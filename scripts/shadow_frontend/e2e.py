@@ -8,7 +8,9 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from unittest.mock import patch
 from e2e_environment import free_port, request, start_backend, stop, wait_for
+from frontend import frontend
 
 HERE = Path(__file__).resolve().parent
 
@@ -37,7 +39,7 @@ class Browser:
         status, data = request(self.base + '/execute/sync', {'script': script, 'args': list(args)})
         if status != 200:
             raise AssertionError({'status': status, 'response': data,
-                                  'driver': self.log_path.read_text()[-2000:]})
+                                  'driver': self.log_path.read_text(encoding='utf-8')[-2000:]})
         return data['value']
 
     def navigate(self, url):
@@ -109,6 +111,12 @@ def main():
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     result = {}
+    # Simulate a Windows legacy codepage. Assets must retain Chinese text even
+    # when the user's default text-file encoding is not UTF-8.
+    read_text = Path.read_text
+    with patch.object(Path, 'read_text', lambda path, encoding=None, errors=None:
+                      read_text(path, encoding=encoding or 'cp1252', errors=errors)):
+        assert '服务'.encode('utf-8') in frontend('index.html', 'fixture-only')
     with tempfile.TemporaryDirectory(prefix='emp-shadow-e2e-') as temp, contextlib.ExitStack() as stack:
         root = Path(temp)
         base, url, state, headers, upstream = start_backend(stack, args.emp.resolve(), root)
@@ -127,8 +135,8 @@ def main():
         process = subprocess.Popen([sys.executable, str(HERE / 'shadow-web.py'), '--port', '0',
             '--backend-port', base.rsplit(':', 1)[1], '--state-dir', str(state)], stdout=shadow_log, stderr=shadow_log)
         stack.callback(stop, process)
-        shadow = wait_for(lambda: shadow_log_path.read_text().split('EMP shadow: ')[-1].strip()
-                          if 'EMP shadow:' in shadow_log_path.read_text() else None)
+        shadow = wait_for(lambda: shadow_log_path.read_text(encoding='utf-8').split('EMP shadow: ')[-1].strip()
+                          if 'EMP shadow:' in shadow_log_path.read_text(encoding='utf-8') else None)
         browser = Browser(stack, root)
         browser.navigate(url)
         result['formal'] = check_page(browser, False)
@@ -140,18 +148,18 @@ def main():
         assert request(shadow + 'api/accounts/fixture', method='DELETE')[0] == 403
         # Formal-page bootstrap rotates its management session; use the current
         # backend token for the final read, as the shadow server does itself.
-        headers['X-EMP-Session'] = json.loads((state/'web-session.json').read_text())['token']
+        headers['X-EMP-Session'] = json.loads((state/'web-session.json').read_text(encoding='utf-8'))['token']
         status, after = request(base + '/api/config', headers=headers)
         assert status == 200, after
         assert (state.parent/'config.json').read_bytes() == stored_before
         for key in ['providers','models','accounts','settings']:
             assert before.get(key) == after.get(key), key
         assert upstream.calls == 2
-        result['checks'] = ['HTTP failure source', 'success denominator', 'native Escape',
+        result['checks'] = ['UTF-8 assets under legacy codepage', 'HTTP failure source', 'success denominator', 'native Escape',
             'nested dialogs', 'light/dark', 'English/Chinese', '125% scale', 'quota style',
             'activity/error demos', 'credential scrubbing', 'backend write rejection', 'backend unchanged']
     if args.output:
-        args.output.write_text(json.dumps(result, indent=2) + '\n')
+        args.output.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     print(json.dumps({'passed': True, 'browser_cases': len(result['formal']) + len(result['shadow']),
                       'checks': result['checks']}))
 
