@@ -25,3 +25,6 @@ docs/v0.5-implementation-plan.md
 /docs/lunamax-overnight-cli-plan.md
 /docs/release-0.12.3-verification.md
 /target/
+
+# Python developer previews
+__pycache__/

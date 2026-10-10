@@ -212,9 +212,12 @@ context labels there and in the Codex model picker for Native, Subscription and
 External Provider models. The left model list does not repeat these labels. The
 control changes catalog labels, not context windows or request limits.
 
+
+Preview frontend changes against a running backend with the [read-only shadow frontend](scripts/shadow_frontend/README.md). Draft changes remain in the preview.
+
 ## Codex compatibility
 
-The current source version is **v0.12.16**.
+The current source version is **v0.12.17**.
 
 Maintenance targets the latest stable Codex minor series and the previous nine;
 patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).

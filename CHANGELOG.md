@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.12.17 (2026-10-10)
+
+- Separate failed requests, history-resend requests, explicit interruption,
+  disconnect and missing outcomes in call records, activity and diagnostics.
+  Correct legacy WebSocket classifications when reading without rewriting usage.
+- Record native WebSocket rejection and stream failures with their actual source.
+  Preserve upstream wire errors and keep upstream completion separate from delivery.
+- Calculate request success from completed and failed requests. Open Call outcomes
+  by clicking the percentage to inspect filtered failure sources, reasons and counts;
+  keep the existing report and filters when closing the dialog.
+- Persist failed quota observations separately from quota values and explain recorded
+  failures in trend gaps. Include safe RPC phase, duration, status and categorized cause.
+- Separate call recording, report queries and result presentation. Share the read
+  projection with developer tooling and remove redundant implementation assertions.
+- Include the accepted read-only shadow frontend under scripts/shadow_frontend,
+  with configurable backend/state paths, compact quota rings, unified statistics,
+  service error bubbles, activity artwork and light/dark interaction previews.
+
 ## 0.12.16 (2026-10-09)
 
 - Keep the EMP logo, status and controls in one top-bar row in both languages.

@@ -196,6 +196,19 @@ test('common call details escape model/session names and keep missing metrics em
   assert.doesNotMatch(html,/0.00 s|0.0 token/);
 });
 
+test('request success separates model failures, recovery and client cancellation', () => {
+  const reports = feature('call-reports.js','createCallReports')({tr,esc,getLanguage:() => 'en'});
+  const result = reports.outcomes({calls:20,completed:9,failed:1,interrupted:2,cancelled:3,recovery_required:4,unknown:1,success_samples:10,failure_breakdown:[{origin:'transport',code:'upstream_error',count:1}]});
+  assert.equal(result.value,'90.0%'); assert.equal(result.label,'Request success rate');
+  assert.match(result.hint,/1 failed/); assert.match(result.detailsHtml,/4 history resends/); assert.match(result.detailsHtml,/Connection<\/td><td>Response transport failed/);
+  assert.doesNotMatch(result.hint,/history resends/);
+  assert.match(reports.outcomes({completed:0,failed:1,success_samples:1,failure_breakdown:[{origin:'emp',code:'<script>',count:1}]}).detailsHtml,/&lt;script&gt;/);
+  assert.equal(reports.outcomes({calls:5,completed:0,failed:0,success_samples:0}).value,'—');
+  assert.equal(reports.outcomes({calls:10,completed:9}).label,'Completion ratio');
+  const row = reports.recordHtml({request_id:'error',state:'failed',error_origin:'transport',error_code:'upstream_error'});
+  assert.match(row,/Error source/);assert.match(row,/upstream_error/);
+});
+
 test('report refresh cancels superseded requests, retains data on error and ignores closure', async () => {
   const pending = [], states = [], results = [];
   const query = feature('report-query.js','createReportQuery',{AbortController})({
@@ -221,7 +234,8 @@ test('report refresh cancels superseded requests, retains data on error and igno
 
 test('call queries coalesce events and discard stale filters and closed windows', async () => {
   const requests = [], timers = new Map(), controls = new Map();
-  const content = {innerHTML:'',textContent:'',querySelectorAll:() => []};
+  let outcomeDialogOpen = false;
+  const content = {innerHTML:'',textContent:'',querySelectorAll:() => [],querySelector:()=>null,ownerDocument:{querySelector:()=>outcomeDialogOpen ? {} : null}};
   const root = {innerHTML:'',setAttribute() {},querySelectorAll:() => [],querySelector(selector) { if (selector === '[data-call-content]') return content; if (!controls.has(selector)) controls.set(selector,{value:'',dataset:{}}); return controls.get(selector); }};
   const report = id => ({start:0,end:Date.now()/1000,records:[{request_id:id,client_model:id,state:'completed'}],total:1,offset:0,limit:50});
   const reports = feature('call-reports.js','createCallReports', {
@@ -241,6 +255,8 @@ test('call queries coalesce events and discard stale filters and closed windows'
   assert.match(requests[1].path,/account=second/);
   requests[1].resolve(report('fresh')); await tick();
   assert.match(content.innerHTML,/fresh/); assert.doesNotMatch(content.innerHTML,/stale/);
+  outcomeDialogOpen=true; content.innerHTML='held snapshot'; reports.live(); assert.equal(content.innerHTML,'held snapshot');
+  outcomeDialogOpen=false; reports.live(); assert.match(content.innerHTML,/fresh/);
   reports.refresh(); reports.refresh(); reports.refresh(); assert.equal(timers.size,1);
   await runTimer(); assert.equal(requests.length,3);
   reports.stop(); requests[2].resolve(report('after-close')); await tick();
@@ -345,4 +361,9 @@ test('quota mode changes bars and history together without changing recorded val
   run("quotaDisplay.set('remaining')");
   run('quotaChartSvg(series,{start:100,end:200},300)');
   assert.equal(run('quotaChartData.points[0].value'), 76);
+  run(`quotaHistoryPayload={failures:[{start_at:120,end_at:180,diagnostics:{code:'quota_transport_error'}}]}`);
+  assert.equal(run('quotaGapReason({start:100,end:200})'),'Quota connection failed');
+  assert.equal(run('quotaGapReason({start:300,end:400})'),'No data recorded');
+  const gapChart = run('quotaChartSvg(series,{start:100,end:500},180)');
+  assert.match(gapChart,/No data recorded/);
 });

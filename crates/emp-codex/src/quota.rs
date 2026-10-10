@@ -79,6 +79,9 @@ pub struct QuotaError {
     message: String,
     code: &'static str,
     retry_imported_refresh: bool,
+    rpc_method: Option<&'static str>,
+    http_status: Option<u16>,
+    transport_cause: Option<&'static str>,
 }
 
 impl QuotaError {
@@ -87,6 +90,9 @@ impl QuotaError {
             message: message.into(),
             code,
             retry_imported_refresh: false,
+            rpc_method: None,
+            http_status: None,
+            transport_cause: None,
         }
     }
 
@@ -101,6 +107,12 @@ impl QuotaError {
 
     pub const fn should_retry_imported_refresh(&self) -> bool {
         self.retry_imported_refresh
+    }
+
+    /// Only classified fields, never the upstream error body, URL or credentials.
+    pub fn diagnostics(&self) -> Value {
+        json!({"code":self.code,"rpc_method":self.rpc_method,
+            "http_status":self.http_status,"transport_cause":self.transport_cause})
     }
 }
 
@@ -331,6 +343,38 @@ pub fn validated_reset_credit_id(value: Option<&str>) -> Result<Option<&str>, Qu
 
 /// Classify one JSON-RPC error without exposing its upstream URL or body.
 pub fn quota_rpc_error(method: &str, error: &Value) -> QuotaError {
+    let mut result = classify_rpc_error(method, error);
+    result.rpc_method = match method {
+        "account/read" => Some("account/read"),
+        "account/rateLimits/read" => Some("account/rateLimits/read"),
+        "account/rateLimitResetCredit/consume" => Some("account/rateLimitResetCredit/consume"),
+        "initialize" => Some("initialize"),
+        _ => None,
+    };
+    let message = error["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    result.http_status = rpc_http_status(&message);
+    result.transport_cause = if message.contains("dns") || message.contains("name resolution") {
+        Some("dns")
+    } else if message.contains("certificate") || message.contains("tls") {
+        Some("tls")
+    } else if message.contains("proxy") {
+        Some("proxy")
+    } else if message.contains("timed out") || message.contains("timeout") {
+        Some("timeout")
+    } else if message.contains("error sending request") {
+        Some("connection")
+    } else if message.contains("workspace routing discovery failed") {
+        Some("workspace_discovery")
+    } else {
+        None
+    };
+    result
+}
+
+fn classify_rpc_error(method: &str, error: &Value) -> QuotaError {
     if error.get("code").and_then(Value::as_i64) == Some(-32601) {
         let message = match method {
             "account/rateLimitResetCredit/consume" => {

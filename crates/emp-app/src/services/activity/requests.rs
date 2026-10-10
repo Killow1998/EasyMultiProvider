@@ -69,6 +69,8 @@ impl Requests {
             "resolved_protocol",
             "transport",
             "error_class",
+            "error_origin",
+            "error_code",
             "failure_reason",
             "session_id",
             "thread_id",
@@ -111,21 +113,8 @@ impl Requests {
             .map_or(Value::Null, |status| json!(status));
         record["state"] = json!(if !finished {
             "active"
-        } else if event["error_class"] == "client_cancelled" {
-            "interrupted"
-        } else if event["error_class"] == "client_disconnect" {
-            "cancelled"
-        } else if matches!(
-            event["response_status"].as_str(),
-            Some("failed" | "incomplete")
-        ) {
-            "failed"
-        } else if event["success"] == true {
-            "completed"
-        } else if event["status"].is_null() {
-            "interrupted"
         } else {
-            "failed"
+            emp_state::usage::call_state(event)
         });
         if finished {
             record["finished_at"] = json!(now);

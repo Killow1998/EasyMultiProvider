@@ -22,6 +22,88 @@ fn filter() -> CallFilter {
         models_sort: "calls".into(),
     }
 }
+
+#[test]
+fn legacy_ws_errors_and_recovery_are_not_client_interruptions() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("usage.sqlite3");
+    let ledger = UsageLedger::new(
+        path.clone(),
+        Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0)),
+    );
+    for (id, extra) in [
+        ("complete", json!({"success":true,"status":200})),
+        ("disconnect", json!({"error_class":"client_disconnect"})),
+        ("interrupt", json!({"error_class":"client_cancelled"})),
+        ("legacy_failure", json!({})),
+        ("legacy_recovery", json!({})),
+        ("unknown", json!({})),
+    ] {
+        let mut event = json!({"request_id":id,"route":"responses","model_id":"demo/model"});
+        event
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        ledger.record_call(&event, 10.0, 11.0).unwrap();
+    }
+    // Simulate the old classifier. Projection must use actual delivery evidence,
+    // not mutate old rows or infer success from a nearby unrelated request.
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE call_records SET state='interrupted' WHERE request_id LIKE 'legacy_%'",
+            [],
+        )
+        .unwrap();
+    ledger.record_call_delivery("legacy_failure","responses",&json!({"downstream_terminal":"failed","error_origin":"transport","error_code":"upstream_error"})).unwrap();
+    ledger.record_call_delivery("legacy_recovery","responses",&json!({"downstream_terminal":"error","error_origin":"emp","error_code":"previous_response_not_found"})).unwrap();
+    let report = ledger.query_calls(&filter()).unwrap();
+    for key in [
+        "completed",
+        "failed",
+        "interrupted",
+        "cancelled",
+        "recovery_required",
+        "unknown",
+    ] {
+        assert_eq!(report["summary"][key], 1, "{key}: {report}");
+    }
+    assert_eq!(report["summary"]["success_samples"], 2);
+    assert_eq!(
+        report["summary"]["failure_breakdown"],
+        json!([
+            {"origin":"transport","code":"upstream_error","status":null,"count":1}
+        ])
+    );
+    let mut paged = filter();
+    paged.limit = 1;
+    paged.offset = 5;
+    assert_eq!(
+        ledger.query_calls(&paged).unwrap()["summary"]["failure_breakdown"],
+        report["summary"]["failure_breakdown"]
+    );
+    let mut completed = filter();
+    completed.state = Some("completed".into());
+    assert_eq!(
+        ledger.query_calls(&completed).unwrap()["summary"]["failure_breakdown"],
+        json!([])
+    );
+    for expected in ["failed", "recovery_required", "unknown"] {
+        let mut selected = filter();
+        selected.state = Some(expected.into());
+        let subset = ledger.query_calls(&selected).unwrap();
+        assert_eq!(subset["total"], 1);
+        assert_eq!(subset["records"][0]["state"], expected);
+    }
+    let unchanged: String = connection
+        .query_row(
+            "SELECT state FROM call_records WHERE request_id='legacy_failure'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(unchanged, "interrupted");
+}
 #[test]
 fn durable_reports_share_accounting_and_keep_delivery_distinct() {
     let root = tempfile::tempdir().unwrap();

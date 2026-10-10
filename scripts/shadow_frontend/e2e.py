@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Real-browser acceptance against an isolated EMP and synthetic upstream."""
+import argparse
+import contextlib
+import json
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from e2e_environment import free_port, request, start_backend, stop, wait_for
+
+HERE = Path(__file__).resolve().parent
+
+
+class Browser:
+    def __init__(self, stack, root):
+        self.base = f'http://127.0.0.1:{free_port()}'
+        log = stack.enter_context((root / 'geckodriver.log').open('w'))
+        process = subprocess.Popen(['geckodriver', '--port', self.base.rsplit(':', 1)[1]],
+                                   stdout=log, stderr=log)
+        stack.callback(stop, process)
+        self.log_path = root / 'geckodriver.log'
+        def ready():
+            try:
+                return request(self.base + '/status')[0] == 200
+            except OSError:
+                return False
+        wait_for(ready)
+        _, result = request(self.base + '/session', {'capabilities': {'alwaysMatch': {
+            'browserName': 'firefox', 'moz:firefoxOptions': {'args': ['-headless'],
+            'prefs': {'layout.css.devPixelsPerPx': '1.25', 'ui.prefersReducedMotion': 1}}}}})
+        self.base += '/session/' + result['value']['sessionId']
+        stack.callback(lambda: request(self.base, method='DELETE'))
+
+    def execute(self, script, *args):
+        status, data = request(self.base + '/execute/sync', {'script': script, 'args': list(args)})
+        if status != 200:
+            raise AssertionError({'status': status, 'response': data,
+                                  'driver': self.log_path.read_text()[-2000:]})
+        return data['value']
+
+    def navigate(self, url):
+        status, data = request(self.base + '/url', {'url': url})
+        assert status == 200, data
+        try:
+            wait_for(lambda: self.execute('return !!document.querySelector("#services .service-card");'))
+        except TimeoutError:
+            print(self.execute('return {state:typeof state,ready:document.readyState,text:document.body.innerText.slice(-2500)};'))
+            raise
+
+    def api(self, path):
+        status, data = request(self.base + '/execute/async', {'script':
+            'const done=arguments[arguments.length-1];fetch(arguments[0],{headers:{"X-EMP-Session":localStorage.getItem("emp_management_session_v1")}}).then(r=>r.json()).then(done,error=>done({error:error.message}));',
+            'args': [path]})
+        assert status == 200, data
+        result = data['value']
+        assert 'error' not in result, result
+        return result
+
+    def escape(self):
+        status, value = request(self.base + '/actions', {'actions': [{'type': 'key', 'id': 'keyboard',
+            'actions': [{'type': 'keyDown', 'value': '\ue00c'}, {'type': 'keyUp', 'value': '\ue00c'}]}]})
+        assert status == 200, value
+
+
+def check_page(browser, shadow):
+    cases = []
+    for language in ['en', 'zh-CN']:
+        for theme in ['light', 'dark']:
+            for width in [640, 1280]:
+                request(browser.base + '/window/rect', {'width': width, 'height': 900})
+                browser.execute('setLanguage(arguments[0]);setTheme(arguments[1]);', language, theme)
+                browser.execute('closeModal();' + ('document.querySelector("[data-i18n=statistics]").click();' if shadow else 'document.querySelector("[data-i18n=diagnostics]").click();'))
+                wait_for(lambda: browser.execute('return !!document.querySelector("[data-call-outcomes]") && !document.querySelector("[data-call-outcomes]").textContent.includes("—");'))
+                assert browser.execute('return document.querySelector("[data-call-outcomes]").textContent.includes("50.0%");')
+                browser.execute('document.querySelector("[data-call-outcomes]").click();')
+                assert browser.execute('return !!document.querySelector("dialog[open] tbody") && document.querySelector("dialog[open]").textContent.includes("401");')
+                assert browser.execute('const r=document.querySelector("dialog[open]").getBoundingClientRect();return r.left>=0 && r.right<=innerWidth+1 && r.height<=innerHeight;')
+                browser.escape()
+                wait_for(lambda: browser.execute('return !document.querySelector("dialog[open]") && !!document.querySelector("[data-call-outcomes]");'))
+                cases.append({'language': language, 'theme': theme, 'width': width})
+    browser.execute('closeModal();')
+    if shadow:
+        browser.execute('document.querySelector("[data-i18n=settings_menu]").click();document.querySelector("[data-shadow-style=bar]").click();')
+        assert browser.execute('return document.body.dataset.quotaStyle === "bar";')
+        browser.execute('document.querySelector("[data-shadow-style=ring]").click();')
+        assert browser.execute('return document.body.dataset.quotaStyle === "ring";')
+        browser.execute('document.querySelector("[data-shadow-dot-color=purple]").click();closeModal();')
+        for mode in ['services', 'service-errors']:
+            wait_for(lambda: browser.execute('return !!document.getElementById("shadow_demo_button");'))
+            browser.execute('document.getElementById("shadow_demo_button").click();document.querySelector("[data-shadow-demo="+arguments[0]+"]").click();', mode)
+            wait_for(lambda: browser.execute('return document.querySelectorAll(".shadow-service-icon").length >= 12;'))
+            if mode == 'service-errors':
+                assert browser.execute('return document.querySelectorAll(".shadow-service-icon[data-error-message]").length >= 12;')
+            browser.execute('document.querySelector("#shadow_services_demo button").click();')
+            wait_for(lambda: browser.execute('return !!document.getElementById("shadow_demo_button") && !document.getElementById("shadow_services_demo") && document.querySelectorAll(".shadow-service-icon").length > 0 && document.querySelectorAll(".shadow-service-icon").length < 12;'))
+        # Edits remain in preview storage, including credential scrubbing.
+        browser.execute('''const script=document.createElement("script");
+            script.textContent='shadowSave({...state,providers:state.providers.map(p=>({...p,name:"Draft",api_key:"must-not-persist"}))});';
+            document.head.append(script);script.remove();''')
+        assert browser.execute('return !localStorage.getItem("emp.shadow.config.v1").includes("must-not-persist");')
+    return cases
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--emp', type=Path, required=True)
+    parser.add_argument('--output', type=Path)
+    args = parser.parse_args()
+    result = {}
+    with tempfile.TemporaryDirectory(prefix='emp-shadow-e2e-') as temp, contextlib.ExitStack() as stack:
+        root = Path(temp)
+        base, url, state, headers, upstream = start_backend(stack, args.emp.resolve(), root)
+        payload = {'model': 'demo/model', 'input': 'ok', 'stream': False}
+        assert request(base + '/v1/responses', payload, headers)[0] == 401
+        upstream.failed = False
+        assert request(base + '/v1/responses', payload, headers)[0] == 200
+        _, report = request(base + '/api/calls', headers=headers)
+        summary = report['summary']
+        assert (summary['completed'], summary['failed'], summary['success_samples']) == (1, 1, 2), summary
+        assert summary['failure_breakdown'][0]['origin'] == 'upstream', summary
+        before = request(base + '/api/config', headers=headers)[1]
+        stored_before = (state.parent/'config.json').read_bytes()
+        shadow_log_path = root / 'shadow.log'
+        shadow_log = stack.enter_context(shadow_log_path.open('w'))
+        process = subprocess.Popen([sys.executable, str(HERE / 'shadow-web.py'), '--port', '0',
+            '--backend-port', base.rsplit(':', 1)[1], '--state-dir', str(state)], stdout=shadow_log, stderr=shadow_log)
+        stack.callback(stop, process)
+        shadow = wait_for(lambda: shadow_log_path.read_text().split('EMP shadow: ')[-1].strip()
+                          if 'EMP shadow:' in shadow_log_path.read_text() else None)
+        browser = Browser(stack, root)
+        browser.navigate(url)
+        result['formal'] = check_page(browser, False)
+        browser.navigate(shadow)
+        result['shadow'] = check_page(browser, True)
+        usage = browser.api('/api/shadow/usage?start=0&end=' + str(time.time()+60) + '&state=completed')
+        assert usage['totals']['input_tokens'] == 10 and usage['totals']['output_tokens'] == 2, usage
+        assert request(shadow + 'api/config', {'providers': []})[0] == 403
+        assert request(shadow + 'api/accounts/fixture', method='DELETE')[0] == 403
+        # Formal-page bootstrap rotates its management session; use the current
+        # backend token for the final read, as the shadow server does itself.
+        headers['X-EMP-Session'] = json.loads((state/'web-session.json').read_text())['token']
+        status, after = request(base + '/api/config', headers=headers)
+        assert status == 200, after
+        assert (state.parent/'config.json').read_bytes() == stored_before
+        for key in ['providers','models','accounts','settings']:
+            assert before.get(key) == after.get(key), key
+        assert upstream.calls == 2
+        result['checks'] = ['HTTP failure source', 'success denominator', 'native Escape',
+            'nested dialogs', 'light/dark', 'English/Chinese', '125% scale', 'quota style',
+            'activity/error demos', 'credential scrubbing', 'backend write rejection', 'backend unchanged']
+    if args.output:
+        args.output.write_text(json.dumps(result, indent=2) + '\n')
+    print(json.dumps({'passed': True, 'browser_cases': len(result['formal']) + len(result['shadow']),
+                      'checks': result['checks']}))
+
+
+if __name__ == '__main__':
+    main()

@@ -134,7 +134,8 @@ impl NativeSession {
         {
             Ok(plan) => plan,
             Err(error) => {
-                let _=websocket.send_json(&serde_json::json!({"type":"error","status":error.status,"error":error.body["error"]}));
+                websocket.reject(state, route, request_body, request_headers,
+                    &serde_json::json!({"type":"error","status":error.status,"error":error.body["error"]}));
                 return NativeTurnResult::Finished;
             }
         };
@@ -156,11 +157,17 @@ impl NativeSession {
             .is_some_and(|id| !route_matches || last_native_response_id.as_deref() != Some(id))
         {
             *last_native_response_id = None;
-            let _ = websocket.send_json(&crate::api::failure_response::emp_websocket_error(
-                400,
-                "previous_response_not_found",
-                "Previous response was not found. Retry with full history.",
-            ));
+            websocket.reject(
+                state,
+                route,
+                request_body,
+                request_headers,
+                &crate::api::failure_response::emp_websocket_error(
+                    400,
+                    "previous_response_not_found",
+                    "Previous response was not found. Retry with full history.",
+                ),
+            );
             return NativeTurnResult::Finished;
         }
         if !route_matches {
@@ -270,6 +277,7 @@ impl NativeSession {
                     route,
                     false,
                 );
+                usage.observe(&error);
                 let _ = websocket.send_json(&error);
                 return NativeTurnResult::Finished;
             }
@@ -315,11 +323,13 @@ impl NativeSession {
                 let event = match plan.project_event(&event) {
                     Ok(event) => event,
                     Err(error) => {
-                        let _ = websocket.send_json(&serde_json::json!({
+                        let event = serde_json::json!({
                             "type":"error",
                             "status":error.status,
                             "error":error.body["error"]
-                        }));
+                        });
+                        usage.observe(&event);
+                        let _ = websocket.send_json(&event);
                         projected_error = true;
                         break;
                     }
@@ -334,7 +344,7 @@ impl NativeSession {
                         .and_then(Value::as_str)
                         .map(str::to_owned);
                 }
-                usage.observe(&event);
+                usage.observe_upstream(&event);
                 // Native WS terminal policy preserves Python's generic
                 // stream failures; only successful turns calibrate here.
                 if crate::services::context::outcome(&event) == Some(true) {
@@ -380,12 +390,13 @@ impl NativeSession {
                     return NativeTurnResult::Finished;
                 }
                 if previous.is_some() && !received_upstream_event {
-                    let _ =
-                        websocket.send_json(&crate::api::failure_response::emp_websocket_error(
-                            400,
-                            "previous_response_not_found",
-                            "Previous response was not found. Retry with full history.",
-                        ));
+                    let event = crate::api::failure_response::emp_websocket_error(
+                        400,
+                        "previous_response_not_found",
+                        "Previous response was not found. Retry with full history.",
+                    );
+                    usage.observe(&event);
+                    let _ = websocket.send_json(&event);
                 } else {
                     let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
                     let error = native_stream_error_value_for_route(
@@ -396,17 +407,24 @@ impl NativeSession {
                         route,
                         delivered_output,
                     );
+                    usage.observe(&error);
                     let _ = websocket.send_json(&error);
                 }
                 return NativeTurnResult::Finished;
             }
         }
         if previous.is_some() {
-            let _ = websocket.send_json(&crate::api::failure_response::emp_websocket_error(
-                400,
-                "previous_response_not_found",
-                "Previous response was not found. Retry with full history.",
-            ));
+            websocket.reject(
+                state,
+                route,
+                request_body,
+                request_headers,
+                &crate::api::failure_response::emp_websocket_error(
+                    400,
+                    "previous_response_not_found",
+                    "Previous response was not found. Retry with full history.",
+                ),
+            );
             return NativeTurnResult::Finished;
         }
         NativeTurnResult::HttpFallback(native_turn_activity)

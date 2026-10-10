@@ -390,3 +390,11 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 @keyframes report-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.report-status[data-loading=true]::before,.report-loading::before{animation:none}}
 @media(max-width:560px){.call-overview{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+[data-call-outcomes]{cursor:pointer}
+[data-call-outcomes]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+[data-call-outcomes]:hover>strong{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px}
+.call-outcome-dialog{width:560px;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);overflow:auto;box-sizing:border-box;padding:20px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text);box-shadow:0 8px 32px #0004;font-size:13px;line-height:1.6}
+.call-outcome-dialog::backdrop{background:#0005}.call-outcome-dialog .modal-header{margin-bottom:16px}.call-outcome-dialog h2{margin:0;font-size:16px}.call-outcome-dialog p{margin:10px 0;color:var(--muted)}
+
+.call-outcome-dialog table{width:100%;border-collapse:collapse;margin-top:16px;table-layout:fixed}.call-outcome-dialog th,.call-outcome-dialog td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);overflow-wrap:anywhere}.call-outcome-dialog th{color:var(--muted);font-weight:500}.call-outcome-dialog th:first-child{width:25%}.call-outcome-dialog th:last-child{width:48px}.call-outcome-dialog td:last-child{text-align:right;font-variant-numeric:tabular-nums}
