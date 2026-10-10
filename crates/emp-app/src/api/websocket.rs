@@ -44,6 +44,27 @@ struct ObservedWebSocket<'a, 'stream> {
     last_response_id: &'a mut Option<String>,
 }
 impl ObservedWebSocket<'_, '_> {
+    fn reject(
+        &mut self,
+        state: &ServerState,
+        route: &emp_core::ResolvedRoute,
+        body: &serde_json::Map<String, Value>,
+        headers: &BTreeMap<String, String>,
+        event: &Value,
+    ) {
+        let mut outcome = crate::services::request_outcome::RequestOutcome::new(
+            state,
+            route,
+            &Value::Object(body.clone()),
+            headers,
+            None,
+            "responses",
+        )
+        .started_at(self.observation.execution_started())
+        .transport("websocket");
+        outcome.observe(event);
+        let _ = self.send_json(event);
+    }
     fn send_json(&mut self, event: &Value) -> Result<(), emp_transport::WebSocketError> {
         self.send(event, false)
     }
@@ -352,11 +373,17 @@ pub(crate) fn serve_responses_websocket(
                 || request_scope != native_session.last_scope)
         {
             native_session.last_response_id = None;
-            let _ = websocket.send_json(&crate::api::failure_response::emp_websocket_error(
-                400,
-                "previous_response_not_found",
-                "Previous response was not found. Retry with full history.",
-            ));
+            websocket.reject(
+                state,
+                &route,
+                &request_body,
+                &request_headers,
+                &crate::api::failure_response::emp_websocket_error(
+                    400,
+                    "previous_response_not_found",
+                    "Previous response was not found. Retry with full history.",
+                ),
+            );
             continue;
         }
         request_body =

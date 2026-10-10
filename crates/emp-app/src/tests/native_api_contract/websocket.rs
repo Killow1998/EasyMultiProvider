@@ -70,6 +70,47 @@ fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_p
     );
     let warmup = receive_websocket_json(&mut stream);
     assert_eq!(warmup["type"], "response.completed");
+    let report = server
+        .state
+        .backend
+        .usage
+        .ledger
+        .query_calls(&emp_state::usage::ledger::CallFilter {
+            start: 0.0,
+            end: crate::util::system_now(),
+            category: None,
+            provider: None,
+            account: None,
+            model: None,
+            models: vec![],
+            session: None,
+            state: Some("recovery_required".into()),
+            request: None,
+            offset: 0,
+            limit: 50,
+            models_offset: 0,
+            models_sort: "calls".into(),
+        })
+        .unwrap();
+    assert_eq!(report["total"], 1, "{report}");
+    assert_eq!(
+        report["records"][0]["error_code"],
+        "previous_response_not_found"
+    );
+    assert_eq!(report["records"][0]["error_origin"], "emp");
+    let activity = server
+        .state
+        .backend
+        .activity
+        .snapshot(crate::util::system_now() as u64);
+    assert!(
+        activity["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["state"] == "recovery_required"
+                && r["error_code"] == "previous_response_not_found")
+    );
     assert_eq!(
         warmup["response"]["id"], "",
         "HTTP warmup has no resumable server history"

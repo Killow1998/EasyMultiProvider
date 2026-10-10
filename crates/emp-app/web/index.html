@@ -108,6 +108,7 @@
 <script src="/assets/management-client.js"></script>
 <script src="/assets/quota-display.js"></script>
 <script src="/assets/settings.js"></script>
+<script src="/assets/call-outcomes.js"></script>
 <script src="/assets/call-reports.js"></script>
 <script src="/assets/report-query.js"></script>
 <script src="/assets/period-controls.js"></script>
@@ -1173,6 +1174,13 @@ function quotaTimeRangeText(start, end) {
 let quotaChartData = {points:[], gaps:[]};
 // Draw at the modal's real width so text keeps its size instead of scaling with the SVG.
 function quotaChartWidth() { return Math.round(Math.max(628, Math.min(1200, ($('modal_body')?.clientWidth || 628) - 2))); }
+function quotaGapReason(gap) {
+  const incidents = (quotaHistoryPayload?.failures || []).filter(item => Number(item.start_at) < gap.end && Number(item.end_at) >= gap.start);
+  if (!incidents.length) return tr('无数据记录','No data recorded');
+  const codes = new Set(incidents.map(item => item.diagnostics?.code));
+  const cause = codes.has('quota_transport_error') ? tr('额度查询连接失败','Quota connection failed') : codes.has('quota_auth_required') ? tr('额度查询需要重新登录','Quota query requires sign-in') : codes.has('quota_rate_limited') ? tr('额度查询频率受限','Quota query rate limited') : codes.has('quota_timeout') ? tr('额度查询超时','Quota query timed out') : tr('额度查询失败','Quota query failed');
+  return cause;
+}
 function quotaChartSvg(series, view, gapLimit) {
   const visible = point => quotaValidPoint(point) && Number(point.observed_at) >= view.start && Number(point.observed_at) <= view.end;
   const samplesBySeries = series.map(item => (item.points || []).filter(visible).slice().sort((a,b) => Number(a.observed_at) - Number(b.observed_at)));
@@ -1190,11 +1198,12 @@ function quotaChartSvg(series, view, gapLimit) {
   const gaps = []; let cursor = view.start;
   for (const time of times) { if (time - cursor > gapLimit) gaps.push({start:cursor, end:time}); cursor = time; }
   if (view.end - cursor > gapLimit) gaps.push({start:cursor, end:view.end});
-  const gapText = tr('无数据记录','No data recorded'), middle = (top+bottom)/2;
+  const middle = (top+bottom)/2;
   const gapMarks = `<defs><pattern id="quota-gap-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" class="quota-gap-base"/><line x1="0" y1="0" x2="0" y2="6" class="quota-gap-stripe"/></pattern></defs>` + gaps.map(gap => {
     const x1 = x(gap.start), width = x(gap.end) - x1, center = (x1+width/2).toFixed(1);
     // Wide gaps get a horizontal label; narrow ones a vertical one.
-    const label = width >= 72 ? `<text class="quota-gap-label" x="${center}" y="${middle+4}" text-anchor="middle">${gapText}</text>` : width >= 14 ? `<text class="quota-gap-label" x="${center}" y="${middle}" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 ${center} ${middle})">${gapText}</text>` : '';
+    const reason = esc(quotaGapReason(gap));
+    const label = width >= 72 ? `<text class="quota-gap-label" x="${center}" y="${middle+4}" text-anchor="middle">${reason}</text>` : width >= 14 ? `<text class="quota-gap-label" x="${center}" y="${middle}" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 ${center} ${middle})">${reason}</text>` : '';
     return `<rect class="quota-gap" x="${x1.toFixed(1)}" y="${top}" width="${Math.max(0,width).toFixed(1)}" height="${bottom-top}" fill="url(#quota-gap-hatch)"/>${label}`;
   }).join('');
   const hoverPoints = [];
@@ -1228,7 +1237,7 @@ function quotaChartHover(event) {
   if (guide) { guide.removeAttribute('hidden'); guide.setAttribute('x1', guideX); guide.setAttribute('x2', guideX); }
   if (!tooltip) return;
   tooltip.hidden = false; tooltip.style.left = `${Math.max(20,Math.min(80,guideX / width * 100))}%`;
-  if (!nearest) { tooltip.style.top = '45%'; tooltip.innerHTML = `<strong>${tr('无数据记录','No data recorded')}</strong><br>${esc(quotaTimeRangeText(gap.start, gap.end))}`; return; }
+  if (!nearest) { tooltip.style.top = '45%'; tooltip.innerHTML = `<strong>${esc(quotaGapReason(gap))}</strong><br>${esc(quotaTimeRangeText(gap.start, gap.end))}`; return; }
   const active = points.filter(point => point.time === nearest.time);
   for (const point of active) { const marker = markers.find(item => Number(item.dataset.series) === point.series); if (marker) { marker.setAttribute('cx', point.x.toFixed(1)); marker.setAttribute('cy', point.y.toFixed(1)); marker.removeAttribute('hidden'); } }
   tooltip.style.top = `${Math.max(70, Math.min(...active.map(point => point.y))) / 266 * 100}%`;
@@ -1267,7 +1276,7 @@ function renderQuotaHistory(payload) {
   const planTimeline = view.end > view.start ? quotaPlanTimeline(payload.plans || [],view) : '';
   const legend = `<span>${quotaDisplay.label(tr)}</span>` + series.map((item,index) => { const samples = item.points.filter(point => quotaValidPoint(point) && point.observed_at >= view.start && point.observed_at <= view.end); const last = samples.length ? samples.reduce((latest, point) => Number(point.observed_at) > Number(latest.observed_at) ? point : latest) : null; const color = quotaSeriesColor(item,index); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(compactWindowText(item.window_minutes))}<strong>${last ? esc(quotaDisplay.value(last.remaining_percent)) + '%' : tr('无数据','No data')}</strong></span>`; }).join('');
   const chart = view.end > view.start ? quotaChartSvg(series, view, quotaGapLimit(payload)) : '';
-  const plot = chart ? `${chart}<div class="quota-chart-tooltip" role="status" hidden></div>` : `<div class="quota-empty">${quotaHistoryLoading ? tr('正在读取记录…','Loading records…') : tr('此时间段无数据记录。','No data recorded in this period.')}</div>`;
+  const plot = chart ? `${chart}<div class="quota-chart-tooltip" role="status" hidden></div>` : `<div class="quota-empty">${quotaHistoryLoading ? tr('正在读取记录…','Loading records…') : esc(quotaGapReason(view))}</div>`;
   for (const [id, markup] of [['quota_history_controls',tabs+windowTabs],['quota_history_plan',planTimeline],['quota_history_legend',legend],['quota_history_plot',plot]]) { const node = $(id); if (node.quotaMarkup !== markup) { node.innerHTML = markup; node.quotaMarkup = markup; } }
   content.querySelectorAll('[data-limit-id], [data-window]').forEach(button => { const selected = button.dataset.limitId ? button.dataset.limitId === activeQuotaLimit : button.dataset.window === activeQuotaWindow; button.classList.toggle('active',selected); button.setAttribute('aria-pressed',String(selected)); });
   $('quota_history_range').textContent = view.end > view.start ? quotaTimeRangeText(view.start,view.end) : '';

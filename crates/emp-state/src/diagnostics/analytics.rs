@@ -178,12 +178,14 @@ pub fn summarize(records: &[Value], now: OffsetDateTime) -> Value {
         .iter()
         .copied()
         .filter(|event| {
-            ![
-                "client_disconnect",
-                "client_cancelled",
-                "client_websocket_close",
-            ]
-            .contains(&text(event, "error_class"))
+            event["status"].as_u64().is_some()
+                && event["error_code"] != "previous_response_not_found"
+                && ![
+                    "client_disconnect",
+                    "client_cancelled",
+                    "client_websocket_close",
+                ]
+                .contains(&text(event, "error_class"))
         })
         .collect::<Vec<_>>();
     let total = health.len();
@@ -199,7 +201,26 @@ pub fn summarize(records: &[Value], now: OffsetDateTime) -> Value {
         }
     }
     failures.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-    let mut summary = json!({"sample_count":total,"success_count":successes,"failure_count":total-successes,"success_rate":rate(successes,total),"cancelled_count":relevant.len()-total,"fallback_attempt_count":attempts.len()-relevant.len(),"failure_classes":failures.into_iter().take(6).map(|(kind,count)|json!({"error_class":kind,"count":count,"rate":rate(count,total)})).collect::<Vec<_>>()});
+    let recovery_requests = relevant
+        .iter()
+        .filter(|event| {
+            event["error_code"] == "previous_response_not_found"
+                && !matches!(
+                    text(event, "error_class"),
+                    "client_disconnect" | "client_cancelled" | "client_websocket_close"
+                )
+        })
+        .count();
+    let cancelled = relevant
+        .iter()
+        .filter(|event| {
+            matches!(
+                text(event, "error_class"),
+                "client_disconnect" | "client_cancelled" | "client_websocket_close"
+            )
+        })
+        .count();
+    let mut summary = json!({"sample_count":total,"success_count":successes,"failure_count":total-successes,"success_rate":rate(successes,total),"cancelled_count":cancelled,"recovery_request_count":recovery_requests,"unknown_count":relevant.len()-total-recovery_requests-cancelled,"fallback_attempt_count":attempts.len()-relevant.len(),"failure_classes":failures.into_iter().take(6).map(|(kind,count)|json!({"error_class":kind,"count":count,"rate":rate(count,total)})).collect::<Vec<_>>()});
     for status in [429, 502, 503, 504] {
         let count = health
             .iter()
@@ -299,6 +320,24 @@ mod tests {
         })
     }
 
+    #[test]
+    fn recovery_and_missing_outcomes_are_not_health_failures() {
+        let now = OffsetDateTime::now_utc();
+        let records = [
+            json!({"route":"responses","status":200,"error_class":"none"}),
+            json!({"route":"responses","status":502,"error_class":"stream_error"}),
+            json!({"route":"responses","status":400,"error_class":"stream_error","error_code":"previous_response_not_found"}),
+            json!({"route":"responses","error_class":"client_disconnect"}),
+            json!({"route":"responses","error_class":"unknown"}),
+        ];
+        let health = &summarize(&records, now)["health"];
+        assert_eq!(health["sample_count"], 2);
+        assert_eq!(health["failure_count"], 1);
+        assert_eq!(health["success_rate"], 50.0);
+        assert_eq!(health["recovery_request_count"], 1);
+        assert_eq!(health["cancelled_count"], 1);
+        assert_eq!(health["unknown_count"], 1);
+    }
     #[test]
     fn schema_two_keeps_ttft_without_mixing_legacy_tps() {
         let now = OffsetDateTime::parse("2026-09-23T12:00:00Z", &Rfc3339).unwrap();

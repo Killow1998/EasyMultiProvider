@@ -114,6 +114,12 @@ impl<'a> RequestOutcome<'a> {
         }
     }
     pub(crate) fn observe(&mut self, event: &Value) {
+        self.observe_event(event, None);
+    }
+    pub(crate) fn observe_upstream(&mut self, event: &Value) {
+        self.observe_event(event, Some("upstream"));
+    }
+    fn observe_event(&mut self, event: &Value, origin: Option<&str>) {
         if self.finalized {
             return;
         }
@@ -177,12 +183,30 @@ impl<'a> RequestOutcome<'a> {
                 },
             );
         } else if response["status"] == "failed" || matches!(kind, "response.failed" | "error") {
-            self.event["error_origin"] = json!(if self.buffered {
-                "claude_cli"
-            } else {
-                "upstream"
-            });
-            self.status(502, "stream_error");
+            let error = &response["error"];
+            self.event["error_origin"] = json!(
+                origin
+                    .or_else(|| error["origin"].as_str().filter(|origin| matches!(
+                        *origin,
+                        "emp" | "upstream" | "transport" | "claude_cli" | "client"
+                    )))
+                    .unwrap_or(if self.buffered {
+                        "claude_cli"
+                    } else {
+                        "upstream"
+                    })
+            );
+            self.event["error_code"] = json!(emp_state::diagnostics::schema::id(&error["code"]));
+            self.event["failure_reason"] =
+                json!(emp_state::diagnostics::schema::id(&error["failure_reason"]));
+            self.status(
+                event["status"]
+                    .as_u64()
+                    .or_else(|| error["status"].as_u64())
+                    .filter(|status| (400..=599).contains(status))
+                    .unwrap_or(502) as u16,
+                "stream_error",
+            );
         }
         if matches!(
             event["type"].as_str(),
@@ -347,13 +371,18 @@ impl<'a> RequestOutcome<'a> {
             {
                 self.event["tokens_per_second"] = json!(rate);
             }
-            self.state.backend.auto_review.record_result(
-                self.event["client_model"].as_str().unwrap_or_default(),
-                self.event["provider_id"].as_str().unwrap_or_default(),
-                self.event["success"] == true,
-                self.event["failure_reason"].as_str().unwrap_or_default(),
-                self.event["error_class"].as_str().unwrap_or_default(),
-            );
+            if matches!(
+                emp_state::usage::call_state(&self.event),
+                "completed" | "failed"
+            ) {
+                self.state.backend.auto_review.record_result(
+                    self.event["client_model"].as_str().unwrap_or_default(),
+                    self.event["provider_id"].as_str().unwrap_or_default(),
+                    self.event["success"] == true,
+                    self.event["failure_reason"].as_str().unwrap_or_default(),
+                    self.event["error_class"].as_str().unwrap_or_default(),
+                );
+            }
             self.prepare_call_facts();
             crate::services::observation::record_completion(self.state, &self.event);
             self.persist_call();

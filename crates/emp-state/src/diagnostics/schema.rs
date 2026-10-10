@@ -248,7 +248,7 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
         "unknown",
     );
     record.insert("error_class".into(), json!(error));
-    for key in ["provider_id", "model_id", "failure_reason"] {
+    for key in ["provider_id", "model_id", "failure_reason", "error_code"] {
         record.insert(key.into(), json!(id(&event[key])));
     }
     for key in ["client_model", "upstream_model", "response_model"] {

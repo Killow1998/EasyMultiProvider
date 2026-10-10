@@ -103,8 +103,49 @@ fn local_and_upstream_websocket_errors_have_distinct_receipts_and_preserve_upstr
         .send_json(&json!({"type":"response.create","model":"native/alias","input":"first"}))
         .unwrap();
     assert_eq!(event(&mut client, "error"), expected);
+    let activity = server
+        .state
+        .backend
+        .activity
+        .snapshot(crate::util::system_now() as u64);
+    let failed = activity["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["state"] == "failed")
+        .unwrap();
+    assert_eq!(
+        failed["error_origin"], "upstream",
+        "upstream cannot claim EMP origin"
+    );
+    assert_eq!(failed["http_status"], 429);
+    assert_eq!(failed["error_code"], "rate_limit_exceeded");
     drop(client);
     worker.join().unwrap();
+    let report = server
+        .state
+        .backend
+        .usage
+        .ledger
+        .query_calls(&emp_state::usage::ledger::CallFilter {
+            start: 0.0,
+            end: crate::util::system_now(),
+            category: None,
+            provider: None,
+            account: None,
+            model: None,
+            models: vec![],
+            session: None,
+            state: Some("failed".into()),
+            request: None,
+            offset: 0,
+            limit: 50,
+            models_offset: 0,
+            models_sort: "calls".into(),
+        })
+        .unwrap();
+    assert_eq!(report["summary"]["failed"], 1);
+    assert_eq!(report["records"][0]["error_origin"], "upstream");
     server.shutdown().unwrap();
     let journal = crate::tests::internal_events_contract::journal(root.path());
     for (code, origin) in [

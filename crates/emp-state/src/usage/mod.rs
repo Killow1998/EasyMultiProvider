@@ -1,5 +1,7 @@
 //! Usage persistence and public price estimates; never store request content.
+mod call_outcome;
 mod decimal;
+pub use call_outcome::call_state;
 pub mod ledger;
 pub mod pricing;
 use serde_json::Value;

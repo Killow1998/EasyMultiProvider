@@ -17,6 +17,7 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/model-settings.js" => include_bytes!("../web/model-settings.js"),
         "/assets/account-details.js" => include_bytes!("../web/account-details.js"),
         "/assets/account-import.js" => include_bytes!("../web/account-import.js"),
+        "/assets/call-outcomes.js" => include_bytes!("../web/call-outcomes.js"),
         "/assets/call-reports.js" => include_bytes!("../web/call-reports.js"),
         "/assets/report-query.js" => include_bytes!("../web/report-query.js"),
         "/assets/period-controls.js" => include_bytes!("../web/period-controls.js"),

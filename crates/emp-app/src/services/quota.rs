@@ -358,14 +358,18 @@ pub(crate) fn migrate_legacy_quota_history(state: &ServerState) {
 }
 
 fn record_quota_snapshot(state: &ServerState, account_id: &str, quota: &Value) {
-    let Ok(owner) = quota_owner_key(state, account_id) else {
-        return;
-    };
-    let _ = state.backend.accounts.quota_history.append_snapshot(
-        &owner,
-        quota,
-        system_now().trunc() as i64,
-    );
+    let result = quota_owner_key(state, account_id).ok().and_then(|owner| {
+        state
+            .backend
+            .accounts
+            .quota_history
+            .append_snapshot(&owner, quota, system_now().trunc() as i64)
+            .ok()
+    });
+    if result.is_none() {
+        state.backend.diagnostics.journal.event("error", "quota_history_save_failed",
+            &serde_json::json!({"account":state.backend.diagnostics.journal.pseudonym(account_id),"operation":"snapshot"}));
+    }
 }
 
 fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
@@ -458,6 +462,7 @@ pub(crate) fn refresh_account_by_id(
     state: &ServerState,
     account_id: &str,
 ) -> Result<Value, QuotaError> {
+    let started = std::time::Instant::now();
     let result = refresh_account_by_id_inner(state, account_id);
     let journal = &state.backend.diagnostics.journal;
     journal.event(
@@ -467,8 +472,27 @@ pub(crate) fn refresh_account_by_id(
             "account": journal.pseudonym(account_id),
             "success": result.is_ok(),
             "error_class": result.as_ref().err().map(|error| error.code()),
+            "duration_ms": started.elapsed().as_millis() as u64,
+            "diagnostics": result.as_ref().err().map(|error| error.diagnostics()),
         }),
     );
+    if let Err(error) = &result {
+        let saved = quota_owner_key(state, account_id).ok().and_then(|owner| {
+            state
+                .backend
+                .accounts
+                .quota_history
+                .append_failure(&owner, error, system_now().trunc() as i64)
+                .ok()
+        });
+        if saved.is_none() {
+            journal.event(
+                "error",
+                "quota_history_save_failed",
+                &serde_json::json!({"account":journal.pseudonym(account_id),"operation":"failure"}),
+            );
+        }
+    }
     notify_quota_update(
         state,
         account_id,

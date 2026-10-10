@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension, params};
+mod failures;
 use serde_json::{Map, Value, json};
 
 pub const SAMPLE_INTERVAL_SECONDS: i64 = 44;
@@ -139,6 +140,8 @@ impl QuotaHistoryStore {
                 params![cutoff],
             )
             .map_err(|_| QuotaHistoryError::unavailable())?;
+        transaction.execute("DELETE FROM quota_failures WHERE observed_at < ?1 OR (account_key = ?2 AND observed_at = ?3)",
+            params![cutoff,account_key,timestamp]).map_err(|_| QuotaHistoryError::unavailable())?;
         transaction
             .commit()
             .map_err(|_| QuotaHistoryError::unavailable())?;
@@ -172,6 +175,7 @@ impl QuotaHistoryStore {
         let (cutoff, now) = (start, end);
         let spacing = ((end - start) / MAX_POINTS_PER_SERIES).max(SAMPLE_INTERVAL_SECONDS);
         let mut series = Vec::<Value>::new();
+        let mut failures = Vec::<Value>::new();
         let mut plans = BTreeMap::<i64, String>::new();
         let mut last_plan = None::<String>;
         if self.path.exists() {
@@ -181,6 +185,7 @@ impl QuotaHistoryStore {
                 .map_err(|_| QuotaHistoryError::unavailable())?;
             reject_symlink(&self.path)?;
             let connection = self.connect()?;
+            failures = Self::failures(&connection, account_key, start, end)?;
             let prior_plan: Option<(i64, String)> = connection
                 .query_row(
                     "SELECT observed_at, plan_type FROM quota_samples \
@@ -278,6 +283,7 @@ impl QuotaHistoryStore {
             "interval_seconds": spacing,
             "retention_days": RETENTION_SECONDS / (24 * 60 * 60),
             "series": series,
+            "failures": failures,
             "plans": plans
                 .into_iter()
                 .map(|(observed_at, plan_type)| json!({
@@ -324,6 +330,18 @@ impl QuotaHistoryStore {
             )
             .map_err(|_| QuotaHistoryError::unavailable())?;
         transaction
+            .execute(
+                "UPDATE OR IGNORE quota_failures SET account_key = ?2 WHERE account_key = ?1",
+                params![legacy_key, owner],
+            )
+            .map_err(|_| QuotaHistoryError::unavailable())?;
+        transaction
+            .execute(
+                "DELETE FROM quota_failures WHERE account_key = ?1",
+                params![legacy_key],
+            )
+            .map_err(|_| QuotaHistoryError::unavailable())?;
+        transaction
             .commit()
             .map_err(|_| QuotaHistoryError::unavailable())?;
         Ok(moved)
@@ -338,16 +356,27 @@ impl QuotaHistoryStore {
             .lock()
             .map_err(|_| QuotaHistoryError::unavailable())?;
         reject_symlink(&self.path)?;
-        let connection =
-            Connection::open(&self.path).map_err(|_| QuotaHistoryError::unavailable())?;
+        let mut connection = self.connect()?;
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|_| QuotaHistoryError::unavailable())?;
-        connection
+        let transaction = connection
+            .transaction()
+            .map_err(|_| QuotaHistoryError::unavailable())?;
+        transaction
             .execute(
                 "DELETE FROM quota_samples WHERE account_key = ?1",
                 params![account_key],
             )
+            .map_err(|_| QuotaHistoryError::unavailable())?;
+        transaction
+            .execute(
+                "DELETE FROM quota_failures WHERE account_key = ?1",
+                params![account_key],
+            )
+            .map_err(|_| QuotaHistoryError::unavailable())?;
+        transaction
+            .commit()
             .map_err(|_| QuotaHistoryError::unavailable())?;
         Ok(())
     }
@@ -373,7 +402,12 @@ impl QuotaHistoryStore {
                     resets_at INTEGER,
                     plan_type TEXT,
                     PRIMARY KEY (account_key, observed_at, limit_id, window_kind)
-                );",
+                );
+                CREATE TABLE IF NOT EXISTS quota_failures (
+                    account_key TEXT NOT NULL, observed_at INTEGER NOT NULL,
+                    diagnostics TEXT NOT NULL, PRIMARY KEY(account_key,observed_at)
+                );
+                CREATE INDEX IF NOT EXISTS quota_failures_retention ON quota_failures(observed_at);",
             )
             .map_err(|_| QuotaHistoryError::unavailable())?;
         let plan_type_exists = connection
