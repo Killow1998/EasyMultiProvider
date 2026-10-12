@@ -63,6 +63,12 @@ certificates while accepting a configured root.
 
 ## Release workflow
 
+Maintain release notes under `### 中文` and `### English` inside the version's
+CHANGELOG section. The existing release extraction preserves these subsections;
+the Web UI selects the section for its current language. An unavailable translation
+is reported explicitly. The older 0.12.18 English body has a verified, maintained
+Chinese rendering in the UI; no remote release body is changed by a local edit.
+
 Pull requests run one Linux format, lint and test job. A newer push to the same
 pull request cancels its superseded run. The checks are not repeated on merge,
 and ordinary source or documentation changes do not build release packages.

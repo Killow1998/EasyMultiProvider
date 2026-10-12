@@ -12,6 +12,7 @@ use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::http::response::unauthorized_response;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 use std::net::TcpStream;
 
@@ -35,6 +36,26 @@ pub(crate) fn management_migration_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
+    let operation = request.raw_path().rsplit('/').next().unwrap_or_default();
+    if matches!(operation, "decode" | "preview" | "demo")
+        || (operation == "import" && body.get("token").is_some())
+    {
+        return match crate::services::migration::preview_request(
+            request.observation_id,
+            state,
+            request.session_token().as_deref().unwrap_or_default(),
+            operation,
+            &body,
+        ) {
+            Ok(value) => response(
+                "HTTP/1.1 200 OK",
+                "application/json",
+                &serde_json::to_vec(&value).expect("preview is JSON"),
+                &[],
+            ),
+            Err(error) => migration_error(error),
+        };
+    }
     if request.raw_path() == "/api/migration/export/confirm" {
         let Some(confirmation) = state
             .sessions
@@ -70,6 +91,7 @@ pub(crate) fn management_migration_request(
             );
         }
         return match crate::services::migration::export(request.observation_id, state, &body) {
+            Ok(exported) if body.get("selections").is_some()=>response("HTTP/1.1 200 OK","application/json",&serde_json::to_vec(&serde_json::json!({"bundle":STANDARD.encode(exported.bundle),"summary":exported.summary})).expect("export is JSON"),&[]),
             Ok(exported) => response(
                 "HTTP/1.1 200 OK",
                 "application/octet-stream",

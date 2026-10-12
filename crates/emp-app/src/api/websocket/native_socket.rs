@@ -26,7 +26,10 @@ pub(super) struct NativeSession {
 pub(super) enum NativeTurnResult<'a> {
     Finished,
     Closed,
-    HttpFallback(Option<ActivityGuard<'a>>),
+    HttpFallback(
+        Option<ActivityGuard<'a>>,
+        Option<Box<crate::services::request_outcome::RequestOutcome<'a>>>,
+    ),
 }
 
 pub(super) fn native_stream_error_value(
@@ -130,6 +133,7 @@ impl NativeSession {
             pending_request,
         } = self;
         let mut native_turn_activity = None;
+        let mut fallback_usage = None;
         let plan = match native::websocket_plan(state, route, config, request_body, request_headers)
         {
             Ok(plan) => plan,
@@ -347,7 +351,9 @@ impl NativeSession {
                 usage.observe_upstream(&event);
                 // Native WS terminal policy preserves Python's generic
                 // stream failures; only successful turns calibrate here.
-                if crate::services::context::outcome(&event) == Some(true) {
+                if request_body.get("generate") != Some(&Value::Bool(false))
+                    && crate::services::context::outcome(&event) == Some(true)
+                {
                     crate::services::context::record_payload(state, route, &plan.payload, true);
                 }
                 terminal = terminal_stream_event(&event);
@@ -383,6 +389,7 @@ impl NativeSession {
                 http_only_routes.insert(route_key.clone());
                 *native_upstream = None;
                 *last_native_response_id = None;
+                fallback_usage = Some(Box::new(usage));
             } else {
                 *native_upstream = None;
                 *last_native_response_id = None;
@@ -427,6 +434,6 @@ impl NativeSession {
             );
             return NativeTurnResult::Finished;
         }
-        NativeTurnResult::HttpFallback(native_turn_activity)
+        NativeTurnResult::HttpFallback(native_turn_activity, fallback_usage)
     }
 }

@@ -213,9 +213,20 @@ fn missing_summary_output_is_distinct_from_history_lookup_and_does_not_retry() {
         .filter(|r| r["event"] == "model_attempt_started")
         .collect();
     assert_eq!(attempts.len(), 1);
-    assert_eq!(
-        attempts[0]["fields"]["request_id"],
-        done["fields"]["request_id"]
+    let summary_id = &attempts[0]["fields"]["request_id"];
+    assert_ne!(summary_id, &done["fields"]["request_id"]);
+    assert!(
+        records
+            .iter()
+            .any(|record| record["event"] == "model_operation_started"
+                && record["fields"]["request_id"] == *summary_id
+                && record["fields"]["route"] == "history_summary")
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record["event"] == "route_observation"
+                && record["fields"]["request_id"] == *summary_id)
     );
     assert!(
         !serde_json::to_string(&records)

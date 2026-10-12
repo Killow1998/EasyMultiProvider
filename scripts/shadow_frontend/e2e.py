@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -16,10 +17,10 @@ HERE = Path(__file__).resolve().parent
 
 
 class Browser:
-    def __init__(self, stack, root):
+    def __init__(self, stack, root, reduced_motion=1, system_access=False):
         self.base = f'http://127.0.0.1:{free_port()}'
         log = stack.enter_context((root / 'geckodriver.log').open('w'))
-        process = subprocess.Popen(['geckodriver', '--port', self.base.rsplit(':', 1)[1]],
+        process = subprocess.Popen(['geckodriver', '--port', self.base.rsplit(':', 1)[1]] + (['--allow-system-access'] if system_access else []),
                                    stdout=log, stderr=log)
         stack.callback(stop, process)
         self.log_path = root / 'geckodriver.log'
@@ -31,7 +32,8 @@ class Browser:
         wait_for(ready)
         _, result = request(self.base + '/session', {'capabilities': {'alwaysMatch': {
             'browserName': 'firefox', 'moz:firefoxOptions': {'args': ['-headless'],
-            'prefs': {'layout.css.devPixelsPerPx': '1.25', 'ui.prefersReducedMotion': 1}}}}})
+            'prefs': {'layout.css.devPixelsPerPx': '1.25', 'ui.prefersReducedMotion': reduced_motion, 'devtools.console.stdout.content': True}}}}})
+        assert 'sessionId' in result['value'],result
         self.base += '/session/' + result['value']['sessionId']
         stack.callback(lambda: request(self.base, method='DELETE'))
 
@@ -39,7 +41,7 @@ class Browser:
         status, data = request(self.base + '/execute/sync', {'script': script, 'args': list(args)})
         if status != 200:
             raise AssertionError({'status': status, 'response': data,
-                                  'driver': self.log_path.read_text(encoding='utf-8')[-2000:]})
+                                  'driver': self.diagnostics()})
         return data['value']
 
     def navigate(self, url):
@@ -48,8 +50,14 @@ class Browser:
         try:
             wait_for(lambda: self.execute('return !!document.querySelector("#services .service-card");'))
         except TimeoutError:
-            print(self.execute('return {state:typeof state,ready:document.readyState,text:document.body.innerText.slice(-2500)};'))
+            print(self.diagnostics())
             raise
+
+    def diagnostics(self):
+        # Fixture logs may contain bootstrap URLs; report errors without tokens.
+        lines=self.log_path.read_text(encoding='utf-8').splitlines()
+        errors=[line for line in lines if 'JavaScript error:' in line or 'Error:' in line]
+        return re.sub(r'([?&](?:token|bootstrap|session)=)[^&\s"\']+',r'\1[redacted]','\n'.join(errors[-8:]))
 
     def api(self, path):
         status, data = request(self.base + '/execute/async', {'script':
@@ -74,7 +82,7 @@ class Browser:
 
 def check_page(browser, shadow):
     cases = []
-    assert browser.execute('return document.body.dataset.quotaStyle;') == ('ring' if shadow else 'bar')
+    assert browser.execute('return document.body.dataset.quotaStyle;') == 'ring'
     assert browser.execute('return document.querySelectorAll("[data-i18n=statistics]").length===1 && !document.querySelector(".page-header-controls [data-i18n=usage]");')
     assert browser.execute('return document.querySelectorAll("#services .request-activity").length===0 && document.querySelectorAll("#services .presentation-service-icon").length>0;')
     assert browser.execute('return document.querySelector("#integration_toggle").disabled;') is shadow
@@ -88,6 +96,7 @@ def check_page(browser, shadow):
                     background=browser.execute('return getComputedStyle(document.querySelector(arguments[0])).backgroundColor;',control)
                     browser.hover(control)
                     wait_for(lambda:browser.execute('return !document.querySelector(".presentation-hover-feedback").hidden;'))
+                    assert browser.execute('const canvas=document.querySelector(".presentation-hover-feedback>canvas");if(!canvas||!canvas.width||!canvas.height)return false;const pixels=canvas.getContext("2d").getImageData(0,0,canvas.width,canvas.height).data;return pixels.some((value,index)=>index%4===3&&value>0);'), 'Hover outline has no painted dots'
                     assert browser.execute('return getComputedStyle(document.querySelector(arguments[0])).backgroundColor;',control)==background
                 browser.execute('document.querySelector("[data-i18n=statistics]").click();')
                 wait_for(lambda: browser.execute('return !!document.querySelector("[data-call-outcomes]") && !document.querySelector("[data-call-outcomes]").textContent.includes("—");'))
@@ -97,14 +106,51 @@ def check_page(browser, shadow):
                     browser.execute('document.querySelector("[data-stats-metric="+arguments[0]+"]").click();',metric)
                 for group in ['services','models','none']:
                     browser.execute('const select=document.querySelector("[data-stats-group]");select.value=arguments[0];select.dispatchEvent(new Event("change",{bubbles:true}));',group)
-                for view in ['services','models','calls','overview']:
+                browser.execute('''window.statisticsReads=0;window.statisticsFetch=window.fetch;
+                    window.fetch=function(input,...args){if(/\\/(calls|usage)\\?/.test(String(input)))window.statisticsReads++;
+                    return window.statisticsFetch.call(this,input,...args);};''')
+                for view in ['services','models','calls','overview','calls']:
                     browser.execute('document.querySelector("[data-stats-view="+arguments[0]+"]").click();',view)
+                    if view == 'calls':
+                        assert browser.execute('return document.querySelectorAll("#presentation_stats_calls .call-record").length===2;'), 'Switching to Calls cleared cached records'
+                        assert browser.execute('''const rows=[...document.querySelectorAll("#presentation_stats_calls .call-record>summary")];
+                            const columns=rows.map(row=>[...row.children].map(cell=>cell.getBoundingClientRect().left));
+                            return columns.every(row=>row.every((left,index)=>Math.abs(left-columns[0][index])<1)) &&
+                            rows.every(row=>[...row.children].every(cell=>getComputedStyle(cell).textAlign==='left'));'''), 'Call columns are not aligned'
+                        assert browser.execute('return !document.querySelector("#presentation_stats_calls .period-picker,#presentation_stats_calls .call-toolbar,#presentation_stats_calls .report-tabs");'), 'Embedded report duplicates controls'
+                assert browser.execute('return window.statisticsReads;') == 0, 'Switching tabs issued duplicate report requests'
+                scroll_left=browser.execute('const list=document.querySelector("#presentation_stats_calls .call-records");list.scrollLeft=100;return list.scrollLeft;')
+                browser.execute('document.querySelector("#presentation_stats_calls .call-record").open=true;document.querySelector("[data-stats-view=calls]").click();')
+                assert browser.execute('return !!document.querySelector("#presentation_stats_calls .call-record[open]");')
+                assert browser.execute('return document.querySelector("#presentation_stats_calls .call-records").scrollLeft;') == scroll_left
+                browser.execute('''window.fetch=function(input,...args){return /\\/(calls|usage)\\?/.test(String(input)) ?
+                    new Promise((resolve,reject)=>setTimeout(()=>window.statisticsFetch.call(this,input,...args).then(resolve,reject),400)) :
+                    window.statisticsFetch.call(this,input,...args);};document.querySelector("#presentation_stats [data-report-action=refresh]").click();''')
+                assert browser.execute('return document.querySelector("#presentation_stats").getAttribute("aria-busy")==="true" && !!document.querySelector("#presentation_stats_calls .call-record[open]");'), 'Refresh removed visible call details'
+                wait_for(lambda: browser.execute('return document.querySelector("#presentation_stats").getAttribute("aria-busy")==="false";'))
+                assert browser.execute('return !!document.querySelector("#presentation_stats_calls .call-record[open]");')
+                assert browser.execute('return document.querySelector("#presentation_stats_calls .call-records").scrollLeft;') == scroll_left
+                browser.execute('window.fetch=window.statisticsFetch;delete window.statisticsFetch;document.querySelector("[data-stats-view=overview]").click();')
 
                 browser.execute('document.querySelector("[data-call-outcomes]").click();')
                 assert browser.execute('return !!document.querySelector("dialog[open] tbody") && document.querySelector("dialog[open]").textContent.includes("401");')
                 assert browser.execute('const r=document.querySelector("dialog[open]").getBoundingClientRect();return r.left>=0 && r.right<=innerWidth+1 && r.height<=innerHeight;')
                 browser.escape()
                 wait_for(lambda: browser.execute('return !document.querySelector("dialog[open]") && !!document.querySelector("[data-call-outcomes]");'))
+                browser.execute('''closeModal();window.trendFetch=window.fetch;
+                    window.fetch=function(input,...args){if(!String(input).includes('/quota-history?'))return window.trendFetch.call(this,input,...args);
+                        const params=new URL(String(input),location.href).searchParams,start=Number(params.get('start')),end=Number(params.get('end')),span=end-start;
+                        return Promise.resolve(new Response(JSON.stringify({start_at:start,end_at:end,series:[{window_minutes:300,points:[
+                            {observed_at:start+span*.3,remaining_percent:76},{observed_at:start+span*.6,remaining_percent:60}]}],
+                            failures:[{start_at:start+span*.7,end_at:end,diagnostics:{code:'quota_transport_error'}}]}),{status:200,headers:{'Content-Type':'application/json'}}));};
+                    document.querySelector('#services [data-ui-action=account-quota-history]').click();''')
+                wait_for(lambda: browser.execute('return !!document.querySelector("#quota_history_plot svg");'))
+                assert browser.execute('return document.querySelector("#quota_history_legend").textContent.includes("60%");')
+                browser.execute('document.querySelector("#quota_history_plot .quota-segment").dispatchEvent(new MouseEvent("click",{bubbles:true}));')
+                wait_for(lambda: browser.execute('return !document.querySelector("#quota_history_back").hidden;'))
+                browser.execute('document.querySelector("#quota_history_back").click();')
+                wait_for(lambda: browser.execute('return document.querySelector("#quota_history_back").hidden && !!document.querySelector("#quota_history_plot svg");'))
+                browser.execute('closeModal();window.fetch=window.trendFetch;delete window.trendFetch;')
                 cases.append({'language': language, 'theme': theme, 'width': width})
     browser.execute('closeModal();')
     browser.execute('document.querySelector("[data-i18n=settings_menu]").click();document.querySelector("[data-presentation-style=bar]").click();')
@@ -193,8 +239,8 @@ def main():
         for key in ['providers','models','accounts','settings']:
             assert before.get(key) == after.get(key), key
         assert upstream.calls == 2
-        result['checks'] = ['UTF-8 assets under legacy codepage', 'formal service error bubble and recovery', 'shared Statistics views and colors', 'formal default bars', 'filtered accounting chart series', 'HTTP failure source', 'success denominator', 'native Escape',
-            'nested dialogs', 'actual hover feedback in both themes', 'equal ring row heights', 'light/dark', 'English/Chinese', '125% scale', 'quota style',
+        result['checks'] = ['UTF-8 assets under legacy codepage', 'formal service error bubble and recovery', 'shared Statistics views and colors', 'cached Calls tab without extra reads', 'aligned call columns', 'call details retained during delayed refresh', 'formal default rings', 'filtered accounting chart series', 'HTTP failure source', 'success denominator', 'native Escape',
+            'nested dialogs', 'quota trend delegated zoom and back', 'actual hover feedback in both themes', 'equal ring row heights', 'light/dark', 'English/Chinese', '125% scale', 'quota style',
             'activity/error demos', 'credential scrubbing', 'backend write rejection', 'backend unchanged']
     if args.output:
         args.output.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')

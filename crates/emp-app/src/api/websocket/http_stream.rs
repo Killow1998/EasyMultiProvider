@@ -17,6 +17,7 @@ pub(super) fn serve_native(
     websocket: &mut super::ObservedWebSocket<'_, '_>,
     monitor: &mut crate::services::disconnect::DisconnectMonitor,
     mut native_turn_activity: Option<ActivityGuard<'_>>,
+    previous_usage: Option<crate::services::request_outcome::RequestOutcome<'_>>,
 ) -> TurnResult {
     let Turn {
         route,
@@ -35,13 +36,14 @@ pub(super) fn serve_native(
                 route,
             ))
     });
-    let mut upstream = match native::open_stream_result(
+    let (mut upstream, usage) = match native::open_stream_result(
         state,
         route,
         config,
         request_body,
         request_headers,
         ids,
+        previous_usage,
     ) {
         Ok(stream) => stream,
         Err(error) => {
@@ -62,16 +64,9 @@ pub(super) fn serve_native(
     {
         return TurnResult::Closed;
     }
-    let mut usage = crate::services::request_outcome::RequestOutcome::new(
-        state,
-        route,
-        &Value::Object(request_body.clone()),
-        request_headers,
-        upstream.usage_owner.as_deref(),
-        "responses",
-    )
-    .started_at(websocket.observation.execution_started())
-    .transport("websocket");
+    let mut usage = usage
+        .started_at(websocket.observation.execution_started())
+        .transport("websocket");
     loop {
         let polled = crate::services::disconnect::raced(
             &state.backend.transport.runtime,
@@ -141,7 +136,7 @@ pub(super) fn serve_external(
             .begin(crate::services::activity::ActivityIdentity::from_route(
                 route,
             ));
-    let (mut upstream, candidate) = match crate::services::external::open_stream(
+    let (mut upstream, candidate, usage) = match crate::services::external::open_stream(
         state,
         route,
         &Value::Object(request_body.clone()),
@@ -166,16 +161,9 @@ pub(super) fn serve_external(
             return TurnResult::Finished;
         }
     };
-    let mut usage = crate::services::request_outcome::RequestOutcome::new(
-        state,
-        &candidate,
-        &Value::Object(request_body.clone()),
-        request_headers,
-        None,
-        "responses",
-    )
-    .started_at(websocket.observation.execution_started())
-    .transport("websocket");
+    let mut usage = usage
+        .started_at(websocket.observation.execution_started())
+        .transport("websocket");
     loop {
         let polled = crate::services::disconnect::raced(
             &state.backend.transport.runtime,

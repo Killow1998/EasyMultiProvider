@@ -1,12 +1,79 @@
 # Changelog
 
+## 0.13.0 (2026-10-12)
+
+### 中文
+
+前端（10 项）：
+
+- 将已确认的 Shadow 界面迁入正式版，两者共用静态资源。
+- 额度圆环作为新设置的默认样式，保留已选横条／圆环与不限额显示。
+- 紧凑账户信息与累计 Token／USD，统一服务详情页签。
+- 返回与关闭按钮统一无边框，保留父窗口返回与取消行为。
+- 连接表单简化标签；已保存 API Key 显示六星占位，输入新值可见，空值或取消保留旧 Key。
+- 模型管理按服务查看、搜索、显示／隐藏、编辑、手动添加和测试，移除重复的隐藏主页列表。
+- 订阅上下文说明区分目录默认值、上限和 Codex 可用比例，编辑时更新计算。
+- 每个模型可暂存向其他订阅同步显示与上下文，保存时一起提交；使用直双箭头与按键形状 Reset。
+- 数据迁移按服务／模型选择并在导入预览调整名称，一次导入提交；关闭保留原配置，演示只读。
+- 更新窗口显示安全渲染的中英说明；统计纵轴按实际峰值保留 5% 余量。
+
+后端（8 项）：
+
+- HTTP 上游协商 gzip／Brotli／Zstandard／deflate 压缩响应并流式解码，保留解码后大小限制、超时与显式 identity。原生请求压缩和增量 WS 保持兼容。
+- 正式迁移预览使用有容量、期限和会话边界的私有缓存，凭据不返回浏览器；选中项才进入加密导出与事务导入。
+- 迁移按账户／连接身份合并，区分同名服务并同步映射模型、显示名与凭据引用。
+- 额度辅助进程避免重复下载模型目录，原生 OAuth 轮换由规范凭据所有者处理。
+- 重试和协议回退计入所属请求，排除 WebSocket 预热的推理调用与用量。
+- 原生恢复会关闭闲置 WebSocket 后等待活动请求；退出只恢复配置，不批量改写会话。
+- 新增明确指定会话的 `migrate-history --thread-id`，保留备份并拒绝该会话的活动写入。
+- 用量读取使用持久身份映射，错误说明保留来源、原始代码与定向历史修复建议。
+
+整理与验证：拆分连接、订阅、更新及 HTTP 回应生命周期；删除重复资源、运行时函数替换与退役控件测试。保留可观察行为、取消、凭据与回滚测试；构建缓存和测试配置减少重复工作。
+
+### English
+
+Frontend (10 changes):
+
+- Promote the accepted Shadow UI to the formal frontend with shared static assets.
+- Default new preferences to quota rings while preserving chosen styles and unlimited displays.
+- Compact account information and lifetime Token/USD totals; unify service detail tabs.
+- Use borderless Back/Close controls with parent navigation and cancellation.
+- Simplify connection labels. Saved keys use a six-star placeholder; replacements stay visible, while blank saves and cancellation preserve the key.
+- Manage/search/show/hide/edit/add/test models per service; remove the duplicate hidden homepage list.
+- Explain catalog defaults, maxima and usable-context percentages with live calculations.
+- Stage per-model visibility/context synchronization to other subscriptions until Save; use straight opposing arrows and a physical Reset icon.
+- Select migration services/models and rename incoming services in one import flow. Closing preserves configuration; demos are read-only.
+- Show safely rendered bilingual release notes; scale statistics to the measured peak plus 5%.
+
+Backend (8 changes):
+
+- Negotiate gzip/Brotli/Zstandard/deflate upstream HTTP responses with streaming decoding, decoded limits, deadlines and explicit identity support. Preserve native request compression and incremental WS compatibility.
+- Keep formal migration previews in bounded, expiring, session-bound private storage; never return credentials to the browser. Encrypt/export and transactionally import selected items.
+- Merge migrations by account/connection identity and map models, aliases and credential references together.
+- Avoid repeated quota-helper catalog downloads; settle native OAuth rotation through its canonical credential owner.
+- Account retries/protocol fallback within their request; exclude WS prewarm from inference and usage.
+- Drain idle WebSockets before native restoration and wait for active requests. Exit restores configuration without bulk history rewriting.
+- Add explicit `migrate-history --thread-id` with backups and active-writer protection for the selected conversation.
+- Project usage through durable identity mappings; preserve error origins/codes and targeted history-repair guidance.
+
+Cleanup and validation: separate connection, subscription, update and HTTP-response lifecycle owners. Remove duplicate assets, runtime function replacement and retired-control tests. Retain behavioral, cancellation, credential and rollback coverage; reduce repeated work with build caching and test profiles.
+
 ## 0.12.18 (2026-10-10)
 
-- Ship the accepted shadow presentation in the official Web UI: service artwork owns activity and call details, with brand colors, bounded halos and error bubbles.
+### 中文
+
+- 改进 Web 界面：服务图标展示调用状态与详情，配合品牌颜色、光晕及错误气泡。
+- 正式版默认横条；新增左右对称的紧凑额度圆环、样式记忆、双单位倒计时，并保留无 5h 限制时的 233% / 1m111s 显示。
+- 将性能与用量合并为统计，统一筛选，支持 Token／USD 图表、按服务／模型区分颜色及查看调用结果。
+- 用量 API 支持筛选后的图表序列；总量与图表共用去重后的记录，服务、模型、会话及调用状态筛选同步生效。
+- 按钮使用可配置的点阵悬停／焦点反馈，对齐语言和外观选择器，并暂停不可见及后台动效。
+
+### English
+
+- Improve the Web UI: service artwork owns activity and call details, with brand colors, bounded halos and error bubbles.
 - Keep bars as the formal default; add mirrored compact quota rings, persistent style selection, two-unit countdowns and the existing 233% / 1m111s unlimited display.
 - Combine performance and usage into Statistics with common filters, Token / USD charts, service/model colors and click-through request outcomes.
 - Add filtered accounting chart series to the existing usage API. Totals and chart groups use the same reconciled ledger; service, model, session and outcome filters apply together.
-- Share the official presentation with the read-only developer preview. Preview command isolation and demos remain separate.
 - Use configurable dotted hover/focus feedback across controls, align language/theme selectors, and pause effects outside the viewport or in the background.
 
 ## 0.12.17 (2026-10-10)

@@ -1,7 +1,7 @@
 // A view of existing accounts/providers; storage and route identities stay with their owners.
 function createServiceList({getState, $, esc, tr, presets, icon, activity, accountSummary, quotaMeters,
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
-  usageSummary, notice, serviceIcon = (kind,id,label,brand,cpa) => activity(kind,id,label)+icon(brand,cpa), updateServiceErrors = () => {}}) {
+  usageSummary, notice, serviceIcon = (kind,id,label,brand,cpa) => activity(kind,id,label)+icon(brand,cpa), updateServiceErrors = () => {}, onMount = () => {}}) {
   const refreshing = new Set(), errors = new Map();
   let detailsController = null;
   function stop() { detailsController?.abort(); detailsController = null; }
@@ -36,14 +36,12 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
   function providerRow(provider, models) {
     const local = provider.execution_backend === 'claude_cli' && provider.auth_mode === 'claude_login';
     const cpa = provider.execution_backend === 'claude_cli' && !local;
-    const hidden = models.length > 0 && models.every(model => !model.enabled);
     const label = provider.name || provider.id;
     const brand = providerBrand(provider);
     const defaults = [provider.id, brand, presets[brand]?.name, ...(local ? ['Claude Code','Claude Subscription'] : cpa ? ['Claude CPA','Claude Code CPA'] : [])];
     const alias = brand === 'custom' || !defaults.some(name => name && name.toLowerCase() === label.toLowerCase()) ? label : '';
     const summary = `<button type="button" class="account-summary service-summary" data-ui-action="provider-details" data-id="${esc(provider.id)}" aria-haspopup="dialog" aria-label="${esc(label + ' · ' + providerType(provider) + ' · Model: ' + models.length)}" title="${esc(label)}">${alias ? `<span class="account-segment account-name"><span>${esc(alias)}</span></span>` : ''}<span class="account-segment ${alias ? 'service-type' : 'account-name'}">${providerType(provider)}</span><span class="account-segment service-model-count">Model: ${models.length}</span></button>`;
-    const modelActions = action('provider-model-settings', provider.id, tr('模型设置','Model settings'), 'settings')
-      + action('provider-toggle-models', provider.id, hidden ? tr('显示模型','Show models') : tr('隐藏模型','Hide models'), '', !models.length, `data-all-hidden="${hidden}"`);
+    const modelActions = action('provider-model-settings', provider.id, tr('模型管理','Manage models'), 'settings');
     const actions = local ? modelActions
       + action('provider-quota-refresh', provider.id, refreshing.has(provider.id) ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh'), 'refresh', refreshing.has(provider.id))
       + action('provider-quota-history', provider.id, tr('趋势','Trend'), 'chart')
@@ -58,7 +56,7 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     const views = kind === 'account'
       ? [['details', 'account-details', tr('账号信息','Account details')], ['edit', 'account-edit', tr('模型设置','Model settings')]]
       : [['details', 'provider-details', tr('用量','Usage')], ['edit', 'provider-edit', tr('连接设置','Connection settings')]];
-    return `<div class="service-detail-tabs" role="tablist" aria-label="${tr('服务设置','Service settings')}">${views.map(([view, action, label]) => `<button id="service-tab-${view}" type="button" class="secondary" role="tab" data-ui-action="${action}" data-id="${esc(id)}" aria-selected="${view === active}" aria-controls="modal_body" tabindex="${view === active ? 0 : -1}" ${view === 'edit' && disabled ? 'disabled' : ''}>${label}</button>`).join('')}</div>`;
+    return `<div class="service-detail-tabs" role="tablist" aria-label="${tr('服务设置','Service settings')}">${views.map(([view, action, label]) => `<button id="service-tab-${view}" type="button" class="secondary" role="tab" data-service-view="${view}" data-ui-action="${action}" data-id="${esc(id)}" aria-selected="${view === active}" aria-controls="modal_body" tabindex="${view === active ? 0 : -1}" ${view === 'edit' && disabled ? 'disabled' : ''}>${label}</button>`).join('')}</div>`;
   }
   function mount(context) {
     const nav = $('service_detail_nav'), body = $('modal_body');
@@ -77,7 +75,7 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
       nav.innerHTML = tabs(id, kind, active, record.duplicate && record.duplicate_of === '当前 Codex 登录');
     }
     for (const button of nav.querySelectorAll('[role="tab"]')) {
-      const selected = button.dataset.uiAction.endsWith(active === 'edit' ? '-edit' : '-details');
+      const selected = button.dataset.serviceView === active;
       button.setAttribute('aria-selected', String(selected));
       button.tabIndex = selected ? 0 : -1;
     }
@@ -90,11 +88,12 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
         : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
       buttons[next].focus(); buttons[next].click();
     };
+    onMount(id,kind,record);
     body.setAttribute('role', 'tabpanel');
     body.setAttribute('aria-labelledby', 'service-tab-' + active);
   }
-  function open(id, kind, active, body, label, submit) {
-    openModal('', body, label, submit, {id, kind, active});
+  function open(id, kind, active, body, label, submit, navigation = {}) {
+    openModal('', body, label, submit, {id, kind, active}, navigation);
   }
   function render() {
     const state = getState(), box = $('services');
@@ -113,11 +112,11 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
       [...box.querySelectorAll('[data-ui-action]')].find(button => button.dataset.uiAction === focused.uiAction && button.dataset.id === focused.id)?.focus({preventScroll:true});
     }
   }
-  async function details(id) {
+  async function details(id, navigation = {}) {
     const provider = (getState().providers || []).find(item => item.id === id);
     if (!provider) return;
     open(id, 'provider', 'details', `<div class="service-detail-actions"><button type="button" class="danger" data-icon="trash" data-ui-action="provider-remove" data-id="${esc(id)}">${tr('移除','Remove')}</button></div>
-      <div id="service_usage">${tr('正在读取用量…','Loading usage…')}</div>`, '', null);
+      <div id="service_usage">${tr('正在读取用量…','Loading usage…')}</div>`, '', null, navigation);
     const box = $('service_usage');
     const controller = new AbortController(); detailsController = controller;
     try {

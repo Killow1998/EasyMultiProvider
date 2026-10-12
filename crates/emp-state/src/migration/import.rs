@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod provider_identity;
+
 struct ValidatedImport {
     source: Value,
     catalog_show_context: Option<bool>,
@@ -172,13 +174,16 @@ fn merge_import(
     payload: ValidatedImport,
     config_path: &Path,
     vault: &VaultStore,
+    preview_auth: &BTreeMap<String, Value>,
 ) -> MigrationResult<(Value, BTreeMap<String, Value>, MigrationImportSummary)> {
     let ValidatedImport {
-        source,
+        mut source,
         catalog_show_context,
         accounts: source_accounts,
-        provider_keys,
+        mut provider_keys,
     } = payload;
+    let provider_id_map =
+        provider_identity::map_providers(current, &mut source, &mut provider_keys, vault);
     let source_provider_count = source
         .get("providers")
         .and_then(Value::as_array)
@@ -304,7 +309,7 @@ fn merge_import(
     }
 
     let mut imported_auth = BTreeMap::new();
-    let mut prefix_map = BTreeMap::new();
+    let mut prefix_map = provider_id_map.clone();
     let mut renamed_accounts = 0_usize;
     for (mut metadata, auth) in source_accounts {
         let source_prefix = prefix_of(&metadata).to_owned();
@@ -313,27 +318,28 @@ fn merge_import(
             .iter()
             .position(|account| id_of(account) == original_id);
         let mut same_index = None;
-        if let Some(existing_index) = original_existing {
-            let candidates = std::iter::once(existing_index)
-                .chain((0..accounts.len()).filter(|index| *index != existing_index));
-            for candidate in candidates {
-                let Some(existing_auth) = stored_account_auth(&accounts[candidate], vault) else {
-                    continue;
-                };
-                if same_account_auth(&existing_auth, &auth) {
-                    same_index = Some(candidate);
-                    break;
-                }
+        for (candidate, existing) in accounts.iter().enumerate() {
+            let Some(existing_auth) = imported_auth
+                .get(id_of(existing))
+                .cloned()
+                .or_else(|| preview_auth.get(id_of(existing)).cloned())
+                .or_else(|| stored_account_auth(existing, vault))
+            else {
+                continue;
+            };
+            if same_account_auth(&existing_auth, &auth) {
+                same_index = Some(candidate);
+                break;
             }
-            if let Some(index) = same_index {
-                set_string(&mut metadata, "id", id_of(&accounts[index]));
-                set_string(&mut metadata, "prefix", prefix_of(&accounts[index]));
-            } else {
-                let renamed = unique_segment(&original_id, &mut reserved);
-                set_string(&mut metadata, "id", &renamed);
-                set_string(&mut metadata, "prefix", renamed);
-                renamed_accounts += 1;
-            }
+        }
+        if let Some(index) = same_index {
+            set_string(&mut metadata, "id", id_of(&accounts[index]));
+            set_string(&mut metadata, "prefix", prefix_of(&accounts[index]));
+        } else if original_existing.is_some() {
+            let renamed = unique_segment(&original_id, &mut reserved);
+            set_string(&mut metadata, "id", &renamed);
+            set_string(&mut metadata, "prefix", renamed);
+            renamed_accounts += 1;
         }
 
         if same_index.is_none() {
@@ -422,12 +428,18 @@ fn merge_import(
         models: source_model_count,
         renamed_accounts,
         overwritten_providers: overwritten_providers.into_iter().collect(),
+        provider_id_map,
     };
     Ok((target, imported_auth, summary))
 }
 
 /// A decrypted, validated `.emp` bundle, ready for [`apply_migration_import`].
 pub struct DecryptedMigration(ValidatedImport);
+
+/// Validate an already decrypted selection before the existing import transaction.
+pub fn validate_migration_payload(payload: &Value) -> MigrationResult<DecryptedMigration> {
+    validate_import_payload(payload).map(DecryptedMigration)
+}
 
 /// Decrypt and validate a Python-compatible `.emp` bundle. This is the slow
 /// (scrypt) half of an import and needs no configuration, so callers can run
@@ -440,6 +452,19 @@ pub fn decrypt_migration_bundle(
     let payload: Value =
         serde_json::from_slice(&plaintext).map_err(|_| MigrationError::DecryptFailed)?;
     validate_import_payload(&payload).map(DecryptedMigration)
+}
+
+/// Compute the normal import result without writing credentials or configuration.
+/// Developer previews use the same identity/collision rules as the real import.
+pub fn preview_migration_import(
+    current: &Value,
+    payload: &Value,
+    config_path: &Path,
+    vault: &VaultStore,
+    preview_auth: &BTreeMap<String, Value>,
+) -> MigrationResult<(Value, BTreeMap<String, Value>, MigrationImportSummary)> {
+    let validated = validate_import_payload(payload)?;
+    merge_import(current, validated, config_path, vault, preview_auth)
 }
 
 /// Decrypt, validate, merge and durably import a Python-compatible `.emp` bundle.
@@ -461,7 +486,8 @@ pub fn apply_migration_import(
     config_path: &Path,
     vault: &VaultStore,
 ) -> MigrationResult<(Value, MigrationImportSummary)> {
-    let (target, imported_auth, summary) = merge_import(current, decrypted.0, config_path, vault)?;
+    let (target, imported_auth, summary) =
+        merge_import(current, decrypted.0, config_path, vault, &BTreeMap::new())?;
 
     let result = with_file_transaction(|transaction| {
         for (account_id, auth) in &imported_auth {

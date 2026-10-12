@@ -464,7 +464,7 @@ impl HttpClientPolicy {
         }
         normalized_headers
             .entry("accept-encoding".to_owned())
-            .or_insert_with(|| "identity".to_owned());
+            .or_insert_with(|| "gzip, br, zstd, deflate".to_owned());
         Ok(RequestPlan {
             method,
             route: RouteIdentity {

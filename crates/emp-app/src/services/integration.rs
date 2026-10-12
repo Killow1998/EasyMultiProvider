@@ -244,46 +244,24 @@ pub(crate) struct IntegrationState {
     pub(crate) inventory: emp_codex::runtime_inventory::RuntimeInventory,
 }
 
-/// Run the portable-history guard and restore Codex configuration as one
-/// operation. The caller holds `IntegrationManager::operation_lock()` so CLI,
-/// API, and lifecycle restoration use the same ordering.
-pub(crate) fn restore_native_with_history(
+/// Restore owned configuration only. Legacy checkpoint migration is explicit
+/// and thread-scoped; switching off EMP never scans or rewrites conversations.
+pub(crate) fn restore_native_configuration(
     manager: &IntegrationManager,
     search: Option<&emp_integration::search::SearchFeatureManager>,
-) -> Result<
-    (
-        IntegrationResult,
-        emp_codex::history::repair::HistoryRepairReport,
-    ),
-    &'static str,
-> {
-    let home = manager
-        .config_path()
-        .parent()
-        .ok_or("codex_home_unavailable")?;
-    let (history_lock, report) = emp_codex::history::repair::repair_before_native_restore(home)
-        .map_err(|error| error.reason())?;
+) -> Result<IntegrationResult, &'static str> {
     if let Some(search) = search {
         search
             .restore()
             .map_err(|_| "search_configuration_restore_failed")?;
     }
-    let result = manager
+    manager
         .restore()
-        .map_err(|_| "native_configuration_restore_failed")?;
-    drop(history_lock);
-    Ok((result, report))
+        .map_err(|_| "native_configuration_restore_failed")
 }
 
-pub(crate) fn restore_error_message(reason: &str) -> &'static str {
-    match reason {
-        "active_codex_writer" => {
-            "Conversation history is still open in Codex. Close the ChatGPT/Codex app, CLI sessions and Codex IDE sessions, then retry. EMP is still running."
-        }
-        _ => {
-            "Native settings were left unchanged because conversation history could not be made portable"
-        }
-    }
+pub(crate) fn restore_error_message(_reason: &str) -> &'static str {
+    "Codex configuration could not be restored; check the integration status and retry"
 }
 
 impl IntegrationState {
@@ -320,8 +298,8 @@ impl IntegrationState {
             .manager
             .operation_lock()
             .map_err(|_| crate::error::AppError::ServerStopped)?;
-        let (result, _) =
-            restore_native_with_history(&self.manager, Some(&self.search)).map_err(|reason| {
+        let result =
+            restore_native_configuration(&self.manager, Some(&self.search)).map_err(|reason| {
                 eprintln!("EMP native restore stopped: {reason}");
                 crate::error::AppError::NativeRestoreBlocked(reason)
             })?;

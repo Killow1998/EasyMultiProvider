@@ -54,11 +54,12 @@ def aggregate(path: Path, filters, metadata):
         call_predicate = [clause.replace('c.', 'call_records.') for clause in call_predicate]
         predicate.append('EXISTS(SELECT 1 FROM '+projection+' WHERE '+' AND '.join(call_predicate)+')')
     sums = ','.join(f'SUM(COALESCE(u.{field},0)) AS {field}' for field in FIELDS)
+    resolved = (Path(__file__).resolve().parents[2]/'contracts/usage-owners.sql').read_text(encoding='utf-8').strip()
     sql = f"""SELECT CAST((u.observed_at-?)/? AS INTEGER) AS bucket,
         u.category,u.owner,u.model,{sums},COUNT(*) AS requests,
         SUM(u.cost_nanos IS NOT NULL) AS priced_requests,
         SUM(COALESCE(u.cost_nanos,0)) AS cost_nanos
-        FROM accounted_usage u WHERE {' AND '.join(predicate)}
+        FROM {resolved} u WHERE {' AND '.join(predicate)}
         GROUP BY bucket,u.category,u.owner,u.model ORDER BY bucket,u.category,u.owner,u.model"""
     # No schema migration, writes, history scan or repricing. Read the live WAL as well.
     connection = sqlite3.connect(path.as_uri()+'?mode=ro', uri=True, timeout=3)
@@ -70,15 +71,21 @@ def aggregate(path: Path, filters, metadata):
         rows = [dict(row) for row in connection.execute(sql, [start, bucket, *args])]
     finally:
         connection.close()
-    names = {(row['category'], row['owner']): row.get('owner_name', '') for row in metadata.get('groups', [])}
+    labels = {(row['category'], row['owner']): row for row in metadata.get('groups', [])}
+    known_accounts = {row['owner']: row for row in metadata.get('groups', [])
+                      if row.get('owner_name') and row['owner'].startswith('account:')}
     groups, periods = {}, {}
     numeric = (*FIELDS, 'requests', 'priced_requests', 'cost_nanos')
     totals = {key: 0 for key in numeric}
     for row in rows:
         row['start'] = start+row.pop('bucket')*bucket
-        row['owner_name'] = names.get((row['category'], row['owner']), '')
+        label = labels.get((row['category'], row['owner']), {})
+        if not label.get('owner_name'):
+            label = known_accounts.get(row['owner'], label)
+        for field in ['owner_name', 'owner_email', 'owner_local_id']:
+            row[field] = label.get(field, '')
         key = (row['category'], row['owner'], row['model'])
-        group = groups.setdefault(key, {k: row[k] for k in ['category', 'owner', 'owner_name', 'model']} | {k: 0 for k in numeric})
+        group = groups.setdefault(key, {k: row[k] for k in ['category', 'owner', 'owner_name', 'owner_email', 'owner_local_id', 'model']} | {k: 0 for k in numeric})
         period = periods.setdefault(row['start'], {'start': row['start']} | {k: 0 for k in numeric})
         for field in numeric:
             row[field] = row[field] or 0

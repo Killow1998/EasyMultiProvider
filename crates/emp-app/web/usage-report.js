@@ -7,7 +7,7 @@ function createUsageReport({api, $, tr, esc, getState, getLanguage, persistState
   const usageMoney = nanos => new Intl.NumberFormat(getLanguage() === 'en' ? 'en-US' : 'zh-CN', {style:'currency', currency:'USD', minimumFractionDigits:2, maximumFractionDigits:4}).format(nanos / 1e9);
   const usageNumber = value => new Intl.NumberFormat(getLanguage() === 'en' ? 'en-US' : 'zh-CN').format(value || 0);
   function usageBucketFor(period) { const span = period.end - period.start; return period.preset === 'all' || span > 3*86400 ? 'day' : span > 3*3600 ? 'hour' : 'minute'; }
-  function openUsage() {
+  function openUsage(selection = {}) {
     usagePayload = null;
     openModal(tr('用量与 API 估算','Usage & API estimates'), `<div id="usage_report">
       ${periodPickerHtml('usage', ['1h','1d','7d','all'])}
@@ -34,14 +34,18 @@ function createUsageReport({api, $, tr, esc, getState, getLanguage, persistState
         if (!eventsConnected() && (result.history?.running || result.history?.queued)) usagePoll = setTimeout(() => { if ($('usage_report') === root) loadUsage(); },1500);
       },
     });
-    registerPeriodPicker('usage', '1d', (period, options) => { if (options.user && $('usage_bucket')) $('usage_bucket').value = usageBucketFor(period); return loadUsage(); });
+    $('usage_category').value = selection.category || 'all';
+    $('usage_bucket').value = selection.bucket || 'hour';
+    registerPeriodPicker('usage', '1d', (period, options) => { if (options.user && $('usage_bucket')) $('usage_bucket').value = usageBucketFor(period); return loadUsage(); }, selection.period);
+    if (selection.bucket) $('usage_bucket').value = selection.bucket;
   }
   function openUsageCalls() {
     const period = periodPickers.usage;
     const category = $('usage_category')?.value;
     const filters = period ? {start:period.start,end:period.end} : {};
     if (category && category !== 'all') filters.category = category;
-    callReports.open(filters);
+    const selection = {category, bucket:$('usage_bucket').value, period:period && {...period}};
+    callReports.open(filters, {back:() => openUsage(selection)});
   }
   async function scanUsageHistory() {
     const root = $('usage_report'); if (!root || root.getAttribute('aria-busy') === 'true') return;

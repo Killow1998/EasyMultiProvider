@@ -29,6 +29,6 @@ def frontend(name, bootstrap):
     }''')
     if name == 'statistics.js':
         text = text.replace('/api/usage?series=true&', '/api/shadow/usage?')
-    if name == 'model-settings.js':
-        text = text.replace("tr('更新模型列表','Update model list')", "tr('读取已保存列表','Read saved list')")
+    if name == 'service-list.js':
+        text = text.replace("action('provider-model-settings', provider.id, tr('模型设置','Model settings')", "action('provider-model-settings', provider.id, tr('模型管理','Manage models')")
     return text.encode('utf-8')

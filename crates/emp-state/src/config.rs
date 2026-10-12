@@ -117,6 +117,7 @@ fn default_native_catalog_path() -> String {
 
 fn default_configuration() -> Value {
     serde_json::json!({
+        "language": "zh-CN",
         "host": DEFAULT_HOST,
         "port": DEFAULT_PORT,
         "native_catalog_path": default_native_catalog_path(),
@@ -598,6 +599,16 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "codex_runtime_sources": codex_runtime_sources,
         "pricing_aliases": pricing_aliases,
     });
+    let language = match raw.get("language") {
+        None => "zh-CN",
+        Some(Value::String(language)) => language.as_str(),
+        _ => return Err(ConfigError::new("language must be en or zh-CN")),
+    };
+    normalized["language"] = match language {
+        "en" => Value::String("en".into()),
+        "zh" | "zh-CN" => Value::String("zh-CN".into()),
+        _ => return Err(ConfigError::new("language must be en or zh-CN")),
+    };
     // Unset settings start enabled; explicit user choices remain authoritative.
     for key in ["auto_enable_on_start", "auto_review_fallback"] {
         normalized[key] = match raw.get(key) {

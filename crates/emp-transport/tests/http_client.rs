@@ -491,7 +491,7 @@ async fn complete_responses_reuse_connections_without_sharing_authorization() {
     assert!(
         requests
             .iter()
-            .all(|request| request.accept_encoding.as_deref() == Some("identity"))
+            .all(|request| request.accept_encoding.as_deref() == Some("gzip, br, zstd, deflate"))
     );
 }
 

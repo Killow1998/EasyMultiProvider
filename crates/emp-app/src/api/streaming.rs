@@ -95,16 +95,58 @@ impl<'a> ObservedSse<'a> {
             .written(write_stream_head_with_headers(self.stream, headers), false)
     }
     pub(crate) fn frames(&mut self, frames: &[Vec<u8>], last_event: &str) -> std::io::Result<()> {
+        if !matches!(last_event, "response.failed" | "error") {
+            return self
+                .observation
+                .event_type_written(last_event, write_stream_frames(self.stream, frames));
+        }
+        let formatted = frames
+            .iter()
+            .map(|frame| {
+                self.observation
+                    .errors()
+                    .frame(frame, false)
+                    .unwrap_or_else(|| frame.clone())
+            })
+            .collect::<Vec<_>>();
         self.observation
-            .event_type_written(last_event, write_stream_frames(self.stream, frames))
+            .event_type_written(last_event, write_stream_frames(self.stream, &formatted))
     }
     fn event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
+        if !matches!(event["type"].as_str(), Some("response.failed" | "error")) {
+            return self
+                .observation
+                .event_written(event, write_stream_frames(self.stream, frames));
+        }
+        let formatted = frames
+            .iter()
+            .map(|frame| {
+                self.observation
+                    .errors()
+                    .frame(frame, false)
+                    .unwrap_or_else(|| frame.clone())
+            })
+            .collect::<Vec<_>>();
         self.observation
-            .event_written(event, write_stream_frames(self.stream, frames))
+            .event_written(event, write_stream_frames(self.stream, &formatted))
     }
     fn upstream_event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
+        if !matches!(event["type"].as_str(), Some("response.failed" | "error")) {
+            return self
+                .observation
+                .upstream_event_written(event, write_stream_frames(self.stream, frames));
+        }
+        let formatted = frames
+            .iter()
+            .map(|frame| {
+                self.observation
+                    .errors()
+                    .frame(frame, true)
+                    .unwrap_or_else(|| frame.clone())
+            })
+            .collect::<Vec<_>>();
         self.observation
-            .upstream_event_written(event, write_stream_frames(self.stream, frames))
+            .upstream_event_written(event, write_stream_frames(self.stream, &formatted))
     }
 }
 
@@ -117,7 +159,7 @@ pub(crate) fn serve_external_stream(
     ids: &ProjectionIds,
 ) -> Result<(), Vec<u8>> {
     let mut monitor = DisconnectMonitor::start(downstream.stream).ok();
-    let (upstream, candidate) = match crate::services::external::open_stream(
+    let (upstream, candidate, usage) = match crate::services::external::open_stream(
         state,
         route,
         body,
@@ -130,7 +172,7 @@ pub(crate) fn serve_external_stream(
         Err(error) => return Err(crate::api::failure_response::external_open_error(error)),
     };
     let completed = relay_external_stream(
-        downstream, state, &candidate, body, incoming, upstream, monitor,
+        downstream, state, &candidate, body, usage, upstream, monitor,
     )?;
     if completed {
         persist_protocol_observation(state, &candidate);
@@ -171,12 +213,14 @@ pub(crate) fn serve_native_stream(
                 body.as_object().expect("validated request object"),
                 incoming,
                 ids,
+                None,
             )
             .map_err(crate::api::native_response::error_response)?,
             None,
         ),
     };
-    relay_native_stream(downstream, state, route, body, incoming, upstream, monitor).map(|_| ())
+    let (upstream, usage) = upstream;
+    relay_native_stream(downstream, state, route, body, usage, upstream, monitor).map(|_| ())
 }
 
 /// One relay state machine for every upstream flavor.
@@ -274,10 +318,8 @@ struct RelayContext<'a> {
     state: &'a ServerState,
     route: &'a ResolvedRoute,
     body: &'a Value,
-    incoming: &'a BTreeMap<String, String>,
     response_headers: &'a BTreeMap<String, String>,
-    usage_owner: Option<&'a str>,
-    started_at: std::time::Instant,
+    usage: crate::services::request_outcome::RequestOutcome<'a>,
 }
 
 fn relay_stream(
@@ -290,20 +332,9 @@ fn relay_stream(
         state,
         route,
         body,
-        incoming,
         response_headers,
-        usage_owner,
-        started_at,
+        mut usage,
     } = context;
-    let mut usage = crate::services::request_outcome::RequestOutcome::new(
-        state,
-        route,
-        body,
-        incoming,
-        usage_owner,
-        "responses",
-    )
-    .started_at(started_at);
     let mut monitor = monitor.or_else(|| DisconnectMonitor::start(downstream.stream).ok());
     let runtime = &state.backend.transport.runtime;
     let mut pending = Vec::<Vec<u8>>::new();
@@ -415,23 +446,19 @@ fn relay_native_stream(
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
-    incoming: &BTreeMap<String, String>,
+    usage: crate::services::request_outcome::RequestOutcome<'_>,
     upstream: NativeStream,
     monitor: Option<DisconnectMonitor>,
 ) -> Result<bool, Vec<u8>> {
     let response_headers = upstream.headers.clone();
-    let started_at = upstream.request_started;
-    let owner = upstream.usage_owner.clone();
     relay_stream(
         RelayContext {
             downstream,
             state,
             route,
             body,
-            incoming,
             response_headers: &response_headers,
-            usage_owner: owner.as_deref(),
-            started_at,
+            usage,
         },
         NativeRelay { upstream },
         monitor,
@@ -443,21 +470,18 @@ fn relay_external_stream(
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
-    incoming: &BTreeMap<String, String>,
+    usage: crate::services::request_outcome::RequestOutcome<'_>,
     upstream: ExternalStream,
     monitor: Option<DisconnectMonitor>,
 ) -> Result<bool, Vec<u8>> {
-    let started_at = upstream.request_started;
     relay_stream(
         RelayContext {
             downstream,
             state,
             route,
             body,
-            incoming,
             response_headers: &BTreeMap::new(),
-            usage_owner: None,
-            started_at,
+            usage,
         },
         ExternalRelay { upstream },
         monitor,

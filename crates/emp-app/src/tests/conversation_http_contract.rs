@@ -329,6 +329,24 @@ fn long_to_short_external_switch_compacts_before_the_destination_request() {
         assert_eq!(summary["stream"], false);
         assert!(!summary.to_string().contains("active request"));
     }
+    let report = request(
+        &server,
+        "/api/calls?start=0&end=9999999999",
+        &[&session_header(&server)],
+    );
+    let report: Value = serde_json::from_str(report.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        report["total"].as_u64().unwrap() as usize,
+        requests.len(),
+        "summary receipts must not replace one another or the destination receipt"
+    );
+    assert!(
+        report["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|record| record["attempts"] == 1 && record["state"] == "completed")
+    );
     server.shutdown().unwrap();
     worker.join().unwrap();
 }

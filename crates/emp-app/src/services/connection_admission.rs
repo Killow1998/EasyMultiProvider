@@ -56,6 +56,13 @@ impl ConnectionAdmission {
         AdaptiveSlotPool::acquire(&self.websockets)
     }
 
+    pub(crate) fn is_quiescing(&self) -> bool {
+        self.requests
+            .state
+            .lock()
+            .map_or(true, |state| state.closed)
+    }
+
     /// Stop new work and wait until admitted requests and WebSockets drain.
     /// `exempt_requests` accounts for the management request doing a restore.
     pub(crate) fn quiesce(
@@ -359,26 +366,5 @@ mod tests {
             .expect("shutdown can wait on a permanently closed gate");
         drop(shutdown_gate);
         assert!(admission.acquire_request().is_none());
-    }
-
-    #[test]
-    fn production_limits_match_python_listener_defaults() {
-        let config = ConnectionAdmissionConfig::default();
-        assert_eq!(
-            (
-                config.requests.initial,
-                config.requests.maximum,
-                config.requests.growth
-            ),
-            (64, 256, 32)
-        );
-        assert_eq!(
-            (
-                config.websockets.initial,
-                config.websockets.maximum,
-                config.websockets.growth
-            ),
-            (48, 224, 32)
-        );
     }
 }

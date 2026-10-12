@@ -2,17 +2,14 @@
 pub(crate) mod commands;
 mod sampler;
 
-pub(crate) use sampler::run as run_sampler;
+pub(crate) use sampler::{run as run_sampler, sample_quotas_once};
 
 use crate::app::ServerState;
 use crate::services::accounts::CredentialOperation;
 use crate::services::accounts::account_public_snapshot;
 use crate::services::accounts::native_account_snapshot;
 use crate::services::accounts::native_auth_document;
-use crate::services::accounts::regular_file;
-use crate::services::accounts::{
-    duplicate_accounts, notify_quota_update, quota_owner_key, quota_refresh_lock,
-};
+use crate::services::accounts::{notify_quota_update, quota_owner_key, quota_refresh_lock};
 use crate::util::system_now;
 use emp_codex::quota::QuotaControl;
 use emp_codex::quota::QuotaError;
@@ -24,10 +21,7 @@ use emp_codex::quota_history::QuotaHistoryError;
 use emp_state::same_account_auth;
 use serde_json::Value;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::Ordering;
-use std::thread;
 use std::time::Duration;
 
 fn quota_control(state: &ServerState) -> QuotaControl<'_> {
@@ -571,56 +565,6 @@ pub(crate) fn consume_quota_reset_for_account(
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct QuotaSampleCounts {
-    pub(crate) sampled: usize,
-    pub(crate) failed: usize,
-}
-
-fn quota_sample_targets(state: &ServerState) -> Vec<String> {
-    let mut targets = Vec::new();
-    if regular_file(&state.backend.accounts.native_auth_path) {
-        targets.push("@native".to_owned());
-    }
-    let Some(config) = state
-        .backend
-        .configuration
-        .read()
-        .ok()
-        .map(|config| config.clone())
-    else {
-        return targets;
-    };
-    // Sample each upstream account once: an import of the native login or of
-    // another imported account shares its quota and history owner.
-    let duplicates = duplicate_accounts(
-        &config,
-        &state.backend.configuration.vault,
-        &state.backend.accounts.native_auth_path,
-    );
-    let accounts = config
-        .get("accounts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    for account in accounts {
-        let Some(account_id) = account.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        if account
-            .get("auth_file")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-        {
-            continue;
-        }
-        if !duplicates.contains_key(account_id) {
-            targets.push(account_id.to_owned());
-        }
-    }
-    targets
-}
-
 pub(crate) fn refresh_account_serialized(
     state: &ServerState,
     account_id: &str,
@@ -633,48 +577,8 @@ pub(crate) fn refresh_account_serialized(
     refresh_account_by_id(state, account_id)
 }
 
-pub(crate) fn sample_quotas_once(state: &Arc<ServerState>) -> QuotaSampleCounts {
-    let targets = quota_sample_targets(state);
-    if targets.is_empty() {
-        return QuotaSampleCounts::default();
-    }
-    let worker_count = 4.min(targets.len());
-    let counts = Arc::new(Mutex::new(QuotaSampleCounts::default()));
-    let mut workers = Vec::with_capacity(worker_count);
-    for offset in 0..worker_count {
-        let state = Arc::clone(state);
-        let counts = Arc::clone(&counts);
-        let batch = targets
-            .iter()
-            .skip(offset)
-            .step_by(worker_count)
-            .cloned()
-            .collect::<Vec<_>>();
-        if let Ok(worker) = thread::Builder::new()
-            .name("emp-quota-refresh".to_owned())
-            .spawn(move || {
-                for account_id in batch {
-                    if state.shutdown.load(Ordering::Acquire) {
-                        return;
-                    }
-                    let sampled = refresh_account_serialized(&state, &account_id).is_ok();
-                    if let Ok(mut counts) = counts.lock() {
-                        if sampled {
-                            counts.sampled += 1;
-                        } else {
-                            counts.failed += 1;
-                        }
-                    }
-                }
-            })
-        {
-            workers.push(worker);
-        }
-    }
-    for worker in workers {
-        let _ = worker.join();
-    }
-    counts
-        .lock()
-        .map_or_else(|_| QuotaSampleCounts::default(), |counts| *counts)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct QuotaSampleCounts {
+    pub(crate) sampled: usize,
+    pub(crate) failed: usize,
 }

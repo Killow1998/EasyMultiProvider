@@ -11,22 +11,22 @@
 .presentation-service-icon[data-brand=zhipu]{--brand-color:#3859ff}
 .presentation-service-icon[data-brand=custom]{--brand-color:var(--accent)}
 .presentation-service-icon>svg{position:relative;width:24px;height:24px;z-index:1}
-.presentation-service-icon{cursor:pointer;transition:background .15s,box-presentation .15s}
+.presentation-service-icon{cursor:pointer;transition:background .15s,box-shadow .15s}
 .presentation-service-icon>svg{transition:transform .15s}
 .presentation-service-icon:hover{background:transparent}
 .presentation-service-icon:hover>svg{transform:scale(1.06)}
 .presentation-service-icon:focus-visible{background:transparent;border-color:transparent}
 .presentation-service-icon:focus-visible{outline:2px solid var(--brand-color);outline-offset:2px}
-#services .account-summary{position:relative;transition:box-presentation .18s,transform .18s,border-color .18s}
-#services .account-summary:hover,#services .account-summary:focus-visible{background:var(--panel);color:var(--text);border-color:var(--border-strong);box-presentation:none;transform:translateY(-1px)}
-#services .account-summary:active{transform:translateY(0);box-presentation:0 0 0 1px var(--border-strong)}
+#services .account-summary{position:relative;transition:box-shadow .18s,transform .18s,border-color .18s}
+#services .account-summary:hover,#services .account-summary:focus-visible{background:var(--panel);color:var(--text);border-color:var(--border-strong);box-shadow:none;transform:translateY(-1px)}
+#services .account-summary:active{transform:translateY(0);box-shadow:0 0 0 1px var(--border-strong)}
 .presentation-service-icon>svg.presentation-icon-color{display:none}
 .presentation-service-icon:is([data-activity-state=active],[data-activity-state=recent])>svg.presentation-icon-color{display:block}
 .presentation-service-icon:is([data-activity-state=active],[data-activity-state=recent]):has(>svg.presentation-icon-color)>svg.presentation-icon-mono{display:none}
 .presentation-service-icon::before{content:"";position:absolute;inset:1px;border-radius:50%;z-index:-1}
 .presentation-service-icon[data-activity-state=active]{color:var(--brand-color)}
 .presentation-service-icon[data-activity-state=recent]{color:var(--brand-color)}
-.presentation-service-icon[data-activity-state=recent]::before{box-presentation:0 0 8px color-mix(in srgb,var(--halo-color,var(--brand-color)) 20%,transparent)}
+.presentation-service-icon[data-activity-state=recent]::before{box-shadow:0 0 8px color-mix(in srgb,var(--halo-color,var(--brand-color)) 20%,transparent)}
 body[data-quota-style=ring] #services{display:block;overflow-x:auto}
 body[data-quota-style=ring] #services .service-card{display:grid;grid-template-columns:minmax(0,1fr) 228px minmax(0,1fr);align-items:center;gap:0 12px;padding:8px 12px;height:57px;min-height:0;min-width:640px;border-radius:0}
 body[data-quota-style=ring] #services .service-card:first-child{border-radius:8px 8px 0 0}
@@ -61,7 +61,7 @@ body[data-quota-style=ring] #services .service-identity .account-name{max-width:
 .modal:has(#performance_call_report){width:min(880px,100%)}
 #performance_call_report .report-status:empty{display:none}
 .presentation-stat-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--border);border-radius:6px;overflow:hidden;background:linear-gradient(140deg,var(--panel-soft),var(--panel));margin:4px 0 18px}
-.presentation-stat{position:relative;min-width:0;min-height:92px;padding:12px 16px;box-presentation:1px 0 0 var(--border),0 1px 0 var(--border);display:flex;flex-direction:column;align-items:flex-start;gap:5px;overflow-wrap:anywhere}
+.presentation-stat{position:relative;min-width:0;min-height:92px;padding:12px 16px;box-shadow:1px 0 0 var(--border),0 1px 0 var(--border);display:flex;flex-direction:column;align-items:flex-start;gap:5px;overflow-wrap:anywhere}
 .presentation-stat-label{font-size:12px;line-height:1.4;color:var(--muted)}
 .presentation-stat>strong{font-size:22px;line-height:1.25;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.35px}
 .presentation-stat>small{font-size:11px;line-height:1.5;color:var(--muted);max-width:100%;min-height:17px}
@@ -87,7 +87,7 @@ body[data-quota-style=ring] #services .service-identity .account-name{max-width:
 .presentation-chart-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;vector-effect:non-scaling-stroke}
 .presentation-time-chart [data-chart-cursor]{fill:var(--accent);opacity:.08;pointer-events:none}
 .presentation-time-chart .presentation-chart-empty{font-size:13px}
-.presentation-chart-tooltip{position:absolute;top:32px;max-width:calc(100% - 8px);pointer-events:none;background:var(--panel);border:1px solid var(--border-strong);border-radius:5px;box-presentation:0 4px 16px #0002;padding:9px 11px;z-index:1;display:flex;flex-direction:column;gap:6px;white-space:nowrap;font-size:11px}
+.presentation-chart-tooltip{position:absolute;top:32px;max-width:calc(100% - 8px);pointer-events:none;background:var(--panel);border:1px solid var(--border-strong);border-radius:5px;box-shadow:0 4px 16px #0002;padding:9px 11px;z-index:1;display:flex;flex-direction:column;gap:6px;white-space:nowrap;font-size:11px}
 .presentation-chart-tooltip[hidden]{display:none}
 .presentation-chart-tooltip>span,.presentation-chart-tooltip>small{color:var(--muted);font-size:11px}
 .presentation-chart-tooltip>strong{font-size:14px;font-variant-numeric:tabular-nums}
@@ -96,17 +96,18 @@ body[data-quota-style=ring] #services .service-identity .account-name{max-width:
 /* All control fills and text retain their idle appearance. Hover paint from the
    production stylesheet is removed only in the served presentation copy. */
 body :is(button:not(:disabled),a.repo-link){transition:transform .16s}
-body :is(button:not(:disabled),a.repo-link):hover{transform:translateY(-1px);box-presentation:none}
+body :is(button:not(:disabled),a.repo-link):hover{transform:translateY(-1px);box-shadow:none}
 body :is(button:not(:disabled),a.repo-link):active{transform:translateY(0)}
 body :is(button:not(:disabled),a.repo-link):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+html[data-input-modality=pointer] body :is(button,a.repo-link):focus-visible{outline:none}
 .presentation-hover-feedback{position:fixed;pointer-events:none;z-index:1000;overflow:hidden;color:var(--presentation-dot-color,var(--accent))}
 .presentation-hover-feedback>canvas{display:block;width:100%;will-change:transform}
 :root{--halo-rim:45%;--halo-glow:50%;--halo-tail:20%;--halo-peak:70%}
 :root .presentation-service-icon[data-brand=codex]{--halo-color:#879aff}
 :root[data-theme=light]{--halo-rim:12%;--halo-glow:18%;--halo-tail:5%;--halo-peak:33%}
 @media(prefers-color-scheme:light){:root:not([data-theme=dark]){--halo-rim:12%;--halo-glow:18%;--halo-tail:5%;--halo-peak:33%}}
-:root[data-theme=dark] .presentation-hover-feedback{filter:drop-presentation(0 0 2px color-mix(in srgb,var(--presentation-dot-color,var(--accent)) 60%,transparent))}
-@media(prefers-color-scheme:dark){:root:not([data-theme=light]) .presentation-hover-feedback{filter:drop-presentation(0 0 2px color-mix(in srgb,var(--presentation-dot-color,var(--accent)) 60%,transparent))}}
+:root[data-theme=dark] .presentation-hover-feedback{filter:drop-shadow(0 0 2px color-mix(in srgb,var(--presentation-dot-color,var(--accent)) 60%,transparent))}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]) .presentation-hover-feedback{filter:drop-shadow(0 0 2px color-mix(in srgb,var(--presentation-dot-color,var(--accent)) 60%,transparent))}}
 @media(prefers-reduced-motion:reduce){body :is(button:not(:disabled),a.repo-link){transition:none}body :is(button:not(:disabled),a.repo-link):hover{transform:none}.presentation-service-icon:hover>svg{transform:none}}
 
 #presentation_stats .presentation-stat-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
@@ -119,13 +120,14 @@ body :is(button:not(:disabled),a.repo-link):focus-visible{outline:2px solid var(
 .presentation-chart-legend i{width:8px;height:8px;border-radius:2px;flex:none}
 .presentation-usage-category th{background:var(--panel-soft);padding-top:14px}
 #presentation_stats td small{display:block;color:var(--muted);font-size:11px}
-#presentation_stats_calls>.period-picker,#presentation_stats_calls>.call-toolbar,#presentation_stats_models>.period-picker,#presentation_stats_models>.call-toolbar,#presentation_stats_models>.report-tabs{display:none}
+#presentation_stats_calls>.report-status:empty{display:none}
+#presentation_stats_models>.period-picker,#presentation_stats_models>.call-toolbar,#presentation_stats_models>.report-tabs{display:none}
 #presentation_stats details[data-model-performance]{margin-top:16px}
 @media(max-width:600px){#presentation_stats .presentation-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .presentation-dot-choices{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
 .presentation-dot-choice{gap:6px;padding:0 8px;min-width:32px}
-.presentation-dot-swatch{display:block;flex:none;width:14px;height:14px;border-radius:50%;background:var(--swatch);box-presentation:inset 0 0 0 1px #0002}
+.presentation-dot-swatch{display:block;flex:none;width:14px;height:14px;border-radius:50%;background:var(--swatch);box-shadow:inset 0 0 0 1px #0002}
 .presentation-dot-swatch.is-multicolor{background:conic-gradient(#487de8,#9473c6,#299c9f,#487de8)}
 .presentation-dot-choice[aria-pressed=true]{border-color:var(--accent);outline:1px solid var(--accent);outline-offset:1px}
 .presentation-dot-custom{display:flex;align-items:center;gap:6px;margin:0;padding:0 8px;height:32px;border:1px solid var(--border-strong);border-radius:6px;color:var(--text);cursor:pointer}
@@ -139,13 +141,13 @@ body :is(button:not(:disabled),a.repo-link):focus-visible{outline:2px solid var(
 .presentation-dot-custom{transition:transform .16s}.presentation-dot-custom:hover{transform:translateY(-1px)}.presentation-dot-custom:active{transform:none}
 @media(prefers-reduced-motion:reduce){.presentation-dot-custom{transition:none}.presentation-dot-custom:hover{transform:none}}
 
-.presentation-service-icon[data-error-message]::before{animation:none;box-presentation:0 0 0 2px color-mix(in srgb,var(--danger) 50%,transparent),0 0 9px color-mix(in srgb,var(--danger) 28%,transparent);background:transparent}
-.presentation-service-error-badge{position:absolute;right:-3px;top:-4px;z-index:2;width:13px;height:13px;border-radius:50%;background:var(--danger);color:#fff;font:700 10px/13px system-ui;text-align:center;box-presentation:0 0 0 2px var(--panel);pointer-events:none}
-.presentation-service-error{position:fixed;z-index:1100;width:320px;max-width:calc(100vw - 16px);max-height:min(240px,calc(100vh - 16px));overflow:auto;padding:10px 12px;border:1px solid var(--danger);border-radius:8px;background:var(--panel);color:var(--text);box-presentation:0 5px 20px #0003;font-size:12px;line-height:1.5;overflow-wrap:anywhere;white-space:pre-wrap}
+.presentation-service-icon[data-error-message]::before{animation:none;box-shadow:0 0 0 2px color-mix(in srgb,var(--danger) 50%,transparent),0 0 9px color-mix(in srgb,var(--danger) 28%,transparent);background:transparent}
+.presentation-service-error-badge{position:absolute;right:-3px;top:-4px;z-index:2;width:13px;height:13px;border-radius:50%;background:var(--danger);color:#fff;font:700 10px/13px system-ui;text-align:center;box-shadow:0 0 0 2px var(--panel);pointer-events:none}
+.presentation-service-error{position:fixed;z-index:1100;width:320px;max-width:calc(100vw - 16px);max-height:min(240px,calc(100vh - 16px));overflow:auto;padding:10px 12px;border:1px solid var(--danger);border-radius:8px;background:var(--panel);color:var(--text);box-shadow:0 5px 20px #0003;font-size:12px;line-height:1.5;overflow-wrap:anywhere;white-space:pre-wrap}
 .presentation-service-error>strong{display:block;color:var(--danger-text);font-size:12px;margin-bottom:4px}
 .presentation-service-error>span{display:block}
 
-.presentation-error-demo{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:1200;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 24px);padding:8px 12px;border:1px solid var(--border-strong);border-radius:8px;background:var(--panel);color:var(--text);box-presentation:0 4px 16px #0002;font-size:12px;white-space:nowrap}
+.presentation-error-demo{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:1200;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 24px);padding:8px 12px;border:1px solid var(--border-strong);border-radius:8px;background:var(--panel);color:var(--text);box-shadow:0 4px 16px #0002;font-size:12px;white-space:nowrap}
 .presentation-error-demo button{height:30px;min-height:30px;font-size:12px}
 
 .presentation-logo-shell{position:relative;display:inline-flex;vertical-align:middle}
@@ -159,9 +161,9 @@ body :is(button:not(:disabled),a.repo-link):focus-visible{outline:2px solid var(
 @media(prefers-reduced-motion:reduce){.presentation-logo-wave>span{animation:none;transform:none}.presentation-logo-shell .dot-logo.emp-live circle.on{fill:#22c76a;opacity:1}}
 
 .presentation-activity-halo{position:absolute;inset:1px;z-index:-1;border-radius:50%;display:none;pointer-events:none}
-.presentation-service-icon[data-activity-state=active]::before{animation:none;box-presentation:none;background:transparent}
-.presentation-service-icon[data-activity-state=active]>.presentation-activity-halo{display:block;background:color-mix(in srgb,var(--halo-color,var(--brand-color)) 14%,transparent);box-presentation:0 0 0 2px color-mix(in srgb,var(--halo-color,var(--brand-color)) var(--halo-rim) ,transparent),0 0 12px color-mix(in srgb,var(--halo-color,var(--brand-color)) var(--halo-glow),transparent)}
+.presentation-service-icon[data-activity-state=active]::before{animation:none;box-shadow:none;background:transparent}
+.presentation-service-icon[data-activity-state=active]>.presentation-activity-halo{display:block;background:color-mix(in srgb,var(--halo-color,var(--brand-color)) 14%,transparent);box-shadow:0 0 0 2px color-mix(in srgb,var(--halo-color,var(--brand-color)) var(--halo-rim) ,transparent),0 0 12px color-mix(in srgb,var(--halo-color,var(--brand-color)) var(--halo-glow),transparent)}
 .presentation-service-icon[data-error-message]>.presentation-activity-halo{display:none}
-.presentation-service-icon[data-error-message]::before{box-presentation:0 0 0 2px color-mix(in srgb,var(--danger) 50%,transparent),0 0 9px color-mix(in srgb,var(--danger) 28%,transparent)}
+.presentation-service-icon[data-error-message]::before{box-shadow:0 0 0 2px color-mix(in srgb,var(--danger) 50%,transparent),0 0 9px color-mix(in srgb,var(--danger) 28%,transparent)}
 /* The published top-bar rule used 3px above / 7px below the text. */
 .page-header-controls .header-preference select{padding-top:5px;padding-bottom:5px;line-height:18px}

@@ -453,3 +453,40 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
     assert_eq!(finished["retry_count"], 1);
     assert!(finished["duration_ms"].is_number());
 }
+
+#[test]
+fn release_check_retains_notes_without_starting_installation() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let name = crate::update::release::current_asset_name().unwrap();
+    let notes = "## Fixes\n- Restore and layout corrections\n<script>sample text</script>";
+    let body = serde_json::to_vec(&serde_json::json!({
+        "tag_name":"v9.0.0","draft":false,"prerelease":false,"body":notes,
+        "assets":[{"name":name,"digest":format!("sha256:{}","a".repeat(64)),"size":8,
+        "browser_download_url":format!("{base}/releases/download/v9.0.0/{name}")}]
+    }))
+    .unwrap();
+    let response = [
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes(),
+        body,
+    ]
+    .concat();
+    let server = thread::spawn(move || retry::serve_responses(listener, vec![response]));
+    let manager = UpdateManager::with_endpoints(
+        std::env::current_exe().unwrap(),
+        Vec::new(),
+        env!("CARGO_PKG_VERSION"),
+        UpdateEndpoints::for_source(&base, format!("{base}/latest")),
+        || panic!("checking release notes must never install or exit"),
+    )
+    .unwrap();
+    manager.check().unwrap();
+    assert_eq!(server.join().unwrap(), 1);
+    assert_eq!(manager.snapshot().state, "available");
+    assert_eq!(manager.snapshot().release_notes, notes);
+    assert_eq!(manager.snapshot().latest_version.as_deref(), Some("9.0.0"));
+}

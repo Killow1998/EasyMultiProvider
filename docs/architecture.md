@@ -1,5 +1,8 @@
 # Architecture assessment and refactoring direction
 
+For the current crate map and the latest ownership changes, see
+[Current architecture and lifecycle ablation](#current-architecture-and-lifecycle-ablation-2026-10-11).
+
 For the current whole-backend ownership contract, before/after diagrams and
 acceptance checklist, see [Backend workflows](backend-workflows.md). The
 assessment below records the earlier passes; availability gates, cooldowns and
@@ -10,6 +13,39 @@ local profiling changes. The first ownership pass is implemented locally.
 The continuation below deepens external request execution and error presentation.
 This review traced application workflows and inspected all nine crate manifests;
 it is not a line-by-line security audit or new cross-platform acceptance run.
+
+## 0.13.0 accepted UI and response ownership (2026-10-12)
+
+Formal and Shadow pages now share migration, model management, service presentation,
+subscription settings, connection forms and update controllers. Shadow supplies
+isolation and demonstration adapters only; accepted UI assets have one source.
+The page composes stable feature interfaces rather than replacing their functions
+at runtime. Subscription preference projection is pure; each modal controller
+owns cancellation and rejects replies for a closed or replaced window.
+
+Removing the retired homepage model list exposed a real dependency: the motion
+owner attempted to observe a missing element and stopped page initialization.
+Motion now observes only existing targets. The retired checkbox-manager test was
+replaced with current manager cancellation/stale-reply acceptance. Meaningful
+protocol, history, credential and rollback tests remain. The smaller entry files
+are a navigation improvement; no repository-wide independence or CPU/RAM gain
+is claimed.
+
+Formal migration previews keep decrypted packages server-side, at most four for
+30 minutes, bound to the authenticated management session. The browser receives
+an opaque token and scrubbed metadata. The pure Rust selection owner excludes
+unselected services, models and credentials. Import uses existing account locks
+and transactions; observation retains separate commit/catalog publication stages.
+The Shadow bridge keeps its own read-only cache and never forwards a write.
+
+The HTTP response owner now contains decoded reads, size/deadline enforcement and
+bounded cleanup. Requests negotiate gzip, Brotli, Zstandard and deflate; reqwest
+streams decoding and removes encoded length/encoding headers. Caller-provided
+`Accept-Encoding` is retained. General API request compression and downstream
+response compression are not added. Existing native zstd requests and WS behavior
+remain. Codec tests require the first SSE event before upstream EOF, validate
+limits/corruption and compare synthetic encoded bytes; this is not a WAN savings
+estimate.
 
 ## Decision
 
@@ -92,7 +128,7 @@ The configuration module now owns a private mutex and durable commit/reload.
 Readers receive snapshots or read-only guards; only services can acquire an
 edit, and memory changes are published after commit succeeds. Settings commands
 own validation and post-commit work; account import/removal/migration retain
-credential locking and legacy-history settlement. HTTP handlers receive results
+credential locking and account-state settlement. HTTP handlers receive results
 without orchestrating transactions. CLI listener overrides are an explicit,
 non-persistent startup operation. Raw mutation is available only to test fixtures.
 
@@ -324,6 +360,26 @@ model inference remain existing shared operations; they are not duplicated.
 Performance navigation stays mounted during data refresh; overview metrics are
 plain facts rather than six equivalent navigation buttons.
 
+Dialog navigation passes an explicit `back` callback to the shared modal shell.
+The parent supplies a `reopen` callback for child transitions; service tabs carry
+their service identity and selected tab. Root dialogs hide Back, while X clears
+navigation and closes the dialog. Replacing a view runs its existing feature
+cleanup. Model editing uses this shell instead of separate shadow header buttons,
+retaining its manager search on return. The call-outcome dialog remains an overlay:
+Back removes it without rebuilding the report; X closes the containing report.
+Both header controls are transparent and borderless.
+
+```mermaid
+flowchart LR
+  Parent[Parent feature and selected state] -->|explicit reopen callback| Child[Child feature]
+  Child -->|back callback| Shell[Shared modal header]
+  Shell -->|Back| Parent
+  Shell -->|X and cleanup| Closed[Closed]
+  Report[Report and filters] --> Overlay[Call outcomes overlay]
+  Overlay -->|Back removes overlay| Report
+  Overlay -->|X closes report| Closed
+```
+
 HTTP error serialization shares a status/body/retry-header function.
 `api/failure_response/stream.rs` owns the common SSE/WebSocket error detail;
 WebSocket does not allocate an SSE envelope to extract that detail. Native
@@ -352,6 +408,50 @@ configuration or execute account, inference, installer or lifecycle actions.
 The bridge forwards only explicitly allowed read requests and reuses the existing
 management session server-side, without exposing or rotating production credentials.
 Creating this preview does not require rebuilding, installing or restarting EMP.
+Encrypted migration preview additionally uses the optional `emp-state`
+`shadow_migration_codec` example. It calls the production read-only export builder
+and import planner, so account identity conflicts follow the real migration rules.
+The preview bridge handles these local operations without forwarding a production
+write. Decoded credentials stay in a bounded, expiring process cache; the browser
+receives scrubbed configuration and an opaque draft token. Only an explicit
+selected export produces an encrypted file. See the shadow README for building
+the helper and the cache/re-export limits.
+
+Shared account and lifetime renderers are supplied at the existing component
+composition boundary for both formal and preview pages.
+Do not slice executable component bodies to create preview variants. Migration
+markup and its CSS belong to the view; the dialog owns requests/cancellation;
+`migration_selection.py` owns pure package projection; the local bridge owns
+private credentials and codec execution. Repeated imports merge against the
+current draft and resolve cached account/provider identities without credential files.
+Provider ID conflicts merge only after verifying the base URL and nonempty API key
+against trusted state; distinct or unverifiable connections receive new IDs.
+The mapping is shared by model routes, aliases and credential ownership. Shadow
+notices only explain the computed result and never perform identity matching.
+Production import continues to resolve its own stored credentials.
+
+The right import preview permits name edits only for incoming targets identified
+by the planner's existing source/token provenance. Names are staged against target
+service references after identity resolution; they do not change account matching,
+routes or credential ownership. Selection refreshes retain name edits without
+resetting the input's focus while typing. One Import action saves the selected
+configuration and names together; closing discards edits. Export projection carries
+those service names into the encrypted package. Demo imports never write a draft.
+
+The shared service-local model manager reuses the existing model editor. It owns
+its cache read, search, visibility actions and return navigation; the normal
+configuration owner still saves drafts. Model tests remain blocked in the preview.
+
+```mermaid
+flowchart LR
+    View[Migration view and scoped CSS] --> Dialog[Dialog request owner]
+    Dialog --> Bridge[Shadow-local private cache]
+    Bridge --> Selection[Pure package projection]
+    Bridge --> Codec[Existing Rust codec and import planner]
+    View --> Names[Inline name edits]
+    Names --> Dialog
+    Dialog -->|Import| Draft[Redacted browser draft]
+```
 
 Retain the existing backend contracts and metric definitions. Check observable
 behavior in English and Simplified Chinese, light/dark appearance and representative
@@ -361,7 +461,19 @@ Use one hover language across clickable controls: preserve their fills and text,
 show a dotted wave around the outline, and use a small lift or icon enlargement.
 Verify actual pointer hover and keyboard focus in both light and dark appearances,
 including primary/secondary/danger buttons, selected controls and service icons.
+For SVG/canvas interaction changes, check both Firefox and Chromium, including
+Windows Edge. Confirm that the canvas contains painted dots and that normal motion
+advances frames; checking only whether the overlay is visible is insufficient.
+Measure SVG contours while their SVG is connected to the rendered document, and
+remove temporary measurement nodes after use.
 Disabled controls stay inactive; reduced-motion preferences retain a static cue.
+Place paired quota rings using equal grid tracks on either side of the quota,
+including container breakpoints; do not compensate with width-specific offsets.
+Context settings distinguish the configured maximum, cloud default/catalog limit
+and Codex's usable window. Read the effective percentage from model metadata,
+using 95% only as the existing fallback; usable context is not the separate
+compaction threshold. Unverified input modalities remain unknown rather than
+being converted into an unsupported-image claim.
 Confirm that preview edits leave production settings and the active runtime intact.
 Do not run unrelated suites or paid inference to verify presentation changes.
 
@@ -678,3 +790,251 @@ The shared service-usage renderer also retains owner-filtered lifetime summaries
 The ledger, time/source filters, pricing and chart queries are unchanged.
 Thirteen frontend behavior contracts passed, including aggregation, service
 classification, unknown fields, escaping and preservation of the query rows.
+
+## Current architecture and lifecycle ablation (2026-10-11)
+
+Codex remains the agent runtime: it owns tools, permissions and session execution.
+EMP owns service credentials, model selection, necessary protocol adaptation,
+transport, history preparation and observations. The runtime path is:
+
+```mermaid
+flowchart TD
+    Codex[Codex runtime] --> API[emp-app: Responses HTTP / WebSocket]
+    API --> Prepare[Request preparation and immutable route]
+    Prepare --> Native[Native subscription forwarding]
+    Prepare --> External[External HTTP execution]
+    Prepare --> Claude[Controlled Claude CLI adapter]
+    External --> Router[emp-router: upstream request and stream]
+    Router --> Protocol[emp-protocol: necessary protocol projection]
+    Router --> Transport[emp-transport: HTTP / SSE / WebSocket]
+    Native --> Transport
+    Claude --> Relay[Private relay and bounded process lifecycle]
+    Transport --> Upstream[Selected upstream service]
+    Relay --> Upstream
+    Prepare --> History[emp-history and emp-codex: history / context]
+```
+
+The nine crates retain their existing boundaries; this pass adds no crate,
+plugin bus, universal internal message schema or new product capability.
+
+| Crate | Responsibility |
+| --- | --- |
+| `emp-app` | Listener/UI, application composition, request workflows and mutable service owners |
+| `emp-core` | Route identity and model/provider capability views |
+| `emp-router` | Upstream request/stream execution and protocol selection |
+| `emp-protocol` | Responses, Chat and Anthropic projections and tool/stream state machines |
+| `emp-transport` | Connections, proxy/TLS, HTTP framing, SSE and WebSocket transport |
+| `emp-history` | History pairing, context budgeting and compaction algorithms |
+| `emp-codex` | Concrete Codex runtime/catalog/history/quota integration |
+| `emp-state` | Persisted configuration, credentials, accounting and diagnostics storage |
+| `emp-integration` | Codex configuration leases, conflict detection and restoration |
+
+Crate dependencies are acyclic, and none of the eight libraries depends on
+`emp-app`. `xtask` is build/release tooling, not a runtime crate. The complete
+source dependency graph is defined by the Cargo manifests.
+
+The latest change removes frontend lifecycle knowledge from the page entry:
+
+```mermaid
+flowchart LR
+    Compose[index.html: compose owners] --> Events[management-events.js]
+    Compose --> Trend[quota-history.js]
+    Compose --> Reports[statistics.js and call-reports.js]
+    Compose --> Services[service-list.js and account-details.js]
+    Feed[Backend management SSE] --> Events
+    Events --> Dispatch[Page routes notifications to owners]
+    Dispatch --> Reports
+    Dispatch --> Services
+    Dispatch --> Trend
+    Trend --> Query[report-query.js: cancellation and newest-result delivery]
+    Reports --> Query
+```
+
+`management-events.js` owns the connection, reader, connected state and reconnect
+wait. `quota-history.js` owns trend reads, timer, chart state, zoom and delegated
+interactions. Closing or superseding a window cancels its read; obsolete results
+cannot write into another window. The shared report-query owner replaces the
+trend's independent request-generation implementation. Page composition routes
+usage notifications explicitly, without replacing feature methods at runtime.
+
+Quota sampling remains scheduled backend work at 44-second deadlines. Its
+existing sampler now owns target selection and worker aggregation. Up to four
+scoped workers borrow their inputs and each writes only its own counter; joining
+aggregates those counters. This removes the shared counting mutex, reference
+count copies and per-worker cloned batches. Account refresh/credential locks,
+deduplication, shutdown checks and durable storage remain at their existing
+boundaries. A joined worker's earlier counts remain available even if it panics.
+The frontend's five-minute trend reload reads stored history; the disconnected
+SSE fallback reads current account snapshots. Neither is a model request.
+
+Each Codex quota/reset helper uses a disposable credential home with plugins
+disabled and a fixed relative `model_catalog_json = "quota-models.json"` pointing
+to its private, bundled catalog. The config does not serialize a host path into
+TOML, including paths with non-UTF-8 bytes or DEL characters.
+The nonempty catalog contains one hidden placeholder; quota helpers never run
+inference or publish this catalog to the user's model picker. This keeps
+app-server startup from downloading a remote model catalog on every quota read,
+without sharing credential directories or changing the user's Codex settings.
+Native quota reads and resets use a disposable `chatgptAuthTokens` snapshot with
+an empty refresh credential. The canonical native login belongs to Codex; a
+helper must not rotate credentials it cannot persist. Imported accounts retain
+managed refresh credentials and their existing save callback, including saves
+before later errors or cancellation. RPC `refreshToken=false` alone does not
+prevent Codex's auth manager from proactively rotating stale credentials.
+`quota_catalog_download` exercises actual installed engines against a synthetic
+TLS backend: native reads/resets never call OAuth, imported rotation is saved,
+and startup does not request `/models`. Removing the local catalog configuration
+must expose a `/models` request.
+
+Execution facts now belong to the request's `RequestOutcome`: each dispatch
+increments its own attempt count and records its protocol/model; scheduled
+retries append bounded, content-free facts. HTTP and Claude execution create the
+outcome before entering the executor. Successful stream opening transfers that
+same outcome to the SSE or WebSocket relay. A native WebSocket 1009 fallback
+also transfers its outcome into HTTP opening, preserving both attempts in one
+completed receipt. The 128-row activity buffer is only a UI projection;
+persistence never snapshots it to reconstruct execution history.
+
+Codex `response.create` with explicit `generate=false` is connection prewarm,
+not inference. Native transport preserves its upstream events and resumable
+response ID, but its outcome records `model_prewarm_started/finished` diagnostics
+without call/usage rows, performance samples, or inference calibration. Actual
+inference with zero output tokens still records its reported input and outcome;
+output length is never used to identify prewarm.
+
+Subscription defaults, maximum context and effective input percentage come from
+the authenticated model catalog, with bounded background refresh. EMP does not
+keep per-model numeric constants for these values. Explicit user preferences
+remain overrides bounded by the latest catalog maximum. API specifications and
+announcements are not a replacement for the selected subscription's metadata.
+The shared subscription editor stages per-model synchronization in its own
+pending model-ID set. One configuration save copies the latest context override
+and visibility for those IDs to peer Codex accounts and the Native root preferences,
+preserving other model settings and providers. Empty input removes the override
+so each subscription uses the catalog default; closing discards pending copies.
+Rendering the editor does not seed context maxima or write configuration.
+Subscription authentication uses Codex's online models manager: EMP publishes
+`/models` and an ETag, and Codex owns TTL and response-triggered refresh. The
+managed integration does not write `model_catalog_json` for subscription auth.
+API-only/unrecognized-auth paths retain a file fallback for compatible older
+engines; a file catalog uses Codex's static manager and needs runtime reload.
+An isolated Codex 0.162.1 subscription-auth fixture loaded an added EMP model
+inside the same process after a response ETag changed. This verifies catalog
+refresh, not replacement of an already-open picker or a provider's physical
+context capacity.
+
+Native restoration and exit restore configuration only. Idle WebSockets poll
+for the admission-drain state and close with 1001; active executors finish or
+the restore times out and reopens admission. Request-local checkpoint decoding
+continues while EMP is enabled. Direct native resume of a legacy `emp1:` thread
+uses `EMP migrate-history --thread-id ID`: only that database row and bounded
+lineage are read, only that rollout is changed, and the selected writer lock,
+append-only replacement and transactional backup boundaries remain. Native
+opaque reasoning and tool call/result pairs are preserved. Once EMP is disabled
+it cannot intercept native requests; explicit migration is that boundary.
+
+```mermaid
+flowchart LR
+  Executor[HTTP / Claude executor] --> Receipt[RequestOutcome]
+  Receipt --> Relay[SSE / WebSocket relay]
+  Relay --> Finish[One terminal finalization]
+  Finish --> Ledger[Durable call ledger]
+  Receipt -. bounded projection .-> Activity[Activity / Web UI]
+```
+
+The quota facade exports the same public functions, while `quota/rpc.rs` owns
+RPC classification/projection and separate test files own process fixtures.
+`native/auth.rs` owns credential selection; native complete and compact reuse one
+buffered execution/result path. `request_outcome/execution.rs` owns attempt/retry
+facts independently of presentation. The external retry executor no longer has
+parallel optional-outcome branches or late accounting reconstruction. Internal
+history summaries use a distinct operation receipt rather than replacing their
+parent response receipt. No crate, provider protocol or plugin abstraction was
+added. Moving fixtures and parsers is not described as deleting their logic.
+
+Measured against the start of this pass, `index.html` falls from 1,922 to 1,641
+lines, and `services/quota.rs` from 680 to 584. The existing sampler is 141 lines;
+new event/trend owners are 93/228 lines. Total Rust/JS/CommonJS/HTML/CSS line count
+in `crates/` increases by 51, including lifecycle coverage. Moving code into an
+owner is not counted as deletion. The benefits are private state, one report
+request lifecycle and less shared mutable work, rather than a claimed global
+line-count reduction or unmeasured latency improvement.
+
+Removed tests are the historical Python-default numeric comparison and the
+redundant version assertion in Unix CLI journeys; the cross-platform version
+contract remains. Trend assertions now use rendered output and the feature's
+public lifecycle instead of reading private page globals. Admission races,
+credential rotation, cancellation, protocol boundaries and user journeys retain
+behavioral coverage.
+
+Changes behind an unchanged owner interface use that owner's focused tests plus
+the small cross-layer acceptance suite. Changes to wire protocols, authentication,
+shared state or cancellation still require the relevant integration tests.
+`emp-app` composition and `ServerState` remain shared boundaries, and the page
+entry still contains other model/settings workflows; complete project-wide
+independence is not established by this pass.
+
+
+### Usage account labels and historical identity (2026-10-12)
+
+The account owner remains the existing fingerprint of the selected upstream
+account ID. `native/auth.rs` captures display metadata when selecting the actual
+outbound headers, before HTTP or WebSocket dispatch. The ledger's additive
+`usage_account_labels` table retains category, fingerprint, local service ID,
+display name and masked mailbox; it stores no credential or full mailbox.
+Unchanged values do not cause an UPSERT update. API labeling prefers current
+configuration, retains saved labels after removal, and can resolve a fingerprint
+across native/subscription categories. Missing labels display an unlinked account
+instead of a hash. Email and display-name equality are not identity evidence. Local service IDs are
+stable internal references for model routes, settings and history; they are not
+proof that two imported services represent the same upstream connection.
+
+`contracts/usage-owners.sql` is a shared read-only projection used by ledger totals,
+chart series and the shadow bridge. Existing accounting deduplication stays intact.
+A historical owner is attributed only when its nonempty turn and route match one
+unique realtime account fingerprint. Ambiguous or missing matches retain an
+explicit unlinked-history label. Historical event rows and total tokens are never
+rewritten by display resolution. Old route-only records without account evidence
+cannot be assigned retroactively to whichever account currently has that alias.
+
+Focused accounting and authenticated HTTP tests cover attribution, ambiguity,
+unchanged totals, label persistence and cross-category lookup. The native HTTP
+fixture also verifies metadata comes from selected credentials rather than caller
+headers. Shadow browser acceptance covers navigation, duplicate-name removal,
+retired-entry removal and language-specific release notes. Deployment of the new
+backend metadata capture is separate from reloading the read-only shadow server.
+
+
+### Identity-first import and localized error delivery (2026-10-12)
+
+Migration compares authenticated subscription identities independently of local ID
+collisions. API/OpenRouter/CPA records match by execution method, exact base URL
+and a verified nonempty API key; existing and earlier incoming connections can be
+reused. Different or unverifiable connections remain separate. References, model
+routes, private keys and display settings follow the existing mapping. Names never
+prove identity. A local Claude login has no comparable migration credential in this
+path, so an unverified login is not automatically merged by mailbox or label.
+
+Name-only browser account import resolves an existing verified account or allocates
+an unused internal reference, then uses the original serialized refresh/configuration
+transaction. It rechecks identity inside that transaction before replacing the
+chosen entry; an intervening identity change rejects the import. Existing explicit-ID
+API callers retain their previous targeting contract. Frontend service IDs are
+hidden, without deleting references from stored configuration or older history.
+
+`error_presentation.rs` owns only delivery summaries. A request snapshots the EMP
+language preference and selected source; HTTP/SSE/WebSocket retain error codes,
+unknown fields and retry advice while placing a short localized summary before the
+existing detail. Upstream provenance is taken from the delivery boundary rather
+than a remote `origin` claim. Ordinary successful frames use the original write
+path and are not re-parsed or copied for localization. Language changes persist a
+single preference without model discovery or engine reload; preview changes stay
+in its draft.
+
+Checkpoint/encrypted-history failures can include a command targeting the validated
+thread UUID. No repair executes on an error, exit or restoration. Users close that
+conversation and run the command explicitly; the running executable path is quoted
+for the platform shell when available. EMP cannot change native Codex errors after
+EMP has been disabled. Legacy ciphertext still requires targeted migration before
+direct native resume. Candidate Windows/macOS application acceptance and release
+remain separate from the isolated Linux tests.

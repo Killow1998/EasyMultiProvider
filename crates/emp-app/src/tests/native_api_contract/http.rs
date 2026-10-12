@@ -243,7 +243,7 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
         .vault
         .write_encrypted_json(
             &auth_path,
-            &json!({"tokens":{"access_token":"selected-secret","account_id":"selected-owner"}}),
+            &json!({"tokens":{"access_token":"fixture.eyJlbWFpbCI6InNlbGVjdGVkQGZpeHR1cmUuaW52YWxpZCJ9.sig","account_id":"selected-owner"}}),
         )
         .expect("encrypted account fixture");
 
@@ -315,8 +315,26 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
     }
     assert_eq!(forward.headers["authorization"], "Bearer caller-secret");
     assert_eq!(forward.headers["chatgpt-account-id"], "caller-owner");
-    assert_eq!(account.headers["authorization"], "Bearer selected-secret");
+    assert_eq!(
+        account.headers["authorization"],
+        "Bearer fixture.eyJlbWFpbCI6InNlbGVjdGVkQGZpeHR1cmUuaW52YWxpZCJ9.sig"
+    );
     assert_eq!(account.headers["chatgpt-account-id"], "selected-owner");
+    let saved = server.state.backend.usage.ledger.account_labels().unwrap();
+    let owner = emp_state::usage::account_owner(&account.headers);
+    let label = saved
+        .iter()
+        .find(|row| row["owner"] == owner)
+        .expect("selected owner label");
+    assert_eq!(label["category"], "subscription");
+    assert_eq!(label["local_id"], "demo");
+    assert_eq!(label["name"], "Demo");
+    assert_eq!(label["email"], "s***@fixture.invalid");
+    assert!(
+        !serde_json::to_string(&saved)
+            .unwrap()
+            .contains("selected@fixture.invalid")
+    );
     server.shutdown().expect("shutdown Rust EMP");
 }
 

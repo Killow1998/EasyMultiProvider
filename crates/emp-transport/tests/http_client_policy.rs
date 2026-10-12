@@ -14,7 +14,7 @@ fn headers() -> BTreeMap<String, String> {
 }
 
 #[test]
-fn plan_uses_same_origin_and_default_identity_encoding() {
+fn plan_uses_same_origin_and_negotiates_supported_response_encodings() {
     let policy = HttpClientPolicy::default();
     let plan = policy
         .plan(
@@ -33,7 +33,7 @@ fn plan_uses_same_origin_and_default_identity_encoding() {
     assert!(!plan.route.route_url().contains("#ignored"));
     assert_eq!(
         plan.headers.get("accept-encoding"),
-        Some(&"identity".to_owned())
+        Some(&"gzip, br, zstd, deflate".to_owned())
     );
     assert_eq!(
         plan.redirect_policy,

@@ -487,15 +487,14 @@ fn native_account_id(config: &Value) -> String {
     candidate
 }
 
-/// Return a Python-compatible encrypted migration payload and summary.
-pub fn export_migration_bundle_with_summary(
+/// Prepare a read-only export snapshot, including selected credentials.
+/// Callers must encrypt it before creating a portable file.
+pub fn prepare_migration_export(
     config: &Value,
-    password: &str,
     vault: &VaultStore,
     groups: Option<&ExportGroups>,
     native_auth_path: Option<&Path>,
-) -> MigrationResult<(Vec<u8>, MigrationExportSummary)> {
-    normalize_password(password)?;
+) -> MigrationResult<(Value, MigrationExportSummary)> {
     let selected = groups.copied().unwrap_or_else(ExportGroups::all);
     let selected_list = selected.as_btree();
     let mut config = select_export_config(config, groups)?;
@@ -585,10 +584,6 @@ pub fn export_migration_bundle_with_summary(
         "accounts": accounts,
         "provider_keys": Value::Object(provider_keys),
     });
-    let plaintext =
-        serde_json::to_vec(&payload).map_err(|_| MigrationError::InvalidConfiguration)?;
-    let salt = random_salt()?;
-    let bundle = encode_migration(password, &salt, &plaintext)?;
     let mut group_names = selected_list
         .into_iter()
         .map(ExportGroup::as_str)
@@ -608,6 +603,22 @@ pub fn export_migration_bundle_with_summary(
         native_login_included: native_included,
         native_login_missing: selected.contains(ExportGroup::Native) && !native_included,
     };
+    Ok((payload, summary))
+}
+
+/// Prepare selected services and encrypt them once with the existing v2 codec.
+pub fn export_migration_bundle_with_summary(
+    config: &Value,
+    password: &str,
+    vault: &VaultStore,
+    groups: Option<&ExportGroups>,
+    native_auth_path: Option<&Path>,
+) -> MigrationResult<(Vec<u8>, MigrationExportSummary)> {
+    normalize_password(password)?;
+    let (payload, summary) = prepare_migration_export(config, vault, groups, native_auth_path)?;
+    let plaintext =
+        serde_json::to_vec(&payload).map_err(|_| MigrationError::InvalidConfiguration)?;
+    let bundle = encode_migration(password, &random_salt()?, &plaintext)?;
     Ok((bundle, summary))
 }
 

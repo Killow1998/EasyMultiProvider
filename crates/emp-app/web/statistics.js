@@ -25,8 +25,8 @@ function createStatistics({api,$,tr,esc,getState,getLanguage,openModal,callRepor
     const focusMetric=focused?.dataset.statsMetric, focusGroup=focused?.hasAttribute('data-stats-group');
     root.querySelectorAll('[data-stats-view]').forEach(button=>{ const selected=button.dataset.statsView===view; button.classList.toggle('active',selected); button.setAttribute('aria-pressed',String(selected)); });
     if (view === 'calls') {
-      content.innerHTML='<div id="presentation_stats_calls"></div>';
-      callReports.mount('presentation_stats_calls',filters,false); return;
+      if (!content.querySelector('#presentation_stats_calls')) content.innerHTML='<div id="presentation_stats_calls"></div>';
+      callReports.mount('presentation_stats_calls',filters,false,report.calls); return;
     }
     callReports.stop();
     if (view !== 'overview') {
@@ -64,7 +64,7 @@ function createStatistics({api,$,tr,esc,getState,getLanguage,openModal,callRepor
     return true;
   }
   function open() {
-    openModal(tr('统计','Statistics'),`<div id="presentation_stats">${periodPickerHtml('presentation_stats',['1h','1d','7d','30d'])}${filterHtml()}<div class="report-tabs" role="group" aria-label="${tr('视图','View')}">${[['overview',tr('总览','Overview')],['services',tr('服务','Services')],['models',tr('模型','Models')],['calls',tr('调用','Calls')]].map(([id,label])=>`<button type="button" class="secondary" data-stats-view="${id}" aria-pressed="false">${label}</button>`).join('')}</div><p class="report-status" data-report-status role="status" aria-live="polite"></p><div data-stats-content></div><details class="diagnostics-details"><summary>${tr('系统诊断','System diagnostics')}</summary><div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics();loadSupportReport()">${tr('刷新','Refresh')}</button><button type="button" class="secondary" data-icon="download" onclick="downloadSupportReport()">${tr('下载脱敏报告','Download redacted report')}</button></div><div class="toolbar"><button type="button" class="secondary" onclick="openUsage()">${tr('历史与计价','History and pricing')}</button></div><div id="support_report"></div><div id="diagnostics_summary"></div><div id="health_summary"></div><div id="diagnostics_records"></div></details></div>`,'',null);
+    openModal(tr('统计','Statistics'),`<div id="presentation_stats">${periodPickerHtml('presentation_stats',['1h','1d','7d','30d'])}${filterHtml()}<div class="report-tabs" role="group" aria-label="${tr('视图','View')}">${[['overview',tr('总览','Overview')],['services',tr('服务','Services')],['models',tr('模型','Models')],['calls',tr('调用','Calls')]].map(([id,label])=>`<button type="button" class="secondary" data-stats-view="${id}" aria-pressed="false">${label}</button>`).join('')}</div><p class="report-status" data-report-status role="status" aria-live="polite"></p><div data-stats-content></div><details class="diagnostics-details"><summary>${tr('系统诊断','System diagnostics')}</summary><div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics();loadSupportReport()">${tr('刷新','Refresh')}</button><button type="button" class="secondary" data-icon="download" onclick="downloadSupportReport()">${tr('下载脱敏报告','Download redacted report')}</button></div><div id="support_report"></div><div id="diagnostics_summary"></div><div id="health_summary"></div><div id="diagnostics_records"></div></details></div>`,'',null);
     root=$('presentation_stats'); filters={}; view='overview'; metric='tokens'; grouping='none';
     const selectedRoot=root;
     query=createReportQuery({api:async(params,options)=>{const [calls,usage]=await Promise.all([api('/api/calls?'+params,options),api('/api/usage?series=true&'+params,options)]);return {calls,usage};},onState:(loading,error)=>setReportState(selectedRoot,loading,error,tr),onResult:result=>{report=result;render();}});

@@ -8,7 +8,7 @@ use crate::services::request_outcome::RequestOutcome;
 use emp_core::{ResolvedRoute, RouteResolutionError};
 use emp_router::{CompleteResponse, ExternalRouter, ExternalStream, ProjectionIds, RouterError};
 use emp_transport::{FailureClass, FailurePhase, UpstreamFailure};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::ops::AsyncFnMut;
 use std::time::{Duration, Instant};
@@ -38,15 +38,12 @@ pub(crate) fn complete(
         incoming,
         activity: None,
     };
-    let (result, candidate) = execution.run(
-        None,
-        Some(&mut outcome),
-        async |candidate: &ResolvedRoute| {
+    let (result, candidate) =
+        execution.run(None, &mut outcome, async |candidate: &ResolvedRoute| {
             router
                 .execute_complete(candidate, body, incoming, ids)
                 .await
-        },
-    )?;
+        })?;
     outcome.http_status(result.status);
     outcome.upstream_observation(&result.observation);
     outcome.observe(&result.body);
@@ -59,30 +56,29 @@ pub(crate) fn complete(
 
 /// An opened stream transfers completion accounting to its relay. Opening
 /// retries stop at this interface: no stream output is ever replayed here.
-pub(crate) fn open_stream(
-    state: &ServerState,
+pub(crate) fn open_stream<'a>(
+    state: &'a ServerState,
     route: &ResolvedRoute,
     body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     monitor: Option<&mut DisconnectMonitor>,
-) -> Result<(ExternalStream, ResolvedRoute), ExternalRequestError> {
+) -> Result<(ExternalStream, ResolvedRoute, RequestOutcome<'a>), ExternalRequestError> {
     let started = Instant::now();
     let router = ExternalRouter::new(&state.backend.transport.client);
-    Execution {
+    let mut outcome =
+        RequestOutcome::new(state, route, body, incoming, None, "responses").started_at(started);
+    let (stream, candidate) = Execution {
         state,
         route,
         body,
         incoming,
         activity: None,
     }
-    .run(monitor, None, async |candidate: &ResolvedRoute| {
+    .run(monitor, &mut outcome, async |candidate: &ResolvedRoute| {
         router.open_stream(candidate, body, incoming, ids).await
-    })
-    .map(|(mut stream, route)| {
-        stream.request_started = started;
-        (stream, route)
-    })
+    })?;
+    Ok((stream, candidate, outcome))
 }
 
 struct Execution<'a> {
@@ -94,15 +90,13 @@ struct Execution<'a> {
 }
 
 impl Execution<'_> {
-    // A complete request owns one outcome across all attempts. A stream only
-    // owns opening here; its relay owns the outcome after a successful open.
+    // The same outcome survives opening retries and transfers to a stream relay.
     fn run<T>(
         &mut self,
         mut monitor: Option<&mut DisconnectMonitor>,
-        mut outcome: Option<&mut RequestOutcome<'_>>,
+        outcome: &mut RequestOutcome<'_>,
         mut request: impl AsyncFnMut(&ResolvedRoute) -> Result<T, RouterError>,
     ) -> Result<(T, ResolvedRoute), ExternalRequestError> {
-        let started = Instant::now();
         let Self {
             state,
             route,
@@ -111,30 +105,18 @@ impl Execution<'_> {
             ..
         } = *self;
         let candidates = emp_router::protocol_candidates(route);
-        let request_id = json!(
-            incoming
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("x-emp-request-id"))
-                .map(|(_, value)| value)
-        );
         'candidate: for (index, protocol) in candidates.iter().copied().enumerate() {
             let candidate = route
                 .with_protocol(protocol)
                 .map_err(ExternalRequestError::Route)?;
-            if let Some(outcome) = outcome.as_deref_mut() {
-                outcome.candidate(&candidate);
-            }
+            outcome.candidate(&candidate);
             for attempt in 0..3 {
-                if let Some(outcome) = outcome.as_deref_mut() {
-                    outcome.dispatch();
-                    self.activity.get_or_insert_with(|| {
-                        state.backend.activity.begin(
-                            crate::services::activity::ActivityIdentity::from_route(route),
-                        )
-                    });
-                } else {
-                    observation::execution_attempt(state, &candidate, body, incoming);
-                }
+                outcome.dispatch();
+                self.activity.get_or_insert_with(|| {
+                    state.backend.activity.begin(
+                        crate::services::activity::ActivityIdentity::from_route(route),
+                    )
+                });
                 let result = match raced(
                     &state.backend.transport.runtime,
                     monitor.as_deref_mut(),
@@ -143,20 +125,7 @@ impl Execution<'_> {
                     DisconnectRace::Ready(result) => result,
                     DisconnectRace::Disconnected => {
                         observation::request_cancelled(state, &candidate, incoming);
-                        if let Some(receipt) = outcome.as_deref_mut() {
-                            receipt.disconnected();
-                        } else {
-                            RequestOutcome::new(
-                                state,
-                                &candidate,
-                                body,
-                                incoming,
-                                None,
-                                "responses",
-                            )
-                            .started_at(started)
-                            .disconnected();
-                        }
+                        outcome.disconnected();
                         return Err(ExternalRequestError::Disconnected);
                     }
                 };
@@ -172,18 +141,7 @@ impl Execution<'_> {
                     && index + 1 < candidates.len()
                     && emp_transport::protocol_fallback_allowed(error.status(), false, false);
                 if let Some(delay) = retry.or(fallback.then_some(Duration::ZERO)) {
-                    if let Some(outcome) = outcome.as_deref_mut() {
-                        outcome.retry(attempt, delay, &error, fallback);
-                    } else {
-                        observation::retry_scheduled(
-                            state,
-                            &request_id,
-                            attempt,
-                            delay,
-                            &error,
-                            fallback,
-                        );
-                    }
+                    outcome.retry(attempt, delay, &error, fallback);
                     if fallback {
                         continue 'candidate;
                     }
@@ -196,37 +154,16 @@ impl Execution<'_> {
                         DisconnectRace::Disconnected
                     ) {
                         observation::request_cancelled(state, &candidate, incoming);
-                        if let Some(receipt) = outcome.as_deref_mut() {
-                            receipt.disconnected();
-                        } else {
-                            RequestOutcome::new(
-                                state,
-                                &candidate,
-                                body,
-                                incoming,
-                                None,
-                                "responses",
-                            )
-                            .started_at(started)
-                            .disconnected();
-                        }
+                        outcome.disconnected();
                         return Err(ExternalRequestError::Disconnected);
                     }
                     continue;
                 }
-                if let Some(outcome) = outcome.as_deref_mut() {
-                    outcome.router_error(&error);
-                } else {
-                    RequestOutcome::new(state, &candidate, body, incoming, None, "responses")
-                        .started_at(started)
-                        .router_error(&error);
-                }
+                outcome.router_error(&error);
                 return Err(ExternalRequestError::Router(error, Box::new(candidate)));
             }
         }
-        if let Some(outcome) = outcome {
-            outcome.status(503, "router_error");
-        }
+        outcome.status(503, "router_error");
         Err(ExternalRequestError::Unsupported)
     }
 }

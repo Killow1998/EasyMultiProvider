@@ -271,6 +271,9 @@ pub(crate) fn handle_connection(
                         "/api/migration/export"
                             | "/api/migration/export/confirm"
                             | "/api/migration/import"
+                            | "/api/migration/decode"
+                            | "/api/migration/preview"
+                            | "/api/migration/demo"
                     ) =>
             {
                 Some(management_migration_request(
@@ -290,6 +293,7 @@ pub(crate) fn handle_connection(
                             | "/api/catalog/context-preference"
                             | "/api/models/metadata"
                             | "/api/config"
+                            | "/api/language"
                     ) =>
             {
                 Some(catalog::management_request(

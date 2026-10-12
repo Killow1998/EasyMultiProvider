@@ -160,14 +160,24 @@ may need reloading; the UI reports when the observed catalog still differs.
 
 EMP is designed to keep provider changes from turning into a different coding client.
 
-EMP preserves native Codex sessions, `resume`, WebSockets, compression, and MCP where supported. During live provider switching, it reconstructs Codex-owned visible history instead of forwarding provider-private opaque state.
+EMP preserves native Codex sessions, `resume`, WebSockets, compression, and MCP where supported. Shared HTTP upstream requests negotiate gzip, Brotli, Zstandard and deflate responses with streaming decoding and decoded-body limits. During live provider switching, it reconstructs Codex-owned visible history instead of forwarding provider-private opaque state.
 
-To return a conversation with EMP-owned compaction data to native Codex, finish
-active work and close Codex, then choose **Restore Native** in the Web UI header. EMP converts only affected saved histories and
-backs up each affected history file before rewriting it, then restores native
-settings. The original conversation can then be resumed on supported Codex.
-When restoration finishes, EMP exits; reopen Codex to continue. You can also
-run `EMP restore` from the command line.
+While EMP is active, it converts EMP-owned checkpoints in each request when
+switching to a native model. **Restore Native**, quitting EMP, and `EMP restore`
+restore configuration only; they do not scan or rewrite saved conversations.
+Active requests must finish first. Idle WebSocket connections close normally.
+
+To resume an old conversation containing EMP-owned compaction data directly in
+native Codex after EMP is disabled, close that conversation and run:
+
+```sh
+EMP migrate-history --thread-id CONVERSATION_UUID
+```
+
+This migrates only the selected conversation, backs up changed history, and
+preserves its parent and other conversations. It rejects migration while the
+selected conversation is being written. Reopen Codex to load native settings,
+then resume the same conversation. `CODEX_HOME` selects the Codex home as usual.
 
 For details about external subagent delegation, follow-up tasks, and tool calls, see [external collaboration compatibility](docs/external-collaboration.md).
 
@@ -209,7 +219,7 @@ increase the capacity offered by the model or account.
 
 Use the global eye control in the right-side **Model display** to show or hide
 context labels there and in the Codex model picker for Native, Subscription and
-External Provider models. The left model list does not repeat these labels. The
+External Provider models. Manage each service’s models from its own Model settings window. The
 control changes catalog labels, not context windows or request limits.
 
 
@@ -217,7 +227,7 @@ Preview frontend changes against a running backend with the [read-only shadow fr
 
 ## Codex compatibility
 
-The current source version is **v0.12.18**.
+The current source version is **v0.13.0**.
 
 Maintenance targets the latest stable Codex minor series and the previous nine;
 patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).

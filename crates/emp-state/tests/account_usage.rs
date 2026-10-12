@@ -117,3 +117,82 @@ fn chart_series_preserve_totals_and_filter_by_receipt_and_service() {
         0
     );
 }
+
+#[test]
+fn historical_identity_requires_a_unique_matching_turn_and_route() {
+    use emp_state::usage::ledger::UsageSeriesFilter;
+    let root = tempfile::tempdir().unwrap();
+    let ledger = UsageLedger::new(
+        root.path().join("usage.sqlite3"),
+        Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0)),
+    );
+    for (id, owner, origin, turn, tokens) in [
+        ("r1", "account:a", "realtime", "one", 10),
+        ("h1", "history:egg", "history", "one", 20),
+        ("h2", "history:egg", "history", "unknown", 30),
+        ("r2", "account:a", "realtime", "ambiguous", 40),
+        ("r3", "account:b", "realtime", "ambiguous", 50),
+        ("h3", "history:egg", "history", "ambiguous", 60),
+    ] {
+        ledger.record(&json!({"route":"responses","observation_id":id,"usage_owner":owner,"usage_category":"subscription","origin":origin,"usage_turn":turn,"route_model":"egg/model","upstream_model":"model","input_tokens":tokens,"output_tokens":1}),100.0);
+    }
+    let all = ledger.query(0.0, 200.0, "all", 1000.0).unwrap();
+    assert_eq!(all["totals"]["requests"], 6);
+    assert_eq!(all["totals"]["input_tokens"], 210);
+    assert_eq!(
+        ledger.query_owner(0.0, 200.0, "account:a", 1000.0).unwrap()["totals"]["input_tokens"],
+        70
+    );
+    let unresolved = all["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["owner"] == "history:egg")
+        .unwrap();
+    assert_eq!(unresolved["input_tokens"], 90);
+    let filter = UsageSeriesFilter {
+        start: 0.0,
+        end: 200.0,
+        category: "all".into(),
+        owner: Some("account:a".into()),
+        provider: None,
+        model: None,
+        session: None,
+        state: None,
+    };
+    assert_eq!(
+        ledger.query_series(&filter, 1000.0).unwrap()["totals"]["input_tokens"],
+        70
+    );
+    ledger
+        .remember_account(
+            "subscription",
+            "account:a",
+            "egg",
+            "Egg",
+            "e***@fixture.invalid",
+        )
+        .unwrap();
+    let reopened = UsageLedger::new(
+        root.path().join("usage.sqlite3"),
+        Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0)),
+    );
+    assert_eq!(
+        reopened.account_labels().unwrap()[0]["email"],
+        "e***@fixture.invalid"
+    );
+    ledger
+        .remember_account(
+            "subscription",
+            "account:b",
+            "other",
+            "Other",
+            "e***@fixture.invalid",
+        )
+        .unwrap();
+    assert_eq!(
+        ledger.account_labels().unwrap().len(),
+        2,
+        "Same email must not merge different account IDs"
+    );
+}

@@ -41,7 +41,6 @@ const CHILD_POLL: Duration = Duration::from_millis(25);
 pub(crate) struct ClaudeCliCompletion {
     pub(crate) response: CompleteResponse,
     pub(crate) route: ResolvedRoute,
-    pub(crate) request_started: Instant,
 }
 
 pub(crate) fn selected(route: &ResolvedRoute) -> bool {
@@ -73,6 +72,7 @@ pub(crate) fn execute_complete(
     body: &Value,
     incoming: &BTreeMap<String, String>,
     monitor: Option<&mut DisconnectMonitor>,
+    usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
     let started = Instant::now();
     let result = (|| {
@@ -82,8 +82,7 @@ pub(crate) fn execute_complete(
         preflight_input(body)?;
         let executable = emp_codex::installed_cli::resolve_claude_cli()
             .ok_or(ClaudeCliError::Failure("claude_cli_unavailable"))?;
-        crate::services::observation::execution_attempt(state, route, body, incoming);
-        execute_complete_with_cli(state, route, body, incoming, &executable, monitor)
+        execute_complete_with_cli(state, route, body, incoming, &executable, monitor, usage)
     })();
     if let Err(error) = &result {
         if matches!(error, ClaudeCliError::Failure("claude_cli_interrupted")) {
@@ -97,6 +96,7 @@ pub(crate) fn execute_complete(
             ClaudeCliError::Disconnected => (499, "client_disconnected"),
             ClaudeCliError::ShuttingDown => (503, "server_shutting_down"),
         };
+        usage.claude_error(error);
         state.backend.diagnostics.journal.event(
             "warning",
             "claude_cli_request_failed",
@@ -119,6 +119,7 @@ fn execute_complete_with_cli(
     incoming: &BTreeMap<String, String>,
     executable: &emp_codex::installed_cli::InstalledClaudeCli,
     mut monitor: Option<&mut DisconnectMonitor>,
+    usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
     let protocol = protocol_candidates(route)
         .into_iter()
@@ -127,6 +128,8 @@ fn execute_complete_with_cli(
     let candidate = route
         .with_protocol(protocol)
         .map_err(|_| ClaudeCliError::Failure("unsupported_provider_protocol"))?;
+    usage.candidate(&candidate);
+    usage.dispatch();
     let local_login = candidate
         .provider
         .value()
@@ -190,7 +193,6 @@ fn execute_complete_with_cli(
     let cancelled = Arc::new(
         Cancellation::new().map_err(|_| ClaudeCliError::Failure("claude_cli_relay_unavailable"))?,
     );
-    let request_started = Instant::now();
     let mut relay_model = None;
     let (stdout, provider_status) = if local_login {
         let local_home = local_home.as_deref().expect("checked local CLI home");
@@ -344,7 +346,6 @@ fn execute_complete_with_cli(
     Ok(ClaudeCliCompletion {
         response,
         route: candidate,
-        request_started,
     })
 }
 

@@ -1,4 +1,5 @@
 //! Real server contract tests.
+mod migration_preview;
 use super::*;
 #[cfg(unix)]
 use std::sync::Mutex;
@@ -252,34 +253,51 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     assert!(applied.contains("model_catalog_json"));
     assert!(applied.contains("[features]\nweb_search = true"));
 
-    // An idle desktop session may keep its writer lock even with no HTTP
-    // request in flight. Both buttons must explain that blocker and leave
-    // EMP forwarding until the session closes.
-    rusqlite::Connection::open(root.join("state_5.sqlite"))
-        .unwrap()
-        .execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT);")
-        .unwrap();
+    // Restoring configuration never scans or edits even unknown legacy logs,
+    // and an unrelated open conversation is not a configuration blocker.
+    let sessions = root.join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let old_history = sessions.join("old.jsonl");
+    let bytes = b"{\"type\":\"response_item\",\"payload\":{\"type\":\"compaction\",\"encrypted_content\":\"emp1:invalid\"}}\n";
+    std::fs::write(&old_history, bytes).unwrap();
     let locks = root.join("thread-writer-locks");
     std::fs::create_dir_all(&locks).unwrap();
     let writer =
         std::fs::File::create(locks.join("11111111-1111-4111-8111-111111111111.lock")).unwrap();
     writer.lock().unwrap();
-    for endpoint in ["/api/integration/restore", "/api/quit"] {
-        let blocked = post(
-            &server,
-            endpoint,
-            br#"{"confirm_reload":true}"#,
-            &[&session_header(&server)],
-        );
-        assert!(blocked.starts_with("HTTP/1.1 409 "), "{blocked}");
-        assert!(
-            blocked.contains("\"code\":\"active_codex_writer\""),
-            "{blocked}"
-        );
-        assert!(blocked.contains("Close the ChatGPT/Codex app"), "{blocked}");
-        assert_eq!(std::fs::read_to_string(&codex_config).unwrap(), applied);
-        assert!(request(&server, "/healthz", &[]).starts_with("HTTP/1.1 200 OK\r\n"));
+    // An idle native connection must drain without requiring the user to
+    // close the entire desktop application or restart the computer.
+    let mut idle = std::net::TcpStream::connect(server.local_addr()).unwrap();
+    idle.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    use std::io::{Read, Write};
+    write!(idle,"GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{}\r\nAuthorization: Bearer fixture-only\r\n\r\n",server.local_addr().port(),session_header(&server)).unwrap();
+    idle.flush().unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        idle.read_exact(&mut byte).unwrap();
+        head.push(byte[0]);
     }
+    assert!(head.starts_with(b"HTTP/1.1 101"));
+    let restored_reply = post(
+        &server,
+        "/api/integration/restore",
+        br#"{"confirm_reload":true}"#,
+        &[&session_header(&server)],
+    );
+    assert!(
+        restored_reply.starts_with("HTTP/1.1 200 OK"),
+        "{restored_reply}"
+    );
+    let mut close_head = [0; 2];
+    idle.read_exact(&mut close_head).unwrap();
+    assert_eq!(close_head[0], 0x88);
+    let mut close = vec![0; (close_head[1] & 0x7f) as usize];
+    idle.read_exact(&mut close).unwrap();
+    assert_eq!(u16::from_be_bytes([close[0], close[1]]), 1001);
+    drop(idle);
+    assert_eq!(std::fs::read(&old_history).unwrap(), bytes);
     drop(writer);
     server.shutdown().unwrap();
     let restored = std::fs::read_to_string(&codex_config).unwrap();
@@ -935,4 +953,169 @@ fn migration_export_confirmation_is_single_use_and_session_bound() {
         now + 64.0,
     ));
     server.shutdown().expect("shutdown");
+}
+
+#[test]
+fn usage_labels_survive_removed_accounts_and_resolve_across_categories() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_root(&directory);
+    let config = root.join("config.json");
+    std::fs::write(&config, b"{}").unwrap();
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config,
+        "codex",
+        root.join("auth.json"),
+    )
+    .unwrap();
+    let ledger = &server.state.backend.usage.ledger;
+    ledger
+        .remember_account(
+            "native",
+            "account:native-fixture",
+            "@native",
+            "Native",
+            "n***@fixture.invalid",
+        )
+        .unwrap();
+    ledger
+        .remember_account(
+            "subscription",
+            "account:removed-fixture",
+            "egg",
+            "Saved egg",
+            "e***@fixture.invalid",
+        )
+        .unwrap();
+    for (owner, tokens) in [
+        ("account:native-fixture", 10),
+        ("account:removed-fixture", 20),
+    ] {
+        ledger.record(&json!({"route":"responses","usage_category":"subscription",
+            "usage_owner":owner,"upstream_model":"fixture-model","input_tokens":tokens,"output_tokens":1}),100.0);
+    }
+    for suffix in ["", "&series=true"] {
+        let response = request(
+            &server,
+            &format!("/api/usage?start=0&end=200{suffix}"),
+            &[&session_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+        let payload: Value =
+            serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(payload["totals"]["input_tokens"], 30);
+        for row in payload["groups"].as_array().unwrap() {
+            let native = row["owner"] == "account:native-fixture";
+            assert_eq!(
+                row["owner_name"],
+                if native { "Native" } else { "Saved egg" }
+            );
+            assert_eq!(
+                row["owner_local_id"],
+                if native { "@native" } else { "egg" }
+            );
+            assert_eq!(
+                row["owner_email"],
+                if native {
+                    "n***@fixture.invalid"
+                } else {
+                    "e***@fixture.invalid"
+                }
+            );
+        }
+        if !suffix.is_empty() {
+            assert!(payload["series"].as_array().unwrap().iter().all(|row| {
+                row["owner_name"]
+                    .as_str()
+                    .is_some_and(|name| !name.is_empty())
+            }));
+        }
+    }
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn name_only_import_reuses_authenticated_account_and_language_changes_only_preference() {
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = canonical_root(&root_dir);
+    let config = root.join("config.json");
+    std::fs::write(&config, b"{}").unwrap();
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config,
+        "missing-test-codex",
+        root.join("auth.json"),
+    )
+    .unwrap();
+    let cookie = session_header(&server);
+    let import = |name: &str, account: &str| {
+        serde_json::to_vec(&json!({"name":name,"auth_json":{"tokens":{"access_token":"fixture","account_id":account}}})).unwrap()
+    };
+    for (name, account) in [
+        ("First name", "stable-account"),
+        ("Renamed", "stable-account"),
+        ("Renamed", "distinct-account"),
+    ] {
+        let response = post(
+            &server,
+            "/api/accounts/import",
+            &import(name, account),
+            &[&cookie],
+        );
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    let before = server
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap()
+        .clone();
+    assert_eq!(before["accounts"].as_array().unwrap().len(), 2);
+    assert!(
+        before["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|account| account["name"] == "Renamed")
+    );
+    for language in ["en", "zh-CN"] {
+        let response = post(
+            &server,
+            "/api/language",
+            &serde_json::to_vec(&json!({"language":language})).unwrap(),
+            &[&cookie],
+        );
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let response = post(
+            &server,
+            "/v1/responses",
+            br#"{"model":"","input":"x"}"#,
+            &[&cookie],
+        );
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+        let body: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            body["error"]["summary"],
+            if language == "en" {
+                "EMP request processing failed"
+            } else {
+                "EMP 请求处理出错"
+            }
+        );
+    }
+    let after = server
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap()
+        .clone();
+    assert_eq!(before["accounts"], after["accounts"]);
+    assert_eq!(before["providers"], after["providers"]);
+    server.shutdown().unwrap();
 }

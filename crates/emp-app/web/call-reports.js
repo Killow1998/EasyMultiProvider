@@ -47,6 +47,7 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
     const focused = target.ownerDocument?.activeElement;
     const focus = focused && target.contains(focused) && ['callMetric','callSort'].find(key => focused.dataset[key]);
     const open = new Set([...target.querySelectorAll('details[data-call-id][open]')].map(node => node.dataset.callId));
+    const scrollLeft = target.querySelector('.call-records')?.scrollLeft || 0;
     const active = current.offset === 0 ? (getActivity()?.requests || []).filter(row => row.state === 'active' && matches(row,current.filters) && row.started_at >= report.start && row.started_at <= report.end) : [];
     const ids = new Set(active.map(row => row.request_id));
     const rows = [...active,...(report.records || []).filter(row => !ids.has(row.request_id))];
@@ -56,10 +57,11 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
       button.classList.toggle('active', active);
       button.setAttribute('aria-pressed', String(active));
     });
-    const content = current.view === 'models' ? modelHtml(report) : current.view === 'overview' ? summaryHtml(report) : rows.map(recordHtml).join('') + pages;
+    const content = current.view === 'models' ? modelHtml(report) : current.view === 'overview' ? summaryHtml(report) : `<div class="call-records">${rows.map(recordHtml).join('')}</div>` + pages;
     disposeOutcomes();
     performance.stop();
     target.innerHTML = (rows.length || current.view !== 'calls' ? content : `<p class="muted">${tr('暂无调用记录','No calls recorded')}</p>${pages}`);
+    const records = target.querySelector('.call-records'); if (records) records.scrollLeft = scrollLeft;
     disposeOutcomes = () => {};
     if(current.view === 'overview') performance.bind(target,report,current.metric || 'calls');
     target.querySelectorAll('details[data-call-id]').forEach(node => { node.open = open.has(node.dataset.callId); });
@@ -80,18 +82,33 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
   }
   function live() { if (current?.report && $(current.id)) render($(current.id).querySelector('[data-call-content]'),current.report); }
   function stop() { performance.stop(); disposeOutcomes(); disposeOutcomes = () => {}; current?.query.cancel(); current = null; if (timer !== null) clearTimeout(timer); timer = null; }
-  function mount(id, filters = {}, performance = false) {
+  function mount(id, filters = {}, performance = false, report = null) {
+    // Embedded statistics already fetched the first page with these filters.
+    if (report && current?.id === id) {
+      if (JSON.stringify(current.filters) !== JSON.stringify(filters)) {
+        current.query.cancel();
+        current.filters = {...filters}; current.offset = 0; current.modelsOffset = 0;
+      }
+      if (current.offset === 0) {
+        current.report = report;
+        render($(id).querySelector('[data-call-content]'),report);
+      } else if (current.seedReport !== report) void load();
+      current.seedReport = report;
+      return;
+    }
     stop();
     const root = $(id); if (!root) return;
     current = {id,filters:{...filters},offset:0,modelsOffset:0,modelsSort:'calls',view:performance ? 'overview' : 'calls',performance};
-    root.innerHTML = toolbar();
+    root.innerHTML = report ? '<div class="report-status" data-report-status role="status" aria-live="polite"></div><div data-call-content></div>' : toolbar();
     const selected = current;
     current.query = createReportQuery({api,
       onState:(loading,error) => setReportState(root,loading,error,tr),
       onResult:report => { selected.report = report; render(root.querySelector('[data-call-content]'),report); },
     });
-    for (const field of ['model','state','session','category']) { if (filters[field]) root.querySelector(`[data-call-filter="${field}"]`).value = filters[field]; }
-    root.querySelector('[data-call-filter="service"]').value = filters.provider ? 'provider:'+filters.provider : filters.account ? 'account:'+filters.account : '';
+    if (!report) {
+      for (const field of ['model','state','session','category']) { if (filters[field]) root.querySelector(`[data-call-filter="${field}"]`).value = filters[field]; }
+      root.querySelector('[data-call-filter="service"]').value = filters.provider ? 'provider:'+filters.provider : filters.account ? 'account:'+filters.account : '';
+    }
     root.onchange = event => {
       if (!current || current.id !== id) return;
       const field = event.target.dataset.callFilter; if (!field) return;
@@ -112,6 +129,7 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
       if (button.dataset.callAction === 'previous') current.offset = Math.max(0,current.offset-50);
       void load();
     };
+    if (report) { current.report = report; current.seedReport = report; render(root.querySelector('[data-call-content]'),report); return; }
     const range = filters.start !== undefined || filters.end !== undefined
       ? {start:filters.start ?? 0,end:filters.end ?? Date.now()/1000} : null;
     registerPeriodPicker('calls','1d', period => {
@@ -120,7 +138,7 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
       return load();
     },range);
   }
-  function open(filters = {}) { openModal(tr('调用详情','Call details'),'<div id="call_report"></div>','',null); mount('call_report',filters); }
+  function open(filters = {}, navigation = {}) { openModal(tr('调用详情','Call details'),'<div id="call_report"></div>','',null,null,navigation); mount('call_report',filters); }
   function openActivity(element) {
     const id = element.dataset.activityId || '';
     const kind = element.dataset.activityKind;

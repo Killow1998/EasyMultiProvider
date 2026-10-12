@@ -60,9 +60,14 @@ function installMotion(refreshCountdowns) {
     clearInterval(timer);timer=null;cancelAnimationFrame(raf);clearTimeout(frameTimer);raf=null;frameTimer=null;
     if(!document.hidden){refreshCountdowns();timer=setInterval(refreshCountdowns,1000);start();}
   }
-  new MutationObserver(sync).observe(document.querySelector('#services'),{childList:true,subtree:true,attributes:true,attributeFilter:['data-activity-state']});
-  for(const id of ['models','catalog_display_models'])new MutationObserver(sync).observe(document.getElementById(id),{childList:true});
-  new MutationObserver(sync).observe(document.querySelector('#emp_logo'),{attributes:true,attributeFilter:['class']});
+  for(const [selector,options] of [
+    ['#services',{childList:true,subtree:true,attributes:true,attributeFilter:['data-activity-state']}],
+    ['#catalog_display_models',{childList:true}],
+    ['#emp_logo',{attributes:true,attributeFilter:['class']}],
+  ]){
+    const node=document.querySelector(selector);
+    if(node)new MutationObserver(sync).observe(node,options);
+  }
   document.addEventListener('visibilitychange',visibility);motion.addEventListener('change',()=>{cancelAnimationFrame(raf);clearTimeout(frameTimer);raf=null;frameTimer=null;start();});
   sync();visibility();return sync;
 }

@@ -34,8 +34,10 @@ function createCallOutcomes({esc,tr,number,time}) {
       const titleId='call-outcome-'+Math.random().toString(36).slice(2);
       dialog.setAttribute('aria-labelledby',titleId);
       const range = n(report.start) !== null && n(report.end) !== null ? `<p class="muted">${esc(time(report.start))} — ${esc(time(report.end))}</p>` : '';
-      dialog.innerHTML=`<div class="modal-header"><h2 id="${titleId}">${tr('调用结果','Call outcomes')}</h2><button type="button" class="modal-close" aria-label="${tr('关闭','Close')}">×</button></div><div>${range}${outcomes(summary).detailsHtml}</div>`;
-      doc.body.appendChild(dialog); dialog.querySelector('button').onclick=close;
+      dialog.innerHTML=`<div class="modal-header"><h2 id="${titleId}">${tr('调用结果','Call outcomes')}</h2><div class="modal-navigation"><button type="button" class="secondary modal-back" data-icon="restore" aria-label="${tr('返回上一层','Back to previous dialog')}"></button><button type="button" class="modal-close" aria-label="${tr('关闭','Close')}">×</button></div></div><div>${range}${outcomes(summary).detailsHtml}</div>`;
+      doc.body.appendChild(dialog);
+      dialog.querySelector('.modal-back').onclick=close;
+      dialog.querySelector('.modal-close').onclick=()=>{close();doc.querySelector('#modal_backdrop:not(.hidden) .modal-close')?.click();};
       dialog.addEventListener('cancel',event=>{event.preventDefault();close();});
       dialog.addEventListener('keydown',event=>{if(event.key==='Escape')event.stopPropagation();});
       dialog.showModal();

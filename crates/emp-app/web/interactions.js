@@ -1,6 +1,10 @@
 // One temporary sprite sheet: paint the wave once, then move its texture.
 // Geometry/palette changes rebuild it; hover frames only change transform.
 function installInteractions() {
+  // Chromium may retain :focus-visible after a pointer-opened dialog focuses
+  // a text field. Keep focus for navigation; show its outline only for keys.
+  const modality=document.documentElement.dataset;
+  modality.inputModality='pointer';
   const layer=document.createElement('div');
   layer.className='presentation-hover-feedback'; layer.setAttribute('aria-hidden','true'); layer.hidden=true;
   document.body.append(layer);
@@ -67,19 +71,31 @@ function installInteractions() {
     if(key===geometry&&canvas&&paletteKey===colors().join('/')&&frames===(motion.matches?1:24)){if(raf===null&&frameTimer===null)tick(performance.now());return;}
     geometry=key;
     const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('width',width);svg.setAttribute('height',height);
+    svg.style.cssText='position:absolute;visibility:hidden;pointer-events:none';
     svg.innerHTML=`<rect x="3" y="3" width="${width-6}" height="${height-6}" rx="${radius}"/>`;
-    const outline=svg.firstChild, length=outline.getTotalLength(), count=Math.max(12,Math.round(length/6));
-    dots=Array.from({length:count},(_,i)=>{
-      const point=outline.getPointAtLength(i*length/count);
-      return {x:point.x,y:point.y,dx:(point.x-width/2)/(width/2)*1.2,dy:(point.y-height/2)/(height/2)*1.2};
-    });
+    // Chromium requires a rendered SVG when measuring a geometric outline.
+    layer.append(svg);
+    try {
+      const outline=svg.firstChild, length=outline.getTotalLength(), count=Math.max(12,Math.round(length/6));
+      dots=Array.from({length:count},(_,i)=>{
+        const point=outline.getPointAtLength(i*length/count);
+        return {x:point.x,y:point.y,dx:(point.x-width/2)/(width/2)*1.2,dy:(point.y-height/2)/(height/2)*1.2};
+      });
+    } finally {svg.remove();}
     paint();
   }
   function show(control) {
     if(!control || control===target) return;
     hide();clearTimeout(releaseTimer);releaseTimer=null;target=control;observer.observe(target);draw();
   }
-  const focused=()=>document.activeElement?.matches(':focus-visible') ? document.activeElement.closest(selector) : null;
+  const focused=()=>modality.inputModality==='keyboard' && document.activeElement?.matches(':focus-visible') ? document.activeElement.closest(selector) : null;
+  document.addEventListener('pointerdown',()=>{modality.inputModality='pointer';hide();},true);
+  document.addEventListener('keydown',event=>{
+    if(['Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter',' '].includes(event.key)){
+      modality.inputModality='keyboard';show(focused());
+    }
+  },true);
   document.addEventListener('pointerover',event=>show(event.target.closest(selector)));
   document.addEventListener('pointerout',event=>{if(target?.contains(event.target)&&!target.contains(event.relatedTarget)){hide();show(focused());}});
   document.addEventListener('focusin',()=>{const control=focused();if(control)show(control);});

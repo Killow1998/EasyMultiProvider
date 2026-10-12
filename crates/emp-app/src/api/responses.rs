@@ -199,6 +199,7 @@ pub(crate) fn responses_request(
                 &summary_body,
                 &incoming,
                 monitor.as_mut(),
+                &mut usage,
             ) {
                 Ok(completion) => {
                     let Some(summary) = crate::services::compaction::response_output_text(
@@ -255,6 +256,7 @@ pub(crate) fn responses_request(
                 &incoming,
                 &ids,
                 monitor.as_mut(),
+                &mut usage,
             ) {
                 Ok(result) => result,
                 Err(error) => {
@@ -303,52 +305,28 @@ pub(crate) fn responses_request(
                 .begin(crate::services::activity::ActivityIdentity::from_route(
                     &route,
                 ));
+        let mut usage = crate::services::request_outcome::RequestOutcome::new(
+            state,
+            &route,
+            &body,
+            &incoming,
+            None,
+            "responses",
+        )
+        .started_at(started);
         let completion = match crate::services::claude_cli::execute_complete(
             state,
             &route,
             &body,
             &incoming,
             monitor.as_mut(),
+            &mut usage,
         ) {
             Ok(completion) => completion,
             Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
-                let mut usage = crate::services::request_outcome::RequestOutcome::new(
-                    state,
-                    &route,
-                    &body,
-                    &incoming,
-                    None,
-                    "responses",
-                )
-                .started_at(started);
-                usage.disconnected();
                 return ResponsesRequestResult::Streamed;
             }
             Err(error) => {
-                if matches!(
-                    &error,
-                    crate::services::claude_cli::ClaudeCliError::Router(_)
-                        | crate::services::claude_cli::ClaudeCliError::ShuttingDown
-                ) {
-                    let mut usage = crate::services::request_outcome::RequestOutcome::new(
-                        state,
-                        &route,
-                        &body,
-                        &incoming,
-                        None,
-                        "responses",
-                    )
-                    .started_at(started);
-                    match &error {
-                        crate::services::claude_cli::ClaudeCliError::Router(router_error) => {
-                            usage.router_error(router_error);
-                        }
-                        crate::services::claude_cli::ClaudeCliError::ShuttingDown => {
-                            usage.http_status(503);
-                        }
-                        _ => unreachable!("guarded Claude CLI error variant"),
-                    }
-                }
                 return ResponsesRequestResult::Buffered(
                     crate::api::claude_response::http_response_for_route(&error, &route),
                 );
@@ -356,15 +334,7 @@ pub(crate) fn responses_request(
         };
         let route = &completion.route;
         let response_value = completion.response.body;
-        let mut usage = crate::services::request_outcome::RequestOutcome::new(
-            state,
-            route,
-            &body,
-            &incoming,
-            None,
-            "responses",
-        )
-        .started_at(completion.request_started);
+        usage.candidate(route);
         usage.http_status(completion.response.status);
         usage.upstream_observation(&completion.response.observation);
         usage.observe(&response_value);

@@ -39,10 +39,11 @@ pub(crate) fn execute_summary_request(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
+    usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
 ) -> Result<(CompleteResponse, ResolvedRoute), SummaryExecutionError> {
     if crate::services::claude_cli::selected(route) {
         return match crate::services::claude_cli::execute_complete(
-            state, route, body, incoming, monitor,
+            state, route, body, incoming, monitor, usage,
         ) {
             Ok(completion) => Ok((completion.response, completion.route)),
             Err(crate::services::claude_cli::ClaudeCliError::Router(error)) => {
@@ -56,12 +57,8 @@ pub(crate) fn execute_summary_request(
     }
 
     let router = ExternalRouter::new(&state.backend.transport.client);
-    let mut event = Value::Object(crate::services::observation::request::route_fields(
-        route,
-        &state.backend.diagnostics,
-    ));
-    event["request_id"] = crate::services::observation::request::request_id(incoming);
-    crate::services::observation::record_attempt(state, &event, "summary_dispatch");
+    usage.candidate(route);
+    usage.dispatch();
     match crate::services::disconnect::raced(
         &state.backend.transport.runtime,
         monitor,
@@ -195,6 +192,7 @@ pub(crate) fn external_compaction_response(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     mut monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
+    usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
 ) -> Result<(Value, ResolvedRoute), CompactionError> {
     let summary_body = compaction_summary_body(body);
     let candidates = protocol_candidates(route);
@@ -215,6 +213,7 @@ pub(crate) fn external_compaction_response(
             incoming,
             ids,
             monitor.as_deref_mut(),
+            usage,
         ) {
             Ok((result, executed_route)) => {
                 let Some(summary) = response_output_text(&result.body) else {
@@ -227,14 +226,21 @@ pub(crate) fn external_compaction_response(
                 if index + 1 < candidates.len()
                     && protocol_fallback_allowed(error.status(), false, false) =>
             {
+                usage.retry(index, std::time::Duration::ZERO, &error, true);
                 continue;
             }
             Err(SummaryExecutionError::Router(error)) => {
+                usage.router_error(&error);
                 return Err(CompactionError::Execution(SummaryExecutionError::Router(
                     error,
                 )));
             }
-            Err(error) => return Err(CompactionError::Execution(error)),
+            Err(error) => {
+                if matches!(error, SummaryExecutionError::Disconnected) {
+                    usage.disconnected();
+                }
+                return Err(CompactionError::Execution(error));
+            }
         }
     }
     Err(CompactionError::InvalidSummary("invalid_response"))

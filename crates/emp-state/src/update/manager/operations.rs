@@ -129,7 +129,19 @@ impl UpdateManager {
         #[cfg(not(target_os = "linux"))]
         let migration = false;
         self.stage("parse_release");
-        match latest_asset(&raw, &desired, &snapshot.current_version, &self.0.endpoints)? {
+        let asset = latest_asset(&raw, &desired, &snapshot.current_version, &self.0.endpoints)?;
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&raw).map_err(|_| UpdateError("invalid_release"))?;
+        if let Ok(mut snapshot) = self.0.snapshot.lock() {
+            snapshot.release_notes = metadata
+                .get("body")
+                .and_then(|body| body.as_str())
+                .unwrap_or_default()
+                .chars()
+                .take(65536)
+                .collect();
+        }
+        match asset {
             Some(asset) => {
                 let latest = asset.version.clone();
                 *self
@@ -153,14 +165,10 @@ impl UpdateManager {
                     .asset
                     .lock()
                     .map_err(|_| UpdateError("update_failed"))? = None;
-                let version = serde_json::from_slice::<serde_json::Value>(&raw)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("tag_name")?
-                            .as_str()
-                            .map(|tag| tag.trim_start_matches('v').to_owned())
-                    });
+                let version = metadata
+                    .get("tag_name")
+                    .and_then(|tag| tag.as_str())
+                    .map(|tag| tag.trim_start_matches('v').to_owned());
                 self.set_checked(
                     if migration {
                         "migration_required"

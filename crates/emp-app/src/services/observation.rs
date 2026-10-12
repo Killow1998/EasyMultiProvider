@@ -15,15 +15,6 @@ pub(crate) fn retry_scheduled(
     error: &emp_router::RouterError,
     fallback: bool,
 ) {
-    state.backend.activity.request_retry(
-        request_id,
-        if fallback {
-            "protocol_rejection"
-        } else {
-            error.error_class().as_str()
-        },
-        error.status(),
-    );
     state.backend.diagnostics.journal.event(
         "info",
         "model_retry_scheduled",
@@ -47,36 +38,6 @@ pub(crate) fn request_tokens_per_second(output_tokens: &Value, duration_ms: &Val
     (0.0..=1_000_000.0)
         .contains(&rate)
         .then(|| (rate * 100.0).round_ties_even() / 100.0)
-}
-
-pub(crate) fn execution_attempt(
-    state: &ServerState,
-    route: &ResolvedRoute,
-    body: &Value,
-    incoming: &BTreeMap<String, String>,
-) {
-    let event = json!({
-        "request_id":incoming.iter().find(|(name, _)| name.eq_ignore_ascii_case("x-emp-request-id")).map(|(_, value)| value),
-        "dispatch_started":true, "client_model":body["model"], "upstream_model":route.upstream_model,
-        "provider_id":route.provider_id,"model_id":route.requested_model, "dialect":route.dialect,
-        "endpoint_fingerprint":route.endpoint_fingerprint, "route_source":route.source,
-        "resolved_protocol":route.protocol,
-        "transport":if body["stream"]==true { "sse" } else { "http" },
-    });
-    record_attempt(
-        state,
-        &event,
-        if crate::services::claude_cli::selected(route) {
-            "cli_execution"
-        } else {
-            "router_dispatch"
-        },
-    );
-    state.backend.activity.observe_request(
-        &event,
-        crate::services::activity::ActivityIdentity::from_route(route).as_ref(),
-        false,
-    );
 }
 
 /// An attempt is evidence of entering an executor, not proof of provider acceptance.

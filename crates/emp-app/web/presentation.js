@@ -20,7 +20,7 @@ function presentationQuotaMeters(account, busy = false, animate = false) {
   }).join('')}</div>`;
 }
 const presentationPreferencePrefix = window.EMP_PREVIEW ? 'emp.shadow.' : 'emp.';
-document.body.dataset.quotaStyle = storedPreference(presentationPreferencePrefix+'quotaStyle',window.EMP_PREVIEW ? 'ring' : 'bar');
+document.body.dataset.quotaStyle = storedPreference(presentationPreferencePrefix+'quotaStyle','ring');
 const presentationDotColors = [
   ['multi','多彩','Multicolor',''],['blue','蓝色','Blue','#487de8'],
   ['purple','紫色','Purple','#9473c6'],['teal','青色','Teal','#299c9f'],
@@ -49,8 +49,8 @@ presentationSetDotColor(storedPreference(presentationDotPreference,'multi'));
 function presentationDotColorSettings() {
   return `<div class="setting-row"><div class="setting-title">${tr('点阵颜色','Dotted outline color')}</div><div class="presentation-dot-choices" role="group" aria-label="${tr('点阵颜色','Dotted outline color')}">${presentationDotColors.map(([id,zh,en,color]) => `<button type="button" class="secondary presentation-dot-choice" data-presentation-dot-color="${id}" aria-pressed="${document.body.dataset.dotColor === id}" title="${esc(tr(zh,en))}" aria-label="${esc(tr(zh,en))}"><span class="presentation-dot-swatch ${id === 'multi' ? 'is-multicolor' : ''}" ${color ? `style="--swatch:${color}"` : ''} aria-hidden="true"></span>${id === 'multi' ? tr(zh,en) : ''}</button>`).join('')}<label class="presentation-dot-custom" data-selected="${document.body.dataset.dotColor === 'custom'}"><input type="color" value="${presentationDotCustom}" data-presentation-dot-custom aria-label="${tr('自定义点阵颜色','Custom dotted outline color')}"><span>${tr('自定义','Custom')}</span></label></div></div>`;
 }
-function presentationSettingsHtml() {
-  return `<div class="setting-row"><div class="setting-title">${tr('额度样式','Quota style')}</div><div class="quota-display-choice" role="group" aria-label="${tr('额度样式','Quota style')}">${['bar','ring'].map(style => `<button type="button" class="secondary" data-presentation-style="${style}" aria-pressed="${document.body.dataset.quotaStyle === style}">${style === 'bar' ? tr('横条','Bars') : tr('圆环','Rings')}</button>`).join('')}</div></div>`+presentationDotColorSettings();
+function presentationSettingsHtml(quotaChoice = '') {
+  return `<div class="setting-row"><div class="setting-title">${tr('额度样式','Quota style')}</div><div class="quota-display-choice" role="group" aria-label="${tr('额度样式','Quota style')}">${['bar','ring'].map(style => `<button type="button" class="secondary" data-presentation-style="${style}" aria-pressed="${document.body.dataset.quotaStyle === style}">${style === 'bar' ? tr('横条','Bars') : tr('圆环','Rings')}</button>`).join('')}</div></div>`+quotaChoice+presentationDotColorSettings();
 }
 document.addEventListener('click', event => {
   const color = event.target.closest('[data-presentation-dot-color]');

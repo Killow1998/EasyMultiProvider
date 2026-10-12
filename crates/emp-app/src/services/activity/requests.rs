@@ -52,14 +52,9 @@ impl Requests {
             return false;
         };
         let previous = record.clone();
-        if event["dispatch_started"] == true {
-            record["attempts"] = json!(record["attempts"].as_u64().unwrap_or(0).saturating_add(1));
-            if record["attempt_routes"].is_null() {
-                record["attempt_routes"] = json!([]);
-            }
-            let routes = record["attempt_routes"].as_array_mut().unwrap();
-            if routes.len() < 16 {
-                routes.push(json!({"at":now,"upstream_model":emp_state::diagnostics::schema::id(&event["upstream_model"]),"protocol":emp_state::diagnostics::schema::id(&event["resolved_protocol"])}));
+        for field in ["attempts", "retries", "attempt_routes"] {
+            if !event[field].is_null() {
+                record[field] = event[field].clone();
             }
         }
         for field in [
@@ -127,18 +122,6 @@ impl Requests {
         changed
     }
 
-    pub(super) fn retry(&mut self, id: &Value, reason: &str, status: u16, now: u64) -> bool {
-        let Some(record) = self.entry(id, now) else {
-            return false;
-        };
-        let retries = record["retries"].as_array_mut().expect("request retries");
-        if retries.len() < 16 {
-            retries.push(json!({"reason":reason,"status":status,"at":now}));
-        }
-        record["updated_at"] = json!(now);
-        true
-    }
-
     pub(super) fn snapshot(&self, now: u64) -> Vec<Value> {
         self.records
             .iter()
@@ -162,8 +145,7 @@ mod tests {
         let identity =
             ActivityIdentity::new("demo/model".into(), Some("demo".into()), None).unwrap();
         let mut requests = Requests::default();
-        requests.retry(&json!("first"), "network", 502, 10);
-        let first = json!({"request_id":"first","client_model":"demo/model","upstream_model":"model","prompt":"secret","api_key":"secret","dispatch_started":true});
+        let first = json!({"request_id":"first","client_model":"demo/model","upstream_model":"model","prompt":"secret","api_key":"secret","attempts":1,"retries":[{"reason":"network","status":502,"at":10}]});
         requests.observe(&first, Some(&identity), false, 11);
         requests.observe(
             &json!({"request_id":"second","upstream_model":"model"}),
@@ -172,7 +154,6 @@ mod tests {
             12,
         );
         let mut complete = first;
-        complete["dispatch_started"] = json!(false);
         complete["response_model"] = json!("model-revision");
         complete["status"] = json!(200);
         complete["success"] = json!(true);

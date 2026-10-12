@@ -15,12 +15,12 @@ function createServiceChooser({tr, esc, presets, icon, openModal, getState}) {
     const apiKeys = ['openai', 'anthropic', ...Object.keys(presets).filter(key => !['chatgpt','openai','anthropic'].includes(key))];
     const api = apiKeys.filter(key => presets[key]).map(key => card('official-provider-choose', esc(presets[key].name), key, tr('连接 API 服务','Connect an API service'), `data-provider="${esc(key)}"`)).join('')
       + card('service-custom-api', tr('自定义 API','Custom API'), 'custom', tr('填写地址和 API Key','Enter address and API key'));
-    openModal(tr('添加服务','Add service'), group(tr('Codex 订阅','Codex subscriptions'), codex) + group('Claude Code', claude) + group('API', api), '', null);
+    openModal(tr('添加服务','Add service'), group(tr('Codex 订阅','Codex subscriptions'), codex) + group('Claude Code', claude) + group('API', api), '', null, null, {reopen:open});
   }
-  function importCodex() {
+  function importCodex(navigation = {}) {
     openModal(tr('导入 Codex 订阅','Import Codex subscription'), `<div id="codex_import_choices" class="choice-grid">`
       + card('account-import-paste', tr('粘贴内容','Paste contents'), 'codex', tr('粘贴 auth.json 的完整内容','Paste the complete auth.json contents'))
-      + card('account-import-file', tr('选择文件','Choose a file'), 'codex', tr('选择 auth.json 文件','Choose an auth.json file')) + '</div>', '', null);
+      + card('account-import-file', tr('选择文件','Choose a file'), 'codex', tr('选择 auth.json 文件','Choose an auth.json file')) + '</div>', '', null, null, {...navigation, reopen:() => importCodex(navigation)});
   }
   return {open, importCodex};
 }

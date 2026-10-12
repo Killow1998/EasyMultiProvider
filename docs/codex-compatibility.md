@@ -22,6 +22,21 @@ All ten series passed the common Linux fixture contract. Windows, macOS, App
 and IDE bundled engines need their own acceptance evidence; Linux fixtures do
 not establish real-provider acceptance.
 
+## On-demand migration acceptance on 2026-10-12 UTC
+
+Version 0.13.0 changes native restoration to
+configuration-only. Historical ten-series results above describe the earlier
+restore-time migration contract; they are not automatic acceptance of this new
+contract across those engines.
+
+Codex 0.162.1 passed the updated isolated Linux created-history fixture: real MCP
+before/after external compaction, parent and three bounded descendants, explicit
+single-thread migrations, native resumes and idempotent configuration restore.
+The same engine passed online subscription catalog discovery and loading a new
+model after a response ETag change within one process. All credentials and
+upstreams were synthetic, with external network proxies blocked. Windows source
+behavior still needs a candidate-binary acceptance; production is unchanged.
+
 ## Protocol decisions
 
 - **Provider capabilities:** EMP's normal integration changes the existing
