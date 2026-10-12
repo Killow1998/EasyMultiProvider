@@ -28,3 +28,8 @@ docs/v0.5-implementation-plan.md
 
 # Python developer previews
 __pycache__/
+
+# The Rust account owner is source; keep sibling data ignored.
+!crates/emp-app/src/services/accounts/
+crates/emp-app/src/services/accounts/*
+!crates/emp-app/src/services/accounts/*.rs
