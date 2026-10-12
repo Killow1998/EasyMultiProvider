@@ -270,11 +270,14 @@ fn quota_helper_accepts_temp_roots_that_cannot_be_toml_literals() {
     let root = tempfile::tempdir().unwrap();
     let script = root.path().join("fake-codex");
     fs::write(&script, r#"#!/usr/bin/env python3
-import json, os, pathlib, sys, tomllib
+import configparser, json, os, pathlib, sys
 home = pathlib.Path(os.environ['CODEX_HOME'])
-config = tomllib.loads((home / 'config.toml').read_text())
-assert config['model_catalog_json'] == 'quota-models.json'
-assert json.loads((home / config['model_catalog_json']).read_text())['models']
+# The helper's scalar TOML subset is INI-compatible; Python 3.10 has this parser.
+config = configparser.ConfigParser(interpolation=None)
+config.read_string('[quota_fixture]\n' + (home / 'config.toml').read_text())
+catalog = json.loads(config['quota_fixture']['model_catalog_json'])
+assert not pathlib.Path(catalog).is_absolute()
+assert json.loads((home / catalog).read_text())['models']
 for line in sys.stdin:
     request = json.loads(line)
     if 'id' not in request: continue
