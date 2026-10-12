@@ -49,7 +49,8 @@ function installShadowServiceDemo() {
     return summary(element);
   };
   // The gallery uses a fixed snapshot; live quota/activity events cannot overwrite it.
-  startQuotaEvents=function(){};
+  managementEvents.stop();
+  managementEvents.start=()=>{};
   requestQuotaSync=async function(){};
   document.addEventListener('click',event=>{
     const button=event.target.closest('#services [data-ui-action]');

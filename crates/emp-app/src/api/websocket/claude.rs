@@ -38,28 +38,29 @@ pub(super) fn serve(
             .begin(crate::services::activity::ActivityIdentity::from_route(
                 route,
             ));
+    let mut usage = crate::services::request_outcome::RequestOutcome::new(
+        state,
+        route,
+        &Value::Object(request_body.clone()),
+        request_headers,
+        None,
+        "responses",
+    )
+    .started_at(websocket.observation.execution_started())
+    .transport("websocket");
     let completion = match crate::services::claude_cli::execute_complete(
         state,
         route,
         &Value::Object(request_body.clone()),
         request_headers,
         Some(monitor),
+        &mut usage,
     ) {
         Ok(completion) => completion,
         Err(
             crate::services::claude_cli::ClaudeCliError::Disconnected
             | crate::services::claude_cli::ClaudeCliError::Failure("claude_cli_interrupted"),
         ) => {
-            let mut usage = crate::services::request_outcome::RequestOutcome::new(
-                state,
-                route,
-                &Value::Object(request_body.clone()),
-                request_headers,
-                None,
-                "responses",
-            )
-            .started_at(websocket.observation.execution_started())
-            .transport("websocket");
             if websocket.interrupted() {
                 usage.interrupted();
                 return TurnResult::Finished;
@@ -68,19 +69,6 @@ pub(super) fn serve(
             return TurnResult::Closed;
         }
         Err(error) => {
-            if let crate::services::claude_cli::ClaudeCliError::Router(router_error) = &error {
-                let mut usage = crate::services::request_outcome::RequestOutcome::new(
-                    state,
-                    route,
-                    &Value::Object(request_body.clone()),
-                    request_headers,
-                    None,
-                    "responses",
-                )
-                .started_at(websocket.observation.execution_started())
-                .transport("websocket");
-                usage.router_error(router_error);
-            }
             if websocket
                 .send_json(&crate::api::claude_response::websocket_value_for_route(
                     &error, route,
@@ -95,16 +83,7 @@ pub(super) fn serve(
     let selected_route = completion.route;
     let mut response_value = completion.response.body;
     response_value["id"] = Value::String(id);
-    let mut usage = crate::services::request_outcome::RequestOutcome::new(
-        state,
-        &selected_route,
-        &Value::Object(request_body.clone()),
-        request_headers,
-        None,
-        "responses",
-    )
-    .started_at(websocket.observation.execution_started())
-    .transport("websocket");
+    usage.candidate(&selected_route);
     usage.http_status(completion.response.status);
     usage.upstream_observation(&completion.response.observation);
     usage.observe(&response_value);

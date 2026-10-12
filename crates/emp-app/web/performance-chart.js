@@ -23,12 +23,6 @@ function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
     });
     return result;
   }
-  function scale(maximum, integers) {
-    const raw = Math.max(maximum,integers ? 4 : 1)/4;
-    const power = 10**Math.floor(Math.log10(raw));
-    const step = [1,2,2.5,5,10].find(n => n*power >= raw)*power;
-    return (integers ? Math.ceil(step) : step)*4;
-  }
   function spark(report, metric) {
     const {rows} = buckets(report), parts = segments(rows,metric);
     if (parts.reduce((n,part) => n+part.length,0) < 2) return '';
@@ -47,8 +41,9 @@ function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
     const svg = canvas.querySelector('svg'), tip = canvas.querySelector('.presentation-chart-tooltip');
     const {rows,step} = buckets(report), parts = segments(rows,metric);
     const bar = ['calls','tokens','cost_nanos'].includes(metric);
-    const maximum = Math.max(0,...rows.map(row => valid(row[metric]) ? row[metric] : 0));
-    const ceiling = scale(maximum,metric !== 'cost_nanos' && bar);
+    const values = bar && report.chartSeries?.length ? rows.map((_,i)=>report.chartSeries.reduce((total,series)=>total+(valid(series.values[i])?series.values[i]:0),0)) : rows.map(row=>valid(row[metric])?row[metric]:0);
+    const maximum = Math.max(0,...values);
+    const ceiling = maximum > 0 ? maximum*1.05 : 1;
     let width = 0, index = -1, disposed = false;
     const left = 50, top = 18, bottom = 180;
     const plotWidth = () => width-left-14;

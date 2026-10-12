@@ -203,10 +203,6 @@ impl ActivityService {
         });
     }
 
-    pub(crate) fn request_retry(&self, request_id: &Value, reason: &str, status: u16) {
-        self.update_requests(|requests| requests.retry(request_id, reason, status, unix_seconds()));
-    }
-
     fn update_requests(&self, update: impl FnOnce(&mut requests::Requests) -> bool) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let changed = update(&mut state.requests);

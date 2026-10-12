@@ -1,6 +1,6 @@
 //! Offline doctor/restore commands; they never start a server or model request.
 use crate::http::auth::codex_auth_path;
-use crate::services::integration::restore_native_with_history;
+use crate::services::integration::restore_native_configuration;
 use emp_integration::runtime::{RuntimeStore, offline_snapshot};
 use emp_integration::search::SearchFeatureManager;
 use emp_integration::{IntegrationManager, IntegrationResult, IntegrationStatus};
@@ -62,7 +62,7 @@ impl Control {
                 manager.config_path().to_owned(),
                 state_dir.join("search.json"),
             );
-            let (result, repair) = restore_native_with_history(&manager, Some(&search))
+            let result = restore_native_configuration(&manager, Some(&search))
                 .map_err(|reason| format!("EMP native restore stopped: {reason}"))?;
             if result.ok() {
                 store
@@ -80,7 +80,7 @@ impl Control {
             }
             let record = store.load().map_err(|_| unavailable())?;
             let runtime = offline_snapshot(record.as_ref(), "offline");
-            print_result(&result, &runtime, self.json, &repair);
+            print_result(&result, &runtime, self.json);
             Ok(if result.ok() {
                 ExitCode::SUCCESS
             } else {
@@ -149,19 +149,14 @@ fn print_status(status: &IntegrationStatus, runtime: &Value, as_json: bool) {
     }
 }
 
-fn print_result(
-    result: &IntegrationResult,
-    runtime: &Value,
-    as_json: bool,
-    repair: &emp_codex::history::repair::HistoryRepairReport,
-) {
+fn print_result(result: &IntegrationResult, runtime: &Value, as_json: bool) {
     if as_json {
         println!(
             "{}",
             json!({
                 "configuration":{"action":result.action, "state":result.state, "relation":result.relation,
                     "lease_status":result.lease.as_ref().map_or("none",|lease|lease.status.as_str()), "conflicts":result.conflicts},
-                "history_repair":{"threads_repaired":repair.threads_repaired,"checkpoints_converted":repair.checkpoints_converted},
+                "history_repair":{"mode":"on_demand"},
                 "runtime":runtime, "next_action":next_action(&result.state)
             })
         );
@@ -172,13 +167,11 @@ fn print_result(
             result.conflicts.join(",")
         };
         println!(
-            "action: {}\nstate: {}\nrelation: {}\nconflicts: {}\nhistory threads repaired: {}\ncheckpoints converted: {}\nruntime state: {}\nruntime confidence: {}",
+            "action: {}\nstate: {}\nrelation: {}\nconflicts: {}\nhistory migration: on demand\nruntime state: {}\nruntime confidence: {}",
             result.action,
             result.state,
             result.relation,
             conflicts,
-            repair.threads_repaired,
-            repair.checkpoints_converted,
             runtime["state"].as_str().unwrap_or_default(),
             runtime["confidence"].as_str().unwrap_or_default()
         );

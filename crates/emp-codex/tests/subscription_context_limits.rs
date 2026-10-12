@@ -76,3 +76,27 @@ fn changed_settings_follow_current_limits_and_unchanged_settings_remain_allowed(
         "{rendered}"
     );
 }
+
+#[test]
+fn catalog_defaults_and_override_limits_follow_replaced_cloud_metadata() {
+    let mut catalog = json!({"models":[{"slug":"gpt-6.1-sol","context_window":272000,
+        "max_context_window":872000,"effective_context_window_percent":95}]});
+    let config = json!({"accounts":[],"providers":[],"models":[]});
+    for (default, maximum) in [(272000, 872000), (500000, 872000), (600000, 1050000)] {
+        catalog["models"][0]["context_window"] = json!(default);
+        catalog["models"][0]["max_context_window"] = json!(maximum);
+        let merged = emp_codex::merged_catalog::build_catalog(
+            &config,
+            &catalog,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        assert_eq!(merged["models"][0]["context_window"], default);
+        assert_eq!(merged["models"][0]["max_context_window"], maximum);
+        let requested = json!({"native_model_context_windows":{"gpt-6.1-sol":1000000}});
+        assert_eq!(
+            validate_subscription_contexts(&requested, None, &catalog, &BTreeMap::new()).is_ok(),
+            maximum >= 1000000
+        );
+    }
+}

@@ -1188,3 +1188,58 @@ fn streams_and_resumes_rollout_larger_than_128_mib() {
     assert_eq!(file_fingerprint(&backup).unwrap(), original);
     drop(lock);
 }
+
+#[test]
+fn selected_child_migration_preserves_parent_and_ignores_its_open_writer() {
+    let fixture = fixture(false, true, false);
+    let parent_before = fs::read(&fixture.parent_path).unwrap();
+    let locks = fixture.home.join(LOCK_DIRECTORY);
+    fs::create_dir_all(&locks).unwrap();
+    let writer = File::create(locks.join(format!("{PARENT_ID}.lock"))).unwrap();
+    writer.lock().unwrap();
+    let (lock, report) = repair_thread_before_native_resume(&fixture.home, CHILD_ID).unwrap();
+    assert_eq!(report.threads_repaired, 1);
+    assert_eq!(fs::read(&fixture.parent_path).unwrap(), parent_before);
+    let snapshot = resumed_snapshot(&fixture.home, CHILD_ID);
+    assert!(
+        !snapshot
+            .items
+            .iter()
+            .any(|item| item.content.to_string().contains("emp1:"))
+    );
+    assert!(
+        snapshot
+            .items
+            .iter()
+            .any(|item| item.content.to_string().contains("Portable EMP summary"))
+    );
+    drop(lock);
+    let (lock, report) = repair_thread_before_native_resume(&fixture.home, CHILD_ID).unwrap();
+    assert_eq!(report.threads_repaired, 0);
+    drop(lock);
+    let error = repair_thread_before_native_resume(&fixture.home, PARENT_ID).unwrap_err();
+    assert_eq!(error.reason(), "active_codex_writer");
+    assert_eq!(fs::read(&fixture.parent_path).unwrap(), parent_before);
+    drop(writer);
+}
+
+#[test]
+fn targeted_migration_rejects_invalid_or_missing_thread_without_touching_rollouts() {
+    let fixture = fixture(false, true, false);
+    let parent_before = fs::read(&fixture.parent_path).unwrap();
+    // A malformed unrelated row must not block the selected conversation.
+    Connection::open(fixture.home.join("state_1.sqlite"))
+        .unwrap()
+        .execute(
+            "INSERT INTO threads (id, rollout_path) VALUES ('invalid-unrelated-id', '')",
+            [],
+        )
+        .unwrap();
+    let (lock, report) = repair_thread_before_native_resume(&fixture.home, CHILD_ID).unwrap();
+    assert_eq!(report.threads_repaired, 1);
+    drop(lock);
+    for id in ["../sessions", GRANDCHILD_ID] {
+        assert!(repair_thread_before_native_resume(&fixture.home, id).is_err());
+    }
+    assert_eq!(fs::read(&fixture.parent_path).unwrap(), parent_before);
+}

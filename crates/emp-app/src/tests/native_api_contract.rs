@@ -3,8 +3,10 @@ use super::*;
 use emp_transport::decode_content;
 use std::sync::mpsc;
 
+mod history;
 mod http;
 mod incremental;
+mod installed_catalog;
 mod installed_codex;
 mod installed_tool_search;
 mod interrupt;

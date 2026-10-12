@@ -1,19 +1,20 @@
 // Owns account detail reads and alias interaction; routing and configuration stay outside.
 function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage, persistState,
-  uiIcon, subscriptionPlanLabel, resetCreditCount}) {
+  uiIcon, subscriptionPlanLabel, resetCreditCount, renderInfo}) {
   let current = null;
   function stop() { current?.controller.abort(); current = null; }
   function findAccount(id) { return [getState().native_account, ...(getState().accounts || [])].filter(Boolean).find(account => account.id === id); }
-  async function openAccountDetails(id) {
+  async function openAccountDetails(id, navigation = {}) {
     const account = findAccount(id); if (!account) return;
     const name = account.native ? 'Native' : account.name || account.id;
     const mail = account.quota?.account_label || '';
-    const alias = account.native ? '<div class="account-alias-edit">Native</div>' : `<div class="account-alias-edit"><input id="account_alias" value="${esc(name)}" aria-label="${esc(tr('别名','Alias'))}"><button type="button" class="secondary" id="account_alias_save" data-ui-action="account-alias-save" data-id="${esc(id)}" title="${esc(tr('保存别名','Save alias'))}" aria-label="${esc(tr('保存别名','Save alias'))}">${uiIcon('save')}</button></div>`;
+    const alias = account.native ? '<div class="account-alias-edit">Native</div>' : `<div class="account-alias-edit"><input id="account_alias" value="${esc(name)}" aria-label="${esc(tr('名称','Name'))}"><button type="button" class="secondary" id="account_alias_save" data-ui-action="account-alias-save" data-id="${esc(id)}" title="${esc(tr('保存名称','Save name'))}" aria-label="${esc(tr('保存名称','Save name'))}">${uiIcon('save')}</button></div>`;
     const remove = account.native ? '' : `<button type="button" class="danger" data-icon="trash" data-ui-action="account-remove" data-id="${esc(id)}">${tr('移除','Remove')}</button>`;
     const credit = account.quota?.credits;
     const monthly = credit?.individual_limit?.remaining_percent;
-    const reset = resetCreditCount(account) > 0 ? `<button type="button" class="secondary" data-icon="refresh" data-ui-action="account-reset-credits" data-id="${esc(id)}">${tr('选择重置','Choose reset')} · ${resetCreditCount(account)}</button>` : '';
-    services.open(id, 'account', 'details', `<div class="account-info-grid"><div><span class="account-info-label">${tr('别名','Alias')}</span>${alias}</div><div><span class="account-info-label">${tr('账号','Account')}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr('登录信息','Sign-in')}</span><span class="account-value">${account.native ? tr('本机 Codex 登录','Local Codex sign-in') : tr('已导入的 Codex 登录信息','Imported Codex sign-in')} · ${account.credential_set ? tr('已保存','Saved') : tr('未检测到','Not detected')}</span></div><div><span class="account-info-label">${tr('订阅','Subscription')}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr('月额度','Monthly quota')} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr('已达消费上限','Spend limit reached')}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr('正在读取用量…','Loading usage…')}</p></div>${reset}`, '', null);
+    const reset = resetCreditCount(account) > 0 ? `<button type="button" class="secondary" data-ui-action="account-reset-credits" data-id="${esc(id)}">${uiIcon('reset')} ${tr('选择重置','Choose reset')} · ${resetCreditCount(account)}</button>` : '';
+    const info = {alias,remove,monthly,credit,reset};
+    services.open(id, 'account', 'details', renderInfo ? renderInfo(account,info) : `<div class="account-info-grid"><div><span class="account-info-label">${tr('名称','Name')}</span>${alias}</div><div><span class="account-info-label">${tr('账号','Account')}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr('登录信息','Sign-in')}</span><span class="account-value">${account.native ? tr('本机 Codex 登录','Local Codex sign-in') : tr('已导入的 Codex 登录信息','Imported Codex sign-in')} · ${account.credential_set ? tr('已保存','Saved') : tr('未检测到','Not detected')}</span></div><div><span class="account-info-label">${tr('订阅','Subscription')}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr('月额度','Monthly quota')} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr('已达消费上限','Spend limit reached')}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr('正在读取用量…','Loading usage…')}</p></div>${reset}`, '', null, navigation);
     current = {id, node:$('account_usage'), controller:new AbortController()};
     await refreshAccountDetailsUsage();
   }
@@ -30,10 +31,10 @@ function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage
     const candidate = structuredClone(getState()), account = candidate.accounts.find(item => item.id === element.dataset.id);
     if (!account) return;
     const name = $('account_alias').value.trim();
-    if (!name) { $('modal_status').textContent = tr('请输入别名','Enter an alias'); return; }
+    if (!name) { $('modal_status').textContent = tr('请输入名称','Enter a name'); return; }
     const node = $('account_alias');
     account.name = name; element.disabled = true;
-    try { await persistState(tr('别名已保存','Alias saved'), candidate); if ($('account_alias') === node) { services.mount({id:element.dataset.id, kind:'account', active:'details'}); element.innerHTML = uiIcon('check'); } }
+    try { await persistState(tr('名称已保存','Name saved'), candidate); if ($('account_alias') === node) { services.mount({id:element.dataset.id, kind:'account', active:'details'}); element.innerHTML = uiIcon('check'); } }
     catch (error) { if ($('account_alias') === node) $('modal_status').textContent = error.message; }
     finally { element.disabled = false; }
   }

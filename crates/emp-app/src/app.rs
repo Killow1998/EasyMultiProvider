@@ -71,6 +71,7 @@ pub(crate) struct BackendState {
     pub(crate) integration: IntegrationState,
     pub(crate) usage: crate::services::usage::UsageState,
     pub(crate) diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+    pub(crate) migration_previews: crate::services::migration::MigrationPreviews,
 }
 
 pub(crate) struct TransportState {
@@ -182,6 +183,7 @@ impl BackendState {
             },
             activity: ActivityService::new(Arc::clone(&management_events)),
             auto_review: Default::default(),
+            migration_previews: Default::default(),
             claude_quota: crate::services::claude_cli::quota::LocalQuota::new(
                 state_root.join("claude_quota_history.sqlite3"),
             ),

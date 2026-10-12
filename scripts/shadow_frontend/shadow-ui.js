@@ -43,6 +43,7 @@ notice = function(message, error = false) {
   shadowSavedNotice(!error && /已保存|已显示|已隐藏|已移除|已删除|saved|visible|hidden|removed|deleted/i.test(message) ? tr('影子预览：','Shadow preview: ') + message : message,error);
 };
 
+const shadowMigration = migration;
 installShadowServiceDemo();
 
 // Event-driven integration snapshots must preserve the preview's disabled action.

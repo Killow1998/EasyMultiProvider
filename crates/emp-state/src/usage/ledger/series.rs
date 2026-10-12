@@ -77,7 +77,7 @@ impl UsageLedger {
              u.category,u.owner,u.model,{sums},COUNT(*) AS requests,
              SUM(u.cost_nanos IS NOT NULL) AS priced_requests,
              SUM(COALESCE(u.cost_nanos,0)) AS cost_nanos
-             FROM accounted_usage u WHERE {selection}
+             FROM {RESOLVED_USAGE} u WHERE {selection}
              GROUP BY bucket,u.category,u.owner,u.model ORDER BY bucket,u.category,u.owner,u.model"
             ),
             &query_args,

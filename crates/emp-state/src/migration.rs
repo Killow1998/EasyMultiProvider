@@ -199,6 +199,8 @@ pub struct MigrationImportSummary {
     pub renamed_accounts: usize,
     /// IDs of existing local Providers replaced by same-id imported Providers.
     pub overwritten_providers: Vec<String>,
+    /// Original provider IDs mapped to their verified or newly allocated targets.
+    pub provider_id_map: BTreeMap<String, String>,
 }
 
 /// A byte vector with zeroization on drop.
@@ -260,11 +262,14 @@ mod export;
 mod import;
 
 pub use codec::{decode_migration, encode_migration, parse_envelope};
+mod selection;
 pub use export::{
     ExportGroup, ExportGroups, export_migration_bundle, export_migration_bundle_with_summary,
-    select_export_config,
+    prepare_migration_export, select_export_config,
 };
 use import::id_of;
 pub use import::{
     DecryptedMigration, apply_migration_import, decrypt_migration_bundle, import_migration_bundle,
+    preview_migration_import, validate_migration_payload,
 };
+pub use selection::select_migration_payload;

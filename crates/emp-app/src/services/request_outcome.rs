@@ -2,12 +2,13 @@
 //! updates existing routing feedback, usage and activity exactly once. Downstream
 //! delivery belongs to the passive request receipt and cannot rewrite this result.
 use crate::app::ServerState;
-use crate::services::observation::{request_tokens_per_second, retry_scheduled};
+use crate::services::observation::request_tokens_per_second;
 use emp_core::ResolvedRoute;
 use emp_state::usage::{account_owner, reported_usage};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::Instant;
+mod execution;
 mod recording;
 mod shape;
 
@@ -36,6 +37,13 @@ impl<'a> RequestOutcome<'a> {
         owner: Option<&str>,
         operation: &str,
     ) -> Self {
+        // Codex startup prewarm tokenizes its input but does not run inference.
+        // Use the explicit wire flag, never output_tokens == 0 as a heuristic.
+        let operation = if operation == "responses" && body["generate"] == false {
+            "prewarm"
+        } else {
+            operation
+        };
         let category = match route
             .provider
             .value()
@@ -73,6 +81,9 @@ impl<'a> RequestOutcome<'a> {
         if event["request_id"].is_null() {
             event["request_id"] = json!(crate::util::random_hex(8).ok());
         }
+        event["attempts"] = json!(0);
+        event["retries"] = json!([]);
+        event["attempt_routes"] = json!([]);
         event["requested_effort"] = json!(crate::services::observation::request::reasoning_effort(
             body.get("reasoning")
         ));
@@ -92,16 +103,17 @@ impl<'a> RequestOutcome<'a> {
             &event,
             &state.backend.diagnostics.journal,
         );
-        state.backend.diagnostics.journal.event("info", "model_operation_started", &json!({
+        let started_event = if operation == "prewarm" {
+            "model_prewarm_started"
+        } else {
+            "model_operation_started"
+        };
+        state.backend.diagnostics.journal.event("info", started_event, &json!({
             "request_id":record["request_id"], "protocol":record["protocol"], "transport":record["transport"],
             "provider_id":record["provider_id"], "model_id":record["model_id"], "route":operation,
         }));
         let identity = crate::services::activity::ActivityIdentity::from_route(route);
-        state
-            .backend
-            .activity
-            .observe_request(&event, identity.as_ref(), false);
-        Self {
+        let result = Self {
             state,
             identity,
             started: Instant::now(),
@@ -111,7 +123,9 @@ impl<'a> RequestOutcome<'a> {
             models: Default::default(),
             source_clock: false,
             buffered: crate::services::claude_cli::selected(route),
-        }
+        };
+        result.publish(false);
+        result
     }
     pub(crate) fn observe(&mut self, event: &Value) {
         self.observe_event(event, None);
@@ -261,44 +275,6 @@ impl<'a> RequestOutcome<'a> {
             .extend(projected.as_object().unwrap().clone());
         self.publish(false);
     }
-    pub(crate) fn dispatch(&self) {
-        let mut event = self.event.clone();
-        event["dispatch_started"] = json!(true);
-        crate::services::observation::record_attempt(self.state, &event, "router_dispatch");
-        self.state
-            .backend
-            .activity
-            .observe_request(&event, self.identity.as_ref(), false);
-    }
-    pub(crate) fn candidate(&mut self, route: &ResolvedRoute) {
-        self.event["resolved_protocol"] = json!(route.protocol);
-        self.event["dialect"] = json!(route.dialect);
-        self.event["endpoint_fingerprint"] = json!(route.endpoint_fingerprint);
-        self.event["deployment_identity"] = json!(route.deployment_identity);
-        self.event["upstream_model"] = json!(route.upstream_model);
-        self.identity = crate::services::activity::ActivityIdentity::from_route(route);
-        self.publish(false);
-    }
-    pub(crate) fn retry(
-        &mut self,
-        attempt: usize,
-        delay: std::time::Duration,
-        error: &emp_router::RouterError,
-        fallback: bool,
-    ) {
-        if fallback {
-            self.event["protocol_decision"] = json!("fallback_rejection");
-            self.event["fallback_reason"] = json!("protocol_rejection");
-        }
-        retry_scheduled(
-            self.state,
-            &self.event["request_id"],
-            attempt,
-            delay,
-            error,
-            fallback,
-        );
-    }
     pub(crate) fn transport(mut self, transport: &str) -> Self {
         self.event["transport"] = json!(transport);
         self.publish(false);
@@ -361,6 +337,17 @@ impl<'a> RequestOutcome<'a> {
                 self.event["ttft_ms"] =
                     json!(first.duration_since(self.started).as_millis() as u64);
             }
+            if self.event["route"] == "prewarm" {
+                self.state.backend.diagnostics.journal.event(
+                    "info",
+                    "model_prewarm_finished",
+                    &json!({"request_id":self.event["request_id"],"model_id":self.event["model_id"],
+                        "duration_ms":duration_ms,"success":self.event["success"],
+                        "error_class":self.event["error_class"],"generate":false}),
+                );
+                self.finalized = true;
+                return;
+            }
             self.event
                 .as_object_mut()
                 .expect("route observation is an object")
@@ -392,6 +379,9 @@ impl<'a> RequestOutcome<'a> {
     }
 
     fn publish(&self, finished: bool) {
+        if self.event["route"] == "prewarm" {
+            return;
+        }
         self.state
             .backend
             .activity

@@ -1,5 +1,5 @@
 // Service-owned lifetime summaries and service-type/model usage breakdowns.
-function createServiceUsage({esc, tr, number, money, dateTime}) {
+function createServiceUsage({esc, tr, number, money, dateTime, renderLifetime}) {
   const fields = ['requests', 'priced_requests', 'input_reports', 'output_reports',
     'input_tokens', 'output_tokens', 'cost_nanos', 'cache_reports', 'cached_input_tokens',
     'cache_write_tokens', 'reasoning_reports', 'reasoning_tokens'];
@@ -18,6 +18,7 @@ function createServiceUsage({esc, tr, number, money, dateTime}) {
     return {models:[...models.values()], totals};
   }
   function render(data) {
+    if (renderLifetime) return renderLifetime(data,{aggregate,number,money,dateTime});
     const {models, totals} = aggregate(data.groups);
     const rows = models.sort((a, b) => a.model.localeCompare(b.model)).map(row =>
       `<tr><td>${esc(row.model)}</td><td>${row.input_reports ? number(row.input_tokens) : '—'}</td><td>${row.output_reports ? number(row.output_tokens) : '—'}</td><td>${cost(row)}</td></tr>`).join('');

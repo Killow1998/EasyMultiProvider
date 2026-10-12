@@ -278,7 +278,13 @@ fn stream_errors_keep_pre_and_post_output_boundaries() {
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(response.contains("event: response.output_text.delta\n"));
     assert!(response.contains("event: response.failed\n"));
-    assert!(response.contains("\"status\": 502"));
+    let failed: Value = response
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .find(|event| event["type"] == "response.failed")
+        .expect("terminal failure is valid SSE JSON");
+    assert_eq!(failed["response"]["error"]["status"], 502, "{failed}");
     assert!(response.contains("Selected source 'Demo' and model 'demo/model'"));
     assert!(response.contains("Some output was delivered"));
     assert!(!response.contains("event: response.completed\n"));

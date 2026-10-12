@@ -6,7 +6,7 @@ try { shadowDraft = JSON.parse(localStorage.getItem(shadowStorageKey) || 'null')
 function shadowScrub(value) {
   if (Array.isArray(value)) return value.map(shadowScrub);
   if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).filter(([key]) => !['api_key','auth_json','access_token','refresh_token','id_token','password','authorization','proxy-authorization','cookie'].includes(key.toLowerCase())).map(([key,entry]) => [key,shadowScrub(entry)]));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !['api_key','api_key_file','auth_file','auth','imported_auth','provider_keys','auth_json','access_token','refresh_token','id_token','password','authorization','proxy-authorization','cookie'].includes(key.toLowerCase())).map(([key,entry]) => [key,shadowScrub(entry)]));
 }
 function shadowSave(candidate) {
   if (shadowServicesDemoActive) return shadowServiceDemoDraft = shadowScrub(candidate);
@@ -21,7 +21,7 @@ function shadowMerge(live) {
   for (const key of ['emp_version','claude_quota','catalog_models','catalog_families']) result[key] = live[key];
   const liveAccounts = new Map([live.native_account,...(live.accounts || [])].filter(Boolean).map(a => [a.id,a]));
   result.accounts = (result.accounts || []).map(a => ({...liveAccounts.get(a.id),...a,quota:liveAccounts.get(a.id)?.quota || a.quota}));
-  if (result.native_account && live.native_account) result.native_account = {...result.native_account,quota:live.native_account.quota};
+  if (result.native_account && live.native_account) result.native_account = {...result.native_account,quota:live.native_account.quota,hidden_models:result.native_hidden_models ?? result.native_account.hidden_models,model_context_windows:result.native_model_context_windows ?? result.native_account.model_context_windows};
   const modelById = new Map((result.models || []).map(m => [m.id,m]));
   const accounts = new Map([result.native_account,...result.accounts].filter(Boolean).map(a => [a.id,a]));
   result.catalog_families = (result.catalog_families || []).map(f => ({...f,routes:(f.routes || []).filter(r => {
@@ -72,6 +72,12 @@ window.fetch = async function(path, options = {}) {
     if (route === '/api/config') return shadowReply(shadowMerge(await shadowRead(path, options)));
     const providerModels = route.match(/^\/api\/providers\/([^/]+)\/models$/);
     if (providerModels) return shadowReply(await shadowSavedModels(decodeURIComponent(providerModels[1]),options));
+    const accountModels = route.match(/^\/api\/accounts\/([^/]+)\/models$/);
+    if (accountModels) {
+      const id=decodeURIComponent(accountModels[1]);
+      const account=shadowDraft?.accounts?.find(a=>a.id===id);
+      if(account?._shadow_migration_token)return shadowReply({models:shadowDraft._shadow_model_previews?.[id] || state.subscription_models || [],cached:true});
+    }
     if (route === '/api/accounts' && (shadowDraft || shadowServicesDemoActive)) {
       const snapshot = await shadowRead(path, options);
       const live = shadowMerge({...state,...snapshot});
@@ -80,16 +86,33 @@ window.fetch = async function(path, options = {}) {
     return shadowNativeFetch(path, options);
   }
   let payload = {};
+  if (route.startsWith('/api/shadow/migration/')) return shadowNativeFetch(path, options);
   try { payload = JSON.parse(options.body || '{}'); } catch (_) { return shadowReply({error:{message:'请输入有效 JSON。'}},400); }
+  if(route==='/api/updates/check'){
+    const info=await shadowRead('/api/updates',options),release=await shadowRead('/api/shadow/release-notes',options);
+    const current=String(info.current_version).split('.').map(Number),latest=release.latest_version.split('.').map(Number);
+    const difference=latest.map((part,index)=>part-current[index]).find(value=>value!==0)||0;
+    return shadowReply({...info,...release,state:difference>0?'available':'current',supported:false});
+  }
+  if (route === '/api/migration/export/confirm') return shadowReply({confirmation:'preview-only'});
+  if (['decode','preview','demo','export'].some(operation=>route==='/api/migration/'+operation))
+    return shadowNativeFetch(path.replace('/api/migration/','/api/shadow/migration/'),options);
+  if (route === '/api/migration/import') {
+    const result=await shadowNativeFetch('/api/shadow/migration/preview',{...options,body:JSON.stringify({...payload,current_config:shadowScrub(state)})});
+    if(!result.ok)return result;
+    const preview=await result.json();shadowSave({...state,...preview.config});return shadowReply({status:'ok'});
+  }
   if (route === '/api/config') {
     for (const provider of payload.providers || []) if (provider.api_key) provider.api_key_set = true;
     const live = await shadowRead('/api/config',options);
     shadowSave(payload);
     return shadowReply(shadowMerge(live));
   }
+  if (route === '/api/language') return shadowReply(shadowSave({...state,language:payload.language}));
   if (route === '/api/catalog/context-preference') return shadowReply(shadowSave({...state,...payload}));
   if (route === '/api/catalog/refresh' || route === '/api/client-events') return shadowReply({ok:true});
   if (route === '/api/accounts/import') {
+    payload.id ||= 'account-'+crypto.randomUUID().slice(0,8);payload.prefix ||= payload.id;
     if ((state.accounts || []).some(a => a.id === payload.id)) return shadowReply({error:{message:'此账号 ID 已存在。'}},409);
     shadowSave({...state,accounts:[...(state.accounts || []),{id:payload.id,name:payload.name,prefix:payload.prefix,credential_set:false,enabled:true,hidden_models:[]}]});
     return shadowReply({ok:true});

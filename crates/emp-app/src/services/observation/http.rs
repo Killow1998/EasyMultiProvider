@@ -10,6 +10,7 @@ pub(crate) struct HttpObservation {
     diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
     ledger: Arc<emp_state::usage::ledger::UsageLedger>,
     events: Arc<crate::services::management_events::ManagementEvents>,
+    errors: crate::services::error_presentation::ErrorPresentation,
     started: Instant,
     fields: Value,
     pub(crate) model: Option<super::request::RequestObservation>,
@@ -27,6 +28,7 @@ impl HttpObservation {
             diagnostics: Arc::clone(&state.backend.diagnostics),
             ledger: Arc::clone(&state.backend.usage.ledger),
             events: Arc::clone(&state.backend.management_events),
+            errors: crate::services::error_presentation::ErrorPresentation::new(state),
             started: Instant::now(),
             fields,
             model: None,
@@ -34,6 +36,7 @@ impl HttpObservation {
     }
 
     pub(crate) fn received(&mut self, request: Request<'_>) {
+        self.errors.thread(request.header("thread-id"));
         if request.method == RequestMethod::Post
             && matches!(
                 request.raw_path(),
@@ -52,7 +55,8 @@ impl HttpObservation {
                         "responses"
                     },
                 )
-                .with_ledger(Arc::clone(&self.ledger), Arc::clone(&self.events)),
+                .with_ledger(Arc::clone(&self.ledger), Arc::clone(&self.events))
+                .with_errors(self.errors.clone()),
             );
         }
         self.fields["method"] = json!(match request.method {
@@ -78,6 +82,11 @@ impl HttpObservation {
     }
 
     pub(crate) fn write_response(&mut self, stream: &mut impl Write, bytes: &[u8]) {
+        let formatted = self
+            .model
+            .as_ref()
+            .and_then(|model| model.errors().http(bytes));
+        let bytes = formatted.as_deref().unwrap_or(bytes);
         // Cancellation can return an empty buffer before response headers.
         // Writing zero bytes is not evidence of a delivered HTTP response.
         if bytes.is_empty() {

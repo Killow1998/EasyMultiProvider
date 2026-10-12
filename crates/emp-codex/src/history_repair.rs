@@ -1,5 +1,5 @@
 //! Reversible, append-only conversion of EMP portable checkpoints before
-//! restoring Codex's native provider configuration.
+//! resuming one selected conversation directly with native Codex.
 
 use crate::history::{
     CodexHomeHistoryReader, HistoryBase, MAX_LINEAGE_SEGMENTS, MAX_ROLLOUT_LINE_BYTES,
@@ -45,9 +45,8 @@ pub struct HistoryRepairReport {
     pub checkpoints_converted: usize,
 }
 
-/// Keeps Codex's cross-process writer coordination lock held until the caller
-/// has restored the native configuration. This closes the gap where a new
-/// rollout could be written after repair but before configuration restore.
+/// Keeps Codex's cross-process writer coordination lock held until migration
+/// finishes. New writers cannot race a checkpoint replacement.
 #[derive(Debug)]
 pub struct HistoryRepairLock {
     _coordination: File,
@@ -131,6 +130,25 @@ impl ContextSnapshot {
 pub fn repair_before_native_restore(
     codex_home: &Path,
 ) -> Result<(HistoryRepairLock, HistoryRepairReport), HistoryRepairError> {
+    repair_selected(codex_home, None)
+}
+
+/// Migrate only the selected legacy thread, including inherited context at its
+/// fork cutoff. Other rollouts and their writer locks are not selected.
+pub fn repair_thread_before_native_resume(
+    codex_home: &Path,
+    thread_id: &str,
+) -> Result<(HistoryRepairLock, HistoryRepairReport), HistoryRepairError> {
+    if !uuid_shape(thread_id) {
+        return Err(HistoryRepairError::new("invalid_thread_id"));
+    }
+    repair_selected(codex_home, Some(thread_id))
+}
+
+fn repair_selected(
+    codex_home: &Path,
+    selected: Option<&str>,
+) -> Result<(HistoryRepairLock, HistoryRepairReport), HistoryRepairError> {
     let home = canonical_home(codex_home)?;
     let coordination = acquire_coordination_lock(&home)?;
     let repair_root = ensure_repair_root(&home)?;
@@ -138,6 +156,9 @@ pub fn repair_before_native_restore(
     let database = match CodexHomeHistoryReader::new(&home).latest_state_database() {
         Ok(path) => path,
         Err(error) if error.reason() == "state_database_missing" => {
+            if selected.is_some() {
+                return Err(HistoryRepairError::new("thread_not_found"));
+            }
             if session_roots(&home)?
                 .iter()
                 .any(|root| directory_has_rollouts(root))
@@ -155,8 +176,29 @@ pub fn repair_before_native_restore(
         }
         Err(_) => return Err(HistoryRepairError::new("state_database_unavailable")),
     };
-    let infos = read_thread_infos(&home, &database)?;
-    let pending = pending_manifests(&home, &repair_root)?;
+    let infos = read_thread_infos(&home, &database, selected)?;
+    if selected.is_some() && infos.is_empty() {
+        return Err(HistoryRepairError::new("thread_not_found"));
+    }
+    let mut pending = pending_manifests(&home, &repair_root)?;
+    if let Some(selected) = selected {
+        pending.retain(|(_, manifest)| {
+            manifest
+                .entries
+                .iter()
+                .any(|entry| entry.thread_id == selected)
+        });
+        if pending.iter().any(|(_, manifest)| {
+            manifest
+                .entries
+                .iter()
+                .any(|entry| entry.thread_id != selected)
+        }) {
+            return Err(HistoryRepairError::new(
+                "pending_repair_includes_other_threads",
+            ));
+        }
+    }
     let mut lock_ids = infos
         .iter()
         .map(|row| row.id.clone())
@@ -164,7 +206,7 @@ pub fn repair_before_native_restore(
     for (_, manifest) in &pending {
         lock_ids.extend(manifest.entries.iter().map(|entry| entry.thread_id.clone()));
     }
-    probe_codex_writers(&home, &lock_ids)?;
+    probe_codex_writers(&home, &lock_ids, selected.is_none())?;
     recover_pending(&home, &repair_root, pending)?;
 
     if infos.is_empty() {
@@ -295,36 +337,39 @@ fn acquire_coordination_lock(home: &Path) -> Result<File, HistoryRepairError> {
 
 /// Mirrors Codex 0.158.0's publication probe: while holding the shared
 /// coordination lock, try each known writer lock and fail instead of waiting
-/// on a per-thread lock. New writers cannot start until the caller restores
-/// configuration and drops the coordination lock.
+/// on a per-thread lock. New writers cannot start until the caller finishes
+/// migration and drops the coordination lock.
 fn probe_codex_writers(
     home: &Path,
     thread_ids: &BTreeSet<String>,
+    all_writer_locks: bool,
 ) -> Result<(), HistoryRepairError> {
     let directory = home.join(LOCK_DIRECTORY);
     let mut candidates = thread_ids.clone();
-    for entry in fs::read_dir(&directory)
-        .map_err(|_| HistoryRepairError::new("writer_lock_directory_unavailable"))?
-    {
-        let entry = entry.map_err(|_| HistoryRepairError::new("writer_lock_unavailable"))?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name == COORDINATION_LOCK {
-            continue;
+    if all_writer_locks {
+        for entry in fs::read_dir(&directory)
+            .map_err(|_| HistoryRepairError::new("writer_lock_directory_unavailable"))?
+        {
+            let entry = entry.map_err(|_| HistoryRepairError::new("writer_lock_unavailable"))?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name == COORDINATION_LOCK {
+                continue;
+            }
+            let metadata = entry
+                .file_type()
+                .map_err(|_| HistoryRepairError::new("writer_lock_unavailable"))?;
+            if metadata.is_symlink() || !metadata.is_file() {
+                return Err(HistoryRepairError::new("writer_lock_unsafe"));
+            }
+            let Some(thread_id) = name.strip_suffix(".lock") else {
+                return Err(HistoryRepairError::new("writer_lock_unsafe"));
+            };
+            if !uuid_shape(thread_id) {
+                return Err(HistoryRepairError::new("invalid_thread_id"));
+            }
+            candidates.insert(thread_id.to_owned());
         }
-        let metadata = entry
-            .file_type()
-            .map_err(|_| HistoryRepairError::new("writer_lock_unavailable"))?;
-        if metadata.is_symlink() || !metadata.is_file() {
-            return Err(HistoryRepairError::new("writer_lock_unsafe"));
-        }
-        let Some(thread_id) = name.strip_suffix(".lock") else {
-            return Err(HistoryRepairError::new("writer_lock_unsafe"));
-        };
-        if !uuid_shape(thread_id) {
-            return Err(HistoryRepairError::new("invalid_thread_id"));
-        }
-        candidates.insert(thread_id.to_owned());
     }
     for thread_id in &candidates {
         if !uuid_shape(thread_id) {
@@ -436,7 +481,11 @@ fn directory_has_rollouts(root: &Path) -> bool {
     false
 }
 
-fn read_thread_infos(home: &Path, database: &Path) -> Result<Vec<ThreadInfo>, HistoryRepairError> {
+fn read_thread_infos(
+    home: &Path,
+    database: &Path,
+    selected: Option<&str>,
+) -> Result<Vec<ThreadInfo>, HistoryRepairError> {
     let metadata = fs::symlink_metadata(database)
         .map_err(|_| HistoryRepairError::new("state_database_unavailable"))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -466,12 +515,17 @@ fn read_thread_infos(home: &Path, database: &Path) -> Result<Vec<ThreadInfo>, Hi
     } else {
         "NULL"
     };
-    let query = format!("SELECT id, rollout_path, {mode} FROM threads ORDER BY id");
+    let selection = if selected.is_some() {
+        "WHERE id = ?1"
+    } else {
+        ""
+    };
+    let query = format!("SELECT id, rollout_path, {mode} FROM threads {selection} ORDER BY id");
     let mut statement = connection
         .prepare(&query)
         .map_err(|_| HistoryRepairError::new("threads_schema_unsupported"))?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map(rusqlite::params_from_iter(selected), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,

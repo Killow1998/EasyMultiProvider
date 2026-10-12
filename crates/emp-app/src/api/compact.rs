@@ -112,12 +112,18 @@ pub(crate) fn compact_request(
         state, &route, &body, &incoming, None, "compact",
     );
     let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
-    let (compacted, candidate) =
-        match external_compaction_response(state, &route, &body, &incoming, &ids, monitor.as_mut())
-        {
-            Ok(result) => result,
-            Err(error) => return crate::api::history_response::compaction_error_response(error),
-        };
+    let (compacted, candidate) = match external_compaction_response(
+        state,
+        &route,
+        &body,
+        &incoming,
+        &ids,
+        monitor.as_mut(),
+        &mut usage,
+    ) {
+        Ok(result) => result,
+        Err(error) => return crate::api::history_response::compaction_error_response(error),
+    };
     usage.observe(&compacted);
     persist_protocol_observation(state, &candidate);
     match serde_json::to_vec(&compacted) {

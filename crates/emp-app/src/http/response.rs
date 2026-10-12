@@ -99,6 +99,7 @@ pub(crate) fn json_error_response(
     headers: &[(&str, &str)],
 ) -> Vec<u8> {
     let mut error = serde_json::Map::new();
+    error.insert("origin".to_owned(), Value::String("emp".to_owned()));
     if let Some(code) = code {
         error.insert("code".to_owned(), Value::String(code.to_owned()));
     }

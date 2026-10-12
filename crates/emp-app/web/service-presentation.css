@@ -1,0 +1,65 @@
+/* Preview scope; geometric alignment replaces width-dependent offsets. */
+body[data-shadow-refinements][data-quota-style=ring] #services .service-card{grid-template-columns:minmax(0,1fr) max-content minmax(0,1fr)!important;min-width:640px}
+body[data-shadow-refinements][data-quota-style=ring] #services .service-quota{justify-self:center}
+body[data-shadow-refinements] .presentation-quota-pair{justify-content:center}
+body[data-shadow-refinements] .presentation-ring-meter{width:auto;min-width:104px}
+body[data-shadow-refinements] .presentation-ring-meta{min-width:65px}
+body[data-shadow-refinements] .presentation-service-icon[data-activity-state=active]{filter:drop-shadow(0 0 3px color-mix(in srgb,var(--halo-color,var(--brand-color)) 60%,transparent))}
+body[data-shadow-refinements] .presentation-service-icon[data-activity-state=active] [data-presentation-motion=halo]{background:radial-gradient(circle,transparent 39%,color-mix(in srgb,var(--halo-color,var(--brand-color)) 45%,transparent) 57%,transparent 76%);box-shadow:0 0 8px 2px color-mix(in srgb,var(--halo-color,var(--brand-color)) 55%,transparent);border:1px solid color-mix(in srgb,var(--halo-color,var(--brand-color)) 70%,transparent);inset:-4px}
+:root[data-theme=dark] body[data-shadow-refinements] .presentation-service-icon{--halo-color:color-mix(in srgb,var(--brand-color) 65%,white)}
+:root[data-theme=dark] body[data-shadow-refinements] .presentation-service-icon[data-brand=codex]{--halo-color:#a6acff}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]) body[data-shadow-refinements] .presentation-service-icon{--halo-color:color-mix(in srgb,var(--brand-color) 65%,white)}:root:not([data-theme=light]) body[data-shadow-refinements] .presentation-service-icon[data-brand=codex]{--halo-color:#a6acff}}
+body[data-shadow-refinements] .account-info-grid.shadow-compact-account{grid-template-columns:repeat(3,minmax(0,1fr));min-width:0;gap:12px;margin-bottom:18px}
+.shadow-account-footnotes{font-size:11px;line-height:1.6;color:var(--muted);margin-top:16px;border-top:1px solid var(--border);padding-top:10px}
+.shadow-account-footnotes p{margin:3px 0}
+body[data-shadow-refinements] .shadow-context-row,body[data-shadow-refinements] .subscription-list-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,.7fr) 32px;gap:12px;align-items:center}
+.shadow-context-row .shadow-subscription-sync{justify-self:end}
+.shadow-context-usable{display:block;color:var(--muted);font-size:12px;margin-top:5px}
+.shadow-context-control{display:flex;align-items:center;gap:8px}
+.shadow-context-control input{min-width:0;margin:0}
+.shadow-help{display:inline-grid;place-items:center;flex:none;border:1px solid var(--border-strong);border-radius:50%;width:20px;height:20px;min-height:20px;padding:0;background:transparent;color:var(--muted);font-size:12px}
+.shadow-feedback{position:fixed;z-index:10000;max-width:min(340px,calc(100vw - 24px));padding:10px 12px;border:1px solid var(--border-strong);border-radius:7px;background:var(--panel);box-shadow:0 5px 18px #0002;color:var(--text);font-size:12px;line-height:1.6;white-space:pre-line;pointer-events:none}
+body[data-shadow-refinements] #notification{background:var(--panel);border:1px solid var(--border-strong);border-radius:7px;box-shadow:0 5px 18px #0002}
+body[data-shadow-refinements] .subscription-model-context{display:flex;align-items:center;gap:8px}
+body[data-shadow-refinements] .subscription-model-context>small{display:none}
+body[data-shadow-refinements] .presentation-service-error-bubble{border-radius:7px;box-shadow:0 5px 18px #0002;font-size:12px;line-height:1.6}
+@container services (max-width:720px){body[data-shadow-refinements][data-quota-style=ring] #services .subscription-plan{display:none}body[data-shadow-refinements][data-quota-style=ring] #services .service-identity{min-width:0;max-width:100%}body[data-shadow-refinements][data-quota-style=ring] #services .account-summary{display:flex;max-width:100%;overflow:hidden}body[data-shadow-refinements][data-quota-style=ring] #services .account-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}body[data-shadow-refinements][data-quota-style=ring] #services .account-segment:not(.account-name){flex:none}}
+
+body[data-shadow-refinements] #notification[hidden]{display:none}
+
+/* Detail values share one line box, regardless of whether they contain inputs. */
+.shadow-compact-account>div>.account-value{display:flex;align-items:center;flex:1;font-size:13px}
+.shadow-usage-summary{display:flex;align-items:center;gap:28px;margin:14px 0 18px}
+.shadow-usage-summary h3{margin:0;flex:none}
+.shadow-usage-summary .usage-totals{display:flex;align-items:center;justify-content:space-between;flex:1;margin:0;gap:24px}
+.shadow-usage-summary .usage-total{display:flex;align-items:baseline;gap:8px;padding:0}
+.shadow-usage-summary .usage-total strong{font-size:18px}
+@media(max-width:650px){.shadow-usage-summary{gap:12px;flex-wrap:wrap}.shadow-usage-summary .usage-totals{flex-wrap:wrap;gap:10px 20px}.account-info-grid.shadow-compact-account{grid-template-columns:1fr!important}}
+
+/* One scroll owner for model dialogs, including short or zoomed viewports. */
+body[data-shadow-refinements] .modal .model-selection{max-height:none;overflow:visible}
+
+/* Provider model operations are owned by their service dialog. */
+.modal:has(#shadow_model_manager){width:min(900px,100%)}
+#shadow_model_manager .toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+#shadow_model_search{flex:1;min-width:180px;margin:0}
+#shadow_model_manager .toolbar button{flex:none}
+#shadow_managed_models{border:1px solid var(--border);border-radius:4px}
+.shadow-managed-model{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:12px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border)}
+.shadow-managed-model:last-child{border-bottom:0}
+.shadow-managed-model>div:first-child{min-width:0;overflow-wrap:anywhere}
+.shadow-managed-model small{display:block;font-size:11px;color:var(--muted);margin-top:3px}
+.shadow-managed-model.is-hidden strong{color:var(--muted)}
+.shadow-model-actions{display:flex;gap:6px}
+.shadow-model-action{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;min-width:32px;padding:0}
+.shadow-model-action svg{width:16px;height:16px}
+.shadow-model-action[aria-pressed=true]{color:var(--accent)}
+
+
+body[data-shadow-refinements] #service_detail_nav{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+body[data-shadow-refinements] #service_detail_nav[hidden]{display:none}
+.shadow-detail-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+
+body[data-shadow-refinements] #service_detail_nav{padding-bottom:10px}
+body[data-shadow-refinements] #service_detail_nav .service-detail-tabs{padding-bottom:0;margin:0}
+.shadow-detail-actions button{margin:0}

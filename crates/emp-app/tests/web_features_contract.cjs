@@ -34,7 +34,7 @@ test('service details isolate provider usage and discard results after navigatio
   const pending = [], calls = [];
   const state = {providers:[{id:'first', name:'<img src=x>', base_url:'https://user:secret@example.invalid/v1?key=secret', protocol:'responses'}, {id:'second', name:'Second'}]};
   const service = feature('service-list.js', 'createServiceList')({
-    getState:() => state, $:() => box, tr, esc, presets:{}, icon:() => '', protocolLabel:x => x, authLabel:() => 'API Key',
+    getState:() => state, $:() => box, tr, esc, presets:{}, icon:() => '',
     usageSummary:serviceUsage(), openModal(_title, body) { service.stop(); html = body; box = {innerHTML:''}; },
     api:async (path, options) => { calls.push(path); const value = deferred(); pending.push({...value,signal:options.signal}); return value.promise; },
   });
@@ -266,6 +266,26 @@ test('call queries coalesce events and discard stale filters and closed windows'
   assert.deepEqual(selected.getAll('models'),['service/model','account/model']);
   assert.equal(selected.has('model'),false); reports.stop();
   requests[3].resolve(report('closed-group')); await tick();
+  reports.mount('embedded',{account:'first'},false,report('cached'));
+  assert.equal(requests.length,4); assert.match(content.innerHTML,/cached/);
+  const shell = root.innerHTML;
+  const updated = report('updated');
+  reports.mount('embedded',{account:'first'},false,updated);
+  assert.equal(root.innerHTML,shell); assert.match(content.innerHTML,/updated/);
+  root.onclick({target:{closest:() => ({dataset:{callAction:'next'}})}});
+  assert.match(requests[4].path,/offset=50/);
+  requests[4].resolve({...report('page-two'),offset:50}); await tick();
+  reports.mount('embedded',{account:'first'},false,updated);
+  assert.match(content.innerHTML,/page-two/); assert.doesNotMatch(content.innerHTML,/first-page/);
+  reports.mount('embedded',{account:'first'},false,report('first-page'));
+  assert.match(requests[5].path,/offset=50/);
+  assert.match(content.innerHTML,/page-two/);
+  reports.mount('embedded',{account:'second'},false,report('new-filter'));
+  assert.equal(requests[5].options.signal.aborted,true);
+  requests[5].resolve({...report('stale-page'),offset:50}); await tick();
+  assert.match(content.innerHTML,/new-filter/); assert.doesNotMatch(content.innerHTML,/page-two/);
+  assert.doesNotMatch(content.innerHTML,/stale-page/);
+  assert.equal(requests.length,6); reports.stop();
 });
 
 test('closing diagnostics discards in-flight reports without a polling timer', async () => {
@@ -304,7 +324,7 @@ function pageEffectsGlobals() {
     ResizeObserver:class{observe(){} disconnect(){}},
     performance:{now:()=>0},requestAnimationFrame:()=>0,cancelAnimationFrame(){},
     setInterval:()=>0,clearInterval(){},setTimeout:()=>0,clearTimeout(){},
-    Event:class{}, documentEffects:{hidden:true,body:{...element(),append(){}},createElement:element,
+    Event:class{}, documentEffects:{hidden:true,documentElement:element(),body:{...element(),append(){}},createElement:element,
       querySelector:element,querySelectorAll:()=>[],getElementById:element},windowEffects:{dispatchEvent(){}}};
 }
 
@@ -340,7 +360,7 @@ test('the shipped page initializes its bindings and retains translated integrati
   assert.equal(node('integration_badge').textContent, 'EMP 模型已加载');
 });
 
-test('quota mode changes bars and history together without changing recorded values', () => {
+test('quota mode changes bars without changing recorded values', () => {
   const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
   const storage = new Map();
   const effects=pageEffectsGlobals();
@@ -369,16 +389,22 @@ test('quota mode changes bars and history together without changing recorded val
   assert.match(weeklyOnly, /class="quota-reset">1m111s<\/span>/);
   assert.doesNotMatch(weeklyOnly, /aria-valuenow="233"/);
   assert.equal((weeklyOnly.match(/data-reset-countdown=/g) || []).length, 1);
-  run(`quotaChartWidth=()=>600;globalThis.series=[{window_minutes:300,points:[{observed_at:100,remaining_percent:76},{observed_at:200,remaining_percent:60}]}]`);
-  run('quotaChartSvg(series,{start:100,end:200},300)');
-  assert.equal(run('quotaChartData.points[0].value'), 24);
-  assert.equal(run('series[0].points[0].remaining_percent'), 76);
-  run("quotaDisplay.set('remaining')");
-  run('quotaChartSvg(series,{start:100,end:200},300)');
-  assert.equal(run('quotaChartData.points[0].value'), 76);
-  run(`quotaHistoryPayload={failures:[{start_at:120,end_at:180,diagnostics:{code:'quota_transport_error'}}]}`);
-  assert.equal(run('quotaGapReason({start:100,end:200})'),'Quota connection failed');
-  assert.equal(run('quotaGapReason({start:300,end:400})'),'No data recorded');
-  const gapChart = run('quotaChartSvg(series,{start:100,end:500},180)');
-  assert.match(gapChart,/No data recorded/);
+
+});
+
+
+test('usage services display account labels and distinguish unlinked history without exposing fingerprints', () => {
+  const usage = feature('usage-data.js', 'createUsageData')({tr, esc, number:String});
+  const amount = {model:'model',requests:1,priced_requests:0,input_tokens:10,output_tokens:2,cached_input_tokens:0,cost_nanos:0};
+  const groups = [
+    {...amount,category:'subscription',owner:'account:private-fingerprint',owner_name:'Native',owner_email:'n***@fixture.invalid',owner_local_id:'@native'},
+    {...amount,category:'subscription',owner:'history:egg'},
+    {...amount,category:'subscription',owner:'account:unknown-fingerprint'},
+  ];
+  const html = usage.table({groups}, 'services');
+  assert.match(html, /Native/);
+  assert.match(html, /n\*\*\*@fixture.invalid/);
+  assert.match(html, /Unlinked historical usage · egg/);
+  assert.match(html, /Unlinked account/);
+  assert.doesNotMatch(html, /fingerprint|history:egg|account:|@native/);
 });

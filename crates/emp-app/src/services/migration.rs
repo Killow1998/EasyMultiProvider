@@ -1,13 +1,15 @@
 //! Migration commands own encryption/decryption, account publication and catalog.
 //! The HTTP boundary still owns the existing one-use export authorization.
 use crate::app::ServerState;
-use crate::services::observation::operation::observe;
+use crate::services::observation::operation::{OperationObservation, observe};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use emp_state::{ExportGroups, decrypt_migration_bundle, export_migration_bundle_with_summary};
 use serde_json::Value;
 
 const MIN_EXPORT_PASSWORD_UTF8_BYTES: usize = 12;
+mod preview;
+pub(crate) use preview::{MigrationPreviews, preview_request};
 
 pub(crate) enum MigrationError {
     Invalid {
@@ -17,7 +19,7 @@ pub(crate) enum MigrationError {
     Internal,
 }
 impl MigrationError {
-    fn invalid(error: impl std::fmt::Display) -> Self {
+    pub(super) fn invalid(error: impl std::fmt::Display) -> Self {
         Self::Invalid {
             message: error.to_string(),
             code: None,
@@ -75,6 +77,64 @@ pub(crate) fn export(
                     return Err(MigrationError::Internal);
                 }
             };
+            if let Some(selections) = body.get("selections").and_then(Value::as_array) {
+                let account_ids: std::collections::BTreeSet<_> = selections
+                    .iter()
+                    .filter(|s| s["kind"] == "account")
+                    .filter_map(|s| s["id"].as_str())
+                    .collect();
+                let provider_ids: std::collections::BTreeSet<_> = selections
+                    .iter()
+                    .filter(|s| s["kind"] == "provider")
+                    .filter_map(|s| s["id"].as_str())
+                    .collect();
+                let mut selected_config = config.clone();
+                if let Some(accounts) = selected_config["accounts"].as_array_mut() {
+                    accounts.retain(|a| account_ids.contains(a["id"].as_str().unwrap_or_default()));
+                }
+                if let Some(providers) = selected_config["providers"].as_array_mut() {
+                    providers.retain(|p| {
+                        provider_ids.contains(p["id"].as_str().unwrap_or_default())
+                            || (account_ids.contains("@native") && p["auth_mode"] == "forward")
+                    });
+                }
+                let mut categories = Vec::new();
+                if account_ids.contains("@native") {
+                    categories.push("native");
+                }
+                if account_ids.iter().any(|id| *id != "@native") {
+                    categories.push("subscriptions");
+                }
+                if !provider_ids.is_empty() {
+                    categories.push("external");
+                }
+                let selected_groups =
+                    ExportGroups::from_list(&categories).map_err(MigrationError::invalid)?;
+                let (payload, summary) = emp_state::migration::prepare_migration_export(
+                    &selected_config,
+                    &state.backend.configuration.vault,
+                    Some(&selected_groups),
+                    Some(&state.backend.accounts.native_auth_path),
+                )
+                .map_err(MigrationError::invalid)?;
+                let payload = emp_state::migration::select_migration_payload(
+                    &payload,
+                    selections,
+                    body["include_context"].as_bool().unwrap_or(true),
+                    body["include_rename"].as_bool().unwrap_or(true),
+                )
+                .map_err(MigrationError::invalid)?;
+                let mut salt = [0; 16];
+                getrandom::getrandom(&mut salt).map_err(|_| MigrationError::Internal)?;
+                let plaintext =
+                    serde_json::to_vec(&payload).map_err(|_| MigrationError::Internal)?;
+                let bundle = emp_state::migration::encode_migration(password, &salt, &plaintext)
+                    .map_err(MigrationError::invalid)?;
+                return Ok(Exported {
+                    bundle,
+                    summary: serde_json::json!({"accounts":payload["accounts"].as_array().map_or(0,Vec::len),"providers":payload["config"]["providers"].as_array().map_or(0,Vec::len),"models":payload["config"]["models"].as_array().map_or(0,Vec::len),"native_login_included":summary.native_login_included}),
+                });
+            }
             let (bundle, summary) = match receipt.step("encrypt_bundle", || {
                 export_migration_bundle_with_summary(
                     &config,
@@ -144,41 +204,30 @@ pub(crate) fn import(
             // Same-identity accounts in the bundle replace stored credentials; keep
             // quota refreshes, rotated-credential flushes and other configuration
             // writers out while that happens.
-            let summary = receipt.step("commit_bundle", || {
-                match crate::services::accounts::import_account_bundle(state, decrypted) {
-                    Some(Ok(summary)) => Ok(summary),
-                    Some(Err(error)) => Err(MigrationError::invalid(error)),
-                    None => Err(MigrationError::Internal),
-                }
-            })?;
-            receipt.check("bundle_committed", Some(true));
-            let (catalog_path, _) = match receipt.step("publish_catalog", || {
-                crate::services::catalog::refresh_catalog(state)
-            }) {
-                Ok(result) => result,
-                Err(()) => {
-                    return Err(MigrationError::Internal);
-                }
-            };
-            let catalog_path = catalog_path.to_string_lossy().into_owned();
-            let mut body = serde_json::json!({
-                "status":"ok",
-                "accounts":summary.accounts,
-                "providers":summary.providers,
-                "models":summary.models,
-                "catalog_path":catalog_path,
-            });
-            if summary.renamed_accounts > 0 {
-                body.as_object_mut()
-                    .expect("migration response is an object")
-                    .insert(
-                        "renamed_accounts".to_owned(),
-                        Value::from(summary.renamed_accounts),
-                    );
-            }
-            receipt.check("catalog_published", Some(true));
-            receipt.check("runtime_catalog_matches_target", None);
-            Ok(body)
+            commit_import(state, decrypted, receipt)
         },
     )
+}
+
+fn commit_import(
+    state: &ServerState,
+    decrypted: emp_state::migration::DecryptedMigration,
+    receipt: &mut OperationObservation,
+) -> Result<Value, MigrationError> {
+    let summary = receipt.step("commit_bundle", || {
+        crate::services::accounts::import_account_bundle(state, decrypted)
+            .ok_or(MigrationError::Internal)?
+            .map_err(MigrationError::invalid)
+    })?;
+    receipt.check("bundle_committed", Some(true));
+    let (path, _) = receipt.step("publish_catalog", || {
+        crate::services::catalog::refresh_catalog(state).map_err(|_| MigrationError::Internal)
+    })?;
+    receipt.check("catalog_published", Some(true));
+    receipt.check("runtime_catalog_matches_target", None);
+    let mut result = serde_json::json!({"status":"ok","accounts":summary.accounts,"providers":summary.providers,"models":summary.models,"catalog_path":path.to_string_lossy()});
+    if summary.renamed_accounts > 0 {
+        result["renamed_accounts"] = summary.renamed_accounts.into();
+    }
+    Ok(result)
 }

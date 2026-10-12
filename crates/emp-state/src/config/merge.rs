@@ -246,6 +246,7 @@ fn merge_web_update_at_time(
 
     for key in [
         "catalog_show_context",
+        "language",
         "auto_enable_on_start",
         "auto_review_fallback",
     ] {

@@ -38,6 +38,15 @@ pub(crate) fn management_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
+    if request.raw_path() == "/api/language" {
+        let Some(language) = body["language"].as_str() else {
+            return config_error("language is required");
+        };
+        return match crate::services::configuration::update_language(state, language) {
+            Ok(()) => json_response(&json!({"language":language})),
+            Err(error) => config_error(&error),
+        };
+    }
     if request.raw_path() == "/api/config" {
         return update_configuration(request, state, &body);
     }

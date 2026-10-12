@@ -150,3 +150,22 @@ def confined_path(root: Path, relative: Any, description: str) -> Path:
     if not candidate.is_file():
         fail(f"history repair manifest {description} is not a regular file")
     return candidate
+
+
+def migrate_selected_threads(
+    emp_bin: Path, thread_ids: list[str], memory_limit: int,
+    *, env: dict[str, str], cwd: Path,
+) -> list[dict[str, Any]]:
+    """Explicitly migrate only fixture conversations after their writers close."""
+    results = []
+    for thread_id in thread_ids:
+        process, peak = run_bounded_capture(
+            [str(emp_bin), "migrate-history", "--thread-id", thread_id, "--json"],
+            memory_limit, env=env, cwd=cwd, timeout=180,
+        )
+        if process.returncode != 0:
+            fail(f"selected migration failed: {process.stderr}")
+        result = json.loads(process.stdout)
+        result["peak_rss_bytes"] = peak
+        results.append(result)
+    return results

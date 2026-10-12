@@ -46,8 +46,8 @@ fn configuration_normalization_matches_frozen_fixture() {
             .as_object_mut()
             .expect("normalized object")
             .remove("catalog_show_context");
-        // These three defaults intentionally changed after the Python baseline.
-        for key in ["auto_enable_on_start", "auto_review_fallback"] {
+        // These defaults intentionally changed after the Python baseline.
+        for key in ["auto_enable_on_start", "auto_review_fallback", "language"] {
             python_compatible.as_object_mut().unwrap().remove(key);
         }
         let mut expected = case["expected"].clone();
@@ -87,6 +87,11 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
     let defaults = normalize_configuration(None).expect("defaults");
     assert_eq!(defaults["port"], 4200);
     assert_eq!(defaults["catalog_show_context"], true);
+    assert_eq!(defaults["language"], "zh-CN");
+    assert_eq!(
+        normalize_configuration(Some(&json!({"language":"en"}))).unwrap()["language"],
+        "en"
+    );
     for input in [None, Some(json!({}))] {
         let defaults = normalize_configuration(input.as_ref()).unwrap();
         assert_eq!(defaults["auto_enable_on_start"], true);

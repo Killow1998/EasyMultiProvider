@@ -291,7 +291,7 @@ for line in sys.stdin:
     .expect("unknown account error");
     assert_eq!(
         unknown,
-        json!({"error":{"code":"quota_error","message":"unknown account: missing"}})
+        json!({"error":{"code":"quota_error","message":"unknown account: missing","origin":"emp"}})
     );
 
     let refreshed = post(&server, "/api/accounts/%40native/quota", b"{}", &[&session]);
@@ -657,7 +657,7 @@ for line in sys.stdin:
     .expect("rate-limit error response");
     assert_eq!(
         body,
-        json!({"error":{"code":"quota_rate_limited","message":"Codex quota queries are rate limited (429); try again later"}})
+        json!({"error":{"code":"quota_rate_limited","message":"Codex quota queries are rate limited (429); try again later","origin":"emp"}})
     );
     assert!(!response.contains("private-token"));
     assert!(!response.contains("example.invalid"));

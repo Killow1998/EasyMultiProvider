@@ -1,4 +1,5 @@
 //! Durable usage observations, price refresh and read-only rollout scanning.
+pub(crate) mod identities;
 use crate::app::ServerState;
 use crate::util::system_now;
 use emp_codex::usage_history::UsageHistoryScanner;

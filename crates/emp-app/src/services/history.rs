@@ -120,33 +120,59 @@ pub(crate) fn prepare_destination_context(
         candidate.model.value(),
         safe_budget,
         |summary_body| {
-            let ids = match projection_ids() {
-                Ok(ids) => ids,
-                Err(_) => {
+            let (ids, request_id) = match (projection_ids(), crate::util::random_hex(8)) {
+                (Ok(ids), Ok(request_id)) => (ids, request_id),
+                _ => {
                     summary_failure = Some(DestinationPrepareError::History(
                         "summary_request_id_failed",
                     ));
                     return Err(());
                 }
             };
+            let mut summary_headers = incoming.clone();
+            summary_headers.retain(|name, _| !name.eq_ignore_ascii_case("x-emp-request-id"));
+            summary_headers.insert("x-emp-request-id".into(), request_id);
             if activity_guard.is_none() {
                 activity_guard = Some(state.backend.activity.begin(
                     crate::services::activity::ActivityIdentity::from_route(&candidate),
                 ));
             }
+            let mut usage = crate::services::request_outcome::RequestOutcome::new(
+                state,
+                &candidate,
+                summary_body,
+                &summary_headers,
+                None,
+                "history_summary",
+            );
             match crate::services::compaction::execute_summary_request(
                 state,
                 &candidate,
                 summary_body,
-                incoming,
+                &summary_headers,
                 &ids,
                 monitor.as_deref_mut(),
+                &mut usage,
             ) {
-                Ok((result, _)) => response_output_text(&result.body).ok_or_else(|| {
-                    summary_failure =
-                        Some(DestinationPrepareError::History("summary_output_missing"));
-                }),
+                Ok((result, _)) => {
+                    usage.http_status(result.status);
+                    usage.upstream_observation(&result.observation);
+                    usage.observe(&result.body);
+                    response_output_text(&result.body).ok_or_else(|| {
+                        summary_failure =
+                            Some(DestinationPrepareError::History("summary_output_missing"));
+                    })
+                }
                 Err(error) => {
+                    match &error {
+                        crate::services::compaction::SummaryExecutionError::Router(error) => {
+                            usage.router_error(error)
+                        }
+                        crate::services::compaction::SummaryExecutionError::Disconnected => {
+                            usage.disconnected()
+                        }
+                        crate::services::compaction::SummaryExecutionError::ClaudeCli(_) => {}
+                    }
                     summary_failure = Some(match error {
                         crate::services::compaction::SummaryExecutionError::Router(error) => {
                             DestinationPrepareError::Router(error)

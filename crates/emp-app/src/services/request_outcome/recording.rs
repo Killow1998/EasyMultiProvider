@@ -6,17 +6,6 @@ impl RequestOutcome<'_> {
         if let Some(identity) = &self.identity {
             self.event["account_id"] = json!(identity.account_id);
         }
-        let now = crate::util::system_now();
-        let snapshot = self.state.backend.activity.snapshot(now as u64);
-        if let Some(receipt) = snapshot["requests"].as_array().and_then(|records| {
-            records
-                .iter()
-                .find(|record| record["request_id"] == self.event["request_id"])
-        }) {
-            for field in ["attempts", "retries", "attempt_routes"] {
-                self.event[field] = receipt[field].clone();
-            }
-        }
     }
     pub(super) fn persist_call(&self) {
         let now = crate::util::system_now();

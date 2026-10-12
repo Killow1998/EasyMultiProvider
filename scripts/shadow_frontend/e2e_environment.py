@@ -8,15 +8,19 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
 def request(url, payload=None, headers=None, method=None):
+    if urlsplit(url).hostname != '127.0.0.1':
+        raise ValueError('Acceptance requests must target the local fixture')
     req = urllib.request.Request(url, data=None if payload is None else json.dumps(payload).encode(),
                                  headers={'Content-Type': 'application/json', **(headers or {})}, method=method)
     try:
-        response = urllib.request.urlopen(req, timeout=15)
+        # Inherited HTTP_PROXY must not send local WebDriver/backend traffic away.
+        response = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=15)
     except urllib.error.HTTPError as error:
         response = error
     with response:
@@ -72,16 +76,18 @@ class Upstream(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
 
-def start_backend(stack, binary, root):
+def start_backend(stack, binary, root, configuration=None):
     upstream = ThreadingHTTPServer(('127.0.0.1', 0), Upstream)
     stack.callback(upstream.server_close)
     threading.Thread(target=upstream.serve_forever, daemon=True).start()
     stack.callback(upstream.shutdown)
     config = root / 'config.json'
-    config.write_text(json.dumps({'providers': [{'id': 'demo', 'name': 'Demo', 'base_url':
+    fixture={'providers': [{'id': 'demo', 'name': 'Demo', 'base_url':
         f'http://127.0.0.1:{upstream.server_port}/v1', 'protocol': 'chat_completions',
         'auth_mode': 'api_key', 'api_key': 'fixture-only'}], 'models': [{'id': 'demo/model',
-        'provider': 'demo', 'upstream_id': 'upstream-model', 'enabled': True}]}))
+        'provider': 'demo', 'upstream_id': 'upstream-model', 'enabled': True}]}
+    fixture.update(configuration or {})
+    config.write_text(json.dumps(fixture))
     env = {key: value for key, value in os.environ.items() if key not in {
         'OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
         'ANTHROPIC_BASE_URL', 'EASY_MULTI_PROVIDER_CONFIG'}}

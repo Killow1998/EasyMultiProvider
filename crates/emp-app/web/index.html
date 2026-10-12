@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/assets/style.css">
 <link rel="stylesheet" href="/assets/service-list.css">
 
-<link rel="stylesheet" href="/assets/presentation.css"></head>
+<link rel="stylesheet" href="/assets/presentation.css"><script src="/assets/service-presentation.js"></script><script src="/assets/migration-view.js"></script><script src="/assets/migration.js"></script><script src="/assets/model-manager.js"></script><script src="/assets/subscription-settings.js"></script><link rel="stylesheet" href="/assets/service-presentation.css"><link rel="stylesheet" href="/assets/migration.css"></head>
 <body>
 <main>
 <header class="page-header">
@@ -26,8 +26,7 @@
     </div>
     <div class="header-group">
       <button type="button" class="secondary" data-icon="settings" onclick="openSettings()" data-i18n="settings_menu">设置</button>
-      <button type="button" class="secondary" data-icon="upload" onclick="selectMigrationFile()" data-i18n="import_emp">导入数据</button>
-      <button type="button" class="secondary" data-icon="download" onclick="exportMigration()" data-i18n="export_emp">导出数据</button>
+      <button id="shadow_migration_open" type="button" class="secondary" data-icon="upload" onclick="migration.open()" data-i18n="data_migration">数据迁移</button>
       <input id="migration_file" type="file" hidden accept=".emp,application/octet-stream" onchange="migrationFileChosen(this)">
     </div>
     <div class="header-group">
@@ -54,11 +53,7 @@
 <div id="services" class="entity-list service-list"></div>
 </section>
 
-<section>
-<h2 data-i18n="models_routes">模型</h2>
-<div class="toolbar"><button data-icon="plus" onclick="openManualModelModal()" data-i18n="add_model">手动添加模型</button></div>
-<div id="models"></div>
-</section>
+
 
 </div>
 <aside class="workspace-side">
@@ -88,7 +83,7 @@
 
 <div id="modal_backdrop" class="modal-backdrop hidden">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal_title">
-    <div class="modal-header"><h2 id="modal_title"></h2><button type="button" class="modal-close" aria-label="Close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-header"><h2 id="modal_title"></h2><div class="modal-navigation"><button id="modal_back" type="button" class="secondary modal-back" data-icon="restore" hidden></button><button type="button" class="modal-close" aria-label="Close" onclick="closeModal()">&times;</button></div></div>
     <div id="service_detail_nav" hidden></div>
     <div id="modal_body"></div>
     <div id="modal_status" class="modal-status" role="alert" aria-live="polite"></div>
@@ -99,17 +94,19 @@
 <script src="/assets/service-icons.js"></script><script src="/assets/brand-colors.js"></script>
 <script src="/assets/service-list.js"></script>
 <script src="/assets/service-usage.js"></script>
-<script src="/assets/model-editor.js"></script>
-<script src="/assets/model-settings.js"></script>
+<script src="/assets/release-notes.js"></script><script src="/assets/updates.js"></script><script src="/assets/model-editor.js"></script>
+
 <script src="/assets/account-details.js"></script>
 <script src="/assets/account-import.js"></script>
-<script src="/assets/service-chooser.js"></script>
+<script src="/assets/service-chooser.js"></script><script src="/assets/service-connections.js"></script>
 <script src="/assets/management-client.js"></script>
+<script src="/assets/management-events.js"></script>
 <script src="/assets/quota-display.js"></script>
 <script src="/assets/settings.js"></script>
 <script src="/assets/call-outcomes.js"></script>
 <script src="/assets/performance-chart.js"></script><script src="/assets/performance.js"></script><script src="/assets/call-reports.js"></script>
 <script src="/assets/report-query.js"></script>
+<script src="/assets/quota-history.js"></script>
 <script src="/assets/period-controls.js"></script>
 <script src="/assets/usage-report.js"></script>
 <script src="/assets/diagnostics.js"></script><script src="/assets/service-errors.js"></script><script src="/assets/request-errors.js"></script><script src="/assets/interactions.js"></script><script src="/assets/motion.js"></script><script src="/assets/usage-data.js"></script><script src="/assets/statistics.js"></script>
@@ -117,25 +114,13 @@
 let state = null;
 let integrationInfo = null;
 let pendingMigrationFile = null;
-let activeQuotaAccountId = '';
-let activeQuotaServiceKind = 'accounts';
-let quotaHistoryTimer = null;
-let quotaHistoryRequest = 0;
-let quotaHistoryPayload = null;
-let activeQuotaLimit = 'codex';
-let activeQuotaWindow = '300';
-let quotaHistoryZoom = [];
-let quotaHistoryLoading = false;
 let quotaStateTimer = null;
 let quotaStateBusy = false;
-let quotaEventsController = null;
-let quotaEventsConnected = false;
 let activitySnapshot = null;
 let activityClockOffsetSeconds = 0;
 let activityExpiryTimer = null;
 let quotaUpdatePending = false;
 let quotaUpdateRunning = false;
-const expandedModelGroups = new Set();
 const refreshErrors = {};
 const refreshingAccounts = new Set();
 const quotaAnimationAccounts = new Set();
@@ -146,8 +131,10 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const management = createManagementClient({tr, fetch: (...args) => fetch(...args), storage:() => localStorage, window});
 const {request:api, fetch:managementFetch, establish:establishSession, errorText:upstreamErrorText} = management;
+const managementEvents = createManagementEvents({management,visible:()=>document.visibilityState !== 'hidden',onEvent:processManagementEvent,
+  onStart:()=>{updateActivityDots();rescheduleActivityExpiry();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
-const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, presentationOptions:() => presentationSettingsHtml()});
+const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice)});
 const {open:openSettings, toggle:toggleSetting} = settings;
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});
@@ -176,7 +163,16 @@ function applyTranslations() {
   if (integrationInfo) renderIntegration(integrationInfo);
   else $('integration_badge').textContent = t('loading');
 }
-function setLanguage(value) { language = value === 'en' ? 'en' : 'zh-CN'; savePreference('emp-language', language); if ($('language_select')) $('language_select').value = language; applyTranslations(); if (state) fill(); }
+let languageSaveBusy=false;
+async function syncLanguage() {
+  if(languageSaveBusy || !state || state.language===language)return;
+  languageSaveBusy=true;
+  try {
+    while(state.language!==language){const chosen=language;await api('/api/language',{method:'POST',body:JSON.stringify({language:chosen})});state.language=chosen;}
+  } catch(error){notice(tr('错误说明语言保存失败：','Could not save error language: ')+error.message,true);}
+  finally{languageSaveBusy=false;}
+}
+function setLanguage(value) { language = value === 'en' ? 'en' : 'zh-CN'; savePreference('emp-language', language); if ($('language_select')) $('language_select').value = language; applyTranslations(); if (state) fill(); if ($('update_notes') && updates.info()) renderUpdate(updates.info()); if(state)void syncLanguage(); }
 function setTheme(value) { const theme = ['light','dark'].includes(value) ? value : 'system'; savePreference('emp-theme', theme); if (document.documentElement) document.documentElement.dataset.theme = theme; if ($('theme_select')) $('theme_select').value = theme; }
 function applyPreferences() { language = storedPreference('emp-language', 'zh-CN') === 'en' ? 'en' : 'zh-CN'; setTheme(storedPreference('emp-theme', 'system')); if ($('language_select')) $('language_select').value = language; applyTranslations(); }
 
@@ -192,17 +188,17 @@ const officialProviders = {
   zhipu: {id:'zhipu-glm', name:'Zhipu/GLM', base_url:'https://api.z.ai/api/paas/v4', protocol:'chat_completions', auth_mode:'api_key', hint:'GLM OpenAI-compatible API'}
 };
 
-const serviceUsage = createServiceUsage({esc, tr, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), money:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN', {style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4}).format(value/1e9), dateTime:utcDateTimeText});
-const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, getLanguage:() => language, persistState, openModal, serviceUsage, callReports, eventsConnected:() => quotaEventsConnected, periods:{periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg}});
+const serviceUsage = createServiceUsage({renderLifetime:shadowServiceUsage,esc, tr, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), money:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN', {style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4}).format(value/1e9), dateTime:utcDateTimeText});
+const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, getLanguage:() => language, persistState, openModal, serviceUsage, callReports, eventsConnected:() => managementEvents.connected(), periods:{periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg}});
 const {open:openUsage} = usageReport;
 const services = createServiceList({
   getState:() => state, $, esc, tr, presets:officialProviders, icon:serviceIconHtml,
   activity:activityIndicatorHtml, serviceIcon:(...args)=>serviceActivityIcon(...args), updateServiceErrors:()=>{presentationUpdateServiceRequestErrors();presentationUpdateServiceErrorLabels();}, accountSummary:accountSummaryHtml, quotaMeters:(...args)=>presentationQuotaMeters(...args),
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots:() => updateActivityDots(), openModal, api,
-  notice, usageSummary:serviceUsage
+  notice, usageSummary:serviceUsage, onMount:shadowDetailActions
 });
 const {render:renderServices, details:openProviderDetails} = services;
-const accountDetails = createAccountDetails({getState:() => state, $, tr, esc, api, services, serviceUsage, persistState, uiIcon, subscriptionPlanLabel, resetCreditCount});
+const accountDetails = createAccountDetails({renderInfo:shadowAccountInfo,getState:() => state, $, tr, esc, api, services, serviceUsage, persistState, uiIcon, subscriptionPlanLabel, resetCreditCount});
 const {open:openAccountDetails, saveAlias:saveAccountAlias} = accountDetails;
 const {open:openServiceChooser, importCodex:openCodexImportChooser} = createServiceChooser({tr, esc, presets:officialProviders, icon:serviceIconHtml, openModal, getState:() => state});
 
@@ -229,7 +225,11 @@ function capabilitySummary(model) {
   const parts = [];
   const inputs = Array.isArray(confirmedField(model, 'input_modalities')) ? confirmedField(model, 'input_modalities') : [];
   if (inputs.length) parts.push(tr('输入 ', 'Input ') + inputs.map(modalityLabel).map(esc).join('/'));
-  else parts.push(esc(visionLabel(visionStatus(model))));
+  else {
+    const status=visionStatus(model),label=esc(visionLabel(status));
+    const help=tr('当前记录没有可确认的输入模态声明，不代表不支持图像。在模型编辑中选择图像，或使用图像测试。','This record has no verified input modality declaration; it does not mean images are unsupported. Select image input in the model editor or use the image test.');
+    parts.push(status==='unknown'?`<span tabindex="0" data-shadow-help="${esc(help)}">${label} ?</span>`:label);
+  }
   const outputs = Array.isArray(confirmedField(model, 'output_modalities')) ? confirmedField(model, 'output_modalities') : [];
   if (outputs.length) parts.push(tr('输出 ', 'Output ') + outputs.map(modalityLabel).map(esc).join('/'));
   const protocols = Array.isArray(confirmedField(model, 'supported_protocols')) ? confirmedField(model, 'supported_protocols') : [];
@@ -279,7 +279,7 @@ function selectMigrationFile() { $('migration_file').click(); }
 async function migrationFileChosen(input) {
   const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice(tr('EMP 文件不能超过 32 MB','EMP files cannot exceed 32 MB'), true); }
   pendingMigrationFile = file;
-  openModal(tr('导入 EMP 数据','Import EMP data'), `<p class="muted">${tr('已选择','Selected')}：${esc(file.name)}<br>${tr('同 ID 且身份一致的账号会更新；账号冲突会保留双方并重命名导入项。Provider 和模型按 ID 合并。','Accounts with matching IDs and identities are updated; conflicting accounts are retained under new IDs. Providers and models are merged by ID.')}</p><label>${tr('迁移密码','Migration password')}<input id="modal_import_migration_password" type="password" autocomplete="current-password" autofocus></label>`, tr('导入并合并','Import and merge'), submitMigrationImport);
+  openModal(tr('导入 EMP 数据','Import EMP data'), `<p class="muted">${tr('已选择','Selected')}：${esc(file.name)}<br>${tr('确认同一账号或连接时更新已有服务；不同或无法确认时保留双方。名称相同不影响导入。','Verified matching accounts or connections update existing services; different or unverifiable identities remain separate. Matching names do not block import.')}</p><label>${tr('迁移密码','Migration password')}<input id="modal_import_migration_password" type="password" autocomplete="current-password" autofocus></label>`, tr('导入并合并','Import and merge'), submitMigrationImport);
 }
 async function submitMigrationImport() {
   const password = $('modal_import_migration_password').value; if (!password) throw new Error(tr('请填写迁移密码','Enter the migration password')); if (!pendingMigrationFile) throw new Error(tr('请重新选择 EMP 文件','Select the EMP file again'));
@@ -415,24 +415,32 @@ async function toggleCatalogContext() {
   catalogContextPreferenceBusy = true;
   updateCatalogDisplayControls();
   renderCatalogDisplay();
-  renderModels();
+
   try {
     const saved = await api('/api/catalog/context-preference', {method:'POST', body:JSON.stringify({catalog_show_context:next})});
     if (typeof saved?.catalog_show_context !== 'boolean') throw new Error(tr('无法保存上下文标签设置','Could not save the context label preference'));
     state.catalog_show_context = saved.catalog_show_context;
     renderCatalogDisplay();
-    renderModels();
+
     notice(tr('上下文标签设置已保存','Context label preference saved'));
     void syncSavedCatalog();
   } catch (error) {
     state.catalog_show_context = previous;
     renderCatalogDisplay();
-    renderModels();
+
     notice(error.message, true);
   } finally {
     catalogContextPreferenceBusy = false;
     updateCatalogDisplayControls();
   }
+}
+function catalogSourceLabel(route) {
+  const id=route.id || '';
+  const provider=(state.providers || []).find(item=>id.startsWith(item.id+'/'));
+  if(provider)return provider.name || tr('未命名服务','Unnamed service');
+  const account=(state.accounts || []).find(item=>item.prefix && id.startsWith(item.prefix+'/'));
+  if(account)return account.name || tr('订阅账号','Subscription account');
+  return id.includes('/') ? tr('未关联服务','Unlinked service') : 'Native';
 }
 function renderCatalogDisplay() {
   updateCatalogDisplayControls();
@@ -443,7 +451,7 @@ function renderCatalogDisplay() {
   if (!all.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_models'))}</p>`; return; }
   if (!visible.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_matches'))}</p>`; return; }
   $('catalog_display_models').innerHTML = visible.map(model => {
-    const routes = model.routes || []; const routeText = routes.map(route => route.id).join(' · ');
+    const routes = model.routes || []; const routeText = [...new Set(routes.map(catalogSourceLabel))].join(' · ');
     const route = routes[0]?.id || model.id;
     const displayName = presentationPreview(route, model.default_display_name || model.display_name || model.id, model.context_window);
     const activity = activityIndicatorHtml('models', '', displayName, routes.map(item => item.id));
@@ -454,7 +462,7 @@ function renderCatalogDisplay() {
 function openCatalogDisplayEditor(family) {
   const group = (state.catalog_families || []).find(item => item.id === family); if (!group) return;
   const presentation = familyPresentationFor(family);
-  const routes = (group.routes || []).map(route => route.id).join(' · ') || family;
+  const routes = [...new Set((group.routes || []).map(catalogSourceLabel))].join(' · ');
   openModal(tr('修改模型显示','Edit model display'), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr('显示名称','Display name'))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><p class="muted">${esc(tr('更改名称后立即应用。','The new name takes effect immediately after saving.'))}</p>`, tr('完成','Done'), async () => {
     const candidate = cloneState(); candidate.catalog_family_presentations ||= {}; candidate.catalog_presentations ||= {};
     const current = candidate.catalog_family_presentations[family] || familyPresentationFor(family) || {};
@@ -465,19 +473,20 @@ function openCatalogDisplayEditor(family) {
 }
 
 function fill() {
-  drawLogo(); enhanceLogo($('emp_logo')); presentationSyncMotion(); applyTranslations(); if (latestUpdateInfo) renderUpdateHint(latestUpdateInfo); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderCatalogDisplay(); renderServices(); renderModels(); updateActivityDots();
+  drawLogo(); enhanceLogo($('emp_logo')); presentationSyncMotion(); applyTranslations(); if (updates.info()) renderUpdateHint(updates.info()); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderCatalogDisplay(); renderServices();  updateActivityDots();
 }
 async function load() {
   applyPreferences(); drawLogo();
   try {
     state = await api('/api/config');
+    void syncLanguage();
     const integration = loadIntegration();
     let renderError = null;
     try {
       fill();
-      startQuotaEvents();
+      managementEvents.start();
       void checkUpdateHint();
-      if (quotaStateTimer === null) quotaStateTimer = setInterval(() => { refreshResetCountdowns(); if (!quotaEventsConnected) requestQuotaSync(); }, 60 * 1000);
+      if (quotaStateTimer === null) quotaStateTimer = setInterval(() => { refreshResetCountdowns(); if (!managementEvents.connected()) requestQuotaSync(); }, 60 * 1000);
     } catch (error) { renderError = error; }
     const loaded = await integration;
     if (renderError) { reportWebClientPhase('window_error', 'failed', renderError); throw renderError; }
@@ -510,16 +519,7 @@ function drawLogo() {
   svg.innerHTML = dots.join('');
 }
 function renderLogoState(live) { drawLogo(); enhanceLogo($('emp_logo')); $('emp_logo')?.classList.toggle('emp-live', live); }
-function toast(title, body, ms = 7000) {
-  document.querySelector('.toast')?.remove();
-  const box = document.createElement('div');
-  box.className = 'toast'; box.setAttribute('role', 'status'); box.style.setProperty('--toast-ms', `${ms}ms`);
-  box.innerHTML = `<strong>${esc(title)}</strong><p>${esc(body)}</p>`;
-  const close = () => { box.classList.add('leaving'); setTimeout(() => box.remove(), 200); };
-  box.addEventListener('click', close);
-  document.body.appendChild(box);
-  setTimeout(close, ms);
-}
+function toast(title,body) {notice(title+' · '+body);}
 // The badge reports configuration/model availability, without claiming a test request.
 function runtimeView(runtime) {
   const native = runtime.target === 'native';
@@ -703,6 +703,7 @@ function subscriptionPlanColor(value) { return ({free:'#94a3b8',go:'#2bb5a6',plu
 function uiIcon(name) {
   const paths = {
     refresh:'<path d="M17 7a7 7 0 0 0-12-2L2 8m0-5v5h5M3 13a7 7 0 0 0 12 2l3-3m0 5v-5h-5"/>',
+    reset:'<path d="M4 12H2v6h16v-6h-2"/><rect x="4" y="3" width="12" height="11" rx="2"/><path d="M7 8h6"/>',
     eye:'<path d="M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z"/><circle cx="10" cy="10" r="2.5"/>',
     'eye-off':'<path d="m3 3 14 14M7 4.5A9 9 0 0 1 10 4c5 0 8 6 8 6a14 14 0 0 1-2 3M4.3 6A17 17 0 0 0 2 10s3 6 8 6a9 9 0 0 0 4-1M8 8a2.8 2.8 0 0 0 4 4"/>',
     save:'<path d="M3 2h11l3 3v13H3zM6 2v5h7V2M6 18v-7h8v7"/>',
@@ -718,7 +719,7 @@ function accountSummaryHtml(account, hoverText = '') {
   const balance = credit?.unlimited === true ? '∞' : credit?.balance !== undefined ? integerCredit(credit.balance) : null;
   const credits = balance === null ? '' : `<span class="account-segment account-credit" title="${esc(tr('可用余额','Available credits'))}"><span class="credit-mark" aria-hidden="true">C</span><strong>${esc(balance)}</strong></span>`;
   const resets = resetCreditCount(account);
-  const reset = resets > 0 ? `<span class="account-segment" title="${esc(tr('可用重置次数','Available resets'))}">${uiIcon('refresh')}<strong>${esc(resets)}</strong></span>` : '';
+  const reset = resets > 0 ? `<span class="account-segment" title="${esc(tr('可用重置次数','Available resets'))}">${uiIcon('reset')}<strong>${esc(resets)}</strong></span>` : '';
   return `<button type="button" class="account-summary" data-ui-action="account-details" data-id="${esc(account.id)}" aria-haspopup="dialog" aria-label="${esc(label+' · '+tr('查看账号信息','View account details'))}" title="${esc(hoverText || label)}"><span class="account-segment account-name"><span>${esc(label)}</span></span>${plan}${credits}${reset}</button>`;
 }
 
@@ -786,6 +787,7 @@ function updateActivityDots() {
     element.setAttribute('aria-label', description);
     element.title = description;
   });
+  presentationUpdateServiceRequestErrors();
 }
 function rescheduleActivityExpiry() {
   if (activityExpiryTimer !== null) clearTimeout(activityExpiryTimer);
@@ -926,100 +928,26 @@ function quotaMetersHtml(account, busy = false, animate = false) {
   }).join('')}</div>`;
 }
 function accountQuotaSignature(account) { return JSON.stringify(account?.quota || null); }
-function processManagementEventFrame(frame) {
-  let eventType = '';
-  const data = [];
-  for (const line of frame.split('\n')) {
-    if (line.startsWith('event:')) eventType = line.slice(6).trim();
-    else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
-  }
+function processManagementEvent(eventType, data) {
   if (eventType === 'quota-updated') requestQuotaSync();
-  else if (eventType === 'usage-updated') { void usageReport.refresh(); void accountDetails.refresh(); callReports.refresh(); }
+  else if (eventType === 'usage-updated') {
+    if (!statistics.refresh()) { void usageReport.refresh(); callReports.refresh(); }
+    void accountDetails.refresh();
+  }
   else if (eventType === 'integration-updated') void integrationUpdated();
-  else if (eventType === 'activity-updated' && data.length) {
-    try { applyActivitySnapshot(JSON.parse(data.join('\n'))); } catch (_) {}
+  else if (eventType === 'activity-updated' && data) {
+    try { applyActivitySnapshot(JSON.parse(data)); } catch (_) {}
   }
-}
-async function consumeQuotaEventStream(response, signal) {
-  if (!response.body) throw new Error('Quota event stream has no readable body');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  try {
-    while (!signal.aborted) {
-      const {done, value} = await reader.read();
-      if (done) return;
-      if (signal.aborted) return;
-      buffer += decoder.decode(value, {stream:true}).replace(/\r\n/g, '\n');
-      let boundary;
-      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        processManagementEventFrame(frame);
-      }
-    }
-  } finally {
-    try { await reader.cancel(); } catch (_) {}
-  }
-}
-async function runQuotaEventStream(controller) {
-  let retryDelay = 1000;
-  while (!controller.signal.aborted && document.visibilityState !== 'hidden') {
-    try {
-      const response = await managementFetch('/api/accounts/events', {headers:{'Accept':'text/event-stream'}, signal:controller.signal, cache:'no-store'});
-      if (controller.signal.aborted || quotaEventsController !== controller) return;
-      if (!response.ok) {
-        if (response.status === 401) { management.clear(); controller.abort(); return; }
-        throw new Error(`Quota event stream returned HTTP ${response.status}`);
-      }
-      quotaEventsConnected = true;
-      retryDelay = 1000;
-      await consumeQuotaEventStream(response, controller.signal);
-    } catch (error) {
-      if (quotaEventsController === controller) quotaEventsConnected = false;
-      if (controller.signal.aborted) return;
-    } finally {
-      if (quotaEventsController === controller) {
-        quotaEventsConnected = false;
-        clearActivityConfidence();
-      }
-    }
-    if (!controller.signal.aborted && document.visibilityState !== 'hidden') {
-      await new Promise(resolve => setTimeout(resolve, retryDelay));
-      retryDelay = Math.min(retryDelay * 2, 15000);
-    }
-  }
-}
-function startQuotaEvents() {
-  if (quotaEventsController || !management.isSignedIn() || document.visibilityState === 'hidden') return;
-  updateActivityDots();
-  rescheduleActivityExpiry();
-  const controller = new AbortController();
-  quotaEventsController = controller;
-  runQuotaEventStream(controller).finally(() => {
-    if (quotaEventsController === controller) {
-      quotaEventsController = null;
-      quotaEventsConnected = false;
-      clearActivityConfidence();
-      if (!controller.signal.aborted && management.isSignedIn() && document.visibilityState !== 'hidden') startQuotaEvents();
-    }
-  });
-}
-function stopQuotaEvents() {
-  if (quotaEventsController) quotaEventsController.abort();
-  quotaEventsController = null;
-  quotaEventsConnected = false;
-  clearActivityConfidence();
 }
 function requestQuotaSync() { quotaUpdatePending = true; return drainQuotaUpdates(); }
 async function drainQuotaUpdates() {
-  if (!quotaUpdatePending || quotaUpdateRunning || quotaStateBusy || quotaHistoryLoading || !state || document.visibilityState === 'hidden') return;
+  if (!quotaUpdatePending || quotaUpdateRunning || quotaStateBusy || quotaHistory.busy() || !state || document.visibilityState === 'hidden') return;
   quotaUpdateRunning = true;
   try {
     do {
       quotaUpdatePending = false;
       await refreshQuotaState();
-      if (quotaHistoryTimer !== null && activeQuotaAccountId && document.visibilityState !== 'hidden') await refreshPeriod('quota_history', false);
+      if (document.visibilityState !== 'hidden') await quotaHistory.refresh();
     } while (quotaUpdatePending && document.visibilityState !== 'hidden');
   } finally { quotaUpdateRunning = false; }
 }
@@ -1066,7 +994,7 @@ function resetAttemptKey(accountId, creditId) {
   resetAttempts.set(accountId,{creditId,key});
   return key;
 }
-function openResetCredits(accountId) {
+function openResetCredits(accountId, back = modalReturn()) {
   const account = [...(state.native_account ? [state.native_account] : []),...(state.accounts || [])].find(item => item.id === accountId);
   if (!account || resetCreditCount(account) <= 0) { notice(tr('此账户没有可用的重置机会。','This account has no available reset opportunities.'),true); return; }
   const entries = resetCreditEntries(account);
@@ -1087,14 +1015,14 @@ function openResetCredits(accountId) {
     const credit = selectable[Number(selected?.value)] || null;
     const creditId = credit?.id || null;
     resetAttemptKey(accountId,creditId);
-    confirmResetCredit(account,credit);
-  });
+    confirmResetCredit(account,credit, () => openResetCredits(accountId, back));
+  }, null, {back, reopen:() => openResetCredits(accountId, back)});
   refreshResetCountdowns();
 }
-function confirmResetCredit(account,credit) {
+function confirmResetCredit(account,credit, back) {
   const expires = credit ? utcDateTimeText(credit.expires_at) : '';
   const remaining = credit ? resetCountdownText(credit.expires_at) : '';
-  const body = `<div class="reset-credit-note"><p><strong>${tr('请再次确认','Please confirm again')}</strong><br>${tr('账号','Account')}：${esc(account.name || account.id)}${expires ? `<br>${tr('到期','Expires')}：${esc(expires)}` : ''}${remaining ? `<br>${esc(remaining)}` : ''}</p></div><p class="muted">${tr('确认后会消耗一次重置机会，同时重置额度与刷新时间。此操作无法撤销。','Confirming uses one reset opportunity and resets both the quota and its refresh time. This cannot be undone.')}</p><button type="button" class="secondary" id="reset_choice_back">${tr('返回选择','Change selection')}</button>`;
+  const body = `<div class="reset-credit-note"><p><strong>${tr('请再次确认','Please confirm again')}</strong><br>${tr('账号','Account')}：${esc(account.name || account.id)}${expires ? `<br>${tr('到期','Expires')}：${esc(expires)}` : ''}${remaining ? `<br>${esc(remaining)}` : ''}</p></div><p class="muted">${tr('确认后会消耗一次重置机会，同时重置额度与刷新时间。此操作无法撤销。','Confirming uses one reset opportunity and resets both the quota and its refresh time. This cannot be undone.')}</p>`;
   openModal(tr('确认重置额度','Confirm quota reset'),body,tr('确认并使用重置','Confirm and use reset'),async () => {
     const payload = {idempotency_key:resetAttemptKey(account.id,credit?.id || null)};
     if (credit) payload.credit_id = credit.id;
@@ -1106,278 +1034,27 @@ function confirmResetCredit(account,credit) {
     closeModal();
     await refreshQuotaState();
     notice(result.refresh_error ? tr('重置已完成，但新的额度与刷新时间暂时读取失败；请稍后刷新。','Reset completed, but the new quota and refresh time could not be read yet. Refresh again shortly.') : tr('重置已完成，额度与刷新时间已更新。','Reset completed. Quota and refresh time were updated.'));
-  });
-  $('reset_choice_back').onclick = () => openResetCredits(account.id);
+  }, null, {back});
 }
 
-const quotaChartColors = ['#3b82f6','#f59e0b','#10b981','#a855f7','#ef4444','#06b6d4'];
-function quotaLimitLabel(limitId) { return ({codex:'Codex', claude:'Claude', codex_bengalfox:'Codex Spark'})[limitId] || limitId; }
-function quotaSeriesLabel(series) { const duration = compactWindowText(series.window_minutes); const label = duration === '?' ? (series.window_kind === 'primary' ? tr('主窗口','Primary') : tr('次窗口','Secondary')) : duration; return `${!series.limit_id || series.limit_id === 'codex' ? '' : quotaLimitLabel(series.limit_id) + ' · '}${label}`; }
-function quotaSeriesColor(series, index) { return Number(series.window_minutes) === 300 ? '#3b82f6' : Number(series.window_minutes) === 10080 ? '#10b981' : quotaChartColors[index % quotaChartColors.length]; }
-function quotaPointBreak(previous, point, gapLimit) {
-  if (!previous) return '';
-  const priorReset = Number(previous.resets_at), reset = Number(point.resets_at);
-  if (priorReset > 0 && reset > 0 && Math.abs(reset-priorReset) > 60) return tr('新的额度周期','New quota period');
-  if (Number(point.remaining_percent) > Number(previous.remaining_percent) + .1) return tr('额度回升','Quota replenished');
-  if (Number(point.observed_at) - Number(previous.observed_at) > gapLimit) return tr('无数据记录','No data recorded');
-  return '';
-}
-function quotaValidPoint(point) { return point.observed_at != null && point.remaining_percent != null && Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent)); }
-// Samples further apart than this leave a period with no record.
-function quotaGapLimit(payload) { return Math.max(180, 3 * (Number(payload?.interval_seconds) || 44)); }
-function quotaResetBoundaries(series, start, end) {
-  const boundaries = new Map();
-  for (const item of series) {
-    let previous = null;
-    const samples = (item.points || []).filter(quotaValidPoint).slice().sort((a,b) => a.observed_at-b.observed_at);
-    for (const point of samples) {
-      const reset = Number(point.resets_at);
-      if (!(reset > 0)) continue;
-      if (previous && Math.abs(reset-Number(previous.resets_at)) > 60) {
-        const priorReset = Number(previous.resets_at);
-        // A reset inside the observation gap is timed by the prior deadline.
-        // Early resets can only be located at the first changed observation.
-        const scheduled = priorReset > Number(previous.observed_at) && priorReset <= Number(point.observed_at);
-        const at = scheduled ? priorReset : Number(point.observed_at);
-        if (at > start && at < end) boundaries.set(at, {at, kind:scheduled ? 'reset' : 'observed'});
-      }
-      previous = point;
-    }
-  }
-  return [...boundaries.values()].sort((a,b) => a.at-b.at);
-}
-// Dividers mark quota resets (and days on long periods); clicking a section zooms into it.
-function quotaChartSections(series, view) {
-  // Over long spans reset lines would crowd the chart, so divide by day instead.
-  const long = view.end - view.start > 2*86400;
-  const boundaries = long ? [] : quotaResetBoundaries(series, view.start, view.end);
-  if (long) {
-    const next = new Date(view.start*1000); next.setHours(0,0,0,0); next.setDate(next.getDate()+1);
-    while (next.getTime()/1000 < view.end) { boundaries.push({at:next.getTime()/1000, kind:'day'}); next.setDate(next.getDate()+1); }
-  }
-  let edges = [view.start, ...boundaries.map(item => item.at), view.end];
-  if (edges.length === 2) {
-    const ticks = timeAxisTicks(view.start, view.end).map(tick => tick.at).filter(at => at > view.start && at < view.end);
-    edges = [view.start, ...ticks, view.end];
-  }
-  const sections = edges.slice(0,-1).map((start,index) => ({start, end:edges[index+1]})).map(section => ({...section, zoomable:section.end-section.start >= 900 && section.end-section.start < view.end-view.start}));
-  return {boundaries, sections};
-}
-function quotaTimeRangeText(start, end) {
-  const options = {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false};
-  return `${new Date(start*1000).toLocaleString([],options)} — ${new Date(end*1000).toLocaleString([],options)}`;
-}
-let quotaChartData = {points:[], gaps:[]};
-// Draw at the modal's real width so text keeps its size instead of scaling with the SVG.
-function quotaChartWidth() { return Math.round(Math.max(628, Math.min(1200, ($('modal_body')?.clientWidth || 628) - 2))); }
-function quotaGapReason(gap) {
-  const incidents = (quotaHistoryPayload?.failures || []).filter(item => Number(item.start_at) < gap.end && Number(item.end_at) >= gap.start);
-  if (!incidents.length) return tr('无数据记录','No data recorded');
-  const codes = new Set(incidents.map(item => item.diagnostics?.code));
-  const cause = codes.has('quota_transport_error') ? tr('额度查询连接失败','Quota connection failed') : codes.has('quota_auth_required') ? tr('额度查询需要重新登录','Quota query requires sign-in') : codes.has('quota_rate_limited') ? tr('额度查询频率受限','Quota query rate limited') : codes.has('quota_timeout') ? tr('额度查询超时','Quota query timed out') : tr('额度查询失败','Quota query failed');
-  return cause;
-}
-function quotaChartSvg(series, view, gapLimit) {
-  const visible = point => quotaValidPoint(point) && Number(point.observed_at) >= view.start && Number(point.observed_at) <= view.end;
-  const samplesBySeries = series.map(item => (item.points || []).filter(visible).slice().sort((a,b) => Number(a.observed_at) - Number(b.observed_at)));
-  const points = samplesBySeries.flat(); if (!points.length) return '';
-  const minTime = view.start, maxTime = view.end, span = Math.max(1, maxTime - minTime);
-  const percent = value => Math.max(0, Math.min(100, Number(value)));
-  const values = points.map(point => quotaDisplay.value(point.remaining_percent)); const minValue = Math.min(...values); const maxValue = Math.max(...values);
-  // Round percent gridlines (every 5, 10, 20 or 25 points).
-  const tickStep = [5, 10, 20, 25].find(step => (Math.ceil(maxValue/step) - Math.floor(minValue/step)) * step / step <= 5) || 25;
-  const axisMin = Math.max(0, Math.floor(minValue/tickStep)*tickStep - (minValue % tickStep === 0 && minValue > 0 ? tickStep : 0)); const axisMax = Math.min(100, Math.max(axisMin + tickStep, Math.ceil(maxValue/tickStep)*tickStep)); const axisSpan = axisMax - axisMin;
-  const width = quotaChartWidth(), left = 46, right = width - 18, top = 18, bottom = 218; const x = time => left + ((Number(time) - minTime) / span) * (right - left); const y = value => bottom - ((percent(value) - axisMin) / axisSpan) * (bottom - top);
-  const grid = Array.from({length:Math.round(axisSpan/tickStep)+1}, (_, index) => axisMin + tickStep * index).map(value => `<line x1="${left}" y1="${y(value)}" x2="${right}" y2="${y(value)}" stroke="var(--border)"/><text x="${left-7}" y="${y(value)+4}" text-anchor="end" fill="var(--muted)" font-size="11">${Number(value.toFixed(2))}%</text>`).join('');
-  // Periods without samples are shaded and labelled rather than left blank.
-  const times = [...new Set(points.map(point => Number(point.observed_at)))].sort((a,b) => a-b);
-  const gaps = []; let cursor = view.start;
-  for (const time of times) { if (time - cursor > gapLimit) gaps.push({start:cursor, end:time}); cursor = time; }
-  if (view.end - cursor > gapLimit) gaps.push({start:cursor, end:view.end});
-  const middle = (top+bottom)/2;
-  const gapMarks = `<defs><pattern id="quota-gap-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" class="quota-gap-base"/><line x1="0" y1="0" x2="0" y2="6" class="quota-gap-stripe"/></pattern></defs>` + gaps.map(gap => {
-    const x1 = x(gap.start), width = x(gap.end) - x1, center = (x1+width/2).toFixed(1);
-    // Wide gaps get a horizontal label; narrow ones a vertical one.
-    const reason = esc(quotaGapReason(gap));
-    const label = width >= 72 ? `<text class="quota-gap-label" x="${center}" y="${middle+4}" text-anchor="middle">${reason}</text>` : width >= 14 ? `<text class="quota-gap-label" x="${center}" y="${middle}" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 ${center} ${middle})">${reason}</text>` : '';
-    return `<rect class="quota-gap" x="${x1.toFixed(1)}" y="${top}" width="${Math.max(0,width).toFixed(1)}" height="${bottom-top}" fill="url(#quota-gap-hatch)"/>${label}`;
-  }).join('');
-  const hoverPoints = [];
-  const lines = series.map((item, index) => {
-    const color = quotaSeriesColor(item, index), samples = samplesBySeries[index];
-    if (!samples.length) return '';
-    const path = samples.map((point, i) => `${i && !quotaPointBreak(samples[i-1], point, gapLimit) ? 'L' : 'M'}${x(point.observed_at).toFixed(1)},${y(quotaDisplay.value(point.remaining_percent)).toFixed(1)}`).join(' ');
-    samples.forEach((point, i) => hoverPoints.push({series:index, x:x(point.observed_at), y:y(quotaDisplay.value(point.remaining_percent)), time:Number(point.observed_at), value:quotaDisplay.value(point.remaining_percent), label:quotaSeriesLabel(item), reset:point.resets_at ?? '', note:quotaPointBreak(samples[i-1], point, gapLimit)}));
-    return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/><circle class="quota-chart-marker" data-series="${index}" r="4" fill="${color}" stroke="var(--panel)" stroke-width="2" hidden/>`;
-  }).join('');
-  quotaChartData = {points:hoverPoints, gaps:gaps.map(gap => ({...gap, x1:x(gap.start), x2:x(gap.end)}))};
-  const {boundaries, sections} = quotaChartSections(series, view);
-  const dividers = boundaries.map(({at,kind}) => `<line class="quota-period-divider${kind === 'observed' ? ' observed' : ''}" x1="${x(at)}" y1="${top}" x2="${x(at)}" y2="${bottom}"/>`).join('');
-  const targets = sections.map(section => {
-    const label = quotaTimeRangeText(section.start,section.end);
-    return `<rect class="quota-hover-target${section.zoomable ? ' quota-segment' : ''}" x="${x(section.start)}" y="${top}" width="${Math.max(0,x(section.end)-x(section.start))}" height="${bottom-top}" data-start="${section.start}" data-end="${section.end}" onpointermove="quotaChartHover(event)" onpointerleave="quotaChartLeave(event)"${section.zoomable ? ` role="button" tabindex="0" aria-label="${esc(tr('查看 ','View ') + label)}" onclick="zoomQuotaHistory(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();zoomQuotaHistory(this)}"` : ''}><title>${esc(label)}</title></rect>`;
-  }).join('');
-  return `<svg viewBox="0 0 ${width} 266" role="group" aria-label="${esc(tr('Subscription 额度趋势','Subscription quota trend'))}">${grid}${gapMarks}${dividers}${lines}<line class="quota-chart-guide" x1="${left}" y1="${top}" x2="${left}" y2="${bottom}" hidden/>${targets}${timeAxisSvg(minTime, maxTime, x, 240, left, right)}</svg>`;
-}
-function quotaObservedTimeText(value) { const timestamp = Number(value); if (!Number.isFinite(timestamp)) return ''; const date = new Date(timestamp * 1000); return `${date.toLocaleString([], {hour12:false})} (${utcOffsetLabel(date)})`; }
-function quotaChartHover(event) {
-  const svg = event.currentTarget?.ownerSVGElement; if (!svg) return;
-  const bounds = svg.getBoundingClientRect(); if (!(bounds.width > 0)) return;
-  const width = svg.viewBox.baseVal.width, cursorX = Math.max(46, Math.min(width - 18, ((event.clientX - bounds.left) / bounds.width) * width));
-  const guide = svg.querySelector('.quota-chart-guide'), tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip');
-  const markers = [...svg.querySelectorAll('.quota-chart-marker')]; markers.forEach(marker => marker.setAttribute('hidden',''));
-  const gap = quotaChartData.gaps.find(item => cursorX > item.x1 && cursorX < item.x2);
-  const points = quotaChartData.points;
-  const nearest = !gap && points.length ? points.reduce((best, point) => Math.abs(point.x - cursorX) < Math.abs(best.x - cursorX) ? point : best, points[0]) : null;
-  const guideX = nearest ? nearest.x : cursorX;
-  if (guide) { guide.removeAttribute('hidden'); guide.setAttribute('x1', guideX); guide.setAttribute('x2', guideX); }
-  if (!tooltip) return;
-  tooltip.hidden = false; tooltip.style.left = `${Math.max(20,Math.min(80,guideX / width * 100))}%`;
-  if (!nearest) { tooltip.style.top = '45%'; tooltip.innerHTML = `<strong>${esc(quotaGapReason(gap))}</strong><br>${esc(quotaTimeRangeText(gap.start, gap.end))}`; return; }
-  const active = points.filter(point => point.time === nearest.time);
-  for (const point of active) { const marker = markers.find(item => Number(item.dataset.series) === point.series); if (marker) { marker.setAttribute('cx', point.x.toFixed(1)); marker.setAttribute('cy', point.y.toFixed(1)); marker.removeAttribute('hidden'); } }
-  tooltip.style.top = `${Math.max(70, Math.min(...active.map(point => point.y))) / 266 * 100}%`;
-  tooltip.innerHTML = `<strong>${esc(quotaObservedTimeText(nearest.time))}</strong><br>${active.map(point => { const reset = localTimeText(point.reset); return `${esc(point.label)} · ${quotaDisplay.label(tr)} ${esc(point.value)}%${point.note ? ' · ' + esc(point.note) : ''}${reset ? '<br>' + tr('重置时间：','Resets: ') + esc(reset) : ''}`; }).join('<br>')}`;
-}
-function quotaChartLeave(event) { const svg = event.currentTarget?.ownerSVGElement; if (!svg) return; svg.querySelector('.quota-chart-guide')?.setAttribute('hidden',''); svg.querySelectorAll('.quota-chart-marker').forEach(marker => marker.setAttribute('hidden','')); const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (tooltip) tooltip.hidden = true; }
-function quotaPlanTimeline(plans, view) {
-  const byTime = new Map();
-  for (const item of Array.isArray(plans) ? plans : []) { const observedAt = Number(item?.observed_at); const key = subscriptionPlanKey(item?.plan_type); if (Number.isFinite(observedAt) && observedAt <= view.end && key) byTime.set(observedAt,{observedAt,planType:item.plan_type,key}); }
-  const ordered = [...byTime.values()].sort((left,right) => left.observedAt-right.observedAt);
-  const prior = ordered.filter(item => item.observedAt <= view.start).pop();
-  const visible = [...(prior ? [prior] : []),...ordered.filter(item => item.observedAt > view.start && item.observedAt <= view.end)];
-  const changes = [];
-  for (const item of visible) { const previous = changes[changes.length-1]; if (previous && previous.key === item.key) continue; changes.push(item); }
-  const segments = changes.map((item,index) => { const start = Math.max(view.start,item.observedAt); const end = index + 1 < changes.length ? Math.min(view.end,changes[index+1].observedAt) : view.end; if (!(end > start)) return ''; const left = (start-view.start)/(view.end-view.start)*100; const width = (end-start)/(view.end-view.start)*100; const label = subscriptionPlanLabel(item.planType); const title = `${label} · ${quotaTimeRangeText(start,end)}`; return `<span class="quota-plan-segment" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%;--plan-color:${subscriptionPlanColor(item.planType)}" title="${esc(title)}">${width >= 8 ? esc(label) : ''}</span>`; }).join('');
-  const covered = changes.length ? Math.max(view.start, changes[0].observedAt) : view.end;
-  const emptyWidth = (covered - view.start) / (view.end - view.start) * 100;
-  const empty = emptyWidth > 0.5 ? `<span class="quota-plan-empty" style="left:0;width:${emptyWidth.toFixed(3)}%">${emptyWidth >= 10 ? tr('无数据记录','No data recorded') : ''}</span>` : '';
-  return segments ? `<div class="quota-plan-history"><span>${tr('订阅','Plan')}</span><div class="quota-plan-track" aria-label="${esc(tr('订阅方案历史','Subscription plan history'))}">${empty}${segments}</div></div>` : '';
-}
-function renderQuotaHistory(payload) {
-  quotaHistoryPayload = payload;
-  const content = $('quota_history_content'); if (!content) return; const allSeries = (payload.series || []).filter(item => Array.isArray(item.points) && item.points.length);
-  if (!content.querySelector('#quota_history_plot')) content.innerHTML = `<div id="quota_history_controls" class="quota-chart-toolbar"></div><div class="quota-history-navigation"><button id="quota_history_back" class="secondary" type="button" onclick="backQuotaHistory()">${tr('返回','Back')}</button><span id="quota_history_range"></span><span id="quota_history_loading" class="muted" role="status" hidden>${tr('更新中…','Updating…')}</span></div><div id="quota_history_plan"></div><div id="quota_history_legend" class="quota-legend"></div><div id="quota_history_plot" class="quota-chart"></div>`;
-  const period = periodPickers.quota_history;
-  const view = {start:Number(payload.start_at) || period?.start || 0, end:Number(payload.end_at) || period?.end || 0};
-  const groups = [...new Set(allSeries.map(item => item.limit_id || 'codex'))];
-  if (!groups.includes(activeQuotaLimit)) activeQuotaLimit = groups.includes('codex') ? 'codex' : groups[0];
-  const groupSeries = allSeries.filter(item => (item.limit_id || 'codex') === activeQuotaLimit);
-  const windowKey = item => String(item.window_minutes || item.window_kind || 'unknown');
-  const windows = [...new Set(groupSeries.map(windowKey))].sort((a,b) => Number(a) - Number(b));
-  if (!windows.includes(activeQuotaWindow)) activeQuotaWindow = windows[0];
-  const series = groupSeries.filter(item => windowKey(item) === activeQuotaWindow);
-  const tabs = groups.length > 1 ? `<div class="quota-ranges quota-groups" aria-label="${esc(tr('额度组','Quota group'))}">${groups.map(id => `<button type="button" class="secondary" data-limit-id="${esc(id)}" onclick="selectQuotaHistoryGroup(this.dataset.limitId)">${esc(quotaLimitLabel(id))}</button>`).join('')}</div>` : '';
-  const windowTabs = windows.length > 1 ? `<div class="quota-ranges quota-windows" aria-label="${esc(tr('额度周期','Quota window'))}">${windows.map(key => `<button type="button" class="secondary" data-window="${esc(key)}" onclick="selectQuotaHistoryWindow(this.dataset.window)">${esc(compactWindowText(key))}</button>`).join('')}</div>` : '';
-  const planTimeline = view.end > view.start ? quotaPlanTimeline(payload.plans || [],view) : '';
-  const legend = `<span>${quotaDisplay.label(tr)}</span>` + series.map((item,index) => { const samples = item.points.filter(point => quotaValidPoint(point) && point.observed_at >= view.start && point.observed_at <= view.end); const last = samples.length ? samples.reduce((latest, point) => Number(point.observed_at) > Number(latest.observed_at) ? point : latest) : null; const color = quotaSeriesColor(item,index); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(compactWindowText(item.window_minutes))}<strong>${last ? esc(quotaDisplay.value(last.remaining_percent)) + '%' : tr('无数据','No data')}</strong></span>`; }).join('');
-  const chart = view.end > view.start ? quotaChartSvg(series, view, quotaGapLimit(payload)) : '';
-  const plot = chart ? `${chart}<div class="quota-chart-tooltip" role="status" hidden></div>` : `<div class="quota-empty">${quotaHistoryLoading ? tr('正在读取记录…','Loading records…') : esc(quotaGapReason(view))}</div>`;
-  for (const [id, markup] of [['quota_history_controls',tabs+windowTabs],['quota_history_plan',planTimeline],['quota_history_legend',legend],['quota_history_plot',plot]]) { const node = $(id); if (node.quotaMarkup !== markup) { node.innerHTML = markup; node.quotaMarkup = markup; } }
-  content.querySelectorAll('[data-limit-id], [data-window]').forEach(button => { const selected = button.dataset.limitId ? button.dataset.limitId === activeQuotaLimit : button.dataset.window === activeQuotaWindow; button.classList.toggle('active',selected); button.setAttribute('aria-pressed',String(selected)); });
-  $('quota_history_range').textContent = view.end > view.start ? quotaTimeRangeText(view.start,view.end) : '';
-  $('quota_history_back').hidden = !quotaHistoryZoom.length;
-  $('quota_history_loading').hidden = !quotaHistoryLoading || !quotaHistoryLoadingVisible;
-}
-function selectQuotaHistoryGroup(limitId) { activeQuotaLimit = limitId; if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload); }
-function selectQuotaHistoryWindow(windowKey) { activeQuotaWindow = windowKey; if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload); }
-function zoomQuotaHistory(target) {
-  const period = periodPickers.quota_history; if (!period) return;
-  quotaHistoryZoom.push({preset:period.preset, start:period.start, end:period.end});
-  setPeriod('quota_history', {preset:'', start:Number(target.dataset.start), end:Number(target.dataset.end)}, {user:true, zoom:true});
-}
-function backQuotaHistory() { const previous = quotaHistoryZoom.pop(); if (previous) setPeriod('quota_history', previous.preset ? {...previous, ...periodPresetRange(previous.preset)} : previous, {user:true, zoom:true}); }
-let quotaHistoryLoadingVisible = false;
-// Background reloads stay silent; only a period the user picked shows "Updating…".
-async function loadQuotaHistory(accountId, user = false) {
-  const period = periodPickers.quota_history; if (!period || !accountId) return;
-  const request = ++quotaHistoryRequest;
-  quotaHistoryLoading = true; quotaHistoryLoadingVisible = user;
-  const loading = $('quota_history_loading'); if (loading && user) loading.hidden = false;
-  try {
-    const payload = await api('/api/' + activeQuotaServiceKind + '/' + encodeURIComponent(accountId) + '/quota-history?' + new URLSearchParams({start:Math.floor(period.start), end:Math.ceil(period.end)}));
-    if (request === quotaHistoryRequest) { quotaHistoryLoading = false; $('modal_status').textContent = ''; renderQuotaHistory(payload); }
-  } catch (error) { if (request === quotaHistoryRequest) $('modal_status').textContent = error.message; }
-  finally { if (request === quotaHistoryRequest) { quotaHistoryLoading = false; const indicator = $('quota_history_loading'); if (indicator) indicator.hidden = true; } }
-  if (request === quotaHistoryRequest) await refreshQuotaState();
-  drainQuotaUpdates();
-}
-function openQuotaHistory(accountId, kind = 'accounts') {
-  activeQuotaServiceKind = kind;
-  activeQuotaAccountId = accountId; activeQuotaLimit = 'codex'; activeQuotaWindow = ''; quotaHistoryZoom = []; quotaHistoryPayload = null; quotaHistoryLoading = true;
-  openModal(tr('Subscription 额度趋势','Subscription quota trend'), `${periodPickerHtml('quota_history', ['1h','1d','7d'])}<div id="quota_history_content"></div>`, '', null);
-  renderQuotaHistory({series:[]});
-  registerPeriodPicker('quota_history', '1d', (period, options) => { if (options.user && !options.zoom) quotaHistoryZoom = []; return loadQuotaHistory(activeQuotaAccountId, options.user); });
-  quotaHistoryTimer = setInterval(() => { if (!quotaHistoryLoading) refreshPeriod('quota_history', false); }, 5 * 60 * 1000);
-}
+const quotaHistory = createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,compactWindowText,localTimeText,utcOffsetLabel,subscriptionPlanKey,subscriptionPlanLabel,subscriptionPlanColor,
+  afterRead:async () => { await refreshQuotaState(); void drainQuotaUpdates(); },
+  periods:{periodPickerHtml,registerPeriodPicker,periodPickers,setPeriod,periodPresetRange,refreshPeriod,timeAxisTicks,timeAxisSvg}});
+const {open:openQuotaHistory} = quotaHistory;
 
-const codexAccountImport = createCodexAccountImport({$, tr, esc, api, openModal, closeModal, notice,
+const codexAccountImport = createCodexAccountImport({$, tr, esc, api, openModal, closeModal, notice, modalReturn,
   onSaved:async () => {
     state = await api('/api/config');
     await api('/api/catalog/refresh', {method:'POST', body:'{}'});
     fill(); await loadIntegration(); notice(tr('订阅已导入','Subscription imported'));
   }
 });
-let subscriptionEditor = null;
-function renderSubscriptionModels(editor) {
-  const container = $('subscription_model_list'); if (!container || subscriptionEditor !== editor) return;
-  container.innerHTML = editor.models.map((model, index) => {
-    const route = editor.native ? model.id : editor.account.prefix + '/' + model.id;
-    const maximum = Number(model.max_context_window || 0);
-    const value = editor.windows[model.id] ?? '';
-    return `<div class="model-option subscription-model-row"><label class="subscription-model-identity"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${editor.hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(canonicalDisplayName(model.display_name || model.id))}</strong><small>${esc(route)}</small></span></label><div class="subscription-model-context"><input type="number" name="subscription_context" data-model="${esc(model.id)}" min="1" step="1" ${maximum ? `max="${maximum}"` : 'disabled'} value="${esc(value)}" placeholder="${esc(tr('默认 ','Default ') + Number(model.default_context_window || 0))}" data-context-index="${index}" aria-label="${esc(model.display_name || model.id)} ${tr('上下文（tokens）','Context (tokens)')}" aria-describedby="subscription_context_preview_${index}"><small id="subscription_context_preview_${index}"></small></div></div>`;
-  }).join('') || `<p class="muted">${tr('没有可用的订阅模型，请刷新模型目录。','No subscription models available. Refresh the model catalog.')}</p>`;
-  container.querySelectorAll('input[name="subscription_context"]').forEach((input, index) => previewSubscriptionContext(input, index));
-}
-function previewSubscriptionContext(input, index) {
-  const model = subscriptionEditor?.models[index]; if (!model) return;
-  const tokens = input.value === '' ? Number(model.default_context_window || 0) : Number(input.value);
-  const usable = Math.round(tokens * Number(model.effective_context_window_percent ?? 95) / 100);
-  const maximum = Number(model.max_context_window || 0);
-  $(`subscription_context_preview_${index}`).textContent = maximum ? tr(`最大 ${compactContext(maximum)} · 可用 ${compactContext(usable)}`,`Max ${compactContext(maximum)} · Usable ${compactContext(usable)}`) : tr('上限未知，暂不可修改','Maximum unknown; editing unavailable');
-}
-function captureSubscriptionModels(editor) {
-  document.querySelectorAll('input[name="subscription_model"]').forEach(input => { if (input.checked) editor.hidden.delete(input.value); else editor.hidden.add(input.value); });
-  document.querySelectorAll('input[name="subscription_context"]').forEach(input => { if (input.value === '') delete editor.windows[input.dataset.model]; else editor.windows[input.dataset.model] = input.value; });
-}
-async function refreshSubscriptionModels() {
-  const editor = subscriptionEditor; if (!editor) return;
-  captureSubscriptionModels(editor);
-  const button = $('subscription_model_refresh'); button.disabled = true;
-  try {
-    const result = await api('/api/accounts/' + encodeURIComponent(editor.account.id) + '/models/refresh', {method:'POST', body:'{}'});
-    if (subscriptionEditor !== editor || $('modal_backdrop').classList.contains('hidden')) return;
-    editor.models = result.models; renderSubscriptionModels(editor);
-    $('modal_status').textContent = tr('模型上限已刷新','Model limits refreshed');
-  } catch (error) { if (subscriptionEditor === editor) $('modal_status').textContent = error.message; }
-  finally { if (subscriptionEditor === editor) button.disabled = false; }
-}
-function editAccount(id) {
-  const account = state.native_account?.id === id ? state.native_account : (state.accounts || []).find(item => item.id === id); if (!account) return;
-  if (account.duplicate && account.duplicate_of === '当前 Codex 登录') return notice(tr('模型显示请在原生账户中调整','Adjust model visibility from the Native account'), true);
-  const native = account.native === true;
-  const editor = {account, native, models:state.subscription_models || [], hidden:new Set(account.hidden_models || []), windows:{...(account.model_context_windows || {})}};
-  const visibilityHint = `<p class="muted">${tr('留空使用默认上下文。名称在“模型显示”中设置。','Leave blank for the default context. Rename models in Model display.')}</p>`;
-  const modelSelection = `<div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">${tr('全部显示','Show all')}</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">${tr('全部隐藏','Hide all')}</button><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh" onclick="refreshSubscriptionModels()">${tr('刷新模型上限','Refresh model limits')}</button></div><div class="subscription-list-head"><span>${tr('在 Codex /model 中显示','Visible in Codex /model')}</span><span>${tr('上下文（tokens）','Context (tokens)')}</span></div><div id="subscription_model_list" class="model-selection"></div>`;
-  services.open(id, 'account', 'edit', `${visibilityHint}${modelSelection}`, tr('保存修改','Save changes'), async () => {
-    for (const input of document.querySelectorAll('input[name="subscription_context"]')) { if (!input.checkValidity()) { input.reportValidity(); throw new Error(tr('上下文必须为目录上限内的正整数','Context must be a positive integer within the catalog limit')); } }
-    captureSubscriptionModels(editor);
-    const contextWindows = Object.fromEntries(Object.entries(editor.windows).map(([model, value]) => [model, Number(value)]));
-    const hiddenModels = [...editor.hidden];
-    const candidate = cloneState();
-    if (native) { candidate.native_hidden_models = hiddenModels; candidate.native_model_context_windows = contextWindows; candidate.accounts = (candidate.accounts || []).map(item => item.duplicate && item.duplicate_of === '当前 Codex 登录' ? Object.assign({}, item, {hidden_models:[]}) : item); }
-    else { candidate.accounts = candidate.accounts.map(item => item.id === id ? Object.assign({}, item, {hidden_models:hiddenModels, model_context_windows:contextWindows}) : item); }
-    await persistState(tr('账户信息已保存','Account saved'), candidate); closeModal();
-  });
-  subscriptionEditor = editor;
-  renderSubscriptionModels(editor);
-  api('/api/accounts/' + encodeURIComponent(id) + '/models').then(result => { if (subscriptionEditor === editor && !$('modal_backdrop').classList.contains('hidden')) { captureSubscriptionModels(editor); editor.models = result.models; renderSubscriptionModels(editor); } }).catch(error => { if (subscriptionEditor === editor) $('modal_status').textContent = error.message; });
-}
-function setSubscriptionModelChecks(checked) { document.querySelectorAll('input[name="subscription_model"]').forEach(input => { input.checked = checked; }); }
+const subscriptionSettings=createSubscriptionSettings({getState:()=>state,cloneState,$,tr,esc,api,services,persistState,closeModal,notice,help:shadowHelp,compactNumber:shadowCompactNumber,compactContext,canonicalDisplayName,modelSort,uiIcon});
+function editAccount(id,navigation={}) { return subscriptionSettings.open(id,navigation); }
 function quotaErrorText(error, id) {
   const code = error.payload?.error?.code;
   const messages = {
-    quota_auth_required: id === state.native_account?.id ? tr('当前 Codex 登录已失效，请在 Codex 中重新登录。','The current Codex login is no longer valid. Sign in again in Codex.') : tr('导入的登录凭据已失效，请重新登录该账号，再用相同账户 ID 导入最新 auth.json。','The imported credentials are no longer valid. Sign in again, then import the latest auth.json with the same account ID.'),
+    quota_auth_required: id === state.native_account?.id ? tr('当前 Codex 登录已失效，请在 Codex 中重新登录。','The current Codex login is no longer valid. Sign in again in Codex.') : tr('导入的登录凭据已失效，请重新登录该账号，再导入该账号最新的 auth.json。','The imported credentials are no longer valid. Sign in again, then import the latest auth.json for that account.'),
     quota_access_denied: tr('额度服务拒绝访问（403）；请检查账号权限或网络。','Quota access denied (403). Check account permissions or network.'),
     quota_rate_limited: tr('额度查询过于频繁（429），请稍后再试。','Quota queries are rate limited (429). Try again later.'),
     quota_transport_error: tr('Codex 无法连接 ChatGPT 工作区路由服务；请检查 DNS、VPN/TUN、系统代理和网络连通性。','Codex could not reach ChatGPT workspace routing. Check DNS, VPN/TUN, the system proxy, and network connectivity.'),
@@ -1405,204 +1082,13 @@ async function refreshAllAccounts() {
 }
 async function removeAccount(id) { if (!confirm(tr(`移除账号 ${id}？`,`Remove account ${id}?`))) return; try { await api('/api/accounts/' + encodeURIComponent(id), {method:'DELETE'}); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); closeModal(); notice(tr('账号已移除','Account removed')); } catch (error) { notice(error.message, true); } }
 
-async function toggleProviderModels(id, enabled) {
-  const candidate = cloneState();
-  const models = (candidate.models || []).filter(model => model.provider === id); if (!models.length) return notice(tr('该 Provider 还没有已导入模型','This Provider has no imported models'), true);
-  models.forEach(model => { model.enabled = enabled; });
-  try { await persistState(enabled ? tr(`${id} 的模型已全部显示`,`All ${id} models are visible`) : tr(`${id} 的模型已全部隐藏`,`All ${id} models are hidden`), candidate); }
-  catch (error) { notice(error.message, true); }
-}
-function normalizedIdentity(value) { return String(value || '').trim().toLocaleLowerCase(); }
-function providerIdentityTaken(id) {
-  const identity = normalizedIdentity(id);
-  if (!identity) return false;
-  const accounts = [state.native_account, ...(state.accounts || [])].filter(Boolean);
-  return (state.providers || []).some(provider => normalizedIdentity(provider.id) === identity)
-    || accounts.some(account => [account.id, account.prefix].some(value => normalizedIdentity(value) === identity));
-}
-function providerNameTaken(name) {
-  const identity = normalizedIdentity(name);
-  if (!identity) return false;
-  const accounts = [state.native_account, ...(state.accounts || [])].filter(Boolean);
-  return (state.providers || []).some(provider => normalizedIdentity(provider.name || provider.id) === identity)
-    || accounts.some(account => normalizedIdentity(account.name || account.id) === identity);
-}
-function defaultClaudeProviderIdentity(connection) {
-  const idBase = connection === 'local' ? 'claude' : 'claude-cpa';
-  const nameBase = connection === 'local' ? 'Claude Subscription' : 'Claude CPA';
-  for (let suffix = 1; ; suffix++) {
-    const id = suffix === 1 ? idBase : `${idBase}-${suffix}`;
-    const name = suffix === 1 ? nameBase : `${nameBase} ${suffix}`;
-    if (!providerIdentityTaken(id) && !providerNameTaken(name)) return {id, name};
-  }
-}
-function openClaudeConnectionChooser(existing = {}) {
-  const editing = Boolean(existing.id);
-  const id = esc(existing.id || '');
-  const switching = editing ? `<p class="muted">${tr('保留现有 Provider ID 和路由。选择新的连接方式后再保存。','The Provider ID and route stay the same. Choose a connection method, then save it.')}</p>` : '';
-  openModal(editing ? tr('选择 Claude 连接方式','Choose Claude connection') : tr('Claude 连接方式','Claude connection'), `${switching}<div class="choice-grid"><button class="choice" data-ui-action="claude-local-choose" data-id="${id}"><strong>${tr('本机 Claude 订阅','Local Claude subscription')}</strong><small>${tr('连接本机 Claude Code。','Connect local Claude Code.')}</small></button><button class="choice" data-ui-action="claude-cpa-choose" data-id="${id}"><strong>CPA</strong><small>${tr('填写地址和 API Key。','Enter an address and API key.')}</small></button></div>`, '', null);
-  $('modal_submit').style.display = 'none';
-}
-function providerProtocolOptions() {
-  const options = [['auto', tr('自动检测','Auto detect')], ['chat_completions', 'Chat Completions'], ['responses', 'Responses'], ['anthropic_messages', 'Anthropic Messages']];
-  return options.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
-}
-async function refreshClaudeCliAvailability() {
-  const status = $('modal_claude_cli_status');
-  if (!status) return;
-  status.textContent = tr('正在检查 Claude Code CLI…','Checking Claude Code CLI…');
-  try {
-    const result = await api('/api/runtime/claude-cli');
-    if (!status.isConnected) return;
-    const guidance = typeof result.guidance === 'string' ? result.guidance.trim() : '';
-    status.textContent = result.available
-      ? tr('已找到 Claude Code CLI，EMP 可以访问。', guidance || 'Claude Code CLI is available to EMP.')
-      : tr('未找到可用的 Claude Code CLI。请安装或检查 EMP 是否能够访问。', guidance || 'Claude Code CLI was not found. Install it or check that EMP can access it, then reopen this form.');
-  } catch (_) {
-    if (!status.isConnected) return;
-    status.textContent = tr('无法检查 Claude Code CLI。请重新加载管理页后重试。','Could not check Claude Code CLI availability. Reload this page to try again.');
-  }
-}
-function openClaudeCpaForm(existing = {}, serviceContext = null) {
-  serviceContext ||= existing.id ? {id:existing.id, kind:'provider', active:'edit'} : null;
-  const editing = Boolean(existing.id);
-  const identity = editing ? {} : defaultClaudeProviderIdentity('cpa');
-  const switchingFromLocal = existing.auth_mode === 'claude_login';
-  const keyHint = existing.api_key_set
-    ? tr('留空会保留已保存的 Key','Leave blank to keep the saved key')
-    : tr('必填','required');
-  const switchButton = editing ? `<button type="button" class="secondary" data-ui-action="claude-change-connection" data-id="${esc(existing.id)}">${tr('更改连接方式','Change connection method')}</button>` : '';
-  const body = `<p class="muted">${tr('连接 CPA，通过本机 Claude Code 使用模型。','Connect CPA models through local Claude Code.')}</p><div class="grid"><div><label>${tr('Provider ID / 路由（必填）','Provider ID / route (required)')}<input id="modal_cpa_id" value="${esc(existing.id || identity.id)}" placeholder="${tr('例如 claude-cpa','for example claude-cpa')}" ${editing ? 'readonly' : ''}></label></div><div><label>${tr('显示名称（可选）','Display name (optional)')}<input id="modal_cpa_name" value="${esc(existing.name || identity.name)}" placeholder="${tr('留空使用 Provider ID','Leave blank to use the Provider ID')}"></label></div><div class="wide"><label>CPA Base URL<input id="modal_cpa_base" type="url" value="${esc(existing.base_url || '')}" placeholder="https://cpa.example.com" required></label></div><div class="wide"><label>API Key (${keyHint})<input id="modal_cpa_key" type="password" autocomplete="new-password" placeholder="${existing.api_key_set ? esc(tr('已保存；留空保持不变','Saved; leave blank to keep it')) : esc(tr('输入 CPA API Key','Enter the CPA API key'))}"></label></div><div class="wide"><p id="modal_claude_cli_status" class="muted" role="status" aria-live="polite">${tr('正在检查 Claude Code CLI…','Checking Claude Code CLI…')}</p>${switchButton}</div></div>`;
-  openModal(editing ? tr('编辑 Claude CPA','Edit Claude CPA') : tr('添加 Claude CPA','Add Claude CPA'), body, tr('保存服务','Save service'), async () => {
-    const id = $('modal_cpa_id').value.trim();
-    const baseUrl = $('modal_cpa_base').value.trim();
-    const apiKey = $('modal_cpa_key').value.trim();
-    if (!id || !baseUrl) throw new Error(tr('Provider ID 和 CPA Base URL 不能为空','Provider ID and CPA Base URL are required'));
-    if (!editing && providerIdentityTaken(id)) throw new Error(tr('Provider ID 与现有 Provider 或账户冲突','Provider ID conflicts with an existing Provider or account'));
-    if (!apiKey && !existing.api_key_set) throw new Error(tr('请填写 CPA API Key','Enter the CPA API key'));
-    await saveProvider({
-      id,
-      name:$('modal_cpa_name').value.trim() || existing.name || identity.name,
-      base_url:baseUrl,
-      protocol:editing && !switchingFromLocal ? existing.protocol : existing.protocol || 'anthropic_messages',
-      auth_mode:editing && !switchingFromLocal ? existing.auth_mode : 'api_key',
-      execution_backend:'claude_cli',
-      api_key:apiKey
-    });
-    closeModal();
-  }, serviceContext);
-  void refreshClaudeCliAvailability();
-}
-function openLocalClaudeSubscriptionForm(existing = {}, serviceContext = null) {
-  serviceContext ||= existing.id ? {id:existing.id, kind:'provider', active:'edit'} : null;
-  const editing = Boolean(existing.id);
-  const identity = editing ? {} : defaultClaudeProviderIdentity('local');
-  const protocol = ['auto', 'anthropic_messages'].includes(existing.protocol) ? existing.protocol : 'anthropic_messages';
-  const switchButton = editing ? `<button type="button" class="secondary" data-ui-action="claude-change-connection" data-id="${esc(existing.id)}">${tr('更改连接方式','Change connection method')}</button>` : '';
-  const body = `<p class="muted">${tr('连接本机 Claude Code 订阅。','Connect your local Claude Code subscription.')}</p><p class="muted">${tr('在“模型设置”中更新列表并选择模型，即可在 Codex 模型选择器中使用。','Update the list and select models in Model settings to use them in the Codex model picker.')}</p><div class="grid"><div><label>${tr('Provider ID / 路由（必填）','Provider ID / route (required)')}<input id="modal_local_claude_id" value="${esc(existing.id || identity.id)}" placeholder="claude" ${editing ? 'readonly' : ''}></label></div><div><label>${tr('显示名称（可选）','Display name (optional)')}<input id="modal_local_claude_name" value="${esc(existing.name || identity.name)}" placeholder="${tr('留空使用 Provider ID','Leave blank to use the Provider ID')}"></label></div><div class="wide"><p id="modal_claude_cli_status" class="muted" role="status" aria-live="polite">${tr('正在检查 Claude Code CLI…','Checking Claude Code CLI…')}</p>${switchButton}</div></div>`;
-  openModal(editing ? tr('编辑本机 Claude 订阅','Edit local Claude subscription') : tr('本机 Claude 订阅','Local Claude subscription'), body, tr('保存服务','Save service'), async () => {
-    const id = $('modal_local_claude_id').value.trim();
-    if (!id) throw new Error(tr('Provider ID 不能为空','Provider ID is required'));
-    if (!editing && providerIdentityTaken(id)) throw new Error(tr('Provider ID 与现有 Provider 或账户冲突','Provider ID conflicts with an existing Provider or account'));
-    await saveProvider({
-      id,
-      name:$('modal_local_claude_name').value.trim() || existing.name || identity.name,
-      execution_backend:'claude_cli',
-      auth_mode:'claude_login',
-      protocol,
-      base_url:'',
-      api_key:'',
-      api_key_file:''
-    });
-    closeModal();
-  }, serviceContext);
-  void refreshClaudeCliAvailability();
-}
-function editClaudeProvider(provider, serviceContext = null) {
-  return provider.auth_mode === 'claude_login'
-    ? openLocalClaudeSubscriptionForm(provider, serviceContext)
-    : openClaudeCpaForm(provider, serviceContext);
-}
-function chooseOfficialProvider(key, serviceContext = null) {
-  const preset = officialProviders[key]; const existing = (state.providers || []).find(p => p.id === preset.id);
-  if (existing?.execution_backend === 'claude_cli') return editClaudeProvider(existing);
-  const keyField = preset.auth_mode === 'forward' ? `<p class="muted">${tr('使用 Codex 登录','Use Codex sign-in')}</p>` : `<label>API Key${existing && existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : ''}<input id="modal_provider_key" type="password" placeholder="${tr('输入 API Key','Enter API Key')}"></label>`;
-  openModal(tr('配置 ','Configure ') + preset.name, `<p class="muted">Endpoint: <code>${esc(preset.base_url)}</code><br>${tr('协议','Protocol')}: ${esc(protocolLabel(preset.protocol))}<br>${tr('认证','Authentication')}: ${esc(authLabel(preset.auth_mode))}</p>${keyField}`, tr('保存服务','Save service'), async () => {
-    const keyValue = preset.auth_mode === 'forward' ? '' : $('modal_provider_key').value.trim(); if (preset.auth_mode !== 'forward' && !keyValue && !(existing && existing.api_key_set)) throw new Error(tr('请填写 API Key','Enter an API Key'));
-    await saveProvider(Object.assign({}, preset, {api_key:keyValue})); closeModal();
-  }, serviceContext);
-}
-function openCustomProviderForm(existing, serviceContext = null) {
-  existing = existing || {};
-  if (existing.execution_backend === 'claude_cli') return editClaudeProvider(existing);
-  const forwardAuthOption = existing.auth_mode === 'forward' ? `<option value="forward">Forward Codex auth</option>` : '';
-  openModal(existing.id ? tr('编辑自建 Provider','Edit custom Provider') : tr('添加自建 Provider','Add custom Provider'), `<div class="grid"><div><label>${tr('ID（必填）','ID (required)')}</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="${tr('例如 my-provider','for example my-provider')}" ${existing.id ? 'readonly' : ''}></div><div><label>${tr('显示名称（可选）','Display name (optional)')}</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="${tr('留空使用 ID','Leave blank to use the ID')}"></div><div class="wide"><label>${tr('Base URL（必填）','Base URL (required)')}</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com"></div><div><label>${tr('协议','Protocol')}</label><select id="modal_provider_protocol"></select></div><div><label>${tr('认证','Authentication')}</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option>${forwardAuthOption}</select></div><div class="wide"><label>API Key${existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : tr('（必填）',' (required)')}</label><input id="modal_provider_key" type="password"></div></div>`, tr('保存服务','Save service'), async () => {
-    const id = $('modal_provider_id').value.trim(); const base = $('modal_provider_base').value.trim(); if (!id || !base) throw new Error(tr('ID 和 Base URL 不能为空','ID and Base URL are required')); const keyValue = $('modal_provider_key').value.trim();
-    const protocolValue = $('modal_provider_protocol').value; const authMode = $('modal_provider_auth').value;
-    if (authMode !== 'forward' && !keyValue && !existing.api_key_set) throw new Error(tr('请填写 API Key','Enter an API Key'));
-    await saveProvider({id, name:$('modal_provider_name').value.trim() || id, base_url:base, protocol:protocolValue, auth_mode:authMode, api_key:keyValue}); closeModal();
-  }, serviceContext);
-  const protocol = $('modal_provider_protocol'); protocol.innerHTML = providerProtocolOptions(); protocol.value = existing.protocol || 'auto';
-  if (existing.auth_mode) $('modal_provider_auth').value = existing.auth_mode;
-}
-function editProvider(id) {
-  const provider = (state.providers || []).find(p => p.id === id); if (!provider) return;
-  const context = {id, kind:'provider', active:'edit'};
-  if (provider.execution_backend === 'claude_cli') editClaudeProvider(provider, context);
-  else openCustomProviderForm(provider, context);
-}
-async function saveProvider(provider) {
-  const old = (state.providers || []).find(p => p.id === provider.id); const localLogin = provider.execution_backend === 'claude_cli' && provider.auth_mode === 'claude_login'; const apiKey = localLogin ? '' : provider.api_key || (old && old.api_key_set ? '••••••••' : '');
-  const candidate = cloneState(); const next = Object.assign({}, old || {}, provider, {api_key:apiKey, enabled:true});
-  if (localLogin) { next.base_url = ''; next.api_key = ''; next.api_key_file = ''; delete next.api_key_set; }
-  const index = candidate.providers.findIndex(p => p.id === next.id); if (index >= 0) candidate.providers[index] = next; else candidate.providers.push(next); await persistState('', candidate);
-  const saved = (state.providers || []).find(p => p.id === provider.id);
-  if (!saved || (saved.auth_mode !== 'forward' && saved.auth_mode !== 'claude_login' && !saved.api_key_set)) throw new Error(tr('API Key 未保存，请重新输入','The API Key was not saved; enter it again'));
-  notice(tr('服务已保存','Service saved'));
-}
-async function removeProvider(id) { if (!confirm(tr(`移除服务 ${id} 及其模型？`,`Remove service ${id} and its models?`))) return; const candidate = cloneState(); candidate.providers = candidate.providers.filter(p => p.id !== id); candidate.models = candidate.models.filter(m => m.provider !== id); try { await persistState(tr('服务已移除','Service removed'), candidate); closeModal(); } catch (error) { notice(error.message, true); } }
-
-function renderModels() {
-  const models = [...(state.models || [])].sort(modelSort); if (!models.length) { $('models').innerHTML = `<p class="muted">${tr('还没有外部模型；在服务的“模型设置”中选择，或点击“手动添加模型”。','No external models yet. Select models in a service’s Model settings or click Add model manually.')}</p>`; return; }
-  const providerNames = Object.fromEntries((state.providers || []).map(p => [p.id, p.name || p.id])); const groups = {};
-  models.forEach(model => { (groups[model.provider] ||= []).push(model); });
-  const configuredOrder = (state.providers || []).map(provider => provider.id); const groupOrder = [...configuredOrder.filter(provider => groups[provider]), ...Object.keys(groups).filter(provider => !configuredOrder.includes(provider))];
-  $('models').innerHTML = groupOrder.map(provider => {
-    const items = groups[provider]; const expanded = expandedModelGroups.has(provider); const shown = expanded ? items : items.slice(0, 6);
-    const rows = shown.map(m => {
-      const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : [];
-      const reasoning = levels.length ? levels.join(' / ') : (m.supports_reasoning === false ? tr('不支持','Not supported') : tr('自动','Automatic'));
-      const capabilities = capabilitySummary(m);
-      const displayName = presentationName(m.id, m.display_name || m.upstream_id || m.id);
-      const activity = activityIndicatorHtml('model', m.id, displayName);
-      return `<article class="entity-card model-card${m.enabled ? '' : ' model-hidden'}">
-        <div class="entity-card-main"><div class="entity-card-title">${activity}<strong>${esc(displayName)}</strong></div>
-        <div class="entity-card-subtitle model-details-inline"><code>${esc(m.id)}</code><span class="model-capabilities">${tr('思考强度','Reasoning effort')} ${esc(reasoning)}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></div></div>
-        <button type="button" class="secondary visibility" aria-pressed="${Boolean(m.enabled)}" title="${esc(m.enabled ? tr('隐藏此模型','Hide this model') : tr('显示此模型','Show this model'))}" data-ui-action="model-toggle" data-id="${esc(m.id)}">${uiIcon(m.enabled ? 'eye' : 'eye-off')}${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</button>
-        <div class="entity-card-actions"><button class="secondary" data-icon="edit" data-ui-action="model-edit" data-id="${esc(m.id)}">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" data-ui-action="model-test" data-id="${esc(m.id)}">${tr('测试','Test')}</button><button class="danger" data-icon="trash" data-ui-action="model-remove" data-id="${esc(m.id)}">${tr('删除','Delete')}</button></div>
-      </article>`;
-    }).join('');
-    const toggle = items.length > 6 ? `<button type="button" class="secondary" data-ui-action="model-group-toggle" data-id="${esc(provider)}">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : '';
-    const activity = activityIndicatorHtml('provider', provider, providerNames[provider] || provider);
-    return `<div class="provider-model-group"><h3>${activity}${esc(providerNames[provider] || provider)} <span class="pill provider-id-badge">${esc(provider)}</span></h3><div class="entity-list">${rows}</div>${toggle}</div>`;
-  }).join('');
-  updateActivityDots();
-}
-function toggleModelGroup(provider) { if (expandedModelGroups.has(provider)) expandedModelGroups.delete(provider); else expandedModelGroups.add(provider); renderModels(); }
-const modelEditor = createModelEditor({getState:() => state, $, tr, esc, api, persistState, openModal, closeModal, notice, upstreamErrorText, testModelAudio, testModelVision, movePresentation, format:{visionStatus, modalityLabel, compactContext, usableContext}});
+const serviceConnections=createServiceConnections({getState:()=>state,cloneState,$,tr,esc,api,openModal,closeModal,persistState,notice,presets:officialProviders,protocolLabel,authLabel,randomId:()=>crypto.randomUUID(),confirmRemoval:question=>confirm(question)});
+const {openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openCustomProviderForm,editProvider,removeProvider}=serviceConnections;
+const modelEditorOptions = {getState:() => state, $, tr, esc, api, persistState, openModal, closeModal, notice, upstreamErrorText, testModelAudio, testModelVision, movePresentation, format:{visionStatus, modalityLabel, compactContext, usableContext}};
+const modelEditor = createModelEditor(modelEditorOptions);
 const {open:openManualModelModal} = modelEditor;
-function providerDiscoveryError(error) { return upstreamErrorText(error, tr('无法读取模型列表。','Could not read the model list.')); }
-const providerModelSettings = createProviderModelSettings({getState:() => state, $, api, tr, esc, openModal, closeModal,
-  modelSort, capabilitySummary, formatDate, errorText:providerDiscoveryError,
-  onSaved:async result => {
-    state = await api('/api/config');
-    await api('/api/catalog/refresh', {method:'POST', body:'{}'});
-    fill(); await loadIntegration();
-    notice(tr(`已添加 ${result.added} 个模型`, `${result.added} models added`));
-  }
-});
-async function toggleModel(id, enabled) { const candidate = cloneState(); const model = candidate.models.find(item => item.id === id); if (!model) return; model.enabled = enabled; try { await persistState(enabled ? tr('模型已显示','Model is visible') : tr('模型已隐藏；已从 Codex /model 目录移除','Model hidden and removed from the Codex /model catalog'), candidate); } catch (error) { notice(error.message, true); } }
-async function removeModel(id) { const candidate = cloneState(); candidate.models = candidate.models.filter(m => m.id !== id); try { await persistState(tr('模型已删除','Model deleted'), candidate); } catch (error) { notice(error.message, true); } }
+const providerModelSettings = createProviderModelManager({getState:()=>state,cloneState,$,tr,esc,api,persistState,openModal,notice,modelSort,compactContext,capabilitySummary:model=>capabilitySummary(model),uiIcon,testModel,
+  createEditor:options=>createModelEditor({...modelEditorOptions,...options}),isPreview:()=>Boolean(window.EMP_PREVIEW)});
 async function testModel(id) { try { notice(tr(`正在测试 ${id} …`,`Testing ${id}…`)); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr('测试成功：','Test succeeded: ') + (result.output_text || tr('已收到模型响应','model response received'))); } catch (error) { notice(tr('测试失败：','Test failed: ') + error.message, true); } }
 async function testModelVision(id) {
   try {
@@ -1631,14 +1117,27 @@ async function testModelAudio(id) {
   } catch (error) { notice(tr('音频测试未通过：','Audio test did not succeed: ') + upstreamErrorText(error), true); return false; }
 }
 
-function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
 function stopModalFeatures() {
   statistics.stop();
   callReports.stop(); usageReport.stop(); accountDetails.stop(); providerModelSettings.stop(); modelEditor.stop(); services.stop();
-  stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); subscriptionEditor = null;
+  stopDiagnostics(); stopUpdatePoll(); quotaHistory.stop(); subscriptionSettings.stop();
 }
-function openModal(title, body, submitLabel, submit, serviceContext = null) {
+let modalNavigation = {};
+function modalReturn() { return modalNavigation.reopen || null; }
+function restoreServiceModal(context, navigation) {
+  const {id, kind, active} = context;
+  if (kind === 'account') return active === 'edit' ? editAccount(id, navigation) : openAccountDetails(id, navigation);
+  return active === 'edit' ? editProvider(id, navigation) : openProviderDetails(id, navigation);
+}
+function openModal(title, body, submitLabel, submit, serviceContext = null, navigation = {}) {
+  const sameService = serviceContext && modalNavigation.service?.id === serviceContext.id && modalNavigation.service?.kind === serviceContext.kind;
+  const back = navigation.back === undefined && sameService ? modalNavigation.back : navigation.back;
   stopModalFeatures();
+  modalNavigation = {back, reopen:navigation.reopen, service:serviceContext};
+  if (serviceContext) modalNavigation.reopen = () => restoreServiceModal(serviceContext, {back});
+  const backButton = $('modal_back');
+  backButton.hidden = !back; backButton.onclick = back || null;
+  backButton.title = backButton.ariaLabel = tr('返回上一层','Back to previous dialog');
   $('modal_title').textContent = title;
   $('modal_body').innerHTML = body;
   services.mount(serviceContext);
@@ -1657,157 +1156,10 @@ function openModal(title, body, submitLabel, submit, serviceContext = null) {
   button.onclick = submit ? handler : null;
   $('modal_backdrop').classList.remove('hidden');
 }
-function closeModal() { stopModalFeatures(); $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+function closeModal() { migration.stop(); servicePresentation.hide(); stopModalFeatures(); modalNavigation = {}; $('modal_back').onclick = null; $('modal_back').hidden = true; $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 
-let updatePollTimer = null;
-let updatePollGeneration = 0;
-let latestUpdateInfo = null;
-function stopUpdatePoll() { updatePollGeneration++; if (updatePollTimer) clearTimeout(updatePollTimer); updatePollTimer = null; }
-function updateErrorLabel(code) {
-  const messages = {
-    directory_not_writable:tr('安装目录没有写权限，请将 EMP 移到可写目录后重试。','The installation directory is not writable. Move EMP to a writable folder and retry.'),
-    package_query_failed:tr('无法确认系统安装包状态。请先在系统包管理器中检查 EMP。','Could not confirm the installed package state. Check EMP in the system package manager first.'),
-    requests_busy:tr('当前请求尚未结束，已取消安装，请稍后重试。','Requests are still running. Installation was cancelled; try again later.'),
-    checksum_missing:tr('新版本缺少文件校验信息，暂时无法自动更新。','The release has no file checksum; automatic update is unavailable.'),
-    checksum_mismatch:tr('下载文件校验失败，请重试。','Download verification failed. Please retry.'),
-    package_missing:tr('新版本尚未提供此平台的安装包。','The release does not yet include a package for this platform.'),
-    unsupported_installation:tr('当前安装方式不支持自动更新。','This installation does not support automatic updates.'),
-    system_install_manual:tr('系统级 Linux 安装不能在运行中覆盖。请按迁移说明改为用户级安装。','A system Linux installation cannot be replaced while running. Follow the migration steps to install for your user.'),
-    unsupported_platform:tr('此平台暂不支持自动更新。','Automatic updates are not available for this platform.'),
-    install_rolled_back:tr('新版本未能启动，已恢复旧版本。','The new version could not start. The previous version has been restored.'),
-  };
-  return messages[code] || tr('更新未完成。请稍后重新检查更新；如果仍然失败，可从官方发布页下载安装包。','The update did not finish. Check again later; if it still fails, download the installer from the official release page.');
-}
-function updateFailureAdvice(failure) {
-  const codeAdvice = {
-    checksum_mismatch:tr('安装包内容与发布信息不符，可能下载损坏。请重新下载；若仍失败，请检查代理或网络缓存。','The package does not match the release, possibly because the download was corrupted. Download again; if it persists, check your proxy or network cache.'),
-    invalid_release:tr('收到的版本信息格式不正确，可能下载服务或代理返回了其他页面。请检查网络后重新检查更新。','The release information is invalid; the service or proxy may have returned a different page. Check the network and check for updates again.'),
-    invalid_package_size:tr('安装包大小不符合发布信息。请重新检查更新并下载官方安装包。','The package size does not match the release. Check for updates again and download the official installer.'),
-    version_mismatch:tr('安装包中的版本与发布信息不符。请重新检查更新并下载官方安装包。','The package version does not match the release. Check for updates again and download the official installer.'),
-    invalid_download_url:tr('安装包链接未通过安全检查。请重新检查更新，或从官方发布页下载安装包。','The package link failed the security check. Check for updates again or download from the official release page.'),
-  };
-  if (codeAdvice[failure.error]) return codeAdvice[failure.error];
-  if (failure.stage === 'parse_release' && failure.error === 'update_failed') return codeAdvice.invalid_release;
-  const networkStages = ['check_release','read_release','download_package'];
-  const reasonAdvice = {
-    incomplete_download:tr('安装包未下载完整，可能网络或代理连接中途断开。请检查连接后重新检查更新。','The package download was incomplete; the network or proxy may have disconnected. Check the connection and check for updates again.'),
-    timeout:tr('连接超时，可能网络较慢、代理不可用或下载服务暂时无响应。请检查网络与代理后重试。','The connection timed out. The network may be slow, the proxy unavailable, or the download service unresponsive. Check the network and proxy, then retry.'),
-    PermissionDenied:tr('无法写入安装文件。请确认安装目录可写，并检查系统防护是否阻止 EMP 更新。','The installation files could not be written. Check folder permissions and whether system protection is blocking the update.'),
-    StorageFull:tr('磁盘空间不足。请释放安装目录所在磁盘的空间后重试。','The disk is full. Free space on the installation drive and retry.'),
-  };
-  if (reasonAdvice[failure.reason]) return reasonAdvice[failure.reason];
-  if (networkStages.includes(failure.stage)) {
-    if ([10054,104,54].includes(failure.os_error)) return tr('连接被中途断开，可能网络不稳定、代理断线或安全软件拦截。请检查网络与代理后重试。','The connection was reset. Possible causes include an unstable network, a disconnected proxy, or security software blocking the connection. Check the network and proxy, then retry.');
-    if ([403,429].includes(failure.http_status)) return tr('下载请求被拒绝，可能触发访问限制或请求过于频繁。请稍后重试，并检查代理与网络访问规则。','The download request was rejected, possibly by access restrictions or rate limits. Try later and check proxy/network access rules.');
-    if (failure.http_status === 404) return tr('安装包暂时不存在，可能尚未发布完整或已移除。请稍后重新检查更新。','The package is unavailable; publication may be incomplete or the asset removed. Check for updates again later.');
-    if (failure.http_status >= 500) return tr('下载服务暂时不可用，也可能代理无法连接 GitHub。请稍后重试或检查代理。','The download service is temporarily unavailable, or the proxy cannot reach GitHub. Try later or check the proxy.');
-    return tr('无法完成网络请求，可能网络、代理、DNS 或安全连接出现问题。请确认能访问官方发布页后重试。','The network request could not complete. Possible causes include network, proxy, DNS or secure-connection issues. Check access to the official release page and retry.');
-  }
-  if ([28,112].includes(failure.os_error)) return reasonAdvice.StorageFull;
-  if ([5,13].includes(failure.os_error)) return reasonAdvice.PermissionDenied;
-  const stageAdvice = {
-    write_package:tr('无法保存安装包。请检查磁盘空间、目录权限及文件是否被占用。','The package could not be saved. Check disk space, folder permissions and whether the file is in use.'),
-    sync_package:tr('安装包无法写入磁盘。请检查磁盘空间及存储设备状态。','The package could not be flushed to disk. Check disk space and storage health.'),
-    extract_package:tr('安装包无法解包。请重新下载，并检查磁盘空间与系统防护提示。','The package could not be extracted. Download again and check disk space and system-protection messages.'),
-    verify_version:tr('新版程序无法正常运行。请检查系统防护提示，并确认使用对应系统的官方安装包。','The new executable could not run correctly. Check system-protection messages and use the official package for your operating system.'),
-    wait_worker:tr('更新程序未能就绪。请检查系统防护提示及安装目录权限后重试。','The updater did not become ready. Check system-protection messages and installation permissions, then retry.'),
-  };
-  if (stageAdvice[failure.stage]) return stageAdvice[failure.stage];
-  return updateErrorLabel(failure.error);
-}
-function updateFailureLabel(info) {
-  const failure = info.failure;
-  const stages = {
-    start_update:tr('启动更新任务','starting the update task'), check_release:tr('检查版本','checking for a release'), read_release:tr('读取版本信息','reading release information'), parse_release:tr('解析版本信息','validating release information'),
-    prepare_install:tr('准备安装','preparing installation'), create_staging:tr('创建更新目录','creating the update folder'), download_package:tr('下载安装包','downloading the package'),
-    write_package:tr('保存安装包','saving the package'), sync_package:tr('写入安装包','flushing the package'), verify_checksum:tr('校验安装包','verifying the checksum'), extract_package:tr('解包','extracting the package'),
-    verify_version:tr('检查新版程序','checking the new executable'), prepare_worker:tr('准备更新程序','preparing the updater'), write_plan:tr('保存更新计划','saving the update plan'), drain_requests:tr('等待请求结束','waiting for requests'),
-    start_worker:tr('启动更新程序','starting the updater'), wait_worker:tr('等待更新程序就绪','waiting for the updater'), shutdown_previous:tr('退出旧版','exiting the previous version'),
-    replacing:tr('替换程序','replacing the executable'), starting:tr('启动新版','starting the new version'), waiting_for_startup:tr('等待新版启动','waiting for startup'),
-  };
-  if (!failure || (failure.error !== info.error && info.error !== 'install_rolled_back') || !stages[failure.stage]) return updateErrorLabel(info.error);
-  const reasons = {timeout:tr('连接超时','connection timed out'), connection:tr('连接失败','connection failed'), PermissionDenied:tr('没有写入权限','permission denied'), StorageFull:tr('磁盘空间不足','disk full')};
-  const detail = reasons[failure.reason] || (failure.http_status ? `HTTP ${failure.http_status}` : Number.isInteger(failure.os_error) ? tr(`系统错误 ${failure.os_error}`,`system error ${failure.os_error}`) : Number.isInteger(failure.exit_code) ? tr(`程序退出码 ${failure.exit_code}`,`exit code ${failure.exit_code}`) : '');
-  const retries = Number.isInteger(failure.retry_count) && failure.retry_count > 0 ? tr(`已自动重试 ${failure.retry_count} 次。`, `Automatically retried ${failure.retry_count} times. `) : '';
-  return retries + tr(`${stages[failure.stage]}时失败`, `Update failed while ${stages[failure.stage]}`) + (detail ? tr(`：${detail}`, `: ${detail}`) : '') + tr('。 ', '. ') + updateFailureAdvice(failure) + (info.error === 'install_rolled_back' ? tr(' 已恢复旧版。', ' The previous version has been restored.') : '');
-}
-function renderUpdateHint(info) {
-  latestUpdateInfo = info;
-  const button = $('check_update');
-  const available = info.state === 'available' || (info.state === 'error' && info.latest_version && info.latest_version !== info.current_version);
-  button?.classList.toggle('has-update', Boolean(available));
-  if (button) {
-    button.title = available ? tr(`有可用更新 v${info.latest_version}`, `Update available: v${info.latest_version}`) : t('check_update');
-    button.setAttribute('aria-label', button.title);
-  }
-}
-let updateHintBusy = false;
-let updateHintCheckedAt = 0;
-async function checkUpdateHint() {
-  if (updateHintBusy || document.visibilityState === 'hidden' || Date.now() - updateHintCheckedAt < 6 * 60 * 60 * 1000) return;
-  updateHintBusy = true;
-  updateHintCheckedAt = Date.now();
-  try {
-    let info = await api('/api/updates');
-    renderUpdateHint(info);
-    if (['idle','current','no_release','error'].includes(info.state)) info = await api('/api/updates/check', {method:'POST', body:'{}'});
-    // Only wait for this check to finish; no permanent background polling.
-    for (let attempt = 0; info.state === 'checking' && attempt < 25; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      info = await api('/api/updates');
-    }
-    renderUpdateHint(info);
-  } catch (_) {} finally { updateHintBusy = false; }
-}
-function renderUpdate(info) {
-  renderUpdateHint(info);
-  const labels = {
-    idle:tr('检查可用版本。','Check for an available version.'), checking:tr('正在检查…','Checking…'),
-    no_release:tr('暂无正式版更新。','No stable release is available.'), current:tr('当前已是最新版本。','You are up to date.'),
-    available:tr(`发现新版本 v${info.latest_version}。`,`Version ${info.latest_version} is available.`),
-    migration_required:tr('检测到旧的 Linux 系统级安装。请先退出 EMP 并恢复原生 Codex，再迁移到用户目录；现有配置会继续保留。','A legacy system-wide Linux installation was detected. Exit EMP and restore native Codex, then migrate to a user installation. Your existing configuration is preserved.'),
-    downloading:tr(`正在后台下载 ${info.progress}%…`,`Downloading in the background: ${info.progress}%…`),
-    verifying:tr('正在校验安装包…','Verifying the package…'), waiting:tr('下载完成，正在等待当前请求结束…','Download complete. Waiting for current requests to finish…'),
-    installing:tr('正在安装并重启 EMP，完成后会打开新页面。','Installing and restarting EMP. A new page will open when ready.'),
-    error:updateFailureLabel(info),
-  };
-  $('update_status').textContent = labels[info.state] || labels.idle;
-  if (['checking','downloading'].includes(info.state) && info.retry_count > 0) $('update_status').textContent += tr(` 正在自动重试 ${info.retry_count}/${info.retry_limit}。`, ` Retrying automatically ${info.retry_count}/${info.retry_limit}.`);
-  $('update_version').textContent = tr(`当前版本 v${info.current_version}`,`Current version: ${info.current_version}`);
-  $('update_progress').hidden = !['downloading','verifying'].includes(info.state);
-  $('update_progress').value = Number(info.progress) || 0;
-  const install = $('update_install'); install.hidden = info.state !== 'available' || !info.supported;
-  const release = $('update_release'); release.hidden = info.manual_update !== 'linux_system_migration';
-  const commands = $('update_commands'); commands.hidden = info.manual_update !== 'linux_system_migration';
-  const manual = $('update_manual'); manual.hidden = info.manual_update !== 'linux_system_migration';
-  if (info.state === 'available' && !info.supported) $('update_status').textContent += tr(' 请使用 EMP 安装包启动后更新。',' Launch the packaged EMP app to update.');
-}
-function openLatestRelease() {
-  const url = latestUpdateInfo?.release_url;
-  if (url === 'https://github.com/Killow1998/EasyMultiProvider/releases/latest') window.open(url, '_blank', 'noopener');
-}
-async function copyLinuxMigrationCommands() {
-  const commands = `curl -fL -o EMP-linux-x86_64-install.sh https://github.com/Killow1998/EasyMultiProvider/releases/latest/download/EMP-linux-x86_64-install.sh\nsh EMP-linux-x86_64-install.sh`;
-  try { await navigator.clipboard.writeText(commands); notice(tr('迁移命令已复制。','Migration commands copied.')); }
-  catch (_) { $('update_status').textContent = commands; }
-}
-async function pollUpdate(generation) {
-  try {
-    const info = await api('/api/updates');
-    if (generation !== updatePollGeneration) return;
-    renderUpdate(info);
-    if (['checking','downloading','verifying','waiting','installing'].includes(info.state)) updatePollTimer = setTimeout(() => pollUpdate(generation), 1000);
-  } catch (_) {
-    if (generation === updatePollGeneration) $('update_status').textContent = tr('连接已断开。若正在更新，请等待 EMP 重新打开页面。','Connection closed. If updating, wait for EMP to reopen the page.');
-  }
-}
-async function requestUpdate(operation) {
-  stopUpdatePoll(); const generation = updatePollGeneration;
-  $('update_install').disabled = true;
-  try { const info = await api('/api/updates/' + operation, {method:'POST', body:'{}'}); if (generation === updatePollGeneration) { renderUpdate(info); pollUpdate(generation); } }
-  catch (error) { if (generation === updatePollGeneration) $('update_status').textContent = error.message; }
-  finally { if (generation === updatePollGeneration) $('update_install').disabled = false; }
-}
+const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,localizedReleaseNotes,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW)});
+const {open:openUpdate,stop:stopUpdatePoll,request:requestUpdate,render:renderUpdate,hint:renderUpdateHint,checkHint:checkUpdateHint,openRelease:openLatestRelease,copyCommands:copyLinuxMigrationCommands}=updates;
 async function quitEmp() {
   if (!confirm(tr('退出 EMP 并恢复原生 Codex？', 'Exit EMP and restore native Codex?'))) return;
   try {
@@ -1816,10 +1168,6 @@ async function quitEmp() {
   } catch (error) { notice(error.message, true); }
 }
 
-async function openUpdate() {
-  openModal(tr('更新 EMP','Update EMP'), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite">${tr('正在检查…','Checking…')}</div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div id="update_manual" class="muted" hidden><p>${tr('建議：下載 Linux 雙語安裝腳本，退出目前 EMP 後執行。安裝器會詢問是否移除舊系統套件，並可遷移源碼目錄中的設定。','Recommended: download the bilingual Linux installer, exit EMP, then run it. The installer asks before removing a system package and can migrate configuration from a source checkout.')}</p><p>${tr('舊系統安裝的使用者設定會保留；來源設定也只會複製，不會刪除。','Existing system-install user settings are kept; source settings are copied and remain in place.')}</p></div><div class="modal-actions"><button id="update_release" type="button" class="secondary" hidden onclick="openLatestRelease()">${tr('打開最新 Release','Open latest Release')}</button><button id="update_commands" type="button" class="secondary" hidden onclick="copyLinuxMigrationCommands()">${tr('複製安裝命令','Copy installer command')}</button><button id="update_install" type="button" data-icon="update" hidden onclick="requestUpdate('install')">${tr('后台更新','Update in background')}</button></div>`, '', null);
-  await requestUpdate('check');
-}
 function dynamicActionElement(target) {
   return target instanceof Element ? target.closest('[data-ui-action]') : null;
 }
@@ -1831,7 +1179,7 @@ function runDynamicUiAction(element) {
     case 'quota-display':
       quotaDisplay.set(element.dataset.mode);
       renderServices();
-      if ($('quota_history_content') && quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload);
+      quotaHistory.redraw();
       $('modal_body').querySelectorAll('[data-ui-action="quota-display"]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.mode === quotaDisplay.mode())));
       return true;
     case 'setting-toggle': toggleSetting(element); return true;
@@ -1849,26 +1197,22 @@ function runDynamicUiAction(element) {
     case 'provider-quota-refresh': services.refresh(id); return true;
     case 'provider-quota-history': openQuotaHistory(id, 'providers'); return true;
     case 'provider-model-settings': providerModelSettings.open(id); return true;
-    case 'provider-add-model': openManualModelModal('', id); return true;
+    case 'provider-add-model': openManualModelModal('', id, {back:modalReturn()}); return true;
     case 'provider-edit': editProvider(id); return true;
-    case 'provider-toggle-models': toggleProviderModels(id, element.dataset.allHidden === 'true'); return true;
     case 'provider-details': openProviderDetails(id); return true;
-    case 'service-native': if (state.native_account) openAccountDetails(state.native_account.id); return true;
-    case 'service-import-account': openCodexImportChooser(); return true;
+    case 'service-native': if (state.native_account) openAccountDetails(state.native_account.id, {back:modalReturn()}); return true;
+    case 'service-import-account': openCodexImportChooser({back:modalReturn()}); return true;
     case 'account-import-paste': codexAccountImport.paste(); return true;
     case 'account-import-file': codexAccountImport.chooseFile(); return true;
-    case 'service-custom-api': openCustomProviderForm(); return true;
+    case 'service-custom-api': openCustomProviderForm({}, null, {back:modalReturn()}); return true;
     case 'provider-remove': removeProvider(id); return true;
-    case 'official-provider-choose': chooseOfficialProvider(element.dataset.provider || ''); return true;
-    case 'claude-provider-choose': openClaudeConnectionChooser(); return true;
-    case 'claude-local-choose': openLocalClaudeSubscriptionForm((state.providers || []).find(provider => provider.id === id) || {}); return true;
-    case 'claude-cpa-choose': openClaudeCpaForm((state.providers || []).find(provider => provider.id === id) || {}); return true;
-    case 'claude-change-connection': openClaudeConnectionChooser((state.providers || []).find(provider => provider.id === id) || {}); return true;
-    case 'model-toggle': toggleModel(id, element.getAttribute('aria-pressed') !== 'true'); return true;
+    case 'official-provider-choose': chooseOfficialProvider(element.dataset.provider || '', null, {back:modalReturn()}); return true;
+    case 'claude-provider-choose': openClaudeConnectionChooser({}, {back:modalReturn()}); return true;
+    case 'claude-local-choose': openLocalClaudeSubscriptionForm((state.providers || []).find(provider => provider.id === id) || {}, null, {back:modalReturn()}); return true;
+    case 'claude-cpa-choose': openClaudeCpaForm((state.providers || []).find(provider => provider.id === id) || {}, null, {back:modalReturn()}); return true;
+    case 'claude-change-connection': openClaudeConnectionChooser((state.providers || []).find(provider => provider.id === id) || {}, {back:modalReturn()}); return true;
     case 'model-edit': openManualModelModal(id); return true;
     case 'model-test': testModel(id); return true;
-    case 'model-remove': removeModel(id); return true;
-    case 'model-group-toggle': toggleModelGroup(id); return true;
     default: return false;
   }
 }
@@ -1880,12 +1224,6 @@ function handleDynamicUiChange(event) {
   const element = dynamicActionElement(event.target);
   if (element?.dataset.uiAction === 'period-edit') runDynamicUiAction(element);
 }
-function handleSubscriptionContextInput(event) {
-  const input = event.target;
-  if (!(input instanceof HTMLInputElement) || !input.hasAttribute('data-context-index')) return;
-  const index = Number(input.dataset.contextIndex);
-  if (Number.isInteger(index) && index >= 0) previewSubscriptionContext(input, index);
-}
 function handleModalKeydown(event) {
   if (event.key === 'Escape') {
     if (!$('modal_backdrop').classList.contains('hidden')) closeModal();
@@ -1894,14 +1232,14 @@ function handleModalKeydown(event) {
 document.addEventListener('click', handleDynamicUiClick);
 document.addEventListener('change', handleDynamicUiChange);
 document.addEventListener('keydown', handleModalKeydown);
-document.addEventListener('input', handleSubscriptionContextInput);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { startQuotaEvents(); requestQuotaSync(); void checkUpdateHint(); } else stopQuotaEvents(); });
+
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { managementEvents.start(); requestQuotaSync(); void checkUpdateHint(); } else managementEvents.stop(); });
 if (window.addEventListener) {
   window.addEventListener('storage', event => {
-    if (management.receiveStorageEvent(event) && document.visibilityState !== 'hidden') startQuotaEvents();
+    if (management.receiveStorageEvent(event) && document.visibilityState !== 'hidden') managementEvents.start();
   });
-  window.addEventListener('pagehide', stopQuotaEvents);
-  window.addEventListener('pageshow', startQuotaEvents);
+  window.addEventListener('pagehide', () => managementEvents.stop());
+  window.addEventListener('pageshow', () => managementEvents.start());
 }
 </script>
 <script src="/assets/presentation.js"></script>
@@ -1911,11 +1249,9 @@ const statistics=createStatistics({api,$,tr,esc,getState:()=>state,getLanguage:(
 const presentationSyncMotion=installMotion(refreshResetCountdowns);
 installInteractions();
 installServiceErrors();
-const presentationActivityUpdate=updateActivityDots;
-updateActivityDots=function(){presentationActivityUpdate();presentationUpdateServiceRequestErrors();};
-const statisticsUsageRefresh=usageReport.refresh;
-usageReport.refresh=function(...args){if(!statistics.refresh())return statisticsUsageRefresh(...args);};
 
+const migration=createMigration();
+const servicePresentation=installServicePresentation();
 establishSession().then(load).catch(error => notice(error.message, true));
 </script>
 </body>

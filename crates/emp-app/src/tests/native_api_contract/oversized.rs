@@ -156,6 +156,21 @@ fn native_websocket_peer_1009_before_events_falls_back_to_full_http_request() {
     assert_eq!(observations[1].1["content-encoding"], "zstd");
     assert_eq!(observations[1].2["model"], "upstream");
     assert_eq!(observations[1].2["stream"], true);
+    let report = request(&server, "/api/calls?start=0&end=9999999999", &[&cookie]);
+    let report: Value = serde_json::from_str(report.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        report["total"], 1,
+        "fallback must finish the same operation"
+    );
+    assert_eq!(report["records"][0]["state"], "completed");
+    assert_eq!(report["records"][0]["attempts"], 2);
+    assert_eq!(
+        report["records"][0]["attempt_routes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     drop(stream);
     server.shutdown().unwrap();
 }

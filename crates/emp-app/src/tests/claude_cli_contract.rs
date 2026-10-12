@@ -465,6 +465,19 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
     );
     assert_eq!(transcript["tools"], history["tools"]);
 
+    let report = request(
+        &server,
+        "/api/calls?start=0&end=9999999999",
+        &[&session_header(&server)],
+    );
+    let report: Value = serde_json::from_str(report.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(report["total"], 1);
+    assert_eq!(report["records"][0]["attempts"], 1);
+    assert_eq!(
+        report["records"][0]["resolved_protocol"],
+        "anthropic_messages"
+    );
+    assert_eq!(report["records"][0]["input_tokens"], 10012);
     server.shutdown().expect("shutdown HTTP tool server");
 
     let sse_upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({

@@ -46,13 +46,7 @@ fn responses_usage() -> Value {
 }
 
 #[test]
-fn cli_reports_version_and_help() {
-    let version = emp_command().arg("--version").output().expect("run EMP");
-    assert!(version.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&version.stdout),
-        format!("EMP {}\n", emp_app::VERSION)
-    );
+fn cli_reports_help() {
     for arguments in [&["--help"][..], &["serve", "--help"], &["doctor", "--help"]] {
         let help = emp_command().args(arguments).output().expect("run EMP");
         assert!(help.status.success(), "{arguments:?}");

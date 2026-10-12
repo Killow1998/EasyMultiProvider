@@ -8,6 +8,7 @@ import os
 import sys
 import secrets
 import sqlite3
+import subprocess
 import threading
 import urllib.parse
 import webbrowser
@@ -15,6 +16,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from shadow_usage import aggregate, parameters
 from frontend import frontend
+from shadow_migration import MigrationPreview
+from migration_selection import PreviewError
+from shadow_release_notes import ReleaseNotes
 
 def default_state_dir():
     configured = os.environ.get('EASY_MULTI_PROVIDER_CONFIG')
@@ -90,6 +94,11 @@ class ShadowHandler(BaseHTTPRequestHandler):
             return self.send(200, body, mimetypes.guess_type(name)[0] or 'application/octet-stream')
         if not secrets.compare_digest(self.headers.get('X-EMP-Session', ''), self.server.session):
             return self.error(401, 'management session is required')
+        if path == '/api/shadow/release-notes':
+            try:
+                return self.send(200,self.server.release_notes.read())
+            except (OSError,ValueError):
+                return self.error(502,'无法读取官方更新说明，请稍后重试。 / Could not read official release notes.')
         if path == '/api/shadow/usage':
             try:
                 filters = parameters(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query))
@@ -151,6 +160,22 @@ class ShadowHandler(BaseHTTPRequestHandler):
         if self.path == '/api/session' and secrets.compare_digest(
                 self.headers.get('X-EMP-Bootstrap', ''), self.server.bootstrap):
             return self.send(200, {'session': self.server.session})
+        if self.path in {'/api/shadow/migration/decode', '/api/shadow/migration/preview', '/api/shadow/migration/export','/api/shadow/migration/demo'}:
+            if not secrets.compare_digest(self.headers.get('X-EMP-Session',''),self.server.session):
+                return self.error(401,'management session is required')
+            try:
+                length = int(self.headers.get('Content-Length','0'))
+                if not 0 < length <= 64*1024*1024:
+                    return self.error(413,'迁移包过大 / Migration request too large')
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body,dict):
+                    return self.error(400,'Invalid request')
+                result = self.server.migration.handle(self.path.rsplit('/',1)[1],body)
+                return self.send(200,result)
+            except PreviewError as error:
+                return self.error(400,str(error))
+            except (ValueError,KeyError,TypeError,OSError,subprocess.TimeoutExpired):
+                return self.error(400,'迁移预览失败，请检查文件、密码和所选服务。 / Check the package, password and selected services.')
         self.error(403, '影子页只保存预览配置。')
 
     def do_DELETE(self):
@@ -163,6 +188,9 @@ def main():
     parser.add_argument('--backend-port', type=int, default=4200)
     parser.add_argument('--state-dir', type=Path, default=default_state_dir(), help='EMP state directory containing web-session.json and usage.sqlite3')
     parser.add_argument('--open', action='store_true')
+    parser.add_argument('--migration-helper',type=Path,help='Built emp-state shadow_migration_codec example')
+    parser.add_argument('--config',type=Path,help='Read-only production configuration for migration preview')
+    parser.add_argument('--release-api',help='Loopback release metadata endpoint for isolated acceptance')
     args = parser.parse_args()
     server = ThreadingHTTPServer(('127.0.0.1', args.port), ShadowHandler)
     server.daemon_threads = True
@@ -172,6 +200,17 @@ def main():
     server.state_dir = args.state_dir.expanduser().resolve()
     server.bootstrap = secrets.token_urlsafe(32)
     server.session = secrets.token_urlsafe(32)
+    project = Path(__file__).resolve().parents[2]
+    name = 'shadow_migration_codec.exe' if sys.platform == 'win32' else 'shadow_migration_codec'
+    candidates = [project/'target/debug/examples'/name,
+                  project.parent/'.emp-rust-target-root/per-worktree'/project.name/'debug/examples'/name]
+    helper = args.migration_helper or next((path for path in candidates if path.is_file()),None)
+    config = args.config or Path(os.environ.get('EASY_MULTI_PROVIDER_CONFIG',server.state_dir.parent/'config.json'))
+    native_auth = Path(os.environ.get('CODEX_HOME',Path.home()/'.codex'))/'auth.json'
+    server.migration = MigrationPreview(helper,config,native_auth)
+    if args.release_api and urllib.parse.urlsplit(args.release_api).hostname != '127.0.0.1':
+        parser.error('--release-api must use a loopback fixture')
+    server.release_notes = ReleaseNotes(args.release_api) if args.release_api else ReleaseNotes()
     if args.open:
         threading.Timer(0.5, lambda: webbrowser.open(f'http://127.0.0.1:{port}/')).start()
     print(f'EMP shadow: http://127.0.0.1:{port}/', flush=True)

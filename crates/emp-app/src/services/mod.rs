@@ -35,3 +35,5 @@ pub(crate) mod observation;
 pub(crate) mod request_outcome;
 pub(crate) mod request_preparation;
 pub(crate) mod shutdown;
+
+pub(crate) mod error_presentation;

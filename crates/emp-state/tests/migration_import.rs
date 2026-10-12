@@ -61,11 +61,33 @@ fn import_merges_without_deleting_local_entries_and_reencrypts_provider_keys() {
         "catalog_family_presentations": {"deepseek-family": {"catalog_alias": "Imported family"}},
         "native_hidden_models": ["native-imported"]
     });
-    let migration = bundle(&payload(
+    let package = payload(
         source,
         json!([]),
-        json!({"deepseek": "synthetic provider credential"}),
-    ));
+        json!({"deepseek":"synthetic provider credential"}),
+    );
+    let before = fs::read(&path).unwrap();
+    let directory_entries = || {
+        fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let before_entries = directory_entries();
+    let (preview, pending_auth, preview_summary) = emp_state::migration::preview_migration_import(
+        &current,
+        &package,
+        &path,
+        &vault,
+        &Default::default(),
+    )
+    .expect("read-only import preview");
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert!(pending_auth.is_empty());
+    assert_eq!(preview_summary.providers, 1);
+    assert_eq!(preview["providers"][1]["id"], "deepseek");
+    assert_eq!(directory_entries(), before_entries);
+    let migration = bundle(&package);
 
     let (imported, summary) =
         import_migration_bundle(&current, &migration, PASSWORD, &path, &vault)
@@ -179,11 +201,11 @@ fn import_updates_the_same_account_and_renames_a_different_identity() {
     let same = payload(
         json!({
             "account_store_path": "accounts",
-            "accounts": [{"id": "shared", "prefix": "route", "name": "Imported"}],
+            "accounts": [{"id": "different-local-id", "prefix": "route", "name": "Imported"}],
             "catalog_presentations": {"route/model": {"catalog_alias": "Imported"}}
         }),
         json!([{
-            "metadata": {"id": "shared", "prefix": "route", "name": "Imported"},
+            "metadata": {"id": "different-local-id", "prefix": "route", "name": "Imported"},
             "auth": {"tokens": {"account_id": "account-A", "access_token": "NEW"}}
         }]),
         json!({}),
@@ -317,4 +339,34 @@ fn failed_import_rolls_back_new_account_and_provider_credentials() {
         !root.join("target/state/secrets/deepseek.key.enc").exists(),
         "provider credential must roll back"
     );
+}
+
+#[test]
+fn preview_reuses_an_in_memory_account_without_touching_the_filesystem() {
+    let directory = tempdir().unwrap();
+    let root = root(&directory);
+    let path = root.join("not-created/config.json");
+    let vault = vault(&root);
+    let current = normalize_configuration(Some(&json!({
+        "accounts":[{"id":"draft","prefix":"draft","name":"Previous draft"}],
+        "providers":[{"id":"local","name":"Edited locally","base_url":"https://fixture.invalid"}]
+    })))
+    .unwrap();
+    let auth = json!({"tokens":{"account_id":"fixture-account","access_token":"fixture-token"}});
+    let package = payload(
+        json!({}),
+        json!([{
+            "metadata":{"id":"draft","prefix":"draft","name":"Updated draft"},"auth":auth
+        }]),
+        json!({}),
+    );
+    let known = std::collections::BTreeMap::from([("draft".to_owned(), auth)]);
+    let (preview, _, summary) =
+        emp_state::migration::preview_migration_import(&current, &package, &path, &vault, &known)
+            .unwrap();
+    assert_eq!(preview["accounts"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["accounts"][0]["id"], "draft");
+    assert_eq!(preview["providers"][0]["name"], "Edited locally");
+    assert_eq!(summary.renamed_accounts, 0);
+    assert!(!path.parent().unwrap().exists());
 }

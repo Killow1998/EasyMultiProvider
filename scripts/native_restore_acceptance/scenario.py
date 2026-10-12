@@ -12,7 +12,7 @@ from typing import Any
 
 from .app_server import AppServer
 from .assertions import build_assertions, classify
-from .common import fail, run_bounded_capture, sha256, sha256_file
+from .common import migrate_selected_threads, fail, run_bounded_capture, sha256, sha256_file
 from .constants import (
     CALL_ID,
     CHILD_SUFFIX,
@@ -270,6 +270,12 @@ def main() -> int:
         config_path = codex_home / "config.toml"
         if config_path.read_bytes() != active_config:
             fail("active fixture Codex config changed before EMP restore")
+
+        # Native restoration never rewrites history. Resume candidates are an
+        # explicit selection, migrated only after their Codex writers close.
+        report["migrations"] = migrate_selected_threads(
+            emp_bin, list(ids.values()), ADDRESS_SPACE_LIMIT_BYTES, env=env, cwd=root,
+        )
 
         restore, restore_peak = run_bounded_capture(
             [str(emp_bin), "restore", "--state-dir", str(state_dir), "--json"],

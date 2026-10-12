@@ -7,7 +7,7 @@ struct NativeWebSocketUpstream {
     worker: Option<JoinHandle<()>>,
 }
 impl NativeWebSocketUpstream {
-    fn start() -> Self {
+    fn start(prewarm: bool) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
         let (sender, requests) = mpsc::sync_channel(2);
@@ -38,10 +38,10 @@ impl NativeWebSocketUpstream {
                     assert_eq!(body["previous_response_id"], "resp_one");
                 }
                 websocket.send_json(&json!({"type":"response.created","response":{"id":id,"status":"in_progress"}})).unwrap();
-                if index == 0 {
+                if index == 0 && !prewarm {
                     websocket.send_json(&json!({"type":"response.output_text.delta","delta":"native websocket"})).unwrap();
                 }
-                websocket.send_json(&json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","model":"upstream","output":[]} })).unwrap();
+                websocket.send_json(&json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","model":"upstream","output":[],"usage":{"input_tokens":41,"output_tokens":0,"total_tokens":41}} })).unwrap();
             }
         });
         Self {
@@ -64,7 +64,16 @@ impl Drop for NativeWebSocketUpstream {
 
 #[test]
 fn responses_websocket_reuses_matching_native_upstream_for_incremental_turn() {
-    let upstream = NativeWebSocketUpstream::start();
+    check_incremental_turn(false);
+}
+
+#[test]
+fn native_prewarm_preserves_connection_without_counting_inference_or_usage() {
+    check_incremental_turn(true);
+}
+
+fn check_incremental_turn(prewarm: bool) {
+    let upstream = NativeWebSocketUpstream::start(prewarm);
     let (_directory, server) = native_alias_server(&upstream.base_url());
     let cookie = session_header(&server);
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
@@ -85,10 +94,11 @@ fn responses_websocket_reuses_matching_native_upstream_for_incremental_turn() {
         head.push(byte[0]);
     }
     assert!(String::from_utf8(head).unwrap().starts_with("HTTP/1.1 101"));
-    send_masked_websocket_text(
-        &mut stream,
-        &json!({"type":"response.create","model":"native/alias","input":"first"}),
-    );
+    let mut initial = json!({"type":"response.create","model":"native/alias","input":"first"});
+    if prewarm {
+        initial["generate"] = json!(false);
+    }
+    send_masked_websocket_text(&mut stream, &initial);
     let mut first = Vec::new();
     loop {
         let event = receive_websocket_json(&mut stream);
@@ -105,10 +115,11 @@ fn responses_websocket_reuses_matching_native_upstream_for_incremental_turn() {
             .any(|event| event["type"] == "response.metadata"
                 && event["headers"]["openai-model"] == "native/alias")
     );
-    assert!(
+    assert_eq!(
         first
             .iter()
-            .any(|event| event["type"] == "response.output_text.delta")
+            .any(|event| event["type"] == "response.output_text.delta"),
+        !prewarm
     );
     send_masked_websocket_text(
         &mut stream,
@@ -144,6 +155,38 @@ fn responses_websocket_reuses_matching_native_upstream_for_incremental_turn() {
     assert_eq!(first_body["type"], "response.create");
     assert_eq!(first_body["model"], "upstream");
     assert_eq!(second_body["previous_response_id"], "resp_one");
+    assert_eq!(first_body.get("generate") == Some(&json!(false)), prewarm);
+    let ledger = &server.state.backend.usage.ledger;
+    let calls = ledger
+        .query_calls(&emp_state::usage::ledger::CallFilter {
+            start: 0.0,
+            end: crate::util::system_now(),
+            category: None,
+            provider: None,
+            account: None,
+            model: None,
+            models: vec![],
+            session: None,
+            state: None,
+            request: None,
+            offset: 0,
+            limit: 50,
+            models_offset: 0,
+            models_sort: "calls".into(),
+        })
+        .unwrap();
+    assert_eq!(calls["total"], if prewarm { 1 } else { 2 }, "{calls}");
+    // The actual inference has zero output too: it must still be counted.
+    assert_eq!(calls["records"][0]["output_tokens"], 0);
+    assert_eq!(calls["records"][0]["input_tokens"], 41);
+    let now = crate::util::system_now();
+    let usage = ledger.query(0.0, now, "all", now).unwrap();
+    assert_eq!(
+        usage["totals"]["input_tokens"],
+        if prewarm { 41 } else { 82 },
+        "{usage}"
+    );
+
     drop(stream);
     server.shutdown().unwrap();
 }

@@ -22,6 +22,7 @@ use crate::util::random_hex;
 use emp_history::HistoryError;
 use emp_transport::FailureClass;
 use emp_transport::WebSocketConnection;
+use emp_transport::WebSocketPoll;
 use emp_transport::websocket_accept;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -72,6 +73,8 @@ impl ObservedWebSocket<'_, '_> {
         self.send(event, true)
     }
     fn send(&mut self, event: &Value, upstream: bool) -> Result<(), emp_transport::WebSocketError> {
+        let formatted = self.observation.errors().event(event, upstream);
+        let event = formatted.as_ref().unwrap_or(event);
         let result = match &self.control {
             Some(control) => match control.send(self.inner, event) {
                 Ok(false) => return Ok(()),
@@ -205,7 +208,30 @@ pub(crate) fn serve_responses_websocket(
     loop {
         let next = match native_session.pending_request.take() {
             Some(text) => Ok(Some(text)),
-            None => websocket.receive_text(),
+            None => loop {
+                // Drain idle persistent sockets on an explicit native restore.
+                // Active turns stay in their executor until completion; a
+                // restore timeout reopens admission without interrupting them.
+                if state.connection_admission.is_quiescing()
+                    || state.shutdown.load(std::sync::atomic::Ordering::Acquire)
+                {
+                    websocket.close(1001, "EMP connection is draining");
+                    return;
+                }
+                match websocket.poll_text_ready() {
+                    Ok(WebSocketPoll::Text(text)) => break Ok(Some(text)),
+                    Ok(WebSocketPoll::Closed { .. }) => break Ok(None),
+                    Ok(WebSocketPoll::Ping(payload)) => {
+                        if let Err(error) = websocket.send_pong(&payload) {
+                            break Err(error);
+                        }
+                    }
+                    Ok(WebSocketPoll::Pending) => {
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                    Err(error) => break Err(error),
+                }
+            },
         };
         let text = match next {
             Ok(Some(value)) => value,
@@ -215,6 +241,10 @@ pub(crate) fn serve_responses_websocket(
                 return;
             }
         };
+        if state.connection_admission.is_quiescing() {
+            websocket.close(1001, "EMP connection is draining");
+            return;
+        }
         // A steering frame can race the preceding terminal event. It is a
         // control message, never another inference or a failed model request.
         if let Ok(value) = serde_json::from_str::<Value>(&text)
@@ -252,6 +282,9 @@ pub(crate) fn serve_responses_websocket(
             std::sync::Arc::clone(&state.backend.usage.ledger),
             std::sync::Arc::clone(&state.backend.management_events),
         );
+        let mut presentation = crate::services::error_presentation::ErrorPresentation::new(state);
+        presentation.thread(incoming.get("thread-id").map(String::as_str));
+        observation = observation.with_errors(presentation);
         let mut websocket = ObservedWebSocket {
             inner: &mut websocket,
             observation: &mut observation,
@@ -480,15 +513,16 @@ pub(crate) fn serve_responses_websocket(
             ids,
             scope: request_scope,
         };
-        let native_turn_activity = if turn.route.dialect == emp_core::Dialect::CodexNative {
-            match native_session.serve(state, &turn, &mut websocket, monitor_stream.as_ref()) {
-                NativeTurnResult::Finished => continue,
-                NativeTurnResult::Closed => return,
-                NativeTurnResult::HttpFallback(activity) => activity,
-            }
-        } else {
-            None
-        };
+        let (native_turn_activity, native_usage) =
+            if turn.route.dialect == emp_core::Dialect::CodexNative {
+                match native_session.serve(state, &turn, &mut websocket, monitor_stream.as_ref()) {
+                    NativeTurnResult::Finished => continue,
+                    NativeTurnResult::Closed => return,
+                    NativeTurnResult::HttpFallback(activity, usage) => (activity, usage),
+                }
+            } else {
+                (None, None)
+            };
         turn.body.remove("previous_response_id");
         let generate = turn
             .body
@@ -530,6 +564,7 @@ pub(crate) fn serve_responses_websocket(
                         websocket,
                         monitor,
                         native_turn_activity,
+                        native_usage.map(|usage| *usage),
                     )
                 } else {
                     http_stream::serve_external(state, &turn, websocket, monitor)

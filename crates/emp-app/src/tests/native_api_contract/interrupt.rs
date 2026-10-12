@@ -97,12 +97,23 @@ fn local_and_upstream_websocket_errors_have_distinct_receipts_and_preserve_upstr
         local["error"]["message"]
             .as_str()
             .unwrap()
-            .starts_with("[EMP]")
+            .starts_with("EMP 请求处理出错\n")
     );
     client
         .send_json(&json!({"type":"response.create","model":"native/alias","input":"first"}))
         .unwrap();
-    assert_eq!(event(&mut client, "error"), expected);
+    let returned = event(&mut client, "error");
+    assert_eq!(returned["error"]["summary"], "Codex 请求受限");
+    assert!(
+        returned["error"]["message"]
+            .as_str()
+            .unwrap()
+            .ends_with(expected["error"]["message"].as_str().unwrap())
+    );
+    let mut machine = returned.clone();
+    machine["error"].as_object_mut().unwrap().remove("summary");
+    machine["error"]["message"] = expected["error"]["message"].clone();
+    assert_eq!(machine, expected);
     let activity = server
         .state
         .backend

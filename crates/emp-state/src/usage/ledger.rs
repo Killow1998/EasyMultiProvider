@@ -34,8 +34,11 @@ impl From<std::io::Error> for UsageError {
 }
 mod calls;
 pub use calls::CallFilter;
+mod identities;
 mod series;
 pub use series::UsageSeriesFilter;
+
+pub const RESOLVED_USAGE: &str = include_str!("../../../../contracts/usage-owners.sql");
 
 type Result<T> = std::result::Result<T, UsageError>;
 pub struct UsageLedger {
@@ -148,6 +151,7 @@ impl UsageLedger {
         }
         connection.execute_batch(INDEXES)?;
         calls::initialize(&connection)?;
+        identities::initialize(&connection)?;
         private(&self.path)?;
         self.initialized.store(true, Ordering::Release);
         Ok(connection)
@@ -319,7 +323,7 @@ impl UsageLedger {
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let connection = self.connect()?;
         connection.execute_batch("PRAGMA temp_store=MEMORY")?;
-        connection.execute(&format!("CREATE TEMP TABLE selected_usage AS SELECT observed_at,category,owner,model,service_tier,origin,usage_turn,route_model,price_issue,cost_nanos,{} FROM accounted_usage WHERE {selection}",TOKEN_FIELDS.join(",")),params_from_iter(&parameters))?;
+        connection.execute(&format!("CREATE TEMP TABLE selected_usage AS SELECT observed_at,category,owner,model,service_tier,origin,usage_turn,route_model,price_issue,cost_nanos,{} FROM {RESOLVED_USAGE} WHERE {selection}",TOKEN_FIELDS.join(",")),params_from_iter(&parameters))?;
         let grouped = |group: &str| {
             rows(
                 &connection,

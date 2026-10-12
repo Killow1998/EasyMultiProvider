@@ -71,6 +71,9 @@ button:not(:disabled):hover{transform:none}
 .display-row{border-radius:10px;background:var(--panel)}
 .modal-actions{flex-wrap:wrap}
 .notification-close,.modal-close{width:36px;height:36px;min-height:36px;padding:0}
+.modal-navigation{display:flex;align-items:center;gap:8px;flex:none}.modal-back{width:36px;height:36px;min-height:36px;padding:0;justify-content:center}
+.modal-navigation button.modal-back,.modal-navigation button.modal-close{background:transparent;border:0;color:var(--muted);margin:0}
+button[data-icon="sync"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M3%207h18m-4-4%204%204-4%204M21%2017H3m4-4-4%204%204%204%22/%3E%3C/svg%3E")}
 @media(max-width:760px){main{padding:18px 12px 32px}section{padding:16px}.action-group{display:block}.action-group-label{display:block;margin-bottom:8px;padding-top:0}.action-group>.toolbar,.action-group>.runtime-controls{margin:0}}
 button[data-icon]{display:inline-flex}
 .repo-link{border:1px solid var(--border-strong);background:transparent;color:var(--text);cursor:pointer}
@@ -357,7 +360,10 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .call-toolbar input,.call-toolbar select{width:auto;max-width:100%;min-width:0}
 .call-toolbar input[type=datetime-local]{max-width:190px}
 .call-record{border-bottom:1px solid var(--border);margin:0;overflow:hidden}
-.call-record>summary{display:grid;grid-template-columns:minmax(100px,1fr) minmax(130px,1.2fr) auto auto auto minmax(100px,1fr);gap:12px;align-items:center;padding:12px;cursor:pointer}
+.call-records{overflow-x:auto}
+.call-records>.call-record{min-width:880px}
+.call-record>summary{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.3fr) 100px 150px 70px minmax(0,1.2fr);gap:12px;align-items:center;padding:12px;cursor:pointer;text-align:left}
+.call-record>summary>span{min-width:0;overflow-wrap:anywhere}
 .call-record small,.call-model small,.usage-table td small{display:block;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
 .call-model,.call-session{min-width:0;overflow-wrap:anywhere}
 .call-detail{border-top:1px solid var(--border);padding:14px}
@@ -367,7 +373,6 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .call-detail h3{margin:18px 0 10px;font-size:14px}.call-technical{margin-top:16px}
 .call-overview{grid-template-columns:repeat(3,minmax(0,1fr));padding:14px 0;gap:20px 16px}.call-overview .call-fact{padding:0;line-height:1.4}.call-overview strong{font-size:20px;font-variant-numeric:tabular-nums}
 .call-pages{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:12px}
-@media(max-width:1000px){.call-record>summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .call-trend{display:block;width:100%;height:auto;margin:6px 0 14px}
 
@@ -389,3 +394,6 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .call-outcome-dialog::backdrop{background:#0005}.call-outcome-dialog .modal-header{margin-bottom:16px}.call-outcome-dialog h2{margin:0;font-size:16px}.call-outcome-dialog p{margin:10px 0;color:var(--muted)}
 
 .call-outcome-dialog table{width:100%;border-collapse:collapse;margin-top:16px;table-layout:fixed}.call-outcome-dialog th,.call-outcome-dialog td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);overflow-wrap:anywhere}.call-outcome-dialog th{color:var(--muted);font-weight:500}.call-outcome-dialog th:first-child{width:25%}.call-outcome-dialog th:last-child{width:48px}.call-outcome-dialog td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+
+.update-notes{border-top:1px solid var(--border);margin-top:16px;padding-top:12px}
+.update-notes-content{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;font-size:13px;line-height:1.6;scrollbar-color:var(--border-strong) var(--panel)}

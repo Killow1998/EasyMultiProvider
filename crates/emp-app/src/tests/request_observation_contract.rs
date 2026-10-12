@@ -495,3 +495,85 @@ fn downstream_write_failure_does_not_rewrite_or_repeat_upstream_accounting() {
     assert_eq!(done["fields"]["terminal_written"], false);
     server.shutdown().unwrap();
 }
+
+#[test]
+fn ledger_keeps_execution_facts_after_activity_eviction() {
+    use crate::services::request_outcome::RequestOutcome;
+    use emp_router::native_http::{NativeRetryDecision, NativeRetryReason};
+    let (_root, server) = configured_server("http://127.0.0.1:1/v1");
+    let config = server
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap()
+        .clone();
+    let route = emp_core::resolve_route_without_catalog(&config, "demo/model").unwrap();
+    let body = json!({"model":"demo/model","input":"private-fixture"});
+    let headers = BTreeMap::from([("x-emp-request-id".into(), "long-request".into())]);
+    let mut outcome =
+        RequestOutcome::new(&server.state, &route, &body, &headers, None, "responses");
+    outcome.dispatch();
+    outcome.native_retry(NativeRetryDecision {
+        retry: true,
+        status: 502,
+        reason: NativeRetryReason::Network,
+    });
+    outcome.dispatch();
+    // Fill the existing bounded projection while this request is still active.
+    for index in 0..128 {
+        let headers = BTreeMap::from([("x-emp-request-id".into(), format!("short-{index}"))]);
+        let mut short =
+            RequestOutcome::new(&server.state, &route, &body, &headers, None, "responses");
+        short.dispatch();
+        short.http_status(200);
+        short.finish();
+    }
+    let snapshot = server
+        .state
+        .backend
+        .activity
+        .snapshot(crate::util::system_now() as u64);
+    assert!(
+        !snapshot["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["request_id"] == "long-request")
+    );
+    outcome.http_status(200);
+    outcome.finish();
+    let now = crate::util::system_now();
+    let report = server
+        .state
+        .backend
+        .usage
+        .ledger
+        .query_calls(&emp_state::usage::ledger::CallFilter {
+            start: now - 3600.0,
+            end: now + 60.0,
+            category: None,
+            provider: None,
+            account: None,
+            model: None,
+            models: vec![],
+            session: None,
+            state: None,
+            request: Some("long-request".into()),
+            offset: 0,
+            limit: 10,
+            models_offset: 0,
+            models_sort: "calls".into(),
+        })
+        .unwrap();
+    let receipt = &report["records"][0];
+    assert_eq!(report["total"], 1);
+    assert_eq!(receipt["state"], "completed");
+    assert_eq!(receipt["attempts"], 2);
+    assert_eq!(receipt["retries"][0]["reason"], "network");
+    assert_eq!(receipt["attempt_routes"].as_array().unwrap().len(), 2);
+    assert!(!report.to_string().contains("private-fixture"));
+    drop(outcome);
+    server.shutdown().unwrap();
+}

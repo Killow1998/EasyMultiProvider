@@ -8,6 +8,38 @@ const queries = () => {
 };
 const formats = {periodPickerHtml:() => '', periodLocalInput:() => '',timeAxisSvg:() => ''};
 
+test('connection Save retains the stored key and cannot close a replacement window',async()=>{
+  const saving=deferred(),owner={isConnected:true};let submit,closed=0,saved;
+  const state={accounts:[],providers:[{id:'api',name:'API',base_url:'https://fixture.invalid/v1',protocol:'responses',auth_mode:'api_key',api_key_set:true}],models:[]};
+  const nodes={modal_body:{firstElementChild:owner},modal_provider_name:{value:'New name'},modal_provider_base:{value:'https://fixture.invalid/v1'},modal_provider_key:{value:''},modal_provider_protocol:{value:'responses'},modal_provider_auth:{value:'api_key'}};
+  const forms=feature('service-connections.js','createServiceConnections')({getState:()=>state,cloneState:()=>structuredClone(state),$:id=>nodes[id],tr,esc,notice(){},openModal(_title,_body,_label,save){submit=save;},closeModal(){closed++;},
+    persistState(_message,candidate){saved=candidate;return saving.promise;}});
+  forms.editProvider('api');const work=submit();
+  assert.equal(saved.providers[0].api_key,'••••••••','empty input must preserve the stored key');
+  assert.equal(saved.providers[0].name,'New name');owner.isConnected=false;saving.resolve();await work;
+  assert.equal(closed,0,'an older Save must not close the new window');
+});
+
+test('update window owns requests and discards a late check after closing',async()=>{
+  const q=queries();let updater,nodes={};
+  updater=feature('updates.js','createUpdates')({...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",localizedReleaseNotes:()=>"",visible:()=>true,isPreview:()=>false,
+    openModal(){updater.stop();nodes={update_install:{disabled:false},update_status:{textContent:''}};}});
+  const opening=updater.open();assert.equal(q.calls.length,1);
+  updater.stop();nodes={};assert.equal(q.calls[0].options.signal.aborted,true);
+  q.calls[0].resolve({state:'available',latest_version:'9.0.0'});await opening;
+  assert.equal(q.calls.length,1,'a closed window must not restart polling');
+  assert.equal(updater.info(),null,'a late reply must not replace the current update metadata');
+});
+
+test('completed update check retains release notes without an extra status request',async()=>{
+  const q=queries(),nodes=Object.fromEntries(['update_status','update_version','update_notes','update_progress','update_install','update_release','update_commands','update_manual'].map(id=>[id,{}]));
+  const updater=feature('updates.js','createUpdates')({...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",localizedReleaseNotes:notes=>notes,visible:()=>true,isPreview:()=>true,openModal(){}});
+  const opening=updater.open();q.calls[0].resolve({state:'available',current_version:'0.13.0',latest_version:'1.0.0',supported:false,release_notes:'Literal <script> markup'});await opening;await tick();
+  assert.equal(q.calls.length,1,'terminal checks must not overwrite notes with an older status read');
+  assert.equal(nodes.update_notes.textContent,'Literal <script> markup');
+  assert.equal(nodes.update_install.disabled,true);updater.stop();
+});
+
 test('usage owns scan cancellation, fallback timers and pricing-save navigation', async () => {
   let nodes={}, report, period, timerId=0;
   const timers=new Map(), q=queries(), saving=deferred();
@@ -60,20 +92,19 @@ test('account details cancel reads and cannot update another service after a sav
   assert.equal(mounted,0,'saving a departed account must not reopen its tabs');
 });
 
-test('model settings cancels cached reads, preserves refreshed data and closes work', async () => {
-  let nodes={}, settings;
-  const q=queries(), button={disabled:false};
-  const document={querySelectorAll:() => []};
-  settings=feature('model-settings.js','createProviderModelSettings',{document})({...q,getState:() => ({providers:[{id:'api'}],models:[]}),$:id => nodes[id],tr,esc,
-    openModal() {settings.stop(); nodes=Object.fromEntries(['provider_model_settings','modal_submit','modal_status','model_list_updated','discovered_models','discovered_search','discovered_select_all','discovered_clear_all','discovered_count'].map(id => [id,{value:'',textContent:'',querySelector:() => button}]));},
-    closeModal() {settings.stop();nodes={};},modelSort:() => 0,capabilitySummary:() => '',formatDate:() => '',errorText:error => error.message,onSaved(){}});
-  const opening=settings.open('api'), refresh=settings.refresh();
+test('service-local model manager cancels replaced reads and ignores stale or closed results', async () => {
+  let nodes={}, manager;
+  const q=queries();
+  manager=feature('model-manager.js','createProviderModelManager')({...q,getState:()=>({providers:[{id:'api'}],models:[]}),$:id=>nodes[id],tr,esc,
+    openModal(){manager.stop();nodes=Object.fromEntries(['shadow_model_manager','shadow_model_search','shadow_model_count','shadow_managed_models','modal_status'].map(id=>[id,{value:'',textContent:'',innerHTML:''}]));},
+    modelSort:()=>0,compactContext:String,capabilitySummary:()=>'',uiIcon:()=>'<svg/>',isPreview:()=>false});
+  const first=manager.open('api'),second=manager.open('api');
   assert.equal(q.calls[0].options.signal.aborted,true);
-  q.calls[1].resolve({models:[],updated_at:'2026-10-09T00:00:00Z'});await refresh;
-  const updated=nodes.model_list_updated.textContent;
-  q.calls[0].resolve({models:[],updated_at:'2020-01-01T00:00:00Z'}); await opening;
-  assert.equal(nodes.model_list_updated.textContent,updated,'late cache data cannot overwrite a fresh catalog');
-  const closing=settings.refresh();settings.stop();nodes={};
+  q.calls[1].resolve({models:[{upstream_id:'fresh',display_name:'Fresh catalog'}]});await second;
+  const visible=nodes.shadow_managed_models.innerHTML;assert.match(visible,/Fresh catalog/);
+  q.calls[0].resolve({models:[{upstream_id:'stale',display_name:'Stale catalog'}]});await first;
+  assert.equal(nodes.shadow_managed_models.innerHTML,visible);
+  const closing=manager.open('api');manager.stop();nodes={};
   assert.equal(q.calls[2].options.signal.aborted,true);
   q.calls[2].reject(new Error('transport ignored abort'));await closing;
 });
@@ -91,4 +122,60 @@ test('model editor cancels metadata when routes change and discards replies to a
   q.calls[0].resolve({context_window:999999});await tick();assert.equal(nodes.modal_model_context.value,'');
   nodes.model_editor.onclick({target:{closest:() => ({dataset:{editorAction:'inspect'}})}});
   editor.stop();nodes={};q.calls[1].resolve({context_window:999999});await tick();assert.equal(notices.length,0);
+});
+
+test('quota trend owns filters, display projection, failures and cancelled window reads', async () => {
+  let nodes={}, trend, after=0;
+  const q=queries(), timers=new Set(), periods={...formats,periodPickers:{},periodPresetRange:() => ({start:100,end:500}),timeAxisTicks:()=>[]};
+  const get=id=>nodes[id];
+  periods.setPeriod=(_id,range,options)=>{Object.assign(periods.periodPickers.quota_history,range);return periods.periodPickers.quota_history.onChange(range,options);};
+  periods.refreshPeriod=()=>periods.periodPickers.quota_history.onChange(periods.periodPickers.quota_history,{user:false});
+  periods.registerPeriodPicker=(id,preset,onChange)=>{periods.periodPickers[id]={start:100,end:500,preset,onChange};return onChange(periods.periodPickers[id],{user:true});};
+  const display=feature('quota-display.js','createQuotaDisplay')({read:()=> 'remaining',save(){}});
+  trend=feature('quota-history.js','createQuotaHistory',{
+    createReportQuery:feature('report-query.js','createReportQuery'),setInterval:fn=>{timers.add(fn);return fn;},clearInterval:fn=>timers.delete(fn),
+  })({...q,$:get,tr,esc,quotaDisplay:display,periods,afterRead:()=>{after++;},compactWindowText:String,localTimeText:String,utcOffsetLabel:()=> 'UTC',subscriptionPlanKey:()=>'',subscriptionPlanLabel:String,subscriptionPlanColor:()=>'',
+    openModal(){trend.stop();nodes=Object.fromEntries(['modal_status','modal_body','quota_history_content','quota_history_controls','quota_history_plan','quota_history_legend','quota_history_plot','quota_history_range','quota_history_back','quota_history_loading'].map(id=>[id,{innerHTML:'',textContent:'',querySelector:selector=>get(selector.slice(1)),querySelectorAll:()=>[]}]));}});
+  const samples=[{observed_at:100,remaining_percent:76},{observed_at:200,remaining_percent:60}];
+  const payload={start_at:100,end_at:500,series:[{window_minutes:300,points:samples}],failures:[{start_at:220,end_at:450,diagnostics:{code:'quota_transport_error'}}]};
+  trend.open('first'); assert.equal(trend.busy(),true); assert.equal(timers.size,1);
+  const old=q.calls[0]; trend.open('second','providers');
+  assert.equal(old.options.signal.aborted,true); assert.equal(timers.size,1);
+  assert.match(q.calls[1].path,/providers\/second\/quota-history/);
+  old.resolve(payload); await tick(); assert.doesNotMatch(nodes.quota_history_plot.innerHTML,/<svg/);
+  q.calls[1].resolve(payload); await tick(); assert.equal(trend.busy(),false);
+  assert.match(nodes.quota_history_legend.innerHTML,/<strong>60%/);
+  assert.match(nodes.quota_history_plot.innerHTML,/Quota connection failed/);
+  display.set('used');trend.redraw();assert.match(nodes.quota_history_legend.innerHTML,/<strong>40%/);
+  assert.equal(samples[0].remaining_percent,76);assert.equal(q.calls.length,2);
+  const chart=nodes.quota_history_plot.innerHTML;
+  trend.refresh();q.calls[2].reject(new Error('offline'));await tick();
+  assert.equal(nodes.quota_history_plot.innerHTML,chart);assert.equal(nodes.modal_status.textContent,'offline');
+  nodes.quota_history_content.onclick({target:{closest:()=>({dataset:{start:'100',end:'200'},id:''})}});
+  assert.match(q.calls[3].path,/start=100&end=200/);
+  trend.stop();assert.equal(q.calls[3].options.signal.aborted,true);assert.equal(timers.size,0);
+  nodes.modal_status.textContent='other window';q.calls[3].resolve(payload);await tick();
+  assert.equal(nodes.modal_status.textContent,'other window');assert.equal(after,2);
+});
+
+test('management events own split frames, connection cancellation and reconnect timers', async () => {
+  const q=queries(), timers=new Map(), frames=[], encoder=new TextEncoder();
+  let source, cancellations=0, disconnected=0;
+  const connection=feature('management-events.js','createManagementEvents',{
+    TextDecoder,setTimeout:fn=>{timers.set(fn,fn);return fn;},clearTimeout:id=>timers.delete(id),
+  })({management:{fetch:q.api,isSignedIn:()=>true,clear(){}},visible:()=>true,onStart(){},onDisconnect:()=>disconnected++,onEvent:(type,data)=>frames.push([type,data])});
+  connection.start();connection.start();assert.equal(q.calls.length,1);
+  q.calls[0].resolve({ok:true,body:new ReadableStream({start(controller){source=controller;},cancel(){cancellations++;}})});await tick();
+  assert.equal(connection.connected(),true);
+  source.enqueue(encoder.encode('event: activity-updated\r\ndata: {"revision":'));
+  source.enqueue(encoder.encode('1}\r'));
+  source.enqueue(encoder.encode('\n\r\nevent: quota-updated\n\n'));await tick();
+  assert.deepEqual(frames,[['activity-updated','{"revision":1}'],['quota-updated','']]);
+  source.close();await tick();assert.equal(connection.connected(),false);assert.equal(timers.size,1);
+  connection.stop();await tick();assert.equal(timers.size,0);assert.equal(q.calls.length,1);
+  connection.start();const stale=q.calls[1];connection.stop();assert.equal(stale.options.signal.aborted,true);
+  stale.resolve({ok:true,body:new ReadableStream({cancel(){cancellations++;}})});await tick();
+  assert.equal(connection.connected(),false);assert.equal(frames.length,2);assert.ok(disconnected>0);assert.equal(cancellations,1);
+  connection.start();q.calls[2].resolve({ok:true,body:new ReadableStream({cancel(){cancellations++;}})});await tick();
+  connection.stop();await tick();assert.equal(cancellations,2);assert.equal(connection.connected(),false);assert.equal(timers.size,0);
 });

@@ -1,4 +1,5 @@
 //! Existing usage charts and on-demand history refresh endpoints.
+mod labels;
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
 use crate::http::request::{Request, query_values, read_json_body};
@@ -115,66 +116,7 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
         .ok()
         .map(|config| config.clone())
         .unwrap_or(json!({}));
-    let mut names = BTreeMap::new();
-    for provider in config["providers"].as_array().into_iter().flatten() {
-        let id = provider["id"].as_str().unwrap_or("");
-        names.insert(
-            ("external", id.to_owned()),
-            provider["name"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(id)
-                .to_owned(),
-        );
-    }
-    for account in config["accounts"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_object)
-    {
-        if let Some(headers) = account_catalog_headers(account, &state.backend.configuration.vault)
-        {
-            let owner = account_owner(&headers);
-            if !owner.is_empty() {
-                let name = account["name"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| account["id"].as_str())
-                    .unwrap_or("");
-                names
-                    .entry(("subscription", owner))
-                    .or_insert_with(|| name.to_owned());
-            }
-        }
-    }
-    if let Some(headers) = native_auth_document(&state.backend.accounts.native_auth_path)
-        .and_then(|auth| emp_codex::account_auth_headers(&auth))
-    {
-        let owner = account_owner(&headers);
-        if !owner.is_empty() {
-            names.insert(("native", owner), "Native".into());
-        }
-    }
-    for field in ["groups", "series"] {
-        if let Some(groups) = payload[field].as_array_mut() {
-            for row in groups {
-                let category = row["category"].as_str().unwrap_or("").to_owned();
-                let owner = row["owner"].as_str().unwrap_or("").to_owned();
-                row["owner_name"] = json!(
-                    names
-                        .get(&(category.as_str(), owner.clone()))
-                        .map(String::as_str)
-                        .unwrap_or("")
-                );
-                if matches!(category.as_str(), "native" | "subscription")
-                    && !owner.starts_with("history:")
-                {
-                    row["account_identity_confirmed"] = json!(owner.starts_with("account:"));
-                }
-            }
-        }
-    }
+    labels::enrich(state, &config, &mut payload);
     payload["history"] = state.backend.usage.status();
     json_response(200, &payload)
 }

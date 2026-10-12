@@ -11,7 +11,7 @@ import socket
 from typing import Any
 
 from .app_server import AppServer
-from .common import fail, run_bounded_capture, sha256, sha256_file
+from .common import migrate_selected_threads, fail, run_bounded_capture, sha256, sha256_file
 from .created_assertions import (
     CREATED_LOCAL_MARKERS,
     created_assertions,
@@ -397,6 +397,19 @@ def run_created_flow(args: argparse.Namespace, address_space_limit_bytes: int) -
             report["emp_peak_rss_bytes"] = emp.peak_rss_bytes
             emp = None
         report["shutdown_restored_config"] = (codex_home / "config.toml").read_bytes() == native_config
+
+        report["shutdown_history_untouched"] = all(
+            sha256_file(paths[key]) == original_files[thread_id].sha256
+            for key, thread_id in ids.items()
+        )
+        if not report["shutdown_history_untouched"]:
+            fail("configuration-only shutdown modified conversation history")
+
+        # Native restoration never rewrites history. Resume candidates are an
+        # explicit selection, migrated only after their Codex writers close.
+        report["migrations"] = migrate_selected_threads(
+            emp_bin, list(ids.values()), address_space_limit_bytes, env=env, cwd=root,
+        )
 
         restore, restore_peak = run_bounded_capture(
             [str(emp_bin), "restore", "--state-dir", str(state_dir), "--json"],

@@ -6,6 +6,7 @@ use crate::app::ServerState;
 use crate::http::auth::MAX_NATIVE_AUTH_BYTES;
 use emp_codex::account_auth_headers;
 use emp_codex::quota::QuotaError;
+mod import_identity;
 use emp_state::FileTransaction;
 use emp_state::VaultStore;
 use emp_state::duplicate_account_status;
@@ -122,6 +123,9 @@ pub(crate) fn import_account_state(
     state: &ServerState,
     body: &Value,
 ) -> Result<Value, String> {
+    let identity_only = body.get("id").is_none();
+    let resolved = import_identity::resolve(state, body)?;
+    let body = &resolved;
     crate::services::observation::operation::observe(
         &state.backend.diagnostics,
         request_id,
@@ -160,6 +164,30 @@ pub(crate) fn import_account_state(
             // Validates the import against `current` and builds the configuration to
             // store.
             let prepare = |current: &Value| -> Result<(PathBuf, Value), String> {
+                if identity_only
+                    && let Some(existing) = current["accounts"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|record| record["id"] == account_id)
+                {
+                    let same = existing["auth_file"]
+                        .as_str()
+                        .and_then(|path| {
+                            state
+                                .backend
+                                .configuration
+                                .vault
+                                .read_encrypted_json(Path::new(path))
+                                .ok()
+                        })
+                        .is_some_and(|old| emp_state::same_account_auth(&old, &auth));
+                    if !same {
+                        return Err(
+                            "account identity changed during import; please import again".into(),
+                        );
+                    }
+                }
                 let auth_path = emp_state::account_auth_path(
                     current,
                     account_id,

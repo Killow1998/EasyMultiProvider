@@ -31,6 +31,7 @@ pub struct Snapshot {
     pub state: String,
     pub current_version: String,
     pub latest_version: Option<String>,
+    pub release_notes: String,
     pub progress: u8,
     pub retry_count: u8,
     pub retry_limit: u8,
@@ -185,6 +186,7 @@ impl UpdateManager {
             },
             current_version: version.to_owned(),
             latest_version: None,
+            release_notes: String::new(),
             progress: 0,
             retry_count: 0,
             retry_limit: retry::MAX_RETRIES,
@@ -251,6 +253,7 @@ impl UpdateManager {
                 state: "error".to_owned(),
                 current_version: String::new(),
                 latest_version: None,
+                release_notes: String::new(),
                 progress: 0,
                 retry_count: 0,
                 retry_limit: retry::MAX_RETRIES,
@@ -267,6 +270,9 @@ impl UpdateManager {
     fn set(&self, state: &str, error: &str, latest: Option<String>, progress: u8) {
         if let Ok(mut snapshot) = self.0.snapshot.lock() {
             snapshot.state = state.to_owned();
+            if state == "checking" {
+                snapshot.release_notes.clear();
+            }
             snapshot.error = error.to_owned();
             snapshot.latest_version = latest;
             snapshot.progress = progress;

@@ -8,6 +8,7 @@ use std::process::ExitCode;
 mod control;
 pub(crate) mod desktop;
 mod help;
+mod history_migration;
 mod migrate;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +16,10 @@ pub(crate) enum Cli {
     Version,
     Help(Option<String>),
     Control(control::Control),
+    MigrateHistory {
+        thread_id: String,
+        json: bool,
+    },
     ApplyUpdate(PathBuf),
     MigrateConfig {
         source: PathBuf,
@@ -70,15 +75,20 @@ where
         return Ok(Cli::Help(None));
     }
     let arguments = arguments.collect::<Vec<_>>();
-    if matches!(command.as_str(), "serve" | "doctor" | "restore")
-        && arguments
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    if matches!(
+        command.as_str(),
+        "serve" | "doctor" | "restore" | "migrate-history"
+    ) && arguments
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
     {
         return Ok(Cli::Help(Some(command)));
     }
     if matches!(command.as_str(), "doctor" | "restore") {
         return control::Control::parse(&command, arguments.into_iter()).map(Cli::Control);
+    }
+    if command == "migrate-history" {
+        return history_migration::parse(arguments.into_iter());
     }
     if command != "serve" {
         return Err(format!("unknown command: {command}"));
@@ -179,6 +189,7 @@ pub(crate) fn run() -> Result<ExitCode, String> {
             }
         }
         Cli::Control(command) => return command.run(),
+        Cli::MigrateHistory { thread_id, json } => return history_migration::run(&thread_id, json),
         Cli::ApplyUpdate(path) => {
             return emp_state::update::worker::run(&path)
                 .map(ExitCode::from)

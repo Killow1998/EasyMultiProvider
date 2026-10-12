@@ -36,6 +36,7 @@ impl Phase {
 
 pub(crate) struct RequestObservation {
     diagnostics: Arc<Diagnostics>,
+    errors: crate::services::error_presentation::ErrorPresentation,
     ledger: Option<Arc<emp_state::usage::ledger::UsageLedger>>,
     reports_changed: Option<Arc<crate::services::management_events::ManagementEvents>>,
     started: Instant,
@@ -66,6 +67,7 @@ impl RequestObservation {
             .event("info", "request_started", &fields);
         Self {
             diagnostics,
+            errors: Default::default(),
             ledger: None,
             reports_changed: None,
             started: now,
@@ -76,6 +78,16 @@ impl RequestObservation {
         }
     }
 
+    pub(crate) fn with_errors(
+        mut self,
+        errors: crate::services::error_presentation::ErrorPresentation,
+    ) -> Self {
+        self.errors = errors;
+        self
+    }
+    pub(crate) fn errors(&self) -> &crate::services::error_presentation::ErrorPresentation {
+        &self.errors
+    }
     pub(crate) fn with_ledger(
         mut self,
         ledger: Arc<emp_state::usage::ledger::UsageLedger>,
@@ -134,6 +146,7 @@ impl RequestObservation {
     }
 
     pub(crate) fn selected(&mut self, route: &ResolvedRoute) {
+        self.errors.select(route);
         let mut fields = route_fields(route, &self.diagnostics);
         self.fields.as_object_mut().unwrap().extend(fields.clone());
         fields.insert("request_id".into(), self.fields["request_id"].clone());

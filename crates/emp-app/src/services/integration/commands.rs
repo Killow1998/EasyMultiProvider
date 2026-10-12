@@ -1,6 +1,6 @@
 //! Complete integration commands. Wire adapters only authenticate, decode and render.
 use crate::app::ServerState;
-use crate::services::integration::{integration_summary_with_result, restore_native_with_history};
+use crate::services::integration::{integration_summary_with_result, restore_native_configuration};
 use crate::services::observation::operation::{OperationObservation, observe};
 use crate::services::runtime::sync_runtime;
 use emp_integration::IntegrationResult;
@@ -206,10 +206,10 @@ fn execute_inner(
             }
         },
         "restore" => {
-            match receipt.step("restore_configuration_and_history", || {
-                restore_native_with_history(manager, Some(&state.backend.integration.search))
+            match receipt.step("restore_configuration", || {
+                restore_native_configuration(manager, Some(&state.backend.integration.search))
             }) {
-                Ok((result, _)) => result,
+                Ok(result) => result,
                 Err(reason) => {
                     return summary(
                         state,
@@ -217,7 +217,7 @@ fn execute_inner(
                         409,
                         None,
                         Some(json!({
-                            "code":if reason == "active_codex_writer" { reason } else { "native_history_restore_blocked" },
+                            "code":if reason == "active_codex_writer" { reason } else { "native_configuration_restore_failed" },
                             "message":crate::services::integration::restore_error_message(reason),
                             "reason":reason
                         })),
