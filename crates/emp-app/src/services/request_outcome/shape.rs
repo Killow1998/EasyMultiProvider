@@ -99,6 +99,10 @@ pub(super) fn facts(body: &Value, headers: &BTreeMap<String, String>) -> Value {
             .map(|(_, value)| value.as_str())
     };
     result["request_id"] = json!(header("x-emp-request-id"));
+    result["has_previous_response"] = json!(
+        body.get("previous_response_id")
+            .is_some_and(|id| !id.is_null())
+    );
     result["client_kind"] = json!(header("originator"));
     result["session_id"] = json!(header("session-id"));
     let metadata = body["client_metadata"]["x-codex-turn-metadata"]

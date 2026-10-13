@@ -110,6 +110,50 @@ write, privacy and forwarding with an unavailable journal. Existing native,
 Claude, cancellation and stream contracts verify that transport behavior is
 preserved. No live-provider or desktop acceptance is implied by these fixtures.
 
+## Native continuation receipts
+
+Each WebSocket turn that reaches history preparation adds one
+`native_continuation` object to `request_finished`. Join by `(run_id, request_id)`;
+do not add start, outcome and final receipts as separate transmitted requests.
+No raw prior response, credential, account identity, URL or input content enters
+this object. The reason is a bounded enum: `unsupported_dialect`, `scope_mismatch`,
+`route_mismatch`, `identity_mismatch`, `prior_response_mismatch`,
+`upstream_disconnected`, `upstream_recovery_required`,
+`incremental_fallback_unavailable`, `prefill_rejected`, or
+`prefill_invalid_response`. `upstream_recovery_required` requires an actual
+upstream `previous_response_not_found` event. A local pre-event disconnect is
+classified separately.
+
+The receipt records prior presence, local prior/connection availability and
+scope/route/identity comparisons; unavailable comparisons are null. Connection
+attempts/openings, observed handshake status, actual reuse, peer close code,
+HTTP fallback and generation-free prefill counts come from their event points.
+A matching route rejected before dispatch is not a reused connection. Legacy
+route observations with no reuse measurement now retain null instead of false.
+
+`downstream_decoded_bytes` is the received text message's UTF-8 length.
+`upstream_decoded_bytes_sent/received` and `upstream_encoded_bytes_sent/received`
+measure complete WebSocket text payloads before/after permessage-deflate.
+`byte_scope=websocket_text_payload` excludes control frames, framing,
+handshakes, HTTP fallback, TLS, proxies and IP overhead. Compression reflects the
+negotiated connection; the client compresses each sent text message when enabled.
+Partial writes/frame errors and unobserved transport paths stay null.
+Prefill bytes are a subset of the sent total, not an extra amount to add.
+These metrics are not FakeAI counters or billable VPS bytes.
+
+At request start, the existing 512-record in-memory ring can link a native full
+request to the latest prior rejection within 60 seconds, only when run-local
+thread, session and turn references, provider and model all match. Its final
+route observation carries `continuation_recovery_from`, an EMP request ID;
+neither prior response IDs nor raw client identities are recorded. Missing
+anchors, evicted evidence or other intervening outcomes produce no link. The
+diagnostic snapshot's `continuation_recovery` reports deduplicated request count,
+measured count and `request_json_bytes` with scope `normalized_request_json`.
+That byte count uses the existing normalized request serializer, not exact
+received or encoded bytes. These are bounded metadata correlations, not proof
+that the two request bodies contain identical history; they cannot establish
+lifetime totals across process restarts or rotated-away logs.
+
 ## History failure diagnosis
 
 Local history preparation and destination-compaction rejections in Responses

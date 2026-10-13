@@ -39,7 +39,8 @@ pub use http_policy::{
 };
 pub use system_memory::system_memory_status;
 pub use websocket::{
-    ClientWebSocket, ClientWebSocketError, WebSocketConnection, WebSocketError, websocket_accept,
+    ClientWebSocket, ClientWebSocketError, WebSocketConnection, WebSocketError, WebSocketTraffic,
+    websocket_accept,
 };
 pub use websocket_pump::{
     ClientWebSocketPump, ConfirmationError, DEFAULT_PUMP_CHANNEL_CAPACITY,

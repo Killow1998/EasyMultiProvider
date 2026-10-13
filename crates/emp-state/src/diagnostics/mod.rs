@@ -1,6 +1,7 @@
 //! Bounded, content-free route observations shared by diagnostics and the UI.
 pub mod analytics;
 mod journal;
+mod recovery;
 pub mod schema;
 pub use journal::Journal;
 use serde_json::{Value, json};
@@ -29,6 +30,12 @@ impl Diagnostics {
         }
         recent.push_back(record);
     }
+    /// Called at request start; a slow generation must not age out a prompt recovery.
+    /// Accepts a sanitized route record and consults only the bounded in-memory ring.
+    pub fn continuation_recovery_from(&self, record: &Value) -> Option<String> {
+        let recent = self.recent.lock().expect("diagnostic observations");
+        recovery::previous_rejection(&recent, record).map(str::to_owned)
+    }
     pub fn snapshot(&self) -> Value {
         let persisted = self.journal.read_routes(CAPACITY);
         let recent = self.recent.lock().expect("diagnostic observations");
@@ -51,6 +58,7 @@ impl Diagnostics {
         let mut result = analytics::summarize(&records, time::OffsetDateTime::now_utc());
         result["capacity"] = json!(CAPACITY);
         result["sample_count"] = json!(records.len());
+        result["continuation_recovery"] = recovery::summary(&records);
         result["records"] = json!(&records[records.len().saturating_sub(64)..]);
         result
     }

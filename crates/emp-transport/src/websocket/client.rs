@@ -231,6 +231,7 @@ impl ClientWebSocket {
             max_message_bytes: MAX_PROXY_REQUEST_BYTES,
             frame_decoder: FrameDecoder::new(MAX_PROXY_REQUEST_BYTES),
             local_control: false,
+            traffic: Default::default(),
         })
     }
     pub fn response_headers(&self) -> &std::collections::BTreeMap<String, String> {
@@ -238,6 +239,14 @@ impl ClientWebSocket {
     }
     pub const fn peer_close_code(&self) -> Option<u16> {
         self.peer_close_code
+    }
+
+    pub const fn traffic(&self) -> super::WebSocketTraffic {
+        self.traffic
+    }
+
+    pub fn compression_enabled(&self) -> bool {
+        self.compression.is_some()
     }
 
     /// Socket readiness only: all reads must go through this client's TLS and
@@ -303,12 +312,26 @@ impl ClientWebSocket {
                 "native websocket request is too large",
             ));
         }
-        if let Some(compression) = self.compression.as_mut() {
+        let (result, encoded_bytes) = if let Some(compression) = self.compression.as_mut() {
             let payload = compression.compress(text.as_bytes())?;
-            self.send_frame(1, &payload, true)
+            (self.send_frame(1, &payload, true), payload.len())
         } else {
-            self.send_frame(1, text.as_bytes(), false)
+            (self.send_frame(1, text.as_bytes(), false), text.len())
+        };
+        if result.is_ok() {
+            self.traffic.decoded_sent = self
+                .traffic
+                .decoded_sent
+                .map(|n| n.saturating_add(text.len() as u64));
+            self.traffic.encoded_sent = self
+                .traffic
+                .encoded_sent
+                .map(|n| n.saturating_add(encoded_bytes as u64));
+        } else {
+            self.traffic.decoded_sent = None;
+            self.traffic.encoded_sent = None;
         }
+        result
     }
 
     pub fn send_pong(&mut self, payload: &[u8]) -> Result<(), ClientWebSocketError> {
@@ -381,6 +404,10 @@ impl ClientWebSocket {
                 payload,
                 compressed,
             } => {
+                self.traffic.encoded_received = self
+                    .traffic
+                    .encoded_received
+                    .map(|n| n.saturating_add(payload.len() as u64));
                 let payload = if compressed {
                     match self
                         .compression
@@ -390,6 +417,7 @@ impl ClientWebSocket {
                     {
                         Ok(payload) => payload,
                         Err(DecompressionError::TooLarge) => {
+                            self.traffic.decoded_received = None;
                             self.close_with(1009, "message too large");
                             return Err(ClientWebSocketError::new(
                                 502,
@@ -397,6 +425,7 @@ impl ClientWebSocket {
                             ));
                         }
                         Err(DecompressionError::Invalid) => {
+                            self.traffic.decoded_received = None;
                             self.close_with(1002, "invalid compression");
                             return Err(ClientWebSocketError::new(
                                 502,
@@ -407,6 +436,10 @@ impl ClientWebSocket {
                 } else {
                     payload
                 };
+                self.traffic.decoded_received = self
+                    .traffic
+                    .decoded_received
+                    .map(|n| n.saturating_add(payload.len() as u64));
                 if payload.len() > self.max_message_bytes {
                     self.close_with(1009, "message too large");
                     return Err(ClientWebSocketError::new(
@@ -436,6 +469,9 @@ impl ClientWebSocket {
     }
 
     fn map_frame_error(&mut self, error: FrameDecodeError) -> ClientWebSocketError {
+        // A failed/partial frame cannot be measured as a complete text payload.
+        self.traffic.decoded_received = None;
+        self.traffic.encoded_received = None;
         match error {
             FrameDecodeError::Protocol => {
                 self.close_with(1002, "invalid frame");

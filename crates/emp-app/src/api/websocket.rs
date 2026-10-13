@@ -401,21 +401,22 @@ pub(crate) fn serve_responses_websocket(
                     continue;
                 }
             };
-        if request_body.contains_key("previous_response_id")
-            && (route.dialect != emp_core::Dialect::CodexNative
-                || request_scope != native_session.last_scope)
-        {
-            native_session.last_response_id = None;
+        websocket
+            .observation
+            .native_continuation()
+            .downstream_decoded_bytes = Some(text.len() as u64);
+        if let Some(reason) = native_session.check_scope(
+            route.dialect,
+            &request_scope,
+            request_body.get("previous_response_id"),
+            websocket.observation.native_continuation(),
+        ) {
             websocket.reject(
                 state,
                 &route,
                 &request_body,
                 &request_headers,
-                &crate::api::failure_response::emp_websocket_error(
-                    400,
-                    "previous_response_not_found",
-                    "Previous response was not found. Retry with full history.",
-                ),
+                &native_socket::previous_response_error(reason),
             );
             continue;
         }

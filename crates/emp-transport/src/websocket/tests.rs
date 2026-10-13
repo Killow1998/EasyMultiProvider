@@ -26,7 +26,56 @@ fn client_socket() -> ClientWebSocket {
         max_message_bytes: MAX_PROXY_REQUEST_BYTES,
         frame_decoder: FrameDecoder::new(MAX_PROXY_REQUEST_BYTES),
         local_control: false,
+        traffic: Default::default(),
     }
+}
+
+#[test]
+fn text_traffic_measures_encoding_excludes_control_and_keeps_unknown_partial_reads() {
+    let mut client = client_socket();
+    client.send_text("plain").unwrap();
+    client.send_pong(b"ping").unwrap();
+    assert_eq!(client.traffic().decoded_sent, Some(5));
+    assert_eq!(client.traffic().encoded_sent, Some(5));
+
+    let parameters = "permessage-deflate; client_no_context_takeover; server_no_context_takeover";
+    let mut codec = PerMessageDeflate::negotiated(parameters).unwrap();
+    let text = "synthetic compressed text ".repeat(256);
+    let encoded = codec.compress(text.as_bytes()).unwrap();
+    let mut frame = vec![0xc1];
+    frame.extend(frame_length_prefix(encoded.len()));
+    frame.extend(&encoded);
+    let mut compressed = client_socket();
+    compressed.compression = Some(PerMessageDeflate::negotiated(parameters).unwrap());
+    compressed.frame_decoder.feed(&frame).unwrap();
+    assert_eq!(
+        compressed.poll_receive_text().unwrap(),
+        WebSocketPoll::Text(text.clone())
+    );
+    assert_eq!(
+        compressed.traffic().decoded_received,
+        Some(text.len() as u64)
+    );
+    assert_eq!(
+        compressed.traffic().encoded_received,
+        Some(encoded.len() as u64)
+    );
+    compressed.send_text(&text).unwrap();
+    assert_eq!(compressed.traffic().decoded_sent, Some(text.len() as u64));
+    assert_eq!(
+        compressed.traffic().encoded_sent,
+        Some(encoded.len() as u64)
+    );
+
+    let mut broken = client_socket();
+    // Invalid unmasked-server frame: the rejected payload's length is unknown.
+    broken
+        .frame_decoder
+        .feed(b"\x81\x82\x00\x00\x00\x00{}")
+        .unwrap();
+    assert!(broken.poll_receive_text().is_err());
+    assert_eq!(broken.traffic().decoded_received, None);
+    assert_eq!(broken.traffic().encoded_received, None);
 }
 
 fn masked_data_header(length: u64) -> Vec<u8> {

@@ -283,6 +283,39 @@ sends the complete first request instead of referencing an invented checkpoint.
 Native WebSocket continuations still use the upstream state. EMP does not invent
 usage for cancelled inference.
 
+Native WebSocket forwarding delegates connection identity and scope checks to
+`native_socket/connection.rs` and error projection to `native_socket/errors.rs`.
+Large native full-history requests use the pure planner in
+[`native_socket/prefill/plan.rs`](../crates/emp-app/src/api/websocket/native_socket/prefill/plan.rs);
+`prefill.rs` owns only the generation-free exchange and its failure handling.
+The plan borrows the original history and allocates one outgoing batch at a time.
+It partitions whole input items under an 8 MiB decoded JSON message budget,
+keeping client tool calls/results together and repeating the original request
+instructions and controls. Prefixes use `generate:false`; each must finish with
+an upstream response ID, empty output and no reported output tokens before the
+next chunk references it. Only the last chunk uses the caller's generation flag
+and reaches downstream projection/accounting. Later turns retain the resulting
+upstream connection and prior ID. No history is cached on disk or removed to
+achieve smaller messages. The budget is EMP policy, not a published upstream
+limit; warmup round trips increase initial setup latency.
+
+This avoids the old oversized-message loop: a pre-event 1009 led to full HTTP
+fallback, whose successful response did not create reusable WebSocket state;
+the next incremental turn required another complete history. Incremental
+requests are never partitioned or stripped of their prior ID. An individually
+oversized item, unpaired tool history or unknown tool protocol retains the
+existing fallback behavior, so such histories can still require full recovery.
+Prefill rejection, unexpected generation and transport failure terminate the
+attempt without automatic replay. Downstream disconnect releases the same
+upstream owner. Scope/route/credential mismatches still reject continuation;
+locally rejecting an incompatible request no longer erases an otherwise valid
+base. Explicit `previous_response_id:null` remains a full request.
+
+The [continuation receipt contract](diagnostic-journal-spec.md#native-continuation-receipts)
+separates local rejection, actual upstream rejection, connection reuse and byte
+layers. Production acceptance must compare the same account/client workload;
+synthetic traffic reduction alone does not certify an installed binary.
+
 Control frames are logged separately from model requests. Active interruption
 uses `client_cancelled` and the call state `interrupted`; a disconnected client
 retains its separate cancellation classification. This follows Codex's

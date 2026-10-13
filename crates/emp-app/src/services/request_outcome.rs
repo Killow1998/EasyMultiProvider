@@ -103,6 +103,13 @@ impl<'a> RequestOutcome<'a> {
             &event,
             &state.backend.diagnostics.journal,
         );
+        if let Some(prior) = state
+            .backend
+            .diagnostics
+            .continuation_recovery_from(&record)
+        {
+            event["continuation_recovery_from"] = json!(prior);
+        }
         let started_event = if operation == "prewarm" {
             "model_prewarm_started"
         } else {
