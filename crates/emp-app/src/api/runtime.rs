@@ -9,6 +9,16 @@ use crate::http::response::{
 use crate::services::runtime::compatibility_snapshot;
 use std::net::TcpStream;
 
+/// Discovery alone never authenticates or starts a model request.
+pub(crate) fn agy_cli_availability_request() -> Vec<u8> {
+    let available = emp_codex::installed_agy::resolve_agy_cli().is_some();
+    let body = serde_json::to_vec(
+        &serde_json::json!({"available":available,"sign_in_status":"unverified"}),
+    )
+    .expect("agy availability JSON");
+    response("HTTP/1.1 200 OK", "application/json", &body, &[])
+}
+
 /// Reports whether EMP can resolve a trusted Claude Code CLI installation.
 /// This is deliberately a path-only availability check: it never starts the CLI.
 pub(crate) fn claude_cli_availability_request() -> Vec<u8> {

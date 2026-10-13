@@ -206,6 +206,7 @@ fn safe_path(path: &str) -> String {
         | "/api/quit"
         | "/api/request-limits"
         | "/api/runtime/claude-cli"
+        | "/api/runtime/agy-cli"
         | "/api/runtime/scan"
         | "/api/session"
         | "/api/support-report"

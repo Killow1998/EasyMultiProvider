@@ -184,6 +184,8 @@ python3 scripts/shadow_frontend/e2e_navigation.py --emp /path/to/EMP \
   --output /tmp/shadow-navigation.json
 python3 scripts/shadow_frontend/e2e_subscription_sync.py --emp /path/to/EMP \
   --output /tmp/shadow-subscription-sync.json
+python3 scripts/shadow_frontend/e2e_agy.py --emp /path/to/candidate/EMP \
+  --agy /path/to/official/agy --output /tmp/agy-e2e.json
 ```
 
 E2E requires Firefox and geckodriver on PATH. It creates a temporary backend,
@@ -194,3 +196,13 @@ The refinements test also verifies actual Firefox fullZoom at 150% and 170%,
 normal animation frames in both themes, selected imports and selected re-export
 with synthetic credentials. Browser system access is enabled only on this
 temporary Firefox instance to set its zoom; no user browser is attached.
+
+The unreleased agy candidate's E2E runs on Linux with the official CLI, a fake
+Gemini API key and a loopback upstream. It checks client-owned read/write/edit/
+command proposals, returned tool results, SSE/WebSocket delivery, compaction,
+concurrency, cancellation, model selection and the real service dialog. Its
+small synthetic client executes the fixture actions in a separate workspace;
+this is not an installed Codex-client acceptance test. It also copies the
+harmless profile files created by the CLI into the adapter fixture to catch
+first-use/reuse incompatibilities. No native subscription login or entitlement
+is verified. The report includes executable hashes and only bounded test facts.

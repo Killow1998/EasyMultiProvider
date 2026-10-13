@@ -27,6 +27,7 @@ pub(crate) enum CompactionError {
 pub(crate) enum SummaryExecutionError {
     Router(RouterError),
     ClaudeCli(crate::services::claude_cli::ClaudeCliError),
+    AgyCli(crate::services::agy_cli::Error),
     Disconnected,
 }
 
@@ -41,6 +42,17 @@ pub(crate) fn execute_summary_request(
     monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
     usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
 ) -> Result<(CompleteResponse, ResolvedRoute), SummaryExecutionError> {
+    if crate::services::agy_cli::selected(route) {
+        return crate::services::agy_cli::execute(state, route, body, monitor, usage)
+            .map(|result| (result, route.clone()))
+            .map_err(|error| {
+                if error.0 == "client_disconnected" {
+                    SummaryExecutionError::Disconnected
+                } else {
+                    SummaryExecutionError::AgyCli(error)
+                }
+            });
+    }
     if crate::services::claude_cli::selected(route) {
         return match crate::services::claude_cli::execute_complete(
             state, route, body, incoming, monitor, usage,

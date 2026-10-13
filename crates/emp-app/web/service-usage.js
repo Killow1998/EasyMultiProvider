@@ -32,6 +32,7 @@ function createServiceUsage({esc, tr, number, money, dateTime, renderLifetime}) 
     const services = new Map((providers || []).map(provider => [provider.id, provider]));
     const types = [
       {id:'codex', label:tr('Codex 订阅','Codex subscriptions'), rows:[]},
+      {id:'agy', label:'Antigravity CLI', rows:[]},
       {id:'claude', label:tr('Claude Code / CPA','Claude Code / CPA'), rows:[]},
       {id:'api', label:'API', rows:[]},
       {id:'other', label:tr('其他记录','Other records'), rows:[]},
@@ -39,7 +40,7 @@ function createServiceUsage({esc, tr, number, money, dateTime, renderLifetime}) 
     for (const row of data.groups || []) {
       const provider = services.get(row.owner);
       const type = ['native','subscription'].includes(row.category) ? 'codex'
-        : row.category === 'external' && provider ? (provider.execution_backend === 'claude_cli' ? 'claude' : 'api') : 'other';
+        : row.category === 'external' && provider ? (provider.execution_backend === 'agy_cli' ? 'agy' : provider.execution_backend === 'claude_cli' ? 'claude' : 'api') : 'other';
       types.find(group => group.id === type).rows.push(row);
     }
     const input = row => `${row.input_reports ? number(row.input_tokens) : '—'}<small>${tr('缓存 ','Cached ')}${row.cache_reports ? number(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr('写入 ','Write ')+number(row.cache_write_tokens) : ''}</small>`;

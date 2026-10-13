@@ -1,7 +1,8 @@
 //! Bounded CLI execution, cancellation and ownership of the child process tree.
 use super::cancellation::Cancellation;
+use crate::services::child_process::ChildTree;
 use std::io::{Read, Write};
-use std::process::{Child, Command};
+use std::process::Command;
 use std::sync::Arc;
 
 use std::thread;
@@ -115,7 +116,7 @@ fn run_with_timeout_policy(
 ) -> Result<Vec<u8>, &'static str> {
     thread::scope(|scope| {
         let child = command.spawn().map_err(|_| "claude_cli_spawn_failed")?;
-        let mut tree = ChildTree::new(child)?;
+        let mut tree = ChildTree::new(child).map_err(|_| "claude_cli_process_tree_unavailable")?;
         let (stdout, stderr, stdin) = match (
             tree.child.stdout.take(),
             tree.child.stderr.take(),
@@ -234,88 +235,6 @@ fn drain_pipe<'scope, R: Read + Send + 'scope>(
             budget_exhausted,
         }
     })
-}
-
-struct ChildTree {
-    child: Child,
-    stopped: bool,
-    #[cfg(windows)]
-    job: windows_sys::Win32::Foundation::HANDLE,
-}
-
-impl ChildTree {
-    #[allow(unused_mut)]
-    fn new(mut child: Child) -> Result<Self, &'static str> {
-        #[cfg(windows)]
-        {
-            use std::os::windows::io::AsRawHandle;
-            use windows_sys::Win32::System::JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW,
-            };
-            let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-            if job.is_null() || unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) } == 0
-            {
-                if !job.is_null() {
-                    unsafe { windows_sys::Win32::Foundation::CloseHandle(job) };
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("claude_cli_process_tree_unavailable");
-            }
-            Ok(Self {
-                child,
-                stopped: false,
-                job,
-            })
-        }
-        #[cfg(not(windows))]
-        {
-            Ok(Self {
-                child,
-                stopped: false,
-            })
-        }
-    }
-
-    fn stop(&mut self) {
-        if self.stopped {
-            return;
-        }
-        self.stopped = true;
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(-(self.child.id() as i32), libc::SIGTERM);
-        }
-        #[cfg(windows)]
-        if !self.job.is_null() {
-            unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1) };
-        }
-        #[cfg(unix)]
-        {
-            thread::sleep(Duration::from_millis(100));
-            unsafe {
-                libc::kill(-(self.child.id() as i32), libc::SIGKILL);
-            }
-        }
-        let _ = self.child.kill();
-    }
-
-    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        self.child.wait()
-    }
-}
-
-impl Drop for ChildTree {
-    fn drop(&mut self) {
-        if !self.stopped {
-            self.stop();
-            let _ = self.child.wait();
-        }
-        #[cfg(windows)]
-        if !self.job.is_null() {
-            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.job) };
-        }
-    }
 }
 
 #[cfg(test)]

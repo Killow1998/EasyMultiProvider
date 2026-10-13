@@ -115,6 +115,7 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
                 "upstream",
                 "transport",
                 "claude_cli",
+                "agy_cli",
                 "client",
                 "unknown",
             ],

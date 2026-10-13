@@ -39,12 +39,16 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     };
     let claude_login = raw.get("execution_backend").and_then(Value::as_str) == Some("claude_cli")
         && raw.get("auth_mode").and_then(Value::as_str) == Some("claude_login");
-    let base_url = if claude_login {
+    let agy_login = raw.get("execution_backend").and_then(Value::as_str) == Some("agy_cli")
+        && raw.get("auth_mode").and_then(Value::as_str) == Some("agy_login");
+    let base_url = if claude_login || agy_login {
         let base_url = string_value(raw.get("base_url"), "provider.base_url", false)?;
         if !base_url.is_empty() {
-            return Err(ConfigError::new(
-                "provider.base_url must be empty for Claude CLI local login",
-            ));
+            return Err(ConfigError::new(if agy_login {
+                "provider.base_url must be empty for agy local login"
+            } else {
+                "provider.base_url must be empty for Claude CLI local login"
+            }));
         }
         String::new()
     } else {
@@ -92,7 +96,7 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     }
     if !PROVIDER_AUTH_MODES.contains(&auth_mode.as_str()) {
         return Err(ConfigError::new(
-            "provider.auth_mode must be api_key, anthropic_api_key, forward, or claude_login",
+            "provider.auth_mode must be api_key, anthropic_api_key, forward, claude_login, or agy_login",
         ));
     }
     if auth_mode == "forward" && protocol != "responses" {
@@ -105,9 +109,9 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
             "provider.execution_backend claude_cli cannot use forward authentication",
         ));
     }
-    if !["http", "claude_cli"].contains(&execution_backend) {
+    if !["http", "claude_cli", "agy_cli"].contains(&execution_backend) {
         return Err(ConfigError::new(
-            "provider.execution_backend must be http or claude_cli",
+            "provider.execution_backend must be http, claude_cli, or agy_cli",
         ));
     }
     if auth_mode == "claude_login" && execution_backend != "claude_cli" {
@@ -125,6 +129,16 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     {
         return Err(ConfigError::new(
             "provider.execution_backend claude_cli requires provider.protocol auto or anthropic_messages",
+        ));
+    }
+    if (execution_backend == "agy_cli" || auth_mode == "agy_login")
+        && (!agy_login
+            || protocol != "responses"
+            || !api_key.is_empty()
+            || !api_key_file.is_empty())
+    {
+        return Err(ConfigError::new(
+            "agy_cli requires agy_login, Responses protocol, and no provider URL or API credentials",
         ));
     }
     let mut normalized = serde_json::json!({
@@ -195,7 +209,7 @@ mod tests {
             normalize_provider(&invalid)
                 .expect_err("unknown execution backend")
                 .to_string(),
-            "provider.execution_backend must be http or claude_cli"
+            "provider.execution_backend must be http, claude_cli, or agy_cli"
         );
 
         let unsupported_protocol = json!({

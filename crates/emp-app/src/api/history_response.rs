@@ -58,6 +58,7 @@ pub(crate) fn destination_error_response(
 ) -> Vec<u8> {
     match error {
         DestinationPrepareError::Router(error) => router_error_response(error),
+        DestinationPrepareError::AgyCli(error) => crate::api::agy_response::http_error(error),
         DestinationPrepareError::ClaudeCli(error) => {
             crate::api::claude_response::http_response(&error)
         }
@@ -106,6 +107,9 @@ pub(crate) fn compaction_error_response(error: CompactionError) -> Vec<u8> {
         CompactionError::Route(error) => route_resolution_response(error),
         CompactionError::Execution(SummaryExecutionError::Router(error)) => {
             router_error_response(error)
+        }
+        CompactionError::Execution(SummaryExecutionError::AgyCli(error)) => {
+            crate::api::agy_response::http_error(error)
         }
         CompactionError::Execution(SummaryExecutionError::ClaudeCli(error)) => {
             crate::api::claude_response::http_response(&error)

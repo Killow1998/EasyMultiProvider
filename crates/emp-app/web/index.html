@@ -1083,13 +1083,18 @@ async function refreshAllAccounts() {
 async function removeAccount(id) { if (!confirm(tr(`移除账号 ${id}？`,`Remove account ${id}?`))) return; try { await api('/api/accounts/' + encodeURIComponent(id), {method:'DELETE'}); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); closeModal(); notice(tr('账号已移除','Account removed')); } catch (error) { notice(error.message, true); } }
 
 const serviceConnections=createServiceConnections({getState:()=>state,cloneState,$,tr,esc,api,openModal,closeModal,persistState,notice,presets:officialProviders,protocolLabel,authLabel,randomId:()=>crypto.randomUUID(),confirmRemoval:question=>confirm(question)});
-const {openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openCustomProviderForm,editProvider,removeProvider}=serviceConnections;
+const {openAgySubscriptionForm,openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openCustomProviderForm,editProvider,removeProvider}=serviceConnections;
 const modelEditorOptions = {getState:() => state, $, tr, esc, api, persistState, openModal, closeModal, notice, upstreamErrorText, testModelAudio, testModelVision, movePresentation, format:{visionStatus, modalityLabel, compactContext, usableContext}};
 const modelEditor = createModelEditor(modelEditorOptions);
 const {open:openManualModelModal} = modelEditor;
 const providerModelSettings = createProviderModelManager({getState:()=>state,cloneState,$,tr,esc,api,persistState,openModal,notice,modelSort,compactContext,capabilitySummary:model=>capabilitySummary(model),uiIcon,testModel,
   createEditor:options=>createModelEditor({...modelEditorOptions,...options}),isPreview:()=>Boolean(window.EMP_PREVIEW)});
-async function testModel(id) { try { notice(tr(`正在测试 ${id} …`,`Testing ${id}…`)); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr('测试成功：','Test succeeded: ') + (result.output_text || tr('已收到模型响应','model response received'))); } catch (error) { notice(tr('测试失败：','Test failed: ') + error.message, true); } }
+async function testModel(id) { try {
+  notice(tr(`正在测试 ${id} …`,`Testing ${id}…`));
+  const model=(state.models || []).find(m=>m.id===id);
+  const agy=(state.providers || []).some(p=>p.id===model?.provider && p.execution_backend==='agy_cli');
+  const body={model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', ...(agy ? {reasoning:{effort:'low'}} : {max_output_tokens:512})};
+  const result = await api('/v1/responses', {method:'POST', body:JSON.stringify(body)}); notice(tr('测试成功：','Test succeeded: ') + (result.output_text || tr('已收到模型响应','model response received'))); } catch (error) { notice(tr('测试失败：','Test failed: ') + error.message, true); } }
 async function testModelVision(id) {
   try {
     notice(tr(`正在向 ${id} 发送 EMP 图标…`,`Sending the EMP icon to ${id}…`));
@@ -1208,6 +1213,7 @@ function runDynamicUiAction(element) {
     case 'provider-remove': removeProvider(id); return true;
     case 'official-provider-choose': chooseOfficialProvider(element.dataset.provider || '', null, {back:modalReturn()}); return true;
     case 'claude-provider-choose': openClaudeConnectionChooser({}, {back:modalReturn()}); return true;
+    case 'agy-local-choose': openAgySubscriptionForm((state.providers || []).find(provider => provider.id === id) || {}, null, {back:modalReturn()}); return true;
     case 'claude-local-choose': openLocalClaudeSubscriptionForm((state.providers || []).find(provider => provider.id === id) || {}, null, {back:modalReturn()}); return true;
     case 'claude-cpa-choose': openClaudeCpaForm((state.providers || []).find(provider => provider.id === id) || {}, null, {back:modalReturn()}); return true;
     case 'claude-change-connection': openClaudeConnectionChooser((state.providers || []).find(provider => provider.id === id) || {}, {back:modalReturn()}); return true;

@@ -167,49 +167,56 @@ fn same_origin_edits_keep_the_stored_key() {
 }
 
 #[test]
-fn switching_cpa_provider_to_claude_login_clears_its_credentials_and_url_only() {
-    let current = normalize_configuration(Some(&json!({
-        "secret_store_path":"/managed/secrets",
-        "providers":[
-            {
-                "id":"claude","name":"Claude CPA","base_url":"https://cpa.example/v1",
-                "protocol":"anthropic_messages","auth_mode":"api_key",
-                "execution_backend":"claude_cli","api_key":"cpa-secret",
-                "api_key_file":"/managed/secrets/claude.key.enc"
-            },
-            {
-                "id":"other","name":"Other","base_url":"https://other.example/v1",
-                "protocol":"chat_completions","auth_mode":"api_key","api_key":"other-secret"
-            }
-        ],
-        "models":[
-            {"id":"claude/model","provider":"claude","upstream_id":"sonnet"},
-            {"id":"other/model","provider":"other","upstream_id":"other-model"}
-        ]
-    })))
-    .expect("current CPA configuration");
+fn switching_provider_to_local_cli_login_clears_only_its_credentials_and_url() {
+    for (backend, auth, protocol) in [
+        ("claude_cli", "claude_login", "anthropic_messages"),
+        ("agy_cli", "agy_login", "responses"),
+    ] {
+        let current = normalize_configuration(Some(&json!({
+            "secret_store_path":"/managed/secrets",
+            "providers":[
+                {
+                    "id":"claude","name":"Claude CPA","base_url":"https://cpa.example/v1",
+                    "protocol":"anthropic_messages","auth_mode":"api_key",
+                    "execution_backend":"claude_cli","api_key":"cpa-secret",
+                    "api_key_file":"/managed/secrets/claude.key.enc"
+                },
+                {
+                    "id":"other","name":"Other","base_url":"https://other.example/v1",
+                    "protocol":"chat_completions","auth_mode":"api_key","api_key":"other-secret"
+                }
+            ],
+            "models":[
+                {"id":"claude/model","provider":"claude","upstream_id":"sonnet"},
+                {"id":"other/model","provider":"other","upstream_id":"other-model"}
+            ]
+        })))
+        .expect("current CPA configuration");
 
-    // The browser sends a complete public config; the old CPA URL and masked
-    // key can remain in its cloned provider record when auth mode changes.
-    let mut incoming = current.clone();
-    incoming["providers"][0]["api_key"] = json!(MASK);
-    incoming["providers"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("api_key_file");
-    incoming["providers"][0]["auth_mode"] = json!("claude_login");
+        // The browser sends a complete public config; the old CPA URL and masked
+        // key can remain in its cloned provider record when auth mode changes.
+        let mut incoming = current.clone();
+        incoming["providers"][0]["api_key"] = json!(MASK);
+        incoming["providers"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("api_key_file");
+        incoming["providers"][0]["auth_mode"] = json!(auth);
+        incoming["providers"][0]["execution_backend"] = json!(backend);
+        incoming["providers"][0]["protocol"] = json!(protocol);
 
-    let merged = merge_web_update_with_time(&current, &incoming, AT)
-        .expect("switch CPA route to the installed Claude login");
-    let local = &merged["providers"][0];
-    assert_eq!(local["execution_backend"], "claude_cli");
-    assert_eq!(local["auth_mode"], "claude_login");
-    assert_eq!(local["base_url"], "");
-    assert_eq!(local["api_key"], "");
-    assert_eq!(local["api_key_file"], "");
+        let merged = merge_web_update_with_time(&current, &incoming, AT)
+            .expect("switch CPA route to the installed Claude login");
+        let local = &merged["providers"][0];
+        assert_eq!(local["execution_backend"], backend);
+        assert_eq!(local["auth_mode"], auth);
+        assert_eq!(local["base_url"], "");
+        assert_eq!(local["api_key"], "");
+        assert_eq!(local["api_key_file"], "");
 
-    assert_eq!(merged["providers"][1], current["providers"][1]);
-    assert_eq!(merged["models"], current["models"]);
+        assert_eq!(merged["providers"][1], current["providers"][1]);
+        assert_eq!(merged["models"], current["models"]);
+    }
 }
 
 #[test]

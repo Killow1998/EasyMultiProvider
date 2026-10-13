@@ -129,7 +129,8 @@ impl<'a> RequestOutcome<'a> {
             event,
             models: Default::default(),
             source_clock: false,
-            buffered: crate::services::claude_cli::selected(route),
+            buffered: crate::services::claude_cli::selected(route)
+                || crate::services::agy_cli::selected(route),
         };
         result.publish(false);
         result
@@ -209,7 +210,7 @@ impl<'a> RequestOutcome<'a> {
                 origin
                     .or_else(|| error["origin"].as_str().filter(|origin| matches!(
                         *origin,
-                        "emp" | "upstream" | "transport" | "claude_cli" | "client"
+                        "emp" | "upstream" | "transport" | "claude_cli" | "agy_cli" | "client"
                     )))
                     .unwrap_or(if self.buffered {
                         "claude_cli"

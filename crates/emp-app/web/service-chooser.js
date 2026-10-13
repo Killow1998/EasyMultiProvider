@@ -12,10 +12,12 @@ function createServiceChooser({tr, esc, presets, icon, openModal, getState}) {
       + card('service-import-account', tr('导入订阅','Import subscription'), 'codex', tr('添加 Codex 订阅账号','Add a Codex subscription'));
     const claude = card('claude-local-choose', tr('本机订阅','Local subscription'), 'claudecode', tr('连接本机 Claude Code','Connect local Claude Code'), `data-id="${esc(existingClaude?.id || '')}"`)
       + card('claude-cpa-choose', 'CPA', 'claudecode', tr('填写地址和 API Key','Enter address and API key'), '', true);
+    const existingAgy = (getState().providers || []).find(p => p.execution_backend === 'agy_cli');
+    const agy = card('agy-local-choose', tr('本机登录','Local sign-in'), 'custom', tr('连接官方 agy CLI；由客户端执行工具','Connect the official agy CLI; client executes tools'), `data-id="${esc(existingAgy?.id || '')}"`);
     const apiKeys = ['openai', 'anthropic', ...Object.keys(presets).filter(key => !['chatgpt','openai','anthropic'].includes(key))];
     const api = apiKeys.filter(key => presets[key]).map(key => card('official-provider-choose', esc(presets[key].name), key, tr('连接 API 服务','Connect an API service'), `data-provider="${esc(key)}"`)).join('')
       + card('service-custom-api', tr('自定义 API','Custom API'), 'custom', tr('填写地址和 API Key','Enter address and API key'));
-    openModal(tr('添加服务','Add service'), group(tr('Codex 订阅','Codex subscriptions'), codex) + group('Claude Code', claude) + group('API', api), '', null, null, {reopen:open});
+    openModal(tr('添加服务','Add service'), group(tr('Codex 订阅','Codex subscriptions'), codex) + group('Claude Code', claude) + group('Antigravity', agy) + group('API', api), '', null, null, {reopen:open});
   }
   function importCodex(navigation = {}) {
     openModal(tr('导入 Codex 订阅','Import Codex subscription'), `<div id="codex_import_choices" class="choice-grid">`

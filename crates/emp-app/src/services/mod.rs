@@ -1,7 +1,9 @@
 pub(crate) mod accounts;
 pub(crate) mod activity;
+pub(crate) mod agy_cli;
 pub(crate) mod auto_review;
 pub(crate) mod catalog;
+pub(crate) mod child_process;
 pub(crate) mod claude_cli;
 pub(crate) mod compaction;
 pub(crate) mod configuration;

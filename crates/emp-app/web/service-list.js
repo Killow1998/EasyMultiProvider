@@ -13,6 +13,7 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     } catch (_) { return 'custom'; }
   }
   function providerType(provider) {
+    if (provider.execution_backend === 'agy_cli') return 'agy · Native';
     if (provider.execution_backend !== 'claude_cli') return 'API';
     return provider.auth_mode === 'claude_login' ? 'Native' : 'CPA';
   }

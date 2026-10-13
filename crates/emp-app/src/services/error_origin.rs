@@ -31,6 +31,7 @@ pub(crate) fn message(origin: &str, message: &str) -> String {
         "upstream" => "Upstream service",
         "transport" => "EMP connection",
         "claude_cli" => "Claude Code CLI",
+        "agy_cli" => "Antigravity CLI",
         "client" => "Client",
         _ => "Unknown source",
     };

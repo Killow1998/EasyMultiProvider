@@ -74,6 +74,9 @@ pub(crate) fn management_request(
             config_error(&message)
         }
         Err(crate::services::catalog::discovery::DiscoveryError::Unavailable) => internal_error(),
+        Err(crate::services::catalog::discovery::DiscoveryError::AgyCli(error)) => {
+            crate::api::agy_response::http_error(error)
+        }
         Err(crate::services::catalog::discovery::DiscoveryError::LocalCli(code)) => {
             let (status, code, message) = crate::services::claude_cli::failure_details(code);
             json_error_response(status, status_text(status), message, Some(code), &[])
@@ -196,6 +199,9 @@ pub(crate) fn read_management_request(request: Request<'_>, state: &ServerState)
             Ok(value) => json_response(&value),
             Err(crate::services::catalog::discovery::DiscoveryError::Invalid(message)) => {
                 config_error(&message)
+            }
+            Err(crate::services::catalog::discovery::DiscoveryError::AgyCli(error)) => {
+                crate::api::agy_response::http_error(error)
             }
             Err(crate::services::catalog::discovery::DiscoveryError::LocalCli(code)) => {
                 let (status, code, message) = crate::services::claude_cli::failure_details(code);

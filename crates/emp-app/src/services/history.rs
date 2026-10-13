@@ -33,6 +33,7 @@ pub(crate) fn prepare_history(
 pub(crate) enum DestinationPrepareError {
     Router(RouterError),
     ClaudeCli(crate::services::claude_cli::ClaudeCliError),
+    AgyCli(crate::services::agy_cli::Error),
     Disconnected,
     History(&'static str),
     Context(Box<emp_history::context::ContextAssessment>),
@@ -171,11 +172,15 @@ pub(crate) fn prepare_destination_context(
                         crate::services::compaction::SummaryExecutionError::Disconnected => {
                             usage.disconnected()
                         }
-                        crate::services::compaction::SummaryExecutionError::ClaudeCli(_) => {}
+                        crate::services::compaction::SummaryExecutionError::ClaudeCli(_)
+                        | crate::services::compaction::SummaryExecutionError::AgyCli(_) => {}
                     }
                     summary_failure = Some(match error {
                         crate::services::compaction::SummaryExecutionError::Router(error) => {
                             DestinationPrepareError::Router(error)
+                        }
+                        crate::services::compaction::SummaryExecutionError::AgyCli(error) => {
+                            DestinationPrepareError::AgyCli(error)
                         }
                         crate::services::compaction::SummaryExecutionError::ClaudeCli(error) => {
                             DestinationPrepareError::ClaudeCli(error)

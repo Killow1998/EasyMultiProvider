@@ -105,6 +105,21 @@ function openLocalClaudeSubscriptionForm(existing = {}, serviceContext = null, n
   }, serviceContext, navigation);
   void refreshClaudeCliAvailability();
 }
+function openAgySubscriptionForm(existing = {}, serviceContext = null, navigation = {}) {
+  const id = existing.id || 'agy-'+randomId().slice(0,8);
+  const context = serviceContext || (existing.id ? {id,kind:'provider',active:'edit'} : null);
+  const body = `<p class="muted">${tr('使用本机官方 Antigravity CLI 登录。读文件、写文件、编辑与命令由 Codex／客户端执行。','Use your local official Antigravity CLI sign-in. Codex executes file reads, writes, edits and commands.')}</p><p class="muted">${tr('先在同一系统账号下登录 agy，再更新模型列表。此接入支持文本和文本工具结果；模型额度暂由官方 CLI 查看。','Sign in to agy under the same OS account, then update the model list. This adapter supports text and text tool results; view quota in the official CLI.')}</p><p class="muted">${tr('请使用没有 hooks、插件或 MCP 的独立 agy 环境。回答在完成后返回；官方 CLI 会保留自己的会话历史。','Use a separate agy profile without hooks, plugins or MCP. Answers arrive after completion; the official CLI retains its own conversation history.')}</p><div class="grid"><label>${tr('名称','Name')}<input id="modal_agy_name" value="${esc(existing.name || 'Antigravity')}"></label><p id="modal_agy_status" class="muted" role="status">${tr('正在检查 agy…','Checking agy…')}</p></div>`;
+  openModal(tr('Antigravity 本机登录','Antigravity local sign-in'),body,tr('保存服务','Save service'),async()=>{
+    if (!existing.id && providerIdentityTaken(id)) throw new Error(tr('服务引用发生冲突，请重新打开此窗口','Service reference conflict; reopen this dialog'));
+    await saveAndClose({id,name:$('modal_agy_name').value.trim() || 'Antigravity',execution_backend:'agy_cli',auth_mode:'agy_login',protocol:'responses',base_url:'',api_key:'',api_key_file:''});
+  },context,navigation);
+  const status = $('modal_agy_status');
+  void api('/api/runtime/agy-cli').then(result=>{
+    if (status?.isConnected) status.textContent = result.available
+      ? tr('已找到 agy；登录与模型权限仍需实际调用验证。','agy found; sign-in and model access still require a successful request.')
+      : tr('未找到官方 agy CLI。请先安装并登录。','Official agy CLI was not found. Install it and sign in first.');
+  }).catch(()=>{if(status?.isConnected)status.textContent=tr('无法检查 agy，请稍后重试。','Could not check agy; try again.');});
+}
 function editClaudeProvider(provider, serviceContext = null, navigation = {}) {
   return provider.auth_mode === 'claude_login'
     ? openLocalClaudeSubscriptionForm(provider, serviceContext, navigation)
@@ -121,6 +136,7 @@ function chooseOfficialProvider(key, serviceContext = null, navigation = {}) {
 }
 function openCustomProviderForm(existing, serviceContext = null, navigation = {}) {
   existing = existing || {};
+  if (existing.execution_backend === 'agy_cli') return openAgySubscriptionForm(existing, serviceContext, navigation);
   if (existing.execution_backend === 'claude_cli') return editClaudeProvider(existing, serviceContext, navigation);
   const forwardAuthOption = existing.auth_mode === 'forward' ? `<option value="forward">Forward Codex auth</option>` : '';
   openModal(existing.id ? tr('编辑自建 Provider','Edit custom Provider') : tr('添加自建 Provider','Add custom Provider'), `<div class="grid"><div><label>${tr('名称','Name')}</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="${tr('例如 工作服务','for example Work service')}"></div><div class="wide"><label>Base URL</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com"></div><div><label>${tr('协议','Protocol')}</label><select id="modal_provider_protocol"></select></div><div><label>${tr('认证','Authentication')}</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option>${forwardAuthOption}</select></div><div class="wide">${apiKeyField('modal_provider_key', existing.api_key_set)}</div></div>`, tr('保存服务','Save service'), async () => {
@@ -135,7 +151,8 @@ function openCustomProviderForm(existing, serviceContext = null, navigation = {}
 function editProvider(id, navigation = {}) {
   const provider = (getState().providers || []).find(p => p.id === id); if (!provider) return;
   const context = {id, kind:'provider', active:'edit'};
-  if (provider.execution_backend === 'claude_cli') editClaudeProvider(provider, context, navigation);
+  if (provider.execution_backend === 'agy_cli') openAgySubscriptionForm(provider, context, navigation);
+  else if (provider.execution_backend === 'claude_cli') editClaudeProvider(provider, context, navigation);
   else openCustomProviderForm(provider, context, navigation);
 }
 async function saveAndClose(provider) {
@@ -144,12 +161,12 @@ async function saveAndClose(provider) {
   if(owner?.isConnected)closeModal();
 }
 async function saveProvider(provider) {
-  const old = (getState().providers || []).find(p => p.id === provider.id); const localLogin = provider.execution_backend === 'claude_cli' && provider.auth_mode === 'claude_login'; const apiKey = localLogin ? '' : provider.api_key || (old && old.api_key_set ? '••••••••' : '');
+  const old = (getState().providers || []).find(p => p.id === provider.id); const localLogin = (provider.execution_backend === 'claude_cli' && provider.auth_mode === 'claude_login') || (provider.execution_backend === 'agy_cli' && provider.auth_mode === 'agy_login'); const apiKey = localLogin ? '' : provider.api_key || (old && old.api_key_set ? '••••••••' : '');
   const candidate = cloneState(); const next = Object.assign({}, old || {}, provider, {api_key:apiKey, enabled:true});
   if (localLogin) { next.base_url = ''; next.api_key = ''; next.api_key_file = ''; delete next.api_key_set; }
   const index = candidate.providers.findIndex(p => p.id === next.id); if (index >= 0) candidate.providers[index] = next; else candidate.providers.push(next); await persistState('', candidate);
   const saved = (getState().providers || []).find(p => p.id === provider.id);
-  if (!saved || (saved.auth_mode !== 'forward' && saved.auth_mode !== 'claude_login' && !saved.api_key_set)) throw new Error(tr('API Key 未保存，请重新输入','The API Key was not saved; enter it again'));
+  if (!saved || (saved.auth_mode !== 'forward' && saved.auth_mode !== 'claude_login' && saved.auth_mode !== 'agy_login' && !saved.api_key_set)) throw new Error(tr('API Key 未保存，请重新输入','The API Key was not saved; enter it again'));
   notice(tr('服务已保存','Service saved'));
 }
 async function removeProvider(id) {
@@ -165,5 +182,5 @@ async function removeProvider(id) {
 }
 
 
-return {openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openCustomProviderForm,editProvider,removeProvider};
+return {openAgySubscriptionForm,openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openCustomProviderForm,editProvider,removeProvider};
 }

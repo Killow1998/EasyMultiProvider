@@ -10,6 +10,7 @@ pub(crate) enum DiscoveryError {
     Unavailable,
     Upstream(emp_router::RouterError),
     LocalCli(&'static str),
+    AgyCli(crate::services::agy_cli::Error),
 }
 
 impl From<ChangeError> for DiscoveryError {
@@ -113,7 +114,9 @@ fn discover_inner(
         })?
     } else {
         match receipt.step("discover_models", || {
-            if provider["execution_backend"] == "claude_cli"
+            if provider["execution_backend"] == "agy_cli" {
+                crate::services::agy_cli::discover(state).map_err(DiscoveryError::AgyCli)
+            } else if provider["execution_backend"] == "claude_cli"
                 && provider["auth_mode"] == "claude_login"
             {
                 crate::services::claude_cli::model_query::discover(state)

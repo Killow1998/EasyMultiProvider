@@ -106,24 +106,28 @@ fn provider_normalization_rejects_unusable_values_with_field_fragments() {
 }
 
 #[test]
-fn claude_login_provider_round_trips_without_url_or_credentials() {
-    let raw = json!({
-        "providers":[{
-            "id":"claude-local",
-            "protocol":"anthropic_messages",
-            "execution_backend":"claude_cli",
-            "auth_mode":"claude_login"
-        }],
-        "models":[{"id":"claude-local/sonnet","provider":"claude-local","upstream_id":"sonnet"}]
-    });
-    let normalized = normalize_configuration(Some(&raw)).expect("normalized local login config");
-    let round_trip = normalize_configuration(Some(&normalized)).expect("config round trip");
-    let provider = &round_trip["providers"][0];
-
-    assert_eq!(provider["execution_backend"], "claude_cli");
-    assert_eq!(provider["auth_mode"], "claude_login");
-    assert_eq!(provider["base_url"], "");
-    assert_eq!(provider["api_key"], "");
-    assert_eq!(provider["api_key_file"], "");
-    assert_eq!(round_trip["models"][0]["upstream_id"], "sonnet");
+fn local_cli_login_round_trips_and_rejects_mixed_credentials() {
+    for (backend, auth, protocol) in [
+        ("claude_cli", "claude_login", "anthropic_messages"),
+        ("agy_cli", "agy_login", "responses"),
+    ] {
+        let raw = json!({"providers":[{"id":"local", "protocol":protocol,"execution_backend":backend,"auth_mode":auth}],"models":[{"id":"local/model","provider":"local","upstream_id":"model"}]});
+        let normalized = normalize_configuration(Some(&raw)).unwrap();
+        let round_trip = normalize_configuration(Some(&normalized)).unwrap();
+        assert_eq!(round_trip, normalized);
+        let provider = &round_trip["providers"][0];
+        for key in ["base_url", "api_key", "api_key_file"] {
+            assert_eq!(provider[key], "");
+            let mut invalid = provider.clone();
+            invalid[key] = json!(if key == "base_url" {
+                "https://example.invalid"
+            } else {
+                "synthetic"
+            });
+            assert!(normalize_provider(&invalid).is_err());
+        }
+        let mut invalid = provider.clone();
+        invalid["execution_backend"] = json!("http");
+        assert!(normalize_provider(&invalid).is_err());
+    }
 }

@@ -2,6 +2,16 @@
 use super::*;
 
 impl RequestOutcome<'_> {
+    pub(crate) fn agy_error(&mut self, error: crate::services::agy_cli::Error) {
+        self.event["error_origin"] = json!(error.origin());
+        self.event["error_code"] = json!(error.0);
+        match error.0 {
+            "client_disconnected" => self.disconnected(),
+            "agy_cli_interrupted" => self.interrupted(),
+            code => self.status(error.details().0, code),
+        }
+    }
+
     pub(crate) fn claude_error(&mut self, error: &crate::services::claude_cli::ClaudeCliError) {
         use crate::services::claude_cli::{ClaudeCliError, failure_details};
         self.event["error_origin"] = json!(crate::services::error_origin::claude(error));

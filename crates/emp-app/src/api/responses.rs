@@ -104,6 +104,11 @@ pub(crate) fn responses_request(
             crate::api::claude_response::http_response_for_route(&error, &route),
         );
     }
+    if crate::services::agy_cli::selected(&route)
+        && let Err(error) = crate::services::agy_cli::preflight(&body)
+    {
+        return ResponsesRequestResult::Buffered(crate::api::agy_response::http_error(error));
+    }
     let ids = match projection_ids() {
         Ok(ids) => ids,
         Err(_) => {
@@ -176,6 +181,18 @@ pub(crate) fn responses_request(
         }
     };
     observation.phase(Phase::Execute);
+    if crate::services::agy_cli::selected(&route) {
+        return crate::api::agy_response::serve_http(
+            state,
+            &route,
+            &body,
+            &incoming,
+            &ids,
+            stream,
+            observation,
+            stream_requested,
+        );
+    }
     if route.dialect != emp_core::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
         let started = std::time::Instant::now();
         let mut usage = crate::services::request_outcome::RequestOutcome::new(

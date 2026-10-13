@@ -25,3 +25,5 @@ mod claude_response;
 mod failure_response;
 mod history_response;
 mod native_response;
+
+mod agy_response;

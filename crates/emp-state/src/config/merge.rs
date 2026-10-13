@@ -224,13 +224,18 @@ fn provider_origin_changed(incoming: &Map<String, Value>, old: &Value) -> bool {
     }
 }
 
-fn is_claude_login(provider: &Map<String, Value>) -> bool {
-    provider.get("execution_backend").and_then(Value::as_str) == Some("claude_cli")
-        && provider.get("auth_mode").and_then(Value::as_str) == Some("claude_login")
+fn is_local_cli_login(provider: &Map<String, Value>) -> bool {
+    matches!(
+        (
+            provider.get("execution_backend").and_then(Value::as_str),
+            provider.get("auth_mode").and_then(Value::as_str)
+        ),
+        (Some("claude_cli"), Some("claude_login")) | (Some("agy_cli"), Some("agy_login"))
+    )
 }
 
-fn stored_provider_is_claude_login(provider: &Value) -> bool {
-    provider.as_object().is_some_and(is_claude_login)
+fn stored_provider_is_local_login(provider: &Value) -> bool {
+    provider.as_object().is_some_and(is_local_cli_login)
 }
 
 fn merge_web_update_at_time(
@@ -285,26 +290,26 @@ fn merge_web_update_at_time(
                 .and_then(Value::as_str)
                 .and_then(|id| old_providers.get(id));
             let origin_changed = old.is_some_and(|old| provider_origin_changed(provider, old));
-            let claude_login = is_claude_login(provider);
+            let local_login = is_local_cli_login(provider);
             let local_login_changed =
-                old.is_some_and(|old| stored_provider_is_claude_login(old) != claude_login);
+                old.is_some_and(|old| stored_provider_is_local_login(old) != local_login);
             let credential_changed = origin_changed || local_login_changed;
             let incoming_file = provider.get("api_key_file").cloned();
             let old_file = old.and_then(|value| value.get("api_key_file"));
 
-            if claude_login {
+            if local_login {
                 let api_key = provider
                     .get("api_key")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 if !api_key.is_empty() && api_key != MASKED_API_KEY {
                     return Err(ConfigError::new(
-                        "Claude CLI local login cannot include an API key",
+                        "Local CLI login cannot include an API key",
                     ));
                 }
                 if incoming_file.as_ref().is_some_and(json_truthy) {
                     return Err(ConfigError::new(
-                        "Claude CLI local login cannot include a provider key file",
+                        "Local CLI login cannot include a provider key file",
                     ));
                 }
                 let incoming_url = provider
@@ -320,7 +325,7 @@ fn merge_web_update_at_time(
                 let carried_old_url = local_login_changed && incoming_url == old_url;
                 if !incoming_url.is_empty() && !carried_old_url {
                     return Err(ConfigError::new(
-                        "provider.base_url must be empty for Claude CLI local login",
+                        "provider.base_url must be empty for local CLI login",
                     ));
                 }
                 // The browser may carry the old CPA URL and masked key while

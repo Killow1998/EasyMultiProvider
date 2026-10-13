@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::TcpStream;
 
+mod agy;
 mod claude;
 mod control;
 mod duplex;
@@ -379,6 +380,15 @@ pub(crate) fn serve_responses_websocket(
             }
             continue;
         }
+        if crate::services::agy_cli::selected(&route)
+            && let Err(error) =
+                crate::services::agy_cli::preflight(&Value::Object(request_body.clone()))
+        {
+            if websocket.send_json(&error.event()).is_err() {
+                return;
+            }
+            continue;
+        }
         let ids = match projection_ids() {
             Ok(ids) => ids,
             Err(_) => {
@@ -471,6 +481,12 @@ pub(crate) fn serve_responses_websocket(
                 }
                 continue;
             }
+            Err(DestinationPrepareError::AgyCli(error)) => {
+                if websocket.send_json(&error.event()).is_err() {
+                    return;
+                }
+                continue;
+            }
             Err(DestinationPrepareError::ClaudeCli(error)) => {
                 if websocket
                     .send_json(&crate::api::claude_response::websocket_value_for_route(
@@ -558,6 +574,8 @@ pub(crate) fn serve_responses_websocket(
             |websocket, monitor| {
                 if crate::services::claude_cli::selected(&turn.route) {
                     claude::serve(state, &turn, websocket, monitor)
+                } else if crate::services::agy_cli::selected(&turn.route) {
+                    agy::serve(state, &turn, websocket, monitor)
                 } else if turn.route.dialect == emp_core::Dialect::CodexNative {
                     http_stream::serve_native(
                         state,

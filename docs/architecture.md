@@ -1,5 +1,53 @@
 # Architecture assessment and refactoring direction
 
+## Antigravity CLI candidate (unreleased)
+
+The `agy_cli` execution backend uses the installed official `agy` executable
+with `agy_login` authentication and the Responses protocol. Provider API keys,
+key files and URLs are rejected. Availability checks only resolve a trusted
+executable; the official `models` command supplies model IDs. Neither check is
+proof of sign-in, model entitlement or quota. Preserve the complete returned
+model ID, including any effort suffix; some family-only names require effort.
+
+The client owns file reads, writes, edits and commands. EMP selects one offered
+tool per capability, retaining its name, namespace and definition. It passes
+the ordered text history to a temporary custom agent whose only selected native
+tool is `finish`. The official CLI additionally advertises `manage_task`;
+EMP rejects native tool activity other than `finish`. Client proposals come
+from the terminal structured result, are checked against the offered tools,
+and become Responses function/custom-tool calls. The next client request
+contains the call results and full history. The CLI's native tool events are
+not an external execution protocol.
+
+Each request owns a fresh CLI process and temporary workspace. Input is bounded
+to 10 MiB, stdout to 4 MiB, stderr to 64 KiB, inference to 300 seconds and model
+discovery to 20 seconds. Cancellation and output-limit failures stop the owned
+process tree using the same lifecycle primitive as Claude. Model/configuration,
+projection, process and profile checks remain separate concrete modules under
+`services/agy_cli`; the HTTP and WebSocket modules only deliver results.
+
+This candidate returns text and tool calls after validating the complete result,
+including when the client requests SSE or WebSocket delivery. It supports text
+history and text tool results. Prior-response-only requests, media, unsupported
+generation/sampling limits, `generate:false`, client output schemas and effort
+`none` fail explicitly. No incremental history state is fabricated. CLI input
+usage excludes cached tokens, so the Responses projection adds that count;
+unknown counters remain null. One process per request prevents cumulative CLI
+usage from being counted across client turns.
+
+The official OS-user profile supplies authentication. The adapter clears inherited
+API keys and refuses active hooks, plugins, MCP, global agents/rules/skills and
+custom title/status commands before starting the CLI. It does not edit the
+profile. Empty integration files created by the CLI are allowed. This is a
+clean-profile integration, not an OS sandbox; the official CLI retains its own
+conversation history. Diagnostics do not persist raw stderr or request bodies.
+
+Official CLI 1.3.3 has been exercised with an isolated synthetic upstream on
+Linux. The repeatable acceptance command is documented in
+[frontend validation](../scripts/shadow_frontend/README.md#validation).
+Native subscription authentication, installed-client acceptance and Windows/macOS
+runtime behavior remain unverified; the candidate is not deployed or released.
+
 For the current crate map and the latest ownership changes, see
 [Current architecture and lifecycle ablation](#current-architecture-and-lifecycle-ablation-2026-10-11).
 
