@@ -227,7 +227,7 @@ Preview frontend changes against a running backend with the [read-only shadow fr
 
 ## Codex compatibility
 
-The current source version is **v0.13.0**.
+The current source version is **v0.13.1**.
 
 Maintenance targets the latest stable Codex minor series and the previous nine;
 patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).

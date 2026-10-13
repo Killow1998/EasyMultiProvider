@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.1 (2026-10-12)
+
+### 中文
+
+- 修复原生 WebSocket 大上下文触发 HTTP 回退后反复全量重传的问题：可分段的历史通过不生成回答的预热建立状态，后续继续增量续传。
+- 保留完整输入、图片、instructions 及工具调用／结果配对；账号、路由、会话隔离与真实失效恢复检查保持有效。无法安全分段的历史仍使用既有回退路径。
+- 增加无正文的续传原因、实际连接复用和应用载荷字节诊断，关联同轮全量恢复，区分压缩前后大小与网络流量。
+- 拆分连接状态、错误呈现与预热规划；规划借用原始历史，逐批构建载荷，减少大上下文复制。保留验证完整性、取消与隔离的行为测试。
+
+### English
+
+- Fix repeated full-history recovery after oversized native WebSocket requests fall back to HTTP. Safely partitionable histories establish state with generation-free prefill, preserving subsequent incremental continuation.
+- Preserve complete inputs, images, instructions and tool call/result pairs, with account, route and session isolation and genuine-loss recovery. Histories that cannot be safely partitioned retain the existing fallback path.
+- Add content-free continuation reasons, actual connection reuse and application-payload byte measurements, linking same-turn full recovery and distinguishing decoded/encoded payloads from network traffic.
+- Separate connection state, error projection and prefill planning. Borrow history and build one payload batch at a time to reduce large-context copying; retain behavioral integrity, cancellation and isolation tests.
+
 ## 0.13.0 (2026-10-12)
 
 ### 中文

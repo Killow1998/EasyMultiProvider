@@ -44,6 +44,7 @@ pub(crate) struct RequestObservation {
     execution_started: Option<Instant>,
     phase: Phase,
     fields: Value,
+    continuation: Option<super::continuation::NativeContinuation>,
 }
 
 impl RequestObservation {
@@ -75,6 +76,7 @@ impl RequestObservation {
             execution_started: None,
             phase: Phase::Authentication,
             fields,
+            continuation: None,
         }
     }
 
@@ -143,6 +145,17 @@ impl RequestObservation {
             self.fields["transport"] = json!("sse");
             self.fields["requested_transport"] = json!("sse");
         }
+    }
+
+    pub(crate) fn native_prefill_sent(&mut self, bytes: usize) {
+        let facts = self.native_continuation();
+        facts.prefill_requests += 1;
+        facts.prefill_application_bytes =
+            facts.prefill_application_bytes.saturating_add(bytes as u64);
+    }
+
+    pub(crate) fn native_continuation(&mut self) -> &mut super::continuation::NativeContinuation {
+        self.continuation.get_or_insert_with(Default::default)
     }
 
     pub(crate) fn selected(&mut self, route: &ResolvedRoute) {
@@ -282,6 +295,11 @@ impl RequestObservation {
 
 impl Drop for RequestObservation {
     fn drop(&mut self) {
+        if let Some(continuation) = &self.continuation {
+            self.fields["native_continuation"] =
+                serde_json::to_value(continuation).expect("content-free continuation facts");
+            self.fields["native_continuation"]["byte_scope"] = json!("websocket_text_payload");
+        }
         self.close_phase();
         self.fields["last_phase"] = json!(self.phase.name());
         self.fields["duration_ms"] = json!(self.started.elapsed().as_millis() as u64);

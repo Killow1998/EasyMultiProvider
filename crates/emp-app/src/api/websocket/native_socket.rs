@@ -1,26 +1,32 @@
 //! Native upstream connection reuse, incremental ownership and HTTP fallback.
 use super::Turn;
 use super::duplex::{Duplex, Message};
-use crate::api::failure_response::{safe_failure_reason, stream_error_code};
 use crate::app::ServerState;
 use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
+use crate::services::native_connections::RouteKey;
+use crate::services::observation::continuation::ContinuationReason;
 use crate::services::{activity::ActivityGuard, native};
 use crate::util::random_hex;
-use emp_core::ResolvedRoute;
-use emp_router::native_metadata::native_response_headers;
-use emp_transport::{ClientWebSocket, FailureClass, public_failure_message};
+use emp_transport::FailureClass;
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::collections::BTreeSet;
+mod connection;
+mod errors;
+mod prefill;
+use connection::NativeUpstreamConnection;
+use errors::native_stream_error_value_for_route;
+pub(super) use errors::{native_stream_error_value, previous_response_error};
 
 #[derive(Default)]
 pub(super) struct NativeSession {
     upstream: Option<NativeUpstreamConnection>,
-    pub(super) last_response_id: Option<String>,
-    pub(super) last_scope: (Option<String>, Option<String>),
-    http_only_routes: BTreeSet<(String, Option<String>, BTreeMap<String, String>)>,
+    last_response_id: Option<String>,
+    last_scope: (Option<String>, Option<String>),
+    http_only_routes: BTreeSet<RouteKey>,
     pub(super) pending_request: Option<String>,
+    fallback_active: bool,
+    connected_before: bool,
 }
 
 pub(super) enum NativeTurnResult<'a> {
@@ -30,83 +36,6 @@ pub(super) enum NativeTurnResult<'a> {
         Option<ActivityGuard<'a>>,
         Option<Box<crate::services::request_outcome::RequestOutcome<'a>>>,
     ),
-}
-
-pub(super) fn native_stream_error_value(
-    status: u16,
-    error_class: FailureClass,
-    failure_reason: Option<&str>,
-    response_id: &str,
-) -> Value {
-    let mut error = serde_json::json!({
-        "code":stream_error_code(error_class),
-        "message":format!("HTTP {status}: {}",public_failure_message(error_class,failure_reason,status)),
-        "status":status,"error_class":error_class.as_str()
-    });
-    if let Some(reason) = failure_reason {
-        error["failure_reason"] = Value::String(safe_failure_reason(reason));
-    }
-    crate::services::error_origin::annotate(
-        &mut error,
-        if error_class == FailureClass::ContextLengthExceeded {
-            "emp"
-        } else {
-            "transport"
-        },
-    );
-    serde_json::json!({"type":"response.failed","response":{"id":response_id,"object":"response","status":"failed","error":error}})
-}
-
-fn native_stream_error_value_for_route(
-    status: u16,
-    error_class: FailureClass,
-    failure_reason: Option<&str>,
-    response_id: &str,
-    route: &ResolvedRoute,
-    output_started: bool,
-) -> Value {
-    let mut event = native_stream_error_value(status, error_class, failure_reason, response_id);
-    let origin = event["response"]["error"]["origin"]
-        .as_str()
-        .unwrap_or("unknown")
-        .to_owned();
-    event["response"]["error"]["message"] = Value::String(crate::services::error_origin::message(
-        &origin,
-        &format!(
-            "HTTP {status}: {}",
-            crate::services::failure_feedback::message(
-                route,
-                error_class,
-                failure_reason,
-                status,
-                output_started,
-                None,
-            )
-        ),
-    ));
-    event
-}
-
-fn native_websocket_identity_headers(
-    headers: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    headers
-        .iter()
-        .filter(|(name, _)| {
-            matches!(
-                name.to_ascii_lowercase().as_str(),
-                "authorization" | "chatgpt-account-id"
-            )
-        })
-        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
-        .collect()
-}
-
-struct NativeUpstreamConnection {
-    url: String,
-    proxy: Option<String>,
-    identity: BTreeMap<String, String>,
-    client: ClientWebSocket,
 }
 
 impl NativeSession {
@@ -125,13 +54,6 @@ impl NativeSession {
             scope: request_scope,
             ..
         } = turn;
-        let Self {
-            upstream: native_upstream,
-            last_response_id: last_native_response_id,
-            last_scope: last_native_scope,
-            http_only_routes,
-            pending_request,
-        } = self;
         let mut native_turn_activity = None;
         let mut fallback_usage = None;
         let plan = match native::websocket_plan(state, route, config, request_body, request_headers)
@@ -146,84 +68,44 @@ impl NativeSession {
         let previous = request_body
             .get("previous_response_id")
             .and_then(Value::as_str);
-        let plan_identity = native_websocket_identity_headers(&plan.headers);
-        let proxy = state
-            .backend
-            .transport
-            .client
-            .websocket_proxy_for(&plan.url);
-        let route_matches = native_upstream.as_ref().is_some_and(|upstream| {
-            upstream.url == plan.url
-                && proxy.as_ref().is_ok_and(|proxy| proxy == &upstream.proxy)
-                && upstream.identity == plan_identity
-        });
-        if previous
-            .is_some_and(|id| !route_matches || last_native_response_id.as_deref() != Some(id))
-        {
-            *last_native_response_id = None;
-            websocket.reject(
-                state,
-                route,
-                request_body,
-                request_headers,
-                &crate::api::failure_response::emp_websocket_error(
-                    400,
-                    "previous_response_not_found",
-                    "Previous response was not found. Retry with full history.",
-                ),
-            );
-            return NativeTurnResult::Finished;
-        }
-        if !route_matches {
-            *native_upstream = None;
-            *last_native_response_id = None;
-        }
-        let route_key = (
-            plan.url.clone(),
-            proxy.as_ref().ok().cloned().flatten(),
-            plan_identity.clone(),
-        );
-        let mut connected_now = false;
-        if native_upstream.is_none()
-            && !http_only_routes.contains(&route_key)
-            && state
-                .backend
-                .transport
-                .native_connections
-                .allowed(&route_key)
-            && let Ok(selected_proxy) = &proxy
-        {
-            match ClientWebSocket::connect_with_proxy(
-                &plan.url,
-                &plan.headers,
-                Duration::from_secs(15),
-                selected_proxy.as_deref(),
-            ) {
-                Ok(client) => {
-                    *native_upstream = Some(NativeUpstreamConnection {
-                        url: plan.url.clone(),
-                        proxy: selected_proxy.clone(),
-                        identity: plan_identity.clone(),
-                        client,
-                    });
-                    connected_now = true;
-                }
-                Err(error) => {
-                    // No response.create frame has been sent. Match Python's
-                    // HTTP fallback and avoid repeating failed handshakes.
-                    if matches!(error.status(), 400 | 404 | 405 | 415 | 426 | 501) {
-                        http_only_routes.insert(route_key.clone());
-                    }
-                    state
-                        .backend
-                        .transport
-                        .native_connections
-                        .defer(route_key.clone());
-                }
+        let (route_key, connected_now) = match self.prepare_connection(
+            state,
+            &plan,
+            previous,
+            websocket.observation.native_continuation(),
+        ) {
+            Ok(connection) => connection,
+            Err(reason) => {
+                websocket.reject(
+                    state,
+                    route,
+                    request_body,
+                    request_headers,
+                    &previous_response_error(reason),
+                );
+                return NativeTurnResult::Finished;
             }
-        }
+        };
+        let Self {
+            upstream: native_upstream,
+            last_response_id: last_native_response_id,
+            last_scope: last_native_scope,
+            http_only_routes,
+            pending_request,
+            fallback_active,
+            ..
+        } = self;
         if let Some(upstream) = native_upstream.as_mut() {
+            websocket
+                .observation
+                .native_continuation()
+                .connection_reused = Some(!connected_now);
+            if upstream.metadata(&plan, connected_now, websocket).is_err() {
+                return NativeTurnResult::Closed;
+            }
             let client = &mut upstream.client;
+            let traffic_before = client.traffic();
+            let compression = client.compression_enabled();
             let Some(mut duplex) = downstream.and_then(|socket| Duplex::new(client, socket).ok())
             else {
                 websocket
@@ -231,29 +113,6 @@ impl NativeSession {
                     .close(1011, "websocket readiness setup failed");
                 return NativeTurnResult::Closed;
             };
-            {
-                let selected = native_response_headers(
-                    &serde_json::json!({"headers":client.response_headers()}),
-                    &plan.requested_model,
-                    &plan.upstream_model,
-                );
-                let state_headers = selected
-                    .into_iter()
-                    .filter(|(name, _)| {
-                        !name.eq_ignore_ascii_case("x-models-etag")
-                            && (connected_now
-                                || name.eq_ignore_ascii_case("openai-model")
-                                || name.eq_ignore_ascii_case("x-openai-model"))
-                    })
-                    .collect::<serde_json::Map<_, _>>();
-                if !state_headers.is_empty()
-                        && websocket
-                            .send_json(&serde_json::json!({"type":"response.metadata","headers":state_headers}))
-                            .is_err()
-                    {
-                        return NativeTurnResult::Closed;
-                    }
-            }
             let owner = emp_state::usage::account_owner(&plan.headers);
             let mut usage = crate::services::request_outcome::RequestOutcome::new(
                 state,
@@ -268,8 +127,40 @@ impl NativeSession {
             native_turn_activity = Some(state.backend.activity.begin(
                 crate::services::activity::ActivityIdentity::from_route(route),
             ));
+            let payload = if let Some(prefill) = prefill::Prefill::plan(&plan.payload) {
+                let result = prefill.run(client, &mut duplex, websocket, pending_request);
+                websocket.observation.native_continuation().traffic(
+                    traffic_before,
+                    client.traffic(),
+                    compression,
+                );
+                websocket.observation.native_continuation().peer_close_code =
+                    client.peer_close_code();
+                match result {
+                    Ok(payload) => std::borrow::Cow::Owned(payload),
+                    Err(prefill::PrefillError::Disconnected) => {
+                        usage.disconnected();
+                        return NativeTurnResult::Closed;
+                    }
+                    Err(error) => {
+                        error.report(route, websocket, &mut usage);
+                        *native_upstream = None;
+                        *last_native_response_id = None;
+                        return NativeTurnResult::Finished;
+                    }
+                }
+            } else {
+                std::borrow::Cow::Borrowed(&plan.payload)
+            };
             usage.dispatch();
-            if client.send_json(&plan.payload).is_err() {
+            if client.send_json(&payload).is_err() {
+                websocket.observation.native_continuation().traffic(
+                    traffic_before,
+                    client.traffic(),
+                    compression,
+                );
+                websocket.observation.native_continuation().reason =
+                    Some(ContinuationReason::UpstreamDisconnected);
                 *native_upstream = None;
                 *last_native_response_id = None;
                 let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
@@ -294,6 +185,11 @@ impl NativeSession {
             while let Ok(Some(message)) =
                 duplex.next(client, websocket.inner, pending_request.is_none())
             {
+                websocket.observation.native_continuation().traffic(
+                    traffic_before,
+                    client.traffic(),
+                    compression,
+                );
                 let event = match message {
                     Message::Upstream(event) => event,
                     Message::DownstreamClosed => {
@@ -323,6 +219,12 @@ impl NativeSession {
                     }
                 };
                 received_upstream_event = true;
+                if event["error"]["code"] == "previous_response_not_found"
+                    || event["response"]["error"]["code"] == "previous_response_not_found"
+                {
+                    websocket.observation.native_continuation().reason =
+                        Some(ContinuationReason::UpstreamRecoveryRequired);
+                }
                 usage.raw_event(&event);
                 let event = match plan.project_event(&event) {
                     Ok(event) => event,
@@ -365,6 +267,12 @@ impl NativeSession {
                     break;
                 }
             }
+            websocket.observation.native_continuation().traffic(
+                traffic_before,
+                client.traffic(),
+                compression,
+            );
+            websocket.observation.native_continuation().peer_close_code = client.peer_close_code();
             if terminal {
                 state
                     .backend
@@ -397,11 +305,9 @@ impl NativeSession {
                     return NativeTurnResult::Finished;
                 }
                 if previous.is_some() && !received_upstream_event {
-                    let event = crate::api::failure_response::emp_websocket_error(
-                        400,
-                        "previous_response_not_found",
-                        "Previous response was not found. Retry with full history.",
-                    );
+                    let reason = ContinuationReason::UpstreamDisconnected;
+                    websocket.observation.native_continuation().reason = Some(reason);
+                    let event = previous_response_error(reason);
                     usage.observe(&event);
                     let _ = websocket.send_json(&event);
                 } else {
@@ -421,19 +327,19 @@ impl NativeSession {
             }
         }
         if previous.is_some() {
+            let reason = ContinuationReason::IncrementalFallbackUnavailable;
+            websocket.observation.native_continuation().reason = Some(reason);
             websocket.reject(
                 state,
                 route,
                 request_body,
                 request_headers,
-                &crate::api::failure_response::emp_websocket_error(
-                    400,
-                    "previous_response_not_found",
-                    "Previous response was not found. Retry with full history.",
-                ),
+                &previous_response_error(reason),
             );
             return NativeTurnResult::Finished;
         }
+        *fallback_active = true;
+        websocket.observation.native_continuation().http_fallback = true;
         NativeTurnResult::HttpFallback(native_turn_activity, fallback_usage)
     }
 }

@@ -111,6 +111,27 @@ pub struct ClientWebSocket {
     max_message_bytes: usize,
     frame_decoder: FrameDecoder,
     local_control: bool,
+    traffic: WebSocketTraffic,
+}
+
+/// Complete text application payload bytes. Partial writes/failed decoding
+/// become unknown; framing, control, handshakes and TLS overhead are excluded.
+#[derive(Clone, Copy)]
+pub struct WebSocketTraffic {
+    pub decoded_sent: Option<u64>,
+    pub encoded_sent: Option<u64>,
+    pub decoded_received: Option<u64>,
+    pub encoded_received: Option<u64>,
+}
+impl Default for WebSocketTraffic {
+    fn default() -> Self {
+        Self {
+            decoded_sent: Some(0),
+            encoded_sent: Some(0),
+            decoded_received: Some(0),
+            encoded_received: Some(0),
+        }
+    }
 }
 
 fn local_socket_error(error: std::io::Error) -> ClientWebSocketError {

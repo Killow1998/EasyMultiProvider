@@ -312,9 +312,14 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
         "tool_activity",
         "terminal_event_observed",
         "recovery_succeeded",
-        "connection_reused",
     ] {
         record.insert(field.into(), json!(truth(&event[field])));
+    }
+    for key in ["connection_reused", "has_previous_response"] {
+        record.insert(
+            key.into(),
+            event[key].as_bool().map(Value::Bool).unwrap_or(Value::Null),
+        );
     }
     record.insert(
         "fallback".into(),
@@ -471,14 +476,15 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
             record.insert(reference.into(), json!(retained));
         }
     }
-    let request = event["request_id"].as_str().filter(|value| {
-        (16..=32).contains(&value.len())
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    });
-    if let Some(request) = request {
-        record.insert("request_id".into(), json!(request));
+    for key in ["request_id", "continuation_recovery_from"] {
+        if let Some(request) = event[key].as_str().filter(|value| {
+            (16..=32).contains(&value.len())
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }) {
+            record.insert(key.into(), json!(request));
+        }
     }
     let client = select(
         &event["client_kind"],

@@ -3,6 +3,7 @@ use super::*;
 use emp_transport::decode_content;
 use std::sync::mpsc;
 
+mod continuation;
 mod history;
 mod http;
 mod incremental;
