@@ -195,10 +195,11 @@ const services = createServiceList({
   getState:() => state, $, esc, tr, presets:officialProviders, icon:serviceIconHtml,
   activity:activityIndicatorHtml, serviceIcon:(...args)=>serviceActivityIcon(...args), updateServiceErrors:()=>{presentationUpdateServiceRequestErrors();presentationUpdateServiceErrorLabels();}, accountSummary:accountSummaryHtml, quotaMeters:(...args)=>presentationQuotaMeters(...args),
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots:() => updateActivityDots(), openModal, api,
-  notice, usageSummary:serviceUsage, onMount:shadowDetailActions
+  notice, usageSummary:serviceUsage, onMount:shadowDetailActions,settingsConflict:account=>subscriptionPreferenceConflicts(state,account)
 });
 const {render:renderServices, details:openProviderDetails} = services;
-const accountDetails = createAccountDetails({renderInfo:shadowAccountInfo,getState:() => state, $, tr, esc, api, services, serviceUsage, persistState, uiIcon, subscriptionPlanLabel, resetCreditCount});
+const accountDetails = createAccountDetails({renderInfo:shadowAccountInfo,getState:() => state, $, tr, esc, api, services, serviceUsage, persistState, uiIcon, subscriptionPlanLabel, resetCreditCount,
+  confirmRemoval:question=>confirm(question),notice,closeModal,syncSavedCatalog,onRemoved:value=>{state=value;fill();}});
 const {open:openAccountDetails, saveAlias:saveAccountAlias} = accountDetails;
 const {open:openServiceChooser, importCodex:openCodexImportChooser} = createServiceChooser({tr, esc, presets:officialProviders, icon:serviceIconHtml, openModal, getState:() => state});
 
@@ -537,9 +538,9 @@ function runtimeView(runtime) {
 function conflictView(configuration) {
   const conflicts = configuration.conflicts || [];
   if (conflicts.includes('listener_mismatch') || conflicts.includes('catalog_mismatch')) {
-    return [tr('其他 EMP','Other EMP'), tr('Codex 正在使用另一个 EMP。要改用这个 EMP，请先恢复原生 Codex，再启动 EMP。','Codex is using another EMP. To switch to this one, restore Native Codex first, then start EMP.')];
+    return [tr('其他 EMP','Other EMP'), tr('Codex 正在使用另一个 EMP。要改用这个 EMP，请先恢复原生 Codex，再点击“启用 EMP”。','Codex is using another EMP. To switch to this one, restore Native Codex first, then click Enable EMP.')];
   }
-  return [tr('需要处理','Needs attention'), tr('Codex 的 config.toml 被其他程序改过。请恢复原生 Codex，再重新启动 EMP。','Another program changed Codex config.toml. Restore Native Codex, then start EMP again.')];
+  return [tr('需要处理','Needs attention'), tr('Codex 的 config.toml 被其他程序改过。请先处理配置冲突，再点击“启用 EMP”。','Another program changed Codex config.toml. Resolve the configuration conflict, then click Enable EMP.')];
 }
 function renderIntegration(info) {
   integrationInfo = info;
@@ -602,18 +603,18 @@ async function loadIntegration() {
 function confirmIntegrationAction(action) {
   const actions = language === 'en' ? {
     enable: ['Apply EMP to Codex', 'Save EMP settings and check Codex’s shared model catalog. Active chats keep running.'],
-    restore: ['Restore native Codex', 'Finish active Codex conversations and close Codex before restoring. EMP waits for requests to finish, makes existing conversation history portable, restores native settings, then stops. Reopen Codex after the restore completes.'],
+    restore: ['Restore native Codex', 'Finish active requests before restoring native Codex settings. EMP stays running, and you can enable it again here.'],
     reload: ['Check Codex', 'Read the saved target and compare it with Codex’s shared model catalog. This does not confirm request routing.']
   } : {
     enable: ['将 EMP 应用于 Codex', '保存 EMP 设置并检查 Codex 共享模型目录。当前对话会继续运行。'],
-    restore: ['恢复原生 Codex', '恢复前请结束活动对话并关闭 Codex。EMP 会等待请求完成、修复现有对话历史、恢复原生设置，然后退出。恢复完成后再重新打开 Codex。'],
+    restore: ['恢复原生 Codex', '请先完成当前请求，再恢复原生 Codex 设置。EMP 会继续运行，之后可在此重新启用。'],
     reload: ['检查 Codex', '读取已保存目标并与 Codex 共享模型目录比较；此操作无法确认请求转发路线。']
   };
   const selected = actions[action]; if (!selected) return;
   openModal(selected[0], `<p>${esc(selected[1])}</p>`, selected[0], () => submitIntegrationAction(action));
 }
 function integrationOutcomeMessage(info, action) {
-  if (action === 'restore') return tr('原生 Codex 设置已恢复。EMP 已退出；请重新打开 Codex。','Native Codex settings restored. EMP has stopped; reopen Codex.');
+  if (action === 'restore') return tr('原生 Codex 设置已恢复，EMP 继续运行。','Native Codex settings restored. EMP is still running.');
   if (action === 'enable') {
     const runtime = info.runtime || {};
     if (runtime.state === 'catalog_loaded') return runtime.target === 'native'
@@ -1068,7 +1069,7 @@ function quotaErrorText(error, id) {
 }
 async function refreshAccount(id, announce = true) { if (refreshingAccounts.has(id)) return false; const before = state.native_account?.id === id ? state.native_account : state.accounts.find(a => a.id === id); const previousQuota = accountQuotaSignature(before); refreshingAccounts.add(id); delete refreshErrors[id]; renderServices(); try { const result = await api('/api/accounts/' + encodeURIComponent(id) + '/quota', {method:'POST', body:'{}'}); if (previousQuota !== accountQuotaSignature(result.account)) quotaAnimationAccounts.add(id); if (state.native_account?.id === id) state.native_account = result.account; else { const index = state.accounts.findIndex(a => a.id === id); if (index >= 0) state.accounts[index] = result.account; } if (announce) notice(tr('账户余量已刷新','Account quota refreshed')); return true; } catch (error) { const message = quotaErrorText(error, id); refreshErrors[id] = message; if (error.payload?.error?.code === 'quota_auth_required' && state.native_account?.id !== id) { const account = state.accounts.find(a => a.id === id); if (account) account.credential_status = 'invalid'; } if (announce) notice(tr('刷新失败','Refresh failed') + ': ' + message, true); return false; } finally { refreshingAccounts.delete(id); renderServices(); } }
 async function refreshAllAccounts() {
-  const accounts = [...(state.native_account?.credential_set ? [state.native_account] : []), ...(state.accounts || [])];
+  const accounts = services.accounts().filter(account=>account.credential_set);
   // Local Claude providers share the same OS login, so query that subscription once.
   const claude = (state.providers || []).find(p => p.execution_backend === 'claude_cli' && p.auth_mode === 'claude_login');
   if (!accounts.length && !claude) return notice(tr('还没有可刷新服务','No refreshable services'), true);
@@ -1080,7 +1081,7 @@ async function refreshAllAccounts() {
     notice(failed ? tr(`刷新完成：成功 ${results.length - failed} 个，失败 ${failed} 个`, `Refresh complete: ${results.length - failed} succeeded, ${failed} failed`) : tr('全部服务额度已刷新','All service quotas refreshed'), Boolean(failed));
   } finally { button.disabled = false; }
 }
-async function removeAccount(id) { if (!confirm(tr(`移除账号 ${id}？`,`Remove account ${id}?`))) return; try { await api('/api/accounts/' + encodeURIComponent(id), {method:'DELETE'}); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); closeModal(); notice(tr('账号已移除','Account removed')); } catch (error) { notice(error.message, true); } }
+async function removeAccount(id, element) { return accountDetails.remove(id, element); }
 
 const serviceConnections=createServiceConnections({getState:()=>state,cloneState,$,tr,esc,api,openModal,closeModal,persistState,notice,presets:officialProviders,protocolLabel,authLabel,randomId:()=>crypto.randomUUID(),confirmRemoval:question=>confirm(question)});
 const {openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openCustomProviderForm,editProvider,removeProvider}=serviceConnections;
@@ -1164,7 +1165,7 @@ async function quitEmp() {
   if (!confirm(tr('退出 EMP 并恢复原生 Codex？', 'Exit EMP and restore native Codex?'))) return;
   try {
     await api('/api/quit', {method:'POST', body:'{}'});
-    openModal(tr('EMP 已退出', 'EMP has exited'), `<p>${tr('已恢复原生配置，可以关闭此页面。', 'Native configuration restored. You can close this page.')}</p>`, '', null);
+    openModal(tr('EMP 正在退出', 'EMP is exiting'), `<p>${tr('已恢复原生配置，可以关闭此页面。', 'Native configuration restored. You can close this page.')}</p>`, '', null);
   } catch (error) { notice(error.message, true); }
 }
 
@@ -1185,7 +1186,7 @@ function runDynamicUiAction(element) {
     case 'setting-toggle': toggleSetting(element); return true;
     case 'account-details': openAccountDetails(id); return true;
     case 'account-alias-save': saveAccountAlias(element); return true;
-    case 'account-remove': removeAccount(id); return true;
+    case 'account-remove': removeAccount(id, element); return true;
     case 'account-edit': editAccount(id); return true;
     case 'account-refresh': refreshAccount(id); return true;
     case 'account-quota-history': openQuotaHistory(id); return true;

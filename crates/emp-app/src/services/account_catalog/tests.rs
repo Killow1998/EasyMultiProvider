@@ -72,6 +72,8 @@ fn start_server(
         .path()
         .canonicalize()
         .expect("canonical test root");
+    emp_state::VaultStore::from_sources(None, &root.join("state/master.key"))
+        .expect("initialize fixture credential store before referencing accounts");
     let config_path = root.join("config.json");
     let native_auth_path = root.join("codex/auth.json");
     std::fs::create_dir_all(native_auth_path.parent().unwrap()).expect("native auth directory");

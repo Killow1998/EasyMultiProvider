@@ -237,7 +237,6 @@ pub(crate) fn handle_connection(
                     raw.body_prefix,
                     state,
                     system_now(),
-                    &mut stop_after_write,
                 ))
             }
             Some(request)

@@ -79,13 +79,25 @@ pub(crate) fn sync_runtime(
     intent: Option<&str>,
     confirmed: bool,
     verify: bool,
-    reconcile_search: bool,
 ) -> Result<RuntimeSyncResult, String> {
     let integration = &state.backend.integration;
+    let operation = integration
+        .manager
+        .operation_lock()
+        .map_err(|error| error.to_string())?;
+    if state.shutdown.load(Ordering::Acquire) {
+        return Err("EMP is stopping".to_owned());
+    }
     let status = integration
         .manager
         .status()
         .map_err(|error| error.to_string())?;
+    if matches!(intent, Some("emp")) && status.relation != "applied"
+        || matches!(intent, Some("native"))
+            && !matches!(status.relation.as_str(), "original" | "unleased")
+    {
+        return Err("Codex configuration changed before runtime observation".to_owned());
+    }
     if verify && status.relation != "applied" {
         let result = RuntimeSyncResult::new(
             "verification_failed",
@@ -138,15 +150,9 @@ pub(crate) fn sync_runtime(
         }
         (data.intent.clone(), data.expected.clone())
     };
-    if reconcile_search {
-        let search_result = if target == "emp" {
-            let enabled = config["subscription_search"]["enabled"] == true;
-            integration.search.apply(enabled)
-        } else {
-            integration.search.restore()
-        };
-        search_result.map_err(|_| "integration state is unavailable".to_owned())?;
-    }
+    // Runtime discovery can wait on another process. Only the local snapshot
+    // needs the integration operation lock.
+    drop(operation);
     let result = if !verify && !confirmed {
         RuntimeSyncResult::new(
             "reload_required",
@@ -162,6 +168,17 @@ pub(crate) fn sync_runtime(
             (target == "emp").then_some(&catalog),
         )
     };
+    let _operation = integration
+        .manager
+        .operation_lock()
+        .map_err(|error| error.to_string())?;
+    let current = integration
+        .manager
+        .status()
+        .map_err(|error| error.to_string())?;
+    if state.shutdown.load(Ordering::Acquire) || current != status {
+        return Err("Codex configuration changed during runtime observation".to_owned());
+    }
     integration.runtime.publish(&result, &status.relation)?;
     Ok(result)
 }
@@ -351,10 +368,7 @@ pub(crate) fn watch_runtime(state: &ServerState) {
             continue;
         }
         let before = state.backend.integration.runtime.snapshot()["state"].clone();
-        let checked = match state.backend.integration.manager.operation_lock() {
-            Ok(_operation) => sync_runtime(state, None, false, true, false).ok(),
-            Err(_) => None,
-        };
+        let checked = sync_runtime(state, None, false, true).ok();
         if checked.is_some() {
             crate::services::account_catalog::request_refresh(state, false);
         }

@@ -190,7 +190,7 @@ pub(crate) fn session_header_value(request: Request<'_>) -> Option<String> {
         .then(|| value.to_owned())
 }
 
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     let mut difference = left.len() ^ right.len();
     let length = left.len().max(right.len());
     for index in 0..length {

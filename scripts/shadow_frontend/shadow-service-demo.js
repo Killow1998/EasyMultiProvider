@@ -27,7 +27,7 @@ function mountShadowServiceDemo() {
   if (!entry) {
     entry=document.createElement('button');entry.id='shadow_demo_button';entry.type='button';entry.className='secondary';
     document.querySelector('.page-header-controls [data-i18n="settings_menu"]').before(entry);
-    entry.onclick=()=>openModal(tr('演示','Demos'),`<div class="choice-grid"><button type="button" class="choice" data-shadow-demo="services"><strong>${tr('全部服务调用中','All services running')}</strong><small>${tr('查看品牌颜色、运行光晕和额度样式','View brand colors, activity halos and quota styles')}</small></button><button type="button" class="choice" data-shadow-demo="service-errors"><strong>${tr('全部服务报错','All service errors')}</strong><small>${tr('查看红色提示与错误气泡','View red indicators and error bubbles')}</small></button></div>`,'',null);
+    entry.onclick=()=>openModal(tr('演示','Demos'),`<div class="choice-grid">${window.EMP_REVIEW_CHOICES?.()||''}${window.EMP_IMPORT_DEMO?`<button type="button" class="choice" id="demo_account_import" data-shadow-demo="import"><strong>${tr('导入同一账号','Import the same account')}</strong><small>${tr('在导入页选择显示与上下文设置，一次完成合并','Choose visibility and context during import, then merge once')}</small></button>`:''}<button type="button" class="choice" data-shadow-demo="services"><strong>${tr('全部服务调用中','All services running')}</strong><small>${tr('查看品牌颜色、运行光晕和额度样式','View brand colors, activity halos and quota styles')}</small></button><button type="button" class="choice" data-shadow-demo="service-errors"><strong>${tr('全部服务报错','All service errors')}</strong><small>${tr('查看红色提示与错误气泡','View red indicators and error bubbles')}</small></button></div>`,'',null);
   }
   entry.textContent=tr('演示','Demos');
   if (!shadowServicesDemoActive) return;
@@ -40,6 +40,8 @@ function mountShadowServiceDemo() {
 function installShadowServiceDemo() {
   document.addEventListener('click',event=>{
     const choice=event.target.closest('[data-shadow-demo]');if(!choice)return;
+    if(window.EMP_REVIEW_ACTION?.(choice.dataset.shadowDemo))return;
+    if(choice.dataset.shadowDemo==='import'&&window.EMP_IMPORT_DEMO){window.EMP_IMPORT_DEMO();return;}
     const url=new URL(location.href);url.searchParams.set('demo',choice.dataset.shadowDemo);location.assign(url);
   });
   if (!shadowServicesDemoActive) return;

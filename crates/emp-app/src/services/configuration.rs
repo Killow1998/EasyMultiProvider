@@ -161,6 +161,21 @@ impl ConfigurationEdit<'_> {
         *self.current.0 = saved;
         Ok(summary)
     }
+
+    pub(super) fn commit_migration(
+        &mut self,
+        target: &Value,
+        auth: &std::collections::BTreeMap<String, Value>,
+    ) -> Result<(), emp_state::migration::MigrationError> {
+        let saved = emp_state::migration::persist_migration_import(
+            target,
+            auth,
+            &self.store.config_path,
+            &self.store.vault,
+        )?;
+        *self.current.0 = saved;
+        Ok(())
+    }
 }
 
 /// A language change updates only its preference, without catalog or engine work.

@@ -630,6 +630,7 @@ impl Emp {
         self.codex("POST", "/v1/responses", Some(body))
     }
 
+    #[cfg(unix)]
     pub fn signal(&self, signal: i32) {
         // SAFETY: kill(2) on our own live child process id.
         let result = unsafe { libc::kill(self.pid(), signal) };
@@ -661,7 +662,10 @@ impl Emp {
         if self.child.try_wait().ok().flatten().is_some() {
             return;
         }
+        #[cfg(unix)]
         self.signal(libc::SIGTERM);
+        #[cfg(windows)]
+        let _ = self.post("/api/quit", &json!({}));
         for _ in 0..500 {
             if self.child.try_wait().ok().flatten().is_some() {
                 return;

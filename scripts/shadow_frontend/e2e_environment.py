@@ -76,7 +76,7 @@ class Upstream(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
 
-def start_backend(stack, binary, root, configuration=None):
+def start_backend(stack, binary, root, configuration=None, env_overrides=None):
     upstream = ThreadingHTTPServer(('127.0.0.1', 0), Upstream)
     stack.callback(upstream.server_close)
     threading.Thread(target=upstream.serve_forever, daemon=True).start()
@@ -94,6 +94,7 @@ def start_backend(stack, binary, root, configuration=None):
     for key in ['HOME', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'APPDATA', 'LOCALAPPDATA']:
         env[key] = str(root / key.lower())
         Path(env[key]).mkdir()
+    env.update(env_overrides or {})
     log_path = root / 'backend.log'
     log = stack.enter_context(log_path.open('w'))
     process = subprocess.Popen([str(binary), 'serve', '--config', str(config), '--port', '0'],

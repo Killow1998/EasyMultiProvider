@@ -1,5 +1,5 @@
 //! Session-bound, bounded import previews. Only commit publishes credentials.
-use super::{MigrationError, commit_import};
+use super::{MigrationError, commit_selected, preferences};
 use crate::app::ServerState;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -160,25 +160,32 @@ pub(crate) fn preview_request(
                 if demo {
                     return Err(MigrationError::invalid("Demo packages cannot be imported"));
                 }
-                let validated = emp_state::migration::validate_migration_payload(&payload)
-                    .map_err(MigrationError::invalid)?;
                 let result = crate::services::observation::operation::observe(
                     &state.backend.diagnostics,
                     request_id,
                     "migration_import",
-                    |receipt| commit_import(state, validated, receipt),
+                    |receipt| {
+                        commit_selected(state, &payload, &body["preference_choices"], receipt)
+                    },
                 )?;
                 cache.remove(session, token);
                 return Ok(result);
             }
-            preview(state, &payload, token)
+            preview(state, &payload, token, &body["preference_choices"])
         }
         _ => Err(MigrationError::invalid("Unknown migration operation")),
     }
 }
 
-fn preview(state: &ServerState, payload: &Value, token: &str) -> Result<Value, MigrationError> {
+fn preview(
+    state: &ServerState,
+    payload: &Value,
+    token: &str,
+    choices: &Value,
+) -> Result<Value, MigrationError> {
     let current = read_config(state)?;
+    let resolution = preferences::resolve(state, &current, payload, choices, false)?;
+    let payload = &resolution.payload;
     let (mut config, auth, summary) = emp_state::migration::preview_migration_import(
         &current,
         payload,
@@ -187,12 +194,49 @@ fn preview(state: &ServerState, payload: &Value, token: &str) -> Result<Value, M
         &BTreeMap::new(),
     )
     .map_err(MigrationError::invalid)?;
+    preferences::apply(&mut config, &resolution.updates);
     let mut warnings = Vec::new();
     let mut model_previews = serde_json::Map::new();
+    let native =
+        crate::services::accounts::native_auth_document(&state.backend.accounts.native_auth_path);
+    let credentials = config["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|account| {
+            let id = account["id"].as_str()?;
+            let credential = auth.get(id).cloned().or_else(|| {
+                account["auth_file"].as_str().and_then(|path| {
+                    state
+                        .backend
+                        .configuration
+                        .vault
+                        .read_encrypted_json(std::path::Path::new(path))
+                        .ok()
+                })
+            })?;
+            Some((id.to_owned(), credential))
+        })
+        .collect::<Vec<_>>();
+    let duplicates = emp_state::duplicate_account_status(native.as_ref(), &credentials);
+    let native_visible = native
+        .as_ref()
+        .is_some_and(|auth| emp_state::validate_auth_json(auth).is_ok());
+    if native_visible {
+        config["native_account"] =
+            crate::services::accounts::native_account_snapshot(state, &config);
+    }
+    config["_shadow_merge_preview"] = json!(true);
     for (field, kind) in [("accounts", "account"), ("providers", "provider")] {
         if let Some(records) = config[field].as_array_mut() {
             for record in records {
                 let target = id(record).to_owned();
+                if kind == "account"
+                    && let Some(owner) = duplicates.get(&target)
+                {
+                    record["duplicate"] = json!(true);
+                    record["duplicate_of"] = json!(owner);
+                }
                 let source = if kind == "provider" {
                     summary
                         .provider_id_map
@@ -224,6 +268,11 @@ fn preview(state: &ServerState, payload: &Value, token: &str) -> Result<Value, M
                 if kind == "account" {
                     model_previews
                         .insert(target.clone(), payload["model_previews"][&source].clone());
+                    if record["duplicate_of"] == "当前 Codex 登录" {
+                        model_previews
+                            .insert("@native".into(), payload["model_previews"][&source].clone());
+                        warnings.push(json!({"kind":"account","id":"@native","message":"已确认与 Native 为同一账号，将合并为一个服务。","message_en":"Confirmed the same account as Native; merge into one service."}));
+                    }
                 }
                 let existed = current[field]
                     .as_array()
@@ -272,5 +321,7 @@ fn preview(state: &ServerState, payload: &Value, token: &str) -> Result<Value, M
         }
     }
     config["_shadow_model_previews"] = json!(model_previews);
-    Ok(json!({"config":scrub(&config),"warnings":warnings}))
+    Ok(
+        json!({"config":scrub(&config),"warnings":warnings,"preference_conflicts":resolution.conflicts}),
+    )
 }

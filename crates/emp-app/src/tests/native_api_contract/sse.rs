@@ -7,15 +7,20 @@ struct NativeErrorSseUpstream {
 }
 impl NativeErrorSseUpstream {
     fn start(wire: Vec<u8>) -> Self {
+        Self::start_repeated(wire, 1)
+    }
+    fn start_repeated(wire: Vec<u8>, requests: usize) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
         let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let _ = receive_native_request(&mut stream);
-            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
-            for chunk in wire.chunks(13) {
-                stream.write_all(chunk).unwrap();
-                stream.flush().unwrap();
+            for _ in 0..requests {
+                let (mut stream, _) = listener.accept().unwrap();
+                let _ = receive_native_request(&mut stream);
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
+                for chunk in wire.chunks(13) {
+                    stream.write_all(chunk).unwrap();
+                    stream.flush().unwrap();
+                }
             }
         });
         Self {
@@ -32,6 +37,72 @@ impl Drop for NativeErrorSseUpstream {
         if let Some(worker) = self.worker.take() {
             worker.join().unwrap();
         }
+    }
+}
+
+#[test]
+fn native_sse_incomplete_preserves_usage_and_deduplicates_response_id() {
+    for usage in [
+        json!({"input_tokens":17,"output_tokens":3,"input_tokens_details":{"cached_tokens":5}}),
+        Value::Null,
+        json!({"input_tokens":"invalid","output_tokens":-1}),
+    ] {
+        let terminal = json!({"type":"response.incomplete","response":{
+            "id":"resp_incomplete_usage", "object":"response", "status":"incomplete",
+            "model":"upstream", "output":[], "usage":usage,
+            "incomplete_details":{"reason":"max_output_tokens"}
+        }});
+        let wire = format!("data: {terminal}\n\n").into_bytes();
+        let upstream = NativeErrorSseUpstream::start_repeated(wire, 2);
+        let (_directory, server) = native_alias_server(&upstream.base_url());
+        let cookie = session_header(&server);
+        let body =
+            serde_json::to_vec(&json!({"model":"native/alias","input":"fixture","stream":true}))
+                .unwrap();
+        let responses = (0..2)
+            .map(|_| {
+                post_stream(
+                    &server,
+                    "/v1/responses",
+                    &body,
+                    &[&cookie, "Authorization: Bearer caller"],
+                )
+            })
+            .collect::<Vec<_>>();
+        for response in responses {
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+            let event: Value = response
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .find(|event| event["type"] == "response.incomplete")
+                .expect("incomplete terminal");
+            assert_eq!(event["response"]["id"], terminal["response"]["id"]);
+            assert_eq!(event["response"]["usage"], usage);
+            assert_eq!(
+                event["response"]["incomplete_details"],
+                terminal["response"]["incomplete_details"]
+            );
+        }
+        let now = crate::util::system_now();
+        let totals = server
+            .state
+            .backend
+            .usage
+            .ledger
+            .query(0.0, now, "all", now)
+            .unwrap();
+        assert_eq!(
+            totals["totals"]["input_tokens"].as_u64().unwrap_or(0),
+            usage["input_tokens"].as_u64().unwrap_or(0),
+            "{totals}"
+        );
+        assert_eq!(
+            totals["totals"]["output_tokens"].as_u64().unwrap_or(0),
+            usage["output_tokens"].as_u64().unwrap_or(0),
+            "{totals}"
+        );
+        server.shutdown().unwrap();
     }
 }
 

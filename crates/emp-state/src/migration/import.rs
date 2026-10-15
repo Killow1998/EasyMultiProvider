@@ -489,8 +489,21 @@ pub fn apply_migration_import(
     let (target, imported_auth, summary) =
         merge_import(current, decrypted.0, config_path, vault, &BTreeMap::new())?;
 
-    let result = with_file_transaction(|transaction| {
-        for (account_id, auth) in &imported_auth {
+    let result = persist_migration_import(&target, &imported_auth, config_path, vault)?;
+    Ok((result, summary))
+}
+
+/// Persist a prepared import and its resolved preferences in the same transaction.
+pub fn persist_migration_import(
+    target: &Value,
+    imported_auth: &BTreeMap<String, Value>,
+    config_path: &Path,
+    vault: &VaultStore,
+) -> MigrationResult<Value> {
+    let target =
+        normalize_configuration(Some(target)).map_err(|_| MigrationError::StateUpdateFailed)?;
+    with_file_transaction(|transaction| {
+        for (account_id, auth) in imported_auth {
             let path = account_auth_path(&target, account_id, config_path)
                 .map_err(|_| MigrationError::StateUpdateFailed)?;
             transaction.remember(&path)?;
@@ -499,8 +512,7 @@ pub fn apply_migration_import(
         save_configuration_in_transaction(&target, Some(config_path), vault, transaction)
             .map_err(|_| MigrationError::StateUpdateFailed)?;
         load_configuration(Some(config_path)).map_err(|_| MigrationError::StateUpdateFailed)
-    })?;
-    Ok((result, summary))
+    })
 }
 
 #[cfg(test)]

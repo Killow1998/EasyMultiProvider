@@ -1,10 +1,10 @@
-use emp_state::{duplicate_account_status, migrate_duplicate_native_visibility, same_account_auth};
-use serde_json::{Value, json};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use emp_state::{duplicate_account_status, same_account_auth};
+use serde_json::json;
 
-/// A duplicate native login is detected by account_id overlap and its hidden
-/// models migrate into the native list exactly once (idempotent on re-run).
+/// Only consistent identity can assign a canonical account owner.
 #[test]
-fn duplicate_visibility_uses_identity_overlap_and_is_idempotent() {
+fn duplicate_accounts_require_consistent_identity() {
     let fixture = json!({
         "native":{"tokens":{"access_token":"native-token","account_id":"native-owner"}},
         "auths":{
@@ -32,29 +32,37 @@ fn duplicate_visibility_uses_identity_overlap_and_is_idempotent() {
         })
         .collect::<Vec<_>>();
     let duplicates = duplicate_account_status(Some(&fixture["native"]), &accounts);
-    let (migrated, changed) = migrate_duplicate_native_visibility(&fixture["config"], &duplicates);
-    let (again, second_changed) = migrate_duplicate_native_visibility(&migrated, &duplicates);
-    assert!(changed);
-    assert!(!second_changed);
-    assert_eq!(again, migrated);
     assert!(!same_account_auth(
         &fixture["native"],
         &fixture["auths"]["same-token"]
     ));
-    assert_eq!(duplicates["same-token"], "当前 Codex 登录");
-    assert_eq!(
-        migrated["native_hidden_models"],
-        json!(["already", "native-a", "native-b"])
-    );
-    // Untouched configuration sections and independent accounts are preserved.
-    assert_eq!(migrated["untouched"], fixture["config"]["untouched"]);
-    let hidden: Vec<&Value> = migrated["accounts"]
-        .as_array()
-        .expect("accounts")
-        .iter()
-        .map(|account| &account["hidden_models"])
-        .collect();
-    assert_eq!(hidden[2], &json!(["other-hidden"]));
-    assert_eq!(hidden[3], &json!(["leave-other"]));
-    assert_eq!(hidden[4], &json!(["invalid-hidden"]));
+    assert_eq!(duplicates["same-owner"], "当前 Codex 登录");
+    assert!(!duplicates.contains_key("same-token"));
+    assert_eq!(duplicates["duplicate-other"], "independent");
+    assert_eq!(duplicates.len(), 2);
+    let auth = |user: &str, access: &str| {
+        json!({"tokens": {
+            "account_id":"shared-workspace", "access_token": access,
+            "id_token":format!("fixture.{}.signature", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
+                "https://api.openai.com/auth":{"chatgpt_account_id":"shared-workspace","chatgpt_user_id":user}
+            })).unwrap()))
+        }})
+    };
+    assert!(same_account_auth(
+        &auth("same-user", "before"),
+        &auth("same-user", "rotated")
+    ));
+    assert!(!same_account_auth(
+        &auth("first-user", "first"),
+        &auth("second-user", "second")
+    ));
+    assert!(!same_account_auth(
+        &auth("first-user", "shared"),
+        &auth("second-user", "shared")
+    ));
+    let workspace = vec![
+        ("first".into(), auth("first-user", "first")),
+        ("second".into(), auth("second-user", "second")),
+    ];
+    assert!(duplicate_account_status(None, &workspace).is_empty());
 }

@@ -1,12 +1,15 @@
 //! Account credentials, persistence and public snapshots.
 use emp_codex::quota_history::QuotaHistoryStore;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::app::ServerState;
 use crate::http::auth::MAX_NATIVE_AUTH_BYTES;
 use emp_codex::account_auth_headers;
 use emp_codex::quota::QuotaError;
+mod delete;
 mod import_identity;
+pub(crate) use delete::delete_account_state;
 use emp_state::FileTransaction;
 use emp_state::VaultStore;
 use emp_state::duplicate_account_status;
@@ -241,7 +244,7 @@ pub(crate) fn import_account_state(
                 .configuration
                 .edit()
                 .map_err(|_| "internal server error".to_owned())?;
-            let (auth_path, mut updated) = prepare(&config)?;
+            let (auth_path, updated) = prepare(&config)?;
             if configured(&config) {
                 // The id is about to name new credentials: its legacy rows must be
                 // attributed with the credentials that recorded them, or dropped.
@@ -278,19 +281,16 @@ pub(crate) fn import_account_state(
                     b"cli_auth_credentials_store = \"file\"\n",
                 )
                 .map_err(|error| error.to_string())?;
-                let duplicates = duplicate_accounts(
-                    &updated,
-                    &state.backend.configuration.vault,
-                    &state.backend.accounts.native_auth_path,
-                );
-                (updated, _) =
-                    emp_state::migrate_duplicate_native_visibility(&updated, &duplicates);
                 config
                     .commit_files(&updated, transaction)
                     .map_err(|error| error.to_string())
             })?;
             receipt.check("account_and_configuration_committed", Some(true));
             forget_pending_rotation(state, &auth_path);
+            if let Ok(mut cancellations) = state.backend.accounts.quota_refresh_cancellations.lock()
+            {
+                cancellations.insert(account_id.to_owned(), Arc::new(AtomicBool::new(false)));
+            }
             state.catalog_refresh.account_changed(account_id);
             drop(config);
             notify_quota_update(state, account_id, None);
@@ -298,116 +298,6 @@ pub(crate) fn import_account_state(
                 account_public_snapshot(state, account_id)
                     .ok_or_else(|| "account import failed".to_owned())
             })
-        },
-    )
-}
-
-pub(crate) fn delete_account_state(
-    request_id: Option<&str>,
-    state: &ServerState,
-    account_id: &str,
-) -> Result<(), String> {
-    crate::services::observation::operation::observe(
-        &state.backend.diagnostics,
-        request_id,
-        "account_delete",
-        |receipt| {
-            receipt.subject(account_id);
-            let refresh_lock = quota_refresh_lock(state, account_id)
-                .ok_or_else(|| "internal server error".to_owned())?;
-            let _refresh_guard = refresh_lock
-                .lock()
-                .map_err(|_| "internal server error".to_owned())?;
-            // Held until the result is stored; see `import_account_state`.
-            let mut config = state
-                .backend
-                .configuration
-                .edit()
-                .map_err(|_| "internal server error".to_owned())?;
-            let current = config.clone();
-            let accounts = current
-                .get("accounts")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let target = accounts
-                .iter()
-                .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
-                .ok_or_else(|| format!("unknown account: {account_id}"))?;
-            let expected = emp_state::account_auth_path(
-                &current,
-                account_id,
-                &state.backend.configuration.config_path,
-            )
-            .map_err(|error| error.to_string())?;
-            let configured = target
-                .get("auth_file")
-                .and_then(Value::as_str)
-                .map(PathBuf::from)
-                .ok_or_else(|| {
-                    "refusing to delete credentials outside the account store".to_owned()
-                })?;
-            if configured != expected {
-                return Err("refusing to delete credentials outside the account store".to_owned());
-            }
-            // Legacy rows keyed by this id must reach the identity they belong to,
-            // or be dropped, before the id becomes free for a different account.
-            receipt
-                .step("settle_history", || {
-                    crate::services::quota::settle_legacy_quota_history(state, &config, account_id)
-                })
-                .map_err(|_| {
-                    "quota history is unavailable; the account was not deleted".to_owned()
-                })?;
-            let mut updated = current.clone();
-            updated["accounts"] = Value::Array(
-                accounts
-                    .into_iter()
-                    .filter(|account| account.get("id").and_then(Value::as_str) != Some(account_id))
-                    .collect(),
-            );
-            if updated
-                .get("subscription_search")
-                .and_then(Value::as_object)
-                .and_then(|search| search.get("account_id"))
-                .and_then(Value::as_str)
-                == Some(account_id)
-                && let Some(search) = updated
-                    .get_mut("subscription_search")
-                    .and_then(Value::as_object_mut)
-            {
-                search.insert("enabled".to_owned(), Value::Bool(false));
-                search.insert("account_id".to_owned(), Value::String(String::new()));
-            }
-            receipt.step("commit_account_and_configuration", || {
-                let config_toml = expected
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .join("config.toml");
-                let mut transaction = FileTransaction::new();
-                transaction
-                    .remember(&expected)
-                    .map_err(|error| error.to_string())?;
-                transaction
-                    .remember(&config_toml)
-                    .map_err(|error| error.to_string())?;
-                for path in [&expected, &config_toml] {
-                    match std::fs::remove_file(path) {
-                        Ok(()) => {}
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(error) => return Err(error.to_string()),
-                    }
-                }
-                config
-                    .commit_files(&updated, transaction)
-                    .map_err(|error| error.to_string())
-            })?;
-            receipt.check("account_and_configuration_committed", Some(true));
-            forget_pending_rotation(state, &expected);
-            state.catalog_refresh.account_changed(account_id);
-            drop(config);
-            notify_quota_update(state, account_id, None);
-            Ok(())
         },
     )
 }
@@ -488,6 +378,11 @@ pub(super) fn replacing_account_credentials<T>(
         let previous_ids = configured_ids(&config);
         let result = replace(&mut config);
         let current_ids = configured_ids(&config);
+        if let Ok(mut cancellations) = state.backend.accounts.quota_refresh_cancellations.lock() {
+            for id in current_ids.iter().filter(|id| !previous_ids.contains(id)) {
+                cancellations.insert(id.clone(), Arc::new(AtomicBool::new(false)));
+            }
+        }
         for id in previous_ids.iter().chain(current_ids.iter()) {
             state.catalog_refresh.account_changed(id);
         }
@@ -517,6 +412,7 @@ pub(crate) struct AccountState {
     pub(crate) native_quota: Mutex<Option<Value>>,
     pub(crate) quota_refresh_errors: Mutex<BTreeMap<String, String>>,
     pub(crate) quota_refresh_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
+    pub(crate) quota_refresh_cancellations: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
     pub(crate) quota_history: QuotaHistoryStore,
     pub(crate) quota_sampler_wait: Mutex<()>,
     pub(crate) quota_sampler_condition: Condvar,
@@ -704,6 +600,23 @@ pub(crate) fn quota_refresh_lock(state: &ServerState, account_id: &str) -> Optio
         locks
             .entry(account_id.to_owned())
             .or_insert_with(|| Arc::new(Mutex::new(()))),
+    ))
+}
+
+pub(crate) fn quota_refresh_cancellation(
+    state: &ServerState,
+    account_id: &str,
+) -> Option<Arc<AtomicBool>> {
+    let mut flags = state
+        .backend
+        .accounts
+        .quota_refresh_cancellations
+        .lock()
+        .ok()?;
+    Some(Arc::clone(
+        flags
+            .entry(account_id.to_owned())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false))),
     ))
 }
 

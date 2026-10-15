@@ -50,20 +50,23 @@ type PersistRotation<'a> = &'a mut dyn FnMut(&Value) -> Result<(), QuotaError>;
 pub struct QuotaControl<'a> {
     pub timeout: Duration,
     pub cancelled: Option<&'a AtomicBool>,
+    pub account_cancelled: Option<&'a AtomicBool>,
 }
 impl From<Duration> for QuotaControl<'_> {
     fn from(timeout: Duration) -> Self {
         Self {
             timeout,
             cancelled: None,
+            account_cancelled: None,
         }
     }
 }
 impl QuotaControl<'_> {
     fn check(self) -> Result<(), QuotaError> {
-        if self
-            .cancelled
-            .is_some_and(|flag| flag.load(Ordering::Acquire))
+        if [self.cancelled, self.account_cancelled]
+            .into_iter()
+            .flatten()
+            .any(|flag| flag.load(Ordering::Acquire))
         {
             Err(QuotaError::new(
                 "Quota check was cancelled",

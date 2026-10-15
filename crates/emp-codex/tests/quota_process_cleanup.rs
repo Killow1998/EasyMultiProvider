@@ -64,6 +64,7 @@ fn check_launcher(mode: &str, cancel: bool) {
                     Duration::from_millis(500)
                 },
                 cancelled: cancel.then_some(&cancelled),
+                account_cancelled: None,
             },
             true,
             |auth| {

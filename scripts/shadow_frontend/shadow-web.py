@@ -185,6 +185,7 @@ class ShadowHandler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=4201)
+    parser.add_argument('--emp', type=Path, help='Candidate binary for the unified disposable Shadow workspace')
     parser.add_argument('--backend-port', type=int, default=4200)
     parser.add_argument('--state-dir', type=Path, default=default_state_dir(), help='EMP state directory containing web-session.json and usage.sqlite3')
     parser.add_argument('--open', action='store_true')
@@ -192,6 +193,10 @@ def main():
     parser.add_argument('--config',type=Path,help='Read-only production configuration for migration preview')
     parser.add_argument('--release-api',help='Loopback release metadata endpoint for isolated acceptance')
     args = parser.parse_args()
+    if args.emp:
+        from preview import serve
+        serve(args.emp, args.port, args.open)
+        return
     server = ThreadingHTTPServer(('127.0.0.1', args.port), ShadowHandler)
     server.daemon_threads = True
     port = server.server_port

@@ -13,6 +13,8 @@ pub(crate) enum AppError {
     NativeRestoreBlocked(&'static str),
     ServiceOwned,
     RandomUnavailable,
+    CredentialKeyMissing,
+    RecoveryIncomplete,
     WebSession(WebSessionError),
     Config(ConfigError),
     Filesystem(FilesystemError),
@@ -38,6 +40,12 @@ impl std::fmt::Display for AppError {
                 write!(formatter, "native restoration blocked: {reason}")
             }
             Self::RandomUnavailable => formatter.write_str("secure randomness is unavailable"),
+            Self::CredentialKeyMissing => {
+                formatter.write_str("saved credentials exist but their master key is missing")
+            }
+            Self::RecoveryIncomplete => formatter.write_str(
+                "a previous settings reset did not finish; its saved files are preserved",
+            ),
             Self::WebSession(error) => write!(formatter, "{error}"),
             Self::Config(error) => write!(formatter, "{error}"),
             Self::Filesystem(error) => write!(formatter, "{error}"),

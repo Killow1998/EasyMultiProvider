@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct IntegrationManager {
     pub(super) config_path: PathBuf,
     pub(super) lease_path: PathBuf,
@@ -42,6 +43,13 @@ impl IntegrationManager {
 
     pub fn with_lock_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.lock_path = path.into();
+        self
+    }
+
+    /// Exit handlers have an OS deadline; interactive operations retain the
+    /// normal timeout. This only changes waiting, never lock ownership.
+    pub fn with_lock_timeout(mut self, timeout: Duration) -> Self {
+        self.lock_timeout = timeout;
         self
     }
 
@@ -223,6 +231,20 @@ impl IntegrationManager {
     }
 
     pub fn restore(&self) -> Result<IntegrationResult, IntegrationError> {
+        self.restore_inner(false)
+    }
+
+    /// Exit removes only unchanged overrides belonging to this instance. An
+    /// externally edited field is retained and reported as a conflict, without
+    /// leaving our other fields pointing to a listener that is about to stop.
+    pub fn restore_owned_fields(&self) -> Result<IntegrationResult, IntegrationError> {
+        self.restore_inner(true)
+    }
+
+    fn restore_inner(
+        &self,
+        owned_fields_only: bool,
+    ) -> Result<IntegrationResult, IntegrationError> {
         self.assert_safe_paths()?;
         let _lock = self.lock()?;
         let (mut document, exists) = self.read_config()?;
@@ -237,6 +259,11 @@ impl IntegrationManager {
                 Vec::new(),
             ));
         };
+        if owned_fields_only && lease.instance_id != self.instance_id {
+            return Err(IntegrationError(
+                "integration lease belongs to another instance",
+            ));
+        }
         let current_relation = relation(&current, &lease);
         if lease.status == "restored" {
             return if current_relation == "original" {
@@ -260,7 +287,7 @@ impl IntegrationManager {
                 ))
             };
         }
-        if current_relation == "other" {
+        if current_relation == "other" && !owned_fields_only {
             let conflicts = conflict_names(&current, &lease);
             return Ok(result(
                 "conflict",
@@ -278,7 +305,15 @@ impl IntegrationManager {
             .iter()
             .map(|(name, recovery)| (name.clone(), recovery.original.clone()))
             .collect::<BTreeMap<_, _>>();
-        document = set_states(document, &original)?;
+        let mut desired = original.clone();
+        if owned_fields_only {
+            for (name, field) in &current {
+                if *field != lease.fields[name].applied && *field != lease.fields[name].original {
+                    desired.insert(name.clone(), field.clone());
+                }
+            }
+        }
+        document = set_states(document, &desired)?;
         if !lease.config_existed && document.trim().is_empty() {
             match fs::remove_file(&self.config_path) {
                 Ok(()) => {}

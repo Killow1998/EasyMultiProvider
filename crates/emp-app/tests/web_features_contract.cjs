@@ -14,6 +14,37 @@ function sessionFixture(url = 'http://localhost/?bootstrap=once', saved = '') {
 const response = (status, body = {}) => new Response(JSON.stringify(body), {status, headers:{'Content-Type':'application/json'}});
 const serviceUsage = () => feature('service-usage.js', 'createServiceUsage')({esc, tr, number:String, money:value => 'USD ' + value, dateTime:String});
 
+test('Restore Native keeps the page usable and Quit EMP uses a separate action', async () => {
+  const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
+  const integration = html.slice(html.indexOf('function confirmIntegrationAction('), html.indexOf('let catalogSync ='));
+  const quit = html.slice(html.indexOf('async function quitEmp('), html.indexOf('function dynamicActionElement('));
+  for (const language of ['en', 'zh-CN']) {
+    const calls = [], notices = [], modals = [], nodes = new Map();
+    let mode = 'emp_applied';
+    const context = vm.createContext({language, integrationBusy:false, esc,
+      tr:(zh,en) => language === 'en' ? en : zh,
+      $:id => { if(!nodes.has(id)) nodes.set(id,{textContent:''}); return nodes.get(id); },
+      renderIntegrationToggle(){}, renderIntegration:info => { mode=info.configuration.state; },
+      api:async route => { calls.push(route); mode=route.endsWith('/enable') ? 'emp_applied' : 'native'; return {configuration:{state:mode},runtime:{}}; },
+      loadIntegration:async () => ({configuration:{state:mode},runtime:{}}),
+      openModal:(...args) => modals.push(args), closeModal(){},
+      notice:text => notices.push(text), confirm:() => true,
+    });
+    vm.runInContext(integration + quit, context);
+    context.confirmIntegrationAction('restore');
+    assert.match(modals.at(-1)[1], /stays running|继续运行/);
+    await modals.at(-1)[3]();
+    assert.deepEqual(calls, ['/api/integration/restore']);
+    assert.equal(mode,'native');
+    assert.match(notices.at(-1), /still running|继续运行/);
+    await context.submitIntegrationAction('enable');
+    assert.equal(mode,'emp_applied');
+    await context.quitEmp();
+    assert.deepEqual(calls, ['/api/integration/restore','/api/integration/enable','/api/quit']);
+    assert.match(modals.at(-1)[0], /exiting|正在退出/);
+  }
+});
+
 test('unified chooser preserves local Claude identity and exposes direct connection choices', () => {
   let html = '';
   const state = {native_account:{credential_set:true}, providers:[{id:'existing-local', name:'Renamed account', execution_backend:'claude_cli', auth_mode:'claude_login'}]};
@@ -121,6 +152,14 @@ test('service badges own settings navigation while list actions retain refresh, 
   assert.match(service.tabs('@native','account'), /data-ui-action="account-edit"/);
   assert.match(service.tabs('api','provider','edit'), /data-ui-action="provider-edit"[^>]*aria-selected="true"/);
   assert.match(service.tabs('duplicate','account','details',true), /data-ui-action="account-edit"[^>]*disabled/);
+  state.accounts=[{id:'same-native',duplicate:true,duplicate_of:'当前 Codex 登录'}, {id:'independent',duplicate:false}, {id:'unverified'}];
+  service.render();
+  assert.doesNotMatch(box.innerHTML,/data-service="account:same-native"/);
+  assert.match(box.innerHTML,/data-service="account:@native"/);
+  assert.match(box.innerHTML,/data-service="account:independent"/);
+  assert.match(box.innerHTML,/data-service="account:unverified"/);
+  state.native_account.credential_set=false;service.render();
+  assert.match(box.innerHTML,/data-service="account:same-native"/,'stored account remains available after native sign-out');
 });
 
 test('management login removes bootstrap secrets and distinguishes upstream rejection from expired sessions', async () => {

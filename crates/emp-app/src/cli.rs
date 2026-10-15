@@ -142,29 +142,69 @@ fn serve(
     port: Option<u16>,
     open_browser: bool,
 ) -> Result<(), AppError> {
-    let configured = emp_state::load_configuration(config.as_deref())?;
-    let host = host
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| configured["host"].as_str().unwrap_or("127.0.0.1"));
-    if host != "127.0.0.1" {
-        return Err(AppError::HostNotLoopback);
+    let config = config.unwrap_or_else(emp_state::config_path);
+    let config =
+        emp_state::config::resolve_user_path(config.parent().unwrap_or(std::path::Path::new(".")))
+            .join(config.file_name().ok_or(AppError::ServerStopped)?);
+    loop {
+        // Invalid saved configuration must still reach the recovery UI.
+        let configured =
+            emp_state::load_configuration(Some(&config)).unwrap_or_else(|_| serde_json::json!({}));
+        let host = host
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| configured["host"].as_str().unwrap_or("127.0.0.1"));
+        if host != "127.0.0.1" {
+            return Err(AppError::HostNotLoopback);
+        }
+        let selected_port =
+            port.unwrap_or_else(|| configured["port"].as_u64().unwrap_or(4200) as u16);
+        let error = match run_server(
+            Some(&config),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            selected_port,
+            open_browser,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        if !crate::startup_recovery::recoverable(&error) {
+            return Err(error);
+        }
+        if crate::startup_recovery::external_key() {
+            // Developer overrides cannot be repaired by clearing local state.
+            eprintln!(
+                "EMP uses an external master key override. Correct EASY_MULTI_PROVIDER_MASTER_KEY or EASY_MULTI_PROVIDER_MASTER_KEY_FILE before restarting. Local settings were not reset."
+            );
+            return Err(error);
+        }
+        if !crate::startup_recovery::run(&config, &error, open_browser)? {
+            return Ok(());
+        }
     }
-    let port = port.unwrap_or_else(|| configured["port"].as_u64().unwrap_or(4200) as u16);
-    run_server(
-        config.as_deref(),
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        port,
-        open_browser,
-    )
 }
 fn serve_error(error: AppError) -> String {
+    match &error {
+        AppError::Io(error) => {
+            let hint = match error.kind() {
+                std::io::ErrorKind::AddrInUse => "another process is using the configured port",
+                std::io::ErrorKind::PermissionDenied => {
+                    "access was denied; check file permissions, port restrictions and security software"
+                }
+                _ => "check the startup I/O error below",
+            };
+            return format!(
+                "EMP could not start: {hint} (kind={:?}, OS error={:?})",
+                error.kind(),
+                error.raw_os_error()
+            );
+        }
+        AppError::Filesystem(error) => return format!("EMP state setup failed: {error}"),
+        _ => {}
+    }
     match error {
         AppError::ServiceOwned => "another EMP service owns this configuration",
         AppError::Config(_) | AppError::HostNotLoopback => "EMP configuration is invalid",
-        AppError::Io(_) | AppError::Filesystem(_) => {
-            "EMP integration state is not readable or writable"
-        }
         _ => "EMP integration operation failed",
     }
     .to_owned()

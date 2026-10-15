@@ -52,6 +52,12 @@ pub(super) fn resolve(state: &ServerState, body: &Value) -> Result<Value, String
         resolved["prefix"] = Value::String(id);
     }
     resolved["name"] = Value::String(name.trim().to_owned());
+    if super::native_auth_document(&state.backend.accounts.native_auth_path)
+        .is_some_and(|native| emp_state::same_account_auth(&native, &auth))
+    {
+        resolved["hidden_models"] = config["native_hidden_models"].clone();
+        resolved["model_context_windows"] = config["native_model_context_windows"].clone();
+    }
     resolved["auth_json"] = auth;
     Ok(resolved)
 }

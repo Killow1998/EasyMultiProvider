@@ -108,7 +108,7 @@ fn account_server(
     codex_binary: &str,
 ) -> (TempDir, ServerHandle, PathBuf) {
     let directory = tempfile::tempdir().expect("account temp dir");
-    let root = canonical_root(&directory);
+    let root = crate::tests::credential_root(&directory);
     let config_path = root.join("config.json");
     let native_auth_path = root.join("codex/auth.json");
     std::fs::create_dir_all(native_auth_path.parent().unwrap()).unwrap();
@@ -207,7 +207,7 @@ impl Drop for ScenarioUpstream {
 fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata() {
     let upstream = NativeUpstream::start(2);
     let directory = tempfile::tempdir().expect("native temp dir");
-    let root = canonical_root(&directory);
+    let root = crate::tests::credential_root(&directory);
     let config_path = root.join("config.json");
     let native_auth_path = root.join("codex/auth.json");
     std::fs::create_dir_all(native_auth_path.parent().unwrap()).expect("native directory");

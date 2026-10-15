@@ -167,7 +167,7 @@ fn narrow_catalog_preference_update_requires_session_and_preserves_new_accounts(
 }
 
 #[test]
-fn startup_and_save_move_duplicate_visibility_to_native_without_touching_auth() {
+fn startup_and_save_preserve_duplicate_preference_conflicts_without_touching_auth() {
     let upstream = CatalogUpstream::start(200);
     let (directory, server) = catalog_server(&upstream);
     let root = canonical_root(&directory);
@@ -186,7 +186,16 @@ fn startup_and_save_move_duplicate_visibility_to_native_without_touching_auth() 
         .clone();
     let auth_path =
         emp_state::account_auth_path(&config, "duplicate", &path).expect("account path");
-    server.state.backend.configuration.vault.write_encrypted_json(&auth_path,&json!({"tokens":{"access_token":"shared-fixture-token","account_id":"different-owner"}})).expect("encrypted auth");
+    server
+        .state
+        .backend
+        .configuration
+        .vault
+        .write_encrypted_json(
+            &auth_path,
+            &json!({"tokens":{"access_token":"rotated-fixture-token","account_id":"native-owner"}}),
+        )
+        .expect("encrypted auth");
     config["accounts"] = json!([{"id":"duplicate","prefix":"duplicate","auth_file":auth_path,"hidden_models":["native"]}]);
     save_configuration(
         &config,
@@ -205,8 +214,8 @@ fn startup_and_save_move_duplicate_visibility_to_native_without_touching_auth() 
     .expect("restart");
     let cookie = session_header(&restarted);
     let mut public = parsed_body(&request(&restarted, "/api/config", &[&cookie]));
-    assert_eq!(public["native_hidden_models"], json!(["native"]));
-    assert_eq!(public["accounts"][0]["hidden_models"], json!([]));
+    assert_eq!(public["native_hidden_models"], json!([]));
+    assert_eq!(public["accounts"][0]["hidden_models"], json!(["native"]));
     assert_eq!(public["accounts"][0]["duplicate"], true);
     assert_eq!(public["accounts"][0]["duplicate_of"], "当前 Codex 登录");
     let accounts = parsed_body(&request(&restarted, "/api/accounts", &[&cookie]));
@@ -229,13 +238,10 @@ fn startup_and_save_move_duplicate_visibility_to_native_without_touching_auth() 
         &[&cookie],
     );
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-    assert_eq!(
-        parsed_body(&response)["native_hidden_models"],
-        json!(["missing", "native"])
-    );
+    assert_eq!(parsed_body(&response)["native_hidden_models"], json!([]));
     assert_eq!(
         parsed_body(&response)["accounts"][0]["hidden_models"],
-        json!([])
+        json!(["missing", "native"])
     );
     assert_eq!(
         std::fs::read(&native_path).expect("native unchanged"),

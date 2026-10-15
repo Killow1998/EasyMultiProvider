@@ -270,6 +270,6 @@ pub use export::{
 use import::id_of;
 pub use import::{
     DecryptedMigration, apply_migration_import, decrypt_migration_bundle, import_migration_bundle,
-    preview_migration_import, validate_migration_payload,
+    persist_migration_import, preview_migration_import, validate_migration_payload,
 };
 pub use selection::select_migration_payload;

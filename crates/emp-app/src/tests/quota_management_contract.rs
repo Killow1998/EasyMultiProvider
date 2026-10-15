@@ -133,7 +133,7 @@ fn native_and_imported_quota_refresh_cross_the_management_boundary() {
     use std::os::unix::fs::PermissionsExt;
 
     let directory = tempfile::tempdir().expect("temporary directory");
-    let root = canonical_root(&directory);
+    let root = crate::tests::credential_root(&directory);
     let auth_path = root.join("auth.json");
     let original_auth = serde_json::to_vec(&json!({
         "tokens": {"access_token": "native-secret", "account_id": "workspace"}
@@ -568,7 +568,7 @@ fn quota_rate_limit_http_error_is_safe() {
     use std::os::unix::fs::PermissionsExt;
 
     let directory = tempfile::tempdir().expect("temporary directory");
-    let root = canonical_root(&directory);
+    let root = crate::tests::credential_root(&directory);
     let account_root = root.join("state").join("accounts");
     let auth_file = account_root.join("rate-limited").join("auth.json.enc");
     let config = root.join("config.json");

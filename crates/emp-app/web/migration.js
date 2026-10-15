@@ -1,35 +1,55 @@
 // Migration selection belongs to this dialog; credentials remain in the local helper.
 function createMigration() {
   let view=null, previewTimer=null;
-  const {services,selections,options,importedNameRows,warningHtml,previewRows,bodyHtml,mergeRules}=createMigrationView(()=>state);
+  const {services,selections,options,importedNameRows,warningHtml,previewRows,bodyHtml,mergeRules,preferenceRows}=createMigrationView(()=>state);
   function stop() { clearTimeout(previewTimer);view?.controller.abort();view=null; }
   function active(candidate) { return view===candidate && $('shadow_migration')?.isConnected; }
   function updatePreview() {
     if(!view)return;
+    $('modal_submit').disabled=!selections(view).length || view.busy || (view.mode==='import'&&(!view.token||!view.previewReady||view.preferenceConflicts?.some(conflict=>Object.values(conflict.fields).some(field=>!field.resolved))));
+    const file=$('shadow_migration_file'), password=$('shadow_import_password');
+    const step=view.token?2:(file?.files.length&&password?.value?1:0);
+    for(const node of document.querySelectorAll('[data-migration-step]')){
+      if(Number(node.dataset.migrationStep)===step)node.setAttribute('aria-current','step');else node.removeAttribute('aria-current');
+    }
+    const decodeButton=document.querySelector('[data-migration-decode]');
+    if(decodeButton)decodeButton.disabled=view.busy;
     const box=$('migration_preview_rows');if(!box)return;
     const expanded=new Set([...box.querySelectorAll('details[open]')].map(node=>node.dataset.migrationDetail));
     $('migration_selected_count').textContent=tr(`已选择 ${selections(view).length} 个服务`,`${selections(view).length} services selected`);
     if(view.mode==='export')box.innerHTML=previewRows(view.rows.filter(row=>row.selected),view,true);
-    else if(view.importConfig)box.innerHTML=previewRows(services(view.importConfig,true,{accounts:view.importConfig.accounts?.map(a=>a.id),providers:view.importConfig.providers?.map(p=>p.id)}),view,true);
+    else if(view.importConfig)box.innerHTML=preferenceRows(view)+previewRows(services(view.importConfig,true,{accounts:view.importConfig.accounts?.map(a=>a.id),providers:view.importConfig.providers?.map(p=>p.id)}),view,true);
     else box.innerHTML=previewRows(view.rows.filter(row=>row.selected),view);
     for(const node of box.querySelectorAll('details'))node.open=expanded.has(node.dataset.migrationDetail);
-    $('modal_submit').disabled=!selections(view).length || view.busy || (view.mode==='import'&&(!view.token||!view.previewReady));
   }
-  function render() {
+  function back(candidate) {
+    if(!active(candidate)||!candidate.parent)return;
+    clearTimeout(previewTimer);candidate.controller.abort();
+    view=candidate.parent.view;render(candidate.parent.body);
+  }
+  function render(savedBody=null) {
     const candidate=view, importing=candidate.mode==='import';
-    openModal(tr('数据迁移','Data migration'),bodyHtml(candidate),importing?tr('导入','Import'):tr('下载 .emp','Download .emp'),()=>submit(candidate));
+    const submitLabel=candidate.demo?tr('结束演示','Finish demo'):importing?tr('导入','Import'):tr('下载 .emp','Download .emp');
+    openModal(tr('数据迁移','Data migration'),savedBody?'':bodyHtml(candidate),submitLabel,
+      importing&&!candidate.token?null:()=>submit(candidate),null,{back:candidate.parent?()=>back(candidate):null});
+    if(savedBody)$('modal_body').append(savedBody);
     $('modal_title').innerHTML=`<span>${esc(tr('数据迁移','Data migration'))}</span>${shadowHelp(mergeRules())}`;
     const help=$('modal_title').querySelector('.shadow-help');help.dataset.migrationRulesHelp='';help.setAttribute('aria-label',tr('导入合并规则','Import merge rules'));
     const node=$('shadow_migration');
     node.onclick=event=>{
       const mode=event.target.closest('[data-migration-mode]')?.dataset.migrationMode;
-      if(mode){candidate.controller.abort();view={mode,rows:mode==='export'?services(state):[],includeContext:true,includeRename:true,controller:new AbortController()};render();return;}
+      if(mode){clearTimeout(previewTimer);candidate.controller.abort();view={mode,rows:mode==='export'?services(state):[],includeContext:true,includeRename:true,controller:new AbortController()};render();return;}
       if(event.target.closest('[data-migration-decode]'))void decode(candidate);
       if(event.target.closest('[data-migration-demo]'))void demo(candidate);
       const all=event.target.closest('[data-migration-all]');if(all){candidate.rows.forEach(row=>row.selected=row.exportable!==false&&all.dataset.migrationAll==='true');render();schedulePreview(candidate);}
     };
     node.oninput=event=>{
       const input=event.target;
+      if(input.dataset.migrationPreferenceSource!==undefined){
+        candidate.preferenceChoices ||= {};candidate.preferenceChoices[input.dataset.migrationPreferenceSource] ||= {};
+        candidate.preferenceChoices[input.dataset.migrationPreferenceSource][input.dataset.migrationPreferenceKind]=input.value;
+        schedulePreview(candidate);return;
+      }
       if(input.dataset.migrationName!==undefined){
         candidate.nameEdits ||= new Map();candidate.nameEdits.set(input.dataset.migrationName,input.value);
         const rows=services(candidate.importConfig,true);
@@ -47,6 +67,13 @@ function createMigration() {
     };
     updatePreview();
   }
+  function openPreview(candidate,result,isDemo=false) {
+    const config={...result.payload.config,model_previews:result.payload.model_previews};
+    view={mode:'import',rows:services(config,true,{accounts:result.credential_accounts,providers:result.credential_providers}),
+      includeContext:candidate.includeContext,includeRename:candidate.includeRename,controller:new AbortController(),
+      token:result.token,demo:isDemo,parent:{view:candidate,body:$('shadow_migration')}};
+    render();schedulePreview(view);
+  }
   function schedulePreview(candidate) {
     if(candidate.mode!=='import'||!candidate.token)return;
     candidate.busy=true;candidate.previewReady=false;updatePreview();
@@ -58,39 +85,42 @@ function createMigration() {
       try{
         const result=await api('/api/migration/preview',{method:'POST',body:JSON.stringify({token:candidate.token,current_config:migrationScrub(state),selections:selections(candidate),...options(candidate)}),signal:controller.signal});
         if(!active(candidate)||controller.signal.aborted)return;
-        candidate.importConfig=result.config;candidate.warnings=result.warnings || [];candidate.previewReady=true;$('modal_status').textContent='';
+        candidate.importConfig=result.config;candidate.warnings=result.warnings || [];candidate.preferenceConflicts=result.preference_conflicts || [];candidate.previewReady=true;$('modal_status').textContent='';
+        candidate.preferenceChoices=Object.fromEntries(candidate.preferenceConflicts.map(conflict=>[conflict.source_id,Object.fromEntries(Object.keys(conflict.fields).filter(kind=>candidate.preferenceChoices?.[conflict.source_id]?.[kind]).map(kind=>[kind,candidate.preferenceChoices[conflict.source_id][kind]]))]));
       }catch(error){if(active(candidate)&&!controller.signal.aborted)$('modal_status').textContent=error.message;}
       finally{if(active(candidate)&&!controller.signal.aborted){candidate.busy=false;updatePreview();}}
     },180);
   }
   async function demo(candidate) {
+    if(!active(candidate)||candidate.busy)return;
     candidate.busy=true;updatePreview();
     try {
       const result=await api('/api/migration/demo',{method:'POST',body:JSON.stringify({current_config:migrationScrub(state)}),signal:candidate.controller.signal});
       if(!active(candidate))return;
-      candidate.demo=true;candidate.token=result.token;candidate.rows=services(result.payload.config,true,{accounts:result.credential_accounts,providers:result.credential_providers});
-      render();schedulePreview(candidate);
+      openPreview(candidate,result,true);
     } catch(error) {if(active(candidate))$('modal_status').textContent=error.message;}
-    finally {if(active(candidate)){candidate.busy=false;updatePreview();}}
+    finally {candidate.busy=false;if(active(candidate))updatePreview();}
   }
   async function decode(candidate) {
+    if(!active(candidate)||candidate.busy)return;
     const file=$('shadow_migration_file').files[0], password=$('shadow_import_password').value;
     if(!file||!password){$('modal_status').textContent=tr('请选择文件并填写密码','Select a file and enter its password');return;}
     if(file.size>32*1024*1024){$('modal_status').textContent=tr('迁移包不能超过 32 MiB','Migration packages cannot exceed 32 MiB');return;}
-    const button=document.querySelector('[data-migration-decode]');button.disabled=true;$('modal_status').textContent=tr('正在打开迁移包…','Opening package…');
+    candidate.busy=true;updatePreview();$('modal_status').textContent=tr('正在打开迁移包…','Opening package…');
     try{
       const bundle=bytesToBase64(new Uint8Array(await file.arrayBuffer()));
       const result=await api('/api/migration/decode',{method:'POST',body:JSON.stringify({password,bundle}),signal:candidate.controller.signal});
       if(!active(candidate))return;
-      candidate.token=result.token;candidate.rows=services({...result.payload.config,model_previews:result.payload.model_previews},true,{accounts:result.credential_accounts,providers:result.credential_providers});
-      render();schedulePreview(candidate);
+      openPreview(candidate,result);
     }catch(error){if(active(candidate))$('modal_status').textContent=error.message;}
-    finally{if(button.isConnected)button.disabled=false;}
+    finally{candidate.busy=false;if(active(candidate))updatePreview();}
   }
   async function submit(candidate) {
     if(!active(candidate)||candidate.busy)return;
     if(candidate.mode==='import'){
-      if(!candidate.previewReady||!candidate.importConfig)throw new Error(tr('请等待预览更新','Wait for the preview to update'));
+      if(!candidate.token)throw new Error(tr('请选择迁移文件、填写密码，然后点击「打开迁移包」。','Select a migration file, enter its password, then click Open package.'));
+      if(!candidate.previewReady||!candidate.importConfig)throw new Error(tr('服务列表尚未准备好，请稍候再导入。','The service list is not ready yet. Please wait before importing.'));
+      if(candidate.preferenceConflicts?.some(conflict=>Object.values(conflict.fields).some(field=>!field.resolved)))throw new Error(tr('请在导入预览中选择模型显示与上下文设置','Choose model visibility and context settings in this import preview'));
       if(candidate.demo){closeModal();notice(tr('演示已完成，未保存服务','Demo finished; no services saved'));return;}
       const selected=selections(candidate);
       for(const row of importedNameRows(candidate)){

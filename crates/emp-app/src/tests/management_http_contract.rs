@@ -246,10 +246,7 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     assert!(enabled.starts_with("HTTP/1.1 200 OK\r\n"), "{enabled}");
     assert!(enabled.contains("\"state\":\"emp_applied\""));
     let applied = std::fs::read_to_string(&codex_config).unwrap();
-    assert!(applied.contains(&format!(
-        "openai_base_url = \"http://127.0.0.1:{}/v1\"",
-        server.local_addr().port()
-    )));
+    assert!(applied.contains(&format!("openai_base_url = \"{}\"", server.state.base_url)));
     assert!(applied.contains("model_catalog_json"));
     assert!(applied.contains("[features]\nweb_search = true"));
 
@@ -604,8 +601,7 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
     assert_eq!(support["codex"]["target"], "native");
     assert_eq!(support["codex"]["verification_scope"], "none");
 
-    // Probe the already loaded catalog before the explicit restore closes
-    // management admission and asks this EMP process to stop.
+    // Probe the already loaded catalog before explicitly restoring settings.
     *codex_models.lock().unwrap() = vec![json!({"id":"gpt-5.5"})];
     let native_config_before_check = std::fs::read(root.join("config.toml")).unwrap();
     let catalog_requests_before_check = catalog_requests.load(std::sync::atomic::Ordering::Relaxed);
@@ -632,8 +628,7 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
     );
 
     // A runtime observation record is best-effort metadata. Its write failure
-    // must not turn a committed native restore into an error or stop before
-    // the UI receives the restore result.
+    // must not turn a committed native restore into an error or stop EMP.
     let runtime_path = server
         .state
         .backend
@@ -655,24 +650,14 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
     let restored_result = response_json(&restored);
     assert_eq!(restored_result["configuration"]["state"], "native");
     assert_eq!(restored_result["runtime"]["target"], "native");
-    // The client returns after reading Content-Length, before the handler's
-    // half-close and shutdown store necessarily run. Wait for the observable
-    // post-response transition with a deadline.
-    let shutdown_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-    while !server
-        .state
-        .shutdown
-        .load(std::sync::atomic::Ordering::Acquire)
-        && std::time::Instant::now() < shutdown_deadline
-    {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
     assert!(
-        server
+        !server
             .state
             .shutdown
             .load(std::sync::atomic::Ordering::Acquire)
     );
+    assert!(request(&server, "/healthz", &[]).starts_with("HTTP/1.1 200"));
+    assert!(request(&server, "/api/config", &[&session]).starts_with("HTTP/1.1 200"));
     let restored_config = std::fs::read_to_string(root.join("config.toml")).unwrap();
     // The earlier direct manager.restore() restored routing fields only.
     // Explicit restore also removes the separately leased search settings.

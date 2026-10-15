@@ -30,8 +30,8 @@ const AUTH_DOMAIN: &[u8] = b"emp-native-route-auth\0";
 
 /// Read the original native Codex model catalog.
 ///
-/// Codex's configured cache may contain EMP's merged catalog. In that case
-/// Python EMP reads the preserved native snapshot beside it instead.
+/// Use the latest native source, excluding Codex caches of EMP's merged catalog.
+/// EMP refreshes its own snapshot; Codex alone owns its model-cache format.
 pub fn load_native_catalog(config: &Value) -> Value {
     let Some(config) = config.as_object() else {
         return empty_catalog();
@@ -52,35 +52,45 @@ pub fn preserve_native_catalog(config: &Value) -> Result<(), emp_state::Filesyst
     let Some(config) = config.as_object() else {
         return Ok(());
     };
-    let path = native_catalog_path(config);
-    let destination = path
+    let destination = preserved_native_catalog_path(config);
+    if read_catalog(&destination).as_ref() == Some(&native) {
+        return Ok(());
+    }
+    emp_state::filesystem::write_catalog_json(&destination, &native)
+}
+
+/// EMP-owned destination for native subscription refreshes and bootstrap copies.
+pub fn preserved_native_catalog_path(config: &Map<String, Value>) -> PathBuf {
+    native_catalog_path(config)
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("easy-multi-provider")
-        .join("native-catalog.json");
-    emp_state::filesystem::write_catalog_json(&destination, &native)
+        .join("native-catalog.json")
 }
 
 fn load_native_catalog_from_map(config: &Map<String, Value>) -> Value {
     let path = native_catalog_path(config);
-    let Some(value) = read_catalog(&path) else {
-        return empty_catalog();
+    let preserved_path = preserved_native_catalog_path(config);
+    let is_native = |value: &Value| {
+        !value
+            .get("etag")
+            .and_then(Value::as_str)
+            .is_some_and(|etag| etag.trim_matches('"').starts_with("emp-"))
     };
-    let generated = value
-        .get("etag")
-        .and_then(Value::as_str)
-        .is_some_and(|etag| etag.trim_matches('"').starts_with("emp-"));
-    if !generated {
-        return value;
+    let cached = read_catalog(&path).filter(is_native);
+    let preserved = read_catalog(&preserved_path).filter(is_native);
+    // A later genuine Codex refresh can seed the snapshot again. An EMP-merged
+    // cache must never feed back into the native source, regardless of its age.
+    let modified = |path: &Path| fs::metadata(path).and_then(|meta| meta.modified()).ok();
+    let codex_is_newer = modified(&path)
+        .zip(modified(&preserved_path))
+        .is_some_and(|(cached, preserved)| cached > preserved);
+    match (cached, preserved) {
+        (Some(cached), Some(_)) if codex_is_newer => cached,
+        (_, Some(preserved)) => preserved,
+        (Some(cached), None) => cached,
+        (None, None) => empty_catalog(),
     }
-    read_catalog(
-        &path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("easy-multi-provider")
-            .join("native-catalog.json"),
-    )
-    .unwrap_or_else(empty_catalog)
 }
 
 /// Resolve one native/subscription model with Python-compatible cache

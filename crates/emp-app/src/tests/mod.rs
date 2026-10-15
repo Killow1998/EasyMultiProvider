@@ -93,6 +93,14 @@ fn canonical_root(directory: &TempDir) -> PathBuf {
         .expect("canonical temporary root")
 }
 
+/// Existing imported-account fixtures must own a key before startup validates them.
+fn credential_root(directory: &TempDir) -> PathBuf {
+    let root = canonical_root(directory);
+    emp_state::VaultStore::from_sources(None, &root.join("state/master.key"))
+        .expect("initialize fixture credential store");
+    root
+}
+
 fn complete_response(stream: &mut TcpStream) -> String {
     stream
         .set_read_timeout(Some(Duration::from_secs(20)))

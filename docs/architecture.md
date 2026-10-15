@@ -958,7 +958,10 @@ context capacity.
 
 Native restoration and exit restore configuration only. Idle WebSockets poll
 for the admission-drain state and close with 1001; active executors finish or
-the restore times out and reopens admission. Request-local checkpoint decoding
+the restore times out and reopens admission. Successful Restore Native also
+reopens admission and keeps EMP's service and management page available for
+Enable EMP. Quit restores configuration and closes admission permanently before
+ending the process. Request-local checkpoint decoding
 continues while EMP is enabled. Direct native resume of a legacy `emp1:` thread
 uses `EMP migrate-history --thread-id ID`: only that database row and bounded
 lineage are read, only that rollout is changed, and the selected writer lock,

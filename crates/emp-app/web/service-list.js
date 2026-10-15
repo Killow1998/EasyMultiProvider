@@ -1,7 +1,7 @@
 // A view of existing accounts/providers; storage and route identities stay with their owners.
 function createServiceList({getState, $, esc, tr, presets, icon, activity, accountSummary, quotaMeters,
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
-  usageSummary, notice, serviceIcon = (kind,id,label,brand,cpa) => activity(kind,id,label)+icon(brand,cpa), updateServiceErrors = () => {}, onMount = () => {}}) {
+  usageSummary, notice, settingsConflict = () => false, serviceIcon = (kind,id,label,brand,cpa) => activity(kind,id,label)+icon(brand,cpa), updateServiceErrors = () => {}, onMount = () => {}}) {
   const refreshing = new Set(), errors = new Map();
   let detailsController = null;
   function stop() { detailsController?.abort(); detailsController = null; }
@@ -24,7 +24,7 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     const label = account.native ? 'Native' : account.name || account.id;
     const status = !account.credential_set ? tr('未登录','Not signed in') : account.credential_status === 'invalid' ? tr('登录已失效','Sign-in expired') : '';
     const duplicateText = account.duplicate ? (duplicate ? tr('模型由 Native 管理','Models managed by Native') : tr('重复账号','Duplicate account') + ' · ' + account.duplicate_of) : '';
-    const detail = [duplicateText].filter(Boolean).map(esc).join(' · ');
+    const detail = [duplicateText,settingsConflict(account)?tr('请确认模型显示与上下文设置','Review model visibility and context settings'):''].filter(Boolean).map(esc).join(' · ');
     const actions = action('account-refresh', account.id, busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh'), 'refresh', busy || !account.credential_set)
       + action('account-quota-history', account.id, tr('趋势','Trend'), 'chart');
     return `<article class="entity-card service-card service-account${duplicate ? ' account-duplicate' : ''}" data-service="account:${esc(account.id)}">
@@ -98,7 +98,7 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
   function render() {
     const state = getState(), box = $('services');
     const focused = box.contains(document.activeElement) ? document.activeElement?.dataset : null;
-    const accounts = [...(state.native_account ? [state.native_account] : []), ...(state.accounts || [])];
+    const accounts = visibleAccounts();
     const groupedModels = new Map();
     for (const model of state.models || []) {
       if (!groupedModels.has(model.provider)) groupedModels.set(model.provider, []);
@@ -111,6 +111,11 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     if (focused?.uiAction) {
       [...box.querySelectorAll('[data-ui-action]')].find(button => button.dataset.uiAction === focused.uiAction && button.dataset.id === focused.id)?.focus({preventScroll:true});
     }
+  }
+  function visibleAccounts() {
+    const state=getState(),accounts=[...(state.native_account?[state.native_account]:[]),...(state.accounts||[])];
+    return accounts.filter(account=>!account.duplicate||!accounts.some(owner=>owner.credential_set&&
+      (account.duplicate_of==='当前 Codex 登录'?owner.native:owner.id===account.duplicate_of)));
   }
   async function details(id, navigation = {}) {
     const provider = (getState().providers || []).find(item => item.id === id);
@@ -148,5 +153,5 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
       return false;
     } finally { refreshing.delete(id); render(); }
   }
-  return {render, details, refresh, tabs, open, mount, stop};
+  return {render, details, refresh, tabs, open, mount, stop, accounts:visibleAccounts};
 }

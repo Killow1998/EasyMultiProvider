@@ -1,6 +1,80 @@
 # Shadow frontend
 
-Preview frontend changes against a running EMP without changing its configuration
+The v0.13.2 product flows are embedded from `crates/emp-app/web` in the normal
+executable. The review overview, fault selector and mock lifecycle actions stay
+in this development directory and are injected only by the Shadow launcher.
+`e2e_formal.py` checks the actual executable rejects these development routes;
+`e2e_startup_recovery.py` checks real reset and exit against disposable data.
+
+Use one entry point for current candidate previews:
+
+```sh
+python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --port 4201
+```
+
+Open `http://127.0.0.1:4201/`. **Changes** (`/?review=1`) lists the ten candidate
+adjustment groups since v0.13.1: six frontend flows (five revised flows and the
+new recovery page) plus four backend groups. agy is separate. The six frontend
+entries cover migration navigation, merged account display, import preference
+conflicts, removal progress, Restore Native versus Quit, and key recovery.
+
+The **Demos** menu contains this overview, **Key recovery**, **Restore Native /
+Quit**, **Remove account**, **Existing preference conflicts**, **Import the same
+account**, **All services running**, and **All service errors**. These use the
+same production frontend modules and a disposable synthetic workspace. Return
+from a service demo to the same workspace; there is no separate import-demo URL
+or launcher. Production backend configuration and credentials are not read.
+
+For an import, choose **Import the same account**, then **Open package**. Resolve
+visibility/context conflicts in the preview and click **Import** once. Saves
+apply only to the disposable backend. Service activity/error galleries are
+read-only. Restarting Shadow resets its temporary data. Ctrl+C stops it.
+
+`/recovery` serves the actual candidate recovery HTML with a preview adapter.
+Its six scenarios include missing/invalid/mismatched keys, key permissions,
+invalid settings and an interrupted reset. All offer clear-and-set-up or exit;
+there is no retry or manual file-repair step. Optional backup (unchecked by
+default), reset and exit are simulated and repeatable;
+no files are cleared. The simulated lifecycle flow keeps the disposable server
+alive even after Quit. Removal operates on a synthetic account and adds a
+clearly announced 0.7-second delay to make progress visible. These are UI
+demonstrations, not Windows runtime acceptance.
+Existing preference conflicts populate a synthetic duplicate in this same
+workspace and open the actual model settings dialog; saving affects only that
+workspace. The import demo exercises the current preference choices before import.
+
+Verify the new recovery/lifecycle/removal review flows with:
+
+```sh
+python3 scripts/shadow_frontend/e2e_preview_review.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-shadow-review.json
+```
+
+Validate that flow with:
+
+```sh
+python3 scripts/shadow_frontend/e2e_account_merge_demo.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-import-merge.json
+```
+
+The focused production-asset migration/account acceptance runs against disposable
+EMP backends and synthetic credentials, with no real model calls:
+
+```sh
+python3 scripts/shadow_frontend/e2e_migration_navigation.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-migration-acceptance.json
+```
+
+It requires Firefox and geckodriver. It covers migration guidance, direct-parent
+Back, cancellation, an encrypted package import, same-account service merging,
+visibility/context conflict choices, and removal of a merged imported service.
+It retains coverage for existing historical preference conflicts; new import
+conflicts are covered by the import-stage acceptance above.
+The same launcher also supports the optional read-only live-data mode below.
+For ordinary candidate review, use the disposable workspace above.
+
+For read-only inspection of existing local data, preview frontend changes against
+a running EMP without changing its configuration
 or interrupting requests. Python 3.10+ is sufficient; no packages are required.
 
 From the repository root:
@@ -149,6 +223,10 @@ and demonstration adapters; it no longer carries duplicate accepted UI assets.
 - `crates/emp-app/web/model-manager.js`: shared service-scoped model operations and editor navigation.
 - `shadow_usage.py`: read-only statistics fallback for older installed backends.
 - `shadow-service-demo.js`: sample services and demonstration state.
+- `preview-review.js`: candidate change inventory, synthetic removal/preferences
+  and simulated lifecycle actions using production dialogs.
+- `preview-recovery.js`: simulated responses around the production recovery HTML;
+  `candidate_web.py` blocks recovery API forwarding as a second boundary.
 - `crates/emp-app/web/service-presentation.js/css`: accepted account/context/feedback presentation.
 - `crates/emp-app/web/migration.js`: shared dialog state, requests, debounce and cancellation.
 - `crates/emp-app/web/migration-view.js` and `migration.css`: service/model projection, markup and scoped layout.

@@ -1,7 +1,9 @@
 // Owns account detail reads and alias interaction; routing and configuration stay outside.
 function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage, persistState,
-  uiIcon, subscriptionPlanLabel, resetCreditCount, renderInfo}) {
+  uiIcon, subscriptionPlanLabel, resetCreditCount, renderInfo, confirmRemoval, notice,
+  onRemoved, closeModal, syncSavedCatalog}) {
   let current = null;
+  const removing = new Set();
   function stop() { current?.controller.abort(); current = null; }
   function findAccount(id) { return [getState().native_account, ...(getState().accounts || [])].filter(Boolean).find(account => account.id === id); }
   async function openAccountDetails(id, navigation = {}) {
@@ -38,5 +40,23 @@ function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage
     catch (error) { if ($('account_alias') === node) $('modal_status').textContent = error.message; }
     finally { element.disabled = false; }
   }
-  return {open:openAccountDetails, refresh:refreshAccountDetailsUsage, saveAlias:saveAccountAlias, stop};
+  async function remove(id, button) {
+    const account=findAccount(id);
+    if(!account || account.native || removing.has(id) || !confirmRemoval(tr(`移除账号 ${account.name || id}？`,`Remove account ${account.name || id}?`)))return;
+    const owner=current, label=button?.textContent;
+    removing.add(id);
+    if(button){button.disabled=true;button.textContent=tr('正在移除…','Removing…');}
+    try {
+      await api('/api/accounts/'+encodeURIComponent(id),{method:'DELETE'});
+      onRemoved(await api('/api/config'));
+      if(current===owner && owner?.id===id)closeModal();
+      notice(tr('账号已移除','Account removed'));
+      void syncSavedCatalog();
+    } catch(error) {notice(error.message,true);}
+    finally {
+      removing.delete(id);
+      if(button?.isConnected){button.disabled=false;button.textContent=label;}
+    }
+  }
+  return {open:openAccountDetails, refresh:refreshAccountDetailsUsage, saveAlias:saveAccountAlias, remove, stop};
 }

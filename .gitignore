@@ -33,3 +33,6 @@ __pycache__/
 !crates/emp-app/src/services/accounts/
 crates/emp-app/src/services/accounts/*
 !crates/emp-app/src/services/accounts/*.rs
+!crates/emp-state/src/accounts/
+crates/emp-state/src/accounts/*
+!crates/emp-state/src/accounts/*.rs

@@ -8,6 +8,7 @@ use emp_state::{ExportGroups, decrypt_migration_bundle, export_migration_bundle_
 use serde_json::Value;
 
 const MIN_EXPORT_PASSWORD_UTF8_BYTES: usize = 12;
+mod preferences;
 mod preview;
 pub(crate) use preview::{MigrationPreviews, preview_request};
 
@@ -219,6 +220,14 @@ fn commit_import(
             .ok_or(MigrationError::Internal)?
             .map_err(MigrationError::invalid)
     })?;
+    finish_import(state, summary, receipt)
+}
+
+fn finish_import(
+    state: &ServerState,
+    summary: emp_state::migration::MigrationImportSummary,
+    receipt: &mut OperationObservation,
+) -> Result<Value, MigrationError> {
     receipt.check("bundle_committed", Some(true));
     let (path, _) = receipt.step("publish_catalog", || {
         crate::services::catalog::refresh_catalog(state).map_err(|_| MigrationError::Internal)
@@ -230,4 +239,32 @@ fn commit_import(
         result["renamed_accounts"] = summary.renamed_accounts.into();
     }
     Ok(result)
+}
+
+fn commit_selected(
+    state: &ServerState,
+    payload: &Value,
+    choices: &Value,
+    receipt: &mut OperationObservation,
+) -> Result<Value, MigrationError> {
+    let summary = receipt.step("commit_bundle", || {
+        crate::services::accounts::replacing_account_credentials(state, |config| {
+            let resolution = preferences::resolve(state, config, payload, choices, true)?;
+            let (mut target, auth, summary) = emp_state::migration::preview_migration_import(
+                config,
+                &resolution.payload,
+                &state.backend.configuration.config_path,
+                &state.backend.configuration.vault,
+                &std::collections::BTreeMap::new(),
+            )
+            .map_err(MigrationError::invalid)?;
+            preferences::apply(&mut target, &resolution.updates);
+            config
+                .commit_migration(&target, &auth)
+                .map_err(MigrationError::invalid)?;
+            Ok(summary)
+        })
+        .ok_or(MigrationError::Internal)?
+    })?;
+    finish_import(state, summary, receipt)
 }

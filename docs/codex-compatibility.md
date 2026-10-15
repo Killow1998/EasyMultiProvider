@@ -37,8 +37,67 @@ model after a response ETag change within one process. All credentials and
 upstreams were synthetic, with external network proxies blocked. Windows source
 behavior still needs a candidate-binary acceptance; production is unchanged.
 
+## 2026-10-14 development checks and 0.163 watchlist
+
+The official stable release remains [0.162.1](https://github.com/openai/codex/releases/tag/rust-v0.162.1)
+(2026-10-09 19:44:51 UTC); [0.163.0-alpha.11](https://github.com/openai/codex/releases/tag/rust-v0.163.0-alpha.11)
+is a prerelease (2026-10-14 03:27:29 UTC). The maintenance window stays
+**0.153–0.162**. GitHub commit comparisons confirm all three changes below are
+ancestors of alpha.11; this is source provenance, not engine acceptance.
+
+| Upstream change | EMP assessment and required evidence |
+| --- | --- |
+| [Incomplete response usage, #53670](https://github.com/openai/codex/pull/53670), `816fa70` | Preserve response ID, valid reported usage and terminal reason through SSE/WebSocket. Avoid duplicate usage accumulation; the upstream change is not evidence of duplicate provider billing. |
+| [Background compaction lifecycle, #53800](https://github.com/openai/codex/pull/53800), `9e03960` | Enabled by `AsyncCompaction`; test pending-result adoption against steering, newer tool outputs, cancellation and account/routing changes with the actual prerelease engine. Existing foreground compaction tests do not cover that lifecycle. |
+| [Daemon feature overrides, #53751](https://github.com/openai/codex/pull/53751), `e762c05` | Applies to explicit daemon restart and persisted feature toggles. Check the actual App/IDE backend and overrides; it is not a reason for EMP to restart a user's running client. |
+
+The local development candidate now writes Native subscription refreshes to
+EMP's own `easy-multi-provider/native-catalog.json`. Codex's model cache remains
+read-only to EMP. The newer native source is selected by file modification
+time; equal/unknown times favor the preserved snapshot. Caches marked with an
+EMP merged ETag are excluded from native input. A missing Codex cache no longer
+hides an available native snapshot. This changes source selection, not Codex's
+cache schema or the user's existing files.
+
+Focused Linux fixture evidence for this candidate:
+
+- Catalog contracts: 29 passed; snapshot selection/ownership: 3 passed. The
+  new byte-preservation assertion failed on the old native refresh writer and
+  passes with the fix while newly fetched and retained models remain routable.
+- Native transport contracts: 29 passed. Incomplete WebSocket responses retain
+  usage and response ID and keep the previous successful continuation base.
+  The additional SSE repeated-response test passes: the same response ID is
+  relayed twice but usage is accumulated once; missing/malformed counts are not
+  estimated. These checks required no production protocol change.
+- Existing large-context continuation fixtures pass for Native and imported
+  accounts: 14,686,529 initial bytes, twenty incremental turns, one WebSocket,
+  one warmup, zero HTTP fallbacks and zero full-history recoveries. Rejection,
+  cancellation, state-loss recovery and account/route isolation fixtures pass.
+- Real installed Linux Codex **0.162.1** passes online catalog discovery and
+  same-process ETag refresh using disposable homes and synthetic upstreams.
+
+All these are local candidate checks, not a released compatibility expansion.
+The new restore contract's complete ten-series rerun, actual 0.163 asynchronous
+compaction, real-provider large-context warmup, Windows/macOS and App/IDE
+acceptance remain pending. No real credentials, paid models or running user
+clients were used by these fixtures.
+
 ## Protocol decisions
 
+- **Windows loopback discovery:** the development candidate advertises
+  `http://localhost:<port>/v1` to Codex while retaining the numeric loopback
+  listener. The reported installed Windows engine `0.162.0-alpha.17.2` failed
+  discovery through `127.0.0.1` under its existing proxy settings but succeeded
+  through `localhost` in a synthetic isolated probe. Startup upgrades only the
+  previous exact `127.0.0.1` URL on the same port when the owned fields are still
+  applied; other listeners and external edits remain conflicts. Native and
+  API-only catalog modes preserve original settings across repeated recovery
+  and shutdown. No system proxy, registry, environment or client process changes
+  are made by this product fix. Linux Codex 0.162.1 passes live catalog discovery,
+  synthetic response routing and same-process ETag refresh with an unreachable
+  proxy and a `localhost`-only exception. This does not cover proxy policies
+  that explicitly proxy localhost, modified localhost resolution or a packaged
+  Windows build; candidate-binary acceptance remains pending.
 - **Provider capabilities:** EMP's normal integration changes the existing
   Codex endpoint and catalog settings. It does not replace them with a new
   custom provider. In 0.162, omitted capability overrides retain provider

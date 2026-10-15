@@ -53,6 +53,23 @@ Download the latest reviewed build from [GitHub Releases](https://github.com/Kil
 | macOS Apple Silicon | `.dmg` | Drag **EMP** to Applications |
 | macOS Intel | `.dmg` | Drag **EMP** to Applications |
 
+On Windows, normal startup connects Codex through `localhost` so local proxy
+exceptions apply. EMP automatically upgrades its previous numeric loopback
+setting on the same port and preserves the original settings for restoration.
+No special launch command is needed. An already-open Codex client may need a
+normal restart after its current work finishes to load changed settings.
+
+If saved settings or their encryption key cannot be opened, EMP shows a recovery
+page with **Clear old settings and set up again** and **Quit EMP**.
+Clearing requires confirmation and creates new settings and a new master key;
+accounts and API keys must be imported again. **Keep a backup** is optional and
+unchecked by default. Selecting it retains the old settings and key together;
+otherwise the old local EMP data is removed after the reset succeeds. Native
+Codex sign-in, conversations and custom external data directories are preserved.
+An interrupted reset uses the same confirmed action; EMP handles the saved
+transaction files automatically. Developer-supplied external key overrides are
+reported as launch errors and do not enter this local-settings recovery flow.
+
 For the Linux `.tar.gz`, run these commands in the download directory:
 
 ~~~bash
@@ -135,6 +152,8 @@ a new model is not visible yet.
   Codex catalog responses. EMP refreshes automatically, keeps the last good cache
   when refresh fails, and preserves visibility, aliases, and context overrides.
   A newly exposed model needs no EMP release or manual model-list edit.
+  Native refreshes write EMP's own snapshot; Codex's `models_cache.json` remains
+  a read-only source for EMP, preserving Codex's cache metadata.
 - Add official or custom Providers through the Web UI.
 - Route Claude requests through the installed Claude Code CLI using either the
   current OS user's Claude Code sign-in or a compatible CPA Base URL and API key.
@@ -165,7 +184,15 @@ EMP preserves native Codex sessions, `resume`, WebSockets, compression, and MCP 
 While EMP is active, it converts EMP-owned checkpoints in each request when
 switching to a native model. **Restore Native**, quitting EMP, and `EMP restore`
 restore configuration only; they do not scan or rewrite saved conversations.
-Active requests must finish first. Idle WebSocket connections close normally.
+**Restore Native** keeps EMP and its management page running; **Enable EMP**
+can apply integration again in the same process. **Quit EMP** restores native
+settings and then ends the service.
+The Web UI waits for active requests before restoring or quitting. Idle
+WebSocket connections close normally. Closing the terminal or receiving an OS
+exit notification restores EMP-owned settings before waiting for background
+work; an active turn can be interrupted. Windows logoff and shutdown are handled
+inside EMP before termination, while canceling shutdown leaves EMP running.
+Force-killing a process or losing power gives it no opportunity to run cleanup.
 
 To resume an old conversation containing EMP-owned compaction data directly in
 native Codex after EMP is disabled, close that conversation and run:
@@ -206,6 +233,23 @@ See [usage accounting](docs/usage-accounting.md) and [usage verification](docs/u
 
 Subscription editing supports per-model context token counts. Leave a field blank to use the model default.
 
+Confirmed copies of the same ChatGPT account share one service, including Native
+and imported credentials. Conflicting model visibility and context settings are
+resolved in the import preview before committing the import. An `auth.json`
+import without model settings inherits the existing account's settings.
+Existing credential and
+history references are retained. Removing a merged imported service removes its
+confirmed imported aliases together; the local Native sign-in is preserved.
+
+EMP updates its catalog when services change. Native subscription integration uses
+Codex's online catalog: response version notifications refresh a running engine
+without restarting it. This is verified with Codex 0.162.1. That engine also
+refreshes its online catalog in the background every 4 minutes 30 seconds.
+An already-open picker must query the updated list; an immediate idle-picker
+update is not guaranteed. API-only integration retains the static-file fallback,
+and an engine already started with that static catalog needs a restart to change
+catalog sources. `model/list` has no supported `forceReload` parameter.
+
 **Refresh model limits** retrieves the subscription catalog with that account's credentials. Configured values cannot exceed the upstream-advertised maximum. Codex's default 95% effective percentage is preserved, so an advertised 872,000-token window becomes 828,400 usable tokens.
 
 External Provider models use the same 95% rule, so a 256,000-token window shows as 243K in the Codex model picker. The catalog display and EMP request checks use the same effective window.
@@ -223,7 +267,7 @@ External Provider models. Manage each service’s models from its own Model sett
 control changes catalog labels, not context windows or request limits.
 
 
-Preview frontend changes against a running backend with the [read-only shadow frontend](scripts/shadow_frontend/README.md). Draft changes remain in the preview.
+Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/README.md), which defaults to a disposable backend with synthetic data. Its review controls and simulated failures are not included in the normal management page.
 
 ## Codex compatibility
 
@@ -314,6 +358,11 @@ See [diagnostic journal specification](docs/diagnostic-journal-spec.md).
 ## Migration
 
 EMP can export and import password-protected `.emp` migration files.
+
+Choose the `.emp` file, enter its export password, then click **Open migration
+package**. Review the services before clicking **Import**. The preview and demo
+have a Back button that retains the chosen file and password; closing discards
+the dialog.
 
 An export can include:
 

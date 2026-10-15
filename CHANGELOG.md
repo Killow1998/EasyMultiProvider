@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.13.2 (2026-10-14)
+
+### 中文
+
+- 更新数据迁移流程：先打开加密包并预览，再一次确认导入；返回保留已选文件。相同账号按验证身份合并，模型显示与上下文冲突在提交前处理。
+- 删除导入账号时立即显示进度，取消该账号的额度任务；提交后更新列表，目录刷新在后台继续。
+- 区分“恢复原生”和“退出 EMP”：恢复后 EMP 保持运行，可再次启用；退出时先还原由当前实例管理的原生设置，再结束服务。
+- 新增简体中文／English 启动恢复页。旧配置或密钥无法使用时，可确认清除并重新配置，备份可选且默认不勾选；中断的重建自动继续处理，保留原生登录和对话。
+- 修复 Native 模型目录写入 Codex 缓存格式的问题，改由 EMP 自己的目录快照管理；改进 Native 额度身份匹配、启动诊断和 Windows 本地地址迁移。
+- 拆分账号删除、偏好合并、退出生命周期与启动恢复职责；移除过时分支和无效状态字段。正式版采用已验证的产品界面，Shadow 总览、模拟故障和假数据仅保留在开发预览。
+- 验证范围和限制：Linux 隔离进程、浏览器及协议行为回归；Windows 实机退出／恢复和桌面 App／IDE 验收仍需继续，未宣称完整支持 0.163 预发布版。
+
+### English
+
+- Preview encrypted migration packages before a single import confirmation, preserving file selection on Back. Merge verified account identities and resolve model visibility/context conflicts before committing.
+- Show account-removal progress immediately, cancel only that account's quota work, and update the list before background catalog refresh completes.
+- Separate Restore Native from Quit EMP: restoring keeps EMP running and available to enable again; quitting restores owned native settings before stopping the service.
+- Add a Simplified Chinese / English startup recovery page for unusable settings or keys. Confirm clearing and setting up again, optionally retain a backup, and recover interrupted resets automatically while preserving native sign-in and conversations.
+- Keep Native catalog refreshes in EMP-owned snapshots instead of overwriting Codex's cache format. Improve Native quota identity matching, startup diagnostics and Windows loopback migration.
+- Isolate account deletion, preference merging, exit lifecycle and startup recovery responsibilities; remove obsolete branches and redundant state fields. Ship accepted product UI while keeping Shadow review controls, simulated failures and fixtures development-only.
+- Validation scope and limits: isolated Linux process, browser and protocol regressions; Windows machine-level exit/recovery and desktop App/IDE acceptance remain pending. No complete 0.163 prerelease compatibility claim.
+
 ## 0.13.1 (2026-10-12)
 
 ### 中文

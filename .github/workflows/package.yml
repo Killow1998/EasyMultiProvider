@@ -77,6 +77,11 @@ jobs:
       - name: Verify native background update and rollback
         run: cargo +1.93.1 xtask package-smoke
 
+      - name: Verify startup recovery and native restoration on exit
+        run: >-
+          cargo +1.93.1 test --locked -p emp-app
+          --test startup_recovery --test exit_process -- --test-threads=1
+
       - name: Verify request cancellation and socket teardown
         run: >-
           cargo +1.93.1 test --locked -p emp-app --lib

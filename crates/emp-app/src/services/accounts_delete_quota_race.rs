@@ -59,14 +59,17 @@ fn response_status(response: &str) -> &str {
 }
 
 #[test]
-fn delete_waits_for_inflight_quota_refresh_before_removing_account() {
+fn delete_cancels_inflight_quota_read_without_recreating_credentials() {
     let directory = tempfile::tempdir().expect("account deletion state directory");
     let root = directory
         .path()
         .canonicalize()
         .expect("canonical account deletion state directory");
+    emp_state::VaultStore::from_sources(None, &root.join("state/master.key"))
+        .expect("initialize fixture credential store before referencing accounts");
     let account_root = root.join("state/accounts");
     let auth_path = account_root.join("racing/auth.json.enc");
+    let other_auth_path = account_root.join("other/auth.json.enc");
     let config_path = root.join("config.json");
     std::fs::write(
         &config_path,
@@ -77,7 +80,7 @@ fn delete_waits_for_inflight_quota_refresh_before_removing_account() {
                 "name":"Racing account",
                 "prefix":"racing",
                 "auth_file":auth_path,
-            }],
+            },{"id":"other","name":"Other account","prefix":"other","auth_file":other_auth_path}],
         }))
         .expect("encode account configuration"),
     )
@@ -103,7 +106,7 @@ for line in sys.stdin:
         auth = json.loads(auth_path.read_text())
         auth["tokens"]["access_token"] = "quota-race-rotated"
         auth_path.write_text(json.dumps(auth))
-        (control / "quota-started").touch()
+        (control / (auth["tokens"]["account_id"] + "-started")).touch()
         deadline = time.monotonic() + 10
         while not (control / "quota-release").exists() and time.monotonic() < deadline:
             time.sleep(0.005)
@@ -139,6 +142,16 @@ for line in sys.stdin:
             &json!({"tokens":{"access_token":"quota-race","account_id":"racing"}}),
         )
         .expect("write encrypted account auth");
+    server
+        .state
+        .backend
+        .configuration
+        .vault
+        .write_encrypted_json(
+            &other_auth_path,
+            &json!({"tokens":{"access_token":"other-token","account_id":"other"}}),
+        )
+        .expect("write unrelated account credential");
 
     let address = server.local_addr();
     let cookie = server.session_token();
@@ -153,8 +166,20 @@ for line in sys.stdin:
             None,
         )
     });
-    let started = fake_root.path().join("quota-started");
+    let started = fake_root.path().join("racing-started");
     wait_for_file(&started);
+    let other_cookie = cookie.clone();
+    let other = thread::spawn(move || {
+        http_request(
+            address,
+            "POST",
+            "/api/accounts/other/quota",
+            &other_cookie,
+            b"{}",
+            None,
+        )
+    });
+    wait_for_file(&fake_root.path().join("other-started"));
 
     let (delete_sent, delete_sent_rx) = mpsc::channel();
     let (delete_done, delete_done_rx) = mpsc::channel();
@@ -174,12 +199,13 @@ for line in sys.stdin:
     delete_sent_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("DELETE request reached the server");
-    let early_delete = delete_done_rx.recv_timeout(Duration::from_millis(250)).ok();
+    let early_delete = delete_done_rx.recv_timeout(Duration::from_secs(3)).ok();
     let delete_completed_early = early_delete.is_some();
 
     std::fs::write(fake_root.path().join("quota-release"), b"release")
         .expect("release fake quota response");
     let quota_response = quota.join().expect("join quota endpoint worker");
+    let other_response = other.join().expect("join unrelated quota worker");
     let delete_response = match early_delete {
         Some(response) => response,
         None => delete_done_rx
@@ -202,18 +228,71 @@ for line in sys.stdin:
         "quota refresh must not recreate encrypted auth after account deletion"
     );
     assert!(
-        !delete_completed_early,
-        "DELETE completed before the in-flight quota endpoint: {delete_response}"
+        delete_completed_early,
+        "DELETE waited for the stalled quota query instead of cancelling it: {delete_response}"
     );
     assert!(
-        response_status(&quota_response).starts_with("HTTP/1.1 200 OK"),
-        "quota refresh must finish before deletion: {quota_response}"
+        quota_response.contains("quota_cancelled"),
+        "the quota read must report cancellation: {quota_response}"
     );
     assert!(
         response_status(&delete_response).starts_with("HTTP/1.1 200 OK"),
         "account deletion should succeed after quota refresh: {delete_response}"
     );
-    assert_eq!(config["accounts"], json!([]));
+    assert!(
+        response_status(&other_response).starts_with("HTTP/1.1 200 OK"),
+        "unrelated quota refresh was interrupted: {other_response}"
+    );
+    assert_eq!(config["accounts"].as_array().unwrap().len(), 1);
+    assert_eq!(config["accounts"][0]["id"], "other");
+}
+
+#[test]
+fn removing_a_merged_imported_service_removes_its_aliases_but_preserves_native_and_other_accounts()
+{
+    let directory = tempfile::tempdir().expect("merged removal directory");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let config_path = root.join("config.json");
+    std::fs::write(&config_path, b"{}").expect("fixture config");
+    let native_path = root.join("codex/auth.json");
+    std::fs::create_dir_all(native_path.parent().unwrap()).expect("native directory");
+    let native = br#"{"tokens":{"account_id":"native-owner","access_token":"native-token"}}"#;
+    std::fs::write(&native_path, native).expect("native fixture");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "/bin/false",
+        native_path.clone(),
+    )
+    .expect("start merged removal fixture");
+    let mut paths = Vec::new();
+    for (id, owner) in [
+        ("primary", "merged-owner"),
+        ("alias", "merged-owner"),
+        ("other", "other-owner"),
+    ] {
+        import_account_state(
+            None,
+            &server.state,
+            &json!({
+                "id": id, "prefix": id, "name": id,
+                "auth_json": {"tokens":{"account_id":owner,"access_token":format!("{id}-token")}},
+            }),
+        )
+        .expect("import fixture");
+        let config = server.state.backend.configuration.read().unwrap();
+        paths.push(emp_state::account_auth_path(&config, id, &config_path).unwrap());
+    }
+    let other = std::fs::read(&paths[2]).expect("unrelated encrypted auth");
+    delete_account_state(None, &server.state, "primary").expect("remove merged service");
+    assert!(!paths[0].exists() && !paths[1].exists());
+    assert_eq!(std::fs::read(&paths[2]).unwrap(), other);
+    assert_eq!(std::fs::read(&native_path).unwrap(), native);
+    let saved: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    assert_eq!(saved["accounts"].as_array().unwrap().len(), 1);
+    assert_eq!(saved["accounts"][0]["id"], "other");
+    server.shutdown().expect("stop fixture");
 }
 
 #[test]

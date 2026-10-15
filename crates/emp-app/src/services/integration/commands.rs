@@ -17,7 +17,6 @@ pub(crate) enum Body {
 pub(crate) struct Reply {
     pub(crate) status: u16,
     pub(crate) body: Body,
-    pub(crate) stop_after_write: bool,
 }
 
 pub(crate) fn read(state: &ServerState) -> Reply {
@@ -83,7 +82,7 @@ fn execute_inner(
             ),
         );
     }
-    let mut restore_admission = if operation == "restore" {
+    let _restore_admission = if operation == "restore" {
         match receipt.step("quiesce", || {
             state
                 .connection_admission
@@ -112,6 +111,9 @@ fn execute_inner(
         Ok(lock) => lock,
         Err(_) => return unavailable(409),
     };
+    if state.shutdown.load(Ordering::Acquire) {
+        return unavailable(503);
+    }
     if matches!(operation, "reload" | "verify") {
         let reload_target = if operation == "reload" {
             let status = match receipt.step("read_configuration", || manager.status()) {
@@ -153,13 +155,13 @@ fn execute_inner(
                 );
             }
         }
+        drop(_operation);
         let result = match receipt.step("observe_runtime", || {
             sync_runtime(
                 state,
                 reload_target,
                 operation == "reload" || confirmed,
                 operation == "verify",
-                false,
             )
         }) {
             Ok(result) => result,
@@ -229,13 +231,19 @@ fn execute_inner(
             return Reply {
                 status: 404,
                 body: Body::NotFound,
-                stop_after_write: false,
             };
         }
     };
-    let mut stop_after_restore_response = false;
     receipt.check("configuration_command_succeeded", Some(result.ok()));
     if result.ok() {
+        // Record ownership before optional follow-up work can fail. If its
+        // rollback fails too, exit must still know which route to restore.
+        let active = result.state == "active";
+        state
+            .backend
+            .integration
+            .owned
+            .store(active, Ordering::Release);
         if result.state == "active"
             && receipt
                 .step("apply_search", || {
@@ -249,19 +257,12 @@ fn execute_inner(
         if let Ok(mut conflicts) = state.backend.integration.startup_conflicts.lock() {
             conflicts.clear();
         }
-        let active = result.state == "active";
-        state
-            .backend
-            .integration
-            .owned
-            .store(active, Ordering::Release);
-        stop_after_restore_response = operation == "restore" && !active;
+        drop(_operation);
         let runtime_sync = receipt.step("observe_runtime", || {
             sync_runtime(
                 state,
                 Some(if active { "emp" } else { "native" }),
                 confirmed,
-                false,
                 false,
             )
         });
@@ -270,33 +271,24 @@ fn execute_inner(
         }
         let runtime_sync_failed = runtime_sync.is_err();
         // A native restore is already committed here. Runtime observation is
-        // secondary; return the restore result before stopping EMP, and leave
-        // the service available if the final summary cannot be prepared.
-        if runtime_sync_failed && !stop_after_restore_response {
+        // secondary; keep EMP available and return the committed result.
+        if runtime_sync_failed && operation != "restore" {
             return unavailable(409);
         }
     }
-    let mut response = summary(
+    summary(
         state,
         Some(receipt),
         if result.ok() { 200 } else { 409 },
         Some(&result),
         None,
-    );
-    if stop_after_restore_response && response.status == 200 {
-        if let Some(gate) = restore_admission.take() {
-            gate.keep_closed();
-        }
-        response.stop_after_write = true;
-    }
-    response
+    )
 }
 
 fn unavailable(status: u16) -> Reply {
     Reply {
         status,
         body: Body::Unavailable,
-        stop_after_write: false,
     }
 }
 
@@ -323,7 +315,6 @@ fn summary(
     Reply {
         status,
         body: Body::Summary(value),
-        stop_after_write: false,
     }
 }
 

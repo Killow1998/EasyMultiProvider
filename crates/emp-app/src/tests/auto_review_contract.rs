@@ -1,4 +1,4 @@
-use super::{OneShotUpstream, canonical_root, post, session_header};
+use super::{OneShotUpstream, credential_root, post, session_header};
 use crate::http::request::{parse_request, read_request_head};
 use crate::lifecycle::ServerHandle;
 use crate::services::accounts::account_catalog_headers;
@@ -35,7 +35,7 @@ fn make_review_server(
     native_auth: Option<&str>,
 ) -> (tempfile::TempDir, ServerHandle, Value) {
     let directory = tempfile::tempdir().expect("auto-review tempdir");
-    let root = canonical_root(&directory);
+    let root = credential_root(&directory);
     let catalog = root.join("models_cache.json");
     std::fs::write(
         &catalog,

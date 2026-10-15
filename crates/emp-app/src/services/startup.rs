@@ -2,13 +2,21 @@
 use crate::app::ServerState;
 use crate::services::accounts::native_auth_document;
 use crate::services::catalog::{generated_catalog_path, refresh_catalog};
+use crate::services::integration::endpoint::is_previous_loopback_url;
 use crate::services::runtime::mark_pending;
 use std::sync::atomic::Ordering;
 
 pub(crate) fn reconcile(state: &ServerState) -> Result<(), ()> {
+    reconcile_with_base_url(state, &state.base_url)
+}
+
+fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()> {
     let integration = &state.backend.integration;
     let manager = &integration.manager;
     let _operation = manager.operation_lock().map_err(|_| ())?;
+    if state.shutdown.load(Ordering::Acquire) {
+        return Ok(());
+    }
     let status = manager.status().map_err(|_| ())?;
     let catalog = generated_catalog_path(state);
     let catalog = emp_state::config::resolve_user_path(&catalog);
@@ -17,7 +25,8 @@ pub(crate) fn reconcile(state: &ServerState) -> Result<(), ()> {
         && status.relation == "applied"
     {
         let mut conflicts = Vec::new();
-        if lease.fields["openai_base_url"].applied.value.as_deref() != Some(&state.base_url) {
+        let previous = lease.fields["openai_base_url"].applied.value.as_deref();
+        if previous != Some(base_url) && !is_previous_loopback_url(previous, base_url) {
             conflicts.push("listener_mismatch".to_owned());
         }
         if lease.fields["model_catalog_json"]
@@ -35,8 +44,8 @@ pub(crate) fn reconcile(state: &ServerState) -> Result<(), ()> {
     }
     let result = manager.recover(true, true).map_err(|_| ())?;
     if result.ok() && result.action == "re_adopted" && result.state == "active" {
-        crate::services::integration::sync_search(state)?;
         integration.owned.store(true, Ordering::Release);
+        crate::services::integration::sync_search(state)?;
         integration
             .startup_conflicts
             .lock()
@@ -51,22 +60,38 @@ pub(crate) fn reconcile(state: &ServerState) -> Result<(), ()> {
         let dynamic = native_auth_document(&state.backend.accounts.native_auth_path)
             .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
             .is_some();
-        if dynamic
-            && result.lease.as_ref().is_some_and(|lease| {
-                lease.fields["openai_base_url"].applied.value.as_deref() == Some(&state.base_url)
-                    && (lease.fields["model_catalog_json"].applied.present
-                        || lease.fields[emp_integration::REALTIME_SIDEBAND_FIELD]
-                            .applied
-                            .value
-                            .as_deref()
-                            != Some(&state.base_url))
-            })
+        if let Some(lease) = result.lease.as_ref()
+            && (is_previous_loopback_url(
+                lease.fields["openai_base_url"].applied.value.as_deref(),
+                base_url,
+            ) || dynamic
+                && lease.fields["openai_base_url"].applied.value.as_deref() == Some(base_url)
+                && (lease.fields["model_catalog_json"].applied.present
+                    || lease.fields[emp_integration::REALTIME_SIDEBAND_FIELD]
+                        .applied
+                        .value
+                        .as_deref()
+                        != Some(base_url)))
         {
+            let catalog = if dynamic {
+                None
+            } else {
+                lease.fields["model_catalog_json"].applied.value.as_deref()
+            };
+            let sideband = (dynamic
+                || is_previous_loopback_url(
+                    lease.fields[emp_integration::REALTIME_SIDEBAND_FIELD]
+                        .applied
+                        .value
+                        .as_deref(),
+                    base_url,
+                ))
+            .then_some(base_url);
             if !manager.restore().map_err(|_| ())?.ok() {
                 return Err(());
             }
             if !manager
-                .enable_with_sideband(&state.base_url, None, true, Some(&state.base_url))
+                .enable_with_sideband(base_url, catalog, true, sideband)
                 .map_err(|_| ())?
                 .ok()
             {
@@ -100,12 +125,15 @@ pub(crate) fn reconcile(state: &ServerState) -> Result<(), ()> {
         if !enabled.ok() {
             return Err(());
         }
+        integration.owned.store(true, Ordering::Release);
         if super::integration::sync_search(state).is_err() {
             let _ = manager.restore();
             return Err(());
         }
-        integration.owned.store(true, Ordering::Release);
         mark_pending(state, "emp", "EMP configuration applied")?;
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

@@ -6,6 +6,7 @@ mod error;
 mod http;
 mod lifecycle;
 mod services;
+mod startup_recovery;
 mod util;
 mod web;
 

@@ -5,6 +5,16 @@ use super::*;
 #[test]
 #[ignore = "requires installed Codex 0.162 and isolated loopback access"]
 fn installed_codex_refreshes_online_catalog_without_process_restart() {
+    online_catalog(false);
+}
+
+#[test]
+#[ignore = "requires installed Codex 0.162 and isolated loopback access"]
+fn installed_codex_uses_localhost_with_a_localhost_only_proxy_exception() {
+    online_catalog(true);
+}
+
+fn online_catalog(localhost_only: bool) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("codex");
@@ -56,7 +66,20 @@ fn installed_codex_refreshes_online_catalog_without_process_restart() {
             .unwrap()
             .contains("model_catalog_json")
     );
-    let mut codex = Codex::start(&home);
+    let mut codex = if localhost_only {
+        let manager = &server.state.backend.integration.manager;
+        assert!(manager.restore().unwrap().ok());
+        let endpoint = format!("http://localhost:{}/v1", server.local_addr().port());
+        assert!(
+            manager
+                .enable_with_sideband(&endpoint, None, true, Some(&endpoint))
+                .unwrap()
+                .ok()
+        );
+        Codex::start_with_no_proxy(&home, "localhost")
+    } else {
+        Codex::start(&home)
+    };
     let initialized = codex.rpc(1,"initialize",json!({"clientInfo":{"name":"online_catalog_fixture","version":"1"},"capabilities":{"experimentalApi":true}}));
     assert!(
         initialized["userAgent"]

@@ -9,7 +9,9 @@ use crate::services::accounts::CredentialOperation;
 use crate::services::accounts::account_public_snapshot;
 use crate::services::accounts::native_account_snapshot;
 use crate::services::accounts::native_auth_document;
-use crate::services::accounts::{notify_quota_update, quota_owner_key, quota_refresh_lock};
+use crate::services::accounts::{
+    notify_quota_update, quota_owner_key, quota_refresh_cancellation, quota_refresh_lock,
+};
 use crate::util::system_now;
 use emp_codex::quota::QuotaControl;
 use emp_codex::quota::QuotaError;
@@ -28,6 +30,7 @@ fn quota_control(state: &ServerState) -> QuotaControl<'_> {
     QuotaControl {
         timeout: Duration::from_secs(45),
         cancelled: Some(&state.shutdown),
+        account_cancelled: None,
     }
 }
 
@@ -367,6 +370,18 @@ fn record_quota_snapshot(state: &ServerState, account_id: &str, quota: &Value) {
 }
 
 fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
+    let cancellation = quota_refresh_cancellation(state, account_id)
+        .ok_or_else(|| QuotaError::new("Codex account quota check failed", "quota_error"))?;
+    let control = QuotaControl {
+        account_cancelled: Some(&cancellation),
+        ..quota_control(state)
+    };
+    if cancellation.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(QuotaError::new(
+            "Quota check was cancelled",
+            "quota_cancelled",
+        ));
+    }
     let credentials = AccountCredentials::for_account(state, account_id)?;
     let auth_file = credentials.auth_file.clone();
     let read_auth = || credentials.read();
@@ -374,7 +389,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         run_quota_query_persisting(
             auth,
             &crate::services::runtime::helper_binary(state)?,
-            quota_control(state),
+            control,
             allow_refresh,
             |refreshed| credentials.persist(refreshed),
         )
@@ -386,9 +401,12 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         return match read_native_login_quota(
             &state.backend.accounts.native_auth_path,
             &crate::services::runtime::helper_binary(state)?,
-            quota_control(state),
+            control,
         ) {
             Ok(quota) => {
+                if let Ok(mut native) = state.backend.accounts.native_quota.lock() {
+                    *native = Some(quota.clone());
+                }
                 save_account_quota_state(state, account_id, &auth_file, "valid", Some(&quota))
                     .inspect(|_| record_quota_snapshot(state, account_id, &quota))
             }

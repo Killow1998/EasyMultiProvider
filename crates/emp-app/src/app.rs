@@ -1,7 +1,6 @@
 //! Shared application service ownership.
 use crate::error::AppError;
 use crate::services::accounts::AccountState;
-use crate::services::accounts::duplicate_accounts;
 use crate::services::activity::ActivityService;
 use crate::services::configuration::ConfigurationState;
 use crate::services::integration::IntegrationState;
@@ -17,7 +16,6 @@ use crate::http::auth::BootstrapToken;
 use crate::http::auth::SessionStore;
 use emp_codex::quota_history::QuotaHistoryStore;
 use emp_integration::IntegrationManager;
-use emp_state::VaultStore;
 use emp_transport::HttpClient;
 use emp_transport::RequestLimits;
 use serde_json::Value;
@@ -90,28 +88,24 @@ impl BackendState {
         http_client_override: Option<HttpClient>,
         diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
     ) -> Result<Self, AppError> {
+        crate::startup_recovery::check_pending(config_path)?;
         let mut config = load_configuration(Some(config_path))?;
         let state_root = config_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("state");
-        let vault = VaultStore::from_environment(&state_root.join("master.key"))?;
-        let duplicates = duplicate_accounts(&config, &vault, &native_auth_path);
-        let (migrated, changed) =
-            emp_state::migrate_duplicate_native_visibility(&config, &duplicates);
-        config = migrated;
-        if changed
-            || config
-                .get("providers")
-                .and_then(Value::as_array)
-                .is_some_and(|providers| {
-                    providers.iter().any(|provider| {
-                        provider
-                            .get("api_key")
-                            .and_then(Value::as_str)
-                            .is_some_and(|key| !key.is_empty())
-                    })
+        let vault = crate::startup_recovery::open_vault(&config, &state_root)?;
+        if config
+            .get("providers")
+            .and_then(Value::as_array)
+            .is_some_and(|providers| {
+                providers.iter().any(|provider| {
+                    provider
+                        .get("api_key")
+                        .and_then(Value::as_str)
+                        .is_some_and(|key| !key.is_empty())
                 })
+            })
         {
             save_configuration(&config, Some(config_path), &vault)?;
             config = load_configuration(Some(config_path))?;
@@ -175,6 +169,7 @@ impl BackendState {
                 native_quota: Mutex::new(None),
                 quota_refresh_errors: Mutex::new(BTreeMap::new()),
                 quota_refresh_locks: Mutex::new(BTreeMap::new()),
+                quota_refresh_cancellations: Mutex::new(BTreeMap::new()),
                 quota_history: QuotaHistoryStore::new(state_root.join("quota_history.sqlite3")),
                 quota_sampler_wait: Mutex::new(()),
                 quota_sampler_condition: Condvar::new(),

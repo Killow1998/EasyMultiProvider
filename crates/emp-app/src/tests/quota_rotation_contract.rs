@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use super::{canonical_root, post, session_header};
+use super::{credential_root, post, session_header};
 use crate::lifecycle::ServerHandle;
 use serde_json::{Value, json};
 use std::net::{IpAddr, Ipv4Addr};
@@ -20,7 +20,7 @@ fn status_and_body(response: String) -> (String, Value) {
 #[test]
 fn rotated_credentials_survive_a_failed_save_and_are_persisted_later() {
     let directory = tempfile::tempdir().expect("rotation temporary directory");
-    let root = canonical_root(&directory);
+    let root = credential_root(&directory);
     let account_root = root.join("state/accounts");
     let auth_path = account_root.join("rotating/auth.json.enc");
     let config_path = root.join("config.json");
@@ -230,7 +230,7 @@ for line in sys.stdin:
 #[test]
 fn shutdown_flushes_pending_rotations_of_configured_accounts_only() {
     let directory = tempfile::tempdir().expect("flush temporary directory");
-    let root = canonical_root(&directory);
+    let root = credential_root(&directory);
     let account_root = root.join("state/accounts");
     let auth_path = account_root.join("kept/auth.json.enc");
     let gone_path = account_root.join("gone/auth.json.enc");
@@ -287,7 +287,7 @@ fn shutdown_flushes_pending_rotations_of_configured_accounts_only() {
 #[test]
 fn shutdown_reports_rotated_credentials_it_could_not_save() {
     let directory = tempfile::tempdir().expect("unsaved temporary directory");
-    let root = canonical_root(&directory);
+    let root = credential_root(&directory);
     let account_root = root.join("state/accounts");
     let auth_path = account_root.join("unsaved/auth.json.enc");
     let config_path = root.join("config.json");
@@ -341,7 +341,7 @@ fn shutdown_reports_rotated_credentials_it_could_not_save() {
 #[test]
 fn shutdown_waits_for_a_quota_check_that_is_rotating_a_credential() {
     let directory = tempfile::tempdir().expect("drain temporary directory");
-    let root = canonical_root(&directory);
+    let root = credential_root(&directory);
     let account_root = root.join("state/accounts");
     let auth_path = account_root.join("draining/auth.json.enc");
     let config_path = root.join("config.json");

@@ -94,6 +94,6 @@ impl CatalogSources {
         previous: &Value,
     ) -> Result<Value, SubscriptionContextError> {
         validate_subscription_contexts(updated, Some(previous), &self.native, &self.accounts)?;
-        Ok(emp_state::migrate_duplicate_native_visibility(updated, &self.duplicates).0)
+        Ok(updated.clone())
     }
 }

@@ -7,6 +7,162 @@ fn json_body(response: &str) -> Value {
 }
 
 #[test]
+fn duplicate_preferences_are_resolved_before_atomic_import_and_native_identity_changes_reject_stale_choices()
+ {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_root(&directory);
+    let path = root.join("config.json");
+    let native = root.join("auth.json");
+    let native_bytes =
+        br#"{"tokens":{"account_id":"fixture-owner","access_token":"private-native-fixture"}}"#;
+    std::fs::write(&native, native_bytes).unwrap();
+    std::fs::write(
+        &path,
+        serde_json::to_vec(
+            &json!({"auto_enable_on_start":false,"native_model_context_windows":{"demo":400000}}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &path,
+        "missing-test-codex",
+        native.clone(),
+    )
+    .unwrap();
+    let session = session_header(&server);
+    let before = std::fs::read(&path).unwrap();
+    let metadata = json!({"id":"incoming","prefix":"incoming","name":"Incoming","hidden_models":["demo"],"model_context_windows":{"demo":467368}});
+    let payload = json!({"schema":"easy-multi-provider-migration","version":1,"config":{"accounts":[metadata],"providers":[],"models":[]},"accounts":[{"metadata":metadata,"auth":{"tokens":{"account_id":"fixture-owner","access_token":"private-incoming-fixture"}}}],"provider_keys":{}});
+    let bundle = emp_state::migration::encode_migration(
+        "fixture-password",
+        &[7; 16],
+        &serde_json::to_vec(&payload).unwrap(),
+    )
+    .unwrap();
+    let decoded = json_body(&post(
+        &server,
+        "/api/migration/decode",
+        &serde_json::to_vec(
+            &json!({"password":"fixture-password","bundle":STANDARD.encode(bundle)}),
+        )
+        .unwrap(),
+        &[&session],
+    ));
+    let mut body = json!({"token":decoded["token"],"selections":[{"kind":"account","id":"incoming","models":[{"id":"demo","selected":false,"context_window":467368}]}]});
+    let pending = json_body(&post(
+        &server,
+        "/api/migration/preview",
+        &serde_json::to_vec(&body).unwrap(),
+        &[&session],
+    ));
+    assert_eq!(pending["preference_conflicts"][0]["target_id"], "@native");
+    assert_eq!(
+        pending["preference_conflicts"][0]["fields"]
+            .as_object()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(!pending.to_string().contains("private-"));
+    assert!(
+        post(
+            &server,
+            "/api/migration/import",
+            &serde_json::to_vec(&body).unwrap(),
+            &[&session]
+        )
+        .starts_with("HTTP/1.1 400")
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    body["preference_choices"] = json!({"incoming":{"visibility":"incoming","context":"current"}});
+    let ready = json_body(&post(
+        &server,
+        "/api/migration/preview",
+        &serde_json::to_vec(&body).unwrap(),
+        &[&session],
+    ));
+    assert_eq!(ready["config"]["native_hidden_models"], json!(["demo"]));
+    assert_eq!(
+        ready["config"]["native_model_context_windows"],
+        json!({"demo":400000})
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    std::fs::write(
+        &native,
+        br#"{"tokens":{"account_id":"different-owner","access_token":"other-token"}}"#,
+    )
+    .unwrap();
+    assert!(
+        post(
+            &server,
+            "/api/migration/import",
+            &serde_json::to_vec(&body).unwrap(),
+            &[&session]
+        )
+        .starts_with("HTTP/1.1 400")
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    std::fs::write(&native, native_bytes).unwrap();
+    json_body(&post(
+        &server,
+        "/api/migration/import",
+        &serde_json::to_vec(&body).unwrap(),
+        &[&session],
+    ));
+    let stored = server.state.backend.configuration.snapshot().unwrap();
+    assert_eq!(stored["native_hidden_models"], json!(["demo"]));
+    assert_eq!(
+        stored["accounts"][0]["hidden_models"],
+        stored["native_hidden_models"]
+    );
+    assert_eq!(
+        stored["accounts"][0]["model_context_windows"],
+        stored["native_model_context_windows"]
+    );
+    assert_eq!(std::fs::read(native).unwrap(), native_bytes);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn auth_only_import_inherits_native_preferences_and_reimport_keeps_one_reference() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_root(&directory);
+    let path = root.join("config.json");
+    let native = root.join("auth.json");
+    let native_bytes =
+        br#"{"tokens":{"account_id":"fixture-owner","access_token":"native-fixture"}}"#;
+    std::fs::write(&native, native_bytes).unwrap();
+    std::fs::write(&path,serde_json::to_vec(&json!({"auto_enable_on_start":false,"native_hidden_models":["demo"],"native_model_context_windows":{"demo":400000}})).unwrap()).unwrap();
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &path,
+        "missing-test-codex",
+        native.clone(),
+    )
+    .unwrap();
+    let session = session_header(&server);
+    for token in ["pasted-fixture", "file-fixture"] {
+        json_body(&post(&server,"/api/accounts/import",&serde_json::to_vec(&json!({"name":"Imported","auth_json":{"tokens":{"account_id":"fixture-owner","access_token":token}}})).unwrap(),&[&session]));
+        let stored = server.state.backend.configuration.snapshot().unwrap();
+        assert_eq!(stored["accounts"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            stored["accounts"][0]["hidden_models"],
+            stored["native_hidden_models"]
+        );
+        assert_eq!(
+            stored["accounts"][0]["model_context_windows"],
+            stored["native_model_context_windows"]
+        );
+    }
+    assert_eq!(std::fs::read(native).unwrap(), native_bytes);
+    server.shutdown().unwrap();
+}
+
+#[test]
 fn selected_migration_previews_redact_credentials_and_commit_only_selected_names() {
     let directory = tempfile::tempdir().unwrap();
     let root = canonical_root(&directory);

@@ -291,7 +291,7 @@ impl ServerHandle {
             },
             backend,
             port: local_addr.port(),
-            base_url: format!("http://{local_addr}/v1"),
+            base_url: crate::services::integration::endpoint::codex_base_url(local_addr),
             updates,
         });
         let journal = &state.backend.diagnostics.journal;

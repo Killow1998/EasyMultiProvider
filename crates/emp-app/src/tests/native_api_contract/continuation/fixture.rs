@@ -212,7 +212,7 @@ impl Drop for Upstream {
 
 pub(super) fn server(upstream: &Upstream, imported: bool) -> (TempDir, ServerHandle, String) {
     let directory = tempfile::tempdir().unwrap();
-    let root = canonical_root(&directory);
+    let root = crate::tests::credential_root(&directory);
     let config_path = root.join("config.json");
     let native = root.join("codex/auth.json");
     std::fs::create_dir_all(native.parent().unwrap()).unwrap();

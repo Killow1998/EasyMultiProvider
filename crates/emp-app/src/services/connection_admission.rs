@@ -34,7 +34,7 @@ impl Default for ConnectionAdmissionConfig {
 }
 
 pub(crate) struct ConnectionAdmission {
-    gate: Mutex<GateOwnership>,
+    gate: Mutex<()>,
     requests: Arc<AdaptiveSlotPool>,
     websockets: Arc<AdaptiveSlotPool>,
 }
@@ -42,7 +42,7 @@ pub(crate) struct ConnectionAdmission {
 impl ConnectionAdmission {
     pub(crate) fn new(config: ConnectionAdmissionConfig) -> Self {
         Self {
-            gate: Mutex::new(GateOwnership::default()),
+            gate: Mutex::new(()),
             requests: Arc::new(AdaptiveSlotPool::new(config.requests)),
             websockets: Arc::new(AdaptiveSlotPool::new(config.websockets)),
         }
@@ -63,6 +63,13 @@ impl ConnectionAdmission {
             .map_or(true, |state| state.closed)
     }
 
+    /// Exit cannot wait behind a management request's drain guard. Closing
+    /// each pool permanently also prevents that guard from reopening it.
+    pub(crate) fn close(&self) {
+        self.requests.close_permanently();
+        self.websockets.close_permanently();
+    }
+
     /// Stop new work and wait until admitted requests and WebSockets drain.
     /// `exempt_requests` accounts for the management request doing a restore.
     pub(crate) fn quiesce(
@@ -75,12 +82,10 @@ impl ConnectionAdmission {
             Err(TryLockError::WouldBlock) => return None,
             Err(TryLockError::Poisoned(error)) => error.into_inner(),
         };
-        let reopen_on_drop = !owner.permanently_closed;
         let guard = AdmissionGateGuard {
-            owner,
+            _owner: owner,
             requests: Arc::clone(&self.requests),
             websockets: Arc::clone(&self.websockets),
-            reopen_on_drop,
         };
         if !guard.requests.close() || !guard.websockets.close() {
             return None;
@@ -106,17 +111,13 @@ impl ConnectionAdmission {
 }
 
 #[derive(Default)]
-struct GateOwnership {
-    permanently_closed: bool,
-}
-
-#[derive(Default)]
 struct SlotState {
     active: usize,
     capacity: usize,
     maximum: usize,
     growth: usize,
     closed: bool,
+    permanently_closed: bool,
 }
 
 struct AdaptiveSlotPool {
@@ -134,6 +135,7 @@ impl AdaptiveSlotPool {
                 maximum: limits.maximum.max(capacity),
                 growth: limits.growth.max(1),
                 closed: false,
+                permanently_closed: false,
             }),
             drained: Condvar::new(),
         }
@@ -179,9 +181,15 @@ impl AdaptiveSlotPool {
 
     fn reopen(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.closed = false;
+            state.closed = state.permanently_closed;
             self.drained.notify_all();
         }
+    }
+
+    fn close_permanently(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.closed = true;
+        state.permanently_closed = true;
     }
 
     fn wait_for_at_most(&self, maximum_active: usize, deadline: Instant) -> bool {
@@ -211,26 +219,23 @@ impl AdaptiveSlotPool {
 }
 
 pub(crate) struct AdmissionGateGuard<'a> {
-    owner: MutexGuard<'a, GateOwnership>,
+    _owner: MutexGuard<'a, ()>,
     requests: Arc<AdaptiveSlotPool>,
     websockets: Arc<AdaptiveSlotPool>,
-    reopen_on_drop: bool,
 }
 
 impl AdmissionGateGuard<'_> {
-    /// Keep the admission gate shut after a successful native restore.
-    pub(crate) fn keep_closed(mut self) {
-        self.owner.permanently_closed = true;
-        self.reopen_on_drop = false;
+    /// Keep the admission gate shut for process exit.
+    pub(crate) fn keep_closed(self) {
+        self.requests.close_permanently();
+        self.websockets.close_permanently();
     }
 }
 
 impl Drop for AdmissionGateGuard<'_> {
     fn drop(&mut self) {
-        if self.reopen_on_drop {
-            self.requests.reopen();
-            self.websockets.reopen();
-        }
+        self.requests.reopen();
+        self.websockets.reopen();
     }
 }
 
@@ -353,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_restore_can_leave_admission_closed() {
+    fn quit_can_leave_admission_permanently_closed() {
         let admission = ConnectionAdmission::new(ConnectionAdmissionConfig::default());
         admission
             .quiesce(0, Duration::ZERO)
@@ -366,5 +371,17 @@ mod tests {
             .expect("shutdown can wait on a permanently closed gate");
         drop(shutdown_gate);
         assert!(admission.acquire_request().is_none());
+    }
+
+    #[test]
+    fn exit_closes_admission_even_while_a_restore_guard_is_held() {
+        let admission = ConnectionAdmission::new(ConnectionAdmissionConfig::default());
+        let current = admission.acquire_request().unwrap();
+        let restore = admission.quiesce(1, Duration::ZERO).unwrap();
+        admission.close();
+        drop(restore);
+        drop(current);
+        assert!(admission.acquire_request().is_none());
+        assert!(admission.acquire_websocket().is_none());
     }
 }

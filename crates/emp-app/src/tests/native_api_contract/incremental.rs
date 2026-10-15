@@ -242,7 +242,9 @@ impl NativeFailureContinuityUpstream {
                         json!({
                             "type":"response.incomplete",
                             "response":{"id":id,"object":"response","status":"incomplete",
-                                "incomplete_details":{"reason":"max_output_tokens"},"output":[]}
+                                "incomplete_details":{"reason":"max_output_tokens"},"output":[],
+                                "usage":{"input_tokens":17,"output_tokens":3,
+                                    "input_tokens_details":{"cached_tokens":5}}}
                         })
                     } else {
                         json!({
@@ -333,6 +335,16 @@ fn responses_websocket_retains_last_successful_previous_id_after_failed_or_incom
         assert_eq!(first.last().unwrap()["type"], "response.completed");
         let failed = send_native_continuity_turn(&mut stream, "failed attempt", None);
         assert_eq!(failed.last().unwrap()["type"], terminal);
+        if terminal == "response.incomplete" {
+            let response = &failed.last().unwrap()["response"];
+            assert_eq!(response["id"], "resp_failed");
+            assert_eq!(response["usage"]["input_tokens"], 17);
+            assert_eq!(response["usage"]["output_tokens"], 3);
+            assert_eq!(
+                response["incomplete_details"]["reason"],
+                "max_output_tokens"
+            );
+        }
         let retry =
             send_native_continuity_turn(&mut stream, "continue previous success", Some("resp_one"));
         assert_eq!(
@@ -356,6 +368,19 @@ fn responses_websocket_retains_last_successful_previous_id_after_failed_or_incom
             })
             .collect::<Vec<_>>();
         assert_eq!(observed[2]["previous_response_id"], "resp_one");
+        if terminal == "response.incomplete" {
+            let now = crate::util::system_now();
+            let usage = server
+                .state
+                .backend
+                .usage
+                .ledger
+                .query(0.0, now, "all", now)
+                .unwrap();
+            assert_eq!(usage["totals"]["input_tokens"], 17, "{usage}");
+            assert_eq!(usage["totals"]["output_tokens"], 3, "{usage}");
+            assert_eq!(usage["totals"]["cached_input_tokens"], 5, "{usage}");
+        }
         drop(stream);
         server.shutdown().unwrap();
     }

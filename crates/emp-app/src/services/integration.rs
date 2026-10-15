@@ -1,6 +1,8 @@
 //! Services integration.
 pub(crate) mod commands;
 pub(crate) mod enable;
+pub(crate) mod endpoint;
+mod restore;
 use emp_integration::IntegrationManager;
 use std::sync::atomic::AtomicBool;
 
@@ -286,28 +288,6 @@ impl IntegrationState {
                 (codex_binary != "codex").then(|| codex_binary.into()),
             ),
         }
-    }
-
-    /// Restore only the lease acquired by this running service.
-    pub(crate) fn restore_owned(&self) -> Result<(), crate::error::AppError> {
-        use std::sync::atomic::Ordering;
-        if !self.owned.load(Ordering::Acquire) {
-            return Ok(());
-        }
-        let _operation = self
-            .manager
-            .operation_lock()
-            .map_err(|_| crate::error::AppError::ServerStopped)?;
-        let result =
-            restore_native_configuration(&self.manager, Some(&self.search)).map_err(|reason| {
-                eprintln!("EMP native restore stopped: {reason}");
-                crate::error::AppError::NativeRestoreBlocked(reason)
-            })?;
-        if !result.ok() {
-            return Err(crate::error::AppError::ServerStopped);
-        }
-        self.owned.store(false, Ordering::Release);
-        Ok(())
     }
 }
 

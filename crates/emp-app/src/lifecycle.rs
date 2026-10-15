@@ -1,20 +1,19 @@
 //! Service ownership, background-worker registration and ordered shutdown.
 
 mod connections;
+mod shutdown;
+mod signals;
 mod startup;
+#[cfg(windows)]
+mod windows;
 
 use crate::app::ServerState;
 use crate::error::AppError;
 use crate::http::auth::codex_auth_path;
-use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
-
-/// Longest a quota check can still rotate a credential: two 45 s Codex
-/// queries plus the save retries.
-const CREDENTIAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(100);
 
 pub(crate) struct ServerHandle {
     local_addr: SocketAddr,
@@ -79,87 +78,6 @@ impl ServerHandle {
             );
         }
     }
-
-    pub fn shutdown(self) -> Result<(), AppError> {
-        let diagnostics = Arc::clone(&self.state.backend.diagnostics);
-        diagnostics
-            .journal
-            .event("info", "shutdown_start", &serde_json::json!({}));
-        let result = self.shutdown_inner();
-        diagnostics.journal.event(
-            if result.is_ok() { "info" } else { "error" },
-            "shutdown_complete",
-            &serde_json::json!({
-                "success": result.is_ok(),
-                "error_class": match &result {
-                    Ok(()) => "none",
-                    Err(AppError::CredentialsUnsaved(_)) => "credentials_unsaved",
-                    Err(AppError::NativeRestoreBlocked(_)) => "native_restore_blocked",
-                    Err(_) => "shutdown_failed",
-                },
-            }),
-        );
-        result
-    }
-
-    fn shutdown_inner(self) -> Result<(), AppError> {
-        let installing = self.state.updates.snapshot().state == "installing";
-        self.state.request_shutdown();
-        self.state.catalog_refresh.stop();
-        let admitted_work_drained = if let Some(gate) = self
-            .state
-            .connection_admission
-            .quiesce(0, Duration::from_secs(30))
-        {
-            gate.keep_closed();
-            true
-        } else {
-            false
-        };
-        let restoration = if !admitted_work_drained {
-            Err(AppError::ServerStopped)
-        } else if installing {
-            Ok(())
-        } else {
-            self.state.backend.integration.restore_owned()
-        };
-        // Request threads are not joined (streams may outlive shutdown), so
-        // quota checks that may rotate a credential are drained explicitly
-        // before the final save below.
-        let credential_operations = &self.state.backend.accounts.credential_operations;
-        let _ = credential_operations.close_and_drain(Duration::ZERO);
-        let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_millis(100));
-        self.state.backend.usage.stop();
-        let accounts = &self.state.backend.accounts;
-        // The same mutex must cover the condition check and notification,
-        // otherwise shutdown can arrive just before a worker starts waiting.
-        self.state.backend.management_events.close();
-        if let Ok(_wait) = accounts.quota_sampler_wait.lock() {
-            accounts.quota_sampler_condition.notify_all();
-        }
-        crate::services::runtime::stop_watch(&self.state);
-        for worker in self.workers {
-            let _: () = worker.join().map_err(|_| AppError::ServerStopped)?;
-        }
-        // Last chance to save credentials Codex rotated: the stored copies
-        // may already be invalid upstream.
-        // A shutdown that loses them is not a clean exit.
-        let unfinished = credential_operations.close_and_drain(CREDENTIAL_DRAIN_TIMEOUT);
-        let unsaved = unfinished + crate::services::quota::flush_pending_rotations(&self.state);
-        drop(self._service_owner);
-        if unsaved == 0 {
-            return restoration;
-        }
-        let unsaved = AppError::CredentialsUnsaved(unsaved);
-        match restoration {
-            Ok(()) => Err(unsaved),
-            Err(error) => {
-                // Only one error is returned; do not let it hide this one.
-                eprintln!("{unsaved}");
-                Err(error)
-            }
-        }
-    }
 }
 
 pub(crate) fn run_server(
@@ -181,6 +99,18 @@ pub(crate) fn run_server(
         open_browser,
         markers.clone(),
     )?;
+    let signals = {
+        let _entered = server.state.backend.transport.runtime.enter();
+        signals::ExitSignals::new(Arc::clone(&server.state))
+    };
+    let signals = match signals {
+        Ok(signals) => signals,
+        Err(error) => {
+            let _ = server.shutdown();
+            return Err(error.into());
+        }
+    };
+    let mut restore = shutdown::RestoreBeforeExit::new(Arc::clone(&server.state));
     let prepared = (|| {
         server
             .state
@@ -200,20 +130,10 @@ pub(crate) fn run_server(
             &serde_json::json!({"stage":"background_workers", "error_class":"startup_error"}),
         );
         let _ = server.shutdown();
+        restore.disarm();
         return Err(error);
     }
     let result = server.state.backend.transport.runtime.block_on(async {
-        // Register before announcing readiness, so immediate termination is safe.
-        #[cfg(unix)]
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        #[cfg(unix)]
-        let mut interrupt =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-        #[cfg(windows)]
-        let mut interrupt = tokio::signal::windows::ctrl_c()?;
-        #[cfg(windows)]
-        let mut terminate = tokio::signal::windows::ctrl_break()?;
         let local_addr = server.local_addr();
         println!("EMP listening on http://{local_addr}");
         println!(
@@ -236,15 +156,18 @@ pub(crate) fn run_server(
         }
         emp_state::update::worker::mark_ready(crate::VERSION, markers.ready_path.clone())
             .map_err(std::io::Error::other)?;
-        let requested = server.state.wait_for_shutdown();
-        tokio::select! {
-            _ = terminate.recv() => {},
-            _ = interrupt.recv() => {},
-            _ = requested => {},
-        }
-        Ok::<(), std::io::Error>(())
+        server.state.wait_for_shutdown().await;
+        Ok::<bool, std::io::Error>(signals.external_exit())
     });
-    let cleanup = server.shutdown();
+    // Only the updater's own handoff retains integration. Closing a terminal
+    // during an update still restores native routing before this process exits.
+    let handoff =
+        matches!(result, Ok(false)) && server.state.updates.snapshot().state == "installing";
+    if handoff {
+        restore.disarm();
+    }
+    let cleanup = server.shutdown_with_handoff(handoff);
+    restore.disarm();
     result?;
     cleanup
 }

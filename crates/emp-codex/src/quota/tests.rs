@@ -70,6 +70,7 @@ for line in sys.stdin:
                 QuotaControl {
                     timeout: Duration::from_secs(10),
                     cancelled: Some(&cancelled),
+                    account_cancelled: None,
                 },
                 false,
                 |auth| {

@@ -56,11 +56,15 @@ function createMigrationView(getState) {
   }
   function services(config, importing = false, credentials = {}) {
     const state = getState();
-    const accounts = importing ? config.accounts || [] : [state.native_account, ...(state.accounts || [])].filter(Boolean);
+    let accounts = importing ? config.accounts || [] : [state.native_account, ...(state.accounts || [])].filter(Boolean);
+    if(importing&&config._shadow_merge_preview){
+      accounts=[...(config.native_account?[config.native_account]:[]),...accounts];
+      accounts=accounts.filter(account=>!account.duplicate||!accounts.some(owner=>account.duplicate_of==='当前 Codex 登录'?owner.native:owner.id===account.duplicate_of));
+    }
     const rows = accounts.map(record => ({
       id:record.id, kind:'account', brand:'codex', selected:true, record,
       name:record.native ? 'Native' : record.name || record.id,
-      credential_set:importing ? (credentials.accounts || []).includes(record.id) : record.credential_set,
+      credential_set:importing ? record.native&&record.credential_set || (credentials.accounts || []).includes(record.id) : record.credential_set,
     }));
     for (const record of config.providers || []) {
       rows.push({id:record.id, kind:'provider', selected:true, record,
@@ -90,7 +94,12 @@ function createMigrationView(getState) {
     }));
   }
   function options(candidate) {
-    return {include_context:candidate.includeContext, include_rename:candidate.includeRename};
+    return {include_context:candidate.includeContext, include_rename:candidate.includeRename,preference_choices:candidate.preferenceChoices||{}};
+  }
+  function preferenceRows(candidate){
+    const summary=(kind,value)=>kind==='visibility'?(value.length?tr(`隐藏 ${value.length} 个模型`,`Hide ${value.length} models`):tr('全部显示','Show all')):
+      Object.keys(value).length?Object.entries(value).slice(0,4).map(([model,tokens])=>`${model}: ${compactContext(tokens)}`).join(' · '):tr('目录默认值','Catalog defaults');
+    return (candidate.preferenceConflicts||[]).map(conflict=>`<section class="migration-preference-conflict"><strong>${esc(tr(`与 ${conflict.target_name} 为同一账号，合并前确认设置`,`Same account as ${conflict.target_name}; choose settings before importing`))}</strong><div class="migration-preference-choices">${Object.entries(conflict.fields).map(([kind,field])=>`<label>${kind==='visibility'?tr('模型显示','Model visibility'):tr('上下文设置','Context settings')}<select data-migration-preference-source="${esc(conflict.source_id)}" data-migration-preference-kind="${kind}"><option value="" disabled ${!field.resolved?'selected':''}>${tr('请选择','Choose')}</option>${['current','incoming'].map(choice=>`<option value="${choice}" ${field.choice===choice?'selected':''}>${choice==='current'?tr('保留本机','Keep local'):tr('采用导入','Use incoming')} · ${esc(summary(kind,field[choice]))}</option>`).join('')}</select></label>`).join('')}</div></section>`).join('');
   }
   function importedNameRows(candidate) {
     const selected = new Set(candidate.rows.filter(row => row.selected).map(row => row.kind+':'+row.id));
@@ -104,7 +113,8 @@ function createMigrationView(getState) {
     return warnings.length ? shadowHelp(warnings.map(item => tr(item.message,item.message_en || item.message)).join('\n'),'!','warning') : '';
   }
   function previewRows(rows, candidate, nativePlaceholder = false) {
-    let html = nativePlaceholder ? `<div class="migration-preview-row">${serviceIconHtml('codex')}
+    const placeholder=nativePlaceholder&&!(candidate.mode==='import'&&rows.some(row=>row.record.native));
+    let html = placeholder ? `<div class="migration-preview-row">${serviceIconHtml('codex')}
       <div><strong>Native</strong><small>${candidate.mode === 'export' ?
         tr('新电脑的本机登录','Local sign-in on the new computer') :
         tr('保留当前本机登录','Current local sign-in is retained')}</small></div></div>` : '';
@@ -148,7 +158,10 @@ function createMigrationView(getState) {
     const tabs = `<div class="report-tabs">
       <button type="button" data-migration-mode="import" class="secondary ${importing ? 'active' : ''}">${tr('导入','Import')}</button>
       <button type="button" data-migration-mode="export" class="secondary ${!importing ? 'active' : ''}">${tr('导出','Export')}</button></div>`;
+    const steps=importing?`<ol class="migration-steps" aria-label="${tr('导入步骤','Import steps')}">
+      ${[tr('选择文件与密码','Choose file and password'),tr('打开迁移包','Open package'),tr('确认后导入','Review and import')].map((label,index)=>`<li data-migration-step="${index}"><span aria-hidden="true">${index+1}</span>${label}</li>`).join('')}</ol>`:'';
     const chooser = importing && !candidate.token ? `
+      <p class="migration-open-hint">${tr('选择 .emp 文件并填写导出时的密码，然后点击「打开迁移包」查看可导入的服务。','Choose a .emp file and enter its export password, then click Open package to review the services to import.')}</p>
       <label>${tr('迁移文件','Migration file')}<input type="file" id="shadow_migration_file" accept=".emp"></label>
       <label><span class="migration-field-label">${tr('迁移密码','Migration password')}${shadowHelp(tr('填写导出时的密码；兼容旧版 8 字节密码。首尾空白不计。','Use the export password; legacy 8-byte passwords remain supported. Leading and trailing whitespace is ignored.'))}</span><input id="shadow_import_password" type="password" autocomplete="current-password"></label>
       <button type="button" class="primary" data-migration-decode>${tr('打开迁移包','Open package')}</button><button type="button" class="secondary" data-migration-demo>${tr('查看导入演示','Preview an example import')}</button>` : '';
@@ -165,7 +178,7 @@ function createMigrationView(getState) {
     const passwords = !importing ? `<div class="migration-passwords">
       <label><span class="migration-field-label">${tr('迁移密码','Migration password')}${shadowHelp(tr('12–4096 个 UTF-8 字节；纯英文或数字至少 12 个字符。首尾空白不计，不要求特定字符组合。','12–4096 UTF-8 bytes; at least 12 characters for plain English or digits. Leading and trailing whitespace is ignored; no specific character combination is required.'))}</span><input type="password" id="shadow_export_password" autocomplete="new-password"></label>
       <label><span class="migration-field-label">${tr('确认密码','Confirm password')}${shadowHelp(tr('两次输入须完全一致。','Both entries must match exactly.'))}</span><input type="password" id="shadow_export_password_confirm" autocomplete="new-password"></label></div>` : '';
-    return `<div id="shadow_migration">${tabs}${candidate.demo ? `<p class="migration-demo-note">${tr('演示数据，不会保存或导入真实服务。','Sample data; no services will be saved or imported.')}</p>` : ''}${chooser}${candidate.rows.length ? flags+list : ''}${passwords}</div>`;
+    return `<div id="shadow_migration">${tabs}${steps}${candidate.demo ? `<p class="migration-demo-note">${tr('演示数据，不会保存或导入真实服务。','Sample data; no services will be saved or imported.')}</p>` : ''}${chooser}${candidate.rows.length ? flags+list : ''}${passwords}</div>`;
   }
-  return {services,selections,options,importedNameRows,warningHtml,previewRows,bodyHtml,mergeRules};
+  return {services,selections,options,importedNameRows,warningHtml,previewRows,bodyHtml,mergeRules,preferenceRows};
 }

@@ -79,6 +79,33 @@ flowchart TD
 
 ## Complete operations and evidence
 
+`startup_recovery` handles unreadable configuration and missing, invalid or
+mismatched credential keys before the normal backend starts. Its recovery page
+uses an isolated loopback listener and an in-memory session token, with the same
+origin checks as management HTTP. It holds the existing `state/service.lock`;
+normal workers and Codex integration do not run during recovery. The page offers
+confirmed reset or Exit, which preserves the current files. There is no manual
+repair/retry flow. Developer-supplied external key overrides retain an explicit
+launch diagnostic and never offer an ineffective local reset.
+
+Confirmed reset creates fresh configuration and a new key with automatic
+integration disabled. It clears only the selected configuration and its adjacent
+state directory, preserving the service lock inode. Backup is optional and
+unchecked by default: old files are staged for rollback, then deleted after a
+successful reset unless the user selected retention. Retained backups include
+the old key; they are not a model/account switching mechanism. Native Codex
+files and custom external directories are untouched. Failed installation rolls
+back moved files; an interrupted transaction marker blocks normal startup but
+allows another confirmed reset. EMP validates the recorded archive against the
+same configuration and a direct-child generated directory, then stores the next
+attempt inside that archive without overwriting earlier files. Successful reset
+retains or clears the entire transaction according to the current backup choice.
+Malformed metadata never authorizes following or deleting an unrelated path;
+only the current configuration/state is reset in that case. Cleanup failure is
+reported with the remaining directory. Contracts live in
+`src/startup_recovery/tests.rs`, `tests/startup_recovery.rs` and
+`scripts/shadow_frontend/e2e_startup_recovery.py`.
+
 | Operation owner | Forward execution | Evidence and limit |
 | --- | --- | --- |
 | `services/request_preparation`, native/external/Claude executors; wire adapters | Prepare selected route → prepare history → execute → deliver | One request ID; requested effort, selected source/model, attempts and errors. Upstream completion/accounting remains independent of local delivery. |
@@ -88,8 +115,28 @@ flowchart TD
 | `services/catalog`, `services/account_catalog` | Publish local catalog; separately request existing subscription refresh / fetch and identity-check a subscription catalog | Requested work is not completed work. Source generation and pseudonym identify background outcomes; publication has its own result. No new polling or probes. |
 | `services/migration` | After existing one-use export authorization: encrypt; or decode/decrypt → commit account bundle → publish catalog | Bundle commit and later catalog publication have separate receipts. Passwords and bundles never enter observation. |
 | `services/quota/commands` | Validate account → hold existing account lock → read quota, or explicitly reset then read quota | Reset outcome (`reset`, no credit, nothing to reset, already redeemed) and follow-up read are separate. A failed follow-up read does not cause another reset. |
-| `services/integration/commands` | Confirm as before → hold operation lock → apply/restore → search step → existing runtime observation → summary | Saved configuration target, observed catalog match/mismatch/unknown and unobservable routing/desktop effect remain separate. Existing rollback and stop-after-response policy is preserved. |
+| `services/integration/commands` | Confirm → temporarily drain admission for restore → hold operation lock → apply/restore → search step → runtime observation → summary → reopen admission | Restore Native changes configuration and keeps EMP running; the same service can be enabled again. Runtime observation failure does not undo a committed restore. Only the separate quit route requests process exit. |
 | `services/shutdown` | Check update and active-work constraints → restore owned integration → verify native configuration → return readiness | An applied or unresolved previous listener lease keeps EMP running. Readiness is not proof of process exit, client receipt or desktop recovery. HTTP/lifecycle owners perform delivery and stopping. |
+
+OS exit notifications are owned by `lifecycle/signals` and the Windows session
+window in `lifecycle/windows`. They register before startup integration is
+applied. Terminal close, interrupt, hangup and confirmed session end close
+admission permanently and restore owned configuration before worker or
+credential drains. A canceled session-end query does neither. The Windows
+session callback completes local restoration before returning to the OS; all
+cleanup runs inside the exiting EMP process. Normal shutdown then gives admitted
+handlers up to 30 seconds to finish and flush their request receipts; a drain
+timeout is reported rather than claimed as a clean exit. `RestoreBeforeExit` also covers a
+Rust stack unwind, but cannot run after forcible process termination.
+
+Exit restoration checks the persisted instance identity under the operation
+lock. It restores unchanged EMP-owned fields independently of external edits,
+retains conflicting fields and reports the conflict. Each exit lock wait is
+limited to 400 ms. Runtime observation releases the operation lock before IPC
+and rejects results if the configuration changed meanwhile. Only a requested
+update handoff retains integration for the replacement executable. Neither file
+restoration nor these exit checks prove an already-open client reloaded its
+configuration. The process contracts are in `tests/exit_process.rs`.
 
 Updates, usage scans, startup and shutdown workers retain their existing
 phase/command receipts and lifecycle owners. Migration commands retain the existing
@@ -125,7 +172,7 @@ result or repeats it. These limits are evidence boundaries, not new policies.
 - [x] Account/configuration/catalog operations have passive stage receipts.
 - [x] HTTP correlation, queued work, persisted state and observed effects are distinct.
 - [x] No new network probes, scheduling policy, routing or retry decisions.
-- [x] No public endpoint, response schema, UI sequence or confirmation changes.
+- [x] The observation refactor itself changes no public endpoint, response schema, UI sequence or confirmation.
 - [x] Tests use temporary Codex homes; fault injection asserts its temporary path.
 
 Verification is through the existing config, catalog, quota, account race,
@@ -135,3 +182,29 @@ by failed publication, early rejection/privacy, parent HTTP correlation and
 applied configuration with unverified runtime. The observer's unavailable-log
 test checks exact result preservation and single execution. Test fixtures do
 not establish real-provider or real-desktop acceptance.
+
+## v0.13.2 close-out verification
+
+The release keeps account deletion, credential identity, migration preference
+resolution, OS exit handling and startup recovery with their respective owners.
+Compared with v0.13.1, the application account module is 625 lines instead of
+712, state accounts is 382 instead of 481, and lifecycle is 189 instead of 266.
+This does not remove the cross-module contracts for persistence and shutdown.
+Recovery drops the unused reset-availability flag and retired page styles;
+account fixtures explicitly initialize their credential store before startup.
+
+Isolated ablations removed the missing-key rejection and pending-reset rejection
+individually. The corresponding recovery behavior tests failed in both cases;
+both protections remain. The import E2E likewise detects removing the unresolved
+preference guard. Transaction rollback, credential ownership and cancellation
+checks are retained rather than replaced by assertions about implementation.
+
+Linux application regression passes 319 tests, with 19 installed-engine or
+environment-specific cases explicitly ignored. Firefox acceptance exercises the
+embedded production UI, actual configuration saves, encrypted migration,
+optional recovery backup and return to management. Development review adapters
+and mock-action routes are absent from the normal executable's HTTP surface.
+Fixtures use temporary homes and synthetic credentials; no paid provider is
+called. Native packaging also gates startup recovery and exit-process tests on
+Windows, Linux and both macOS architectures. Those automated checks do not
+establish acceptance of a user's desktop App, IDE, logoff or shutdown session.

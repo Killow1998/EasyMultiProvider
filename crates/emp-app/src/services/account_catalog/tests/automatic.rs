@@ -254,15 +254,14 @@ fn partial_native_catalog_refresh_keeps_a_known_model_routable() {
         .unwrap();
     let (server, _) = start_server(&directory, &upstream.address, "0.159.2");
     let native_path = directory.path().join("native.json");
-    std::fs::write(
-        &native_path,
-        serde_json::to_vec(&json!({"models":[{
-            "slug":"future-native", "display_name":"Future native",
-            "supported_in_api":true, "context_window":262144
-        }]}))
-        .unwrap(),
-    )
+    let codex_cache = serde_json::to_vec(&json!({
+    "fetched_at":"2026-10-14T00:00:00Z", "client_version":"0.159.2",
+    "etag":"native-cache", "models":[{
+        "slug":"future-native", "display_name":"Future native",
+        "supported_in_api":true, "context_window":262144
+    }]}))
     .unwrap();
+    std::fs::write(&native_path, &codex_cache).unwrap();
     {
         let mut config = server
             .state
@@ -304,6 +303,19 @@ fn partial_native_catalog_refresh_keeps_a_known_model_routable() {
                 .unwrap()
                 .iter()
                 .any(|m| m["slug"] == "future-native")
+        );
+        assert!(
+            catalog["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["slug"] == "unknown-account-model"),
+            "the refreshed native model must be published alongside retained models"
+        );
+        assert_eq!(
+            std::fs::read(&native_path).unwrap(),
+            codex_cache,
+            "EMP refresh must leave Codex's cache and metadata byte-for-byte unchanged"
         );
         let input = json!({"model":"future-native", "stream":false,
             "input":[{"role":"user", "content":"Continue the existing conversation."}]});

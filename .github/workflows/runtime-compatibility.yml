@@ -47,3 +47,23 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace --all-targets --no-fail-fast
+
+  windows-exit:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: 0
+      RUST_TEST_THREADS: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c # 1.93.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: windows-exit-1.93.1
+          cache-bin: false
+      - name: Verify restoration before process exit
+        run: cargo test --locked -p emp-app --lib lifecycle::shutdown::tests
+      - name: Verify console close and session end using isolated EMP processes
+        run: cargo test --locked -p emp-app --test exit_process

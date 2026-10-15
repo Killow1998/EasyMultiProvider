@@ -210,6 +210,55 @@ fn catalog_selection_resolves_context_windows_and_owner_fallbacks() {
 }
 
 #[test]
+fn native_snapshot_survives_missing_or_merged_codex_cache_and_accepts_new_native_data() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = root.path().join("models_cache.json");
+    let snapshot = root.path().join("easy-multi-provider/native-catalog.json");
+    let config = json!({"native_catalog_path":cache});
+    let initial = json!({"fetched_at":"2026-10-14T00:00:00Z","client_version":"0.162.1",
+        "etag":"native","models":[{"slug":"initial"}]});
+    let bytes = serde_json::to_vec(&initial).unwrap();
+    fs::write(&cache, &bytes).unwrap();
+    assert_eq!(load_native_catalog(&config), initial);
+    emp_codex::preserve_native_catalog(&config).unwrap();
+    assert_eq!(fs::read(&cache).unwrap(), bytes);
+    let refreshed = json!({"account_owner":"fixture-owner","models":[{"slug":"refreshed"}]});
+    fs::write(&snapshot, serde_json::to_vec(&refreshed).unwrap()).unwrap();
+    let set_modified = |path: &std::path::Path, seconds| {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)),
+            )
+            .unwrap();
+    };
+    set_modified(&cache, 100);
+    set_modified(&snapshot, 200);
+    assert_eq!(load_native_catalog(&config), refreshed);
+    fs::remove_file(&cache).unwrap();
+    assert_eq!(load_native_catalog(&config), refreshed);
+    fs::write(
+        &cache,
+        br#"{"etag":"emp-merged","models":[{"slug":"imported/only"}]}"#,
+    )
+    .unwrap();
+    set_modified(&cache, 300);
+    assert_eq!(load_native_catalog(&config), refreshed);
+    let latest_native = json!({"etag":"native-new","models":[{"slug":"new-native"}]});
+    fs::write(&cache, serde_json::to_vec(&latest_native).unwrap()).unwrap();
+    set_modified(&cache, 300);
+    assert_eq!(load_native_catalog(&config), latest_native);
+    emp_codex::preserve_native_catalog(&config).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(snapshot).unwrap()).unwrap(),
+        latest_native
+    );
+}
+
+#[test]
 fn owner_changes_for_opaque_credentials_but_not_rotated_jwts() {
     assert_eq!(
         native_catalog_owner(&headers("user", "workspace", "one")),

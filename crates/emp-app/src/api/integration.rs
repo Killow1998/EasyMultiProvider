@@ -20,7 +20,6 @@ pub(crate) fn management_integration_request(
     body_prefix: Vec<u8>,
     state: &ServerState,
     now: f64,
-    stop_after_write: &mut bool,
 ) -> Vec<u8> {
     if !same_origin(request, state.port) {
         return cross_origin_response("management session is required");
@@ -38,7 +37,6 @@ pub(crate) fn management_integration_request(
     let operation = request.raw_path().rsplit('/').next().unwrap_or_default();
     let confirmed = body.get("confirm_reload") == Some(&Value::Bool(true));
     let reply = commands::execute(request.observation_id, state, operation, confirmed);
-    *stop_after_write = reply.stop_after_write;
     render(reply)
 }
 

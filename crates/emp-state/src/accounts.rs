@@ -9,6 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+mod identity;
+pub use identity::same_account_auth;
+
 const MAX_HIDDEN_MODELS: usize = 1000;
 const MAX_MODEL_ID_BYTES: usize = 256;
 const MAX_AUTH_BYTES: usize = 1024 * 1024;
@@ -78,133 +81,31 @@ pub fn validate_auth_json(auth: &Value) -> AccountResult<Value> {
     Ok(auth.clone())
 }
 
-fn auth_identities(auth: &Value) -> BTreeSet<(String, String)> {
-    let Some(auth) = auth.as_object() else {
-        return BTreeSet::new();
-    };
-    let tokens = auth
-        .get("tokens")
-        .and_then(Value::as_object)
-        .unwrap_or(auth);
-    let mut identities = BTreeSet::new();
-    for source in [tokens, auth] {
-        for key in ["account_id", "chatgpt_account_id"] {
-            if let Some(value) = source
-                .get(key)
-                .and_then(Value::as_str)
-                .map(python_trim)
-                .filter(|value| !value.is_empty())
-            {
-                identities.insert(("account_id".to_owned(), value.to_owned()));
-            }
-        }
-    }
-    if let Some(value) = tokens
-        .get("access_token")
-        .and_then(Value::as_str)
-        .map(python_trim)
-        .filter(|value| !value.is_empty())
-    {
-        identities.insert(("access_token".to_owned(), value.to_owned()));
-    }
-    identities
-}
-
-/// Compare two validated credential documents using Python's stable identity
-/// rule: matching account IDs win, with access-token equality as the fallback.
-pub fn same_account_auth(left: &Value, right: &Value) -> bool {
-    let left = auth_identities(left);
-    let right = auth_identities(right);
-    let left_accounts = left
-        .iter()
-        .filter(|(kind, _)| kind == "account_id")
-        .map(|(_, value)| value)
-        .collect::<BTreeSet<_>>();
-    let right_accounts = right
-        .iter()
-        .filter(|(kind, _)| kind == "account_id")
-        .map(|(_, value)| value)
-        .collect::<BTreeSet<_>>();
-    if !left_accounts.is_empty() && !right_accounts.is_empty() {
-        return left_accounts == right_accounts;
-    }
-    left.iter().any(|identity| right.contains(identity))
-}
-
-/// Catalog/UI duplicate detection uses any shared identity, unlike credential
-/// replacement's stricter `same_account_auth` account-ID comparison.
+/// Catalog/UI ownership follows the same identity checks as credential imports.
+/// Contradictory account IDs must not merge merely because a token overlaps.
 pub fn duplicate_account_status(
     native: Option<&Value>,
     accounts: &[(String, Value)],
 ) -> BTreeMap<String, String> {
-    let mut seen = BTreeMap::new();
+    let mut seen = Vec::new();
     if let Some(native) = native.filter(|auth| validate_auth_json(auth).is_ok()) {
-        for identity in auth_identities(native) {
-            seen.insert(identity, "当前 Codex 登录".to_owned());
-        }
+        seen.push(("当前 Codex 登录", native));
     }
     let mut duplicates = BTreeMap::new();
     for (id, auth) in accounts {
         if validate_auth_json(auth).is_err() {
             continue;
         }
-        let identities = auth_identities(auth);
-        if let Some(source) = identities.iter().find_map(|identity| seen.get(identity)) {
-            duplicates.insert(id.clone(), source.clone());
+        if let Some((source, _)) = seen
+            .iter()
+            .find(|(_, previous)| same_account_auth(previous, auth))
+        {
+            duplicates.insert(id.clone(), (*source).to_owned());
             continue;
         }
-        for identity in identities {
-            seen.insert(identity, id.clone());
-        }
+        seen.push((id.as_str(), auth));
     }
     duplicates
-}
-
-/// Move legacy duplicate-account hidden models to the native owner once.
-/// Inputs are normalized configurations; order and unrelated state survive.
-pub fn migrate_duplicate_native_visibility(
-    config: &Value,
-    duplicates: &BTreeMap<String, String>,
-) -> (Value, bool) {
-    let mut result = config.clone();
-    let mut hidden = config
-        .get("native_hidden_models")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut changed = false;
-    if let Some(accounts) = result.get_mut("accounts").and_then(Value::as_array_mut) {
-        for account in accounts {
-            let id = account
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if duplicates
-                .get(id)
-                .is_none_or(|source| source != "当前 Codex 登录")
-            {
-                continue;
-            }
-            let legacy = account
-                .get("hidden_models")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            if !legacy.is_empty() {
-                for model in legacy {
-                    if !hidden.contains(&model) {
-                        hidden.push(model);
-                    }
-                }
-                account["hidden_models"] = Value::Array(Vec::new());
-                changed = true;
-            }
-        }
-    }
-    if changed {
-        result["native_hidden_models"] = Value::Array(hidden);
-    }
-    (result, changed)
 }
 
 /// Apply Python `str.strip()` semantics, including the four C0 file separators.

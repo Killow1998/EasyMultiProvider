@@ -26,9 +26,8 @@ pub mod vault;
 pub mod web_session;
 
 pub use accounts::{
-    AccountError, AccountResult, account_auth_path, duplicate_account_status,
-    migrate_duplicate_native_visibility, normalize_account, normalize_context_windows,
-    normalize_hidden_models, same_account_auth, validate_auth_json,
+    AccountError, AccountResult, account_auth_path, duplicate_account_status, normalize_account,
+    normalize_context_windows, normalize_hidden_models, same_account_auth, validate_auth_json,
 };
 pub use config::{
     CONFIG_PATH_ENV, ConfigError, ConfigResult, canonical_catalog_json, canonicalize_account_paths,

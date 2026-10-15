@@ -406,13 +406,22 @@ fn codex_integration_enable_and_restore_preserve_user_toml() {
     let upstream = Upstream::start();
     let workspace = Workspace::with_routes(&upstream);
     write_file(&workspace.codex_config(), original);
-    let emp = workspace.start();
+    let mut emp = workspace.start();
+    let pid = emp.pid();
 
     let enabled = emp.post("/api/integration/enable", &json!({"confirm_reload": true}));
     assert_eq!(enabled.status, 200, "{}", enabled.text());
     let applied = workspace.read_codex_config();
     assert!(
-        applied.contains(&format!("\"http://127.0.0.1:{}/v1\"", emp.port)),
+        applied.contains(&format!(
+            "\"http://{}:{}/v1\"",
+            if cfg!(windows) {
+                "localhost"
+            } else {
+                "127.0.0.1"
+            },
+            emp.port
+        )),
         "{applied}"
     );
     assert!(applied.contains("openai_base_url = \"this is instruction text\""));
@@ -424,6 +433,35 @@ fn codex_integration_enable_and_restore_preserve_user_toml() {
 
     let restored = emp.post("/api/integration/restore", &json!({"confirm_reload": true}));
     assert_eq!(restored.status, 200, "{}", restored.text());
+    assert_eq!(workspace.read_codex_config(), original);
+    assert_eq!(emp.get("/healthz").status, 200);
+    assert_eq!(emp.get("/api/config").status, 200);
+    assert_eq!(
+        emp.get("/api/integration").json()["configuration"]["state"],
+        "native"
+    );
+    // Restore is repeatable and the same running service can be enabled again.
+    assert_eq!(
+        emp.post("/api/integration/restore", &json!({"confirm_reload":true}))
+            .status,
+        200
+    );
+    assert_eq!(
+        emp.post("/api/integration/enable", &json!({"confirm_reload":true}))
+            .status,
+        200
+    );
+    assert_eq!(
+        emp.get("/api/integration").json()["configuration"]["state"],
+        "emp_applied"
+    );
+    assert_eq!(emp.pid(), pid);
+    // Only the separate Quit action restores and ends this process.
+    assert_eq!(emp.post("/api/quit", &json!({})).status, 200);
+    assert_eq!(
+        emp.wait_exit_with_timeout(std::time::Duration::from_secs(10)),
+        Some(0)
+    );
     assert_eq!(workspace.read_codex_config(), original);
     upstream.assert_idle();
 }
@@ -542,11 +580,15 @@ fn quit_from_the_page_stops_the_process() {
     let mut emp = workspace.start();
     let enabled = emp.post("/api/integration/enable", &json!({"confirm_reload": true}));
     assert_eq!(enabled.status, 200, "{}", enabled.text());
-    assert!(
-        workspace
-            .read_codex_config()
-            .contains(&format!("http://127.0.0.1:{}/v1", emp.port))
-    );
+    assert!(workspace.read_codex_config().contains(&format!(
+        "http://{}:{}/v1",
+        if cfg!(windows) {
+            "localhost"
+        } else {
+            "127.0.0.1"
+        },
+        emp.port
+    )));
     let response = emp.post("/api/quit", &json!({}));
     assert_eq!(response.status, 200, "{}", response.text());
     assert_eq!(response.json(), json!({"status": "stopping"}));

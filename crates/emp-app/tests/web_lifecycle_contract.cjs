@@ -92,6 +92,28 @@ test('account details cancel reads and cannot update another service after a sav
   assert.equal(mounted,0,'saving a departed account must not reopen its tabs');
 });
 
+test('account removal finishes before catalog sync and never closes a replacement dialog', async () => {
+  let state={accounts:[{id:'first',name:'First'},{id:'second',name:'Second'}]}, nodes={}, details, closed=0, synced=0;
+  const q=queries(), catalog=deferred(), notices=[];
+  const services={open(){details.stop();nodes={account_usage:{innerHTML:''}};}};
+  details=feature('account-details.js','createAccountDetails')({...q,getState:()=>state,$:id=>nodes[id],tr,esc,services,
+    serviceUsage:{render:()=>''},uiIcon:()=>'',subscriptionPlanLabel:()=>'',resetCreditCount:()=>0,
+    confirmRemoval:()=>true,notice:text=>notices.push(text),onRemoved:value=>{state=value;},
+    closeModal(){closed++;details.stop();},syncSavedCatalog(){synced++;return catalog.promise;}});
+  const opening=details.open('first');q.calls[0].resolve({});await opening;
+  const button={disabled:false,textContent:'Remove',isConnected:true};
+  const removing=details.remove('first',button);
+  assert.equal(button.disabled,true);assert.equal(button.textContent,'Removing…');
+  await details.remove('first',button);
+  assert.equal(q.calls.filter(call=>call.options.method==='DELETE').length,1);
+  const replacement=details.open('second');q.calls[2].resolve({});await replacement;
+  q.calls[1].resolve({});await tick();
+  q.calls[3].resolve({accounts:[{id:'second',name:'Second'}]});await removing;
+  assert.equal(synced,1);assert.equal(closed,0);assert.deepEqual(state.accounts,[{id:'second',name:'Second'}]);
+  assert.equal(button.disabled,false);assert.equal(notices[0],'Account removed');
+  catalog.resolve();
+});
+
 test('service-local model manager cancels replaced reads and ignores stale or closed results', async () => {
   let nodes={}, manager;
   const q=queries();

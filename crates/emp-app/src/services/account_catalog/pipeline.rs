@@ -219,7 +219,7 @@ pub(crate) fn persist_fetched_catalog(
         {
             return Err(PersistError::SourceChanged);
         }
-        source.path.clone()
+        emp_codex::preserved_native_catalog_path(current_map)
     } else {
         let Some(accounts) = current.get("accounts").and_then(Value::as_array) else {
             return Err(PersistError::SourceChanged);
