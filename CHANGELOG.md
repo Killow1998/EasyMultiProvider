@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.13.2 (2026-10-14)
+## 0.13.3 (2026-10-14)
 
 ### 中文
 
@@ -11,6 +11,7 @@
 - 修复 Native 模型目录写入 Codex 缓存格式的问题，改由 EMP 自己的目录快照管理；改进 Native 额度身份匹配、启动诊断和 Windows 本地地址迁移。
 - 拆分账号删除、偏好合并、退出生命周期与启动恢复职责；移除过时分支和无效状态字段。正式版采用已验证的产品界面，Shadow 总览、模拟故障和假数据仅保留在开发预览。
 - 验证范围和限制：Linux 隔离进程、浏览器及协议行为回归；Windows 实机退出／恢复和桌面 App／IDE 验收仍需继续，未宣称完整支持 0.163 预发布版。
+- 修正发布验证环境：Windows CI 使用真正的控制台窗口检查关闭事件；取消请求测试从实际断开后开始计时。保留原有还原、连接关闭和活动状态断言。
 
 ### English
 
@@ -21,6 +22,12 @@
 - Keep Native catalog refreshes in EMP-owned snapshots instead of overwriting Codex's cache format. Improve Native quota identity matching, startup diagnostics and Windows loopback migration.
 - Isolate account deletion, preference merging, exit lifecycle and startup recovery responsibilities; remove obsolete branches and redundant state fields. Ship accepted product UI while keeping Shadow review controls, simulated failures and fixtures development-only.
 - Validation scope and limits: isolated Linux process, browser and protocol regressions; Windows machine-level exit/recovery and desktop App/IDE acceptance remain pending. No complete 0.163 prerelease compatibility claim.
+- Correct release validation: use an actual console window for Windows CI close events and measure request cancellation from the client disconnect. Preserve restoration, socket-close and activity-state assertions.
+
+## 0.13.2 (unpublished / 未发布)
+
+- 发布检查发现 Windows CI 使用代理控制台窗口，未发送实际关闭事件；没有发布安装包。本次产品变更随 0.13.3 一起发布，原标签保留作为检查记录。
+- Release validation found that the Windows CI proxy console window did not deliver an actual close event. No packages were published. Version 0.13.3 includes the product changes; the original tag remains as the validation record.
 
 ## 0.13.1 (2026-10-12)
 

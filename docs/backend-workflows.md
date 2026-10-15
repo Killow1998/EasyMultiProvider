@@ -183,7 +183,7 @@ applied configuration with unverified runtime. The observer's unavailable-log
 test checks exact result preservation and single execution. Test fixtures do
 not establish real-provider or real-desktop acceptance.
 
-## v0.13.2 close-out verification
+## v0.13.3 close-out verification
 
 The release keeps account deletion, credential identity, migration preference
 resolution, OS exit handling and startup recovery with their respective owners.
@@ -208,3 +208,15 @@ Fixtures use temporary homes and synthetic credentials; no paid provider is
 called. Native packaging also gates startup recovery and exit-process tests on
 Windows, Linux and both macOS architectures. Those automated checks do not
 establish acceptance of a user's desktop App, IDE, logoff or shutdown session.
+
+The unpublished v0.13.2 package run exposed a Windows test prerequisite:
+`GetConsoleWindow` returned `PseudoConsoleWindow`, whose WM_CLOSE destroyed
+only the proxy HWND while EMP remained alive. The disposable Windows CI runner
+now selects Windows Console Host, and the test requires `ConsoleWindowClass`
+before posting the actual close event. See Microsoft's
+[console window semantics](https://learn.microsoft.com/en-us/windows/console/getconsolewindow)
+and [terminal preference values](https://learn.microsoft.com/en-us/windows/terminal/group-policy).
+This changes CI configuration only, not a user's terminal settings. Running
+this particular test locally requires Windows Console Host as the default.
+The cancellation fixture starts its five-second deadline after the test client
+disconnects; waiting for a management snapshot must not spend that deadline.

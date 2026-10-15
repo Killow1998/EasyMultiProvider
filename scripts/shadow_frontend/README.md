@@ -1,6 +1,6 @@
 # Shadow frontend
 
-The v0.13.2 product flows are embedded from `crates/emp-app/web` in the normal
+The v0.13.3 product flows are embedded from `crates/emp-app/web` in the normal
 executable. The review overview, fault selector and mock lifecycle actions stay
 in this development directory and are injected only by the Shadow launcher.
 `e2e_formal.py` checks the actual executable rejects these development routes;
