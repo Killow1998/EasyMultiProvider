@@ -65,5 +65,14 @@ jobs:
           cache-bin: false
       - name: Verify restoration before process exit
         run: cargo test --locked -p emp-app --lib lifecycle::shutdown::tests
+      - name: Select classic console for Windows close-event tests
+        shell: pwsh
+        run: |
+          # A ConPTY proxy HWND is not a closeable console window.
+          $consoleKey = 'HKCU:\Console\%%Startup'
+          New-Item -Path $consoleKey -Force | Out-Null
+          foreach ($setting in @('DelegationConsole', 'DelegationTerminal')) {
+            New-ItemProperty -Path $consoleKey -Name $setting -PropertyType String -Value '{B23D10C0-E52E-411E-9D5B-C09FDF709C7D}' -Force | Out-Null
+          }
       - name: Verify console close and session end using isolated EMP processes
         run: cargo test --locked -p emp-app --test exit_process

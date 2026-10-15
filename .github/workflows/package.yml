@@ -77,6 +77,18 @@ jobs:
       - name: Verify native background update and rollback
         run: cargo +1.93.1 xtask package-smoke
 
+      - name: Select classic console for Windows close-event tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # This disposable runner must expose a real console window: closing
+          # a ConPTY proxy HWND does not send CTRL_CLOSE_EVENT to its client.
+          $consoleKey = 'HKCU:\Console\%%Startup'
+          New-Item -Path $consoleKey -Force | Out-Null
+          foreach ($setting in @('DelegationConsole', 'DelegationTerminal')) {
+            New-ItemProperty -Path $consoleKey -Name $setting -PropertyType String -Value '{B23D10C0-E52E-411E-9D5B-C09FDF709C7D}' -Force | Out-Null
+          }
+
       - name: Verify startup recovery and native restoration on exit
         run: >-
           cargo +1.93.1 test --locked -p emp-app

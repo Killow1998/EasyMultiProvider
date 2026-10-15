@@ -74,6 +74,10 @@ fn closing_the_console_restores_before_windows_terminates_emp() {
     let mut class = [0u16; 128];
     let len = unsafe { GetClassNameW(window, class.as_mut_ptr(), class.len() as i32) };
     let class = String::from_utf16_lossy(&class[..len.max(0) as usize]);
+    assert_eq!(
+        class, "ConsoleWindowClass",
+        "this test needs Windows Console Host; a ConPTY proxy HWND cannot close its client"
+    );
     // Actual console close, not an invocation of EMP's cleanup function.
     assert_ne!(unsafe { PostMessageW(window, WM_CLOSE, 0, 0) }, 0);
     if let Err(failure) = std::panic::catch_unwind(|| await_native(&workspace)) {

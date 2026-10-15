@@ -116,6 +116,7 @@ struct CancelableUpstream {
     address: SocketAddr,
     observed: Receiver<(String, BTreeMap<String, String>, Value)>,
     closed: Receiver<bool>,
+    probe: SyncSender<()>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -126,10 +127,16 @@ impl CancelableUpstream {
         let address = listener.local_addr().expect("cancelable upstream address");
         let (observed_sender, observed) = mpsc::sync_channel(1);
         let (closed_sender, closed) = mpsc::sync_channel(1);
+        let (probe, canceled) = mpsc::sync_channel(1);
         let worker = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept cancelable request");
             let request = receive_upstream_request(&mut stream);
             let _ = observed_sender.send(request);
+            // Measure cancellation latency after the client closes, not while
+            // the test is still waiting for the active management snapshot.
+            if canceled.recv().is_err() {
+                return;
+            }
             stream
                 .set_read_timeout(Some(Duration::from_millis(50)))
                 .expect("set cancellation probe timeout");
@@ -166,6 +173,7 @@ impl CancelableUpstream {
             address,
             observed,
             closed,
+            probe,
             worker: Some(worker),
         }
     }
@@ -177,6 +185,7 @@ impl CancelableUpstream {
 
 impl Drop for CancelableUpstream {
     fn drop(&mut self) {
+        let _ = self.probe.try_send(());
         if let Some(worker) = self.worker.take() {
             worker.join().expect("join cancelable upstream");
         }
@@ -391,6 +400,10 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
     });
     assert_eq!(only_route(&active)["model_id"], "demo/model");
     drop(downstream);
+    upstream
+        .probe
+        .send(())
+        .expect("start cancellation deadline");
     assert!(
         upstream
             .closed
