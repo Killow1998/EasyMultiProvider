@@ -138,7 +138,7 @@ test('usage groups service types before models and preserves account/tier detail
   assert.equal(JSON.stringify(data), original, 'presentation never changes stored categories or rows');
 });
 
-test('service list exposes model and connection settings while retaining details and quota actions', () => {
+test('service badges own settings navigation while list actions retain refresh, trend and model settings', () => {
   const box = {innerHTML:'',contains:() => false};
   const state = {native_account:{id:'@native',native:true,credential_set:true},providers:[{id:'local',execution_backend:'claude_cli',auth_mode:'claude_login'},{id:'api'}]};
   const service = feature('service-list.js', 'createServiceList', {document:{activeElement:null}})({
@@ -147,7 +147,8 @@ test('service list exposes model and connection settings while retaining details
     refreshingAccounts:new Set(),refreshErrors:{},quotaAnimationAccounts:new Set(),updateActivityDots:() => {},
   });
   service.render();
-  for (const action of ['account-edit','provider-edit','account-details','provider-details','account-refresh','account-quota-history','provider-model-settings','provider-quota-refresh','provider-quota-history']) assert.match(box.innerHTML, new RegExp('data-ui-action="'+action+'"'));
+  assert.doesNotMatch(box.innerHTML, /data-ui-action="(?:account|provider)-edit"/);
+  for (const action of ['account-details','provider-details','account-refresh','account-quota-history','provider-model-settings','provider-quota-refresh','provider-quota-history']) assert.match(box.innerHTML, new RegExp('data-ui-action="'+action+'"'));
   assert.match(service.tabs('@native','account'), /data-ui-action="account-edit"/);
   assert.match(service.tabs('api','provider','edit'), /data-ui-action="provider-edit"[^>]*aria-selected="true"/);
   assert.match(service.tabs('duplicate','account','details',true), /data-ui-action="account-edit"[^>]*disabled/);

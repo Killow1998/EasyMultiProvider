@@ -12,19 +12,11 @@ Use one entry point for current candidate previews:
 python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --port 4201
 ```
 
-Open the chosen unused port. **Changes** (`/?review=1`) describes the interface
-maintenance candidate based on v0.13.4: direct model/connection actions, clearer
-save/lifecycle guidance and visible action labels on narrow layouts. Released
-migration, account merge, preference conflict, removal, lifecycle and recovery
-demos remain in its expandable regression section. agy is separate.
-
-`e2e_guidance.py --emp /path/to/candidate/EMP --output /tmp/guidance.json`
-checks these existing journeys against a disposable writable backend. It covers
-both languages and themes at 390, 800 and 1440 CSS-pixel target widths, keyboard
-help, direct entries, Cancel, saved connection names, model visibility and names.
-It saves screenshots beside the result. This is behavioral/layout acceptance;
-human review should separately try adding a service, changing visibility and
-restoring native settings without verbal instructions.
+Open `http://127.0.0.1:4201/`. **Changes** (`/?review=1`) lists the ten candidate
+adjustment groups since v0.13.1: six frontend flows (five revised flows and the
+new recovery page) plus four backend groups. agy is separate. The six frontend
+entries cover migration navigation, merged account display, import preference
+conflicts, removal progress, Restore Native versus Quit, and key recovery.
 
 The **Demos** menu contains this overview, **Key recovery**, **Restore Native /
 Quit**, **Remove account**, **Existing preference conflicts**, **Import the same
@@ -126,9 +118,8 @@ six stars as a placeholder; focus clears the placeholder, and replacement input
 is visible for checking. Keeping the input empty preserves the saved key;
 closing after entering a replacement discards it. Only Save replaces the key.
 
-The shared product assets own account layout, context explanations, quota rings
-and light/dark activity halos. Service rows wrap actions and quota displays when
-space is limited; labels remain visible without horizontal scrolling. Model settings use
+The candidate account layout, context explanations, centered quota rings and
+stronger light/dark activity halos live in the shadow assets. Model settings use
 one scroll owner in the dialog body, keeping navigation and Save visible.
 All non-Native services put Remove at the right of their tab row; Native has no
 Remove. Subscription import asks for a name; its internal reference is allocated

@@ -45,20 +45,10 @@
   </div>
 </header>
 
-<details class="lifecycle-help">
-  <summary data-i18n="lifecycle_help">启用、恢复与退出有什么区别？</summary>
-  <dl>
-    <dt data-i18n="enable_codex">启用 EMP</dt><dd data-i18n="enable_help">让 Codex 使用 EMP 管理的账号和模型。对话仍在 Codex 中进行。</dd>
-    <dt data-i18n="restore_codex">恢复原生</dt><dd data-i18n="restore_help">恢复 Codex 原生设置，EMP 继续运行，可随时重新启用。</dd>
-    <dt data-i18n="quit_emp">退出 EMP</dt><dd data-i18n="quit_help">恢复 Codex 原生设置并关闭 EMP。请先完成当前请求。</dd>
-  </dl>
-</details>
-
 <div class="workspace-layout">
 <div class="workspace-column">
 <section>
 <div class="services-heading"><h2 data-i18n="services_title">服务</h2><div class="toolbar"><button data-icon="plus" onclick="openServiceChooser()" data-i18n="add_provider">添加服务</button><button id="refresh_all" class="secondary" data-icon="refresh" onclick="refreshAllAccounts()" data-i18n="refresh_quotas">刷新额度</button></div></div>
-<p class="section-help" data-i18n="services_help">添加订阅账号或 API 服务；在各服务的模型设置中选择要在 Codex 显示的模型。</p>
 <input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="codexAccountImport.fileChosen(this)">
 <div id="services" class="entity-list service-list"></div>
 </section>
@@ -69,7 +59,7 @@
 <aside class="workspace-side">
 <section>
 <div class="catalog-display-heading">
-  <h2 data-i18n="model_display">模型名称</h2>
+  <h2 data-i18n="model_display">模型显示</h2>
   <div class="catalog-display-actions">
     <button id="catalog_context_toggle" type="button" class="secondary" aria-pressed="true" aria-label="隐藏上下文标签" title="隐藏上下文标签" onclick="toggleCatalogContext()">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="catalog-context-ring" cx="12" cy="12" r="10" stroke-dasharray="49 14"></circle><g class="catalog-eye-path" data-catalog-eye="open"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="2.4"></circle></g><g class="catalog-eye-path" data-catalog-eye="closed" hidden><path d="M3 12s3.2-5.5 9-5.5c2.2 0 4 .7 5.5 1.7M21 12s-3.2 5.5-9 5.5c-2.2 0-4-.7-5.5-1.7"></path><path d="M4 4l16 16"></path></g></svg>
@@ -82,7 +72,6 @@
     </div>
   </div>
 </div>
-<p class="section-help" data-i18n="model_names_help">调整 Codex 模型列表中的名称。显示或隐藏模型，请使用对应服务的模型设置。</p>
 <div id="catalog_display_models" class="display-list"></div>
 </section>
 </aside>
@@ -152,10 +141,10 @@ const diagnostics = createDiagnostics({callReports, api, getLanguage:() => langu
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
 const translations = {
   'zh-CN': {
-    subtitle:'管理 Codex 的账号和模型。', settings_menu:'设置', language_label:'语言', theme_label:'外观', quit_emp:'退出 EMP', more_actions:'更多操作', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', diagnostics:'性能', usage:'用量', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型名称', lifecycle_help:'启用、恢复与退出有什么区别？', enable_help:'让 Codex 使用 EMP 管理的账号和模型。对话仍在 Codex 中进行。', restore_help:'恢复 Codex 原生设置，EMP 继续运行，可随时重新启用。', quit_help:'恢复 Codex 原生设置并关闭 EMP。请先完成当前请求。', services_help:'添加订阅账号或 API 服务；在各服务的模型设置中选择要在 Codex 显示的模型。', model_names_help:'调整 Codex 模型列表中的名称。显示或隐藏模型，请使用对应服务的模型设置。', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', services_title:'服务', import_account:'导入账号', refresh_quotas:'刷新额度', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
+    subtitle:'管理 Codex 的账号和模型。', settings_menu:'设置', language_label:'语言', theme_label:'外观', quit_emp:'退出 EMP', more_actions:'更多操作', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', diagnostics:'性能', usage:'用量', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', services_title:'服务', import_account:'导入账号', refresh_quotas:'刷新额度', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
   },
   en: {
-    subtitle:'Manage Codex accounts and models.', settings_menu:'Settings', language_label:'Language', theme_label:'Appearance', quit_emp:'Quit EMP', more_actions:'More actions', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', statistics:'Statistics', diagnostics:'Performance', usage:'Usage', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model names', lifecycle_help:'What do Enable, Restore and Quit do?', enable_help:'Use EMP accounts and models in Codex. Keep chatting in Codex.', restore_help:'Restore native Codex settings while keeping EMP open. You can enable it again here.', quit_help:'Restore native Codex settings and close EMP. Finish active requests first.', services_help:'Add subscriptions or API services. Choose which models appear in Codex in each service’s model settings.', model_names_help:'Rename entries in the Codex model list. Show or hide models in the corresponding service’s model settings.', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', services_title:'Services', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
+    subtitle:'Manage Codex accounts and models.', settings_menu:'Settings', language_label:'Language', theme_label:'Appearance', quit_emp:'Quit EMP', more_actions:'More actions', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', statistics:'Statistics', diagnostics:'Performance', usage:'Usage', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', services_title:'Services', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
   }
 };
 Object.assign(translations['zh-CN'], {client_scope:'客户端', emp_scope:'EMP', search_scope:'工具'});
@@ -460,14 +449,14 @@ function renderCatalogDisplay() {
   const query = String($('catalog_display_search')?.value || '').trim().toLowerCase();
   const matching = all.filter(model => !query || `${model.id} ${model.default_display_name} ${model.display_name} ${(model.routes || []).map(route => route.id).join(' ')}`.toLowerCase().includes(query));
   const visible = matching;
-  if (!all.length) { $('catalog_display_models').innerHTML = `<p class="muted">${tr('暂无可改名的模型。请先添加服务，并在该服务的模型设置中显示模型。','No models to rename yet. Add a service, then show models in its model settings.')}</p>`; return; }
-  if (!visible.length) { $('catalog_display_models').innerHTML = `<p class="muted">${tr('没有匹配的模型，请修改或清空搜索条件。','No matching models. Change or clear your search.')}</p>`; return; }
+  if (!all.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_models'))}</p>`; return; }
+  if (!visible.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_matches'))}</p>`; return; }
   $('catalog_display_models').innerHTML = visible.map(model => {
     const routes = model.routes || []; const routeText = [...new Set(routes.map(catalogSourceLabel))].join(' · ');
     const route = routes[0]?.id || model.id;
     const displayName = presentationPreview(route, model.default_display_name || model.display_name || model.id, model.context_window);
     const activity = activityIndicatorHtml('models', '', displayName, routes.map(item => item.id));
-    return `<div class="display-row"><div class="route"><div class="catalog-route-title">${activity}<strong>${esc(displayName)}</strong></div><code>${esc(routeText || model.id)}</code></div><button type="button" class="secondary" data-ui-action="catalog-display-editor" data-id="${esc(model.id)}" aria-label="${esc(tr('修改模型名称','Rename model')+' · '+displayName)}">${tr('改名','Rename')}</button></div>`;
+    return `<div class="display-row"><div class="route"><div class="catalog-route-title">${activity}<strong>${esc(displayName)}</strong></div><code>${esc(routeText || model.id)}</code></div><button type="button" class="secondary" data-ui-action="catalog-display-editor" data-id="${esc(model.id)}" aria-label="${esc(tr('修改模型显示','Edit model display'))}">›</button></div>`;
   }).join('');
   updateActivityDots();
 }
@@ -475,12 +464,12 @@ function openCatalogDisplayEditor(family) {
   const group = (state.catalog_families || []).find(item => item.id === family); if (!group) return;
   const presentation = familyPresentationFor(family);
   const routes = [...new Set((group.routes || []).map(catalogSourceLabel))].join(' · ');
-  openModal(tr('修改模型名称','Rename model'), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr('显示名称','Display name'))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><p class="muted">${esc(tr('保存后更新 Codex 模型列表中的名称，同组服务共用此名称；留空恢复默认名称。','Saving updates this name in Codex across the services listed above. Leave it blank to restore the default.'))}</p>`, tr('保存','Save'), async () => {
+  openModal(tr('修改模型显示','Edit model display'), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr('显示名称','Display name'))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><p class="muted">${esc(tr('更改名称后立即应用。','The new name takes effect immediately after saving.'))}</p>`, tr('完成','Done'), async () => {
     const candidate = cloneState(); candidate.catalog_family_presentations ||= {}; candidate.catalog_presentations ||= {};
     const current = candidate.catalog_family_presentations[family] || familyPresentationFor(family) || {};
     candidate.catalog_family_presentations[family] = Object.assign({}, current, {catalog_alias:$('modal_catalog_alias').value.trim()});
     for (const route of group.routes || []) delete candidate.catalog_presentations[route.id];
-    await persistState(tr('模型名称已保存','Model name saved'), candidate); closeModal();
+    await persistState(tr('模型显示已保存','Model display saved'), candidate); closeModal();
   });
 }
 
@@ -567,7 +556,7 @@ function renderIntegration(info) {
     : configuration.state === 'emp_applied' || configuration.state === 'native' && runtimeNeedsDisplay ? runtimeView(info.runtime || {})
     : views[configuration.state] || views.unavailable;
   $('integration_summary').textContent = view[1];
-  $('integration_summary').hidden = false;
+  $('integration_summary').hidden = !['conflict','prepared','restoring','unavailable'].includes(configuration.state || 'unavailable');
   const version = info.codex_compatibility?.installed;
   $('codex_version').textContent = version ? `Codex ${version}` : 'Codex';
   $('integration').dataset.state = configuration.state || 'unknown';
@@ -674,7 +663,7 @@ async function submitIntegrationAction(action) {
     notice(message);
   } catch (error) {
     if (error.payload && error.payload.configuration && error.payload.runtime) renderIntegration(error.payload);
-    if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；在对应服务的“模型设置”或“模型管理”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Show or add a model in the service’s Model settings or Manage models.');
+    if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；点击账号徽章，在“模型设置”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Click the account badge to restore visibility in Model settings, or add a model.');
     $('modal_status').textContent = error.message;
     notice(error.message, true);
     throw error;
@@ -732,7 +721,7 @@ function accountSummaryHtml(account, hoverText = '') {
   const credits = balance === null ? '' : `<span class="account-segment account-credit" title="${esc(tr('可用余额','Available credits'))}"><span class="credit-mark" aria-hidden="true">C</span><strong>${esc(balance)}</strong></span>`;
   const resets = resetCreditCount(account);
   const reset = resets > 0 ? `<span class="account-segment" title="${esc(tr('可用重置次数','Available resets'))}">${uiIcon('reset')}<strong>${esc(resets)}</strong></span>` : '';
-  return `<button type="button" class="account-summary" data-ui-action="account-details" data-id="${esc(account.id)}" aria-haspopup="dialog" aria-label="${esc(label+' · '+tr('查看账号信息','View account details'))}" title="${esc(hoverText || label)}"><span class="account-segment account-name"><span>${esc(label)}</span></span>${plan}${credits}${reset}<span class="account-segment service-type">${tr('账号信息','Account details')} ›</span></button>`;
+  return `<button type="button" class="account-summary" data-ui-action="account-details" data-id="${esc(account.id)}" aria-haspopup="dialog" aria-label="${esc(label+' · '+tr('查看账号信息','View account details'))}" title="${esc(hoverText || label)}"><span class="account-segment account-name"><span>${esc(label)}</span></span>${plan}${credits}${reset}</button>`;
 }
 
 function activityNowSeconds() { return Date.now() / 1000 + activityClockOffsetSeconds; }

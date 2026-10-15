@@ -27,15 +27,15 @@
 .presentation-service-icon[data-activity-state=active]{color:var(--brand-color)}
 .presentation-service-icon[data-activity-state=recent]{color:var(--brand-color)}
 .presentation-service-icon[data-activity-state=recent]::before{box-shadow:0 0 8px color-mix(in srgb,var(--halo-color,var(--brand-color)) 20%,transparent)}
-body[data-quota-style=ring] #services{display:block}
-body[data-quota-style=ring] #services .service-card{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:10px 12px;padding:12px;min-width:0;border-radius:0}
+body[data-quota-style=ring] #services{display:block;overflow-x:auto}
+body[data-quota-style=ring] #services .service-card{display:grid;grid-template-columns:minmax(0,1fr) 228px minmax(0,1fr);align-items:center;gap:0 12px;padding:8px 12px;height:57px;min-height:0;min-width:640px;border-radius:0}
 body[data-quota-style=ring] #services .service-card:first-child{border-radius:8px 8px 0 0}
 body[data-quota-style=ring] #services .service-card:last-child{border-radius:0 0 8px 8px}
 body[data-quota-style=ring] #services .service-card+.service-card{border-top:0}
 body[data-quota-style=ring] #services .service-main{grid-column:1;grid-row:1}
-body[data-quota-style=ring] #services .service-actions{grid-column:2;grid-row:1;display:flex;justify-self:end;width:auto}
-body[data-quota-style=ring] #services .service-quota{grid-column:1/-1;grid-row:2;justify-self:center}
-body[data-quota-style=ring] #services .service-note{white-space:normal}
+body[data-quota-style=ring] #services .service-actions{grid-column:3;grid-row:1;display:flex;justify-self:end;width:auto}
+body[data-quota-style=ring] #services .service-quota{grid-column:2;grid-row:1}
+body[data-quota-style=ring] #services .service-note{position:absolute;left:50px;bottom:0;max-width:150px;margin:0;font-size:9px}
 body[data-quota-style=ring] #services .service-identity .account-name{max-width:150px}
 .presentation-quota-pair{display:flex;justify-content:center;align-items:center;gap:8px;overflow:hidden}
 .presentation-ring-meter{display:flex;align-items:center;gap:6px;height:40px;flex:none}
@@ -53,7 +53,8 @@ body[data-quota-style=ring] #services .service-identity .account-name{max-width:
 .presentation-flow-ring{position:absolute;inset:0;mask:var(--arc-mask) center/contain no-repeat;pointer-events:none}
 .presentation-flow-ring>span{position:absolute;inset:0;background:conic-gradient(#ff826c,#ffcc59,#90d3ab,#53c4dd,#94baff,#c288dd,#ff826c)}
 
-@container services (max-width:760px){body[data-quota-style=ring] #services .service-card{grid-template-columns:minmax(0,1fr)}body[data-quota-style=ring] #services .service-actions{grid-column:1;grid-row:2;justify-self:start;max-width:100%}body[data-quota-style=ring] #services .service-quota{grid-row:3}}
+@container services (max-width:920px){body[data-quota-style=ring] #services .service-actions button{font-size:0;min-width:30px;width:30px;height:32px;padding:0;gap:0}body[data-quota-style=ring] #services .service-actions button:not([data-icon]){font-size:10px;min-width:65px;width:auto;padding:0 5px}body[data-quota-style=ring] #services .service-card{column-gap:8px}body[data-quota-style=ring] #services .account-summary .account-segment{padding:0 6px}}
+@container services (max-width:720px){body[data-quota-style=ring] #services .service-card{grid-template-columns:minmax(0,1fr) 228px auto}}
 @media(prefers-reduced-motion:reduce){.presentation-service-icon::before{animation:none!important}.presentation-flow-ring>span{transform:rotate(90deg)}.presentation-ring .level{transition:none}}
 @media(prefers-reduced-motion:reduce){.presentation-service-icon,.presentation-service-icon>svg{transition:none}.presentation-service-icon:hover>svg{transform:none}}
 @media(prefers-reduced-motion:reduce){#services .account-summary{transition:none}#services .account-summary:hover{transform:none}}
