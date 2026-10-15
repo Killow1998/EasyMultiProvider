@@ -96,6 +96,20 @@ mod tests {
     }
 
     #[test]
+    fn adapter_size_rejections_identify_emp_before_cli_execution() {
+        for reason in ["claude_cli_input_too_large", "claude_cli_schema_too_large"] {
+            let error = ClaudeCliError::Failure(reason);
+            let ws = websocket_value_for_route(&error, &route());
+            assert_eq!(ws["status"], 413);
+            assert_eq!(ws["error"]["origin"], "emp");
+            let message = ws["error"]["message"].as_str().unwrap();
+            assert!(message.starts_with("[EMP]"));
+            assert!(message.contains("before starting Claude Code CLI"));
+            assert!(message.contains("No request was sent upstream"));
+        }
+    }
+
+    #[test]
     fn local_cli_failure_status_and_code_match_http_and_websocket() {
         for (reason, expected_status, expected_code) in [
             (
