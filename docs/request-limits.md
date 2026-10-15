@@ -59,6 +59,28 @@ forwarded immediately, and the upstream remains responsible for its own account
 concurrency and 429 policy. The process-wide listener boundaries above still
 protect the local Python service from exhausting threads and memory.
 
+## Claude Code adapter
+
+Claude Code routes also have an EMP-owned **10 MiB** prepared-input budget
+(system instructions plus stdin) and a **12 MiB** local relay request budget.
+These are adapter memory/encoding boundaries, not Claude model context windows
+or limits reported by Claude Code itself. A small incoming request can exceed
+the prepared-input budget after EMP reconstructs its full visible history.
+
+Reaching the prepared-input budget during context assessment must not prevent
+history compaction. With a configured context/output budget, EMP treats that
+bounded estimate as unavailable and lets the normal history compactor prepare
+bounded summary requests. It then reassesses the compacted destination input.
+The execution limit remains enforced for every summary and final inference;
+history is not silently truncated, and the active turn and tool pairs retain
+their existing protection.
+
+If no usable context budget is configured, or fixed instructions or an atomic
+active input cannot fit, EMP still rejects the request. Adapter size rejections
+identify EMP as the error origin and explain that no upstream request was sent.
+Opening a new chat may reduce history, but restarting or retrying the same
+oversized input does not change these limits.
+
 ## Failure status classification
 
 EMP preserves an actual upstream HTTP status. Local connection failures use a

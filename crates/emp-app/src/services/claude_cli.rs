@@ -4,6 +4,7 @@
 
 mod auth;
 mod cancellation;
+mod context;
 mod local_query;
 pub(crate) mod model_query;
 pub(crate) mod quota;
@@ -56,9 +57,7 @@ pub(crate) fn preflight_input(body: &Value) -> Result<(), ClaudeCliError> {
     media::preflight(body).map_err(ClaudeCliError::Failure)
 }
 
-pub(crate) fn context_estimation_payload(body: &Value) -> Result<Value, ClaudeCliError> {
-    media::context_payload(body).map_err(ClaudeCliError::Failure)
-}
+pub(crate) use context::{assess_context, context_estimation_payload};
 
 fn configured_limit(route: &ResolvedRoute, field: &str) -> Option<u64> {
     [route.model.value(), route.provider.value()]

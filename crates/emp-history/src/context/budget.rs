@@ -31,6 +31,19 @@ pub fn assess(
     payload: &Value,
 ) -> ContextAssessment {
     let input_estimate = estimate_protocol_payload_tokens(payload, protocol);
+    assess_with_input_estimate(provider, model, protocol, payload, input_estimate)
+}
+
+/// Assess an already measured input, or an unavailable bounded estimate.
+/// An unavailable estimate with a known budget must still reach compaction;
+/// estimating a destination is not permission to send an oversized request.
+pub fn assess_with_input_estimate(
+    provider: &Map<String, Value>,
+    model: &Map<String, Value>,
+    protocol: &str,
+    payload: &Value,
+    input_estimate: Option<u64>,
+) -> ContextAssessment {
     let output_reserve = output_reserve(payload, model);
     let limits = calibration::limits(
         provider,
@@ -136,6 +149,26 @@ pub(super) fn positive_integer(value: Option<&Value>) -> Option<u64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn unavailable_bounded_estimate_blocks_without_losing_the_requested_output_budget() {
+        let provider = Map::new();
+        let model = json!({"context_window":1000,"output_limit":64})
+            .as_object()
+            .unwrap()
+            .clone();
+        let assessment = assess_with_input_estimate(
+            &provider,
+            &model,
+            "anthropic_messages",
+            &json!({"max_tokens":32}),
+            None,
+        );
+        assert!(assessment.blocked());
+        assert_eq!(assessment.input_estimate, None);
+        assert_eq!(assessment.output_reserve, Some(32));
+        assert_eq!(assessment.safe_input_limit, Some(712));
+    }
 
     #[test]
     fn assessment_separates_requested_output_budget_from_input() {

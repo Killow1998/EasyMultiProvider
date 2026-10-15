@@ -6,7 +6,7 @@ mod calibration;
 mod compaction;
 mod estimate;
 
-pub use budget::{ContextAssessment, assess};
+pub use budget::{ContextAssessment, assess, assess_with_input_estimate};
 pub use calibration::{status, update as update_calibration};
 pub use compaction::compact_with;
 pub use estimate::estimate_json_tokens;

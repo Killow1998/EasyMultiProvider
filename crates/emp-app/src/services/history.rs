@@ -38,6 +38,9 @@ pub(crate) enum DestinationPrepareError {
     Context(Box<emp_history::context::ContextAssessment>),
 }
 
+#[cfg(test)]
+mod claude_context_tests;
+
 fn context_guard_body(body: &Value) -> Cow<'_, Value> {
     if has_trailing_compaction_trigger(body) {
         Cow::Owned(compaction_summary_body(body))
@@ -50,12 +53,12 @@ fn assess_destination_context(
     candidate: &ResolvedRoute,
     body: &Value,
 ) -> Result<emp_history::context::ContextAssessment, DestinationPrepareError> {
-    let payload = if crate::services::claude_cli::selected(candidate) {
-        crate::services::claude_cli::context_estimation_payload(body)
-            .map_err(DestinationPrepareError::ClaudeCli)?
-    } else {
-        project_external_payload(candidate, body).map_err(DestinationPrepareError::Router)?
-    };
+    if crate::services::claude_cli::selected(candidate) {
+        return crate::services::claude_cli::assess_context(candidate, body)
+            .map_err(DestinationPrepareError::ClaudeCli);
+    }
+    let payload =
+        project_external_payload(candidate, body).map_err(DestinationPrepareError::Router)?;
     Ok(emp_history::context::assess(
         candidate.provider.value(),
         candidate.model.value(),
