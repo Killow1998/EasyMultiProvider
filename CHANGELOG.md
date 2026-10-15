@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.4 (2026-10-15)
+
+### 中文
+
+- 修复 Claude Code 长对话在历史压缩前被输入大小限制拒绝的问题。可压缩的历史先生成摘要，再继续回答；保留当前提问、工具调用和结果。
+- 区分代理无法连接、DNS 解析失败和 TLS 连接失败，提供对应处理提示。本机 Codex 连接 EMP 与 EMP 连接上游服务分别处理代理选择。
+- 明确 Claude 适配器输入或输出结构超限来自 EMP，并说明输入限制和可调整的内容。
+
+### English
+
+- Fix long Claude Code conversations being rejected by the input-size limit before history compaction. Summarize eligible history before continuing, preserving the active request, tool calls and results.
+- Distinguish unreachable proxies, DNS failures and TLS failures with specific guidance. Keep local Codex-to-EMP connections separate from upstream proxy selection.
+- Identify EMP-owned Claude adapter input and output-schema limits and explain which request settings or content can be adjusted.
+
 ## 0.13.3 (2026-10-14)
 
 ### 中文
