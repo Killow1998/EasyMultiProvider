@@ -9,6 +9,21 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 // session. Serialize AttachConsole, which is process-wide in the test runner.
 static CONSOLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+fn fixture_journal(workspace: &Workspace) -> String {
+    std::fs::read_dir(workspace.root.join("state/logs"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|file| std::fs::read_to_string(file.path()).ok())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn assert_clean_exit(emp: &mut Emp, workspace: &Workspace) {
+    let code = emp.wait_exit();
+    assert_eq!(code, Some(0), "{}", fixture_journal(workspace));
+}
+
 fn start(workspace: &Workspace, flags: u32) -> Emp {
     let mut command = workspace.command();
     command
@@ -56,7 +71,7 @@ fn session_window(pid: i32) -> HWND {
 
 #[test]
 fn closing_the_console_restores_before_windows_terminates_emp() {
-    let _serial = CONSOLE.lock().unwrap();
+    let _serial = CONSOLE.lock().unwrap_or_else(|error| error.into_inner());
     let upstream = Upstream::start();
     let workspace = Workspace::with_routes(&upstream);
     let mut emp = start(&workspace, CREATE_NEW_CONSOLE);
@@ -97,13 +112,7 @@ fn closing_the_console_restores_before_windows_terminates_emp() {
                 IsWindow(window),
             );
         }
-        if let Ok(files) = std::fs::read_dir(workspace.root.join("state/logs")) {
-            for file in files.flatten() {
-                if let Ok(text) = std::fs::read_to_string(file.path()) {
-                    eprintln!("fixture journal: {text}");
-                }
-            }
-        }
+        eprintln!("fixture journal: {}", fixture_journal(&workspace));
         std::panic::resume_unwind(failure);
     }
     let _ = emp.wait_exit();
@@ -112,7 +121,7 @@ fn closing_the_console_restores_before_windows_terminates_emp() {
 
 #[test]
 fn canceled_session_end_keeps_running_and_confirmed_end_restores_synchronously() {
-    let _serial = CONSOLE.lock().unwrap();
+    let _serial = CONSOLE.lock().unwrap_or_else(|error| error.into_inner());
     for (reason, flags) in [
         (0, CREATE_NEW_CONSOLE),
         (ENDSESSION_LOGOFF as isize, CREATE_NO_WINDOW),
@@ -135,13 +144,13 @@ fn canceled_session_end_keeps_running_and_confirmed_end_restores_synchronously()
         }
         // Restoration must finish before the session-end callback returns.
         assert_native(&workspace);
-        assert_eq!(emp.wait_exit(), Some(0));
+        assert_clean_exit(&mut emp, &workspace);
     }
 }
 
 #[test]
 fn close_window_request_restores_native() {
-    let _serial = CONSOLE.lock().unwrap();
+    let _serial = CONSOLE.lock().unwrap_or_else(|error| error.into_inner());
     let upstream = Upstream::start();
     let workspace = Workspace::with_routes(&upstream);
     let mut emp = start(&workspace, CREATE_NEW_CONSOLE);
@@ -151,5 +160,5 @@ fn close_window_request_restores_native() {
         SendMessageW(window, WM_CLOSE, 0, 0);
     }
     assert_native(&workspace);
-    assert_eq!(emp.wait_exit(), Some(0));
+    assert_clean_exit(&mut emp, &workspace);
 }
