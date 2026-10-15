@@ -118,7 +118,7 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
     const candidate={account,native:account.native===true,models:state.subscription_models||[],hidden:new Set(account.hidden_models||[]),windows:{...(account.model_context_windows||{})},syncModels:new Set(),controller:new AbortController()};
     candidate.sources=[account,...subscriptionPeers(state,id,candidate.native)].map(source=>({label:source.native?'Native':source.name||tr('已导入设置','Imported settings'),hidden:new Set(source.hidden_models||[]),windows:source.model_context_windows||{}}));
     candidate.resolved=new Set();
-    const body=`<p class="muted">${tr('留空使用默认上下文。名称在“模型显示”中设置。','Leave blank for the default context. Rename models in Model display.')}</p>
+    const body=`<p class="muted">${tr('选择在 Codex 中显示的模型，点击“保存修改”生效。上下文留空使用默认值；名称在首页“模型名称”中设置。','Choose which models appear in Codex, then Save changes. Leave context blank for the default; rename models under Model names on the home page.')}</p>
       <div class="toolbar"><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh">${tr('刷新模型上限','Refresh model limits')}</button></div>
       <div class="subscription-list-head"><span>${tr('在 Codex /model 中显示','Visible in Codex /model')}</span><span>${tr('最大上下文窗口（Tokens）','Maximum context window (tokens)')} ${help(tr('设置不能超过在线目录上限；留空采用在线目录默认值。Codex 可用窗口按目录中的比例计算，系统提示词、历史、工具和输出都占用窗口。自动压缩阈值另算。','Settings cannot exceed the online catalog limit. Leave blank for the catalog default. Codex usable context follows the catalog percentage; instructions, history, tools and output use this window. The compaction threshold is separate.'))}</span></div>
       <div id="subscription_model_list" class="model-selection"></div>`;

@@ -25,6 +25,7 @@ function createProviderModelManager({getState,cloneState,$,tr,esc,api,persistSta
     const provider=getState().providers.find(item=>item.id===id);if(!provider)return;
     const view={id,query,navigation,models:[],controller:new AbortController()};
     openModal(tr('模型管理','Manage models')+' · '+(provider.name||id),`<div id="shadow_model_manager">
+      <p class="section-help">${tr('显示或隐藏会立即保存到 Codex 模型列表。测试会向此服务发送请求，可能消耗额度或产生费用。','Showing or hiding a model saves immediately to the Codex model list. Testing sends a request to this service and may use quota or incur charges.')}</p>
       <div class="toolbar"><input type="search" id="shadow_model_search" placeholder="${tr('搜索模型名称或 ID','Search model name or ID')}" value="${esc(query)}"><button type="button" class="secondary" data-manager-action="refresh" data-icon="refresh">${tr('更新模型列表','Update model list')}</button><button type="button" class="secondary" data-manager-action="add" data-icon="plus">${tr('手动添加','Add manually')}</button></div>
       <p id="shadow_model_count" class="muted" role="status"></p><div id="shadow_managed_models">${tr('正在读取模型列表…','Loading model list…')}</div></div>`,'',null,null,{...navigation,reopen:()=>open(id,view.query,navigation)});
     active=view;view.node=$('shadow_model_manager');

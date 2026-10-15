@@ -8,14 +8,14 @@ function createServiceChooser({tr, esc, presets, icon, openModal, getState}) {
   function open() {
     const native = getState().native_account;
     const existingClaude = (getState().providers || []).find(p => p.execution_backend === 'claude_cli' && p.auth_mode === 'claude_login');
-    const codex = card('service-native', tr('当前登录','Current sign-in'), 'codex', native?.credential_set ? tr('查看 Native 账号','View Native account') : tr('连接本机 Codex','Connect local Codex'))
-      + card('service-import-account', tr('导入订阅','Import subscription'), 'codex', tr('添加 Codex 订阅账号','Add a Codex subscription'));
-    const claude = card('claude-local-choose', tr('本机订阅','Local subscription'), 'claudecode', tr('连接本机 Claude Code','Connect local Claude Code'), `data-id="${esc(existingClaude?.id || '')}"`)
-      + card('claude-cpa-choose', 'CPA', 'claudecode', tr('填写地址和 API Key','Enter address and API key'), '', true);
+    const codex = card('service-native', tr('当前 Codex 登录','Current Codex sign-in'), 'codex', native?.credential_set ? tr('使用本机已登录的账号（Native）','Use the account already signed in on this computer (Native)') : tr('先在本机 Codex 登录，再连接该账号','Sign in to Codex on this computer, then connect that account'))
+      + card('service-import-account', tr('导入其他订阅','Import another subscription'), 'codex', tr('用已有 auth.json 添加另一个 Codex 账号','Add another Codex account using its existing auth.json'));
+    const claude = card('claude-local-choose', tr('本机 Claude 登录','Local Claude sign-in'), 'claudecode', tr('使用本机 Claude Code 已登录的订阅','Use the subscription signed in through local Claude Code'), `data-id="${esc(existingClaude?.id || '')}"`);
+    const cpa = card('claude-cpa-choose', 'Claude Code CPA', 'claudecode', tr('通过 Claude Code 连接外部 API；需要服务地址和 API Key','Connect an external API through Claude Code; requires its address and API key'), '', true);
     const apiKeys = ['openai', 'anthropic', ...Object.keys(presets).filter(key => !['chatgpt','openai','anthropic'].includes(key))];
-    const api = apiKeys.filter(key => presets[key]).map(key => card('official-provider-choose', esc(presets[key].name), key, tr('连接 API 服务','Connect an API service'), `data-provider="${esc(key)}"`)).join('')
-      + card('service-custom-api', tr('自定义 API','Custom API'), 'custom', tr('填写地址和 API Key','Enter address and API key'));
-    openModal(tr('添加服务','Add service'), group(tr('Codex 订阅','Codex subscriptions'), codex) + group('Claude Code', claude) + group('API', api), '', null, null, {reopen:open});
+    const api = apiKeys.filter(key => presets[key]).map(key => card('official-provider-choose', esc(presets[key].name), key, tr('使用该服务的 API Key，按服务商规则计费','Use this service’s API key and billing'), `data-provider="${esc(key)}"`)).join('')
+      + card('service-custom-api', tr('自定义 API','Custom API'), 'custom', tr('已有其他服务商的地址和 API Key','Use another provider’s address and API key')) + cpa;
+    openModal(tr('添加服务','Add service'), group(tr('Codex 订阅','Codex subscriptions'), codex) + group(tr('Claude Code 订阅','Claude Code subscription'), claude) + group(tr('外部 API 服务','External API service'), api), '', null, null, {reopen:open});
   }
   function importCodex(navigation = {}) {
     openModal(tr('导入 Codex 订阅','Import Codex subscription'), `<div id="codex_import_choices" class="choice-grid">`

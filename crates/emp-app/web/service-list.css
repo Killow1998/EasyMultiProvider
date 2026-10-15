@@ -9,7 +9,7 @@
 .service-identity .account-name{max-width:180px}
 .service-type{color:var(--muted)}
 .service-note{display:block;font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.service-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-wrap:nowrap}
+.service-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-wrap:wrap}
 .service-actions button{height:32px;min-height:32px;margin:0;padding:0 8px;min-width:74px;white-space:nowrap;font-size:12px}
 .service-quota{grid-column:1/-1;min-width:0}
 .service-quota .quota-stack{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 12px;max-width:none;min-width:0}

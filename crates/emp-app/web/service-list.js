@@ -25,8 +25,9 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     const status = !account.credential_set ? tr('未登录','Not signed in') : account.credential_status === 'invalid' ? tr('登录已失效','Sign-in expired') : '';
     const duplicateText = account.duplicate ? (duplicate ? tr('模型由 Native 管理','Models managed by Native') : tr('重复账号','Duplicate account') + ' · ' + account.duplicate_of) : '';
     const detail = [duplicateText,settingsConflict(account)?tr('请确认模型显示与上下文设置','Review model visibility and context settings'):''].filter(Boolean).map(esc).join(' · ');
-    const actions = action('account-refresh', account.id, busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh'), 'refresh', busy || !account.credential_set)
-      + action('account-quota-history', account.id, tr('趋势','Trend'), 'chart');
+    const actions = action('account-edit', account.id, tr('模型设置','Model settings'), 'settings', duplicate)
+      + action('account-refresh', account.id, busy ? tr('刷新中…','Refreshing…') : tr('刷新额度','Refresh quota'), 'refresh', busy || !account.credential_set)
+      + action('account-quota-history', account.id, tr('额度趋势','Quota trend'), 'chart');
     return `<article class="entity-card service-card service-account${duplicate ? ' account-duplicate' : ''}" data-service="account:${esc(account.id)}">
       <div class="service-main">${serviceIcon('account', account.native ? '@native' : account.id, label, 'codex', false, refreshErrors[account.id] ? {title:tr('额度刷新失败','Quota refresh failed'),message:refreshErrors[account.id]} : status ? {title:tr('登录需要处理','Sign-in needs attention'),message:status} : null)}<div class="service-identity">${accountSummary(account, account.quota?.account_label || label)}${detail ? `<small class="service-note">${detail}</small>` : ''}</div></div>
       <div class="service-actions">${actions}</div>
@@ -40,11 +41,12 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     const brand = providerBrand(provider);
     const defaults = [provider.id, brand, presets[brand]?.name, ...(local ? ['Claude Code','Claude Subscription'] : cpa ? ['Claude CPA','Claude Code CPA'] : [])];
     const alias = brand === 'custom' || !defaults.some(name => name && name.toLowerCase() === label.toLowerCase()) ? label : '';
-    const summary = `<button type="button" class="account-summary service-summary" data-ui-action="provider-details" data-id="${esc(provider.id)}" aria-haspopup="dialog" aria-label="${esc(label + ' · ' + providerType(provider) + ' · Model: ' + models.length)}" title="${esc(label)}">${alias ? `<span class="account-segment account-name"><span>${esc(alias)}</span></span>` : ''}<span class="account-segment ${alias ? 'service-type' : 'account-name'}">${providerType(provider)}</span><span class="account-segment service-model-count">Model: ${models.length}</span></button>`;
-    const modelActions = action('provider-model-settings', provider.id, tr('模型管理','Manage models'), 'settings');
+    const summary = `<button type="button" class="account-summary service-summary" data-ui-action="provider-details" data-id="${esc(provider.id)}" aria-haspopup="dialog" aria-label="${esc(label + ' · ' + providerType(provider) + ' · Model: ' + models.length)}" title="${esc(label)}">${alias ? `<span class="account-segment account-name"><span>${esc(alias)}</span></span>` : ''}<span class="account-segment ${alias ? 'service-type' : 'account-name'}">${providerType(provider)}</span><span class="account-segment service-model-count">${tr('模型','Models')}: ${models.length}</span><span class="account-segment service-type">${tr('用量','Usage')} ›</span></button>`;
+    const modelActions = action('provider-model-settings', provider.id, tr('模型管理','Manage models'), 'settings')
+      + action('provider-edit', provider.id, tr('连接设置','Connection settings'), 'edit');
     const actions = local ? modelActions
-      + action('provider-quota-refresh', provider.id, refreshing.has(provider.id) ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh'), 'refresh', refreshing.has(provider.id))
-      + action('provider-quota-history', provider.id, tr('趋势','Trend'), 'chart')
+      + action('provider-quota-refresh', provider.id, refreshing.has(provider.id) ? tr('刷新中…','Refreshing…') : tr('刷新额度','Refresh quota'), 'refresh', refreshing.has(provider.id))
+      + action('provider-quota-history', provider.id, tr('额度趋势','Quota trend'), 'chart')
       : modelActions;
     return `<article class="entity-card service-card" data-service="provider:${esc(provider.id)}">
       <div class="service-main">${serviceIcon('provider', provider.id, label, brand, cpa, errors.has(provider.id) ? {title:tr('额度刷新失败','Quota refresh failed'),message:errors.get(provider.id)} : null)}<div class="service-identity">${summary}</div></div>
