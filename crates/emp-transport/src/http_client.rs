@@ -1,6 +1,4 @@
-use crate::http_policy::{
-    ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod, RequestPlan,
-};
+use crate::http_policy::{ConnectionPoolPolicy, HttpClientPolicy, HttpMethod, RequestPlan};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::redirect::Policy;
 use reqwest::{Certificate, Client, Method, Proxy};
@@ -12,6 +10,9 @@ use std::time::Instant;
 use url::Url;
 
 const DEFAULT_MAX_PROXY_POOLS: usize = 4;
+mod error;
+use error::map_send_error;
+pub use error::{HttpTransportError, HttpTransportErrorKind};
 mod response;
 pub use response::HttpResponse;
 
@@ -72,54 +73,6 @@ impl RedirectOrigin {
                 attempt.follow()
             }
         })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HttpTransportErrorKind {
-    InvalidRequest,
-    ClientBuild,
-    ConnectTimeout,
-    ReadTimeout,
-    ResponseTooLarge,
-    Network,
-    RedirectDisabled,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HttpTransportError {
-    kind: HttpTransportErrorKind,
-}
-
-impl HttpTransportError {
-    const fn new(kind: HttpTransportErrorKind) -> Self {
-        Self { kind }
-    }
-
-    pub const fn kind(self) -> HttpTransportErrorKind {
-        self.kind
-    }
-}
-
-impl fmt::Display for HttpTransportError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self.kind {
-            HttpTransportErrorKind::InvalidRequest => "invalid upstream HTTP request",
-            HttpTransportErrorKind::ClientBuild => "failed to build upstream HTTP client",
-            HttpTransportErrorKind::ConnectTimeout => "upstream connection timed out",
-            HttpTransportErrorKind::ReadTimeout => "upstream read timed out",
-            HttpTransportErrorKind::ResponseTooLarge => "upstream response is too large",
-            HttpTransportErrorKind::Network => "upstream network request failed",
-            HttpTransportErrorKind::RedirectDisabled => "upstream redirects are disabled",
-        })
-    }
-}
-
-impl std::error::Error for HttpTransportError {}
-
-impl From<HttpClientPolicyError> for HttpTransportError {
-    fn from(_: HttpClientPolicyError) -> Self {
-        Self::new(HttpTransportErrorKind::InvalidRequest)
     }
 }
 
@@ -349,7 +302,12 @@ impl HttpClient {
         let response = tokio::time::timeout(send_timeout, request.send())
             .await
             .map_err(|_| HttpTransportError::new(HttpTransportErrorKind::ConnectTimeout))?
-            .map_err(map_send_error)?;
+            .map_err(|error| {
+                map_send_error(
+                    error,
+                    !matches!(plan.route.proxy_origin, crate::ProxyOrigin::Direct),
+                )
+            })?;
         if redirect_mode == RedirectMode::Reject && response.status().is_redirection() {
             drop(response);
             return Err(HttpTransportError::new(
@@ -449,14 +407,6 @@ fn to_header_map(headers: &BTreeMap<String, String>) -> Result<HeaderMap, HttpTr
         result.insert(name, value);
     }
     Ok(result)
-}
-
-fn map_send_error(error: reqwest::Error) -> HttpTransportError {
-    if error.is_timeout() {
-        HttpTransportError::new(HttpTransportErrorKind::ConnectTimeout)
-    } else {
-        HttpTransportError::new(HttpTransportErrorKind::Network)
-    }
 }
 
 #[cfg(test)]

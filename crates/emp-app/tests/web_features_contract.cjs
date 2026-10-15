@@ -327,6 +327,31 @@ test('call queries coalesce events and discard stale filters and closed windows'
   assert.equal(requests.length,6); reports.stop();
 });
 
+test('network diagnostics show specific advice in Chinese and English', async () => {
+  for (const language of ['zh', 'en']) {
+    const boxes = new Map();
+    const $ = id => { if (!boxes.has(id)) boxes.set(id, {textContent:'', innerHTML:''}); return boxes.get(id); };
+    const translate = (zh, en) => language === 'en' ? en : zh;
+    let records = [];
+    const diagnostics = feature('diagnostics.js', 'createDiagnostics')({
+      api:async () => ({records}), getLanguage:() => language, tr:translate, t:x => x, esc, $, localTimeText:String,
+    });
+    for (const [error_class, zh, en] of [
+      ['proxy_unavailable', '监听端口', 'listening port'],
+      ['dns_failure', 'DNS 设置', 'DNS settings'],
+      ['tls_failure', '证书信任', 'certificate trust'],
+      ['connect_timeout', '代理节点', 'proxy node'],
+    ]) {
+      records = [{error_class, status:503}];
+      assert.equal(await diagnostics.load(), true);
+      assert.ok($('diagnostics_records').innerHTML.includes(translate(zh, en)));
+    }
+    records = [{error_class:'tls_failure', status:502, output_emitted:true}];
+    await diagnostics.load();
+    assert.ok($('diagnostics_records').innerHTML.includes(translate('先检查任务进度', 'Check the task')));
+  }
+});
+
 test('closing diagnostics discards in-flight reports without a polling timer', async () => {
   const requests = [], intervals = new Set(), boxes = new Map();
   const $ = id => { if (!boxes.has(id)) boxes.set(id, {textContent:'', innerHTML:'', querySelectorAll:() => []}); return boxes.get(id); };

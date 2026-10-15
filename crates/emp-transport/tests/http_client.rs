@@ -749,7 +749,7 @@ async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
         )
         .await
         .expect_err("untrusted certificate must fail");
-    assert_eq!(error.kind(), HttpTransportErrorKind::Network);
+    assert_eq!(error.kind(), HttpTransportErrorKind::TlsFailure);
 
     let mut config = HttpClientConfig::default();
     config
@@ -787,5 +787,71 @@ async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
         )
         .await
         .expect_err("wrong TLS host must fail");
-    assert_eq!(wrong_host.kind(), HttpTransportErrorKind::Network);
+    assert_eq!(wrong_host.kind(), HttpTransportErrorKind::TlsFailure);
+}
+
+#[tokio::test]
+async fn refused_proxy_is_distinguished_from_direct_connection_failure_without_secrets() {
+    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
+    socket
+        .bind(&"127.0.0.1:0".parse::<SocketAddr>().unwrap().into())
+        .unwrap();
+    let address = socket.local_addr().unwrap().as_socket().unwrap();
+    // Keep the port reserved without listening, so refusal is deterministic.
+    let local = format!("http://{address}/private-path?key=secret");
+    for (proxy_scheme, target, expected) in [
+        (None, local.as_str(), HttpTransportErrorKind::Network),
+        (
+            Some("http"),
+            local.as_str(),
+            HttpTransportErrorKind::Network,
+        ),
+        (
+            Some("http"),
+            "http://fixture.invalid/private-path?key=secret",
+            HttpTransportErrorKind::ProxyUnavailable,
+        ),
+        (
+            Some("http"),
+            "https://fixture.invalid/private-path?key=secret",
+            HttpTransportErrorKind::ProxyUnavailable,
+        ),
+        (
+            Some("socks5h"),
+            "https://fixture.invalid/private-path?key=secret",
+            HttpTransportErrorKind::ProxyUnavailable,
+        ),
+    ] {
+        let policy = ProxyPolicy::explicit(
+            proxy_scheme
+                .map(|scheme| format!("{scheme}://private-user:private-password@{address}")),
+        );
+        let client =
+            HttpClient::new(HttpClientPolicy::new(policy, TimeoutPolicy::default())).unwrap();
+        let error = client
+            .open(
+                HttpMethod::Get,
+                target,
+                headers("Bearer private-token"),
+                None,
+                false,
+            )
+            .await
+            .expect_err("closed listener");
+        assert_eq!(error.kind(), expected);
+        let displayed = format!("{error} {error:?}");
+        for secret in [
+            "private-user",
+            "private-password",
+            "private-path",
+            "private-token",
+            "secret",
+            &address.to_string(),
+        ] {
+            assert!(
+                !displayed.contains(secret),
+                "diagnostics contain private request data"
+            );
+        }
+    }
 }

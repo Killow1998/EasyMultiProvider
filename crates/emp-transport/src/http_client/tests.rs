@@ -2,6 +2,29 @@ use super::*;
 use crate::http_policy::{HttpClientPolicy, ProxyEnvironment, ProxyPolicy, TimeoutPolicy};
 use std::sync::{Arc, Mutex};
 
+#[tokio::test]
+async fn resolver_failure_is_classified_without_a_real_dns_query() {
+    struct FailedDns;
+    impl reqwest::dns::Resolve for FailedDns {
+        fn resolve(&self, _: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            Box::pin(async { Err(std::io::Error::other("private resolver details").into()) })
+        }
+    }
+    let client = Client::builder()
+        .no_proxy()
+        .dns_resolver(Arc::new(FailedDns))
+        .build()
+        .unwrap();
+    let error = client
+        .get("http://fixture.invalid/private?key=secret")
+        .send()
+        .await
+        .unwrap_err();
+    let error = map_send_error(error, false);
+    assert_eq!(error.kind(), HttpTransportErrorKind::DnsFailure);
+    assert!(!format!("{error:?} {error}").contains("private"));
+}
+
 #[test]
 fn redirect_origin_rejects_host_port_and_scheme_changes() {
     let origin = RedirectOrigin {

@@ -56,7 +56,11 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
     if (record.tool_activity || record.output_emitted) return tr('中断前已有输出，请先检查任务进度，再决定是否重试。','Output arrived before interruption. Check the task before retrying.');
     if (['auth','payment_required'].includes(record.error_class)) return tr('检查所选账号的登录状态或服务密钥、余额。','Check the selected account sign-in, provider key or balance.');
     if (record.error_class === 'rate_limit') return tr('上游正在限流，请查看账号余量和重置倒计时。','The upstream is rate limiting requests. Check quota and the reset countdown.');
-    if (['proxy_unavailable','proxy_reset','network','dns_failure','tls_failure','connect_timeout'].includes(record.error_class)) return tr('检查系统代理、网络和证书设置；这类错误不代表账号额度不足。','Check proxy, network and certificate settings. This error does not indicate exhausted quota.');
+    if (record.error_class === 'proxy_unavailable') return tr('无法连接配置的代理，请确认代理软件已启动、监听端口与系统或环境代理设置一致。','Cannot connect to the configured proxy. Check that the proxy is running and its listening port matches the system or environment proxy settings.');
+    if (record.error_class === 'dns_failure') return tr('无法解析连接目标的域名，请检查服务或代理地址，以及 DNS 设置。','Cannot resolve the connection host. Check the service or proxy address and DNS settings.');
+    if (record.error_class === 'tls_failure') return tr('安全连接验证或握手失败，请检查系统时间、证书信任和代理的 HTTPS 设置。','Secure connection verification or handshake failed. Check the system clock, certificate trust and proxy HTTPS settings.');
+    if (record.error_class === 'connect_timeout') return tr('连接上游超时，请检查代理节点或直连网络是否可达。','The upstream connection timed out. Check that the proxy node or direct network can reach the service.');
+    if (['proxy_reset','network'].includes(record.error_class)) return tr('网络连接失败，请检查代理与网络状态；这类错误不代表账号额度不足。','The network connection failed. Check proxy and network status; this error does not indicate exhausted quota.');
     if (['context_length_exceeded','history_reconstruction_failed','external_compaction_failed'].includes(record.error_class)) return tr('请求的上下文或历史未能处理，请保留诊断编号以便排查。','The context or history could not be processed. Keep the diagnostic ID for investigation.');
     return tr('可用诊断编号定位本地日志。没有收到输出，也不能确认上游未执行。','Use the diagnostic ID to locate local logs. Missing output does not prove the upstream did not execute.');
   }

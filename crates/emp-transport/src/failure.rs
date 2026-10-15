@@ -380,9 +380,9 @@ pub fn public_failure_message(
 ) -> String {
     let reason = failure_reason.map(safe_token);
     match error_class {
-        FailureClass::ProxyUnavailable => "Configured proxy is unavailable.".to_owned(),
-        FailureClass::DnsFailure => "The upstream host name could not be resolved.".to_owned(),
-        FailureClass::TlsFailure => "The secure connection to the upstream failed.".to_owned(),
+        FailureClass::ProxyUnavailable => "Configured proxy is unavailable. Check that the proxy is running and its listening port matches your proxy settings.".to_owned(),
+        FailureClass::DnsFailure => "The connection host name could not be resolved. Check the service or proxy address and DNS settings.".to_owned(),
+        FailureClass::TlsFailure => "Secure connection verification or handshake failed. Check the system clock, certificate trust and proxy HTTPS settings.".to_owned(),
         FailureClass::Network => {
             "The network connection to the upstream is unavailable.".to_owned()
         }

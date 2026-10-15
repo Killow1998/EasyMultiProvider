@@ -26,7 +26,7 @@ mod error;
 mod stream;
 
 pub use error::NativeHttpError;
-use error::{collaboration_error, projection_error, read_error, upstream_http_error};
+use error::{collaboration_error, projection_error, read_error, send_error, upstream_http_error};
 
 pub struct NativeCompleteResponse {
     pub status: u16,
@@ -392,31 +392,21 @@ impl<'a> NativeRouter<'a> {
                         && matches!(
                             kind,
                             HttpTransportErrorKind::Network
+                                | HttpTransportErrorKind::DnsFailure
+                                | HttpTransportErrorKind::TlsFailure
+                                | HttpTransportErrorKind::ProxyUnavailable
                                 | HttpTransportErrorKind::ConnectTimeout
                                 | HttpTransportErrorKind::ReadTimeout
                         )
                     {
                         self.retry_decision(
                             NativeRetryReason::Network,
-                            if kind == HttpTransportErrorKind::Network {
-                                503
-                            } else {
-                                504
-                            },
+                            send_error(kind).status,
                             true,
                         );
                         continue;
                     }
-                    return Err(match kind {
-                        HttpTransportErrorKind::ConnectTimeout
-                        | HttpTransportErrorKind::ReadTimeout => {
-                            NativeHttpError::transport(FailureClass::ConnectTimeout, 504, None)
-                        }
-                        HttpTransportErrorKind::Network => {
-                            NativeHttpError::transport(FailureClass::Network, 503, Some("network"))
-                        }
-                        _ => NativeHttpError::router(502, "upstream request failed"),
-                    });
+                    return Err(send_error(kind));
                 }
             };
             let status = response.status();
@@ -568,15 +558,7 @@ impl<'a> NativeRouter<'a> {
                 true,
             )
             .await
-            .map_err(|error| match error.kind() {
-                HttpTransportErrorKind::ConnectTimeout | HttpTransportErrorKind::ReadTimeout => {
-                    NativeHttpError::transport(FailureClass::ConnectTimeout, 504, None)
-                }
-                HttpTransportErrorKind::Network => {
-                    NativeHttpError::transport(FailureClass::Network, 503, Some("network"))
-                }
-                _ => NativeHttpError::router(502, "upstream request failed"),
-            })?;
+            .map_err(|error| send_error(error.kind()))?;
         let status = response.status();
         let content_type = response.header("content-type").unwrap_or("").to_owned();
         let mut observation = crate::model_observation::ModelObservation::default();

@@ -141,6 +141,22 @@ pub(super) fn collaboration_error(error: CollaborationError) -> NativeHttpError 
     }
 }
 
+pub(super) fn send_error(kind: HttpTransportErrorKind) -> NativeHttpError {
+    let (class, status, reason) = match kind {
+        HttpTransportErrorKind::DnsFailure => (FailureClass::DnsFailure, 503, "dns_failure"),
+        HttpTransportErrorKind::TlsFailure => (FailureClass::TlsFailure, 502, "tls_failure"),
+        HttpTransportErrorKind::ProxyUnavailable => {
+            (FailureClass::ProxyUnavailable, 503, "proxy_unavailable")
+        }
+        HttpTransportErrorKind::ConnectTimeout | HttpTransportErrorKind::ReadTimeout => {
+            (FailureClass::ConnectTimeout, 504, "connect_timeout")
+        }
+        HttpTransportErrorKind::Network => (FailureClass::Network, 503, "network"),
+        _ => return NativeHttpError::router(502, "upstream request failed"),
+    };
+    NativeHttpError::transport(class, status, Some(reason))
+}
+
 pub(super) fn read_error(kind: HttpTransportErrorKind) -> NativeHttpError {
     match kind {
         HttpTransportErrorKind::ResponseTooLarge => {

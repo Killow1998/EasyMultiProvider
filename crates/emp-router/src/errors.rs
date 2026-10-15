@@ -107,6 +107,11 @@ pub(super) fn transport_error(error: HttpTransportError) -> RouterError {
             (502, FailureClass::ProtocolError, "upstream_body_too_large")
         }
         HttpTransportErrorKind::Network => (503, FailureClass::Network, "network"),
+        HttpTransportErrorKind::DnsFailure => (503, FailureClass::DnsFailure, "dns_failure"),
+        HttpTransportErrorKind::TlsFailure => (502, FailureClass::TlsFailure, "tls_failure"),
+        HttpTransportErrorKind::ProxyUnavailable => {
+            (503, FailureClass::ProxyUnavailable, "proxy_unavailable")
+        }
         HttpTransportErrorKind::RedirectDisabled => {
             (502, FailureClass::ProtocolError, "redirect_disabled")
         }

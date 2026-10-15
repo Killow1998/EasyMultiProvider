@@ -336,6 +336,14 @@ Click an activity dot to view recent request targets, returned models, timings,
 actual dispatch counts, retries and error sources.
 
 EMP automatically detects proxy settings from its launch environment or operating system.
+Explicit proxy environment variables take priority; otherwise EMP reads the system proxy.
+Windows users can launch EMP normally without special commands. Clients should bypass their
+proxy for EMP's `localhost` address; EMP can still use a proxy for upstream services such as
+`chatgpt.com`. Setting only `NO_PROXY` does not disable EMP's system proxy.
+If using TUN mode, confirm that the proxy software started its TUN interface successfully
+with the permissions it requires. System proxy exceptions and TUN routing rules are separate.
+For failed HTTP calls, diagnostics distinguish unavailable proxies, DNS failures, TLS
+failures and connection timeouts, with guidance for the corresponding settings.
 
 ## Local security and diagnostics
 
