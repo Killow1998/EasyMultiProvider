@@ -8,14 +8,13 @@ const reviewRows=[
   ['新增 key 异常恢复页','New key recovery page','一键清除并重新配置，备份可选；中断也自动处理。','Clear and set up again, with optional backup and automatic interrupted-reset handling.','recovery']
 ];
 const reviewChoice=(id,zh,en,detailZh,detailEn)=>`<button type="button" class="choice" data-shadow-demo="${id}"><strong>${tr(zh,en)}</strong><small>${tr(detailZh,detailEn)}</small></button>`;
-window.EMP_REVIEW_CHOICES=()=>reviewChoice('review','本次改动 · 10 组','This update · 10 groups','6 组前端操作，4 组后台调整','6 frontend flows and 4 backend changes')+reviewChoice('recovery','key 异常恢复','Key recovery','实际恢复页，模拟清除重建和退出','Actual recovery page with simulated reset and exit')+reviewChoice('lifecycle','恢复原生 / 退出','Restore Native / Quit','查看两个独立操作','Review the two separate actions')+reviewChoice('removal','移除账号','Remove account','可重复创建和移除示例账号','Create and remove a disposable sample account')+reviewChoice('historical','已有设置冲突','Existing preference conflicts','模型设置中的历史重复账号选择','Resolve existing duplicate preferences in model settings');
+window.EMP_REVIEW_CHOICES=()=>reviewChoice('review','界面维护候选','Interface maintenance candidate','基于 v0.13.4：清晰入口、操作说明和窄屏布局','Based on v0.13.4: clearer actions, guidance and narrow layouts')+reviewChoice('recovery','key 异常恢复','Key recovery','实际恢复页，模拟清除重建和退出','Actual recovery page with simulated reset and exit')+reviewChoice('lifecycle','恢复原生 / 退出','Restore Native / Quit','查看两个独立操作','Review the two separate actions')+reviewChoice('removal','移除账号','Remove account','可重复创建和移除示例账号','Create and remove a disposable sample account')+reviewChoice('historical','已有设置冲突','Existing preference conflicts','模型设置中的历史重复账号选择','Resolve existing duplicate preferences in model settings');
 function openReview(){
-  openModal(tr('本次改动 · 相对 v0.13.1','Changes since v0.13.1'),`<p>${tr('10 组功能调整，其中 6 组涉及前端：5 组已有操作调整，1 个新增恢复页面。agy 不计入本候选版。','10 feature groups, including 6 frontend flows: 5 revised flows and 1 new recovery page. agy is separate.')}</p><div class="choice-grid">${reviewRows.map(([zh,en,dzh,den,action],i)=>reviewChoice(action,`${i+1}. ${zh}`,`${i+1}. ${en}`,dzh,den)).join('')}</div><h3>${tr('其余 4 组后台调整','4 other backend changes')}</h3><ul>${[
-    tr('Native 额度读取跟随当前登录身份','Native quota follows the current signed-in identity'),
-    tr('启动错误分类与诊断记录','Startup error classification and diagnostics'),
-    tr('模型目录刷新与缓存归属修复','Model catalog refresh and cache ownership'),
-    tr('Windows 本机代理兼容与地址迁移','Windows loopback proxy compatibility and endpoint migration')
-  ].map(x=>`<li>${x}</li>`).join('')}</ul><p class="muted">${tr('后台效果及 Windows 退出恢复需实际验收，Shadow 不冒充验证结果。下方已有服务动画与错误画廊继续保留，不计作本次新增。','Backend behavior and Windows exit restoration need runtime acceptance. Shadow is not evidence of that acceptance. Existing activity/error galleries remain available and are not new features.')}</p>`,'',null);
+  openModal(tr('界面维护候选 · 基于 v0.13.4','Interface maintenance candidate · based on v0.13.4'),`<p>${tr('只调整已有操作的入口、说明和布局。关闭此窗口后，可直接在主页体验。','Existing actions have clearer entrypoints, explanations and layout. Close this window to try them on the homepage.')}</p><ul>${[
+    tr('模型设置、连接设置直接可见；账号信息与用量徽章说明用途。','Model and connection settings are directly visible; account and usage badges name their purpose.'),
+    tr('区分订阅与外部 API、模型显隐与改名、恢复原生与退出；说明保存时机。','Distinguishes subscriptions from external APIs, visibility from renaming, and Restore from Quit; explains when changes save.'),
+    tr('窄视窗保留按钮文字；搜索无结果和空列表给出不同的下一步。','Narrow windows retain action labels; unmatched searches and empty lists explain different next steps.')
+  ].map(x=>`<li>${x}</li>`).join('')}</ul><details><summary>${tr('已发布流程的回归演示','Regression demos for released flows')}</summary><div class="choice-grid">${reviewRows.map(([zh,en,dzh,den,action])=>reviewChoice(action,zh,en,dzh,den)).join('')}</div></details><p class="muted">${tr('这里使用独立示例数据。恢复、退出与 key 重建为模拟操作，服务动画与错误画廊也可继续使用。','This workspace uses isolated sample data. Restore, Quit and key recovery are simulated; activity and error galleries remain available.')}</p>`,'',null);
 }
 let lifecycleDemo=false;
 let lifecycleState='emp_applied';

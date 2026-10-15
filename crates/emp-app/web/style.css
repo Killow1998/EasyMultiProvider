@@ -175,7 +175,7 @@ html[lang="en"] .account-list{--account-action-width:108px}
 .display-row .route{grid-column:1;grid-row:1;min-width:0}
 .display-row .route strong{display:block;overflow-wrap:anywhere}
 .display-row .route code{margin-top:3px;font-size:11px;color:var(--muted)}
-.display-row>button{grid-column:2;grid-row:1;align-self:center;justify-self:end;width:34px;height:34px;padding:0;justify-content:center;font-size:24px;line-height:1}
+.display-row>button{grid-column:2;grid-row:1;align-self:center;justify-self:end;height:34px;padding:0 10px;justify-content:center;font-size:12px;line-height:1}
 .section-tools{display:grid;grid-template-columns:minmax(0,1fr);align-items:center}
 .section-tools input{grid-column:1/-1;max-width:none;min-width:0}
 .section-tools .spacer{display:none}
@@ -192,14 +192,14 @@ body{font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;font-feat
 main{max-width:none;margin:0;padding:0 clamp(16px,2.4vw,40px) 40px}
 h1{font-size:17px;font-weight:650;letter-spacing:0}
 h2{font-size:14px;font-weight:600;margin:0}
-.page-header{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;flex-wrap:nowrap;gap:8px;overflow-x:auto;scrollbar-width:thin;margin:0 calc(-1*clamp(16px,2.4vw,40px)) 20px;padding:10px clamp(16px,2.4vw,40px);border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px)}
-.page-brand{display:flex;align-items:center;flex:none;flex-wrap:nowrap;gap:8px;white-space:nowrap}
+.page-header{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin:0 calc(-1*clamp(16px,2.4vw,40px)) 20px;padding:10px clamp(16px,2.4vw,40px);border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px)}
+.page-brand{display:flex;align-items:center;min-width:0;flex-wrap:wrap;gap:8px}
 .page-brand .brand-title{flex:none}
 .page-brand>[data-i18n="subtitle"]{display:none}
-.header-integration{display:flex;align-items:center;gap:8px;min-width:0;max-width:min(480px,100%)}
+.header-integration{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;min-width:0;max-width:min(480px,100%)}
 .header-integration .integration-card-header{flex:none;gap:4px 8px;font-size:12px;flex-wrap:nowrap}
-.header-integration #integration_summary{min-width:0;margin:0;font-size:12px;overflow:hidden;text-overflow:ellipsis}
-.page-header-controls{display:flex;align-items:center;justify-content:flex-end;flex:none;flex-wrap:nowrap;gap:4px;white-space:nowrap}
+.header-integration #integration_summary{min-width:0;margin:0;font-size:12px;white-space:normal}
+.page-header-controls{display:flex;align-items:center;justify-content:flex-start;max-width:100%;flex-wrap:wrap;gap:6px;white-space:nowrap}
 .page-header-controls :is(button,select,a){height:30px;min-height:30px;font-size:12px}
 .page-header-controls :is(button,a){padding-inline:6px}
 .page-header-controls button[data-icon]{gap:4px}
@@ -270,7 +270,7 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .input-action{display:flex;align-items:stretch;gap:6px}.input-action input{flex:1;min-width:0}.input-action button{flex:none;height:auto;min-height:0;white-space:nowrap}
 .modality-option label{display:inline-flex;align-items:center;gap:6px;margin:0;color:var(--text);font-size:13px;cursor:pointer}.modality-option input{width:auto;margin:0}.modality-option .modality-test{height:24px;min-height:24px;padding:0 8px;font-size:12px}.modality-option:not(:has(.modality-test)){padding-right:10px}
 @media(max-width:1100px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}}
-@media(max-width:760px){section{padding:12px}.header-group{padding-right:0;border-right:0}section>h2+.toolbar{grid-column:1/-1;justify-content:flex-start}}
+@media(max-width:760px){.page-header{position:static}section{padding:12px}.header-group{padding-right:0;border-right:0}section>h2+.toolbar{grid-column:1/-1;justify-content:flex-start}}
 .period-picker{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 16px;margin:0 0 14px;padding-bottom:14px;border-bottom:1px solid var(--border)}
 .period-presets{display:inline-flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden}
 .period-presets button{margin:0;border:0;border-radius:0;height:30px;min-height:30px;background:var(--panel);color:var(--text)}

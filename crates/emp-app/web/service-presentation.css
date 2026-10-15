@@ -1,6 +1,4 @@
-/* Preview scope; geometric alignment replaces width-dependent offsets. */
-body[data-shadow-refinements][data-quota-style=ring] #services .service-card{grid-template-columns:minmax(0,1fr) max-content minmax(0,1fr)!important;min-width:640px}
-body[data-shadow-refinements][data-quota-style=ring] #services .service-quota{justify-self:center}
+/* Shared service details and quota presentation. List layout lives in presentation.css. */
 body[data-shadow-refinements] .presentation-quota-pair{justify-content:center}
 body[data-shadow-refinements] .presentation-ring-meter{width:auto;min-width:104px}
 body[data-shadow-refinements] .presentation-ring-meta{min-width:65px}

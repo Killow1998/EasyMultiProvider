@@ -157,7 +157,7 @@ def check_page(browser, shadow):
     assert browser.execute('return document.body.dataset.quotaStyle === "bar";')
     browser.execute('document.querySelector("[data-presentation-style=ring]").click();')
     assert browser.execute('return document.body.dataset.quotaStyle === "ring";')
-    assert browser.execute('const heights=[...document.querySelectorAll("#services .service-card")].map(node=>node.getBoundingClientRect().height);return Math.max(...heights)-Math.min(...heights)<=1;')
+    assert browser.execute('return [...document.querySelectorAll("#services .service-card")].every(card=>{const bounds=card.getBoundingClientRect();return [...card.querySelectorAll(".service-actions button")].every(button=>{const r=button.getBoundingClientRect();return r.left>=bounds.left&&r.right<=bounds.right&&r.bottom<=bounds.bottom&&parseFloat(getComputedStyle(button).fontSize)>=12})});')
     browser.execute('document.querySelector("[data-presentation-dot-color=purple]").click();closeModal();')
     browser.execute('document.querySelector("#services [data-ui-action=provider-model-settings]").click();')
     assert browser.execute('return !!document.querySelector("#modal_body button[data-icon=refresh]");')
@@ -240,7 +240,7 @@ def main():
             assert before.get(key) == after.get(key), key
         assert upstream.calls == 2
         result['checks'] = ['UTF-8 assets under legacy codepage', 'formal service error bubble and recovery', 'shared Statistics views and colors', 'cached Calls tab without extra reads', 'aligned call columns', 'call details retained during delayed refresh', 'formal default rings', 'filtered accounting chart series', 'HTTP failure source', 'success denominator', 'native Escape',
-            'nested dialogs', 'quota trend delegated zoom and back', 'actual hover feedback in both themes', 'equal ring row heights', 'light/dark', 'English/Chinese', '125% scale', 'quota style',
+            'nested dialogs', 'quota trend delegated zoom and back', 'actual hover feedback in both themes', 'visible contained ring-row actions', 'light/dark', 'English/Chinese', '125% scale', 'quota style',
             'activity/error demos', 'credential scrubbing', 'backend write rejection', 'backend unchanged']
     if args.output:
         args.output.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')

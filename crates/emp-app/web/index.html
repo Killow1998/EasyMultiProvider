@@ -69,7 +69,7 @@
 <aside class="workspace-side">
 <section>
 <div class="catalog-display-heading">
-  <h2 data-i18n="model_display">模型显示</h2>
+  <h2 data-i18n="model_display">模型名称</h2>
   <div class="catalog-display-actions">
     <button id="catalog_context_toggle" type="button" class="secondary" aria-pressed="true" aria-label="隐藏上下文标签" title="隐藏上下文标签" onclick="toggleCatalogContext()">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="catalog-context-ring" cx="12" cy="12" r="10" stroke-dasharray="49 14"></circle><g class="catalog-eye-path" data-catalog-eye="open"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="2.4"></circle></g><g class="catalog-eye-path" data-catalog-eye="closed" hidden><path d="M3 12s3.2-5.5 9-5.5c2.2 0 4 .7 5.5 1.7M21 12s-3.2 5.5-9 5.5c-2.2 0-4-.7-5.5-1.7"></path><path d="M4 4l16 16"></path></g></svg>
@@ -460,8 +460,8 @@ function renderCatalogDisplay() {
   const query = String($('catalog_display_search')?.value || '').trim().toLowerCase();
   const matching = all.filter(model => !query || `${model.id} ${model.default_display_name} ${model.display_name} ${(model.routes || []).map(route => route.id).join(' ')}`.toLowerCase().includes(query));
   const visible = matching;
-  if (!all.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_models'))}</p>`; return; }
-  if (!visible.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_matches'))}</p>`; return; }
+  if (!all.length) { $('catalog_display_models').innerHTML = `<p class="muted">${tr('暂无可改名的模型。请先添加服务，并在该服务的模型设置中显示模型。','No models to rename yet. Add a service, then show models in its model settings.')}</p>`; return; }
+  if (!visible.length) { $('catalog_display_models').innerHTML = `<p class="muted">${tr('没有匹配的模型，请修改或清空搜索条件。','No matching models. Change or clear your search.')}</p>`; return; }
   $('catalog_display_models').innerHTML = visible.map(model => {
     const routes = model.routes || []; const routeText = [...new Set(routes.map(catalogSourceLabel))].join(' · ');
     const route = routes[0]?.id || model.id;
@@ -674,7 +674,7 @@ async function submitIntegrationAction(action) {
     notice(message);
   } catch (error) {
     if (error.payload && error.payload.configuration && error.payload.runtime) renderIntegration(error.payload);
-    if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；点击账号徽章，在“模型设置”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Click the account badge to restore visibility in Model settings, or add a model.');
+    if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；在对应服务的“模型设置”或“模型管理”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Show or add a model in the service’s Model settings or Manage models.');
     $('modal_status').textContent = error.message;
     notice(error.message, true);
     throw error;
