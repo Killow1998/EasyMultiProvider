@@ -69,6 +69,22 @@ the Web UI selects the section for its current language. An unavailable translat
 is reported explicitly. The older 0.12.18 English body has a verified, maintained
 Chinese rendering in the UI; no remote release body is changed by a local edit.
 
+### Release note writing rules
+
+- Describe concrete changes, their effect on users, and any required upgrade actions.
+- Omit generic validation caveats and defensive wording such as "acceptance
+  remains pending", "validation scope and limits", or "no complete compatibility
+  claim". Keep test coverage, pending acceptance and prerelease compatibility
+  assessments in development records and `docs/codex-compatibility.md`.
+- Include a confirmed known issue only when users need its concrete impact or
+  workaround to use or upgrade the release. Do not replace missing validation
+  with a claim of support.
+- Apply the same editorial rules to both Chinese and English sections.
+- When correcting published notes, update both CHANGELOG and the GitHub Release
+  body. A wording correction does not require rebuilding packages or moving tags.
+
+### Build and publication
+
 Pull requests run one Linux format, lint and test job. A newer push to the same
 pull request cancels its superseded run. The checks are not repeated on merge,
 and ordinary source or documentation changes do not build release packages.

@@ -10,7 +10,6 @@
 - 新增简体中文／English 启动恢复页。旧配置或密钥无法使用时，可确认清除并重新配置，备份可选且默认不勾选；中断的重建自动继续处理，保留原生登录和对话。
 - 修复 Native 模型目录写入 Codex 缓存格式的问题，改由 EMP 自己的目录快照管理；改进 Native 额度身份匹配、启动诊断和 Windows 本地地址迁移。
 - 拆分账号删除、偏好合并、退出生命周期与启动恢复职责；移除过时分支和无效状态字段。正式版采用已验证的产品界面，Shadow 总览、模拟故障和假数据仅保留在开发预览。
-- 验证范围和限制：Linux 隔离进程、浏览器及协议行为回归；Windows 实机退出／恢复和桌面 App／IDE 验收仍需继续，未宣称完整支持 0.163 预发布版。
 - 修正发布验证环境：Windows CI 使用真正的控制台窗口检查关闭事件；取消请求测试从实际断开后开始计时。保留原有还原、连接关闭和活动状态断言。
 
 ### English
@@ -21,7 +20,6 @@
 - Add a Simplified Chinese / English startup recovery page for unusable settings or keys. Confirm clearing and setting up again, optionally retain a backup, and recover interrupted resets automatically while preserving native sign-in and conversations.
 - Keep Native catalog refreshes in EMP-owned snapshots instead of overwriting Codex's cache format. Improve Native quota identity matching, startup diagnostics and Windows loopback migration.
 - Isolate account deletion, preference merging, exit lifecycle and startup recovery responsibilities; remove obsolete branches and redundant state fields. Ship accepted product UI while keeping Shadow review controls, simulated failures and fixtures development-only.
-- Validation scope and limits: isolated Linux process, browser and protocol regressions; Windows machine-level exit/recovery and desktop App/IDE acceptance remain pending. No complete 0.163 prerelease compatibility claim.
 - Correct release validation: use an actual console window for Windows CI close events and measure request cancellation from the client disconnect. Preserve restoration, socket-close and activity-state assertions.
 
 ## 0.13.2 (unpublished / 未发布)
