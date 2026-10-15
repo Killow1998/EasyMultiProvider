@@ -71,9 +71,37 @@ fn closing_the_console_restores_before_windows_terminates_emp() {
         window
     };
     assert!(!window.is_null());
+    let mut class = [0u16; 128];
+    let len = unsafe { GetClassNameW(window, class.as_mut_ptr(), class.len() as i32) };
+    let class = String::from_utf16_lossy(&class[..len.max(0) as usize]);
     // Actual console close, not an invocation of EMP's cleanup function.
     assert_ne!(unsafe { PostMessageW(window, WM_CLOSE, 0, 0) }, 0);
-    await_native(&workspace);
+    if let Err(failure) = std::panic::catch_unwind(|| await_native(&workspace)) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // Read only this fixture's process and synthetic journal. Keep the
+        // original assertion: successful message posting is not proof of exit.
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, emp.pid() as u32);
+            let mut code = 0;
+            let queried = GetExitCodeProcess(process, &mut code);
+            CloseHandle(process);
+            eprintln!(
+                "console class={class:?} window_exists={} process_query={queried} exit_code={code}",
+                IsWindow(window),
+            );
+        }
+        if let Ok(files) = std::fs::read_dir(workspace.root.join("state/logs")) {
+            for file in files.flatten() {
+                if let Ok(text) = std::fs::read_to_string(file.path()) {
+                    eprintln!("fixture journal: {text}");
+                }
+            }
+        }
+        std::panic::resume_unwind(failure);
+    }
     let _ = emp.wait_exit();
     assert_native(&workspace);
 }
