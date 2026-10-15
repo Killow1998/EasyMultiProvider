@@ -87,10 +87,15 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
             "unsupported_input_modality",
             "Claude Code CLI cannot safely resolve this image, audio, video, or document input",
         ),
-        "claude_cli_input_too_large" | "claude_cli_schema_too_large" => (
+        "claude_cli_input_too_large" => (
             413,
             "claude_cli_input_too_large",
-            "Claude Code CLI request exceeds its size limit",
+            "EMP's Claude Code adapter input exceeds its 10 MiB prepared-input limit; configure the model's context and output budget for history compaction, or reduce fixed instructions, attachments, or the active turn",
+        ),
+        "claude_cli_schema_too_large" => (
+            413,
+            "claude_cli_input_too_large",
+            "EMP's Claude Code adapter output schema exceeds its 64 KiB limit",
         ),
         "unsupported_provider_protocol" => (
             501,
@@ -168,7 +173,10 @@ pub(crate) fn failure_stage(error: &ClaudeCliError) -> &'static str {
         | ClaudeCliError::Failure("claude_cli_interrupted") => "cancelled",
         ClaudeCliError::Router(_) => "upstream_request",
         ClaudeCliError::Failure(
-            "unsupported_reasoning_effort" | "unsupported_reasoning_effort_none",
+            "unsupported_reasoning_effort"
+            | "unsupported_reasoning_effort_none"
+            | "claude_cli_input_too_large"
+            | "claude_cli_schema_too_large",
         ) => "input_validation",
         ClaudeCliError::Failure(code) if code.starts_with("claude_cli_relay_") => "relay_request",
         ClaudeCliError::Failure(

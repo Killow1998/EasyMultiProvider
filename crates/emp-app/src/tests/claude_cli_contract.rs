@@ -38,6 +38,13 @@ fn claude_server_with_context(
 }
 
 fn claude_summary_server(base_url: &str) -> (TempDir, ServerHandle) {
+    claude_summary_server_with_context(base_url, 5000)
+}
+
+fn claude_summary_server_with_context(
+    base_url: &str,
+    context_window: u64,
+) -> (TempDir, ServerHandle) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     std::fs::write(
@@ -56,7 +63,7 @@ fn claude_summary_server(base_url: &str) -> (TempDir, ServerHandle) {
                 },
                 {
                     "id":"demo/short", "provider":"demo", "upstream_id":"sonnet",
-                    "enabled":true, "context_window":5000, "output_limit":64,
+                    "enabled":true, "context_window":context_window, "output_limit":64,
                     "capability_sources":{"context_window":{"source":"manual","confidence":1.0}}
                 }
             ]
@@ -923,6 +930,88 @@ fn installed_cli_websocket_preserves_router_error_class_and_retry_after() {
 
     socket.close();
     server.shutdown().expect("shutdown websocket error server");
+}
+
+#[test]
+#[ignore = "requires an installed trusted Claude Code CLI on PATH"]
+fn installed_cli_compacts_history_above_the_adapter_limit_before_inference() {
+    assert!(emp_codex::installed_cli::resolve_claude_cli().is_some());
+    let upstream = SummaryUpstream::start();
+    let (_directory, server) = claude_summary_server_with_context(&upstream.base_url(), 1_000_000);
+    let mut input = (0..48)
+        .map(|index| {
+            json!({
+                "type":"message", "role":"user",
+                "content":format!("visible history {index}: {}", "h".repeat(256 * 1024))
+            })
+        })
+        .collect::<Vec<_>>();
+    let active = vec![
+        json!({"type":"message","role":"user","content":"active destination request"}),
+        json!({"type":"function_call","name":"read","call_id":"active-call","arguments":"{}"}),
+        json!({"type":"function_call_output","call_id":"active-call","output":"active result"}),
+    ];
+    input.extend(active.iter().cloned());
+    let body = serde_json::to_vec(&json!({
+        "model":"demo/short", "stream":false, "max_output_tokens":4096,
+        "instructions":"preserve the current turn and its tool pair", "input":input,
+        "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]
+    }))
+    .unwrap();
+    assert!(body.len() > 10 * 1024 * 1024);
+    // Content-Length measures the compressed transport, not the decoded history
+    // to which the Claude adapter's prepared-input limit applies.
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&body).unwrap();
+    let compressed = encoder.finish().unwrap();
+    assert!(compressed.len() < 64 * 1024);
+    let started = Instant::now();
+    let response = post(
+        &server,
+        "/v1/responses",
+        &compressed,
+        &[&session_header(&server), "Content-Encoding: gzip"],
+    );
+    assert!(started.elapsed() < Duration::from_secs(60));
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    let result: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(result["status"], "completed");
+    assert_eq!(
+        crate::services::compaction::response_output_text(&result).as_deref(),
+        Some("short destination answer")
+    );
+    let requests = upstream.requests_through_final();
+    assert!((2..=16).contains(&requests.len()));
+    for request in &requests {
+        assert_eq!(request.path, "/v1/messages");
+        assert_eq!(request.body["model"], "sonnet");
+        assert!(serde_json::to_vec(&request.body).unwrap().len() < 12 * 1024 * 1024);
+        assert_eq!(request.body["tools"][0]["name"], "StructuredOutput");
+        assert_eq!(request.body["tools"].as_array().unwrap().len(), 1);
+    }
+    let final_request = requests.last().unwrap();
+    let final_input = final_request.transcript["input"].as_array().unwrap();
+    assert_eq!(&final_input[final_input.len() - active.len()..], &active);
+    assert!(
+        final_input[0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("portable checkpoint")
+    );
+    assert!(
+        final_request.body["system"]
+            .to_string()
+            .contains("preserve the current turn and its tool pair")
+    );
+    eprintln!(
+        "Claude adapter regression: {} encoded bytes / {} decoded bytes -> {} bounded CLI requests -> completed",
+        compressed.len(),
+        body.len(),
+        requests.len()
+    );
+    server
+        .shutdown()
+        .expect("shutdown large-history Claude test server");
 }
 
 #[test]
