@@ -180,6 +180,105 @@ fn structured_output_rejects_extra_fields_and_tools_disallowed_by_choice() {
 }
 
 #[test]
+fn proposal_schema_constrains_namespaces_kinds_and_tool_choice() {
+    let mut request = json!({"tools":[
+        {"type":"namespace","name":"functions","tools":[
+            {"type":"function","name":"exec_command","parameters":{"type":"object"}},
+            {"type":"custom","name":"apply_patch"}
+        ]},
+        {"type":"tool_search","execution":"client"}
+    ]});
+    let schema: Value = serde_json::from_str(&proposal_schema(&request).unwrap()).unwrap();
+    let choices = schema["properties"]["tool_calls"]["items"]["anyOf"]
+        .as_array()
+        .unwrap();
+    assert_eq!(choices.len(), 3);
+    assert!(choices.iter().any(
+        |choice| choice["properties"]["name"]["const"] == "exec_command"
+            && choice["properties"]["namespace"]["const"] == "functions"
+            && choice["properties"]["type"]["const"] == "function_call"
+    ));
+    assert!(choices.iter().any(
+        |choice| choice["properties"]["name"]["const"] == "apply_patch"
+            && choice["properties"]["type"]["const"] == "custom_tool_call"
+    ));
+    request["tool_choice"] = json!("none");
+    let schema: Value = serde_json::from_str(&proposal_schema(&request).unwrap()).unwrap();
+    assert_eq!(schema["properties"]["tool_calls"]["maxItems"], 0);
+    assert!(schema["properties"]["tool_calls"]["items"]["anyOf"].is_null());
+}
+
+#[test]
+fn proposal_schema_includes_discovered_tools_and_filters_forced_choice() {
+    let request = json!({
+        "tools":[{"type":"function","name":"other"}],
+        "input":[{"type":"tool_search_output","tools":[
+            {"type":"namespace","name":"fs","tools":[{"type":"function","name":"read"}]}
+        ]}],
+        "tool_choice":{"type":"function","name":"read","namespace":"fs"}
+    });
+    let schema: Value = serde_json::from_str(&proposal_schema(&request).unwrap()).unwrap();
+    let choices = schema["properties"]["tool_calls"]["items"]["anyOf"]
+        .as_array()
+        .unwrap();
+    assert_eq!(choices.len(), 1);
+    assert_eq!(choices[0]["properties"]["name"]["const"], "read");
+    assert_eq!(choices[0]["properties"]["namespace"]["const"], "fs");
+}
+
+#[test]
+fn restores_only_unambiguous_available_tool_spellings() {
+    let request = json!({"input":"go","tools":[
+        {"type":"namespace","name":"functions","tools":[
+            {"type":"function","name":"exec_command","parameters":{"type":"object"}}
+        ]}
+    ]});
+    for name in [
+        "exec_command",
+        "functions.exec_command",
+        "functions__exec_command",
+    ] {
+        let output = json!({"structured_output":{"answer":"","tool_calls":[
+            {"type":"function_call","name":name,"namespace":"","arguments":{"cmd":"pwd"},"input":""}
+        ]}});
+        let response = response_from_cli(&output, &test_route(), &request, 200).unwrap();
+        assert_eq!(response.body["output"][0]["namespace"], "functions");
+        assert_eq!(response.body["output"][0]["name"], "exec_command");
+        assert_eq!(response.body["output"][0]["arguments"], "{\"cmd\":\"pwd\"}");
+    }
+}
+
+#[test]
+fn refuses_ambiguous_unknown_wrong_scope_and_wrong_kind_tools() {
+    let request = json!({"input":"go","tools":[
+        {"type":"namespace","name":"a","tools":[{"type":"function","name":"read"}]},
+        {"type":"namespace","name":"b","tools":[{"type":"function","name":"read"}]}
+    ]});
+    for (name, namespace, kind) in [
+        ("read", "", "function_call"),
+        ("missing", "a", "function_call"),
+        ("read", "wrong", "function_call"),
+        ("read", "a", "custom_tool_call"),
+    ] {
+        let output = json!({"structured_output":{"answer":"","tool_calls":[
+            {"type":kind,"name":name,"namespace":namespace,"arguments":{},"input":""}
+        ]}});
+        assert!(matches!(
+            response_from_cli(&output, &test_route(), &request, 200),
+            Err(ClaudeCliError::Failure("claude_cli_unknown_tool_proposal"))
+        ));
+    }
+}
+
+#[test]
+fn unknown_tool_error_is_not_a_retryable_gateway_failure() {
+    assert_eq!(
+        crate::services::claude_cli::error::failure_details("claude_cli_unknown_tool_proposal").0,
+        422
+    );
+}
+
+#[test]
 fn nullable_effort_means_no_override_and_explicit_values_keep_their_meaning() {
     for body in [
         json!({}),
@@ -214,6 +313,45 @@ fn nullable_effort_means_no_override_and_explicit_values_keep_their_meaning() {
             Err("unsupported_reasoning_effort")
         );
     }
+}
+
+#[test]
+fn selected_effort_is_never_silently_downgraded_for_the_model() {
+    let old = json!({"supports_reasoning":true,"reasoning_levels":["low","medium","high","max"]});
+    let new =
+        json!({"supports_reasoning":true,"reasoning_levels":["low","medium","high","xhigh","max"]});
+    let old = old.as_object().unwrap();
+    let new = new.as_object().unwrap();
+    for level in ["low", "medium", "high", "max"] {
+        assert_eq!(
+            effort_for_model(&json!({"reasoning":{"effort":level}}), old),
+            Ok(Some(level))
+        );
+    }
+    assert_eq!(
+        effort_for_model(&json!({"reasoning":{"effort":"xhigh"}}), old),
+        Err("unsupported_model_reasoning_effort")
+    );
+    assert_eq!(
+        effort_for_model(&json!({"reasoning":{"effort":"xhigh"}}), new),
+        Ok(Some("xhigh"))
+    );
+    assert_eq!(effort_for_model(&json!({}), new), Ok(None));
+    assert_eq!(
+        effort_for_model(
+            &json!({"reasoning":{"effort":"high"}}),
+            json!({"supports_reasoning":false}).as_object().unwrap()
+        ),
+        Err("unsupported_model_reasoning_effort")
+    );
+    let restricted = json!({"reasoning_levels":["low"]});
+    assert!(
+        effort_for_model(
+            &json!({"reasoning":{"effort":"high"}}),
+            restricted.as_object().unwrap()
+        )
+        .is_err()
+    );
 }
 
 #[test]

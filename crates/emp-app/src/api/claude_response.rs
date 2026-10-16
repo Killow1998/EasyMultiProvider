@@ -127,6 +127,16 @@ mod tests {
                 422,
                 "claude_cli_invalid_tool_history",
             ),
+            (
+                "claude_cli_unknown_tool_proposal",
+                422,
+                "claude_cli_unknown_tool_proposal",
+            ),
+            (
+                "unsupported_model_reasoning_effort",
+                400,
+                "unsupported_reasoning_effort",
+            ),
         ] {
             let error = ClaudeCliError::Failure(reason);
             let http = String::from_utf8(crate::api::claude_response::http_response(&error))

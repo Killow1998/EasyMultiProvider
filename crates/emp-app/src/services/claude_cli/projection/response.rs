@@ -21,6 +21,73 @@ enum ToolKind {
     Search,
 }
 
+fn available_tools(request: &Value) -> BTreeSet<ToolIdentity> {
+    collect_tools(request)
+        .into_iter()
+        .filter(|tool| tool_choice_allows(request.get("tool_choice"), tool))
+        .collect()
+}
+
+pub(super) fn constrain_proposal_schema(schema: &mut Value, request: &Value) {
+    let available = available_tools(request);
+    let calls = &mut schema["properties"]["tool_calls"];
+    if available.is_empty() {
+        calls["maxItems"] = json!(0);
+        return;
+    }
+    // Constrain the complete identity tuple, not three independent enums: a
+    // name from one namespace must not be paired with another namespace/kind.
+    calls["items"]["anyOf"] = Value::Array(
+        available
+            .iter()
+            .map(|tool| {
+                let kind = match tool.kind {
+                    ToolKind::Function => "function_call",
+                    ToolKind::Custom => "custom_tool_call",
+                    ToolKind::Search => "tool_search_call",
+                };
+                json!({"properties":{
+            "type":{"const":kind},
+            "name":{"const":tool.name},
+            "namespace":{"const":tool.namespace}
+        },"required":["type","name","namespace"]})
+            })
+            .collect(),
+    );
+}
+
+fn resolve_tool<'a>(
+    available: &'a BTreeSet<ToolIdentity>,
+    namespace: &str,
+    name: &str,
+    kind: ToolKind,
+) -> Option<&'a ToolIdentity> {
+    let exact = ToolIdentity {
+        namespace: namespace.to_owned(),
+        name: name.to_owned(),
+        kind,
+    };
+    if let Some(tool) = available.get(&exact) {
+        return Some(tool);
+    }
+    // Restore only an unambiguous spelling of an already available identity.
+    // Never invent a tool, cross kinds or override an explicitly wrong scope.
+    let mut matches = available.iter().filter(|tool| {
+        tool.kind == kind
+            && (namespace.is_empty() || namespace == tool.namespace)
+            && (name == tool.name
+                || (!tool.namespace.is_empty()
+                    && [
+                        format!("{}.{}", tool.namespace, tool.name),
+                        format!("{}__{}", tool.namespace, tool.name),
+                    ]
+                    .iter()
+                    .any(|qualified| qualified == name)))
+    });
+    let tool = matches.next()?;
+    matches.next().is_none().then_some(tool)
+}
+
 pub(in crate::services::claude_cli) fn parse_cli_result(
     stdout: &[u8],
 ) -> Result<Value, &'static str> {
@@ -64,10 +131,7 @@ pub(in crate::services::claude_cli) fn response_from_cli(
     bridge
         .prepare_or_borrow(request)
         .map_err(|_| ClaudeCliError::Failure("claude_cli_invalid_tool_history"))?;
-    let available = collect_tools(request)
-        .into_iter()
-        .filter(|tool| tool_choice_allows(request.get("tool_choice"), tool))
-        .collect::<BTreeSet<_>>();
+    let available = available_tools(request);
     let raw_proposals = proposal["tool_calls"]
         .as_array()
         .ok_or(ClaudeCliError::Failure(
@@ -90,13 +154,10 @@ pub(in crate::services::claude_cli) fn response_from_cli(
             .get("namespace")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !available.contains(&ToolIdentity {
-            namespace: namespace.to_owned(),
-            name: name.to_owned(),
-            kind,
-        }) {
-            return Err(ClaudeCliError::Failure("claude_cli_unknown_tool_proposal"));
-        }
+        let tool = resolve_tool(&available, namespace, name, kind)
+            .ok_or(ClaudeCliError::Failure("claude_cli_unknown_tool_proposal"))?;
+        let name = tool.name.as_str();
+        let namespace = tool.namespace.as_str();
         let item = match kind {
             ToolKind::Function => {
                 let arguments = raw

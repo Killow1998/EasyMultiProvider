@@ -174,6 +174,7 @@ pub fn enrich_discovered_models(provider: &Map<String, Value>, models: Vec<Value
                     && !matches!(
                         field,
                         "input_modalities"
+                            | "output_modalities"
                             | "supports_reasoning"
                             | "reasoning_levels"
                             | "reasoning_control"
@@ -228,6 +229,24 @@ pub fn enrich_discovered_models(provider: &Map<String, Value>, models: Vec<Value
             Value::Object(model)
         })
         .collect()
+}
+
+/// Claude Code defaults differ from Messages API defaults for some models.
+/// Only exact published IDs/aliases are recognized; deployment names are not guessed.
+pub fn claude_cli_default_effort(model_id: &str) -> Option<String> {
+    let registry = registry();
+    registry
+        .get("models")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|model| {
+            model.get("provider_key").and_then(Value::as_str) == Some("anthropic")
+                && model_matches(model, model_id)
+        })?
+        .get("claude_cli_default_effort")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 fn model_matches(model: &Map<String, Value>, candidate: &str) -> bool {

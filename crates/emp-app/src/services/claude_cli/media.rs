@@ -277,7 +277,7 @@ pub(super) fn context_payload(body: &Value) -> Result<Value, &'static str> {
         }
         ExpectedUserContent::Blocks(blocks) => Value::Array(blocks),
     };
-    let schema_json = projection::proposal_schema()?;
+    let schema_json = projection::proposal_schema(body)?;
     let schema: Value =
         serde_json::from_str(&schema_json).map_err(|_| "claude_cli_invalid_schema")?;
     Ok(json!({

@@ -429,6 +429,98 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
 
 #[test]
 #[ignore = "requires an installed trusted Claude Code CLI on PATH"]
+fn installed_cli_preserves_scoped_codex_tool_identity() {
+    assert!(emp_codex::installed_cli::resolve_claude_cli().is_some());
+    let upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({
+        "answer":"", "tool_calls":[{
+            "type":"function_call", "name":"exec_command", "namespace":"functions",
+            "arguments":{"cmd":"echo fixture-only"}, "input":""
+        }]
+    }))]);
+    let (_directory, server) = claude_server(&upstream.base_url());
+    let body = json!({"model":"demo/model","stream":false,"input":"propose a tool",
+        "tools":[{"type":"namespace","name":"functions","tools":[{
+            "type":"function","name":"exec_command","parameters":{"type":"object"}
+        }]}]
+    });
+    let response = post(
+        &server,
+        "/v1/responses",
+        &serde_json::to_vec(&body).unwrap(),
+        &[&session_header(&server)],
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    let result: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(result["output"][0]["namespace"], "functions");
+    assert_eq!(result["output"][0]["name"], "exec_command");
+    assert_eq!(
+        result["output"][0]["arguments"],
+        "{\"cmd\":\"echo fixture-only\"}"
+    );
+    let (_, _, forwarded) = upstream.observed();
+    let choices =
+        forwarded["tools"][0]["input_schema"]["properties"]["tool_calls"]["items"]["anyOf"]
+            .as_array()
+            .expect("CLI preserves request-bound tool schema");
+    assert_eq!(choices.len(), 1);
+    assert_eq!(choices[0]["properties"]["namespace"]["const"], "functions");
+    assert_eq!(choices[0]["properties"]["name"]["const"], "exec_command");
+    server.shutdown().unwrap();
+}
+
+#[test]
+#[ignore = "requires an installed trusted Claude Code CLI on PATH"]
+fn installed_cli_preserves_published_claude_model_efforts() {
+    assert!(emp_codex::installed_cli::resolve_claude_cli().is_some());
+    for id in [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "claude-fable-5-1",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+    ] {
+        let levels: &[&str] = if id.ends_with("4-6") {
+            &["low", "medium", "high", "max"]
+        } else {
+            &["low", "medium", "high", "xhigh", "max"]
+        };
+        for level in levels {
+            let upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({
+                "answer":"fixture answer","tool_calls":[]
+            }))]);
+            let (_directory, server) = claude_server_with_model(&upstream.base_url(), id);
+            let body = json!({"model":"demo/model","stream":false,"input":"fixture only",
+                "reasoning":{"effort":level}});
+            let response = post(
+                &server,
+                "/v1/responses",
+                &serde_json::to_vec(&body).unwrap(),
+                &[&session_header(&server)],
+            );
+            assert!(
+                response.starts_with("HTTP/1.1 200 OK\r\n"),
+                "{id} {level}: {response}"
+            );
+            let (_, _, forwarded) = upstream.observed();
+            assert_eq!(forwarded["model"], id, "preserve selected model");
+            assert_eq!(
+                forwarded["output_config"]["effort"], *level,
+                "{id}: preserve effort"
+            );
+            server.shutdown().unwrap();
+        }
+        eprintln!("Verified {id}: {} effort levels", levels.len());
+    }
+}
+
+#[test]
+#[ignore = "requires an installed trusted Claude Code CLI on PATH"]
 fn installed_cli_forwards_images_and_documents_with_ordered_tool_history() {
     assert_cli_forwards_images_and_documents_with_ordered_tool_history("sonnet");
 }

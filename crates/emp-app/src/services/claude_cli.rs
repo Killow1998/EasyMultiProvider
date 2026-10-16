@@ -155,13 +155,14 @@ fn execute_complete_with_cli(
     let stdin = Arc::<[u8]>::from(cli_input.stdin);
     let expected_user_content = cli_input.expected_user_content;
     let model = candidate.upstream_model.as_str();
-    let effort = projection::effort(body).map_err(ClaudeCliError::Failure)?;
+    let effort = projection::effort_for_model(body, candidate.model.value())
+        .map_err(ClaudeCliError::Failure)?;
     let output_limit = body
         .get("max_output_tokens")
         .and_then(Value::as_u64)
         .filter(|value| *value > 0)
         .or_else(|| configured_limit(&candidate, "output_limit"));
-    let schema = projection::proposal_schema().map_err(ClaudeCliError::Failure)?;
+    let schema = projection::proposal_schema(body).map_err(ClaudeCliError::Failure)?;
 
     let temp =
         TempDir::new().map_err(|_| ClaudeCliError::Failure("claude_cli_temp_unavailable"))?;

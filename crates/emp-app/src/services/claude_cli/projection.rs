@@ -74,8 +74,8 @@ fn sanitize_private_reasoning_items(body: &mut Value) {
     }
 }
 
-pub(super) fn proposal_schema() -> Result<String, &'static str> {
-    let schema = json!({
+pub(super) fn proposal_schema(request: &Value) -> Result<String, &'static str> {
+    let mut schema = json!({
         "type":"object",
         "additionalProperties":false,
         "properties":{
@@ -98,6 +98,7 @@ pub(super) fn proposal_schema() -> Result<String, &'static str> {
         },
         "required":["answer","tool_calls"]
     });
+    response::constrain_proposal_schema(&mut schema, request);
     let encoded = serde_json::to_string(&schema).map_err(|_| "claude_cli_invalid_schema")?;
     if encoded.len() > MAX_TOOL_SCHEMA_BYTES {
         return Err("claude_cli_schema_too_large");
@@ -150,6 +151,23 @@ pub(super) fn effort_diagnostic(body: &Value) -> &'static str {
         Some(Value::Array(_)) => "array",
         Some(Value::Object(_)) => "object",
     }
+}
+
+pub(super) fn effort_for_model(
+    body: &Value,
+    model: &serde_json::Map<String, Value>,
+) -> Result<Option<&'static str>, &'static str> {
+    let selected = effort(body)?;
+    let Some(level) = selected else {
+        return Ok(None);
+    };
+    let levels = emp_state::normalize_reasoning_levels(model.get("reasoning_levels"));
+    if model.get("supports_reasoning") == Some(&Value::Bool(false))
+        || (!levels.is_empty() && !levels.iter().any(|allowed| allowed == level))
+    {
+        return Err("unsupported_model_reasoning_effort");
+    }
+    Ok(selected)
 }
 
 mod response;
