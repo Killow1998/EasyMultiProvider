@@ -44,6 +44,13 @@ impl<'a> RequestOutcome<'a> {
         } else {
             operation
         };
+        if operation == "responses" {
+            state
+                .backend
+                .transport
+                .image_routes
+                .remember(route, body, incoming);
+        }
         let category = match route
             .provider
             .value()

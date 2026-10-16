@@ -40,6 +40,7 @@ pub(crate) enum RequestPreparationError {
 pub(crate) enum RequestOperation {
     Responses,
     Compact,
+    Images,
 }
 
 pub(crate) struct PreparedRequest {
@@ -49,7 +50,7 @@ pub(crate) struct PreparedRequest {
 }
 
 /// Freeze routing and presentation together before any history replay or I/O.
-/// Compact deliberately resolves the requested account directly; auto-review
+/// Compact and image tools resolve the requested account directly; auto-review
 /// fallback belongs only to Responses turns. Wire errors and WebSocket
 /// continuation state remain with their respective adapters.
 pub(crate) fn prepare_request(
@@ -84,7 +85,7 @@ pub(crate) fn prepare_request(
     }
     let automatic = match operation {
         RequestOperation::Responses => resolve_auto_review_route(state, &mut config, model),
-        RequestOperation::Compact => None,
+        RequestOperation::Compact | RequestOperation::Images => None,
     };
     let route = automatic
         .unwrap_or_else(|| {

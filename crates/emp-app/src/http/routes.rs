@@ -195,6 +195,21 @@ pub(crate) fn handle_connection(
                 None
             }
             Some(request)
+                if request.method == RequestMethod::Post
+                    && matches!(
+                        request.raw_path(),
+                        "/v1/images/generations" | "/v1/images/edits"
+                    ) =>
+            {
+                Some(crate::api::images::image_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
                 if request.method == RequestMethod::Post && request.raw_path() == "/v1/live" =>
             {
                 Some(serve_realtime_call(

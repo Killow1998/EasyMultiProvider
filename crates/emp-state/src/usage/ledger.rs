@@ -223,10 +223,12 @@ impl UsageLedger {
         Ok(values)
     }
     pub fn record(&self, event: &Value, observed: f64) {
-        if !matches!(event["route"].as_str(), Some("responses" | "compact"))
-            || !event["usage_category"]
-                .as_str()
-                .is_some_and(|value| CATEGORIES.contains(&value))
+        if !matches!(
+            event["route"].as_str(),
+            Some("responses" | "compact" | "image_generation" | "image_edit")
+        ) || !event["usage_category"]
+            .as_str()
+            .is_some_and(|value| CATEGORIES.contains(&value))
             || event["recovery_mode"] == "native_http_fallback"
         {
             return;

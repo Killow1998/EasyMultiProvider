@@ -23,6 +23,7 @@ const CONTEXT_HEADERS: &[(&str, &str)] = &[
     ("x-client-request-id", "x-client-request-id"),
     ("x-codex-beta-features", "x-codex-beta-features"),
     ("x-codex-installation-id", "x-codex-installation-id"),
+    ("x-codex-image-turn-id", "x-codex-image-turn-id"),
     ("x-codex-parent-thread-id", "x-codex-parent-thread-id"),
     ("x-codex-routing-hint", "x-codex-routing-hint"),
     ("x-codex-turn-state", "x-codex-turn-state"),

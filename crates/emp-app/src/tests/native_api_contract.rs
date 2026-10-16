@@ -6,6 +6,7 @@ use std::sync::mpsc;
 mod continuation;
 mod history;
 mod http;
+mod images;
 mod incremental;
 mod installed_catalog;
 mod installed_codex;

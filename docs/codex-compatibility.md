@@ -33,6 +33,29 @@ The transport checks include incomplete response ID/usage preservation and
 deduplication, plus twenty incremental large-context turns for Native and
 imported accounts with one warmup, no HTTP fallback and no full-history recovery.
 
+### Standalone image tools
+
+Codex's standalone `image_gen.imagegen` extension sends JSON to
+[`images/generations` and `images/edits`](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/codex-api/src/endpoint/images.rs).
+EMP accepts both beneath `/v1` and forwards the original image model and payload
+to the subscription backend. Each image request uses `x-codex-image-turn-id` to
+find the account selected by that turn's HTTP or WebSocket inference. Concurrent
+turns remain separate. Missing associations and disabled accounts return an
+explicit error instead of selecting a different account.
+
+Five image contracts pass, including the actual Linux Codex **0.163.0** extension
+generating and editing a synthetic PNG, saving it and passing it into the next
+inference. The contracts also cover Native/imported account selection,
+authentication boundaries, unchanged upstream errors and image quota headers,
+no retry after 404/429, failed credential refresh preserving 401, and image usage
+receipts with duplicate upstream request IDs counted once. All accounts,
+upstreams and images are synthetic.
+
+Run the real extension check explicitly with `EMP_TEST_CODEX_CLI` pointing to the
+chosen engine and `cargo test -p emp-app --lib native_api_contract::images --
+--include-ignored`. No image-specific Codex configuration or model remapping is
+required.
+
 ### Exploratory async compaction
 
 Async compaction is outside EMP's routine compatibility suite and release gate

@@ -78,6 +78,7 @@ pub(crate) struct TransportState {
     pub(crate) runtime: Runtime,
     pub(crate) request_limits: Arc<RequestLimits>,
     pub(crate) native_connections: crate::services::native_connections::NativeConnections,
+    pub(crate) image_routes: crate::services::native::images::ImageRoutes,
 }
 
 impl BackendState {
@@ -161,6 +162,7 @@ impl BackendState {
                 runtime,
                 request_limits,
                 native_connections: Default::default(),
+                image_routes: Default::default(),
             },
             accounts: AccountState {
                 native_auth_path,

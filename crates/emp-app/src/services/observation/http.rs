@@ -182,6 +182,8 @@ fn safe_path(path: &str) -> String {
         | "/v1/models"
         | "/v1/responses"
         | "/v1/responses/compact"
+        | "/v1/images/generations"
+        | "/v1/images/edits"
         | "/v1/live"
         | "/v1/alpha/search"
         | "/api/accounts"

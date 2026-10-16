@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 mod auth;
 use auth::resolve_headers;
+pub(crate) mod images;
 
 fn plaintext_collaboration(config: &Value) -> bool {
     config

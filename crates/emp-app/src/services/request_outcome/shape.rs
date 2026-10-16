@@ -120,7 +120,11 @@ pub(super) fn facts(body: &Value, headers: &BTreeMap<String, String>) -> Value {
             .or_else(|| text(&body["metadata"]["thread_id"]))
             .or_else(|| text(&body["metadata"]["threadId"]))
     );
-    result["turn_id"] = json!(text(&metadata["turn_id"]).or_else(|| text(&metadata["turnId"])));
+    result["turn_id"] = json!(
+        text(&metadata["turn_id"])
+            .or_else(|| text(&metadata["turnId"]))
+            .or_else(|| header("x-codex-image-turn-id").map(str::to_owned))
+    );
     result["parent_thread_id"] = json!(
         header("x-codex-parent-thread-id")
             .map(str::to_owned)
