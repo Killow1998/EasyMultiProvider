@@ -151,7 +151,9 @@ pub(crate) fn run_server(
         );
         let bootstrap_url = server.bootstrap_url();
         println!("Open in browser: {bootstrap_url}");
-        if open_browser && !crate::cli::desktop::open_browser(&bootstrap_url) {
+        // Update and rollback keep the existing browser session and tab.
+        let initial_launch = markers.ready_path.is_none() && !markers.rolled_back;
+        if open_browser && initial_launch && !crate::cli::desktop::open_browser(&bootstrap_url) {
             println!("Browser did not open automatically; use the URL above.");
         }
         emp_state::update::worker::mark_ready(crate::VERSION, markers.ready_path.clone())

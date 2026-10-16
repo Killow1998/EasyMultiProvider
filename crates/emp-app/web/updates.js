@@ -1,11 +1,12 @@
 // Update metadata, polling and presentation have one cancellable window owner.
-function createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage,localizedReleaseNotes,visible,openLink,copyText,isPreview}) {
+function createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage,localizedReleaseNotes,visible,openLink,copyText,isPreview,reload}) {
 let updatePollTimer = null;
 let updatePollGeneration = 0;
 let latestUpdateInfo = null;
 let updateController=null;
+let installingFrom=null, reconnectDeadline=0;
 const pendingStates=['checking','downloading','verifying','waiting','installing'];
-function stopUpdatePoll() { updatePollGeneration++;updateController?.abort();updateController=null;if (updatePollTimer) clearTimeout(updatePollTimer); updatePollTimer = null; }
+function stopUpdatePoll() { updatePollGeneration++;updateController?.abort();updateController=null;if (updatePollTimer) clearTimeout(updatePollTimer); updatePollTimer = null;installingFrom=null;reconnectDeadline=0; }
 function updateErrorLabel(code) {
   const messages = {
     directory_not_writable:tr('安装目录没有写权限，请将 EMP 移到可写目录后重试。','The installation directory is not writable. Move EMP to a writable folder and retry.'),
@@ -111,12 +112,14 @@ function renderUpdate(info) {
     migration_required:tr('检测到旧的 Linux 系统级安装。请先退出 EMP 并恢复原生 Codex，再迁移到用户目录；现有配置会继续保留。','A legacy system-wide Linux installation was detected. Exit EMP and restore native Codex, then migrate to a user installation. Your existing configuration is preserved.'),
     downloading:tr(`正在后台下载 ${info.progress}%…`,`Downloading in the background: ${info.progress}%…`),
     verifying:tr('正在校验安装包…','Verifying the package…'), waiting:tr('下载完成，正在等待当前请求结束…','Download complete. Waiting for current requests to finish…'),
-    installing:tr('正在安装并重启 EMP，完成后会打开新页面。','Installing and restarting EMP. A new page will open when ready.'),
+    installing:tr('正在安装并重启 EMP，完成后此页面会自动刷新。','Installing and restarting EMP. This page will refresh when ready.'),
     error:updateFailureLabel(info),
   };
   $('update_status').textContent = labels[info.state] || labels.idle;
   if (['checking','downloading'].includes(info.state) && info.retry_count > 0) $('update_status').textContent += tr(` 正在自动重试 ${info.retry_count}/${info.retry_limit}。`, ` Retrying automatically ${info.retry_count}/${info.retry_limit}.`);
-  $('update_version').textContent = tr(`当前版本 v${info.current_version}`,`Current version: ${info.current_version}`);
+  $('update_version').textContent = info.latest_version && info.latest_version !== info.current_version
+    ? `v${info.current_version} → v${info.latest_version}`
+    : tr(`当前版本 v${info.current_version}`,`Current version: v${info.current_version}`);
   const notes=$('update_notes');
   if(notes)notes.textContent=localizedReleaseNotes(info.release_notes,info.latest_version,getLanguage()) || tr('此版本尚未提供中文更新说明，请查看官方发布页。','English release notes were not provided. See the official release page.');
   $('update_progress').hidden = !['downloading','verifying'].includes(info.state);
@@ -141,18 +144,33 @@ async function pollUpdate(generation) {
   try {
     const info = await api('/api/updates',{signal:updateController?.signal});
     if (generation !== updatePollGeneration) return;
+    reconnectDeadline=0;
+    if (installingFrom && info.current_version && info.current_version !== installingFrom) { stopUpdatePoll();reload();return; }
     renderUpdate(info);
     if (pendingStates.includes(info.state)) updatePollTimer = setTimeout(() => pollUpdate(generation), 1000);
-  } catch (_) {
-    if (generation === updatePollGeneration) $('update_status').textContent = tr('连接已断开。若正在更新，请等待 EMP 重新打开页面。','Connection closed. If updating, wait for EMP to reopen the page.');
+    else installingFrom=null;
+  } catch (error) {
+    if (generation === updatePollGeneration) reconnectUpdate(error,generation);
   }
+}
+function reconnectUpdate(error,generation) {
+  if (installingFrom && !error.status) {
+    reconnectDeadline ||= Date.now()+180000;
+    if (Date.now()<reconnectDeadline) {
+      $('update_status').textContent=tr('正在等待 EMP 重启，连接恢复后此页面会自动刷新…','Waiting for EMP to restart. This page will refresh when it reconnects…');
+      updatePollTimer=setTimeout(()=>pollUpdate(generation),1000);return;
+    }
+  }
+  installingFrom=null;
+  $('update_status').textContent=error.status ? error.message : tr('暂时无法连接 EMP。请确认 EMP 已启动，再刷新此页面。','Cannot connect to EMP yet. Check that EMP is running, then refresh this page.');
 }
 async function requestUpdate(operation) {
   stopUpdatePoll(); const generation = updatePollGeneration;
+  if(operation==='install'&&!isPreview())installingFrom=latestUpdateInfo?.current_version||null;
   updateController=new AbortController();const controller=updateController;
   $('update_install').disabled = true;
   try { const info = await api('/api/updates/' + operation, {method:'POST', body:'{}',signal:controller.signal}); if (generation === updatePollGeneration) { renderUpdate(info); if(pendingStates.includes(info.state))pollUpdate(generation); } }
-  catch (error) { if (generation === updatePollGeneration) $('update_status').textContent = error.message; }
+  catch (error) { if (generation === updatePollGeneration) reconnectUpdate(error,generation); }
   finally { if (generation === updatePollGeneration) $('update_install').disabled = isPreview(); }
 }
 async function openUpdate() {

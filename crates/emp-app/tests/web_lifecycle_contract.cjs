@@ -37,7 +37,34 @@ test('completed update check retains release notes without an extra status reque
   const opening=updater.open();q.calls[0].resolve({state:'available',current_version:'0.13.0',latest_version:'1.0.0',supported:false,release_notes:'Literal <script> markup'});await opening;await tick();
   assert.equal(q.calls.length,1,'terminal checks must not overwrite notes with an older status read');
   assert.equal(nodes.update_notes.textContent,'Literal <script> markup');
+  assert.equal(nodes.update_version.textContent,'v0.13.0 → v1.0.0');
   assert.equal(nodes.update_install.disabled,true);updater.stop();
+});
+
+test('update reconnects the existing page once, and stops on rollback, expiry or close',async()=>{
+  for(const outcome of ['updated','rollback','expired','closed','unauthorized']) {
+    const q=queries(),timers=new Map();let next=0,now=1000,reloads=0;
+    const nodes=Object.fromEntries(['update_status','update_version','update_notes','update_progress','update_install','update_release','update_commands','update_manual'].map(id=>[id,{}]));
+    const updater=feature('updates.js','createUpdates',{Date:{now:()=>now},setTimeout:callback=>{timers.set(++next,callback);return next;},clearTimeout:id=>timers.delete(id)})({
+      ...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",localizedReleaseNotes:()=>'',visible:()=>true,isPreview:()=>false,openModal(){},reload(){reloads++;}
+    });
+    updater.render({state:'available',current_version:'0.13.4',latest_version:'0.13.5',supported:true});
+    const installing=updater.request('install');q.calls[0].resolve({state:'installing',current_version:'0.13.4',latest_version:'0.13.5'});await installing;
+    q.calls[1].reject(new TypeError('connection refused'));await tick();
+    assert.equal(timers.size,1);
+    assert.match(nodes.update_status.textContent,/Waiting for EMP/);
+    if(outcome==='closed') {updater.stop();assert.equal(timers.size,0);assert.equal(reloads,0);continue;}
+    const callback=[...timers.values()][0];timers.clear();callback();
+    if(outcome==='updated') q.calls[2].resolve({state:'idle',current_version:'0.13.5'});
+    if(outcome==='rollback') q.calls[2].resolve({state:'error',current_version:'0.13.4',error:'install_rolled_back'});
+    if(outcome==='expired') {now+=180001;q.calls[2].reject(new TypeError('connection refused'));}
+    if(outcome==='unauthorized') q.calls[2].reject(Object.assign(new Error('Session expired'),{status:401}));
+    await tick();assert.equal(timers.size,0,outcome);assert.equal(reloads,outcome==='updated'?1:0,outcome);
+    if(outcome==='rollback') assert.match(nodes.update_status.textContent,/previous version has been restored/i);
+    if(outcome==='expired') assert.match(nodes.update_status.textContent,/refresh this page/);
+    if(outcome==='unauthorized') assert.equal(nodes.update_status.textContent,'Session expired');
+    updater.stop();
+  }
 });
 
 test('usage owns scan cancellation, fallback timers and pricing-save navigation', async () => {

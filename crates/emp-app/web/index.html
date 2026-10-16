@@ -1159,7 +1159,7 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
 }
 function closeModal() { migration.stop(); servicePresentation.hide(); stopModalFeatures(); modalNavigation = {}; $('modal_back').onclick = null; $('modal_back').hidden = true; $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 
-const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,localizedReleaseNotes,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW)});
+const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,localizedReleaseNotes,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW),reload:()=>window.location.reload()});
 const {open:openUpdate,stop:stopUpdatePoll,request:requestUpdate,render:renderUpdate,hint:renderUpdateHint,checkHint:checkUpdateHint,openRelease:openLatestRelease,copyCommands:copyLinuxMigrationCommands}=updates;
 async function quitEmp() {
   if (!confirm(tr('退出 EMP 并恢复原生 Codex？', 'Exit EMP and restore native Codex?'))) return;

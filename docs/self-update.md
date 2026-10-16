@@ -4,6 +4,17 @@ The management page checks the official repository's latest stable release.
 Checking or installing requires the authenticated local management session. The
 browser never downloads or executes release code itself.
 
+When a different release is available, the update dialog shows the current and
+target versions together (`v0.13.4 → v0.13.5`). Update and rollback launches reuse
+the existing management session instead of opening another browser tab. The open
+update dialog tolerates temporary restart disconnections for up to three minutes
+and reloads the same tab when the running version changes. Rollback, session
+expiry or a longer outage leaves an actionable status instead of reloading in a
+loop. Closing the dialog stops its polling, not the background installation.
+Ordinary desktop starts still open the browser. An older, already-loaded update
+page does not gain the new reconnect logic retroactively; refresh it manually
+after its first upgrade to this behavior.
+
 Release checks and downloads use proxy environment variables first, then the
 Windows or macOS system proxy. Each network attempt reads the current settings,
 including a proxy enabled after EMP started. Linux uses proxy environment
