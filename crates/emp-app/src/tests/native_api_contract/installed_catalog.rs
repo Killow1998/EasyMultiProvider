@@ -3,13 +3,13 @@ use super::installed_codex::Codex;
 use super::*;
 
 #[test]
-#[ignore = "requires installed Codex 0.162 and isolated loopback access"]
+#[ignore = "requires an explicitly selected Codex and isolated loopback access"]
 fn installed_codex_refreshes_online_catalog_without_process_restart() {
     online_catalog(false);
 }
 
 #[test]
-#[ignore = "requires installed Codex 0.162 and isolated loopback access"]
+#[ignore = "requires an explicitly selected Codex and isolated loopback access"]
 fn installed_codex_uses_localhost_with_a_localhost_only_proxy_exception() {
     online_catalog(true);
 }
@@ -48,6 +48,16 @@ fn online_catalog(localhost_only: bool) {
         "models":[{"id":"demo/model","provider":"demo","upstream_id":"upstream","context_window":100000,"enabled":true}]
     })).unwrap()).unwrap();
     let binary = std::env::var("EMP_TEST_CODEX_CLI").expect("explicit installed engine");
+    let version = std::process::Command::new(&binary)
+        .arg("--version")
+        .env("CODEX_HOME", &home)
+        .env("HOME", &home)
+        .output()
+        .expect("selected Codex version");
+    assert!(version.status.success());
+    let version = String::from_utf8(version.stdout).unwrap();
+    let version = version.strip_prefix("codex-cli ").unwrap().trim();
+    assert!(!version.is_empty());
     let server = ServerHandle::start_with_config_options(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         0,
@@ -81,12 +91,7 @@ fn online_catalog(localhost_only: bool) {
         Codex::start(&home)
     };
     let initialized = codex.rpc(1,"initialize",json!({"clientInfo":{"name":"online_catalog_fixture","version":"1"},"capabilities":{"experimentalApi":true}}));
-    assert!(
-        initialized["userAgent"]
-            .as_str()
-            .unwrap()
-            .contains("0.162.")
-    );
+    assert!(initialized["userAgent"].as_str().unwrap().contains(version));
     codex.send(json!({"method":"initialized"}));
     let first = codex.rpc(2, "model/list", json!({"includeHidden":true}));
     assert!(

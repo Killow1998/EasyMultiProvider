@@ -4,7 +4,7 @@ use super::support::receive_native_request;
 use super::*;
 
 #[test]
-#[ignore = "requires installed Codex 0.162 CLI and isolated loopback access; run explicitly"]
+#[ignore = "requires an explicitly selected Codex CLI and isolated loopback access; run explicitly"]
 fn installed_codex_discovers_and_calls_same_named_tools_across_protocols() {
     for (protocol, native) in [
         ("chat_completions", false),

@@ -6,9 +6,51 @@ the window. The engine used by the CLI, App or IDE is the compatibility input,
 independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 
+## Current acceptance on 2026-10-16 UTC
+
+The maintenance target is **0.154–0.163**, following the official stable
+[0.163.0 release](https://github.com/openai/codex/releases/tag/rust-v0.163.0)
+(2026-10-15 21:30:38 UTC). Series 0.153 remains in the historical record below.
+
+The current EMP 0.13.4 source, including the update-page reuse fix, passed the
+on-demand migration contract with these official Linux engines:
+
+| Engines | Accepted paths |
+| --- | --- |
+| 0.154.0, 0.155.1, 0.156.1, 0.157.1, 0.158.0, 0.159.3, 0.160.1, 0.161.0, 0.162.1, 0.163.0 | Real MCP before/after external compaction; parent, early fork, later fork and grandchild; configuration-only shutdown/restore; explicit selected-history migration; all four native resumes; backup/content preservation; idempotent second restore |
+
+Each engine passed all 51 behavior assertions in the created-history harness.
+Official archive digests, executable hashes and before/after hash preservation
+were checked. Every run used fresh homes, synthetic credentials, randomized
+loopback listeners and a 1536 MiB address-space limit per child. Installed Codex,
+the running EMP and user configuration were not changed.
+
+Codex **0.163.0** additionally passed all 34 native API contracts, including the
+five opt-in real-engine checks: online catalog/ETag refresh in one process,
+localhost-only proxy bypass, external streaming steering, native WebSocket
+interrupt/continuation and same-named Tool Search across four routing paths.
+The transport checks include incomplete response ID/usage preservation and
+deduplication, plus twenty incremental large-context turns for Native and
+imported accounts with one warmup, no HTTP fallback and no full-history recovery.
+
+The separate real-engine async-compaction harness passed four cases with the
+feature explicitly disabled or enabled: disabled control; adoption of a pending
+result by explicit compaction with only one upstream compaction request; a new
+turn preserving its suffix and discarding the older result; and normal process
+shutdown while a background request is pending. All four Codex processes exited
+with status zero. V2 compaction uses a Responses `compaction_trigger` here;
+watching only `/responses/compact` misses that request. The
+[feature remains under development and defaults off](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/features/src/lib.rs).
+
+This establishes the tested Linux engine paths against synthetic upstreams.
+Real-provider ciphertext, account/routing changes during pending async
+compaction, and Windows/macOS/App/IDE journeys have separate acceptance scope.
+Release PR lists and commit ancestry alone must not substitute for checking the
+tagged source and running the selected engine.
+
 ## Source acceptance on 2026-10-09
 
-The current maintenance target is **0.153–0.162**, based on the official
+The maintenance target at this check was **0.153–0.162**, based on the official
 [0.162.0 release](https://github.com/openai/codex/releases/tag/rust-v0.162.0).
 The following checks used the local EMP v0.12.14 development source and official
 Linux Codex binaries, with disposable homes and synthetic loopback providers.
@@ -39,9 +81,9 @@ behavior still needs a candidate-binary acceptance; production is unchanged.
 
 ## 2026-10-14 development checks and 0.163 watchlist
 
-The official stable release remains [0.162.1](https://github.com/openai/codex/releases/tag/rust-v0.162.1)
+At this check, the official stable release was [0.162.1](https://github.com/openai/codex/releases/tag/rust-v0.162.1)
 (2026-10-09 19:44:51 UTC); [0.163.0-alpha.11](https://github.com/openai/codex/releases/tag/rust-v0.163.0-alpha.11)
-is a prerelease (2026-10-14 03:27:29 UTC). The maintenance window stays
+was a prerelease (2026-10-14 03:27:29 UTC). The maintenance window was
 **0.153–0.162**. GitHub commit comparisons confirm all three changes below are
 ancestors of alpha.11; this is source provenance, not engine acceptance.
 
@@ -134,7 +176,7 @@ Use the [native restore harness](../scripts/native_restore_acceptance/README.md)
 for isolated behavior checks. Record the actual engine version and tested paths
 when moving the maintenance window.
 
-Run the real-engine Tool Search contract with an official Linux 0.162.0 binary:
+Run the real-engine Tool Search contract with an official Linux 0.163.0 binary:
 
 ```sh
 EMP_TEST_CODEX_CLI=/path/to/codex cargo test -p emp-app --lib \

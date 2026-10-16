@@ -26,6 +26,33 @@ python3 -B -m scripts.native_restore_acceptance \
 
 `--large-history` incrementally appends more than 128 MiB of historical `event_msg/token_count` rows to a disposable paginated rollout after its bounded forks are created. Point `--root` at a new directory on a disk filesystem with enough free space; do not use tmpfs for this scenario. These rows do not enlarge model input. The selected migration, restore and Codex resume processes run under the same memory limit; backup verification streams the files instead of loading them into memory. Omit `--large-history` for the smaller three-thread differential scenario.
 
-The supplied versions and executable hashes are recorded rather than pinned to one historical release. Disposable app-server clients disable plugins. The earlier restore-time migration contract passed with one official Linux Codex patch from each series 0.153–0.162 (listed in [compatibility results](../../docs/codex-compatibility.md)) against the v0.12.14 development binary on 2026-10-09; this validates these fixture paths, not every platform or real provider.
+The supplied versions and executable hashes are recorded rather than pinned to one historical release. Disposable app-server clients disable plugins. The current created-history contract passed with official Linux Codex 0.154.0, 0.155.1, 0.156.1, 0.157.1, 0.158.0, 0.159.3, 0.160.1, 0.161.0, 0.162.1 and 0.163.0 against EMP 0.13.4 source on 2026-10-16 UTC. The earlier restore-time migration results remain dated separately in [compatibility results](../../docs/codex-compatibility.md).
+
+## Background compaction
+
+Python 3.14 or newer supplies `compression.zstd` for this additional native
+upstream fixture. Run with an official engine supporting `async_compaction`:
+
+```sh
+python3 -B -m scripts.native_restore_acceptance.async_compaction \
+  --codex-bin /path/to/codex \
+  --emp-bin /path/to/EMP \
+  --root /mnt/test-data/emp-acceptance/async-run-unique
+```
+
+The four cases cover disabled control, pending-result adoption without a second
+compaction request, preservation of a later turn while an older result is
+discarded, and shutdown during a pending background request. Gates synchronize
+against actual upstream requests; explicit compaction finishes before the next
+model turn starts. Every Codex process must exit normally. The fixture uses
+synthetic native credentials and an explicit V2-capable test provider, requests
+EMP's generated model catalog, and handles streamed `compaction_trigger` items
+as well as the legacy compact endpoint. Reports record engine version and
+binary hashes. It does not change the installed engine or enable the feature
+in a user's configuration.
+
+Keep large downloaded engines and build temporary files on disk rather than
+tmpfs. Download one official patch per series, verify its published asset
+digest, and reuse the existing contract with a fresh root for every engine.
 
 Use a new or empty root for every run. Never point the harness at a live Codex home or the user's EMP service. The fake upstream is not evidence that real OpenAI accepts or emits EMP-specific ciphertext.
