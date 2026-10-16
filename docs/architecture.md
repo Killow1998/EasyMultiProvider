@@ -759,6 +759,37 @@ The six remaining opt-in contracts were not run. No real subscription, cloud
 Formatting, strict Clippy for the affected application/router targets and diff
 checks also passed.
 
+### Request-owned Claude tools (2026-10-16)
+
+Claude CLI inference uses a fixed structured-output schema. The complete client
+tool definitions travel with the ordered conversation through stdin, so adding
+tools does not enlarge the command line. Context assessment uses the same schema
+and prepared input. There is no separate request-sized tool-schema limit.
+
+Returned proposals are checked against the current request's tool names,
+namespaces, kinds and `tool_choice`, including tools loaded through Tool Search.
+An omitted scope or a qualified spelling is restored only when one allowed
+identity matches. Ambiguous, unknown, wrong-scope and wrong-kind proposals fail
+before delivery. Codex retains tool execution; Claude's host tools stay disabled.
+
+The private `projection/tools.rs` owns identity collection, allowed choices and
+unambiguous resolution. Response assembly borrows the validated proposal instead
+of cloning its JSON tree. Removing the choice filter makes the existing discovered-
+tool contract fail; this guard and its behavioral coverage are retained.
+
+Image routing likewise keeps selection, account affinity and transport separate.
+Automatic selection evaluates each eligible account's capacity once and retains
+the first highest known balance, preserving Native/import order on ties. It builds
+only the selected route. HTTP contracts cover unknown balances, equal balances,
+unusable accounts and existing-image affinity through the normal request boundary.
+
+This is a client-owned proposal loop, using EMP's replacement system prompt and
+serialized history, rather than the native Claude Code agent loop. Protocol
+round-trip tests establish transport and identity preservation, not equal model
+task performance. A future semantic mapping must preserve arguments, results,
+history and command-session behavior, and be evaluated on completed tasks before
+changing the default. Renaming tools alone does not establish that equivalence.
+
 ## Service detail ownership (2026-10-08)
 
 Service badges now own information and editing navigation. Codex account dialogs

@@ -330,10 +330,14 @@ launcher when your active work permits it. There is no background polling.
   Performance, Usage and Settings.
 
 The header **Settings** button groups automatic activation, Codex web search for
-external models, and automatic-review routing to another subscription when
-Native runs out of quota. All three start enabled; saved choices are retained.
+external models, and **Routing settings**. Auto Review can use another subscription
+when Native runs out of quota. Image generation and editing can follow the
+conversation (the default), use a specific subscription, or automatically select
+an available account. Automatic image selection considers shared and image limits;
+server-side image references stay with their original account. Saved choices are retained.
 Click an activity dot to view recent request targets, returned models, timings,
-actual dispatch counts, retries and error sources.
+actual dispatch counts, retries and error sources, including image generation/edit
+records and any token usage reported upstream.
 
 EMP automatically detects proxy settings from its launch environment or operating system.
 Explicit proxy environment variables take priority; otherwise EMP reads the system proxy.

@@ -309,7 +309,18 @@ fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
         .expect("object")
         .extend(fields.as_object().expect("object").clone());
     if !levels.is_empty() {
-        entry["default_reasoning_level"] = json!(levels[(levels.len() - 1) / 2]);
+        let cli_default = (provider.get("execution_backend").and_then(Value::as_str)
+            == Some("claude_cli"))
+        .then(|| {
+            emp_state::official_registry::claude_cli_default_effort(text(model, "upstream_id"))
+        })
+        .flatten()
+        .filter(|level| levels.contains(level));
+        entry["default_reasoning_level"] = json!(
+            cli_default
+                .as_deref()
+                .unwrap_or(&levels[(levels.len() - 1) / 2])
+        );
         entry["supported_reasoning_levels"] = json!(
             levels
                 .iter()

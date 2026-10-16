@@ -3,6 +3,7 @@ use super::support::*;
 use super::*;
 mod fixture;
 mod installed;
+mod routing;
 use fixture::*;
 
 #[test]

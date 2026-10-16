@@ -72,6 +72,7 @@ impl From<FilesystemError> for ConfigError {
 
 pub type ConfigResult<T> = Result<T, ConfigError>;
 
+mod image_routing;
 mod presentation;
 pub use presentation::{
     normalize_catalog_presentations, normalize_codex_runtime_sources, normalize_pricing_aliases,
@@ -135,6 +136,7 @@ fn default_configuration() -> Value {
         "subscription_search": {"enabled": true, "account_id": ""},
         "auto_enable_on_start": true,
         "auto_review_fallback": true,
+        "image_routing": {"mode":"follow", "account_id":""},
         "codex_runtime_sources": ["auto"],
         "pricing_aliases": {},
     })
@@ -573,6 +575,7 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
     let catalog_family_presentations =
         normalize_catalog_presentations(raw.get("catalog_family_presentations"))?;
     let subscription_search = normalize_subscription_search(raw.get("subscription_search"))?;
+    let image_routing = image_routing::normalize(raw.get("image_routing"))?;
     let pricing_aliases = normalize_pricing_aliases(raw.get("pricing_aliases"))?;
     let codex_runtime_sources = if raw.contains_key("codex_runtime_sources") {
         normalize_codex_runtime_sources(raw.get("codex_runtime_sources"))?
@@ -596,6 +599,7 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "catalog_presentations": catalog_presentations,
         "catalog_family_presentations": catalog_family_presentations,
         "subscription_search": subscription_search,
+        "image_routing": image_routing,
         "codex_runtime_sources": codex_runtime_sources,
         "pricing_aliases": pricing_aliases,
     });

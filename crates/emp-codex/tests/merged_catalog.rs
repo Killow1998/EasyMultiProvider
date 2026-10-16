@@ -3,6 +3,67 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 #[test]
+fn claude_model_picker_uses_cli_defaults_with_model_specific_effort_levels() {
+    for (id, default, count) in [
+        ("claude-haiku-5-5", "medium", 5),
+        ("claude-sonnet-5-5", "medium", 5),
+        ("claude-opus-5-5", "medium", 5),
+        ("claude-fable-5-1", "high", 5),
+        ("claude-opus-5", "high", 5),
+        ("claude-sonnet-5", "high", 5),
+        ("claude-fable-5", "high", 5),
+        ("claude-opus-4-8", "high", 5),
+        ("claude-opus-4-7", "xhigh", 5),
+        ("claude-opus-4-6", "high", 4),
+        ("claude-sonnet-4-6", "high", 4),
+    ] {
+        let raw = json!({"providers":[{"id":"claude","protocol":"anthropic_messages",
+            "execution_backend":"claude_cli","auth_mode":"api_key","base_url":"https://example.invalid"}],
+            "models":[{"id":format!("claude/{id}"),"provider":"claude","upstream_id":id}]});
+        let config = emp_state::normalize_configuration(Some(&raw)).unwrap();
+        let catalog = build_catalog(
+            &config,
+            &json!({"models":[]}),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let model = &catalog["models"][0];
+        assert_eq!(model["default_reasoning_level"], default, "{id}");
+        assert_eq!(
+            model["supported_reasoning_levels"]
+                .as_array()
+                .unwrap()
+                .len(),
+            count,
+            "{id}"
+        );
+    }
+}
+
+#[test]
+fn claude_default_stays_within_restricted_efforts_and_does_not_change_http_models() {
+    let mut raw = json!({"providers":[{"id":"claude","execution_backend":"claude_cli"}],
+        "models":[{"id":"claude/model","provider":"claude","upstream_id":"claude-haiku-5-5",
+            "reasoning_levels":["low","high"]}]});
+    let catalog = build_catalog(
+        &raw,
+        &json!({"models":[]}),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    assert_eq!(catalog["models"][0]["default_reasoning_level"], "low");
+    raw["providers"][0]["execution_backend"] = json!("http");
+    raw["models"][0]["reasoning_levels"] = json!(["low", "medium", "high", "xhigh", "max"]);
+    let catalog = build_catalog(
+        &raw,
+        &json!({"models":[]}),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    assert_eq!(catalog["models"][0]["default_reasoning_level"], "high");
+}
+
+#[test]
 fn external_catalog_keeps_coding_template_without_native_entitlements() {
     let config = json!({
         "providers":[{"id":"demo","protocol":"chat_completions"}],
@@ -323,7 +384,7 @@ fn claude_46_picker_recovers_legal_efforts_and_default_from_unknown_saved_capabi
             .map(|level| level["effort"].as_str().unwrap())
             .collect();
         assert_eq!(levels, ["low", "medium", "high", "max"]);
-        assert_eq!(model["default_reasoning_level"], "medium");
+        assert_eq!(model["default_reasoning_level"], "high");
         assert!(levels.contains(&model["default_reasoning_level"].as_str().unwrap()));
     }
     assert_eq!(catalog["models"].as_array().unwrap().len(), 2);

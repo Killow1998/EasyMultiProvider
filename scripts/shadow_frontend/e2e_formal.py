@@ -128,8 +128,9 @@ def main():
         checks.append('Formal import demo remains read-only in both themes')
         # Verify a selected imported service can be encrypted and re-imported via backend endpoints.
         status,confirmation=request(target_base+'/api/migration/export/confirm',{},target_headers);assert status==200
-        status,reexported=request(target_base+'/api/migration/export',{'password':'formal-fixture-password','confirmation':confirmation['confirmation'],'selections':[{'kind':'provider','id':imported['id'],'name':'Imported Alias','models':[{'id':m['id'],'selected':True} for m in stored['models'] if m['provider']==imported['id']]}]},target_headers);assert status==200,reexported
-        status,decoded=request(target_base+'/api/migration/decode',{'password':'formal-fixture-password','bundle':reexported['bundle']},target_headers);assert status==200,decoded
+        # Fixed-cost encryption in an unoptimized build can exceed the HTTP helper's short default.
+        status,reexported=request(target_base+'/api/migration/export',{'password':'formal-fixture-password','confirmation':confirmation['confirmation'],'selections':[{'kind':'provider','id':imported['id'],'name':'Imported Alias','models':[{'id':m['id'],'selected':True} for m in stored['models'] if m['provider']==imported['id']]}]},target_headers,timeout=90);assert status==200,reexported
+        status,decoded=request(target_base+'/api/migration/decode',{'password':'formal-fixture-password','bundle':reexported['bundle']},target_headers,timeout=90);assert status==200,decoded
         assert len(decoded['payload']['config']['providers'])==1 and decoded['payload']['config']['providers'][0]['name']=='Imported Alias'
         assert 'provider_keys' not in decoded['payload']
         checks.append('Selected encrypted re-export retains edited names and excludes unselected services and plaintext credentials')

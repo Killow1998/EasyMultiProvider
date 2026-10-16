@@ -82,6 +82,11 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
             "unsupported_reasoning_effort",
             "EMP's Claude Code CLI adapter does not support this reasoning.effort; use low, medium, high, xhigh, max, or omit the optional value",
         ),
+        "unsupported_model_reasoning_effort" => (
+            400,
+            "unsupported_reasoning_effort",
+            "The selected Claude model does not support this reasoning effort; choose a level offered by this model or omit reasoning.effort. EMP will not silently downgrade it",
+        ),
         "unsupported_input_modality" => (
             400,
             "unsupported_input_modality",
@@ -91,11 +96,6 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
             413,
             "claude_cli_input_too_large",
             "EMP's Claude Code adapter input exceeds its 10 MiB prepared-input limit; configure the model's context and output budget for history compaction, or reduce fixed instructions, attachments, or the active turn",
-        ),
-        "claude_cli_schema_too_large" => (
-            413,
-            "claude_cli_input_too_large",
-            "EMP's Claude Code adapter output schema exceeds its 64 KiB limit",
         ),
         "unsupported_provider_protocol" => (
             501,
@@ -108,9 +108,9 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
             "Responses tool history is invalid for this request",
         ),
         "claude_cli_unknown_tool_proposal" => (
-            502,
+            422,
             "claude_cli_unknown_tool_proposal",
-            "Claude Code proposed a tool that is not available in this request",
+            "Claude Code proposed a tool that is not available in this request; retrying the same request will not repair the tool identity. Retry the turn after refreshing its available tools",
         ),
         "claude_cli_transcript_mismatch" => (
             502,
@@ -174,9 +174,9 @@ pub(crate) fn failure_stage(error: &ClaudeCliError) -> &'static str {
         ClaudeCliError::Router(_) => "upstream_request",
         ClaudeCliError::Failure(
             "unsupported_reasoning_effort"
+            | "unsupported_model_reasoning_effort"
             | "unsupported_reasoning_effort_none"
-            | "claude_cli_input_too_large"
-            | "claude_cli_schema_too_large",
+            | "claude_cli_input_too_large",
         ) => "input_validation",
         ClaudeCliError::Failure(code) if code.starts_with("claude_cli_relay_") => "relay_request",
         ClaudeCliError::Failure(

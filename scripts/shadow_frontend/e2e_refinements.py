@@ -257,7 +257,7 @@ def main():
         assert browser.execute('const detail=[...document.querySelectorAll("[data-migration-detail]")].find(node=>node.dataset.migrationDetail==="provider:imported");return detail.open && detail.querySelector("summary").textContent.includes("0");')
         browser.execute('[...document.querySelectorAll("[data-migration-detail]")].find(node=>node.dataset.migrationDetail==="provider:imported").querySelector("[data-migration-model-select]").click();')
         wait_for(lambda:browser.execute('return !document.getElementById("modal_submit").disabled;'))
-        browser.execute('const field=document.querySelector("[data-migration-name]");field.value="Discard this rename";field.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".modal-close").click();')
+        browser.execute('const field=document.querySelector("[data-migration-name]");field.value="Discard this rename";field.dispatchEvent(new Event("input",{bubbles:true}));document.getElementById("modal_back").click();document.querySelector(".modal-close").click();')
         assert browser.execute('return localStorage.getItem("emp.shadow.config.v1");')==stored
         checks.append('Actual duplicate-ID import stays enabled; model expansion survives selection; closing discards inline name edits')
         browser.execute('document.getElementById("shadow_migration_open").click();document.querySelector("[data-migration-demo]").click();')

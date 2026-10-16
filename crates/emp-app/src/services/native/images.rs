@@ -52,7 +52,15 @@ pub(crate) fn execute(
                 &route,
             ));
     let result = (|| {
-        let mut auth_headers = resolve_headers(state, &route, incoming, false, false)?;
+        let mut incoming = incoming.clone();
+        if route.provider.value().get("implicit_native") == Some(&Value::Bool(true)) {
+            // A fixed Native choice must never fall back to the caller's account.
+            incoming.retain(|name, _| {
+                !name.eq_ignore_ascii_case("authorization")
+                    && !name.eq_ignore_ascii_case("chatgpt-account-id")
+            });
+        }
+        let mut auth_headers = resolve_headers(state, &route, &incoming, false, false)?;
         for attempt in 0..2 {
             usage.owner(&emp_state::usage::account_owner(&auth_headers));
             usage.dispatch();
@@ -106,7 +114,7 @@ pub(crate) fn execute(
                     .and_then(Value::as_str)
                     == Some("account")
             {
-                let refreshed = resolve_headers(state, &route, incoming, false, true);
+                let refreshed = resolve_headers(state, &route, &incoming, false, true);
                 usage.native_retry(emp_router::native_http::NativeRetryDecision {
                     reason: emp_router::native_http::NativeRetryReason::AccountRefresh,
                     status,
@@ -118,7 +126,13 @@ pub(crate) fn execute(
                 }
             }
             usage.http_status(status);
-            if let Ok(mut value) = serde_json::from_slice::<Value>(&raw) {
+            let mut value = serde_json::from_slice::<Value>(&raw).ok();
+            state
+                .backend
+                .transport
+                .image_routes
+                .observe(&route, status, &headers, value.as_ref());
+            if let Some(value) = value.as_mut() {
                 // Images have no Responses ID. Correlate accounting and call
                 // receipts without changing the image body returned to Codex.
                 if let Some(object) = value.as_object_mut()
@@ -127,7 +141,7 @@ pub(crate) fn execute(
                 {
                     object.insert("id".into(), json!(id));
                 }
-                usage.observe(&value);
+                usage.observe(value);
             }
             return Ok(NativeCompleteResponse {
                 status,

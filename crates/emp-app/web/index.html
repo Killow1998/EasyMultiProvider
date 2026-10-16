@@ -83,7 +83,7 @@
 
 <div id="modal_backdrop" class="modal-backdrop hidden">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal_title">
-    <div class="modal-header"><h2 id="modal_title"></h2><div class="modal-navigation"><button id="modal_back" type="button" class="secondary modal-back" data-icon="restore" hidden></button><button type="button" class="modal-close" aria-label="Close" onclick="closeModal()">&times;</button></div></div>
+    <div class="modal-header"><h2 id="modal_title"></h2><div class="modal-navigation"><button id="modal_back" type="button" class="secondary modal-back" data-icon="restore" hidden></button><button id="modal_close" type="button" class="modal-close" aria-label="Close" onclick="closeModal()">&times;</button></div></div>
     <div id="service_detail_nav" hidden></div>
     <div id="modal_body"></div>
     <div id="modal_status" class="modal-status" role="alert" aria-live="polite"></div>
@@ -103,6 +103,7 @@
 <script src="/assets/management-events.js"></script>
 <script src="/assets/quota-display.js"></script>
 <script src="/assets/settings.js"></script>
+<script src="/assets/routing-settings.js"></script>
 <script src="/assets/call-outcomes.js"></script>
 <script src="/assets/performance-chart.js"></script><script src="/assets/performance.js"></script><script src="/assets/call-reports.js"></script>
 <script src="/assets/report-query.js"></script>
@@ -134,6 +135,7 @@ const {request:api, fetch:managementFetch, establish:establishSession, errorText
 const managementEvents = createManagementEvents({management,visible:()=>document.visibilityState !== 'hidden',onEvent:processManagementEvent,
   onStart:()=>{updateActivityDots();rescheduleActivityExpiry();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
+const routingSettings = createRoutingSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
 const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice)});
 const {open:openSettings, toggle:toggleSetting} = settings;
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, periodPickerHtml, registerPeriodPicker});
@@ -465,11 +467,13 @@ function openCatalogDisplayEditor(family) {
   const presentation = familyPresentationFor(family);
   const routes = [...new Set((group.routes || []).map(catalogSourceLabel))].join(' · ');
   openModal(tr('修改模型显示','Edit model display'), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr('显示名称','Display name'))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><p class="muted">${esc(tr('更改名称后立即应用。','The new name takes effect immediately after saving.'))}</p>`, tr('完成','Done'), async () => {
+    const owner = $('modal_body').firstElementChild;
     const candidate = cloneState(); candidate.catalog_family_presentations ||= {}; candidate.catalog_presentations ||= {};
     const current = candidate.catalog_family_presentations[family] || familyPresentationFor(family) || {};
     candidate.catalog_family_presentations[family] = Object.assign({}, current, {catalog_alias:$('modal_catalog_alias').value.trim()});
     for (const route of group.routes || []) delete candidate.catalog_presentations[route.id];
-    await persistState(tr('模型显示已保存','Model display saved'), candidate); closeModal();
+    await persistState(tr('模型显示已保存','Model display saved'), candidate);
+    if (owner?.isConnected) closeModal();
   });
 }
 
@@ -630,6 +634,7 @@ function integrationOutcomeMessage(info, action) {
 }
 async function submitIntegrationAction(action) {
   if (integrationBusy) return;
+  const owner = $('modal_body').firstElementChild;
   integrationBusy = true;
   renderIntegrationToggle();
   const progress = action === 'reload'
@@ -658,13 +663,12 @@ async function submitIntegrationAction(action) {
       if (!refreshed) throw new Error(tr('集成状态刷新失败','Failed to refresh integration status'));
     }
     const message = integrationOutcomeMessage(refreshed, action);
-    $('modal_status').textContent = message;
-    closeModal();
+    if (owner?.isConnected) closeModal();
     notice(message);
   } catch (error) {
     if (error.payload && error.payload.configuration && error.payload.runtime) renderIntegration(error.payload);
     if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；点击账号徽章，在“模型设置”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Click the account badge to restore visibility in Model settings, or add a model.');
-    $('modal_status').textContent = error.message;
+    if (owner?.isConnected) $('modal_status').textContent = error.message;
     notice(error.message, true);
     throw error;
   } finally {
@@ -1025,6 +1029,7 @@ function confirmResetCredit(account,credit, back) {
   const remaining = credit ? resetCountdownText(credit.expires_at) : '';
   const body = `<div class="reset-credit-note"><p><strong>${tr('请再次确认','Please confirm again')}</strong><br>${tr('账号','Account')}：${esc(account.name || account.id)}${expires ? `<br>${tr('到期','Expires')}：${esc(expires)}` : ''}${remaining ? `<br>${esc(remaining)}` : ''}</p></div><p class="muted">${tr('确认后会消耗一次重置机会，同时重置额度与刷新时间。此操作无法撤销。','Confirming uses one reset opportunity and resets both the quota and its refresh time. This cannot be undone.')}</p>`;
   openModal(tr('确认重置额度','Confirm quota reset'),body,tr('确认并使用重置','Confirm and use reset'),async () => {
+    const owner = $('modal_body').firstElementChild;
     const payload = {idempotency_key:resetAttemptKey(account.id,credit?.id || null)};
     if (credit) payload.credit_id = credit.id;
     const result = await api('/api/accounts/' + encodeURIComponent(account.id) + '/quota-reset',{method:'POST',body:JSON.stringify(payload)});
@@ -1032,7 +1037,7 @@ function confirmResetCredit(account,credit, back) {
     if (result.outcome === 'noCredit') { resetAttempts.delete(account.id); throw new Error(tr('OpenAI 表示此账户已没有可用的重置机会。','OpenAI reports no available reset opportunity for this account.')); }
     if (!['reset','alreadyRedeemed'].includes(result.outcome)) throw new Error(tr('OpenAI 没有返回可确认的重置结果。','OpenAI did not return a confirmed reset result.'));
     resetAttempts.delete(account.id);
-    closeModal();
+    if (owner?.isConnected) closeModal();
     await refreshQuotaState();
     notice(result.refresh_error ? tr('重置已完成，但新的额度与刷新时间暂时读取失败；请稍后刷新。','Reset completed, but the new quota and refresh time could not be read yet. Refresh again shortly.') : tr('重置已完成，额度与刷新时间已更新。','Reset completed. Quota and refresh time were updated.'));
   }, null, {back});
@@ -1139,6 +1144,9 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
   const backButton = $('modal_back');
   backButton.hidden = !back; backButton.onclick = back || null;
   backButton.title = backButton.ariaLabel = tr('返回上一层','Back to previous dialog');
+  const closeButton = $('modal_close');
+  closeButton.hidden = Boolean(back);
+  closeButton.title = closeButton.ariaLabel = tr('关闭','Close');
   $('modal_title').textContent = title;
   $('modal_body').innerHTML = body;
   services.mount(serviceContext);
@@ -1184,6 +1192,7 @@ function runDynamicUiAction(element) {
       $('modal_body').querySelectorAll('[data-ui-action="quota-display"]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.mode === quotaDisplay.mode())));
       return true;
     case 'setting-toggle': toggleSetting(element); return true;
+    case 'routing-settings': routingSettings.open({back:openSettings}); return true;
     case 'account-details': openAccountDetails(id); return true;
     case 'account-alias-save': saveAccountAlias(element); return true;
     case 'account-remove': removeAccount(id, element); return true;
@@ -1226,8 +1235,9 @@ function handleDynamicUiChange(event) {
   if (element?.dataset.uiAction === 'period-edit') runDynamicUiAction(element);
 }
 function handleModalKeydown(event) {
-  if (event.key === 'Escape') {
-    if (!$('modal_backdrop').classList.contains('hidden')) closeModal();
+  if (event.key === 'Escape' && !$('modal_backdrop').classList.contains('hidden')) {
+    event.preventDefault();
+    (modalNavigation.back || closeModal)();
   }
 }
 document.addEventListener('click', handleDynamicUiClick);

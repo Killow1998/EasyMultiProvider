@@ -16,6 +16,79 @@ fn configuration() -> Value {
 }
 
 #[test]
+fn published_claude_models_receive_capabilities_and_keep_deployment_limits() {
+    let ids = [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "claude-fable-5-1",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+    ];
+    for local in [false, true] {
+        let mut raw = configuration();
+        if local {
+            raw["providers"][0]["auth_mode"] = json!("claude_login");
+            raw["providers"][0]["base_url"] = json!("");
+        }
+        raw["models"] = json!(ids.map(|id| json!({
+            "id":format!("claude/{id}"),"provider":"claude","upstream_id":id,
+            "context_window":200000,"output_limit":8192,
+            "reasoning_levels":[],"supports_reasoning":null,"input_modalities":["text"],
+            "capability_sources":{"reasoning_levels":{"source":"unknown"},
+                "supports_reasoning":{"source":"unknown"},"input_modalities":{"source":"unknown"},
+                "output_modalities":{"source":"unknown"}}
+        })));
+        let loaded = normalize_configuration(Some(&raw)).unwrap();
+        for model in loaded["models"].as_array().unwrap() {
+            let id = model["upstream_id"].as_str().unwrap();
+            let levels = if id.ends_with("4-6") {
+                json!(["low", "medium", "high", "max"])
+            } else {
+                json!(["low", "medium", "high", "xhigh", "max"])
+            };
+            assert_eq!(model["reasoning_levels"], levels, "{id}");
+            assert_eq!(model["supports_reasoning"], true, "{id}");
+            assert_eq!(model["reasoning_control"], "effort", "{id}");
+            assert_eq!(model["input_modalities"], json!(["text", "image"]), "{id}");
+            assert_eq!(model["output_modalities"], json!(["text"]), "{id}");
+            assert_eq!(model["context_window"], 200000, "retain CPA limits");
+            assert_eq!(model["output_limit"], 8192, "retain CPA limits");
+        }
+        assert_eq!(normalize_configuration(Some(&loaded)).unwrap(), loaded);
+    }
+}
+
+#[test]
+fn new_model_manual_and_advertised_restrictions_are_not_overwritten() {
+    for source in ["manual", "advertised", "observed"] {
+        for id in [
+            "claude-haiku-5-5",
+            "claude-fable-5-1",
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+        ] {
+            let mut raw = configuration();
+            raw["models"] = json!([{
+                "id":format!("claude/{id}"),"provider":"claude","upstream_id":id,
+                "input_modalities":["text"],"output_modalities":["text"],
+                "reasoning_levels":["low"],"supports_reasoning":true,
+                "capability_sources":{"reasoning_levels":{"source":source},
+                    "input_modalities":{"source":source}}
+            }]);
+            let loaded = normalize_configuration(Some(&raw)).unwrap();
+            assert_eq!(loaded["models"][0]["reasoning_levels"], json!(["low"]));
+            assert_eq!(loaded["models"][0]["input_modalities"], json!(["text"]));
+        }
+    }
+}
+
+#[test]
 fn existing_cpa_and_local_claude_models_gain_missing_capabilities_on_load() {
     let mut raw = configuration();
     for local in [false, true] {

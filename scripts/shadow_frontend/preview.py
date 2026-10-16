@@ -50,6 +50,7 @@ def fixture(stack, binary, root):
 def preview(stack, backend, bundle, session, port=0):
     script = (HERE / 'preview.js').read_text().replace('__FIXTURE_BUNDLE__',json.dumps(bundle)).replace('__FIXTURE_PASSWORD__',json.dumps(PASSWORD))
     script += '\n' + (HERE / 'preview-review.js').read_text()
+    script += '\n' + (HERE / 'preview-routing.js').read_text()
     head='<script>'+ (HERE / 'shadow-service-demo.js').read_text() + '</script><script>localStorage.setItem("emp_management_session_v1",'+json.dumps(session)+');</script>'
     web = HERE.parents[1] / 'crates/emp-app/web'
     def recovery_page():

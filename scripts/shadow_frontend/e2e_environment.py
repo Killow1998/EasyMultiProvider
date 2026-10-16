@@ -13,14 +13,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-def request(url, payload=None, headers=None, method=None):
+def request(url, payload=None, headers=None, method=None, *, timeout=15):
     if urlsplit(url).hostname != '127.0.0.1':
         raise ValueError('Acceptance requests must target the local fixture')
     req = urllib.request.Request(url, data=None if payload is None else json.dumps(payload).encode(),
                                  headers={'Content-Type': 'application/json', **(headers or {})}, method=method)
     try:
         # Inherited HTTP_PROXY must not send local WebDriver/backend traffic away.
-        response = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=15)
+        response = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=timeout)
     except urllib.error.HTTPError as error:
         response = error
     with response:

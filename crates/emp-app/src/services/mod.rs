@@ -16,6 +16,7 @@ pub(crate) mod native;
 pub(crate) mod providers;
 pub(crate) mod quota;
 pub(crate) mod runtime;
+mod subscription_quota;
 
 pub(crate) mod native_connections;
 

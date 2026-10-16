@@ -39,17 +39,35 @@ Codex's standalone `image_gen.imagegen` extension sends JSON to
 [`images/generations` and `images/edits`](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/codex-api/src/endpoint/images.rs).
 EMP accepts both beneath `/v1` and forwards the original image model and payload
 to the subscription backend. Each image request uses `x-codex-image-turn-id` to
-find the account selected by that turn's HTTP or WebSocket inference. Concurrent
-turns remain separate. Missing associations and disabled accounts return an
-explicit error instead of selecting a different account.
+associate with its originating HTTP or WebSocket inference. **Settings → Routing
+settings** controls both Auto Review fallback and image account selection. Images
+default to **Follow conversation**; **Specific account** selects Native or an
+imported subscription, and **Automatic** selects an eligible subscription using
+shared and image-specific quota snapshots. A known positive balance precedes an
+unknown one. Disabled/invalid accounts, known Free plans and exhausted capacity
+are excluded from automatic selection. Expired quota windows no longer block it.
 
-Five image contracts pass, including the actual Linux Codex **0.163.0** extension
-generating and editing a synthetic PNG, saving it and passing it into the next
-inference. The contracts also cover Native/imported account selection,
+The image account is frozen for the turn, even if preferences or quota snapshots
+change during subsequent inference frames. Known server-side image references
+retain their originating account across turns; automatic routing rejects unknown
+references with guidance to attach the local image file. Reference metadata and
+turn associations are bounded to 4096 entries each and expire after 24 hours;
+credentials and image bytes are not cached here. Missing turn associations,
+disabled pinned accounts and references from conflicting accounts fail explicitly.
+Image limit headers and 429 responses inform selection for later turns. No
+quota-driven replay or cross-account retry is made after an image request is sent.
+
+The image contracts cover Native/imported account selection,
 authentication boundaries, unchanged upstream errors and image quota headers,
 no retry after 404/429, failed credential refresh preserving 401, and image usage
-receipts with duplicate upstream request IDs counted once. All accounts,
-upstreams and images are synthetic.
+receipts with duplicate upstream request IDs counted once. Six routing contracts
+exercise fixed/automatic selection, independent Auto Review settings, successful
+and failed quota feedback, expired windows, cross-turn references and unavailable
+pinned accounts. Browser E2E verifies bilingual controls, persisted settings,
+failed-save recovery, nested navigation, narrow layouts and the unified Shadow.
+The actual Linux Codex **0.163.0** extension was also verified generating/editing
+a synthetic PNG, saving it and passing it into the next inference. All accounts,
+upstreams and images in these checks are synthetic.
 
 Run the real extension check explicitly with `EMP_TEST_CODEX_CLI` pointing to the
 chosen engine and `cargo test -p emp-app --lib native_api_contract::images --

@@ -67,10 +67,13 @@ def main():
                 assert (target / 'config.json').read_bytes() == before
                 browser.execute('document.querySelector("[data-migration-demo]").click();')
                 wait_for(lambda: browser.execute('return !!document.querySelector(".migration-demo-note") && !document.getElementById("modal_submit").disabled;'))
+                assert browser.execute('return document.getElementById("modal_close").hidden;')
+                browser.escape()
+                assert browser.execute('return !document.querySelector(".migration-demo-note") && document.getElementById("shadow_migration_file").files[0].name==="fixture.emp" && document.getElementById("shadow_import_password").value==="fixture-migration-password";')
                 browser.execute('document.querySelector(".modal-close").click();')
                 assert browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");')
                 assert (target / 'config.json').read_bytes() == before
-        checks.append('Both languages/themes: ordered guidance, demo Back preserves file/password, X closes, no writes')
+        checks.append('Both languages/themes: one child Back, Back/Escape preserve file/password, root X closes, no writes')
         browser.execute('document.getElementById("shadow_migration_open").click();')
         browser.execute(fill, exported['bundle'])
         server.preview_gate = threading.Event()

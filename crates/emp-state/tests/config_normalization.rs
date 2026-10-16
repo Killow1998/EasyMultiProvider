@@ -47,7 +47,12 @@ fn configuration_normalization_matches_frozen_fixture() {
             .expect("normalized object")
             .remove("catalog_show_context");
         // These defaults intentionally changed after the Python baseline.
-        for key in ["auto_enable_on_start", "auto_review_fallback", "language"] {
+        for key in [
+            "auto_enable_on_start",
+            "auto_review_fallback",
+            "language",
+            "image_routing",
+        ] {
             python_compatible.as_object_mut().unwrap().remove(key);
         }
         let mut expected = case["expected"].clone();

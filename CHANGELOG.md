@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.13.5 (2026-10-16)
+
+### 中文
+
+- 支持 Codex 独立图片生成与编辑请求，并记录对应调用和用量。路由设置统一管理自动审查与图片账号；图片支持跟随对话、指定账号和自动选择，保留同轮及已有图片的账号关联。
+- 修复 Claude 工具名称和命名空间还原、模型推理强度与旧目录能力刷新。工具定义通过标准输入传递，固定输出结构避免工具数量撑大 Windows 命令行。
+- 统一弹窗返回行为：子页面只显示返回箭头，保留上一层状态；保存后返回，延迟完成的请求不再关闭后来打开的窗口。
+- 更新提示显示“当前版本 → 最新版本”，更新完成后复用管理页面，避免重复打开标签页。
+- 分离 Claude 工具身份校验与回应组装，减少图片账号选择的重复计算和路由构建；更新 Codex 0.154–0.163 协议与历史恢复回归。
+
+### English
+
+- Support standalone Codex image generation and editing, including call and usage records. Unified routing settings cover Auto Review and image accounts: follow the conversation, select an account, or choose automatically while preserving turn and existing-image account affinity.
+- Fix Claude tool-name and namespace restoration, model-specific reasoning effort, and capability updates for saved catalogs. Send tool definitions through stdin and use a fixed output schema to keep large tool catalogs out of the Windows command line.
+- Give nested dialogs a single Back control with parent state preserved. Return after saving and prevent late request completion from closing a subsequently opened dialog.
+- Show “current version → latest version” during updates and reuse the management page after completion instead of opening duplicate tabs.
+- Separate Claude tool identity validation from response assembly, remove repeated image-account capacity calculations and route construction, and update Codex 0.154–0.163 protocol and history-restoration regression coverage.
+
 ## 0.13.4 (2026-10-15)
 
 ### 中文

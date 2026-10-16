@@ -133,6 +133,7 @@ def check_page(browser, shadow):
                 browser.execute('window.fetch=window.statisticsFetch;delete window.statisticsFetch;document.querySelector("[data-stats-view=overview]").click();')
 
                 browser.execute('document.querySelector("[data-call-outcomes]").click();')
+                assert browser.execute('return document.querySelectorAll(".call-outcome-dialog .modal-navigation button").length===1 && !document.querySelector(".call-outcome-dialog .modal-close");')
                 assert browser.execute('return !!document.querySelector("dialog[open] tbody") && document.querySelector("dialog[open]").textContent.includes("401");')
                 assert browser.execute('const r=document.querySelector("dialog[open]").getBoundingClientRect();return r.left>=0 && r.right<=innerWidth+1 && r.height<=innerHeight;')
                 browser.escape()

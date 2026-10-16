@@ -3,6 +3,7 @@ pub(crate) use state::ReviewState;
 
 use crate::app::ServerState;
 use crate::services::accounts::regular_file;
+use crate::services::subscription_quota::headroom as quota_headroom;
 use emp_core::{ResolvedRoute, RouteResolutionError, RouteSource, resolved_route_from_parts};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
@@ -139,42 +140,6 @@ pub(crate) fn automatic_review_candidates(
     });
     native.append(&mut imported);
     native.into_iter().map(|candidate| candidate.id).collect()
-}
-
-pub(crate) fn quota_headroom(quota: Option<&Value>) -> Option<f64> {
-    let quota = quota?.as_object()?;
-    if quota
-        .get("credits")
-        .and_then(Value::as_object)
-        .and_then(|credits| credits.get("spend_control_reached"))
-        == Some(&Value::Bool(true))
-    {
-        return Some(0.0);
-    }
-    if let Some(remaining) = quota
-        .get("credits")
-        .and_then(Value::as_object)
-        .and_then(|credits| credits.get("individual_limit"))
-        .and_then(Value::as_object)
-        .and_then(|individual| individual.get("remaining_percent"))
-        .and_then(finite_number)
-        && remaining <= 0.0
-    {
-        return Some(0.0);
-    }
-
-    let limits = quota.get("rate_limits")?.as_object()?;
-    ["primary", "secondary"]
-        .into_iter()
-        .filter_map(|name| limits.get(name).and_then(Value::as_object))
-        .filter_map(|window| {
-            let used = window
-                .get("usedPercent")
-                .or_else(|| window.get("used_percent"))
-                .and_then(finite_number)?;
-            Some((100.0 - used).clamp(0.0, 100.0))
-        })
-        .reduce(f64::min)
 }
 
 fn route_from_candidates(
@@ -318,10 +283,6 @@ fn set_review_route_model(model: &mut Map<String, Value>, requested_model: &str)
         }
         model.insert("capability_sources".to_owned(), Value::Object(sources));
     }
-}
-
-fn finite_number(value: &Value) -> Option<f64> {
-    value.as_f64().filter(|value| value.is_finite())
 }
 
 fn is_python_truthy(value: &Value) -> bool {

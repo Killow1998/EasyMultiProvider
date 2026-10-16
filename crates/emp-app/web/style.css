@@ -352,6 +352,11 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .setting-row:last-child{border-bottom:0}
 .setting-row>div{min-width:0}
 .setting-title{font-weight:600;font-size:13px}
+.routing-settings .setting-title{margin:0;color:var(--text)}
+.routing-mode,.routing-account{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,1fr)}
+.routing-settings select{min-width:0;max-width:100%}
+.routing-account[hidden]{display:none}
+@media(max-width:500px){.routing-mode,.routing-account{grid-template-columns:minmax(0,1fr);gap:8px}.routing-settings .setting-help{white-space:normal}}
 .setting-help{margin:5px 0 0;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .model-card button.visibility{padding:0 8px;height:32px;border:1px solid var(--border-strong);border-radius:8px;background:var(--panel)}
 @container accounts (max-width:840px){html[lang="en"] .account-card{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto}html[lang="en"] .account-card .entity-card-actions{grid-column:1;grid-row:2}html[lang="en"] .account-card .entity-card-quota{grid-row:3}}

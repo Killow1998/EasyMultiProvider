@@ -462,6 +462,8 @@
       "provider_key": "anthropic",
       "model_id": "claude-fable-5",
       "display_name": "Claude Fable 5",
+      "reviewed_at": "2026-10-16",
+      "claude_cli_default_effort": "high",
       "context_window": 1000000,
       "max_input_tokens": null,
       "max_output_tokens": 128000,
@@ -473,8 +475,8 @@
         "text"
       ],
       "supports_reasoning": true,
-      "reasoning_levels": null,
-      "reasoning_control": "effort parameter (adaptive thinking, always on); extended thinking not supported (thinking.type enabled = No)",
+      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_control": "effort",
       "tool_calling": true,
       "parallel_tool_calling": null,
       "structured_output": true,
@@ -494,6 +496,8 @@
       "provider_key": "anthropic",
       "model_id": "claude-opus-5",
       "display_name": "Claude Opus 5",
+      "reviewed_at": "2026-10-16",
+      "claude_cli_default_effort": "high",
       "context_window": 1000000,
       "max_input_tokens": null,
       "max_output_tokens": 128000,
@@ -505,8 +509,8 @@
         "text"
       ],
       "supports_reasoning": true,
-      "reasoning_levels": null,
-      "reasoning_control": "effort parameter, defaults to high on Claude API and Claude Code",
+      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_control": "effort",
       "tool_calling": true,
       "parallel_tool_calling": null,
       "structured_output": true,
@@ -526,6 +530,8 @@
       "provider_key": "anthropic",
       "model_id": "claude-sonnet-5",
       "display_name": "Claude Sonnet 5",
+      "reviewed_at": "2026-10-16",
+      "claude_cli_default_effort": "high",
       "context_window": 1000000,
       "max_input_tokens": null,
       "max_output_tokens": 128000,
@@ -537,8 +543,8 @@
         "text"
       ],
       "supports_reasoning": true,
-      "reasoning_levels": null,
-      "reasoning_control": "effort parameter, defaults to high on Claude API and Claude Code",
+      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_control": "effort",
       "tool_calling": true,
       "parallel_tool_calling": null,
       "structured_output": true,
@@ -1216,7 +1222,10 @@
       "provider_key": "anthropic",
       "model_id": "claude-opus-4-6",
       "display_name": "Claude Opus 4.6",
-      "reviewed_at": "2026-10-05",
+      "reviewed_at": "2026-10-16",
+      "claude_cli_default_effort": "high",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
       "supports_reasoning": true,
       "reasoning_levels": [
         "low",
@@ -1243,7 +1252,10 @@
       "provider_key": "anthropic",
       "model_id": "claude-sonnet-4-6",
       "display_name": "Claude Sonnet 4.6",
-      "reviewed_at": "2026-10-05",
+      "reviewed_at": "2026-10-16",
+      "claude_cli_default_effort": "high",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
       "supports_reasoning": true,
       "reasoning_levels": [
         "low",
@@ -1270,7 +1282,9 @@
       "provider_key": "anthropic",
       "model_id": "claude-opus-5-5",
       "display_name": "Claude Opus 5.5",
-      "reviewed_at": "2026-09-30",
+      "reviewed_at": "2026-10-16",
+      "claude_cli_default_effort": "medium",
+      "output_modalities": ["text"],
       "input_modalities": [
         "text",
         "image"
@@ -1298,7 +1312,9 @@
       "provider_key": "anthropic",
       "model_id": "claude-sonnet-5-5",
       "display_name": "Claude Sonnet 5.5",
-      "reviewed_at": "2026-09-30",
+      "reviewed_at": "2026-10-16",
+      "claude_cli_default_effort": "medium",
+      "output_modalities": ["text"],
       "input_modalities": [
         "text",
         "image"
@@ -1321,6 +1337,78 @@
           "https://platform.claude.com/docs/en/build-with-claude/effort"
         ]
       }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-haiku-5-5",
+      "display_name": "Claude Haiku 5.5",
+      "reviewed_at": "2026-10-16",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "supports_reasoning": true,
+      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_control": "effort",
+      "claude_cli_default_effort": "medium",
+      "aliases": [],
+      "sources_by_field": {"all": [
+        "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+      ]}
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-fable-5-1",
+      "display_name": "Claude Fable 5.1",
+      "reviewed_at": "2026-10-16",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "supports_reasoning": true,
+      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_control": "effort",
+      "claude_cli_default_effort": "high",
+      "aliases": [],
+      "sources_by_field": {"all": [
+        "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+      ]}
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-opus-4-8",
+      "display_name": "Claude Opus 4.8",
+      "reviewed_at": "2026-10-16",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "supports_reasoning": true,
+      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_control": "effort",
+      "claude_cli_default_effort": "high",
+      "aliases": [],
+      "sources_by_field": {"all": [
+        "https://platform.claude.com/docs/en/models/opus-4-8/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+      ]}
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-opus-4-7",
+      "display_name": "Claude Opus 4.7",
+      "reviewed_at": "2026-10-16",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "supports_reasoning": true,
+      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_control": "effort",
+      "claude_cli_default_effort": "xhigh",
+      "aliases": [],
+      "sources_by_field": {"all": [
+        "https://platform.claude.com/docs/en/models/opus-4-7/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+      ]}
     }
   ]
 }

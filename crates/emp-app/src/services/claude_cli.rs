@@ -155,7 +155,8 @@ fn execute_complete_with_cli(
     let stdin = Arc::<[u8]>::from(cli_input.stdin);
     let expected_user_content = cli_input.expected_user_content;
     let model = candidate.upstream_model.as_str();
-    let effort = projection::effort(body).map_err(ClaudeCliError::Failure)?;
+    let effort = projection::effort_for_model(body, candidate.model.value())
+        .map_err(ClaudeCliError::Failure)?;
     let output_limit = body
         .get("max_output_tokens")
         .and_then(Value::as_u64)

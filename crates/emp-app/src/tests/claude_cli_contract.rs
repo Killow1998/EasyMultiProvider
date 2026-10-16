@@ -429,6 +429,136 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
 
 #[test]
 #[ignore = "requires an installed trusted Claude Code CLI on PATH"]
+fn installed_cli_preserves_large_tool_catalog_and_scoped_tool_round_trip() {
+    assert!(emp_codex::installed_cli::resolve_claude_cli().is_some());
+    let upstream = OneShotUpstream::start_repeated_wire(
+        200,
+        "text/event-stream",
+        None,
+        2,
+        vec![structured_messages_sse(&json!({
+            "answer":"", "tool_calls":[{
+                "type":"function_call", "name":"functions.mcp__fixture_connector__operation_199", "namespace":"",
+                "arguments":{"value":"fixture-only"}, "input":""
+            }]
+        }))],
+    );
+    let (_directory, server) = claude_server(&upstream.base_url());
+    // This catalog made the request-specific schema alone exceed Windows'
+    // complete command-line budget. All definitions must still reach the model.
+    let tools = (0..200)
+        .map(|index| {
+            json!({
+                "type":"function","name":format!("mcp__fixture_connector__operation_{index:03}"),
+                "parameters":{"type":"object","properties":{"value":{"type":"string"}}}
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut body = json!({"model":"demo/model","stream":false,
+        "input":[{"role":"user","content":"propose the final offered tool"}],
+        "tools":[{"type":"namespace","name":"functions","tools":tools}]
+    });
+    let response = post(
+        &server,
+        "/v1/responses",
+        &serde_json::to_vec(&body).unwrap(),
+        &[&session_header(&server)],
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    let result: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(result["output"][0]["namespace"], "functions");
+    assert_eq!(
+        result["output"][0]["name"],
+        "mcp__fixture_connector__operation_199"
+    );
+    assert_eq!(
+        result["output"][0]["arguments"],
+        "{\"value\":\"fixture-only\"}"
+    );
+    let (_, _, forwarded) = upstream.observed();
+    assert_eq!(user_transcript(&forwarded)["tools"], body["tools"]);
+    assert_eq!(forwarded["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(forwarded["tools"][0]["name"], "StructuredOutput");
+    let schema = forwarded["tools"][0]["input_schema"].to_string();
+    assert!(
+        schema.encode_utf16().count() < 4096,
+        "leave command-line headroom for CLI options and paths"
+    );
+
+    let call = result["output"][0].clone();
+    body["input"].as_array_mut().unwrap().extend([
+        call.clone(),
+        json!({"type":"function_call_output","call_id":call["call_id"],"output":"exact synthetic tool result"}),
+        json!({"role":"user","content":"continue"}),
+    ]);
+    let response = post(
+        &server,
+        "/v1/responses",
+        &serde_json::to_vec(&body).unwrap(),
+        &[&session_header(&server)],
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    // Synthetic replies test transport and projection, not model task quality.
+    let (_, _, forwarded) = upstream.observed();
+    let transcript = user_transcript(&forwarded);
+    assert_eq!(transcript["input"], body["input"]);
+    assert_eq!(transcript["tools"], body["tools"]);
+    server.shutdown().unwrap();
+}
+
+#[test]
+#[ignore = "requires an installed trusted Claude Code CLI on PATH"]
+fn installed_cli_preserves_published_claude_model_efforts() {
+    assert!(emp_codex::installed_cli::resolve_claude_cli().is_some());
+    for id in [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "claude-fable-5-1",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+    ] {
+        let levels: &[&str] = if id.ends_with("4-6") {
+            &["low", "medium", "high", "max"]
+        } else {
+            &["low", "medium", "high", "xhigh", "max"]
+        };
+        for level in levels {
+            let upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({
+                "answer":"fixture answer","tool_calls":[]
+            }))]);
+            let (_directory, server) = claude_server_with_model(&upstream.base_url(), id);
+            let body = json!({"model":"demo/model","stream":false,"input":"fixture only",
+                "reasoning":{"effort":level}});
+            let response = post(
+                &server,
+                "/v1/responses",
+                &serde_json::to_vec(&body).unwrap(),
+                &[&session_header(&server)],
+            );
+            assert!(
+                response.starts_with("HTTP/1.1 200 OK\r\n"),
+                "{id} {level}: {response}"
+            );
+            let (_, _, forwarded) = upstream.observed();
+            assert_eq!(forwarded["model"], id, "preserve selected model");
+            assert_eq!(
+                forwarded["output_config"]["effort"], *level,
+                "{id}: preserve effort"
+            );
+            server.shutdown().unwrap();
+        }
+        eprintln!("Verified {id}: {} effort levels", levels.len());
+    }
+}
+
+#[test]
+#[ignore = "requires an installed trusted Claude Code CLI on PATH"]
 fn installed_cli_forwards_images_and_documents_with_ordered_tool_history() {
     assert_cli_forwards_images_and_documents_with_ordered_tool_history("sonnet");
 }

@@ -1,25 +1,11 @@
 //! CLI result validation, tool identity restoration and Codex response projection.
+use super::tools::{ToolKind, available_tools, resolve_tool};
 use crate::services::claude_cli::ClaudeCliError;
 use crate::util::random_hex;
 use emp_core::ResolvedRoute;
 use emp_protocol::tool_bridge::ExternalTools;
 use emp_router::CompleteResponse;
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct ToolIdentity {
-    namespace: String,
-    name: String,
-    kind: ToolKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum ToolKind {
-    Function,
-    Custom,
-    Search,
-}
 
 pub(in crate::services::claude_cli) fn parse_cli_result(
     stdout: &[u8],
@@ -64,10 +50,7 @@ pub(in crate::services::claude_cli) fn response_from_cli(
     bridge
         .prepare_or_borrow(request)
         .map_err(|_| ClaudeCliError::Failure("claude_cli_invalid_tool_history"))?;
-    let available = collect_tools(request)
-        .into_iter()
-        .filter(|tool| tool_choice_allows(request.get("tool_choice"), tool))
-        .collect::<BTreeSet<_>>();
+    let available = available_tools(request);
     let raw_proposals = proposal["tool_calls"]
         .as_array()
         .ok_or(ClaudeCliError::Failure(
@@ -90,13 +73,10 @@ pub(in crate::services::claude_cli) fn response_from_cli(
             .get("namespace")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !available.contains(&ToolIdentity {
-            namespace: namespace.to_owned(),
-            name: name.to_owned(),
-            kind,
-        }) {
-            return Err(ClaudeCliError::Failure("claude_cli_unknown_tool_proposal"));
-        }
+        let tool = resolve_tool(&available, namespace, name, kind)
+            .ok_or(ClaudeCliError::Failure("claude_cli_unknown_tool_proposal"))?;
+        let name = tool.name.as_str();
+        let namespace = tool.namespace.as_str();
         let item = match kind {
             ToolKind::Function => {
                 let arguments = raw
@@ -208,7 +188,7 @@ pub(in crate::services::claude_cli) fn response_from_cli(
     })
 }
 
-fn parse_structured_proposal(output: &Value) -> Result<Value, ClaudeCliError> {
+fn parse_structured_proposal(output: &Value) -> Result<&Value, ClaudeCliError> {
     let proposal = output
         .get("structured_output")
         .filter(|proposal| proposal.is_object())
@@ -247,111 +227,7 @@ fn parse_structured_proposal(output: &Value) -> Result<Value, ClaudeCliError> {
             return Err(ClaudeCliError::Failure("claude_cli_invalid_tool_proposal"));
         }
     }
-    Ok(proposal.clone())
-}
-
-fn collect_tools(body: &Value) -> BTreeSet<ToolIdentity> {
-    let mut tools = BTreeSet::new();
-    collect_tool_definitions(body.get("tools"), "", &mut tools);
-    if let Some(items) = body.get("input").and_then(Value::as_array) {
-        for item in items {
-            if matches!(
-                item.get("type").and_then(Value::as_str),
-                Some("additional_tools" | "tool_search_output")
-            ) {
-                collect_tool_definitions(item.get("tools"), "", &mut tools);
-            }
-        }
-    }
-    tools
-}
-
-fn tool_choice_allows(choice: Option<&Value>, tool: &ToolIdentity) -> bool {
-    match choice {
-        None | Some(Value::Null) => true,
-        Some(Value::String(value)) => value != "none",
-        Some(Value::Object(choice)) => match choice.get("type").and_then(Value::as_str) {
-            Some("allowed_tools") => {
-                choice
-                    .get("tools")
-                    .and_then(Value::as_array)
-                    .is_some_and(|tools| {
-                        tools.iter().any(|allowed| {
-                            let name = allowed.get("name").and_then(Value::as_str);
-                            let namespace = allowed
-                                .get("namespace")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            name == Some(tool.name.as_str())
-                                && namespace == tool.namespace
-                                && match allowed.get("type").and_then(Value::as_str) {
-                                    Some("custom") => tool.kind == ToolKind::Custom,
-                                    Some("tool_search") => tool.kind == ToolKind::Search,
-                                    _ => tool.kind == ToolKind::Function,
-                                }
-                        })
-                    })
-            }
-            Some("function" | "custom") => {
-                choice.get("name").and_then(Value::as_str) == Some(tool.name.as_str())
-                    && choice
-                        .get("namespace")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        == tool.namespace
-                    && (choice["type"] != "custom" || tool.kind == ToolKind::Custom)
-            }
-            Some("tool_search") => tool.kind == ToolKind::Search,
-            _ => true,
-        },
-        Some(_) => false,
-    }
-}
-
-fn collect_tool_definitions(
-    value: Option<&Value>,
-    namespace: &str,
-    tools: &mut BTreeSet<ToolIdentity>,
-) {
-    let Some(items) = value.and_then(Value::as_array) else {
-        return;
-    };
-    for item in items {
-        match item.get("type").and_then(Value::as_str) {
-            Some("namespace") => {
-                if let Some(group) = item.get("name").and_then(Value::as_str) {
-                    collect_tool_definitions(item.get("tools"), group, tools);
-                }
-            }
-            Some("function" | "custom") => {
-                let definition = item
-                    .get("function")
-                    .filter(|value| value.is_object())
-                    .unwrap_or(item);
-                if let Some(name) = definition.get("name").and_then(Value::as_str) {
-                    tools.insert(ToolIdentity {
-                        namespace: namespace.to_owned(),
-                        name: name.to_owned(),
-                        kind: if item["type"] == "custom" {
-                            ToolKind::Custom
-                        } else {
-                            ToolKind::Function
-                        },
-                    });
-                }
-            }
-            Some("tool_search")
-                if item.get("execution").and_then(Value::as_str) == Some("client") =>
-            {
-                tools.insert(ToolIdentity {
-                    namespace: namespace.to_owned(),
-                    name: "tool_search".to_owned(),
-                    kind: ToolKind::Search,
-                });
-            }
-            _ => {}
-        }
-    }
+    Ok(proposal)
 }
 
 pub(super) fn cli_usage(output: &Value) -> Value {

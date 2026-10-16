@@ -54,6 +54,7 @@ def main():
             assert execute('const node=document.querySelector(arguments[0]);if(!node||node.hidden)return false;if(node.matches("input"))node.focus();node.click();return true;', selector), selector
         def present(selector):
             wait_for(lambda: execute('return !!document.querySelector(arguments[0]);', selector))
+            assert execute('return [...document.querySelectorAll("#modal_backdrop .modal-header .modal-navigation button")].filter(node=>node.getBoundingClientRect().width>0).length===1;')
         def back_to(selector):
             click('#modal_back')
             present(selector)
@@ -75,7 +76,8 @@ def main():
                 present('#codex_import_choices')
                 click('[data-ui-action="account-import-paste"]')
                 present('#codex_import_form')
-                back_to('#codex_import_choices')
+                browser.escape()
+                present('#codex_import_choices')
                 # The file form gets the same explicit parent as paste without OS picker interaction.
                 execute('codexAccountImport.fileChosen({files:[{name:"auth.json",text:async()=>"{}"}],value:""});')
                 present('#codex_import_form')
@@ -83,6 +85,10 @@ def main():
                 back_to('.service-choice-group')
                 assert execute('return document.getElementById("modal_back").hidden;')
                 click('[data-ui-action="service-custom-api"]')
+                present('#modal_provider_base')
+                assert execute('return document.getElementById("modal_close").hidden;')
+                browser.escape()
+                present('.service-choice-group')
                 click('.modal-close')
                 assert execute('return document.getElementById("modal_backdrop").classList.contains("hidden") && document.getElementById("modal_back").onclick===null;')
                 execute('openAccountDetails("nav-account");')
@@ -97,6 +103,10 @@ def main():
                 wait_for(lambda: execute('return !document.querySelector(".reset-credit-list");'))
                 back_to('.reset-credit-list')
                 assert execute('return document.querySelector("[name=reset_credit_choice]:checked").value==="1";')
+                click('#modal_submit')
+                browser.escape()
+                present('.reset-credit-list')
+                assert execute('return document.querySelector("[name=reset_credit_choice]:checked").value==="1";')
                 back_to('#subscription_model_list')
                 assert execute('return document.querySelector("[data-service-view=edit]").getAttribute("aria-selected")==="true" && state.accounts[0].quota.credits.reset_credits.available_count===2;')
                 execute('closeModal();state.providers.push({id:"nav-claude",name:"Local",execution_backend:"claude_cli",auth_mode:"claude_login"});editProvider("nav-claude");')
@@ -106,7 +116,7 @@ def main():
                 back_to('.choice-grid')
                 back_to('#modal_local_claude_name')
                 execute('closeModal();state.providers=state.providers.filter(p=>p.id!=="nav-claude");')
-                checks.append(language+' / '+theme+': add/import/file/Claude/reset direct parents, close, selection and service tab')
+                checks.append(language+' / '+theme+': one navigation control, add/import/file/Claude/reset direct parents, Escape, root close and preserved selection/tab')
         execute('closeModal();usageReport.open();')
         present('#usage_report')
         execute('document.getElementById("usage_category").value="external";document.getElementById("usage_bucket").value="day";window.navUsageRange={start:periodPickers.usage.start,end:periodPickers.usage.end};')
@@ -156,12 +166,14 @@ def main():
                 assert execute('return !document.getElementById("modal_backdrop").classList.contains("hidden");')
                 execute('closeModal();')
         checks.append('Custom/official/CPA keys: six-star saved marker, clear on focus, visible pasted replacement, untouched/focused-empty preserve key, unsaved replacement discarded on close, empty new key rejected in EN/ZH and both themes')
-        # Overlay returns to the same report nodes; X closes the containing modal.
+        # The outcome overlay has one Back control; Escape also preserves the report.
         execute('statistics.open();')
         present('#presentation_stats')
         execute('''
           statistics.stop();callReports.stop();
           const parent=document.getElementById('presentation_stats');
+          parent.querySelector('[data-stats-filter=category]').value='external';
+          parent.querySelector('[data-stats-filter=session]').value='Keep this filter';
           const root=document.createElement('div');root.id='nav_outcome_fixture';parent.append(root);
           const marker=document.createElement('button');marker.dataset.callOutcomes='';root.append(marker);
           window.navOutcomeDispose=createCallOutcomes({esc,tr,number:String,time:String}).bindOutcomes(root,{success_samples:2,completed:1,failed:1});
@@ -169,14 +181,18 @@ def main():
         ''')
         click('#nav_outcome_fixture [data-call-outcomes]')
         present('.call-outcome-dialog')
+        assert execute('return document.querySelectorAll(".call-outcome-dialog .modal-navigation button").length===1 && !document.querySelector(".call-outcome-dialog .modal-close");')
         click('.call-outcome-dialog .modal-back')
         assert execute('return !document.querySelector(".call-outcome-dialog") && navReportNode===document.getElementById("presentation_stats");')
         click('#nav_outcome_fixture [data-call-outcomes]')
-        click('.call-outcome-dialog .modal-close')
+        browser.escape()
+        assert execute('return !document.querySelector(".call-outcome-dialog") && navReportNode===document.getElementById("presentation_stats") && !document.getElementById("modal_backdrop").classList.contains("hidden");')
+        assert execute('return navReportNode.querySelector("[data-stats-filter=category]").value==="external" && navReportNode.querySelector("[data-stats-filter=session]").value==="Keep this filter";')
+        click('#modal_backdrop .modal-close')
         assert execute('return document.getElementById("modal_backdrop").classList.contains("hidden") && !document.querySelector(".call-outcome-dialog");')
-        checks.append('Outcome Back preserves report nodes and filters; X closes the report')
+        checks.append('Outcome overlay has only Back; Back and Escape retain the report, whose own X still closes it')
         assert execute('''
-          language='en';const view=createShadowMigrationView(()=>state);
+          language='en';const view=createMigrationView(()=>state);
           const config={providers:[
             {id:'api',name:'API',base_url:'https://api.example.com',auth_mode:'api_key'},
             {id:'router',name:'Router',base_url:'https://openrouter.ai/api/v1',auth_mode:'api_key'},
@@ -194,8 +210,8 @@ def main():
                 execute('setTheme(arguments[0]);openAccountDetails("nav-account");', theme)
                 present('#account_usage')
                 click('[data-ui-action="account-reset-credits"]')
-                assert execute('const b=document.getElementById("modal_back"),x=document.querySelector(".modal-close"),r=b.getBoundingClientRect();return !b.hidden && r.width>0 && r.right<=x.getBoundingClientRect().left && r.bottom<=innerHeight && getComputedStyle(b,"::before").maskImage!=="none" && [b,x].every(n=>getComputedStyle(n).borderTopWidth==="0px" && getComputedStyle(n).backgroundColor==="rgba(0, 0, 0, 0)");')
-        checks.append('Back icon visible beside X at 100/150/170 percent in both themes')
+                assert execute('const b=document.getElementById("modal_back"),x=document.getElementById("modal_close"),r=b.getBoundingClientRect();return !b.hidden && x.hidden && r.width>0 && r.right<=innerWidth && r.bottom<=innerHeight && getComputedStyle(b,"::before").maskImage!=="none" && getComputedStyle(b).borderTopWidth==="0px" && getComputedStyle(b).backgroundColor==="rgba(0, 0, 0, 0)";')
+        checks.append('One Back icon at 100/150/170 percent in both themes; child dialogs hide X')
         assert execute('return !navigationWrites.some(path=>path.includes("quota-reset")||path.includes("/v1/"));')
         assert (root / 'config.json').read_bytes() == before
         assert upstream.calls == 0

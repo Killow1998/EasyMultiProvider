@@ -66,8 +66,19 @@ pub(super) fn load(state: &ServerState, provider: &Value) -> Option<SavedModels>
         return None;
     }
     let bytes = read_file_limited(&path, emp_state::MAX_TRANSACTION_FILE_BYTES).ok()?;
-    let saved: SavedModels = serde_json::from_slice(&bytes).ok()?;
-    (saved.identity == identity(provider)).then_some(saved)
+    let mut saved: SavedModels = serde_json::from_slice(&bytes).ok()?;
+    if saved.identity != identity(provider) {
+        return None;
+    }
+    // An application upgrade must also update previews from older discovery
+    // caches, without refetching upstream or discarding advertised restrictions.
+    if provider["execution_backend"] == "claude_cli" {
+        saved.models = emp_state::official_registry::enrich_discovered_models(
+            provider.as_object()?,
+            saved.models,
+        );
+    }
+    Some(saved)
 }
 
 pub(super) fn save(
@@ -88,4 +99,60 @@ pub(super) fn save(
 pub(super) fn unchanged(state: &ServerState, config: &Value, expected: &Value) -> bool {
     provider(state, config, expected["id"].as_str().unwrap_or_default())
         .is_some_and(|current| identity(&current) == identity(expected))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lifecycle::ServerHandle;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn cached_claude_list_gains_new_capabilities_without_refetch_or_disk_rewrite() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let config_path = root.join("config.json");
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "native_catalog_path":root.join("codex/models_cache.json"),
+                "providers":[{"id":"claude","base_url":"https://example.invalid",
+                    "protocol":"anthropic_messages","execution_backend":"claude_cli",
+                    "api_key":"fixture-secret"}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let server = ServerHandle::start_with_config_options(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            &config_path,
+            "codex",
+            root.join("codex/auth.json"),
+        )
+        .unwrap();
+        let config = server.state.backend.configuration.read().unwrap().clone();
+        let provider = provider(&server.state, &config, "claude").unwrap();
+        let old_models = vec![
+            json!({"upstream_id":"claude-haiku-5-5"}),
+            json!({"upstream_id":"claude-opus-4-8","reasoning_levels":["low"],
+                "capability_sources":{"reasoning_levels":{"source":"advertised"}}}),
+        ];
+        let written = save(&server.state, &provider, old_models).unwrap();
+        let file_path = path(&server.state, &provider);
+        let before = std::fs::read(&file_path).unwrap();
+        let loaded = load(&server.state, &provider).unwrap();
+        assert_eq!(
+            loaded.models[0]["reasoning_levels"],
+            json!(["low", "medium", "high", "xhigh", "max"])
+        );
+        assert_eq!(
+            loaded.models[0]["input_modalities"],
+            json!(["text", "image"])
+        );
+        assert_eq!(loaded.models[1]["reasoning_levels"], json!(["low"]));
+        assert_eq!(loaded.updated_at, written.updated_at);
+        assert_eq!(std::fs::read(&file_path).unwrap(), before);
+        server.shutdown().unwrap();
+    }
 }
