@@ -28,7 +28,13 @@ python3 -B -m scripts.native_restore_acceptance \
 
 The supplied versions and executable hashes are recorded rather than pinned to one historical release. Disposable app-server clients disable plugins. The current created-history contract passed with official Linux Codex 0.154.0, 0.155.1, 0.156.1, 0.157.1, 0.158.0, 0.159.3, 0.160.1, 0.161.0, 0.162.1 and 0.163.0 against EMP 0.13.4 source on 2026-10-16 UTC. The earlier restore-time migration results remain dated separately in [compatibility results](../../docs/codex-compatibility.md).
 
-## Background compaction
+## Exploratory background compaction
+
+This optional manual harness is retained to reproduce earlier exploratory
+results. It is outside routine maintenance and release acceptance. Defer
+additional async-specific work until upstream marks the feature stable, then
+reassess its place in the maintained suite; a stable CLI release alone is not
+that milestone.
 
 Python 3.14 or newer supplies `compression.zstd` for this additional native
 upstream fixture. Run with an official engine supporting `async_compaction`:

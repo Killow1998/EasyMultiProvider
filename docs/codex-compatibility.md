@@ -33,7 +33,16 @@ The transport checks include incomplete response ID/usage preservation and
 deduplication, plus twenty incremental large-context turns for Native and
 imported accounts with one warmup, no HTTP fallback and no full-history recovery.
 
-The separate real-engine async-compaction harness passed four cases with the
+### Exploratory async compaction
+
+Async compaction is outside EMP's routine compatibility suite and release gate
+while the upstream feature is under development. A stable Codex CLI version
+alone does not make this feature stable. Retain the manual harness and existing
+results for reproducibility; defer further async-specific adaptation and
+steering/account/routing combinations until the feature itself becomes stable,
+then reassess whether to include it in EMP's maintained test scope.
+
+The exploratory real-engine async-compaction harness passed four cases with the
 feature explicitly disabled or enabled: disabled control; adoption of a pending
 result by explicit compaction with only one upstream compaction request; a new
 turn preserving its suffix and discarding the older result; and normal process
@@ -43,8 +52,8 @@ watching only `/responses/compact` misses that request. The
 [feature remains under development and defaults off](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/features/src/lib.rs).
 
 This establishes the tested Linux engine paths against synthetic upstreams.
-Real-provider ciphertext, account/routing changes during pending async
-compaction, and Windows/macOS/App/IDE journeys have separate acceptance scope.
+Real-provider ciphertext and Windows/macOS/App/IDE journeys have separate
+acceptance scope.
 Release PR lists and commit ancestry alone must not substitute for checking the
 tagged source and running the selected engine.
 
@@ -86,6 +95,8 @@ At this check, the official stable release was [0.162.1](https://github.com/open
 was a prerelease (2026-10-14 03:27:29 UTC). The maintenance window was
 **0.153–0.162**. GitHub commit comparisons confirm all three changes below are
 ancestors of alpha.11; this is source provenance, not engine acceptance.
+This dated watchlist is historical; async follow-up is now deferred under the
+current policy above.
 
 | Upstream change | EMP assessment and required evidence |
 | --- | --- |
