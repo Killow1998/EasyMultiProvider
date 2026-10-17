@@ -45,6 +45,11 @@ jobs:
           mkdir -p "$path"
           printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\n' "$path" "$path" "$path" >> "$GITHUB_ENV"
       - run: cargo fmt --all -- --check
+      - name: Verify frontend copy and behavior
+        run: |
+          node crates/emp-app/tests/web_copy_contract.cjs
+          node crates/emp-app/tests/web_features_contract.cjs
+          node crates/emp-app/tests/web_lifecycle_contract.cjs
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace --all-targets --no-fail-fast
 

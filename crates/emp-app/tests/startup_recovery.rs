@@ -43,6 +43,18 @@ impl Recovery {
         let (base, token) = url.split_once("/#recovery=").unwrap();
         recovery.port = base.rsplit(':').next().unwrap().parse().unwrap();
         recovery.token = token.into();
+        for asset in ["/assets/i18n.js", "/assets/copy-recovery.js"] {
+            let response = http(recovery.port, "GET", asset, &[], b"");
+            assert_eq!(
+                response.status, 200,
+                "recovery needs its copy before authentication"
+            );
+            assert!(response.text().contains(if asset.ends_with("i18n.js") {
+                "function translateUiCopy"
+            } else {
+                "recovery.title"
+            }));
+        }
         recovery
     }
 

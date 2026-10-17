@@ -17,8 +17,19 @@ fn instruction_priority_and_context_estimation_match_the_cli_payload() {
     let body = json!({"instructions":"base rule","input":input,"tools":[],"max_output_tokens":512});
     let prepared = media::prepare(&body).unwrap();
     let user: Value = serde_json::from_slice(&prepared.stdin).unwrap();
-    assert_eq!(user["input"], history);
-    assert!(user.get("instructions").is_none());
+    let blocks = user["message"]["content"].as_array().unwrap();
+    let metadata: Value = serde_json::from_str(blocks[0]["text"].as_str().unwrap()).unwrap();
+    assert!(
+        metadata["codex_responses_metadata"]
+            .get("instructions")
+            .is_none()
+    );
+    for (index, item) in history.as_array().unwrap().iter().enumerate() {
+        let marker: Value =
+            serde_json::from_str(blocks[index + 1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(marker["codex_item_index"], index);
+        assert_eq!(&marker["item"], item);
+    }
     for text in ["base rule", "system rule", "developer rule"] {
         assert_eq!(prepared.system_prompt.matches(text).count(), 1);
         assert!(!user.to_string().contains(text));
@@ -29,7 +40,7 @@ fn instruction_priority_and_context_estimation_match_the_cli_payload() {
     assert_eq!(payload["system"], prepared.system_prompt);
     assert_eq!(
         payload["messages"][0]["content"],
-        String::from_utf8(prepared.stdin).unwrap()
+        user["message"]["content"]
     );
     assert_eq!(payload["max_tokens"], 512);
     assert_eq!(

@@ -4,7 +4,7 @@ function presentationQuotaMeters(account, busy = false, animate = false) {
   if (document.body.dataset.quotaStyle === 'bar') return quotaMetersHtml(account,busy,animate);
   let buckets = quotaDisplayBuckets(account);
   if (!buckets.length && account.quota_pending) buckets = [300,10080].map(windowMinutes => ({windowMinutes,pending:true}));
-  if (!buckets.length) return `<span class="muted">${tr('未刷新','Not refreshed')}</span>`;
+  if (!buckets.length) return `<span class="muted">${tr("core.not_refreshed")}</span>`;
   const arc = 'M 76.309 67.223 A 37 37 0 1 1 76.309 24.777';
   return `<div class="presentation-quota-pair">${buckets.map((item,index) => {
     const pending = item.pending || (account.quota_pending && item.unreported);
@@ -22,9 +22,9 @@ function presentationQuotaMeters(account, busy = false, animate = false) {
 const presentationPreferencePrefix = window.EMP_PREVIEW ? 'emp.shadow.' : 'emp.';
 document.body.dataset.quotaStyle = storedPreference(presentationPreferencePrefix+'quotaStyle','ring');
 const presentationDotColors = [
-  ['multi','多彩','Multicolor',''],['blue','蓝色','Blue','#487de8'],
-  ['purple','紫色','Purple','#9473c6'],['teal','青色','Teal','#299c9f'],
-  ['amber','琥珀','Amber','#bc7b25'],['rose','玫红','Rose','#d16b8c'],
+  ['multi','core.multicolor',''],['blue','core.blue','#487de8'],
+  ['purple','core.purple','#9473c6'],['teal','core.teal','#299c9f'],
+  ['amber','core.amber','#bc7b25'],['rose','core.rose','#d16b8c'],
 ];
 const presentationDotPreference = presentationPreferencePrefix+'dotColor';
 const presentationDotCustomPreference = presentationPreferencePrefix+'dotCustom';
@@ -34,7 +34,7 @@ function presentationSetDotColor(choice, save = false) {
   const preset = presentationDotColors.find(row => row[0] === choice);
   if (!preset && choice !== 'custom') choice = 'multi';
   document.body.dataset.dotColor = choice;
-  const color = choice === 'custom' ? presentationDotCustom : preset?.[3];
+  const color = choice === 'custom' ? presentationDotCustom : preset?.[2];
   for (const name of ['--presentation-dot-color','--presentation-dot-secondary','--presentation-dot-third']) {
     if (color) document.body.style.setProperty(name,color);
     else document.body.style.removeProperty(name);
@@ -47,10 +47,10 @@ function presentationSetDotColor(choice, save = false) {
 }
 presentationSetDotColor(storedPreference(presentationDotPreference,'multi'));
 function presentationDotColorSettings() {
-  return `<div class="setting-row"><div class="setting-title">${tr('点阵颜色','Dotted outline color')}</div><div class="presentation-dot-choices" role="group" aria-label="${tr('点阵颜色','Dotted outline color')}">${presentationDotColors.map(([id,zh,en,color]) => `<button type="button" class="secondary presentation-dot-choice" data-presentation-dot-color="${id}" aria-pressed="${document.body.dataset.dotColor === id}" title="${esc(tr(zh,en))}" aria-label="${esc(tr(zh,en))}"><span class="presentation-dot-swatch ${id === 'multi' ? 'is-multicolor' : ''}" ${color ? `style="--swatch:${color}"` : ''} aria-hidden="true"></span>${id === 'multi' ? tr(zh,en) : ''}</button>`).join('')}<label class="presentation-dot-custom" data-selected="${document.body.dataset.dotColor === 'custom'}"><input type="color" value="${presentationDotCustom}" data-presentation-dot-custom aria-label="${tr('自定义点阵颜色','Custom dotted outline color')}"><span>${tr('自定义','Custom')}</span></label></div></div>`;
+  return `<div class="setting-row"><div class="setting-title">${tr("core.dotted_outline_color")}</div><div class="presentation-dot-choices" role="group" aria-label="${tr("core.dotted_outline_color")}">${presentationDotColors.map(([id,key,color]) => `<button type="button" class="secondary presentation-dot-choice" data-presentation-dot-color="${id}" aria-pressed="${document.body.dataset.dotColor === id}" title="${esc(tr(key))}" aria-label="${esc(tr(key))}"><span class="presentation-dot-swatch ${id === 'multi' ? 'is-multicolor' : ''}" ${color ? `style="--swatch:${color}"` : ''} aria-hidden="true"></span>${id === 'multi' ? tr(key) : ''}</button>`).join('')}<label class="presentation-dot-custom" data-selected="${document.body.dataset.dotColor === 'custom'}"><input type="color" value="${presentationDotCustom}" data-presentation-dot-custom aria-label="${tr("core.custom_dotted_outline_color")}"><span>${tr("core.custom")}</span></label></div></div>`;
 }
 function presentationSettingsHtml(quotaChoice = '') {
-  return `<div class="setting-row"><div class="setting-title">${tr('额度样式','Quota style')}</div><div class="quota-display-choice" role="group" aria-label="${tr('额度样式','Quota style')}">${['bar','ring'].map(style => `<button type="button" class="secondary" data-presentation-style="${style}" aria-pressed="${document.body.dataset.quotaStyle === style}">${style === 'bar' ? tr('横条','Bars') : tr('圆环','Rings')}</button>`).join('')}</div></div>`+quotaChoice+presentationDotColorSettings();
+  return `<div class="setting-row"><div class="setting-title">${tr("core.quota_style")}</div><div class="quota-display-choice" role="group" aria-label="${tr("core.quota_style")}">${['bar','ring'].map(style => `<button type="button" class="secondary" data-presentation-style="${style}" aria-pressed="${document.body.dataset.quotaStyle === style}">${style === 'bar' ? tr("core.bars") : tr("core.rings")}</button>`).join('')}</div></div>`+quotaChoice+presentationDotColorSettings();
 }
 document.addEventListener('click', event => {
   const color = event.target.closest('[data-presentation-dot-color]');

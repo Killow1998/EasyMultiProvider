@@ -367,6 +367,16 @@ or a modified transcript remains an error.
 
 ### 7. Frontend features own private state and explicit dependencies
 
+`i18n.js` formats copy registered by the `copy-*.js` dictionaries. UI templates
+and event handlers reference stable keys through `tr`/`t`, passing named values
+for dynamic text instead of embedding Chinese/English sentences. Keep both
+locales and their placeholder names together in the owning feature dictionary;
+the copy contract checks missing keys, duplicate keys and placeholder parity.
+Protocol identifiers and backend-localized data remain data, not translated
+identities. Startup recovery loads only its formatter and recovery dictionary;
+Shadow copy stays in its preview scripts and is absent from the shipped asset
+routes. Static labels use the existing `data-i18n` attributes.
+
 The UI still consumes the same HTTP/SSE endpoints. `management-client.js` owns
 session storage, bootstrap exchange, request authentication and API errors.
 `settings.js`, `call-reports.js` and `diagnostics.js` own their feature
@@ -732,11 +742,17 @@ inside tool results stay at their original conversation position. Claude's
 default system prompt is replaced; its tools, skills, MCP and project instructions
 remain disabled. Codex executes the returned tool proposals.
 
-The remaining ordered conversation and tool definitions still use one serialized
-user carrier, with native media blocks for supported attachments. This change
-does not implement native Claude assistant/tool-result messages for every Codex
-history item. Input validation bounds the combined system prompt and carrier,
-and context assessment and calibration now use the same prepared projection.
+The remaining ordered conversation and tool definitions use one user message.
+Structured history has a metadata text block followed by one complete text record
+per history item; only messages and tool outputs containing supported media are
+expanded into associated part records and native attachment blocks. Appending
+history therefore preserves the existing content-block prefix for prompt-cache
+reuse without repeating item metadata for every text part. Unstructured string
+input retains the serialized text carrier. This does not implement native Claude
+assistant/tool-result messages for every Codex history item. Input validation
+bounds the combined system prompt and carrier, and context assessment and
+calibration use the same prepared projection. The relay still validates the
+complete ordered content and preserves the CLI's cache breakpoints.
 
 EMP owns the configured history budget and compaction. Every inference command
 disables Claude Code's independent compaction and passes the requested output

@@ -22,11 +22,11 @@ function presentationObserveRequestErrors(snapshot) {
 }
 function presentationRequestError(record) {
   const status=Number(record.http_status);
-  const reason=status===429?tr('额度或请求频率受限。','Quota or request rate limited.')
-    :[401,403].includes(status)?tr('认证或访问权限失败。','Authentication or access denied.')
-    :status>=500?tr('服务暂时不可用。','The service is unavailable.')
-    :tr('本次模型请求未完成。','The model request did not complete.');
-  return {title:tr('最近一次模型请求失败','Latest model request failed'),message:[reason,record.model_id,status?'HTTP '+status:'',({emp:'EMP',upstream:tr('服务端','Upstream service'),transport:tr('连接','Connection'),client:tr('Codex 客户端','Codex client'),claude_cli:'Claude Code'})[record.error_origin],record.failure_reason || record.error_code || record.error_class].filter(Boolean).join('\n')};
+  const reason=status===429?tr("services.quota_or_request_rate_limited")
+    :[401,403].includes(status)?tr("services.authentication_or_access_denied")
+    :status>=500?tr("services.the_service_is_unavailable")
+    :tr("services.the_model_request_did_not_complete");
+  return {title:tr("services.latest_model_request_failed"),message:[reason,record.model_id,status?'HTTP '+status:'',({emp:'EMP',upstream:tr("reports.upstream_service"),transport:tr("reports.connection"),client:tr("reports.codex_client"),claude_cli:'Claude Code'})[record.error_origin],record.failure_reason || record.error_code || record.error_class].filter(Boolean).join('\n')};
 }
 function presentationUpdateServiceRequestErrors() {
   for(const button of document.querySelectorAll('#services .presentation-service-icon')) {

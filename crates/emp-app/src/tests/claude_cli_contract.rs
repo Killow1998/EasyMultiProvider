@@ -74,25 +74,46 @@ fn structured_messages_sse_with_usage(
 }
 
 fn user_transcript(messages: &Value) -> Value {
-    let text = messages["messages"]
+    let content = &messages["messages"]
         .as_array()
         .expect("Messages body")
         .iter()
         .find(|message| message["role"] == "user")
-        .and_then(|message| match message.get("content") {
-            Some(Value::String(text)) => Some(text.as_str()),
-            Some(Value::Array(parts)) => parts
-                .iter()
-                .find(|part| part["type"] == "text")
-                .and_then(|part| part["text"].as_str()),
-            _ => None,
-        })
-        .expect("serialized transcript");
-    let transcript: Value = serde_json::from_str(text).expect("serialized transcript JSON");
+        .expect("user message")["content"];
+    if let Some(text) = content.as_str() {
+        return serde_json::from_str(text).expect("serialized transcript JSON");
+    }
+    let markers = content
+        .as_array()
+        .expect("content blocks")
+        .iter()
+        .filter(|block| block["type"] == "text")
+        .filter_map(|block| serde_json::from_str::<Value>(block["text"].as_str().unwrap()).ok())
+        .collect::<Vec<_>>();
+    let Some(metadata) = markers[0].get("codex_responses_metadata") else {
+        return markers[0].clone();
+    };
+    let mut transcript = metadata.clone();
+    // Media contracts inspect native blocks separately; their text markers
+    // contain redacted parts rather than complete original history items.
+    if markers.iter().any(|marker| {
+        marker.get("content_part_index").is_some() || marker.get("tool_output_part_index").is_some()
+    }) {
+        return transcript;
+    }
+    transcript["input"] = json!(
+        markers[1..]
+            .iter()
+            .enumerate()
+            .map(|(index, marker)| {
+                assert_eq!(marker["codex_item_index"], index);
+                assert!(marker.get("content_part_index").is_none());
+                assert!(marker.get("tool_output_part_index").is_none());
+                marker["item"].clone()
+            })
+            .collect::<Vec<_>>()
+    );
     transcript
-        .get("codex_responses_metadata")
-        .cloned()
-        .unwrap_or(transcript)
 }
 
 #[test]
@@ -477,6 +498,10 @@ fn installed_cli_preserves_large_tool_catalog_and_scoped_tool_round_trip() {
     );
     let (_, _, forwarded) = upstream.observed();
     assert_eq!(user_transcript(&forwarded)["tools"], body["tools"]);
+    let first_content = forwarded["messages"][0]["content"]
+        .as_array()
+        .unwrap()
+        .clone();
     assert_eq!(forwarded["tools"].as_array().unwrap().len(), 1);
     assert_eq!(forwarded["tools"][0]["name"], "StructuredOutput");
     let schema = forwarded["tools"][0]["input_schema"].to_string();
@@ -503,6 +528,20 @@ fn installed_cli_preserves_large_tool_catalog_and_scoped_tool_round_trip() {
     let transcript = user_transcript(&forwarded);
     assert_eq!(transcript["input"], body["input"]);
     assert_eq!(transcript["tools"], body["tools"]);
+    let later_content = forwarded["messages"][0]["content"].as_array().unwrap();
+    assert!(
+        later_content.len() > first_content.len(),
+        "new history needs new cache boundaries"
+    );
+    for (mut first, later) in first_content.into_iter().zip(later_content) {
+        let mut later = later.clone();
+        first.as_object_mut().unwrap().remove("cache_control");
+        later.as_object_mut().unwrap().remove("cache_control");
+        assert_eq!(
+            first, later,
+            "installed CLI must preserve the cached history prefix"
+        );
+    }
     server.shutdown().unwrap();
 }
 

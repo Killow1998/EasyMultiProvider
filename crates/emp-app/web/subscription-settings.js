@@ -57,9 +57,9 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
     const model=editor?.models[index];if(!model)return;
     const tokens=input.value===''?Number(model.default_context_window||0):Number(input.value);
     const percent=Number(model.effective_context_window_percent??95),usable=Math.floor(tokens*percent/100);
-    $('shadow_usable_'+index).textContent=tr('Codex 可用 ','Codex usable ')+compactNumber(usable);
+    $('shadow_usable_'+index).textContent=tr("models.codex_usable")+compactNumber(usable);
     const button=$('subscription_model_list').querySelector(`[data-shadow-context-help="${index}"]`);
-    button.dataset.shadowHelp=tr(`当前${input.value===''?'使用目录默认值':'设置'} ${tokens.toLocaleString('en-US')} Tokens；目录比例 ${percent}%。\n${tokens.toLocaleString('en-US')} × ${percent}% = ${usable.toLocaleString('en-US')} 可用 Tokens。`,`Current ${input.value===''?'catalog default':'setting'}: ${tokens.toLocaleString('en-US')} tokens; catalog ratio ${percent}%.\n${tokens.toLocaleString('en-US')} × ${percent}% = ${usable.toLocaleString('en-US')} usable tokens.`);
+    button.dataset.shadowHelp=tr(input.value===''?'models.catalog_context_help':'models.custom_context_help', {tokens:tokens.toLocaleString('en-US'),percent,usable:usable.toLocaleString('en-US')});
   }
   function sync(index){
     const model=editor?.models[index];if(!model)return;
@@ -68,7 +68,7 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
     capture(editor);editor.syncModels.add(model.id);
     const state=getState(),targets=(state.accounts||[]).filter(a=>a.id!==editor.account.id).length+(!editor.native&&state.native_account?1:0);
     const button=list.querySelector(`[data-shadow-subscription-sync="${index}"]`);
-    button.dataset.icon='check';button.title=button.ariaLabel=tr(`保存时同步到其他 ${targets} 个订阅`,`Sync to ${targets} other subscriptions when saving`);
+    button.dataset.icon='check';button.title=button.ariaLabel=tr("models.sync_to_other_subscriptions_when_saving", {targets:targets});
   }
   function render(candidate){
     if(!current(candidate))return;
@@ -77,11 +77,11 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
     box.innerHTML=candidate.models.map((model,index)=>{
       const maximum=Number(model.max_context_window||0),value=candidate.windows[model.id]??'';
       const choices=['visibility','context'].filter(kind=>new Set(candidate.sources.map(source=>kind==='visibility'?source.hidden.has(model.id):String(source.windows[model.id]??''))).size>1&&!candidate.resolved.has(model.id+':'+kind));
-      const conflicts=choices.length?`<div class="subscription-preference-conflicts">${choices.map(kind=>`<label>${tr('同一账号的设置不同，请选择','Settings for this account differ; choose')} · ${kind==='visibility'?tr('显示','Visibility'):tr('上下文','Context')}<select data-preference-index="${index}" data-preference-kind="${kind}"><option value="" selected disabled>${tr('请选择','Choose')}</option>${candidate.sources.map((source,si)=>`<option value="${si}">${esc(source.label)} · ${kind==='visibility'?(source.hidden.has(model.id)?tr('隐藏','Hidden'):tr('显示','Visible')):esc(source.windows[model.id]??tr('目录默认值','Catalog default'))}</option>`).join('')}</select></label>`).join('')}</div>`:'';
+      const conflicts=choices.length?`<div class="subscription-preference-conflicts">${choices.map(kind=>`<label>${tr("models.settings_for_this_account_differ_choose")} · ${kind==='visibility'?tr("models.visibility"):tr("reports.context")}<select data-preference-index="${index}" data-preference-kind="${kind}"><option value="" selected disabled>${tr("transfers.choose")}</option>${candidate.sources.map((source,si)=>`<option value="${si}">${esc(source.label)} · ${kind==='visibility'?(source.hidden.has(model.id)?tr("models.hidden"):tr("models.visible")):esc(source.windows[model.id]??tr("models.catalog_default"))}</option>`).join('')}</select></label>`).join('')}</div>`:'';
       return `<div class="model-option subscription-model-row shadow-context-row">
-        <div class="subscription-model-identity"><button type="button" class="secondary shadow-model-action" data-shadow-subscription-visibility="${index}" aria-pressed="${!candidate.hidden.has(model.id)}" aria-label="${esc(candidate.hidden.has(model.id)?tr('显示模型','Show model'):tr('隐藏模型','Hide model'))}">${uiIcon(candidate.hidden.has(model.id)?'eye-off':'eye')}</button><span><strong>${esc(canonicalDisplayName(model.display_name||model.id))}</strong><span class="shadow-context-usable" id="shadow_usable_${index}"></span></span></div>
-        <div><div class="shadow-context-control"><input type="number" name="subscription_context" data-model="${esc(model.id)}" min="1" step="1" ${maximum?`max="${maximum}"`:'disabled'} value="${esc(value)}" placeholder="${Number(model.default_context_window||0)}" data-context-index="${index}" aria-label="${esc(tr('最大上下文窗口（Tokens）','Maximum context window (tokens)'))}" aria-describedby="subscription_context_preview_${index}">${help('').replace('data-shadow-help=',`data-shadow-context-help="${index}" data-shadow-help=`)}</div><small id="subscription_context_preview_${index}" class="muted">${model.unavailable?tr('此模型不在当前目录中；上下文修改需要刷新上限','Model missing from this catalog; refresh limits before changing context'):tr('目录上限 ','Catalog limit ')+compactContext(maximum)+' · '+tr('默认 ','Default ')+compactContext(model.default_context_window)}</small></div>
-        <button type="button" class="secondary shadow-model-action shadow-subscription-sync" data-shadow-subscription-sync="${index}" data-icon="${candidate.syncModels.has(model.id)?'check':'sync'}" title="${esc(tr('同步显示与上下文到其他订阅','Sync visibility and context to other subscriptions'))}" aria-label="${esc(tr('同步显示与上下文到其他订阅','Sync visibility and context to other subscriptions'))}"></button>
+        <div class="subscription-model-identity"><button type="button" class="secondary shadow-model-action" data-shadow-subscription-visibility="${index}" aria-pressed="${!candidate.hidden.has(model.id)}" aria-label="${esc(candidate.hidden.has(model.id)?tr("models.show_model"):tr("models.hide_model"))}">${uiIcon(candidate.hidden.has(model.id)?'eye-off':'eye')}</button><span><strong>${esc(canonicalDisplayName(model.display_name||model.id))}</strong><span class="shadow-context-usable" id="shadow_usable_${index}"></span></span></div>
+        <div><div class="shadow-context-control"><input type="number" name="subscription_context" data-model="${esc(model.id)}" min="1" step="1" ${maximum?`max="${maximum}"`:'disabled'} value="${esc(value)}" placeholder="${Number(model.default_context_window||0)}" data-context-index="${index}" aria-label="${esc(tr("models.maximum_context_window_tokens"))}" aria-describedby="subscription_context_preview_${index}">${help('').replace('data-shadow-help=',`data-shadow-context-help="${index}" data-shadow-help=`)}</div><small id="subscription_context_preview_${index}" class="muted">${model.unavailable?tr("models.model_missing_from_this_catalog_refresh_limits_before_changing"):tr("models.catalog_limit")+compactContext(maximum)+' · '+tr("models.default")+compactContext(model.default_context_window)}</small></div>
+        <button type="button" class="secondary shadow-model-action shadow-subscription-sync" data-shadow-subscription-sync="${index}" data-icon="${candidate.syncModels.has(model.id)?'check':'sync'}" title="${esc(tr("models.sync_visibility_and_context_to_other_subscriptions"))}" aria-label="${esc(tr("models.sync_visibility_and_context_to_other_subscriptions"))}"></button>
         ${conflicts}</div>`;
     }).join('');
     box.onclick=event=>{
@@ -108,28 +108,28 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
       const result=await api('/api/accounts/'+encodeURIComponent(candidate.account.id)+'/models'+(refresh?'/refresh':''),{...(refresh?{method:'POST',body:'{}'}:{}),signal:controller.signal});
       if(!current(candidate)||controller.signal.aborted)return;
       capture(candidate);candidate.models=result.models;render(candidate);
-      if(refresh)$('modal_status').textContent=tr('模型上限已刷新','Model limits refreshed');
+      if(refresh)$('modal_status').textContent=tr("models.model_limits_refreshed");
     }catch(error){if(current(candidate)&&!controller.signal.aborted)$('modal_status').textContent=error.message;}
     finally{if(current(candidate)&&refresh)button.disabled=false;}
   }
   function open(id,navigation={}){
     const state=getState(),account=state.native_account?.id===id?state.native_account:(state.accounts||[]).find(a=>a.id===id);if(!account)return;
-    if(account.duplicate&&account.duplicate_of==='当前 Codex 登录')return notice(tr('模型显示请在原生账户中调整','Adjust model visibility from the Native account'),true);
+    if(account.duplicate&&account.duplicate_of==='当前 Codex 登录')return notice(tr("models.adjust_model_visibility_from_the_native_account"),true);
     const candidate={account,native:account.native===true,models:state.subscription_models||[],hidden:new Set(account.hidden_models||[]),windows:{...(account.model_context_windows||{})},syncModels:new Set(),controller:new AbortController()};
-    candidate.sources=[account,...subscriptionPeers(state,id,candidate.native)].map(source=>({label:source.native?'Native':source.name||tr('已导入设置','Imported settings'),hidden:new Set(source.hidden_models||[]),windows:source.model_context_windows||{}}));
+    candidate.sources=[account,...subscriptionPeers(state,id,candidate.native)].map(source=>({label:source.native?'Native':source.name||tr("models.imported_settings"),hidden:new Set(source.hidden_models||[]),windows:source.model_context_windows||{}}));
     candidate.resolved=new Set();
-    const body=`<p class="muted">${tr('留空使用默认上下文。名称在“模型显示”中设置。','Leave blank for the default context. Rename models in Model display.')}</p>
-      <div class="toolbar"><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh">${tr('刷新模型上限','Refresh model limits')}</button></div>
-      <div class="subscription-list-head"><span>${tr('在 Codex /model 中显示','Visible in Codex /model')}</span><span>${tr('最大上下文窗口（Tokens）','Maximum context window (tokens)')} ${help(tr('设置不能超过在线目录上限；留空采用在线目录默认值。Codex 可用窗口按目录中的比例计算，系统提示词、历史、工具和输出都占用窗口。自动压缩阈值另算。','Settings cannot exceed the online catalog limit. Leave blank for the catalog default. Codex usable context follows the catalog percentage; instructions, history, tools and output use this window. The compaction threshold is separate.'))}</span></div>
+    const body=`<p class="muted">${tr("models.leave_blank_for_the_default_context_rename_models_in")}</p>
+      <div class="toolbar"><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh">${tr("models.refresh_model_limits")}</button></div>
+      <div class="subscription-list-head"><span>${tr("models.visible_in_codex_model")}</span><span>${tr("models.maximum_context_window_tokens")} ${help(tr("models.settings_cannot_exceed_the_online_catalog_limit_leave_blank"))}</span></div>
       <div id="subscription_model_list" class="model-selection"></div>`;
-    services.open(id,'account','edit',body,tr('保存修改','Save changes'),async()=>{
-      if($('subscription_model_list').querySelector('[data-preference-kind]'))throw new Error(tr('请先选择同一账号的显示与上下文设置','Choose visibility and context settings for this account first'));
+    services.open(id,'account','edit',body,tr("models.save_changes"),async()=>{
+      if($('subscription_model_list').querySelector('[data-preference-kind]'))throw new Error(tr("models.choose_visibility_and_context_settings_for_this_account_first"));
       for(const input of $('subscription_model_list').querySelectorAll('input[name="subscription_context"]')){
-        if(!input.checkValidity()){input.reportValidity();throw new Error(tr('上下文必须为目录上限内的正整数','Context must be a positive integer within the catalog limit'));}
+        if(!input.checkValidity()){input.reportValidity();throw new Error(tr("models.context_must_be_a_positive_integer_within_the_catalog"));}
       }
       capture(candidate);const windows=Object.fromEntries(Object.entries(candidate.windows).map(([model,value])=>[model,Number(value)]));
       const config=applySubscriptionPreferences(cloneState(),{id,native:candidate.native,hidden:candidate.hidden,windows,syncModels:candidate.syncModels});
-      await persistState(tr('账户信息已保存','Account saved'),config);if(current(candidate))closeModal();
+      await persistState(tr("models.account_saved"),config);if(current(candidate))closeModal();
     },navigation);
     editor=candidate;$('subscription_model_refresh').onclick=()=>load(candidate,true);render(candidate);void load(candidate);
   }

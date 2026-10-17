@@ -9,52 +9,52 @@ const pendingStates=['checking','downloading','verifying','waiting','installing'
 function stopUpdatePoll() { updatePollGeneration++;updateController?.abort();updateController=null;if (updatePollTimer) clearTimeout(updatePollTimer); updatePollTimer = null;installingFrom=null;reconnectDeadline=0; }
 function updateErrorLabel(code) {
   const messages = {
-    directory_not_writable:tr('安装目录没有写权限，请将 EMP 移到可写目录后重试。','The installation directory is not writable. Move EMP to a writable folder and retry.'),
-    package_query_failed:tr('无法确认系统安装包状态。请先在系统包管理器中检查 EMP。','Could not confirm the installed package state. Check EMP in the system package manager first.'),
-    requests_busy:tr('当前请求尚未结束，已取消安装，请稍后重试。','Requests are still running. Installation was cancelled; try again later.'),
-    checksum_missing:tr('新版本缺少文件校验信息，暂时无法自动更新。','The release has no file checksum; automatic update is unavailable.'),
-    checksum_mismatch:tr('下载文件校验失败，请重试。','Download verification failed. Please retry.'),
-    package_missing:tr('新版本尚未提供此平台的安装包。','The release does not yet include a package for this platform.'),
-    unsupported_installation:tr('当前安装方式不支持自动更新。','This installation does not support automatic updates.'),
-    system_install_manual:tr('系统级 Linux 安装不能在运行中覆盖。请按迁移说明改为用户级安装。','A system Linux installation cannot be replaced while running. Follow the migration steps to install for your user.'),
-    unsupported_platform:tr('此平台暂不支持自动更新。','Automatic updates are not available for this platform.'),
-    install_rolled_back:tr('新版本未能启动，已恢复旧版本。','The new version could not start. The previous version has been restored.'),
+    directory_not_writable:tr("transfers.the_installation_directory_is_not_writable_move_emp_to"),
+    package_query_failed:tr("transfers.could_not_confirm_the_installed_package_state_check_emp"),
+    requests_busy:tr("transfers.requests_are_still_running_installation_was_cancelled_try_again"),
+    checksum_missing:tr("transfers.the_release_has_no_file_checksum_automatic_update_is"),
+    checksum_mismatch:tr("transfers.download_verification_failed_please_retry"),
+    package_missing:tr("transfers.the_release_does_not_yet_include_a_package_for"),
+    unsupported_installation:tr("transfers.this_installation_does_not_support_automatic_updates"),
+    system_install_manual:tr("transfers.a_system_linux_installation_cannot_be_replaced_while_running"),
+    unsupported_platform:tr("transfers.automatic_updates_are_not_available_for_this_platform"),
+    install_rolled_back:tr("transfers.the_new_version_could_not_start_the_previous_version"),
   };
-  return messages[code] || tr('更新未完成。请稍后重新检查更新；如果仍然失败，可从官方发布页下载安装包。','The update did not finish. Check again later; if it still fails, download the installer from the official release page.');
+  return messages[code] || tr("transfers.the_update_did_not_finish_check_again_later_if");
 }
 function updateFailureAdvice(failure) {
   const codeAdvice = {
-    checksum_mismatch:tr('安装包内容与发布信息不符，可能下载损坏。请重新下载；若仍失败，请检查代理或网络缓存。','The package does not match the release, possibly because the download was corrupted. Download again; if it persists, check your proxy or network cache.'),
-    invalid_release:tr('收到的版本信息格式不正确，可能下载服务或代理返回了其他页面。请检查网络后重新检查更新。','The release information is invalid; the service or proxy may have returned a different page. Check the network and check for updates again.'),
-    invalid_package_size:tr('安装包大小不符合发布信息。请重新检查更新并下载官方安装包。','The package size does not match the release. Check for updates again and download the official installer.'),
-    version_mismatch:tr('安装包中的版本与发布信息不符。请重新检查更新并下载官方安装包。','The package version does not match the release. Check for updates again and download the official installer.'),
-    invalid_download_url:tr('安装包链接未通过安全检查。请重新检查更新，或从官方发布页下载安装包。','The package link failed the security check. Check for updates again or download from the official release page.'),
+    checksum_mismatch:tr("transfers.the_package_does_not_match_the_release_possibly_because"),
+    invalid_release:tr("transfers.the_release_information_is_invalid_the_service_or_proxy"),
+    invalid_package_size:tr("transfers.the_package_size_does_not_match_the_release_check"),
+    version_mismatch:tr("transfers.the_package_version_does_not_match_the_release_check"),
+    invalid_download_url:tr("transfers.the_package_link_failed_the_security_check_check_for"),
   };
   if (codeAdvice[failure.error]) return codeAdvice[failure.error];
   if (failure.stage === 'parse_release' && failure.error === 'update_failed') return codeAdvice.invalid_release;
   const networkStages = ['check_release','read_release','download_package'];
   const reasonAdvice = {
-    incomplete_download:tr('安装包未下载完整，可能网络或代理连接中途断开。请检查连接后重新检查更新。','The package download was incomplete; the network or proxy may have disconnected. Check the connection and check for updates again.'),
-    timeout:tr('连接超时，可能网络较慢、代理不可用或下载服务暂时无响应。请检查网络与代理后重试。','The connection timed out. The network may be slow, the proxy unavailable, or the download service unresponsive. Check the network and proxy, then retry.'),
-    PermissionDenied:tr('无法写入安装文件。请确认安装目录可写，并检查系统防护是否阻止 EMP 更新。','The installation files could not be written. Check folder permissions and whether system protection is blocking the update.'),
-    StorageFull:tr('磁盘空间不足。请释放安装目录所在磁盘的空间后重试。','The disk is full. Free space on the installation drive and retry.'),
+    incomplete_download:tr("transfers.the_package_download_was_incomplete_the_network_or_proxy"),
+    timeout:tr("transfers.the_connection_timed_out_the_network_may_be_slow"),
+    PermissionDenied:tr("transfers.the_installation_files_could_not_be_written_check_folder"),
+    StorageFull:tr("transfers.the_disk_is_full_free_space_on_the_installation"),
   };
   if (reasonAdvice[failure.reason]) return reasonAdvice[failure.reason];
   if (networkStages.includes(failure.stage)) {
-    if ([10054,104,54].includes(failure.os_error)) return tr('连接被中途断开，可能网络不稳定、代理断线或安全软件拦截。请检查网络与代理后重试。','The connection was reset. Possible causes include an unstable network, a disconnected proxy, or security software blocking the connection. Check the network and proxy, then retry.');
-    if ([403,429].includes(failure.http_status)) return tr('下载请求被拒绝，可能触发访问限制或请求过于频繁。请稍后重试，并检查代理与网络访问规则。','The download request was rejected, possibly by access restrictions or rate limits. Try later and check proxy/network access rules.');
-    if (failure.http_status === 404) return tr('安装包暂时不存在，可能尚未发布完整或已移除。请稍后重新检查更新。','The package is unavailable; publication may be incomplete or the asset removed. Check for updates again later.');
-    if (failure.http_status >= 500) return tr('下载服务暂时不可用，也可能代理无法连接 GitHub。请稍后重试或检查代理。','The download service is temporarily unavailable, or the proxy cannot reach GitHub. Try later or check the proxy.');
-    return tr('无法完成网络请求，可能网络、代理、DNS 或安全连接出现问题。请确认能访问官方发布页后重试。','The network request could not complete. Possible causes include network, proxy, DNS or secure-connection issues. Check access to the official release page and retry.');
+    if ([10054,104,54].includes(failure.os_error)) return tr("transfers.the_connection_was_reset_possible_causes_include_an_unstable");
+    if ([403,429].includes(failure.http_status)) return tr("transfers.the_download_request_was_rejected_possibly_by_access_restrictions");
+    if (failure.http_status === 404) return tr("transfers.the_package_is_unavailable_publication_may_be_incomplete_or");
+    if (failure.http_status >= 500) return tr("transfers.the_download_service_is_temporarily_unavailable_or_the_proxy");
+    return tr("transfers.the_network_request_could_not_complete_possible_causes_include");
   }
   if ([28,112].includes(failure.os_error)) return reasonAdvice.StorageFull;
   if ([5,13].includes(failure.os_error)) return reasonAdvice.PermissionDenied;
   const stageAdvice = {
-    write_package:tr('无法保存安装包。请检查磁盘空间、目录权限及文件是否被占用。','The package could not be saved. Check disk space, folder permissions and whether the file is in use.'),
-    sync_package:tr('安装包无法写入磁盘。请检查磁盘空间及存储设备状态。','The package could not be flushed to disk. Check disk space and storage health.'),
-    extract_package:tr('安装包无法解包。请重新下载，并检查磁盘空间与系统防护提示。','The package could not be extracted. Download again and check disk space and system-protection messages.'),
-    verify_version:tr('新版程序无法正常运行。请检查系统防护提示，并确认使用对应系统的官方安装包。','The new executable could not run correctly. Check system-protection messages and use the official package for your operating system.'),
-    wait_worker:tr('更新程序未能就绪。请检查系统防护提示及安装目录权限后重试。','The updater did not become ready. Check system-protection messages and installation permissions, then retry.'),
+    write_package:tr("transfers.the_package_could_not_be_saved_check_disk_space"),
+    sync_package:tr("transfers.the_package_could_not_be_flushed_to_disk_check"),
+    extract_package:tr("transfers.the_package_could_not_be_extracted_download_again_and"),
+    verify_version:tr("transfers.the_new_executable_could_not_run_correctly_check_system"),
+    wait_worker:tr("transfers.the_updater_did_not_become_ready_check_system_protection"),
   };
   if (stageAdvice[failure.stage]) return stageAdvice[failure.stage];
   return updateErrorLabel(failure.error);
@@ -62,18 +62,18 @@ function updateFailureAdvice(failure) {
 function updateFailureLabel(info) {
   const failure = info.failure;
   const stages = {
-    start_update:tr('启动更新任务','starting the update task'), check_release:tr('检查版本','checking for a release'), read_release:tr('读取版本信息','reading release information'), parse_release:tr('解析版本信息','validating release information'),
-    prepare_install:tr('准备安装','preparing installation'), create_staging:tr('创建更新目录','creating the update folder'), download_package:tr('下载安装包','downloading the package'),
-    write_package:tr('保存安装包','saving the package'), sync_package:tr('写入安装包','flushing the package'), verify_checksum:tr('校验安装包','verifying the checksum'), extract_package:tr('解包','extracting the package'),
-    verify_version:tr('检查新版程序','checking the new executable'), prepare_worker:tr('准备更新程序','preparing the updater'), write_plan:tr('保存更新计划','saving the update plan'), drain_requests:tr('等待请求结束','waiting for requests'),
-    start_worker:tr('启动更新程序','starting the updater'), wait_worker:tr('等待更新程序就绪','waiting for the updater'), shutdown_previous:tr('退出旧版','exiting the previous version'),
-    replacing:tr('替换程序','replacing the executable'), starting:tr('启动新版','starting the new version'), waiting_for_startup:tr('等待新版启动','waiting for startup'),
+    start_update:tr("transfers.starting_the_update_task"), check_release:tr("transfers.checking_for_a_release"), read_release:tr("transfers.reading_release_information"), parse_release:tr("transfers.validating_release_information"),
+    prepare_install:tr("transfers.preparing_installation"), create_staging:tr("transfers.creating_the_update_folder"), download_package:tr("transfers.downloading_the_package"),
+    write_package:tr("transfers.saving_the_package"), sync_package:tr("transfers.flushing_the_package"), verify_checksum:tr("transfers.verifying_the_checksum"), extract_package:tr("transfers.extracting_the_package"),
+    verify_version:tr("transfers.checking_the_new_executable"), prepare_worker:tr("transfers.preparing_the_updater"), write_plan:tr("transfers.saving_the_update_plan"), drain_requests:tr("transfers.waiting_for_requests"),
+    start_worker:tr("transfers.starting_the_updater"), wait_worker:tr("transfers.waiting_for_the_updater"), shutdown_previous:tr("transfers.exiting_the_previous_version"),
+    replacing:tr("transfers.replacing_the_executable"), starting:tr("transfers.starting_the_new_version"), waiting_for_startup:tr("transfers.waiting_for_startup"),
   };
   if (!failure || (failure.error !== info.error && info.error !== 'install_rolled_back') || !stages[failure.stage]) return updateErrorLabel(info.error);
-  const reasons = {timeout:tr('连接超时','connection timed out'), connection:tr('连接失败','connection failed'), PermissionDenied:tr('没有写入权限','permission denied'), StorageFull:tr('磁盘空间不足','disk full')};
-  const detail = reasons[failure.reason] || (failure.http_status ? `HTTP ${failure.http_status}` : Number.isInteger(failure.os_error) ? tr(`系统错误 ${failure.os_error}`,`system error ${failure.os_error}`) : Number.isInteger(failure.exit_code) ? tr(`程序退出码 ${failure.exit_code}`,`exit code ${failure.exit_code}`) : '');
-  const retries = Number.isInteger(failure.retry_count) && failure.retry_count > 0 ? tr(`已自动重试 ${failure.retry_count} 次。`, `Automatically retried ${failure.retry_count} times. `) : '';
-  return retries + tr(`${stages[failure.stage]}时失败`, `Update failed while ${stages[failure.stage]}`) + (detail ? tr(`：${detail}`, `: ${detail}`) : '') + tr('。 ', '. ') + updateFailureAdvice(failure) + (info.error === 'install_rolled_back' ? tr(' 已恢复旧版。', ' The previous version has been restored.') : '');
+  const reasons = {timeout:tr("transfers.connection_timed_out"), connection:tr("transfers.connection_failed"), PermissionDenied:tr("transfers.permission_denied"), StorageFull:tr("transfers.disk_full")};
+  const detail = reasons[failure.reason] || (failure.http_status ? `HTTP ${failure.http_status}` : Number.isInteger(failure.os_error) ? tr("transfers.system_error", {osError:failure.os_error}) : Number.isInteger(failure.exit_code) ? tr("transfers.exit_code", {exitCode:failure.exit_code}) : '');
+  const retries = Number.isInteger(failure.retry_count) && failure.retry_count > 0 ? tr("transfers.automatically_retried_times", {retryCount:failure.retry_count}) : '';
+  return retries + tr("transfers.update_failed_while", {value:stages[failure.stage]}) + (detail ? tr("transfers.message", {detail:detail}) : '') + tr("transfers.message_2") + updateFailureAdvice(failure) + (info.error === 'install_rolled_back' ? tr("transfers.the_previous_version_has_been_restored") : '');
 }
 function renderUpdateHint(info) {
   latestUpdateInfo = info;
@@ -81,7 +81,7 @@ function renderUpdateHint(info) {
   const available = info.state === 'available' || (info.state === 'error' && info.latest_version && info.latest_version !== info.current_version);
   button?.classList.toggle('has-update', Boolean(available));
   if (button) {
-    button.title = available ? tr(`有可用更新 v${info.latest_version}`, `Update available: v${info.latest_version}`) : t('check_update');
+    button.title = available ? tr("transfers.update_available_v", {latestVersion:info.latest_version}) : t('check_update');
     button.setAttribute('aria-label', button.title);
   }
 }
@@ -106,29 +106,29 @@ async function checkUpdateHint() {
 function renderUpdate(info) {
   renderUpdateHint(info);
   const labels = {
-    idle:tr('检查可用版本。','Check for an available version.'), checking:tr('正在检查…','Checking…'),
-    no_release:tr('暂无正式版更新。','No stable release is available.'), current:tr('当前已是最新版本。','You are up to date.'),
-    available:tr(`发现新版本 v${info.latest_version}。`,`Version ${info.latest_version} is available.`),
-    migration_required:tr('检测到旧的 Linux 系统级安装。请先退出 EMP 并恢复原生 Codex，再迁移到用户目录；现有配置会继续保留。','A legacy system-wide Linux installation was detected. Exit EMP and restore native Codex, then migrate to a user installation. Your existing configuration is preserved.'),
-    downloading:tr(`正在后台下载 ${info.progress}%…`,`Downloading in the background: ${info.progress}%…`),
-    verifying:tr('正在校验安装包…','Verifying the package…'), waiting:tr('下载完成，正在等待当前请求结束…','Download complete. Waiting for current requests to finish…'),
-    installing:tr('正在安装并重启 EMP，完成后此页面会自动刷新。','Installing and restarting EMP. This page will refresh when ready.'),
+    idle:tr("transfers.check_for_an_available_version"), checking:tr("transfers.checking"),
+    no_release:tr("transfers.no_stable_release_is_available"), current:tr("transfers.you_are_up_to_date"),
+    available:tr("transfers.version_is_available", {latestVersion:info.latest_version}),
+    migration_required:tr("transfers.a_legacy_system_wide_linux_installation_was_detected_exit"),
+    downloading:tr("transfers.downloading_in_the_background", {progress:info.progress}),
+    verifying:tr("transfers.verifying_the_package"), waiting:tr("transfers.download_complete_waiting_for_current_requests_to_finish"),
+    installing:tr("transfers.installing_and_restarting_emp_this_page_will_refresh_when"),
     error:updateFailureLabel(info),
   };
   $('update_status').textContent = labels[info.state] || labels.idle;
-  if (['checking','downloading'].includes(info.state) && info.retry_count > 0) $('update_status').textContent += tr(` 正在自动重试 ${info.retry_count}/${info.retry_limit}。`, ` Retrying automatically ${info.retry_count}/${info.retry_limit}.`);
+  if (['checking','downloading'].includes(info.state) && info.retry_count > 0) $('update_status').textContent += tr("transfers.retrying_automatically", {retryCount:info.retry_count, retryLimit:info.retry_limit});
   $('update_version').textContent = info.latest_version && info.latest_version !== info.current_version
     ? `v${info.current_version} → v${info.latest_version}`
-    : tr(`当前版本 v${info.current_version}`,`Current version: v${info.current_version}`);
+    : tr("transfers.current_version_v", {currentVersion:info.current_version});
   const notes=$('update_notes');
-  if(notes)notes.textContent=localizedReleaseNotes(info.release_notes,info.latest_version,getLanguage()) || tr('此版本尚未提供中文更新说明，请查看官方发布页。','English release notes were not provided. See the official release page.');
+  if(notes)notes.textContent=localizedReleaseNotes(info.release_notes,info.latest_version,getLanguage()) || tr("transfers.english_release_notes_were_not_provided_see_the_official");
   $('update_progress').hidden = !['downloading','verifying'].includes(info.state);
   $('update_progress').value = Number(info.progress) || 0;
-  const install = $('update_install'); install.disabled=isPreview();if(isPreview())install.title=tr('影子页只查看更新说明；请在正式页面更新。','Preview only; install from the main page.'); install.hidden = info.state !== 'available' || !info.supported;
+  const install = $('update_install'); install.disabled=isPreview();if(isPreview())install.title=tr("transfers.preview_only_install_from_the_main_page"); install.hidden = info.state !== 'available' || !info.supported;
   const release = $('update_release'); release.hidden = !info.latest_version && info.manual_update !== 'linux_system_migration';
   const commands = $('update_commands'); commands.hidden = info.manual_update !== 'linux_system_migration';
   const manual = $('update_manual'); manual.hidden = info.manual_update !== 'linux_system_migration';
-  if (info.state === 'available' && !info.supported) $('update_status').textContent += tr(' 请使用 EMP 安装包启动后更新。',' Launch the packaged EMP app to update.');
+  if (info.state === 'available' && !info.supported) $('update_status').textContent += tr("transfers.launch_the_packaged_emp_app_to_update");
 }
 function openLatestRelease() {
   const url = latestUpdateInfo?.release_url;
@@ -136,7 +136,7 @@ function openLatestRelease() {
 }
 async function copyLinuxMigrationCommands() {
   const commands = `curl -fL -o EMP-linux-x86_64-install.sh https://github.com/Killow1998/EasyMultiProvider/releases/latest/download/EMP-linux-x86_64-install.sh\nsh EMP-linux-x86_64-install.sh`;
-  try { await copyText(commands); notice(tr('迁移命令已复制。','Migration commands copied.')); }
+  try { await copyText(commands); notice(tr("transfers.migration_commands_copied")); }
   catch (_) { $('update_status').textContent = commands; }
 }
 async function pollUpdate(generation) {
@@ -157,12 +157,12 @@ function reconnectUpdate(error,generation) {
   if (installingFrom && !error.status) {
     reconnectDeadline ||= Date.now()+180000;
     if (Date.now()<reconnectDeadline) {
-      $('update_status').textContent=tr('正在等待 EMP 重启，连接恢复后此页面会自动刷新…','Waiting for EMP to restart. This page will refresh when it reconnects…');
+      $('update_status').textContent=tr("transfers.waiting_for_emp_to_restart_this_page_will_refresh");
       updatePollTimer=setTimeout(()=>pollUpdate(generation),1000);return;
     }
   }
   installingFrom=null;
-  $('update_status').textContent=error.status ? error.message : tr('暂时无法连接 EMP。请确认 EMP 已启动，再刷新此页面。','Cannot connect to EMP yet. Check that EMP is running, then refresh this page.');
+  $('update_status').textContent=error.status ? error.message : tr("transfers.cannot_connect_to_emp_yet_check_that_emp_is");
 }
 async function requestUpdate(operation) {
   stopUpdatePoll(); const generation = updatePollGeneration;
@@ -174,7 +174,7 @@ async function requestUpdate(operation) {
   finally { if (generation === updatePollGeneration) $('update_install').disabled = isPreview(); }
 }
 async function openUpdate() {
-  openModal(tr('更新 EMP','Update EMP'), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite">${tr('正在检查…','Checking…')}</div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div class="update-notes"><h3>${tr('更新内容','What changed')}</h3><div id="update_notes" class="update-notes-content">${tr('正在读取更新说明…','Loading release notes…')}</div></div><div id="update_manual" class="muted" hidden><p>${tr('建議：下載 Linux 雙語安裝腳本，退出目前 EMP 後執行。安裝器會詢問是否移除舊系統套件，並可遷移源碼目錄中的設定。','Recommended: download the bilingual Linux installer, exit EMP, then run it. The installer asks before removing a system package and can migrate configuration from a source checkout.')}</p><p>${tr('舊系統安裝的使用者設定會保留；來源設定也只會複製，不會刪除。','Existing system-install user settings are kept; source settings are copied and remain in place.')}</p></div><div class="modal-actions"><button id="update_release" type="button" class="secondary" hidden onclick="openLatestRelease()">${tr('打開最新 Release','Open latest Release')}</button><button id="update_commands" type="button" class="secondary" hidden onclick="copyLinuxMigrationCommands()">${tr('複製安裝命令','Copy installer command')}</button><button id="update_install" type="button" data-icon="update" hidden onclick="requestUpdate('install')">${tr('后台更新','Update in background')}</button></div>`, '', null);
+  openModal(tr("transfers.update_emp"), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite">${tr("transfers.checking")}</div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div class="update-notes"><h3>${tr("transfers.what_changed")}</h3><div id="update_notes" class="update-notes-content">${tr("transfers.loading_release_notes")}</div></div><div id="update_manual" class="muted" hidden><p>${tr("transfers.recommended_download_the_bilingual_linux_installer_exit_emp_then")}</p><p>${tr("transfers.existing_system_install_user_settings_are_kept_source_settings")}</p></div><div class="modal-actions"><button id="update_release" type="button" class="secondary" hidden onclick="openLatestRelease()">${tr("transfers.open_latest_release")}</button><button id="update_commands" type="button" class="secondary" hidden onclick="copyLinuxMigrationCommands()">${tr("transfers.copy_installer_command")}</button><button id="update_install" type="button" data-icon="update" hidden onclick="requestUpdate('install')">${tr("transfers.update_in_background")}</button></div>`, '', null);
   await requestUpdate('check');
 }
 

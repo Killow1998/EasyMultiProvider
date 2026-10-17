@@ -10,13 +10,13 @@ function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage
     const account = findAccount(id); if (!account) return;
     const name = account.native ? 'Native' : account.name || account.id;
     const mail = account.quota?.account_label || '';
-    const alias = account.native ? '<div class="account-alias-edit">Native</div>' : `<div class="account-alias-edit"><input id="account_alias" value="${esc(name)}" aria-label="${esc(tr('名称','Name'))}"><button type="button" class="secondary" id="account_alias_save" data-ui-action="account-alias-save" data-id="${esc(id)}" title="${esc(tr('保存名称','Save name'))}" aria-label="${esc(tr('保存名称','Save name'))}">${uiIcon('save')}</button></div>`;
-    const remove = account.native ? '' : `<button type="button" class="danger" data-icon="trash" data-ui-action="account-remove" data-id="${esc(id)}">${tr('移除','Remove')}</button>`;
+    const alias = account.native ? `<div class="account-alias-edit">${tr("common.native")}</div>` : `<div class="account-alias-edit"><input id="account_alias" value="${esc(name)}" aria-label="${esc(tr("services.name"))}"><button type="button" class="secondary" id="account_alias_save" data-ui-action="account-alias-save" data-id="${esc(id)}" title="${esc(tr("services.save_name"))}" aria-label="${esc(tr("services.save_name"))}">${uiIcon('save')}</button></div>`;
+    const remove = account.native ? '' : `<button type="button" class="danger" data-icon="trash" data-ui-action="account-remove" data-id="${esc(id)}">${tr("services.remove")}</button>`;
     const credit = account.quota?.credits;
     const monthly = credit?.individual_limit?.remaining_percent;
-    const reset = resetCreditCount(account) > 0 ? `<button type="button" class="secondary" data-ui-action="account-reset-credits" data-id="${esc(id)}">${uiIcon('reset')} ${tr('选择重置','Choose reset')} · ${resetCreditCount(account)}</button>` : '';
+    const reset = resetCreditCount(account) > 0 ? `<button type="button" class="secondary" data-ui-action="account-reset-credits" data-id="${esc(id)}">${uiIcon('reset')} ${tr("services.choose_reset")} · ${resetCreditCount(account)}</button>` : '';
     const info = {alias,remove,monthly,credit,reset};
-    services.open(id, 'account', 'details', renderInfo ? renderInfo(account,info) : `<div class="account-info-grid"><div><span class="account-info-label">${tr('名称','Name')}</span>${alias}</div><div><span class="account-info-label">${tr('账号','Account')}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr('登录信息','Sign-in')}</span><span class="account-value">${account.native ? tr('本机 Codex 登录','Local Codex sign-in') : tr('已导入的 Codex 登录信息','Imported Codex sign-in')} · ${account.credential_set ? tr('已保存','Saved') : tr('未检测到','Not detected')}</span></div><div><span class="account-info-label">${tr('订阅','Subscription')}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr('月额度','Monthly quota')} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr('已达消费上限','Spend limit reached')}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr('正在读取用量…','Loading usage…')}</p></div>${reset}`, '', null, navigation);
+    services.open(id, 'account', 'details', renderInfo ? renderInfo(account,info) : `<div class="account-info-grid"><div><span class="account-info-label">${tr("services.name")}</span>${alias}</div><div><span class="account-info-label">${tr("services.account")}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr("services.sign_in")}</span><span class="account-value">${account.native ? tr("services.local_codex_sign_in") : tr("services.imported_codex_sign_in")} · ${account.credential_set ? tr("services.saved") : tr("services.not_detected")}</span></div><div><span class="account-info-label">${tr("services.subscription")}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr("services.monthly_quota")} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr("services.spend_limit_reached")}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr("services.loading_usage")}</p></div>${reset}`, '', null, navigation);
     current = {id, node:$('account_usage'), controller:new AbortController()};
     await refreshAccountDetailsUsage();
   }
@@ -33,24 +33,24 @@ function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage
     const candidate = structuredClone(getState()), account = candidate.accounts.find(item => item.id === element.dataset.id);
     if (!account) return;
     const name = $('account_alias').value.trim();
-    if (!name) { $('modal_status').textContent = tr('请输入名称','Enter a name'); return; }
+    if (!name) { $('modal_status').textContent = tr("services.enter_a_name"); return; }
     const node = $('account_alias');
     account.name = name; element.disabled = true;
-    try { await persistState(tr('名称已保存','Name saved'), candidate); if ($('account_alias') === node) { services.mount({id:element.dataset.id, kind:'account', active:'details'}); element.innerHTML = uiIcon('check'); } }
+    try { await persistState(tr("services.name_saved"), candidate); if ($('account_alias') === node) { services.mount({id:element.dataset.id, kind:'account', active:'details'}); element.innerHTML = uiIcon('check'); } }
     catch (error) { if ($('account_alias') === node) $('modal_status').textContent = error.message; }
     finally { element.disabled = false; }
   }
   async function remove(id, button) {
     const account=findAccount(id);
-    if(!account || account.native || removing.has(id) || !confirmRemoval(tr(`移除账号 ${account.name || id}？`,`Remove account ${account.name || id}?`)))return;
+    if(!account || account.native || removing.has(id) || !confirmRemoval(tr("services.remove_account", {name:account.name || id})))return;
     const owner=current, label=button?.textContent;
     removing.add(id);
-    if(button){button.disabled=true;button.textContent=tr('正在移除…','Removing…');}
+    if(button){button.disabled=true;button.textContent=tr("services.removing");}
     try {
       await api('/api/accounts/'+encodeURIComponent(id),{method:'DELETE'});
       onRemoved(await api('/api/config'));
       if(current===owner && owner?.id===id)closeModal();
-      notice(tr('账号已移除','Account removed'));
+      notice(tr("services.account_removed"));
       void syncSavedCatalog();
     } catch(error) {notice(error.message,true);}
     finally {

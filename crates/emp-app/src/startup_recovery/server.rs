@@ -68,6 +68,17 @@ pub(crate) fn run(config: &Path, error: &AppError, open_browser: bool) -> Result
             );
             continue;
         }
+        if request.method == RequestMethod::Get
+            && matches!(
+                request.target,
+                "/assets/i18n.js" | "/assets/copy-recovery.js"
+            )
+        {
+            if let Some(asset) = crate::web::asset_response(request.target) {
+                let _ = stream.write_all(&asset);
+            }
+            continue;
+        }
         if request.header_count("X-EMP-Recovery") != 1
             || !request
                 .header("X-EMP-Recovery")

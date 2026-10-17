@@ -2,24 +2,24 @@
 function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t, tr, localTimeText, notice}) {
   let diagnosticsRequest = 0;
   let supportReportRequest = 0;
-  function diagnosticsTransportLabel(value) { const labels = getLanguage() === 'en' ? {http:'HTTP',sse:'SSE',websocket:'WebSocket'} : {http:'普通请求',sse:'流式请求',websocket:'WebSocket'}; return labels[value] || tr('请求','request'); }
-  function diagnosticsProtocolLabel(value) { return ({responses:'Responses',chat_completions:'Chat Completions',anthropic_messages:'Anthropic Messages',unknown:tr('未知协议','Unknown protocol')}[value] || tr('未知协议','Unknown protocol')); }
-  function diagnosticsContextLabel(record) { const labels = getLanguage() === 'en' ? {allowed:'Context OK',warned:'Context warning',blocked:'Blocked: context too large',unknown:'Context unknown'} : {allowed:'上下文正常',warned:'上下文需关注',blocked:'已拦截：上下文过大',unknown:'上下文未知'}; const decision = labels[record.context_decision] || labels.unknown; const estimate = record.estimated_tokens == null ? tr('估算未知','Estimate unknown') : `${tr('估算','Estimate')} ${Number(record.estimated_tokens).toLocaleString()} tokens`; const limit = record.safe_input_limit == null ? tr('安全上限未知','Safe limit unknown') : `${tr('安全上限','Safe limit')} ${Number(record.safe_input_limit).toLocaleString()}`; return `${decision} · ${estimate} · ${limit}`; }
+  function diagnosticsTransportLabel(value) { const labels = {"http":tr("reports.http"),"sse":tr("reports.sse"),"websocket":tr("reports.websocket")}; return labels[value] || tr("reports.request"); }
+  function diagnosticsProtocolLabel(value) { return ({responses:'Responses',chat_completions:'Chat Completions',anthropic_messages:'Anthropic Messages',unknown:tr("reports.unknown_protocol")}[value] || tr("reports.unknown_protocol")); }
+  function diagnosticsContextLabel(record) { const labels = {"allowed":tr("reports.context_ok"),"warned":tr("reports.context_warning"),"blocked":tr("reports.blocked_context_too_large"),"unknown":tr("reports.context_unknown")}; const decision = labels[record.context_decision] || labels.unknown; const estimate = record.estimated_tokens == null ? tr("reports.estimate_unknown") : `${tr("reports.estimate")} ${Number(record.estimated_tokens).toLocaleString()} tokens`; const limit = record.safe_input_limit == null ? tr("reports.safe_limit_unknown") : `${tr("reports.safe_limit")} ${Number(record.safe_input_limit).toLocaleString()}`; return `${decision} · ${estimate} · ${limit}`; }
   function diagnosticsErrorLabel(value) {
     const labels = {
-      auth:['登录或密钥失效','Sign-in or key rejected'], payment_required:['余额或计费受限','Billing unavailable'],
-      rate_limit:['上游限流','Rate limited'], upstream_5xx:['上游 5xx','Upstream 5xx'], upstream_504:['上游超时','Upstream timeout'],
-      proxy_unavailable:['代理不可用','Proxy unavailable'], proxy_reset:['代理连接中断','Proxy connection reset'],
-      dns_failure:['域名解析失败','DNS failure'], tls_failure:['安全连接失败','TLS failure'], network:['网络不可用','Network unavailable'],
-      stream_error:['流异常','Stream error'], stream_incomplete:['输出未正常完成','Incomplete stream'], malformed_terminal:['终止事件异常','Invalid terminal event'],
-      upstream_close_pre_output:['输出前断线','Disconnected before output'], upstream_close_after_output:['输出后断线','Disconnected after output'], upstream_close_after_tool:['工具调用后断线','Disconnected after tool call'],
-      connect_timeout:['连接超时','Connection timeout'], first_event_timeout:['等待上游响应超时','First response timeout'], first_output_timeout:['首个输出超时','First output timeout'],
-      idle_after_output:['输出中断后超时','Output stalled'], local_deadline:['请求等待超时','Request deadline reached'], timeout:['超时','Timeout'],
-      upstream_capacity:['本地排队超限','Local queue limit'], protocol_rejection:['上游不接受请求格式','Request format rejected'],
-      context_length_exceeded:['上下文过长','Context too long'], history_reconstruction_failed:['历史恢复失败','History recovery failed'], external_compaction_failed:['上下文压缩失败','Context compaction failed'],
-      output_limit:['达到输出上限','Output limit reached'], content_filter:['内容被上游拦截','Content blocked upstream'], router_error:['转发失败','Routing failed'],
+      auth:"reports.sign_in_or_key_rejected", payment_required:"reports.billing_unavailable",
+      rate_limit:"reports.rate_limited_2", upstream_5xx:"reports.upstream_5xx", upstream_504:"reports.upstream_timeout",
+      proxy_unavailable:"reports.proxy_unavailable", proxy_reset:"reports.proxy_connection_reset",
+      dns_failure:"reports.dns_failure", tls_failure:"reports.tls_failure", network:"reports.network_unavailable",
+      stream_error:"reports.stream_error", stream_incomplete:"reports.incomplete_stream", malformed_terminal:"reports.invalid_terminal_event",
+      upstream_close_pre_output:"reports.disconnected_before_output", upstream_close_after_output:"reports.disconnected_after_output", upstream_close_after_tool:"reports.disconnected_after_tool_call",
+      connect_timeout:"reports.connection_timeout", first_event_timeout:"reports.first_response_timeout", first_output_timeout:"reports.first_output_timeout",
+      idle_after_output:"reports.output_stalled", local_deadline:"reports.request_deadline_reached", timeout:"reports.timeout",
+      upstream_capacity:"reports.local_queue_limit", protocol_rejection:"reports.request_format_rejected",
+      context_length_exceeded:"reports.context_too_long", history_reconstruction_failed:"reports.history_recovery_failed", external_compaction_failed:"reports.context_compaction_failed",
+      output_limit:"reports.output_limit_reached", content_filter:"reports.content_blocked_upstream", router_error:"reports.routing_failed",
     };
-    return (labels[value] || ['其他错误','Other error'])[getLanguage() === 'en' ? 1 : 0];
+    return tr(labels[value] || "reports.other_error");
   }
   function performanceNumber(value) { if (value === null || value === undefined || value === '') return null; const number = Number(value); return Number.isFinite(number) && number >= 0 ? number : null; }
   function performanceRate(value) { const number = performanceNumber(value); return number == null ? '—' : number.toFixed(1)+'%'; }
@@ -27,94 +27,80 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
     const records = Array.isArray(payload.records) ? payload.records : [];
     const health = payload.health && typeof payload.health === 'object' ? payload.health : {};
     const healthSamples = performanceNumber(health.sample_count) || 0;
-    $('diagnostics_summary').textContent = healthSamples ? tr(`最近 ${healthSamples} 次请求的运行情况`,`Health across the latest ${healthSamples} requests`) : tr('完成几次模型调用后，这里会显示汇总结果。','Aggregates appear here after a few model calls.');
+    $('diagnostics_summary').textContent = healthSamples ? tr("reports.health_across_the_latest_requests", {healthSamples:healthSamples}) : tr("reports.aggregates_appear_here_after_a_few_model_calls");
     const fallbackAttempts = performanceNumber(health.fallback_attempt_count) || 0;
-    if (fallbackAttempts) $('diagnostics_summary').textContent += tr(` · 另有 ${fallbackAttempts} 次连接回退尝试，未重复计入请求`,` · ${fallbackAttempts} transport fallback attempts counted separately`);
-    $('health_summary').innerHTML = healthSamples ? `<div class="health-grid"><div class="health-stat"><span>${tr('成功率','Success rate')}</span><strong>${performanceRate(health.success_rate)}</strong><small>${Number(health.success_count || 0).toLocaleString()} / ${Number(health.sample_count || 0).toLocaleString()}</small></div><div class="health-stat"><span>429</span><strong>${performanceRate(health.status_429_rate)}</strong><small>${Number(health.status_429_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>502</span><strong>${performanceRate(health.status_502_rate)}</strong><small>${Number(health.status_502_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>503</span><strong>${performanceRate(health.status_503_rate)}</strong><small>${Number(health.status_503_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>504</span><strong>${performanceRate(health.status_504_rate)}</strong><small>${Number(health.status_504_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>${tr('本地排队超限','Local queue limit')}</span><strong>${performanceRate(health.local_capacity_rate)}</strong><small>${Number(health.local_capacity_count || 0).toLocaleString()} ${tr('次','calls')}</small></div></div>` : '';
+    if (fallbackAttempts) $('diagnostics_summary').textContent += tr("reports.transport_fallback_attempts_counted_separately", {fallbackAttempts:fallbackAttempts});
+    $('health_summary').innerHTML = healthSamples ? `<div class="health-grid"><div class="health-stat"><span>${tr("reports.success_rate")}</span><strong>${performanceRate(health.success_rate)}</strong><small>${Number(health.success_count || 0).toLocaleString()} / ${Number(health.sample_count || 0).toLocaleString()}</small></div><div class="health-stat"><span>429</span><strong>${performanceRate(health.status_429_rate)}</strong><small>${Number(health.status_429_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>502</span><strong>${performanceRate(health.status_502_rate)}</strong><small>${Number(health.status_502_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>503</span><strong>${performanceRate(health.status_503_rate)}</strong><small>${Number(health.status_503_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>504</span><strong>${performanceRate(health.status_504_rate)}</strong><small>${Number(health.status_504_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>${tr("reports.local_queue_limit")}</span><strong>${performanceRate(health.local_capacity_rate)}</strong><small>${Number(health.local_capacity_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div></div>` : '';
     const failures = records.slice().reverse().filter(record => !['client_disconnect','client_cancelled','client_websocket_close'].includes(record.error_class) && (Number(record.status) >= 400 || (record.error_class && record.error_class !== 'none'))).slice(0, 20);
-    $('diagnostics_records').innerHTML = failures.length ? failures.map(diagnosticFailureHtml).join('') : `<p class="muted">${tr('近期没有失败记录。','No recent failures.')}</p>`;
+    $('diagnostics_records').innerHTML = failures.length ? failures.map(diagnosticFailureHtml).join('') : `<p class="muted">${tr("reports.no_recent_failures")}</p>`;
   }
   function diagnosticFailureHtml(record) {
     const status = Number(record.status);
     const attempt = record.recovery_mode === 'native_http_fallback';
-    const result = `${attempt ? tr('回退前尝试 · ','Pre-fallback attempt · ') : ''}${status >= 400 && status <= 599 ? status + ' · ' : ''}${diagnosticsErrorLabel(record.error_class)}`;
-    const source = record.provider_id || (record.dialect === 'codex_native' ? tr('当前 Codex 登录','Current Codex login') : tr('未记录','Not recorded'));
+    const result = `${attempt ? tr("reports.pre_fallback_attempt") : ''}${status >= 400 && status <= 599 ? status + ' · ' : ''}${diagnosticsErrorLabel(record.error_class)}`;
+    const source = record.provider_id || (record.dialect === 'codex_native' ? tr("current_codex_login") : tr("reports.not_recorded"));
     const fields = [
-      [tr('账号 / 服务','Account / provider'), source],
-      [tr('调用模型','Requested model'), record.model_id || tr('未记录','Not recorded')],
-      [tr('连接方式','Connection'), `${diagnosticsProtocolLabel(record.protocol)} · ${diagnosticsTransportLabel(record.transport)}`],
-      [tr('耗时','Duration'), `${Number(record.duration_ms || 0).toLocaleString()} ms`],
-      [tr('输出进度','Output progress'), record.tool_activity ? tr('已收到工具调用','Tool call received') : record.output_emitted ? tr('已收到部分输出','Partial output received') : tr('未记录到输出','No output recorded')],
-      [tr('自动恢复','Automatic recovery'), record.recovery_succeeded ? tr('恢复成功','Recovered') : record.fallback ? tr('已尝试切换通道','Another transport was tried') : tr('未记录到成功恢复','No successful recovery recorded')],
-      [tr('诊断编号','Diagnostic ID'), record.request_id || record.observation_id || tr('未记录','Not recorded')],
+      [tr("reports.account_provider"), source],
+      [tr("reports.requested_model"), record.model_id || tr("reports.not_recorded")],
+      [tr("reports.connection_2"), `${diagnosticsProtocolLabel(record.protocol)} · ${diagnosticsTransportLabel(record.transport)}`],
+      [tr("reports.duration"), `${Number(record.duration_ms || 0).toLocaleString()} ms`],
+      [tr("reports.output_progress"), record.tool_activity ? tr("reports.tool_call_received") : record.output_emitted ? tr("reports.partial_output_received") : tr("reports.no_output_recorded")],
+      [tr("reports.automatic_recovery"), record.recovery_succeeded ? tr("reports.recovered") : record.fallback ? tr("reports.another_transport_was_tried") : tr("reports.no_successful_recovery_recorded")],
+      [tr("reports.diagnostic_id"), record.request_id || record.observation_id || tr("reports.not_recorded")],
     ];
-    if (record.context_decision === 'blocked' || record.context_decision === 'warned') fields.push([tr('上下文','Context'), diagnosticsContextLabel(record)]);
+    if (record.context_decision === 'blocked' || record.context_decision === 'warned') fields.push([tr("reports.context"), diagnosticsContextLabel(record)]);
     const advice = diagnosticFailureAdvice(record);
-    return `<details class="request-failure"><summary><span>${esc(record.model_id || tr('未知模型','Unknown model'))}</span><span>${esc(result)}</span><time class="muted">${esc(record.observed_at ? localTimeText(Date.parse(record.observed_at)) : '')}</time></summary><dl>${fields.map(([label,value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join('')}</dl><p class="muted">${esc(advice)}</p></details>`;
+    return `<details class="request-failure"><summary><span>${esc(record.model_id || tr("reports.unknown_model"))}</span><span>${esc(result)}</span><time class="muted">${esc(record.observed_at ? localTimeText(Date.parse(record.observed_at)) : '')}</time></summary><dl>${fields.map(([label,value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join('')}</dl><p class="muted">${esc(advice)}</p></details>`;
   }
   function diagnosticFailureAdvice(record) {
-    if (record.tool_activity || record.output_emitted) return tr('中断前已有输出，请先检查任务进度，再决定是否重试。','Output arrived before interruption. Check the task before retrying.');
-    if (['auth','payment_required'].includes(record.error_class)) return tr('检查所选账号的登录状态或服务密钥、余额。','Check the selected account sign-in, provider key or balance.');
-    if (record.error_class === 'rate_limit') return tr('上游正在限流，请查看账号余量和重置倒计时。','The upstream is rate limiting requests. Check quota and the reset countdown.');
-    if (record.error_class === 'proxy_unavailable') return tr('无法连接配置的代理，请确认代理软件已启动、监听端口与系统或环境代理设置一致。','Cannot connect to the configured proxy. Check that the proxy is running and its listening port matches the system or environment proxy settings.');
-    if (record.error_class === 'dns_failure') return tr('无法解析连接目标的域名，请检查服务或代理地址，以及 DNS 设置。','Cannot resolve the connection host. Check the service or proxy address and DNS settings.');
-    if (record.error_class === 'tls_failure') return tr('安全连接验证或握手失败，请检查系统时间、证书信任和代理的 HTTPS 设置。','Secure connection verification or handshake failed. Check the system clock, certificate trust and proxy HTTPS settings.');
-    if (record.error_class === 'connect_timeout') return tr('连接上游超时，请检查代理节点或直连网络是否可达。','The upstream connection timed out. Check that the proxy node or direct network can reach the service.');
-    if (['proxy_reset','network'].includes(record.error_class)) return tr('网络连接失败，请检查代理与网络状态；这类错误不代表账号额度不足。','The network connection failed. Check proxy and network status; this error does not indicate exhausted quota.');
-    if (['context_length_exceeded','history_reconstruction_failed','external_compaction_failed'].includes(record.error_class)) return tr('请求的上下文或历史未能处理，请保留诊断编号以便排查。','The context or history could not be processed. Keep the diagnostic ID for investigation.');
-    return tr('可用诊断编号定位本地日志。没有收到输出，也不能确认上游未执行。','Use the diagnostic ID to locate local logs. Missing output does not prove the upstream did not execute.');
+    if (record.tool_activity || record.output_emitted) return tr("reports.output_arrived_before_interruption_check_the_task_before_retrying");
+    if (['auth','payment_required'].includes(record.error_class)) return tr("reports.check_the_selected_account_sign_in_provider_key_or");
+    if (record.error_class === 'rate_limit') return tr("reports.the_upstream_is_rate_limiting_requests_check_quota_and");
+    if (record.error_class === 'proxy_unavailable') return tr("reports.cannot_connect_to_the_configured_proxy_check_that_the");
+    if (record.error_class === 'dns_failure') return tr("reports.cannot_resolve_the_connection_host_check_the_service_or");
+    if (record.error_class === 'tls_failure') return tr("reports.secure_connection_verification_or_handshake_failed_check_the_system");
+    if (record.error_class === 'connect_timeout') return tr("reports.the_upstream_connection_timed_out_check_that_the_proxy");
+    if (['proxy_reset','network'].includes(record.error_class)) return tr("reports.the_network_connection_failed_check_proxy_and_network_status");
+    if (['context_length_exceeded','history_reconstruction_failed','external_compaction_failed'].includes(record.error_class)) return tr("reports.the_context_or_history_could_not_be_processed_keep");
+    return tr("reports.use_the_diagnostic_id_to_locate_local_logs_missing");
   }
   function stopDiagnostics() { diagnosticsRequest++; supportReportRequest++; }
   function supportStatusLabel(value) {
-    const labels = getLanguage() === 'en' ? {
-      auth_required:'Sign-in required', transport_error:'Network or proxy error', rate_limited:'Rate limited',
-      unclassified_error:'Other error', credential_missing:'No credential', not_checked:'Not checked', success:'Last check succeeded'
-    } : {
-      auth_required:'需要重新登录', transport_error:'网络或代理故障', rate_limited:'查询受限',
-      unclassified_error:'其他错误', credential_missing:'没有凭据', not_checked:'尚未检查', success:'上次检查成功'
-    };
-    return labels[value] || tr('未知','Unknown');
+    const labels = {"auth_required":tr("reports.sign_in_required"),"transport_error":tr("reports.network_or_proxy_error"),"rate_limited":tr("reports.rate_limited_3"),"unclassified_error":tr("reports.other_error"),"credential_missing":tr("reports.no_credential"),"not_checked":tr("reports.not_checked"),"success":tr("reports.last_check_succeeded")};
+    return labels[value] || tr("reports.unknown");
   }
   function supportDetailLabel(value) {
-    const labels = getLanguage() === 'en' ? {
-      allowed:'Likely writable', denied:'Write permission denied', unknown:'Unknown',
-      environment:'Environment proxy', system:'System proxy', direct:'Direct', proxy:'Through proxy',
-      catalog_loaded:'EMP model catalog observed', emp_catalog_absent:'EMP model IDs absent', nvm:'Codex CLI managed by nvm', path_cli:'Codex CLI on PATH', codex_app:'ChatGPT App (Codex)'
-    } : {
-      allowed:'可能可写', denied:'没有写入权限', unknown:'未知',
-      environment:'环境变量代理', system:'系统代理', direct:'直连', proxy:'经过代理',
-      catalog_loaded:'已观察 EMP 模型目录', emp_catalog_absent:'EMP 模型 ID 已不可见', nvm:'由 nvm 管理的 Codex CLI', path_cli:'PATH 中的 Codex CLI', codex_app:'ChatGPT App（Codex）'
-    };
+    const labels = {"allowed":tr("reports.likely_writable"),"denied":tr("reports.write_permission_denied"),"unknown":tr("reports.unknown"),"environment":tr("reports.environment_proxy"),"system":tr("reports.system_proxy"),"direct":tr("reports.direct"),"proxy":tr("reports.through_proxy"),"catalog_loaded":tr("reports.emp_model_catalog_observed"),"emp_catalog_absent":tr("reports.emp_model_ids_absent"),"nvm":tr("reports.codex_cli_managed_by_nvm"),"path_cli":tr("reports.codex_cli_on_path"),"codex_app":tr("reports.chatgpt_app_codex")};
     return labels[value] || esc(value || 'unknown');
   }
   function runtimeLabel(value) {
     return {
-      catalog_loaded:tr('模型目录符合目标；请求路线未确认','model catalog matches target; request route unverified'),
-      emp_catalog_absent:tr('此前的 EMP 模型 ID 已不可见；恢复未确认','previous EMP model IDs are absent; restoration unverified'),
-      stopped_waiting_for_start:tr('控制接口不可用；目录尚未验证','control interface unavailable; catalog unverified'),
-      reload_required:tr('共享模型目录仍旧；当前对话结束后再请后端所有者正常重启','shared catalog is stale; ask its owner to restart normally after active chats finish'),
-      catalog_unverified:tr('共享模型目录尚未验证','shared model catalog not yet verified'),
-      verification_failed:tr('无法读取共享模型目录','shared model catalog could not be read'),
-      not_checked:tr('尚未观察共享模型目录','shared model catalog has not been observed')
-    }[value] || tr('共享模型目录状态未知','shared model catalog state unknown');
+      catalog_loaded:tr("reports.model_catalog_matches_target_request_route_unverified"),
+      emp_catalog_absent:tr("reports.previous_emp_model_ids_are_absent_restoration_unverified"),
+      stopped_waiting_for_start:tr("reports.control_interface_unavailable_catalog_unverified"),
+      reload_required:tr("reports.shared_catalog_is_stale_ask_its_owner_to_restart"),
+      catalog_unverified:tr("reports.shared_model_catalog_not_yet_verified"),
+      verification_failed:tr("reports.shared_model_catalog_could_not_be_read"),
+      not_checked:tr("reports.shared_model_catalog_has_not_been_observed")
+    }[value] || tr("reports.shared_model_catalog_state_unknown");
   }
   function renderSupportReport(report) {
     const box = $('support_report'); if (!box) return;
     const config = report.configuration || {}, codex = report.codex || {}, network = report.network || {}, accounts = report.accounts || {};
     const imported = Array.isArray(accounts.imported) ? accounts.imported : [];
-    const accountLines = imported.map(account => `${tr('导入账号','Imported account')} ${Number(account.index) || 0}: ${supportStatusLabel(account.quota_status)}`);
-    const configNotes = [!config.exists && tr('文件不存在','file missing'), config.write_access_hint === 'denied' && tr('没有写入权限','not writable')].filter(Boolean);
+    const accountLines = imported.map(account => `${tr("reports.imported_account")} ${Number(account.index) || 0}: ${supportStatusLabel(account.quota_status)}`);
+    const configNotes = [!config.exists && tr("reports.file_missing"), config.write_access_hint === 'denied' && tr("reports.not_writable")].filter(Boolean);
     const compatibilityNote = {
-      available:tr('可用', 'available'),
-      unknown:tr('无法确认引擎版本', 'engine version could not be observed')
+      available:tr("reports.available"),
+      unknown:tr("reports.engine_version_could_not_be_observed")
     }[codex.compatibility];
-    const versionFallback = { unavailable:tr('未找到可用引擎','no engine available') }[codex.compatibility];
-    const versionLabel = codex.version || versionFallback || tr('版本未知','version unknown');
-    const codexNotes = [codex.host_version && `${tr('应用版本','App version')} ${codex.host_version}`, compatibilityNote, codex.source && supportDetailLabel(codex.source), codex.target && runtimeLabel(codex.state,codex.target)].filter(Boolean);
-    box.innerHTML = `<p><strong>${tr('配置','Config')}</strong> ${esc(config.path || '—')}${configNotes.map(note => ' · ' + esc(note)).join('')}</p>
+    const versionFallback = { unavailable:tr("reports.no_engine_available") }[codex.compatibility];
+    const versionLabel = codex.version || versionFallback || tr("reports.version_unknown");
+    const codexNotes = [codex.host_version && `${tr("reports.app_version")} ${codex.host_version}`, compatibilityNote, codex.source && supportDetailLabel(codex.source), codex.target && runtimeLabel(codex.state,codex.target)].filter(Boolean);
+    box.innerHTML = `<p><strong>${tr("reports.config")}</strong> ${esc(config.path || '—')}${configNotes.map(note => ' · ' + esc(note)).join('')}</p>
       <p><strong>Codex</strong> ${esc(versionLabel)}${codexNotes.map(note => ' · ' + esc(note)).join('')}</p>
-      <p><strong>${tr('代理','Proxy')}</strong> ${supportDetailLabel(network.source_at_startup)} · ${supportDetailLabel(network.chatgpt_route)}${network.proxy_scheme ? ' (' + esc(network.proxy_scheme) + ')' : ''}</p>
-      <p><strong>${tr('账号','Accounts')}</strong> Native: ${supportStatusLabel(accounts.native?.quota_status)}${accountLines.length ? ' · ' + accountLines.map(esc).join(' · ') : ''}</p>`;
+      <p><strong>${tr("reports.proxy")}</strong> ${supportDetailLabel(network.source_at_startup)} · ${supportDetailLabel(network.chatgpt_route)}${network.proxy_scheme ? ' (' + esc(network.proxy_scheme) + ')' : ''}</p>
+      <p><strong>${tr("reports.accounts")}</strong> Native: ${supportStatusLabel(accounts.native?.quota_status)}${accountLines.length ? ' · ' + accountLines.map(esc).join(' · ') : ''}</p>`;
   }
   async function loadSupportReport() {
     const request = ++supportReportRequest;
@@ -122,7 +108,7 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
       const report = await api('/api/support-report');
       if (request === supportReportRequest) renderSupportReport(report);
     } catch (_) {
-      if (request === supportReportRequest && $('support_report')) $('support_report').textContent = tr('诊断报告暂时不可用。','Support report is unavailable.');
+      if (request === supportReportRequest && $('support_report')) $('support_report').textContent = tr("reports.support_report_is_unavailable");
     }
   }
   async function downloadSupportReport() {
@@ -131,8 +117,8 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
       const blob = new Blob([JSON.stringify(report, null, 2) + '\n'], {type:'application/json'});
       const url = URL.createObjectURL(blob), link = document.createElement('a');
       link.href = url; link.download = 'EMP-support-report.json'; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
-      notice(tr('诊断报告已下载','Support report downloaded'));
-    } catch (_) { notice(tr('诊断报告下载失败','Could not download support report'), true); }
+      notice(tr("reports.support_report_downloaded"));
+    } catch (_) { notice(tr("reports.could_not_download_support_report"), true); }
   }
   async function loadDiagnostics() {
     const request = ++diagnosticsRequest;
@@ -141,12 +127,12 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
       if (request === diagnosticsRequest && $('diagnostics_summary')) renderDiagnostics(payload);
       return true;
     } catch (error) {
-      if (request === diagnosticsRequest && $('diagnostics_summary')) $('diagnostics_summary').textContent = tr('运行状态暂时不可用。','Diagnostics are unavailable.');
+      if (request === diagnosticsRequest && $('diagnostics_summary')) $('diagnostics_summary').textContent = tr("reports.diagnostics_are_unavailable");
       return false;
     }
   }
   function openDiagnostics() {
-    openModal(tr('性能','Performance'), `<div id="performance_call_report"></div><details class="diagnostics-details"><summary>${tr('系统诊断','System diagnostics')}</summary><div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics(); loadSupportReport()">${esc(t('refresh'))}</button><button type="button" class="secondary" data-icon="download" onclick="downloadSupportReport()">${tr('下载脱敏报告','Download redacted report')}</button></div><div id="support_report"></div><div id="diagnostics_summary" class="muted"></div><div id="health_summary"></div><div id="diagnostics_records"></div></details>`, '', null);
+    openModal(tr("diagnostics"), `<div id="performance_call_report"></div><details class="diagnostics-details"><summary>${tr("reports.system_diagnostics")}</summary><div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics(); loadSupportReport()">${esc(t('refresh'))}</button><button type="button" class="secondary" data-icon="download" onclick="downloadSupportReport()">${tr("reports.download_redacted_report")}</button></div><div id="support_report"></div><div id="diagnostics_summary" class="muted"></div><div id="health_summary"></div><div id="diagnostics_records"></div></details>`, '', null);
     callReports.mount('performance_call_report',{},true);
     void loadDiagnostics(); void loadSupportReport();
   }

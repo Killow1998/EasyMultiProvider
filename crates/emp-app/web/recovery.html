@@ -7,12 +7,13 @@
 :root{color-scheme:light dark;font:16px/1.6 system-ui,sans-serif;background:#f6f7f8;color:#20252b}*{box-sizing:border-box}body{margin:0}main{max-width:760px;margin:8vh auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid #cbd1d8;padding-bottom:16px}h1{font-size:26px;margin:28px 0 12px}h2{font-size:18px;margin:24px 0 8px}p{margin:10px 0}.brand{font-size:22px;font-weight:700}select,button{font:inherit;border-radius:6px;border:1px solid #aab3bc;background:#fff;color:inherit;padding:8px 14px}button{cursor:pointer}button.primary{background:#146758;color:white;border-color:#146758}button:disabled{opacity:.5;cursor:default}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:24px 0}dialog{max-width:560px;width:calc(100% - 32px);border:1px solid #aab3bc;border-radius:8px;padding:24px}dialog::backdrop{background:#0006}#status{white-space:pre-wrap;overflow-wrap:anywhere}@media(prefers-color-scheme:dark){:root{background:#191c20;color:#eceff2}select,button,dialog{background:#252b31;color:#eceff2;border-color:#66727d}}@media(max-width:480px){main{margin:0 auto;padding:20px}.actions button{flex:1 1 auto}}
 </style>
 <main>
-<header><span class="brand">EMP</span><select id="language" aria-label="Language"><option value="zh">简体中文</option><option value="en">English</option></select></header>
+<header><span class="brand">EMP</span><select id="language"><option id="languageChinese" value="zh"></option><option id="languageEnglish" value="en"></option></select></header>
 <h1 id="title"></h1><p id="reason"></p><p id="guidance"></p>
 <div class="actions"><button id="reset" class="primary" disabled></button><button id="exit" disabled></button></div>
 <p id="status" role="status" aria-live="polite"></p>
 </main>
 <dialog id="confirm"><h2 id="confirmTitle"></h2><p id="impact"></p><label><input type="checkbox" id="keepBackup"> <span id="backupOption"></span></label><div class="actions"><button id="cancel"></button><button id="commit" class="primary"></button></div></dialog>
+<script src="/assets/i18n.js"></script><script src="/assets/copy-recovery.js"></script>
 <script>
 const $=id=>document.getElementById(id);
 let language=navigator.language.startsWith('zh')?'zh':'en';
@@ -21,26 +22,8 @@ const token=new URLSearchParams(location.hash.slice(1)).get('recovery')||session
 if(token)sessionStorage.setItem('emp-recovery',token);
 history.replaceState(null,'',location.pathname);
 let state={},ready=false,busy=false,finished=false;
-const strings={
- zh:{
-  title:'EMP 无法使用旧配置',guidance:'清除旧配置后即可重新设置 EMP。整个过程由 EMP 自动完成，无需手动处理文件。',
-  reset:'清除旧配置并重新配置',exit:'退出 EMP',cancel:'取消',commit:'确认清除并重新配置',confirmTitle:'清除旧配置？',
-  impact:'已保存的 EMP 设置、导入账号、API 密钥和本地用量记录将被清除。之后需要重新导入账号或填写 API 密钥。Codex 原生登录和对话不会被清除。',
-  backupOption:'保留旧配置和数据备份（可选）',working:'正在重新配置…',restarting:'新配置已创建，正在启动 EMP。请在管理页重新添加账号或服务。',exiting:'EMP 正在退出，旧数据已保留。',backup:'旧数据备份：',cleanup:'新配置已创建。部分旧数据暂时无法清除，EMP 已保留这些数据：',session:'页面已失效，请重新打开 EMP。',
-  config_invalid:'旧配置已损坏或无法读取。',key_missing:'旧配置的加密密钥已丢失。',key_invalid:'旧配置的加密密钥无效。',key_permissions:'旧配置的加密密钥无法读取。',key_mismatch:'旧配置与当前加密密钥不匹配。',state_unavailable:'旧配置的数据无法读取。',
-  backup_failed:'未能完成清除，旧数据已保留。可以再次点击清除并重新配置。',prepare_failed:'暂时无法创建新配置，旧数据已保留。请退出后重新打开 EMP；如果仍失败，请联系支持。',rollback_failed:'操作中断，EMP 已保留数据。再次点击清除并重新配置即可继续。',reset_incomplete:'上次重新配置未完成，EMP 可以自动处理并重新开始。',unsafe_path:'当前数据位置无法安全重建。旧数据未被清除，请联系支持。',generic:'未能完成重新配置，旧数据已保留。请再次操作或退出 EMP。'
- },
- en:{
-  title:'EMP cannot use the old settings',guidance:'Clear the old settings to set up EMP again. EMP handles the process automatically; no file management is needed.',
-  reset:'Clear old settings and set up again',exit:'Quit EMP',cancel:'Cancel',commit:'Confirm clear and set up again',confirmTitle:'Clear old settings?',
-  impact:'Saved EMP settings, imported accounts, API keys and local usage records will be cleared. You will need to import accounts or enter API keys again. Native Codex sign-in and conversations will not be cleared.',
-  backupOption:'Keep a backup of old settings and data (optional)',working:'Creating fresh settings…',restarting:'Fresh settings are ready. EMP is starting. Add your accounts or services on the management page.',exiting:'EMP is exiting. Your old data is preserved.',backup:'Old data backup:',cleanup:'Fresh settings are ready. Some old data could not be cleared and has been retained:',session:'This page has expired. Open EMP again.',
-  config_invalid:'The old settings are damaged or unreadable.',key_missing:'The encryption key for the old settings is missing.',key_invalid:'The encryption key for the old settings is invalid.',key_permissions:'The encryption key for the old settings cannot be read.',key_mismatch:'The old settings do not match the current encryption key.',state_unavailable:'The old settings data cannot be read.',
-  backup_failed:'The reset could not finish. Your old data is preserved. Select clear and set up again to continue.',prepare_failed:'Fresh settings could not be created. Your old data is preserved. Quit and reopen EMP; contact support if this continues.',rollback_failed:'The operation was interrupted and EMP retained the data. Select clear and set up again to continue.',reset_incomplete:'The previous setup did not finish. EMP can handle it automatically and start fresh.',unsafe_path:'This data location cannot be reset safely. Old data was not cleared. Contact support.',generic:'Setup could not finish. Your old data is preserved. Try the operation again or quit EMP.'
- }
-};
-const t=k=>strings[language][k]||strings[language].generic;
-function render(){document.documentElement.lang=language==='zh'?'zh-CN':'en';$('language').value=language;for(const id of ['title','guidance','reset','exit','cancel','commit','confirmTitle','impact','backupOption'])$(id).textContent=t(id);$('reason').textContent=state.reason?t(state.reason):'';for(const id of ['reset','exit','commit'])$(id).disabled=!ready||busy||finished;}
+const t=k=>translateUiCopy(uiCopy['recovery.'+k]?'recovery.'+k:'recovery.generic',language);
+function render(){document.documentElement.lang=language==='zh'?'zh-CN':'en';$('language').value=language;$('language').setAttribute('aria-label',t('languageLabel'));for(const id of ['languageChinese','languageEnglish','title','guidance','reset','exit','cancel','commit','confirmTitle','impact','backupOption'])$(id).textContent=t(id);$('reason').textContent=state.reason?t(state.reason):'';for(const id of ['reset','exit','commit'])$(id).disabled=!ready||busy||finished;}
 async function api(action){const headers={'X-EMP-Recovery':token||''};if(action==='reset')headers['X-EMP-Recovery-Confirm']=$('keepBackup').checked?'backup-and-reset':'clear-and-reset';const response=await fetch('/api/recovery'+(action?'/'+action:''),{method:action?'POST':'GET',headers,cache:'no-store'});const value=await response.json();if(!response.ok)throw new Error(value.error||'generic');return value;}
 async function act(action){if(!ready||busy||finished)return;busy=true;render();$('status').textContent=t('working');try{const result=await api(action);finished=true;$('status').textContent=t(result.exiting?'exiting':'restarting')+(result.backup_path?'\n'+t(result.cleanup_pending?'cleanup':'backup')+' '+result.backup_path:'');sessionStorage.removeItem('emp-recovery');}catch(error){$('status').textContent=t(error.message);}finally{busy=false;render();}}
 $('language').onchange=()=>{language=$('language').value;try{localStorage.setItem('emp-language',language==='en'?'en':'zh-CN');}catch(_){}render();};$('exit').onclick=()=>act('exit');$('reset').onclick=()=>$('confirm').showModal();$('cancel').onclick=()=>$('confirm').close();$('commit').onclick=()=>{$('confirm').close();act('reset');};

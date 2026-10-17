@@ -16,8 +16,8 @@ def frontend(name, bootstrap):
         text = text.replace('</head>', '<script src="/assets/shadow-drafts.js"></script><script src="/assets/shadow-service-demo.js"></script></head>')
         text = text.replace('<body>', '<body><script>window.EMP_PREVIEW=true;window.EMP_SHADOW_BOOTSTRAP=' + json.dumps(bootstrap) + ';</script>')
         text = text.replace('establishSession().then(load)', (HERE / 'shadow-ui.js').read_text(encoding='utf-8') + '\nestablishSession().then(load)')
-        text = text.replace("tr('账户余量已刷新','Account quota refreshed')", "tr('已读取当前额度','Current quota loaded')")
-        text = text.replace("tr('刷新额度','Refresh quota')", "tr('读取额度','Read quota')")
+        text = text.replace('tr("core.account_quota_refreshed")', "tr('已读取当前额度','Current quota loaded')")
+        text = text.replace('tr("refresh_quotas")', "tr('读取额度','Read quota')")
     if name == 'management-client.js':
         text = text.replace('async function establishSession() {', '''async function establishSession() {
     if (window.EMP_SHADOW_BOOTSTRAP) {
@@ -30,5 +30,5 @@ def frontend(name, bootstrap):
     if name == 'statistics.js':
         text = text.replace('/api/usage?series=true&', '/api/shadow/usage?')
     if name == 'service-list.js':
-        text = text.replace("action('provider-model-settings', provider.id, tr('模型设置','Model settings')", "action('provider-model-settings', provider.id, tr('模型管理','Manage models')")
+        text = text.replace('tr("services.model_settings")', "tr('模型管理','Manage models')")
     return text.encode('utf-8')

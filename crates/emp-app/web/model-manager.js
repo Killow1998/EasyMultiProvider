@@ -16,17 +16,17 @@ function createProviderModelManager({getState,cloneState,$,tr,esc,api,persistSta
   function render(view){
     if(!current(view))return;
     const query=view.query.toLowerCase().trim(), all=rows(view), visible=all.filter(model=>((model.display_name||'')+' '+model.upstream_id).toLowerCase().includes(query));
-    $('shadow_model_count').textContent=tr(`显示 ${all.filter(model=>model.enabled).length} / ${all.length} · 搜索结果 ${visible.length}`,`${all.filter(model=>model.enabled).length} / ${all.length} visible · ${visible.length} matches`);
+    $('shadow_model_count').textContent=tr("models.visible_matches", {count:all.filter(model=>model.enabled).length, count2:all.length, count3:visible.length});
     $('shadow_managed_models').innerHTML=visible.map(model=>`<div class="shadow-managed-model ${model.enabled?'':'is-hidden'}" data-managed-model="${esc(model.upstream_id)}" data-visible="${model.enabled}">
-      <div><strong>${esc(model.display_name||model.upstream_id)}</strong><small>${esc(model.upstream_id)}${model.context_window>0?' · '+tr('上下文 ','Context ')+compactContext(model.context_window):''}${capabilitySummary(model)?' · '+capabilitySummary(model):''}</small></div>
-      <div class="shadow-model-actions">${button('toggle',model,model.enabled?'eye':'eye-off',model.enabled?tr('隐藏模型','Hide model'):tr('显示模型','Show model'),`aria-pressed="${model.enabled}"`)}${button('edit',model,'edit',tr('编辑模型','Edit model'))}${button('test',model,'test',tr('测试模型','Test model'))}</div></div>`).join('')||`<p class="muted">${tr('没有匹配的模型；可读取列表或手动添加。','No matching models; read the list or add one manually.')}</p>`;
+      <div><strong>${esc(model.display_name||model.upstream_id)}</strong><small>${esc(model.upstream_id)}${model.context_window>0?' · '+tr("models.context")+compactContext(model.context_window):''}${capabilitySummary(model)?' · '+capabilitySummary(model):''}</small></div>
+      <div class="shadow-model-actions">${button('toggle',model,model.enabled?'eye':'eye-off',model.enabled?tr("models.hide_model"):tr("models.show_model"),`aria-pressed="${model.enabled}"`)}${button('edit',model,'edit',tr("models.edit_model"))}${button('test',model,'test',tr("models.test_model"))}</div></div>`).join('')||`<p class="muted">${tr("models.no_matching_models_read_the_list_or_add_one")}</p>`;
   }
   async function open(id,query='',navigation={}){
     const provider=getState().providers.find(item=>item.id===id);if(!provider)return;
     const view={id,query,navigation,models:[],controller:new AbortController()};
-    openModal(tr('模型管理','Manage models')+' · '+(provider.name||id),`<div id="shadow_model_manager">
-      <div class="toolbar"><input type="search" id="shadow_model_search" placeholder="${tr('搜索模型名称或 ID','Search model name or ID')}" value="${esc(query)}"><button type="button" class="secondary" data-manager-action="refresh" data-icon="refresh">${tr('更新模型列表','Update model list')}</button><button type="button" class="secondary" data-manager-action="add" data-icon="plus">${tr('手动添加','Add manually')}</button></div>
-      <p id="shadow_model_count" class="muted" role="status"></p><div id="shadow_managed_models">${tr('正在读取模型列表…','Loading model list…')}</div></div>`,'',null,null,{...navigation,reopen:()=>open(id,view.query,navigation)});
+    openModal(tr("models.manage_models")+' · '+(provider.name||id),`<div id="shadow_model_manager">
+      <div class="toolbar"><input type="search" id="shadow_model_search" placeholder="${tr("models.search_model_name_or_id")}" value="${esc(query)}"><button type="button" class="secondary" data-manager-action="refresh" data-icon="refresh">${tr("models.update_model_list")}</button><button type="button" class="secondary" data-manager-action="add" data-icon="plus">${tr("models.add_manually")}</button></div>
+      <p id="shadow_model_count" class="muted" role="status"></p><div id="shadow_managed_models">${tr("models.loading_model_list")}</div></div>`,'',null,null,{...navigation,reopen:()=>open(id,view.query,navigation)});
     active=view;view.node=$('shadow_model_manager');
     $('shadow_model_search').oninput=event=>{view.query=event.target.value;render(view);};
     view.node.onclick=async event=>{
@@ -35,7 +35,7 @@ function createProviderModelManager({getState,cloneState,$,tr,esc,api,persistSta
       if(action==='refresh'){control.disabled=true;try{await api('/api/providers/discover',{method:'POST',body:JSON.stringify({provider:id,cache_refresh:true}),signal:view.controller.signal});return await load(view);}catch(error){if(current(view))$('modal_status').textContent=error.message;}finally{if(control.isConnected)control.disabled=false;}return;}
       if(action==='add')return edit(view,null);
       const model=rows(view).find(item=>item.upstream_id===control.dataset.upstream);if(!model)return;
-      if(action==='test'){if(isPreview()){notice(tr('影子页不发送真实模型请求；正式版可在此测试。','The shadow page does not send real model requests; test here after promotion.'));return;}const route=(getState().models||[]).find(item=>item.provider===id&&item.upstream_id===model.upstream_id);if(!route){notice(tr('先添加模型，再测试连接。','Add the model before testing its connection.'),true);return;}return testModel(route.id);}
+      if(action==='test'){if(isPreview()){notice(tr("models.the_shadow_page_does_not_send_real_model_requests"));return;}const route=(getState().models||[]).find(item=>item.provider===id&&item.upstream_id===model.upstream_id);if(!route){notice(tr("models.add_the_model_before_testing_its_connection"),true);return;}return testModel(route.id);}
       if(action==='edit')return edit(view,model);
       control.disabled=true;
       try{

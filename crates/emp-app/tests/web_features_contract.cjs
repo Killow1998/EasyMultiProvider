@@ -1,5 +1,5 @@
 // Run with: node --test crates/emp-app/tests/web_features_contract.cjs
-const {assert, fs, path, vm, web, tr, esc, deferred, feature} = require('./web_fixture.cjs');
+const {assert, fs, path, vm, web, tr, translate:uiTranslate, esc, deferred, feature} = require('./web_fixture.cjs');
 const {test} = require('node:test');
 function sessionFixture(url = 'http://localhost/?bootstrap=once', saved = '') {
   let token = saved;
@@ -22,7 +22,7 @@ test('Restore Native keeps the page usable and Quit EMP uses a separate action',
     const calls = [], notices = [], modals = [], nodes = new Map();
     let mode = 'emp_applied';
     const context = vm.createContext({language, integrationBusy:false, esc,
-      tr:(zh,en) => language === 'en' ? en : zh,
+      tr:uiTranslate(language),
       $:id => { if(!nodes.has(id)) nodes.set(id,{textContent:''}); return nodes.get(id); },
       renderIntegrationToggle(){}, renderIntegration:info => { mode=info.configuration.state; },
       api:async route => { calls.push(route); mode=route.endsWith('/enable') ? 'emp_applied' : 'native'; return {configuration:{state:mode},runtime:{}}; },
@@ -331,7 +331,7 @@ test('network diagnostics show specific advice in Chinese and English', async ()
   for (const language of ['zh', 'en']) {
     const boxes = new Map();
     const $ = id => { if (!boxes.has(id)) boxes.set(id, {textContent:'', innerHTML:''}); return boxes.get(id); };
-    const translate = (zh, en) => language === 'en' ? en : zh;
+    const translate = uiTranslate(language === 'en' ? 'en' : 'zh-CN');
     let records = [];
     const diagnostics = feature('diagnostics.js', 'createDiagnostics')({
       api:async () => ({records}), getLanguage:() => language, tr:translate, t:x => x, esc, $, localTimeText:String,

@@ -8,14 +8,14 @@ function createPerformanceView({esc, tr, getLanguage, number, seconds, tps, rate
   function facts(report) {
     const s = report.summary || {};
     const result = outcomes(s);
-    const samples = count => `${number(count)} ${tr('个样本','samples')}`;
+    const samples = count => `${number(count)} ${tr("reports.samples")}`;
     const stats = [
-      stat(tr('调用数','Calls'),number(s.calls),`${number(s.completed)} ${tr('次完成','completed')}`,chart.spark(report,'calls')),
+      stat(tr("reports.calls_4"),number(s.calls),`${number(s.completed)} ${tr("reports.completed_3")}`,chart.spark(report,'calls')),
       stat(result.label,result.value,result.hint,'',result.failed > 0 ? 'presentation-stat-warning' : '',true),
-      stat(tr('平均耗时','Mean duration'),seconds(s.duration_ms),tr('每次调用','Per call')),
+      stat(tr("reports.mean_duration"),seconds(s.duration_ms),tr("reports.per_call")),
       stat('TTFT',seconds(s.ttft_ms),samples(s.ttft_samples),chart.spark(report,'ttft_ms')),
       stat('TPS',tps(s.tokens_per_second),samples(s.tps_samples),chart.spark(report,'tokens_per_second')),
-      stat(tr('输入缓存率','Input cache rate'),rate(s.cached_input_tokens,s.cache_input_tokens),`${number(s.cached_input_tokens)} / ${number(s.cache_input_tokens)} token`),
+      stat(tr("reports.input_cache_rate"),rate(s.cached_input_tokens,s.cache_input_tokens),`${number(s.cached_input_tokens)} / ${number(s.cache_input_tokens)} token`),
     ].join('');
     return stats;
   }

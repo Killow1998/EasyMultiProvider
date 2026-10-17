@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.6 (2026-10-17)
+
+### 中文
+
+- 修复 Claude 多轮对话追加历史后无法重用提示词缓存的问题，减少重复缓存写入；完整保留对话、工具调用与结果、图片和文件。
+- 统一 Pro Lite、Pro、Pro Max 订阅名称与标签显示。
+- 将界面文案集中到按功能拆分的中英文字典，统一动态参数、无障碍标签与启动恢复页的语言处理。
+
+### English
+
+- Fix Claude prompt-cache reuse when new turns are appended, reducing repeated cache writes while preserving conversation history, tool calls and results, images and files.
+- Display Pro Lite, Pro and Pro Max subscription names and badges consistently.
+- Centralize UI copy in feature-specific Chinese and English dictionaries, including dynamic values, accessibility labels and startup recovery.
+
 ## 0.13.5 (2026-10-16)
 
 ### 中文

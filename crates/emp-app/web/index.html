@@ -14,41 +14,41 @@
   <div class="page-brand">
     <div class="brand-title"><h1 aria-label="EMP"><svg id="emp_logo" class="dot-logo" aria-hidden="true"></svg></h1><span id="emp_version" class="brand-version"></span></div>
     <div id="integration" class="header-integration" data-state="unknown">
-      <div class="integration-card-header" role="status"><span id="codex_version">Codex</span><span id="integration_badge">加载中</span></div>
+      <div class="integration-card-header" role="status"><span id="codex_version">Codex</span><span id="integration_badge"></span></div>
       <p id="integration_summary" class="muted" hidden></p>
     </div>
-    <p data-i18n="subtitle">管理 Codex 的账号和模型。</p>
+    <p data-i18n="subtitle"></p>
   </div>
   <div class="page-header-controls">
     <div class="header-group header-emp-actions">
-      <button id="integration_toggle" type="button" data-icon="check" data-action="enable" onclick="confirmIntegrationAction(this.dataset.action)" data-i18n="enable_codex" disabled>启用 EMP</button>
-      <button type="button" class="secondary" data-icon="activity" onclick="statistics.open()" data-i18n="statistics">统计</button>
+      <button id="integration_toggle" type="button" data-icon="check" data-action="enable" onclick="confirmIntegrationAction(this.dataset.action)" data-i18n="enable_codex" disabled></button>
+      <button type="button" class="secondary" data-icon="activity" onclick="statistics.open()" data-i18n="statistics"></button>
     </div>
     <div class="header-group">
-      <button type="button" class="secondary" data-icon="settings" onclick="openSettings()" data-i18n="settings_menu">设置</button>
-      <button id="shadow_migration_open" type="button" class="secondary" data-icon="upload" onclick="migration.open()" data-i18n="data_migration">数据迁移</button>
+      <button type="button" class="secondary" data-icon="settings" onclick="openSettings()" data-i18n="settings_menu"></button>
+      <button id="shadow_migration_open" type="button" class="secondary" data-icon="upload" onclick="migration.open()" data-i18n="data_migration"></button>
       <input id="migration_file" type="file" hidden accept=".emp,application/octet-stream" onchange="migrationFileChosen(this)">
     </div>
     <div class="header-group">
       <a class="repo-link" href="https://github.com/Killow1998/EasyMultiProvider" target="_blank" rel="noopener noreferrer">GitHub</a>
-      <button id="check_update" type="button" class="secondary" data-icon="update" onclick="openUpdate()" data-i18n="check_update">检查更新</button>
+      <button id="check_update" type="button" class="secondary" data-icon="update" onclick="openUpdate()" data-i18n="check_update"></button>
     </div>
     <div class="header-group">
-      <label class="header-preference" for="language_select"><span data-i18n="language_label">语言</span>
-        <select id="language_select" aria-label="Language" onchange="setLanguage(this.value)"><option value="zh-CN">中文</option><option value="en">English</option></select>
+      <label class="header-preference" for="language_select"><span data-i18n="language_label"></span>
+        <select id="language_select" data-i18n-aria-label="language_label" onchange="setLanguage(this.value)"><option value="zh-CN" data-i18n="core.language_chinese"></option><option value="en" data-i18n="core.language_english"></option></select>
       </label>
-      <label class="header-preference" for="theme_select"><span data-i18n="theme_label">外观</span>
-        <select id="theme_select" aria-label="Theme" onchange="setTheme(this.value)"><option value="system" data-i18n="theme_system">跟随系统</option><option value="light" data-i18n="theme_light">浅色</option><option value="dark" data-i18n="theme_dark">深色</option></select>
+      <label class="header-preference" for="theme_select"><span data-i18n="theme_label"></span>
+        <select id="theme_select" data-i18n-aria-label="theme_label" onchange="setTheme(this.value)"><option value="system" data-i18n="theme_system"></option><option value="light" data-i18n="theme_light"></option><option value="dark" data-i18n="theme_dark"></option></select>
       </label>
     </div>
-    <button type="button" class="secondary" onclick="quitEmp()" data-i18n="quit_emp">退出 EMP</button>
+    <button type="button" class="secondary" onclick="quitEmp()" data-i18n="quit_emp"></button>
   </div>
 </header>
 
 <div class="workspace-layout">
 <div class="workspace-column">
 <section>
-<div class="services-heading"><h2 data-i18n="services_title">服务</h2><div class="toolbar"><button data-icon="plus" onclick="openServiceChooser()" data-i18n="add_provider">添加服务</button><button id="refresh_all" class="secondary" data-icon="refresh" onclick="refreshAllAccounts()" data-i18n="refresh_quotas">刷新额度</button></div></div>
+<div class="services-heading"><h2 data-i18n="services_title"></h2><div class="toolbar"><button data-icon="plus" onclick="openServiceChooser()" data-i18n="add_provider"></button><button id="refresh_all" class="secondary" data-icon="refresh" onclick="refreshAllAccounts()" data-i18n="refresh_quotas"></button></div></div>
 <input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="codexAccountImport.fileChosen(this)">
 <div id="services" class="entity-list service-list"></div>
 </section>
@@ -59,16 +59,16 @@
 <aside class="workspace-side">
 <section>
 <div class="catalog-display-heading">
-  <h2 data-i18n="model_display">模型显示</h2>
+  <h2 data-i18n="model_display"></h2>
   <div class="catalog-display-actions">
-    <button id="catalog_context_toggle" type="button" class="secondary" aria-pressed="true" aria-label="隐藏上下文标签" title="隐藏上下文标签" onclick="toggleCatalogContext()">
+    <button id="catalog_context_toggle" type="button" class="secondary" aria-pressed="true" onclick="toggleCatalogContext()">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="catalog-context-ring" cx="12" cy="12" r="10" stroke-dasharray="49 14"></circle><g class="catalog-eye-path" data-catalog-eye="open"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="2.4"></circle></g><g class="catalog-eye-path" data-catalog-eye="closed" hidden><path d="M3 12s3.2-5.5 9-5.5c2.2 0 4 .7 5.5 1.7M21 12s-3.2 5.5-9 5.5c-2.2 0-4-.7-5.5-1.7"></path><path d="M4 4l16 16"></path></g></svg>
     </button>
-    <button id="catalog_search_toggle" type="button" class="secondary" aria-expanded="false" aria-controls="catalog_display_search" aria-label="搜索模型" title="搜索模型" onclick="toggleCatalogSearch()">
+    <button id="catalog_search_toggle" type="button" class="secondary" aria-expanded="false" aria-controls="catalog_display_search" onclick="toggleCatalogSearch()">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 5 5"></path></svg>
     </button>
     <div id="catalog_search_shell" class="catalog-search-shell">
-      <input id="catalog_display_search" type="search" placeholder="搜索模型" aria-label="搜索模型" aria-hidden="true" tabindex="-1" inert oninput="renderCatalogDisplay()" onkeydown="catalogSearchKeydown(event)">
+      <input id="catalog_display_search" type="search" data-i18n-placeholder="search_models" data-i18n-aria-label="search_models" aria-hidden="true" tabindex="-1" inert oninput="renderCatalogDisplay()" onkeydown="catalogSearchKeydown(event)">
     </div>
   </div>
 </div>
@@ -79,18 +79,21 @@
 
 </main>
 
-<div id="notification" hidden><span id="status" class="muted" role="status" aria-live="polite" aria-atomic="true"></span><button id="notification_close" type="button" class="notification-close" aria-label="关闭通知" onclick="dismissNotice()">&times;</button></div>
+<div id="notification" hidden><span id="status" class="muted" role="status" aria-live="polite" aria-atomic="true"></span><button id="notification_close" type="button" class="notification-close" data-i18n-aria-label="core.close_notification" onclick="dismissNotice()">&times;</button></div>
 
 <div id="modal_backdrop" class="modal-backdrop hidden">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal_title">
-    <div class="modal-header"><h2 id="modal_title"></h2><div class="modal-navigation"><button id="modal_back" type="button" class="secondary modal-back" data-icon="restore" hidden></button><button id="modal_close" type="button" class="modal-close" aria-label="Close" onclick="closeModal()">&times;</button></div></div>
+    <div class="modal-header"><h2 id="modal_title"></h2><div class="modal-navigation"><button id="modal_back" type="button" class="secondary modal-back" data-icon="restore" hidden></button><button id="modal_close" type="button" class="modal-close" data-i18n-aria-label="core.close" onclick="closeModal()">&times;</button></div></div>
     <div id="service_detail_nav" hidden></div>
     <div id="modal_body"></div>
     <div id="modal_status" class="modal-status" role="alert" aria-live="polite"></div>
-    <div class="modal-actions"><button id="modal_submit" data-icon="check">确定</button></div>
+    <div class="modal-actions"><button id="modal_submit" data-icon="check"></button></div>
   </div>
 </div>
 
+<script src="/assets/i18n.js"></script>
+<script src="/assets/copy-core.js"></script><script src="/assets/copy-services.js"></script>
+<script src="/assets/copy-models.js"></script><script src="/assets/copy-reports.js"></script><script src="/assets/copy-transfers.js"></script>
 <script src="/assets/service-icons.js"></script><script src="/assets/brand-colors.js"></script>
 <script src="/assets/service-list.js"></script>
 <script src="/assets/service-usage.js"></script>
@@ -141,22 +144,12 @@ const {open:openSettings, toggle:toggleSetting} = settings;
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
-const translations = {
-  'zh-CN': {
-    subtitle:'管理 Codex 的账号和模型。', settings_menu:'设置', language_label:'语言', theme_label:'外观', quit_emp:'退出 EMP', more_actions:'更多操作', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', diagnostics:'性能', usage:'用量', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', services_title:'服务', import_account:'导入账号', refresh_quotas:'刷新额度', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
-  },
-  en: {
-    subtitle:'Manage Codex accounts and models.', settings_menu:'Settings', language_label:'Language', theme_label:'Appearance', quit_emp:'Quit EMP', more_actions:'More actions', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', statistics:'Statistics', diagnostics:'Performance', usage:'Usage', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', services_title:'Services', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
-  }
-};
-Object.assign(translations['zh-CN'], {client_scope:'客户端', emp_scope:'EMP', search_scope:'工具'});
-Object.assign(translations.en, {client_scope:'Clients', emp_scope:'EMP', search_scope:'Tools'});
-translations['zh-CN'].check_update = '检查更新'; translations.en.check_update = 'Check updates';
 let language = 'zh-CN';
 function storedPreference(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch (_) { return fallback; } }
 function savePreference(key, value) { try { localStorage.setItem(key, value); } catch (_) {} }
-function t(key) { return (translations[language] && translations[language][key]) || translations['zh-CN'][key] || key; }
-function tr(chinese, english) { return language === 'en' ? english : chinese; }
+function t(key, values) { return translateUiCopy(key, language, values); }
+// The two-string form selects messages supplied by the backend or preview data.
+function tr(key, values) { return typeof values === 'string' ? (language === 'en' ? values : key) : t(key, values); }
 function applyTranslations() {
   if (document.documentElement) document.documentElement.lang = language;
   document.querySelectorAll('[data-i18n]').forEach(element => { element.textContent = t(element.dataset.i18n); });
@@ -171,7 +164,7 @@ async function syncLanguage() {
   languageSaveBusy=true;
   try {
     while(state.language!==language){const chosen=language;await api('/api/language',{method:'POST',body:JSON.stringify({language:chosen})});state.language=chosen;}
-  } catch(error){notice(tr('错误说明语言保存失败：','Could not save error language: ')+error.message,true);}
+  } catch(error){notice(tr("core.could_not_save_error_language")+error.message,true);}
   finally{languageSaveBusy=false;}
 }
 function setLanguage(value) { language = value === 'en' ? 'en' : 'zh-CN'; savePreference('emp-language', language); if ($('language_select')) $('language_select').value = language; applyTranslations(); if (state) fill(); if ($('update_notes') && updates.info()) renderUpdate(updates.info()); if(state)void syncLanguage(); }
@@ -214,7 +207,7 @@ function confirmedField(model, field) {
 // Codex only sends text and images; other stored modalities are kept but not offered.
 const COMMON_MODALITIES = ['text', 'image'];
 function modalityLabel(value) {
-  const labels = language === 'en' ? {text:'text',image:'image',audio:'audio',video:'video'} : {text:'文本',image:'图像',audio:'音频',video:'视频'}; return labels[value] || value;
+  const labels = {"text":tr("core.text"),"image":tr("core.image"),"audio":tr("core.audio"),"video":tr("core.video")}; return labels[value] || value;
 }
 function visionStatus(model) {
   const modalities = confirmedField(model, 'input_modalities');
@@ -222,19 +215,19 @@ function visionStatus(model) {
   return modalities.includes('image') ? 'supported' : 'unsupported';
 }
 function visionLabel(status) {
-  return {unknown:tr('图像能力待确认','Image support not reported'),supported:tr('支持图像','vision supported'),unsupported:tr('不支持图像','vision not supported')}[status];
+  return {unknown:tr("core.image_support_not_reported"),supported:tr("core.vision_supported"),unsupported:tr("core.vision_not_supported")}[status];
 }
 function capabilitySummary(model) {
   const parts = [];
   const inputs = Array.isArray(confirmedField(model, 'input_modalities')) ? confirmedField(model, 'input_modalities') : [];
-  if (inputs.length) parts.push(tr('输入 ', 'Input ') + inputs.map(modalityLabel).map(esc).join('/'));
+  if (inputs.length) parts.push(tr("core.input") + inputs.map(modalityLabel).map(esc).join('/'));
   else {
     const status=visionStatus(model),label=esc(visionLabel(status));
-    const help=tr('当前记录没有可确认的输入模态声明，不代表不支持图像。在模型编辑中选择图像，或使用图像测试。','This record has no verified input modality declaration; it does not mean images are unsupported. Select image input in the model editor or use the image test.');
+    const help=tr("core.this_record_has_no_verified_input_modality_declaration_it");
     parts.push(status==='unknown'?`<span tabindex="0" data-shadow-help="${esc(help)}">${label} ?</span>`:label);
   }
   const outputs = Array.isArray(confirmedField(model, 'output_modalities')) ? confirmedField(model, 'output_modalities') : [];
-  if (outputs.length) parts.push(tr('输出 ', 'Output ') + outputs.map(modalityLabel).map(esc).join('/'));
+  if (outputs.length) parts.push(tr("core.output") + outputs.map(modalityLabel).map(esc).join('/'));
   const protocols = Array.isArray(confirmedField(model, 'supported_protocols')) ? confirmedField(model, 'supported_protocols') : [];
   if (protocols.length) parts.push(protocols.map(protocolLabel).map(esc).join('/'));
   return parts.join(' · ');
@@ -259,11 +252,11 @@ if (typeof window?.addEventListener === 'function') {
 }
 function bytesToBase64(bytes) { let binary = ''; const chunk = 0x8000; for (let index = 0; index < bytes.length; index += chunk) binary += String.fromCharCode(...bytes.subarray(index, index + chunk)); return btoa(binary); }
 async function exportMigration() {
-  openModal(tr('导出 EMP 数据','Export EMP data'), `<p class="muted">${tr('选择导出内容','Choose what to export')}</p><div class="grid"><label class="inline-check"><input id="export_native" type="checkbox" checked>Native</label><label class="inline-check"><input id="export_subscriptions" type="checkbox" checked>${tr('其他 Subscription','Other subscriptions')}</label><label class="inline-check"><input id="export_external" type="checkbox" checked>External Provider</label></div><p class="muted">${tr('Native 包含本机登录凭据；导入后作为额外 Subscription 账号，不替换当前登录。','Native includes this machine’s login credentials; import adds a Subscription account without replacing the current login.')}</p><p class="muted">${tr('导出密码至少需要 12 个 UTF-8 字节；旧版 8 字节迁移包仍可导入。','Exports require at least 12 UTF-8 bytes; legacy 8-byte migration bundles remain importable.')}</p><label>${tr('迁移密码','Migration password')}<input id="modal_migration_password" type="password" autocomplete="new-password" autofocus></label><label>${tr('确认迁移密码','Confirm password')}<input id="modal_migration_password_confirm" type="password" autocomplete="new-password"></label>`, tr('下载 .emp','Download .emp'), async () => {
+  openModal(tr("core.export_emp_data"), `<p class="muted">${tr("core.choose_what_to_export")}</p><div class="grid"><label class="inline-check"><input id="export_native" type="checkbox" checked>${tr("common.native")}</label><label class="inline-check"><input id="export_subscriptions" type="checkbox" checked>${tr("core.other_subscriptions")}</label><label class="inline-check"><input id="export_external" type="checkbox" checked>${tr("common.external_provider")}</label></div><p class="muted">${tr("core.native_includes_this_machine_s_login_credentials_import_adds")}</p><p class="muted">${tr("core.exports_require_at_least_12_utf_8_bytes_legacy")}</p><label>${tr("core.migration_password")}<input id="modal_migration_password" type="password" autocomplete="new-password" autofocus></label><label>${tr("core.confirm_password")}<input id="modal_migration_password_confirm" type="password" autocomplete="new-password"></label>`, tr("core.download_emp"), async () => {
     const groups = ['native','subscriptions','external'].filter(group => $('export_' + group).checked);
-    if (!groups.length) throw new Error(tr('请至少选择一类导出内容','Select at least one export category'));
+    if (!groups.length) throw new Error(tr("core.select_at_least_one_export_category"));
     const password = $('modal_migration_password').value; const confirmPassword = $('modal_migration_password_confirm').value;
-    if (password !== confirmPassword) throw new Error(tr('两次迁移密码不一致','The migration passwords do not match')); if (new TextEncoder().encode(password).length < 12) throw new Error(tr('导出密码至少需要 12 个 UTF-8 字节','Export passwords must be at least 12 UTF-8 bytes'));
+    if (password !== confirmPassword) throw new Error(tr("core.the_migration_passwords_do_not_match")); if (new TextEncoder().encode(password).length < 12) throw new Error(tr("core.export_passwords_must_be_at_least_12_utf_8"));
     const exportRequest = {password, groups};
     if (!management.usesLegacyCookies()) {
       const confirmation = await api('/api/migration/export/confirm', {method:'POST', body:'{}'});
@@ -274,21 +267,21 @@ async function exportMigration() {
     const summary = JSON.parse(response.headers.get('X-EMP-Export-Summary') || '{}');
     const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 0); closeModal();
     const missing = summary.native_login_missing;
-    notice(tr(`已导出：账户 ${summary.accounts ?? 0} 个，Provider ${summary.providers ?? 0} 个，模型 ${summary.models ?? 0} 个`,`Exported: ${summary.accounts ?? 0} accounts, ${summary.providers ?? 0} providers, ${summary.models ?? 0} models`) + (missing ? tr('；未找到 Native 登录凭据，仅导出其配置。','; Native login credentials were not found; only its settings were exported.') : ''), missing);
+    notice(tr("core.exported_accounts_providers_models", {accounts:summary.accounts ?? 0, providers:summary.providers ?? 0, models:summary.models ?? 0}) + (missing ? tr("core.native_login_credentials_were_not_found_only_its_settings") : ''), missing);
   });
 }
 function migrationFilename() { return 'EMP.emp'; }
 function selectMigrationFile() { $('migration_file').click(); }
 async function migrationFileChosen(input) {
-  const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice(tr('EMP 文件不能超过 32 MB','EMP files cannot exceed 32 MB'), true); }
+  const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice(tr("core.emp_files_cannot_exceed_32_mb"), true); }
   pendingMigrationFile = file;
-  openModal(tr('导入 EMP 数据','Import EMP data'), `<p class="muted">${tr('已选择','Selected')}：${esc(file.name)}<br>${tr('确认同一账号或连接时更新已有服务；不同或无法确认时保留双方。名称相同不影响导入。','Verified matching accounts or connections update existing services; different or unverifiable identities remain separate. Matching names do not block import.')}</p><label>${tr('迁移密码','Migration password')}<input id="modal_import_migration_password" type="password" autocomplete="current-password" autofocus></label>`, tr('导入并合并','Import and merge'), submitMigrationImport);
+  openModal(tr("core.import_emp_data"), `<p class="muted">${tr("services.selected")}：${esc(file.name)}<br>${tr("core.verified_matching_accounts_or_connections_update_existing_services_different")}</p><label>${tr("core.migration_password")}<input id="modal_import_migration_password" type="password" autocomplete="current-password" autofocus></label>`, tr("core.import_and_merge"), submitMigrationImport);
 }
 async function submitMigrationImport() {
-  const password = $('modal_import_migration_password').value; if (!password) throw new Error(tr('请填写迁移密码','Enter the migration password')); if (!pendingMigrationFile) throw new Error(tr('请重新选择 EMP 文件','Select the EMP file again'));
+  const password = $('modal_import_migration_password').value; if (!password) throw new Error(tr("core.enter_the_migration_password")); if (!pendingMigrationFile) throw new Error(tr("core.select_the_emp_file_again"));
   const encoded = bytesToBase64(new Uint8Array(await pendingMigrationFile.arrayBuffer()));
   const result = await api('/api/migration/import', {method:'POST', body:JSON.stringify({password, bundle:encoded})});
-  pendingMigrationFile = null; $('migration_file').value = ''; closeModal(); state = await api('/api/config'); fill(); await loadIntegration(); notice(tr(`迁移完成：账户 ${result.accounts} 个，Provider ${result.providers} 个，模型 ${result.models} 个`,`Migration complete: ${result.accounts} accounts, ${result.providers} providers, ${result.models} models`) + (result.renamed_accounts ? tr(`；${result.renamed_accounts} 个冲突账号已重命名`,`; ${result.renamed_accounts} conflicting accounts renamed`) : ''));
+  pendingMigrationFile = null; $('migration_file').value = ''; closeModal(); state = await api('/api/config'); fill(); await loadIntegration(); notice(tr("core.migration_complete_accounts_providers_models", {accounts:result.accounts, providers:result.providers, models:result.models}) + (result.renamed_accounts ? tr("core.conflicting_accounts_renamed", {renamedAccounts:result.renamed_accounts}) : ''));
 }
 let noticeTimer = null;
 function dismissNotice() { clearTimeout(noticeTimer); noticeTimer = null; $('notification').hidden = true; $('status').textContent = ''; }
@@ -297,11 +290,11 @@ function notice(message, error = false) {
   if (!message) return;
   $('status').textContent = message;
   $('status').className = error ? 'danger-text' : 'muted';
-  $('notification_close').setAttribute('aria-label', tr('关闭通知','Dismiss notification'));
+  $('notification_close').setAttribute('aria-label', tr("core.dismiss_notification"));
   $('notification').hidden = false;
   if (!error) noticeTimer = setTimeout(dismissNotice, 4000);
 }
-function protocolLabel(value) { return ({auto:tr('自动检测','Auto detect'),responses:'Responses',chat_completions:'Chat Completions',anthropic_messages:'Anthropic Messages'}[value] || value); }
+function protocolLabel(value) { return ({auto:tr("core.auto_detect"),responses:'Responses',chat_completions:'Chat Completions',anthropic_messages:'Anthropic Messages'}[value] || value); }
 function authLabel(value) { return ({api_key:'Bearer API Key',anthropic_api_key:'Anthropic API Key',forward:'Forward Codex auth'}[value] || value); }
 function formatDate(value) {
   const number = Number(value);
@@ -359,7 +352,7 @@ function updateCatalogDisplayControls() {
   const showContext = state?.catalog_show_context !== false;
   const contextButton = $('catalog_context_toggle');
   if (contextButton) {
-    const label = showContext ? tr('隐藏上下文标签','Hide context labels') : tr('显示上下文标签','Show context labels');
+    const label = showContext ? tr("core.hide_context_labels") : tr("core.show_context_labels");
     contextButton.setAttribute('aria-pressed', String(showContext));
     contextButton.setAttribute('aria-label', label);
     contextButton.title = label;
@@ -375,11 +368,11 @@ function updateCatalogDisplayControls() {
   if (searchButton && searchShell && searchInput) {
     const expanded = searchShell.classList.contains('is-open');
     searchButton.setAttribute('aria-expanded', String(expanded));
-    const label = expanded ? tr('收起模型搜索','Close model search') : tr('搜索模型','Search models');
+    const label = expanded ? tr("core.close_model_search") : tr("search_models");
     searchButton.setAttribute('aria-label', label);
     searchButton.title = label;
-    searchInput.setAttribute('aria-label', tr('搜索模型','Search models'));
-    searchInput.placeholder = tr('搜索模型','Search models');
+    searchInput.setAttribute('aria-label', tr("search_models"));
+    searchInput.placeholder = tr("search_models");
   }
 }
 function toggleCatalogSearch(expanded) {
@@ -421,11 +414,11 @@ async function toggleCatalogContext() {
 
   try {
     const saved = await api('/api/catalog/context-preference', {method:'POST', body:JSON.stringify({catalog_show_context:next})});
-    if (typeof saved?.catalog_show_context !== 'boolean') throw new Error(tr('无法保存上下文标签设置','Could not save the context label preference'));
+    if (typeof saved?.catalog_show_context !== 'boolean') throw new Error(tr("core.could_not_save_the_context_label_preference"));
     state.catalog_show_context = saved.catalog_show_context;
     renderCatalogDisplay();
 
-    notice(tr('上下文标签设置已保存','Context label preference saved'));
+    notice(tr("core.context_label_preference_saved"));
     void syncSavedCatalog();
   } catch (error) {
     state.catalog_show_context = previous;
@@ -440,10 +433,10 @@ async function toggleCatalogContext() {
 function catalogSourceLabel(route) {
   const id=route.id || '';
   const provider=(state.providers || []).find(item=>id.startsWith(item.id+'/'));
-  if(provider)return provider.name || tr('未命名服务','Unnamed service');
+  if(provider)return provider.name || tr("core.unnamed_service");
   const account=(state.accounts || []).find(item=>item.prefix && id.startsWith(item.prefix+'/'));
-  if(account)return account.name || tr('订阅账号','Subscription account');
-  return id.includes('/') ? tr('未关联服务','Unlinked service') : 'Native';
+  if(account)return account.name || tr("core.subscription_account");
+  return id.includes('/') ? tr("core.unlinked_service") : 'Native';
 }
 function renderCatalogDisplay() {
   updateCatalogDisplayControls();
@@ -458,7 +451,7 @@ function renderCatalogDisplay() {
     const route = routes[0]?.id || model.id;
     const displayName = presentationPreview(route, model.default_display_name || model.display_name || model.id, model.context_window);
     const activity = activityIndicatorHtml('models', '', displayName, routes.map(item => item.id));
-    return `<div class="display-row"><div class="route"><div class="catalog-route-title">${activity}<strong>${esc(displayName)}</strong></div><code>${esc(routeText || model.id)}</code></div><button type="button" class="secondary" data-ui-action="catalog-display-editor" data-id="${esc(model.id)}" aria-label="${esc(tr('修改模型显示','Edit model display'))}">›</button></div>`;
+    return `<div class="display-row"><div class="route"><div class="catalog-route-title">${activity}<strong>${esc(displayName)}</strong></div><code>${esc(routeText || model.id)}</code></div><button type="button" class="secondary" data-ui-action="catalog-display-editor" data-id="${esc(model.id)}" aria-label="${esc(tr("core.edit_model_display"))}">›</button></div>`;
   }).join('');
   updateActivityDots();
 }
@@ -466,13 +459,13 @@ function openCatalogDisplayEditor(family) {
   const group = (state.catalog_families || []).find(item => item.id === family); if (!group) return;
   const presentation = familyPresentationFor(family);
   const routes = [...new Set((group.routes || []).map(catalogSourceLabel))].join(' · ');
-  openModal(tr('修改模型显示','Edit model display'), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr('显示名称','Display name'))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><p class="muted">${esc(tr('更改名称后立即应用。','The new name takes effect immediately after saving.'))}</p>`, tr('完成','Done'), async () => {
+  openModal(tr("core.edit_model_display"), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr("core.display_name"))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><p class="muted">${esc(tr("core.the_new_name_takes_effect_immediately_after_saving"))}</p>`, tr("core.done"), async () => {
     const owner = $('modal_body').firstElementChild;
     const candidate = cloneState(); candidate.catalog_family_presentations ||= {}; candidate.catalog_presentations ||= {};
     const current = candidate.catalog_family_presentations[family] || familyPresentationFor(family) || {};
     candidate.catalog_family_presentations[family] = Object.assign({}, current, {catalog_alias:$('modal_catalog_alias').value.trim()});
     for (const route of group.routes || []) delete candidate.catalog_presentations[route.id];
-    await persistState(tr('模型显示已保存','Model display saved'), candidate);
+    await persistState(tr("core.model_display_saved"), candidate);
     if (owner?.isConnected) closeModal();
   });
 }
@@ -495,7 +488,7 @@ async function load() {
     } catch (error) { renderError = error; }
     const loaded = await integration;
     if (renderError) { reportWebClientPhase('window_error', 'failed', renderError); throw renderError; }
-    if (loaded) notice(language === 'en' ? 'Configuration loaded' : '配置已加载');
+    if (loaded) notice(tr("core.configuration_loaded"));
   } catch (error) { notice(error.message, true); }
 }
 let integrationBusy = false;
@@ -529,31 +522,31 @@ function toast(title,body) {notice(title+' · '+body);}
 function runtimeView(runtime) {
   const native = runtime.target === 'native';
   if (runtime.state === 'reload_required') {
-    return [tr('请重新打开 Codex','Reopen Codex'), native
-      ? tr('结束当前操作后，重新打开 Codex 即可使用原生设置。','Finish your current work, then reopen Codex to use the native settings.')
-      : tr('结束当前操作后，重新打开 Codex 即可使用 EMP 模型。','Finish your current work, then reopen Codex to use EMP models.')];
+    return [tr("core.reopen_codex"), native
+      ? tr("core.finish_your_current_work_then_reopen_codex_to_use")
+      : tr("core.finish_your_current_work_then_reopen_codex_to_use_2")];
   }
-  if (native) return [tr('已恢复原生','Native restored'), tr('继续在 Codex 中使用原生模型。','Continue using native models in Codex.')];
+  if (native) return [tr("core.native_restored"), tr("core.continue_using_native_models_in_codex")];
   if (runtime.state === 'catalog_loaded') {
-    return [tr('EMP 模型已加载','EMP models loaded'), tr('模型已同步，在 Codex 中选择模型即可开始。','Models are synced. Choose a model in Codex to get started.')];
+    return [tr("core.emp_models_loaded"), tr("core.models_are_synced_choose_a_model_in_codex_to")];
   }
-  return [tr('EMP 已启动','EMP enabled'), tr('打开 Codex，在模型列表中选择要使用的模型。','Open Codex and choose a model from the model picker.')];
+  return [tr("core.emp_enabled"), tr("core.open_codex_and_choose_a_model_from_the_model")];
 }
 function conflictView(configuration) {
   const conflicts = configuration.conflicts || [];
   if (conflicts.includes('listener_mismatch') || conflicts.includes('catalog_mismatch')) {
-    return [tr('其他 EMP','Other EMP'), tr('Codex 正在使用另一个 EMP。要改用这个 EMP，请先恢复原生 Codex，再点击“启用 EMP”。','Codex is using another EMP. To switch to this one, restore Native Codex first, then click Enable EMP.')];
+    return [tr("core.other_emp"), tr("core.codex_is_using_another_emp_to_switch_to_this")];
   }
-  return [tr('需要处理','Needs attention'), tr('Codex 的 config.toml 被其他程序改过。请先处理配置冲突，再点击“启用 EMP”。','Another program changed Codex config.toml. Resolve the configuration conflict, then click Enable EMP.')];
+  return [tr("core.needs_attention"), tr("core.another_program_changed_codex_config_toml_resolve_the_configuration")];
 }
 function renderIntegration(info) {
   integrationInfo = info;
   const configuration = info.configuration || {};
   const views = {
-    native: ['Native', tr('原生 Codex 设置已保存。','Native Codex settings are saved.')],
-    prepared: [tr('需要恢复','Needs recovery'), tr('EMP 设置未完成，请恢复后重试。','EMP setup is incomplete. Restore and try again.')],
-    restoring: [tr('正在恢复','Restoring'), tr('正在恢复原生 Codex…','Restoring Native Codex…')],
-    unavailable: [tr('不可用','Unavailable'), tr('暂时无法读取 EMP 状态，请重试。','EMP status is unavailable. Try again.')],
+    native: ['Native', tr("core.native_codex_settings_are_saved")],
+    prepared: [tr("core.needs_recovery"), tr("core.emp_setup_is_incomplete_restore_and_try_again")],
+    restoring: [tr("core.restoring"), tr("core.restoring_native_codex")],
+    unavailable: [tr("core.unavailable"), tr("core.emp_status_is_unavailable_try_again")],
   };
   const runtimeNeedsDisplay = ['catalog_loaded','emp_catalog_absent','stopped_waiting_for_start','reload_required','catalog_unverified','verification_failed'].includes(info.runtime?.state || '');
   const view = configuration.state === 'conflict' ? conflictView(configuration)
@@ -577,7 +570,7 @@ async function integrationUpdated() {
     const info = await api('/api/integration');
     renderIntegration(info);
     if (before && before !== 'catalog_loaded' && info.runtime?.state === 'catalog_loaded' && info.runtime?.target === 'emp' && info.runtime?.catalog_verified === true) {
-      toast(tr('Codex 已加载 EMP 模型','Codex loaded EMP models'), tr('在 Codex 中选择模型即可开始。','Choose a model in Codex to get started.'));
+      toast(tr("core.codex_loaded_emp_models"), tr("core.choose_a_model_in_codex_to_get_started"));
     }
   } catch (_) {}
 }
@@ -605,32 +598,24 @@ async function loadIntegration() {
   }
 }
 function confirmIntegrationAction(action) {
-  const actions = language === 'en' ? {
-    enable: ['Apply EMP to Codex', 'Save EMP settings and check Codex’s shared model catalog. Active chats keep running.'],
-    restore: ['Restore native Codex', 'Finish active requests before restoring native Codex settings. EMP stays running, and you can enable it again here.'],
-    reload: ['Check Codex', 'Read the saved target and compare it with Codex’s shared model catalog. This does not confirm request routing.']
-  } : {
-    enable: ['将 EMP 应用于 Codex', '保存 EMP 设置并检查 Codex 共享模型目录。当前对话会继续运行。'],
-    restore: ['恢复原生 Codex', '请先完成当前请求，再恢复原生 Codex 设置。EMP 会继续运行，之后可在此重新启用。'],
-    reload: ['检查 Codex', '读取已保存目标并与 Codex 共享模型目录比较；此操作无法确认请求转发路线。']
-  };
+  const actions = {"enable":[tr("core.apply_emp_to_codex"),tr("core.save_emp_settings_and_check_codex_s_shared_model")],"restore":[tr("core.restore_native_codex"),tr("core.finish_active_requests_before_restoring_native_codex_settings_emp")],"reload":[tr("core.check_codex"),tr("core.read_the_saved_target_and_compare_it_with_codex")]};
   const selected = actions[action]; if (!selected) return;
   openModal(selected[0], `<p>${esc(selected[1])}</p>`, selected[0], () => submitIntegrationAction(action));
 }
 function integrationOutcomeMessage(info, action) {
-  if (action === 'restore') return tr('原生 Codex 设置已恢复，EMP 继续运行。','Native Codex settings restored. EMP is still running.');
+  if (action === 'restore') return tr("core.native_codex_settings_restored_emp_is_still_running");
   if (action === 'enable') {
     const runtime = info.runtime || {};
     if (runtime.state === 'catalog_loaded') return runtime.target === 'native'
-      ? tr('此前的 EMP 模型 ID 已不可见；原生恢复和请求转发路线未确认。','Previous EMP model IDs are absent; native restoration and request routing are unverified.')
-      : tr('EMP 模型目录已匹配；请求转发路线未确认。','The EMP model catalog matches; request routing is unverified.');
-    if (runtime.state === 'emp_catalog_absent') return tr('此前的 EMP 模型 ID 已不可见；原生恢复和请求转发路线未确认。','Previous EMP model IDs are absent; native restoration and request routing are unverified.');
-    if (runtime.state === 'reload_required') return tr('设置已保存；共享目录仍旧。当前对话结束后，可请后端所有者正常重启。','Settings are saved; the shared catalog is stale. After active chats finish, ask the backend owner to restart it normally.');
+      ? tr("core.previous_emp_model_ids_are_absent_native_restoration_and")
+      : tr("core.the_emp_model_catalog_matches_request_routing_is_unverified");
+    if (runtime.state === 'emp_catalog_absent') return tr("core.previous_emp_model_ids_are_absent_native_restoration_and");
+    if (runtime.state === 'reload_required') return tr("core.settings_are_saved_the_shared_catalog_is_stale_after");
     if (runtime.state === 'catalog_unverified' || runtime.state === 'stopped_waiting_for_start') return runtimeView(runtime)[1];
-    if (runtime.state === 'verification_failed') return tr('设置已保存，但无法检查共享模型目录。','Settings are saved, but the shared model catalog could not be checked.');
-    return tr('设置已保存；共享模型目录尚未确认。','Settings are saved; the shared model catalog has not been confirmed.');
+    if (runtime.state === 'verification_failed') return tr("core.settings_are_saved_but_the_shared_model_catalog_could");
+    return tr("core.settings_are_saved_the_shared_model_catalog_has_not");
   }
-  return tr('检查完成。','Check complete.');
+  return tr("core.check_complete");
 }
 async function submitIntegrationAction(action) {
   if (integrationBusy) return;
@@ -638,8 +623,8 @@ async function submitIntegrationAction(action) {
   integrationBusy = true;
   renderIntegrationToggle();
   const progress = action === 'reload'
-    ? tr('正在检查 Codex 模型目录…','Checking the Codex model catalog…')
-    : tr('正在应用设置…','Applying settings…');
+    ? tr("core.checking_the_codex_model_catalog")
+    : tr("core.applying_settings");
   $('modal_status').textContent = progress;
   notice(progress);
   try {
@@ -649,25 +634,25 @@ async function submitIntegrationAction(action) {
     } else if (action === 'restore') {
       refreshed = await api('/api/integration/restore', {method:'POST', body:JSON.stringify({confirm_reload:true})});
       if (refreshed?.configuration?.state !== 'native') {
-        throw new Error(tr('恢复响应未确认原生 Codex 设置。','Restore response did not confirm native Codex settings.'));
+        throw new Error(tr("core.restore_response_did_not_confirm_native_codex_settings"));
       }
       renderIntegration(refreshed);
       $('integration_summary').textContent = integrationOutcomeMessage(refreshed, action);
     } else if (action === 'reload') {
       await api('/api/integration/reload', {method:'POST', body:'{}'});
     } else {
-      throw new Error(tr('未知集成操作','Unknown integration action'));
+      throw new Error(tr("core.unknown_integration_action"));
     }
     if (action !== 'restore') {
       refreshed = await loadIntegration();
-      if (!refreshed) throw new Error(tr('集成状态刷新失败','Failed to refresh integration status'));
+      if (!refreshed) throw new Error(tr("core.failed_to_refresh_integration_status"));
     }
     const message = integrationOutcomeMessage(refreshed, action);
     if (owner?.isConnected) closeModal();
     notice(message);
   } catch (error) {
     if (error.payload && error.payload.configuration && error.payload.runtime) renderIntegration(error.payload);
-    if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；点击账号徽章，在“模型设置”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Click the account badge to restore visibility in Model settings, or add a model.');
+    if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr("core.keep_at_least_one_model_visible_including_a_native");
     if (owner?.isConnected) $('modal_status').textContent = error.message;
     notice(error.message, true);
     throw error;
@@ -683,7 +668,7 @@ function syncSavedCatalog() {
       await api('/api/catalog/refresh', {method:'POST', body:'{}'});
       await loadIntegration();
     } catch (error) {
-      notice(tr('设置已保存，但模型目录同步失败：','Settings saved, but model catalog sync failed: ') + error.message, true);
+      notice(tr("core.settings_saved_but_model_catalog_sync_failed") + error.message, true);
     }
   });
   return catalogSync;
@@ -697,14 +682,14 @@ async function persistState(message, candidate = state) {
 
 function subscriptionPlanKey(value) {
   const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g,'_');
-  const aliases = {prolite:'prolite',pro_lite:'prolite',lite_pro:'prolite',chatgpt_plus:'plus',chatgpt_pro:'pro',team:'business',enterprise:'business',edu:'business'};
+  const aliases = {prolite:'prolite',pro_lite:'prolite',lite_pro:'prolite',promax:'promax',pro_max:'promax',chatgpt_plus:'plus',chatgpt_pro:'pro',team:'business',enterprise:'business',edu:'business'};
   return aliases[normalized] || (['free','go','plus','pro','business'].includes(normalized) ? normalized : (normalized ? 'unknown' : ''));
 }
 function subscriptionPlanLabel(value) {
   const key = subscriptionPlanKey(value);
-  return ({free:'Free',go:'Go',plus:'Plus',prolite:'Pro Lite',pro:'Pro',business:'Business'})[key] || String(value || '').replace(/[_-]+/g,' ').replace(/\b\w/g, letter => letter.toUpperCase());
+  return uiCopy['plan.'+key] ? tr('plan.'+key) : String(value || '').replace(/[_-]+/g,' ').replace(/\b\w/g, letter => letter.toUpperCase());
 }
-function subscriptionPlanColor(value) { return ({free:'#94a3b8',go:'#2bb5a6',plus:'#4c8bea',prolite:'#d9c98f',pro:'#f2b705',business:'#9b7ad8'})[subscriptionPlanKey(value)] || '#94a3b8'; }
+function subscriptionPlanColor(value) { return ({free:'#94a3b8',go:'#2bb5a6',plus:'#4c8bea',prolite:'#d9c98f',pro:'#f2b705',promax:'#ef795b',business:'#9b7ad8'})[subscriptionPlanKey(value)] || '#94a3b8'; }
 function uiIcon(name) {
   const paths = {
     refresh:'<path d="M17 7a7 7 0 0 0-12-2L2 8m0-5v5h5M3 13a7 7 0 0 0 12 2l3-3m0 5v-5h-5"/>',
@@ -722,10 +707,10 @@ function accountSummaryHtml(account, hoverText = '') {
   const plan = key ? `<span class="account-segment subscription-plan plan-${key}">${esc(key === 'free' ? 'Free' : subscriptionPlanLabel(account.quota?.plan_type))}</span>` : '';
   const credit = account.quota?.credits;
   const balance = credit?.unlimited === true ? '∞' : credit?.balance !== undefined ? integerCredit(credit.balance) : null;
-  const credits = balance === null ? '' : `<span class="account-segment account-credit" title="${esc(tr('可用余额','Available credits'))}"><span class="credit-mark" aria-hidden="true">C</span><strong>${esc(balance)}</strong></span>`;
+  const credits = balance === null ? '' : `<span class="account-segment account-credit" title="${esc(tr("core.available_credits"))}"><span class="credit-mark" aria-hidden="true">C</span><strong>${esc(balance)}</strong></span>`;
   const resets = resetCreditCount(account);
-  const reset = resets > 0 ? `<span class="account-segment" title="${esc(tr('可用重置次数','Available resets'))}">${uiIcon('reset')}<strong>${esc(resets)}</strong></span>` : '';
-  return `<button type="button" class="account-summary" data-ui-action="account-details" data-id="${esc(account.id)}" aria-haspopup="dialog" aria-label="${esc(label+' · '+tr('查看账号信息','View account details'))}" title="${esc(hoverText || label)}"><span class="account-segment account-name"><span>${esc(label)}</span></span>${plan}${credits}${reset}</button>`;
+  const reset = resets > 0 ? `<span class="account-segment" title="${esc(tr("core.available_resets"))}">${uiIcon('reset')}<strong>${esc(resets)}</strong></span>` : '';
+  return `<button type="button" class="account-summary" data-ui-action="account-details" data-id="${esc(account.id)}" aria-haspopup="dialog" aria-label="${esc(label+' · '+tr("core.view_account_details"))}" title="${esc(hoverText || label)}"><span class="account-segment account-name"><span>${esc(label)}</span></span>${plan}${credits}${reset}</button>`;
 }
 
 function activityNowSeconds() { return Date.now() / 1000 + activityClockOffsetSeconds; }
@@ -749,16 +734,16 @@ function activitySummary(matches) {
   return {inFlight, lastFinished, recent};
 }
 function activityDescription(label, summary) {
-  const subject = String(label || tr('请求','Request'));
+  const subject = String(label || tr("core.request"));
   if (summary.inFlight > 0) {
-    const count = tr(`${summary.inFlight} 个请求正在进行`,`${summary.inFlight} active ${summary.inFlight === 1 ? 'request' : 'requests'}`);
+    const count = tr(summary.inFlight === 1 ? 'core.active_request' : 'core.active_requests', {count:summary.inFlight});
     const finished = summary.lastFinished === null
-      ? tr('尚无完成记录','no completion recorded yet')
-      : tr(`最近完成 ${activityTimestampText(summary.lastFinished)}`,`last finished ${activityTimestampText(summary.lastFinished)}`);
+      ? tr("core.no_completion_recorded_yet")
+      : tr("core.last_finished", {lastFinished:activityTimestampText(summary.lastFinished)});
     return `${subject}: ${count}; ${finished}`;
   }
-  if (summary.recent && summary.lastFinished !== null) return `${subject}: ${tr(`最近请求完成于 ${activityTimestampText(summary.lastFinished)}`,`last request finished at ${activityTimestampText(summary.lastFinished)}`)}`;
-  return `${subject}: ${tr('近期没有请求','no recent requests')}`;
+  if (summary.recent && summary.lastFinished !== null) return `${subject}: ${tr("core.last_request_finished_at", {lastFinished:activityTimestampText(summary.lastFinished)})}`;
+  return `${subject}: ${tr("core.no_recent_requests")}`;
 }
 function activityIndicatorHtml(kind, id, label, modelIds = []) {
   const attributes = kind === 'models'
@@ -909,18 +894,18 @@ function quotaDisplayBuckets(account) {
 }
 function quotaText(account) {
   const buckets = quotaVisibleBuckets(account);
-  if (!buckets.length) return tr('未刷新','Not refreshed');
+  if (!buckets.length) return tr("core.not_refreshed");
   return buckets.map(item => `${quotaDisplay.label(tr)} ${quotaDisplay.value(item.remaining)}%/${compactWindowText(item.windowMinutes)}${resetCountdownText(item.resetsAt) ? ' ' + resetCountdownText(item.resetsAt) : ''}`).join('\n');
 }
 function quotaMetersHtml(account, busy = false, animate = false) {
   let buckets = quotaDisplayBuckets(account);
   if (!buckets.length && account.quota_pending) buckets = [300,10080].map(windowMinutes => ({windowMinutes,pending:true}));
-  if (!buckets.length) return busy ? `<div class="quota-meter quota-pending is-refreshing"><div class="quota-meter-head"><span class="quota-window">${tr('正在获取额度','Fetching quota')}</span></div><div class="quota-battery" role="status" aria-label="${esc(tr('正在获取额度','Fetching quota'))}"><span class="quota-battery-fill"></span></div></div>` : `<span class="muted">${tr('未刷新','Not refreshed')}</span>`;
+  if (!buckets.length) return busy ? `<div class="quota-meter quota-pending is-refreshing"><div class="quota-meter-head"><span class="quota-window">${tr("core.fetching_quota")}</span></div><div class="quota-battery" role="status" aria-label="${esc(tr("core.fetching_quota"))}"><span class="quota-battery-fill"></span></div></div>` : `<span class="muted">${tr("core.not_refreshed")}</span>`;
   return `<div class="quota-stack">${buckets.map(item => {
     const duration = compactWindowText(item.windowMinutes);
     const label = item.limitId && !['codex','claude'].includes(item.limitId) ? `${quotaLimitLabel(item.limitId)} · ${duration}` : duration;
     const pending = item.pending || (account.quota_pending && item.unreported);
-    const unavailable = pending ? tr('等待额度数据','Waiting for quota') : tr(`${label} 未回传限制`, `No ${label} limit reported`);
+    const unavailable = pending ? tr("core.waiting_for_quota") : tr("core.no_limit_reported", {label:label});
     if (item.unreported || pending) {
       // Fixed presentation for an unreported 5h window, without a countdown timestamp.
       const fixed = !pending && item.windowMinutes === 300;
@@ -929,7 +914,7 @@ function quotaMetersHtml(account, busy = false, animate = false) {
     const value = quotaDisplay.value(item.remaining), mode = quotaDisplay.label(tr);
     const level = item.remaining <= 20 ? 'is-low' : item.remaining <= 50 ? 'is-medium' : 'is-high';
     const reset = resetCountdownText(item.resetsAt), aria = `${label} · ${mode} ${value}%`;
-    return `<div class="quota-meter ${level}${busy ? ' is-refreshing' : ''}${animate ? ' is-updated' : ''}"><div class="quota-meter-head"><span class="quota-window">${esc(label)} · ${mode}</span><strong class="quota-value">${esc(value)}%</strong></div><div class="quota-battery" role="progressbar" aria-label="${esc(aria)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(value)}" style="--quota-level:${esc(value)}%"><span class="quota-battery-fill"></span></div>${reset ? `<span class="quota-reset" title="${tr('距离额度重置','Time until quota reset')}" data-reset-countdown="${esc(item.resetsAt)}">${esc(reset)}</span>` : ''}</div>`;
+    return `<div class="quota-meter ${level}${busy ? ' is-refreshing' : ''}${animate ? ' is-updated' : ''}"><div class="quota-meter-head"><span class="quota-window">${esc(label)} · ${mode}</span><strong class="quota-value">${esc(value)}%</strong></div><div class="quota-battery" role="progressbar" aria-label="${esc(aria)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(value)}" style="--quota-level:${esc(value)}%"><span class="quota-battery-fill"></span></div>${reset ? `<span class="quota-reset" title="${tr("core.time_until_quota_reset")}" data-reset-countdown="${esc(item.resetsAt)}">${esc(reset)}</span>` : ''}</div>`;
   }).join('')}</div>`;
 }
 function accountQuotaSignature(account) { return JSON.stringify(account?.quota || null); }
@@ -972,7 +957,7 @@ async function refreshQuotaState() {
     if (snapshot.refresh_errors) {
       const before = JSON.stringify(refreshErrors);
       for (const id of Object.keys(refreshErrors)) delete refreshErrors[id];
-      for (const [id,code] of Object.entries(snapshot.refresh_errors)) refreshErrors[id] = quotaErrorText({payload:{error:{code}},message:tr('余量查询失败','Quota query failed')},id);
+      for (const [id,code] of Object.entries(snapshot.refresh_errors)) refreshErrors[id] = quotaErrorText({payload:{error:{code}},message:tr("core.quota_query_failed")},id);
       changed = changed || before !== JSON.stringify(refreshErrors);
     }
     state.native_account = snapshot.native_account || null; state.accounts = Array.isArray(snapshot.accounts) ? snapshot.accounts : [];
@@ -1001,7 +986,7 @@ function resetAttemptKey(accountId, creditId) {
 }
 function openResetCredits(accountId, back = modalReturn()) {
   const account = [...(state.native_account ? [state.native_account] : []),...(state.accounts || [])].find(item => item.id === accountId);
-  if (!account || resetCreditCount(account) <= 0) { notice(tr('此账户没有可用的重置机会。','This account has no available reset opportunities.'),true); return; }
+  if (!account || resetCreditCount(account) <= 0) { notice(tr("core.this_account_has_no_available_reset_opportunities"),true); return; }
   const entries = resetCreditEntries(account);
   const selectable = entries.filter(item => item.status === 'available' && typeof item.id === 'string' && item.id.length > 0);
   const prior = resetAttempts.get(accountId);
@@ -1009,14 +994,14 @@ function openResetCredits(accountId, back = modalReturn()) {
   const cards = entries.map(item => {
     const expires = utcDateTimeText(item.expires_at), remaining = resetCountdownText(item.expires_at);
     const choiceIndex = selectable.indexOf(item);
-    const choice = choiceIndex >= 0 ? `<input type="radio" name="reset_credit_choice" value="${choiceIndex}" aria-label="${esc(expires || tr('重置机会','Reset opportunity'))}"${choiceIndex === selectedIndex ? ' checked' : ''}>` : '';
-    return `<label class="reset-credit-card reset-credit-choice">${choice}<span class="reset-credit-time"><time>${expires ? `${tr('到期','Expires')} · ${esc(expires)}` : tr('未提供到期时间','No expiry provided')}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</span></label>`;
+    const choice = choiceIndex >= 0 ? `<input type="radio" name="reset_credit_choice" value="${choiceIndex}" aria-label="${esc(expires || tr("core.reset_opportunity"))}"${choiceIndex === selectedIndex ? ' checked' : ''}>` : '';
+    return `<label class="reset-credit-card reset-credit-choice">${choice}<span class="reset-credit-time"><time>${expires ? `${tr("core.expires")} · ${esc(expires)}` : tr("core.no_expiry_provided")}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</span></label>`;
   }).join('');
-  const fallback = !selectable.length ? `<p class="muted">${entries.length ? tr('没有可选择的机会明细；OpenAI 会选择下一个可用机会。','No selectable credit details were returned; OpenAI will choose the next available opportunity.') : tr('OpenAI 只返回了可用次数，未返回每次机会的到期明细；OpenAI 会选择下一个可用机会。','OpenAI returned only the available count; it will choose the next available opportunity.')}</p>` : '';
-  const body = `<div class="reset-credit-note"><p><strong>${tr('使用后会发生什么','What happens after use')}</strong><br>${tr('使用一次重置机会会重置符合资格的 Codex 额度周期；新的额度与下一次刷新时间由 OpenAI 返回，EMP 会在使用后重新读取。','Using one opportunity resets the eligible Codex quota windows. OpenAI returns the new quota and next refresh time, which EMP must read again after use.')}</p></div><div class="reset-credit-summary">${tr('可用机会','Available opportunities')} <strong>${esc(resetCreditCount(account))}</strong></div><div class="reset-credit-list">${cards}</div>${fallback}`;
-  openModal(tr('重置额度详情','Reset quota details'),body,tr('继续确认','Continue to confirmation'),async () => {
+  const fallback = !selectable.length ? `<p class="muted">${entries.length ? tr("core.no_selectable_credit_details_were_returned_openai_will_choose") : tr("core.openai_returned_only_the_available_count_it_will_choose")}</p>` : '';
+  const body = `<div class="reset-credit-note"><p><strong>${tr("core.what_happens_after_use")}</strong><br>${tr("core.using_one_opportunity_resets_the_eligible_codex_quota_windows")}</p></div><div class="reset-credit-summary">${tr("core.available_opportunities")} <strong>${esc(resetCreditCount(account))}</strong></div><div class="reset-credit-list">${cards}</div>${fallback}`;
+  openModal(tr("core.reset_quota_details"),body,tr("core.continue_to_confirmation"),async () => {
     const selected = document.querySelectorAll('input[name="reset_credit_choice"]:checked')[0];
-    if (selectable.length && !selected) throw new Error(tr('请选择要使用的重置机会。','Choose a reset opportunity to use.'));
+    if (selectable.length && !selected) throw new Error(tr("core.choose_a_reset_opportunity_to_use"));
     const credit = selectable[Number(selected?.value)] || null;
     const creditId = credit?.id || null;
     resetAttemptKey(accountId,creditId);
@@ -1027,19 +1012,19 @@ function openResetCredits(accountId, back = modalReturn()) {
 function confirmResetCredit(account,credit, back) {
   const expires = credit ? utcDateTimeText(credit.expires_at) : '';
   const remaining = credit ? resetCountdownText(credit.expires_at) : '';
-  const body = `<div class="reset-credit-note"><p><strong>${tr('请再次确认','Please confirm again')}</strong><br>${tr('账号','Account')}：${esc(account.name || account.id)}${expires ? `<br>${tr('到期','Expires')}：${esc(expires)}` : ''}${remaining ? `<br>${esc(remaining)}` : ''}</p></div><p class="muted">${tr('确认后会消耗一次重置机会，同时重置额度与刷新时间。此操作无法撤销。','Confirming uses one reset opportunity and resets both the quota and its refresh time. This cannot be undone.')}</p>`;
-  openModal(tr('确认重置额度','Confirm quota reset'),body,tr('确认并使用重置','Confirm and use reset'),async () => {
+  const body = `<div class="reset-credit-note"><p><strong>${tr("core.please_confirm_again")}</strong><br>${tr("services.account")}：${esc(account.name || account.id)}${expires ? `<br>${tr("core.expires")}：${esc(expires)}` : ''}${remaining ? `<br>${esc(remaining)}` : ''}</p></div><p class="muted">${tr("core.confirming_uses_one_reset_opportunity_and_resets_both_the")}</p>`;
+  openModal(tr("core.confirm_quota_reset"),body,tr("core.confirm_and_use_reset"),async () => {
     const owner = $('modal_body').firstElementChild;
     const payload = {idempotency_key:resetAttemptKey(account.id,credit?.id || null)};
     if (credit) payload.credit_id = credit.id;
     const result = await api('/api/accounts/' + encodeURIComponent(account.id) + '/quota-reset',{method:'POST',body:JSON.stringify(payload)});
-    if (result.outcome === 'nothingToReset') { resetAttempts.delete(account.id); throw new Error(tr('OpenAI 表示目前没有符合资格的额度周期；重置机会没有被使用。','OpenAI reports no eligible quota window. No reset opportunity was used.')); }
-    if (result.outcome === 'noCredit') { resetAttempts.delete(account.id); throw new Error(tr('OpenAI 表示此账户已没有可用的重置机会。','OpenAI reports no available reset opportunity for this account.')); }
-    if (!['reset','alreadyRedeemed'].includes(result.outcome)) throw new Error(tr('OpenAI 没有返回可确认的重置结果。','OpenAI did not return a confirmed reset result.'));
+    if (result.outcome === 'nothingToReset') { resetAttempts.delete(account.id); throw new Error(tr("core.openai_reports_no_eligible_quota_window_no_reset_opportunity")); }
+    if (result.outcome === 'noCredit') { resetAttempts.delete(account.id); throw new Error(tr("core.openai_reports_no_available_reset_opportunity_for_this_account")); }
+    if (!['reset','alreadyRedeemed'].includes(result.outcome)) throw new Error(tr("core.openai_did_not_return_a_confirmed_reset_result"));
     resetAttempts.delete(account.id);
     if (owner?.isConnected) closeModal();
     await refreshQuotaState();
-    notice(result.refresh_error ? tr('重置已完成，但新的额度与刷新时间暂时读取失败；请稍后刷新。','Reset completed, but the new quota and refresh time could not be read yet. Refresh again shortly.') : tr('重置已完成，额度与刷新时间已更新。','Reset completed. Quota and refresh time were updated.'));
+    notice(result.refresh_error ? tr("core.reset_completed_but_the_new_quota_and_refresh_time") : tr("core.reset_completed_quota_and_refresh_time_were_updated"));
   }, null, {back});
 }
 
@@ -1052,7 +1037,7 @@ const codexAccountImport = createCodexAccountImport({$, tr, esc, api, openModal,
   onSaved:async () => {
     state = await api('/api/config');
     await api('/api/catalog/refresh', {method:'POST', body:'{}'});
-    fill(); await loadIntegration(); notice(tr('订阅已导入','Subscription imported'));
+    fill(); await loadIntegration(); notice(tr("core.subscription_imported"));
   }
 });
 const subscriptionSettings=createSubscriptionSettings({getState:()=>state,cloneState,$,tr,esc,api,services,persistState,closeModal,notice,help:shadowHelp,compactNumber:shadowCompactNumber,compactContext,canonicalDisplayName,modelSort,uiIcon});
@@ -1060,67 +1045,67 @@ function editAccount(id,navigation={}) { return subscriptionSettings.open(id,nav
 function quotaErrorText(error, id) {
   const code = error.payload?.error?.code;
   const messages = {
-    quota_auth_required: id === state.native_account?.id ? tr('当前 Codex 登录已失效，请在 Codex 中重新登录。','The current Codex login is no longer valid. Sign in again in Codex.') : tr('导入的登录凭据已失效，请重新登录该账号，再导入该账号最新的 auth.json。','The imported credentials are no longer valid. Sign in again, then import the latest auth.json for that account.'),
-    quota_access_denied: tr('额度服务拒绝访问（403）；请检查账号权限或网络。','Quota access denied (403). Check account permissions or network.'),
-    quota_rate_limited: tr('额度查询过于频繁（429），请稍后再试。','Quota queries are rate limited (429). Try again later.'),
-    quota_transport_error: tr('Codex 无法连接 ChatGPT 工作区路由服务；请检查 DNS、VPN/TUN、系统代理和网络连通性。','Codex could not reach ChatGPT workspace routing. Check DNS, VPN/TUN, the system proxy, and network connectivity.'),
-    quota_fetch_failed: tr('额度服务查询失败，请检查网络后重试。','Quota service query failed. Check network connectivity and retry.'),
-    quota_account_read_failed: tr('Codex 无法读取账号登录状态。','Codex could not read the account login state.'),
-    quota_initialize_failed: tr('无法读取额度，请重新扫描 Codex 后重试。','Could not read quota. Rescan Codex and try again.'),
-    quota_timeout: tr('额度查询超时，请稍后再试。','Quota query timed out. Try again later.'),
-    quota_credentials_save_failed: tr('无法保存刷新后的登录凭据，请检查本地凭据存储后重新导入账号。','Could not save refreshed credentials. Check local credential storage, then re-import the account.'),
+    quota_auth_required: id === state.native_account?.id ? tr("core.the_current_codex_login_is_no_longer_valid_sign") : tr("core.the_imported_credentials_are_no_longer_valid_sign_in"),
+    quota_access_denied: tr("core.quota_access_denied_403_check_account_permissions_or_network"),
+    quota_rate_limited: tr("core.quota_queries_are_rate_limited_429_try_again_later"),
+    quota_transport_error: tr("core.codex_could_not_reach_chatgpt_workspace_routing_check_dns"),
+    quota_fetch_failed: tr("core.quota_service_query_failed_check_network_connectivity_and_retry"),
+    quota_account_read_failed: tr("core.codex_could_not_read_the_account_login_state"),
+    quota_initialize_failed: tr("core.could_not_read_quota_rescan_codex_and_try_again"),
+    quota_timeout: tr("core.quota_query_timed_out_try_again_later"),
+    quota_credentials_save_failed: tr("core.could_not_save_refreshed_credentials_check_local_credential_storage"),
   };
   return messages[code] || error.message;
 }
-async function refreshAccount(id, announce = true) { if (refreshingAccounts.has(id)) return false; const before = state.native_account?.id === id ? state.native_account : state.accounts.find(a => a.id === id); const previousQuota = accountQuotaSignature(before); refreshingAccounts.add(id); delete refreshErrors[id]; renderServices(); try { const result = await api('/api/accounts/' + encodeURIComponent(id) + '/quota', {method:'POST', body:'{}'}); if (previousQuota !== accountQuotaSignature(result.account)) quotaAnimationAccounts.add(id); if (state.native_account?.id === id) state.native_account = result.account; else { const index = state.accounts.findIndex(a => a.id === id); if (index >= 0) state.accounts[index] = result.account; } if (announce) notice(tr('账户余量已刷新','Account quota refreshed')); return true; } catch (error) { const message = quotaErrorText(error, id); refreshErrors[id] = message; if (error.payload?.error?.code === 'quota_auth_required' && state.native_account?.id !== id) { const account = state.accounts.find(a => a.id === id); if (account) account.credential_status = 'invalid'; } if (announce) notice(tr('刷新失败','Refresh failed') + ': ' + message, true); return false; } finally { refreshingAccounts.delete(id); renderServices(); } }
+async function refreshAccount(id, announce = true) { if (refreshingAccounts.has(id)) return false; const before = state.native_account?.id === id ? state.native_account : state.accounts.find(a => a.id === id); const previousQuota = accountQuotaSignature(before); refreshingAccounts.add(id); delete refreshErrors[id]; renderServices(); try { const result = await api('/api/accounts/' + encodeURIComponent(id) + '/quota', {method:'POST', body:'{}'}); if (previousQuota !== accountQuotaSignature(result.account)) quotaAnimationAccounts.add(id); if (state.native_account?.id === id) state.native_account = result.account; else { const index = state.accounts.findIndex(a => a.id === id); if (index >= 0) state.accounts[index] = result.account; } if (announce) notice(tr("core.account_quota_refreshed")); return true; } catch (error) { const message = quotaErrorText(error, id); refreshErrors[id] = message; if (error.payload?.error?.code === 'quota_auth_required' && state.native_account?.id !== id) { const account = state.accounts.find(a => a.id === id); if (account) account.credential_status = 'invalid'; } if (announce) notice(tr("core.refresh_failed") + ': ' + message, true); return false; } finally { refreshingAccounts.delete(id); renderServices(); } }
 async function refreshAllAccounts() {
   const accounts = services.accounts().filter(account=>account.credential_set);
   // Local Claude providers share the same OS login, so query that subscription once.
   const claude = (state.providers || []).find(p => p.execution_backend === 'claude_cli' && p.auth_mode === 'claude_login');
-  if (!accounts.length && !claude) return notice(tr('还没有可刷新服务','No refreshable services'), true);
+  if (!accounts.length && !claude) return notice(tr("core.no_refreshable_services"), true);
   const button = $('refresh_all'); button.disabled = true;
   try {
     const jobs = accounts.map(a => refreshAccount(a.id, false));
     if (claude) jobs.push(services.refresh(claude.id, false));
     const results = await Promise.all(jobs), failed = results.filter(success => !success).length;
-    notice(failed ? tr(`刷新完成：成功 ${results.length - failed} 个，失败 ${failed} 个`, `Refresh complete: ${results.length - failed} succeeded, ${failed} failed`) : tr('全部服务额度已刷新','All service quotas refreshed'), Boolean(failed));
+    notice(failed ? tr("core.refresh_complete_succeeded_failed", {count:results.length - failed, failed:failed}) : tr("core.all_service_quotas_refreshed"), Boolean(failed));
   } finally { button.disabled = false; }
 }
 async function removeAccount(id, element) { return accountDetails.remove(id, element); }
 
-const serviceConnections=createServiceConnections({getState:()=>state,cloneState,$,tr,esc,api,openModal,closeModal,persistState,notice,presets:officialProviders,protocolLabel,authLabel,randomId:()=>crypto.randomUUID(),confirmRemoval:question=>confirm(question)});
+const serviceConnections=createServiceConnections({getState:()=>state,getLanguage:()=>language,cloneState,$,tr,esc,api,openModal,closeModal,persistState,notice,presets:officialProviders,protocolLabel,authLabel,randomId:()=>crypto.randomUUID(),confirmRemoval:question=>confirm(question)});
 const {openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openCustomProviderForm,editProvider,removeProvider}=serviceConnections;
 const modelEditorOptions = {getState:() => state, $, tr, esc, api, persistState, openModal, closeModal, notice, upstreamErrorText, testModelAudio, testModelVision, movePresentation, format:{visionStatus, modalityLabel, compactContext, usableContext}};
 const modelEditor = createModelEditor(modelEditorOptions);
 const {open:openManualModelModal} = modelEditor;
 const providerModelSettings = createProviderModelManager({getState:()=>state,cloneState,$,tr,esc,api,persistState,openModal,notice,modelSort,compactContext,capabilitySummary:model=>capabilitySummary(model),uiIcon,testModel,
   createEditor:options=>createModelEditor({...modelEditorOptions,...options}),isPreview:()=>Boolean(window.EMP_PREVIEW)});
-async function testModel(id) { try { notice(tr(`正在测试 ${id} …`,`Testing ${id}…`)); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr('测试成功：','Test succeeded: ') + (result.output_text || tr('已收到模型响应','model response received'))); } catch (error) { notice(tr('测试失败：','Test failed: ') + error.message, true); } }
+async function testModel(id) { try { notice(tr("core.testing", {id:id})); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr("core.test_succeeded") + (result.output_text || tr("core.model_response_received"))); } catch (error) { notice(tr("core.test_failed") + error.message, true); } }
 async function testModelVision(id) {
   try {
-    notice(tr(`正在向 ${id} 发送 EMP 图标…`,`Sending the EMP icon to ${id}…`));
+    notice(tr("core.sending_the_emp_icon_to", {id:id}));
     const image = await api('/api/models/vision-test-image');
-    if (!String(image.data_url || '').startsWith('data:image/png;base64,')) throw new Error(tr('测试图像不可用','Test image is unavailable'));
+    if (!String(image.data_url || '').startsWith('data:image/png;base64,')) throw new Error(tr("core.test_image_is_unavailable"));
     const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:[{role:'user', content:[{type:'input_text',text:'Describe this image in one short sentence.'},{type:'input_image',image_url:image.data_url}]}], max_output_tokens:512})});
     const answer = String(result.output_text || (result.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('')).trim();
-    if (!answer) throw new Error(tr('模型没有返回图像描述','The model returned no image description'));
-    notice(tr('图像测试收到回复（仅为本次兼容性观察，非官方能力保证）：','Image test received a reply (observed compatibility, not an official guarantee): ') + answer.slice(0, 240));
+    if (!answer) throw new Error(tr("core.the_model_returned_no_image_description"));
+    notice(tr("core.image_test_received_a_reply_observed_compatibility_not_an") + answer.slice(0, 240));
     return true;
-  } catch (error) { notice(tr('图像测试未通过：','Image test did not succeed: ') + upstreamErrorText(error), true); return false; }
+  } catch (error) { notice(tr("core.image_test_did_not_succeed") + upstreamErrorText(error), true); return false; }
 }
 
 // Sends one second of stereo speech: "Front left" on the left channel, then "Front right" on the right.
 async function testModelAudio(id) {
   try {
-    notice(tr(`正在向 ${id} 发送声道测试音频…`,`Sending the channel test audio to ${id}…`));
+    notice(tr("core.sending_the_channel_test_audio_to", {id:id}));
     const sound = await api('/api/models/audio-test-sound');
-    if (sound.format !== 'wav' || !sound.data) throw new Error(tr('测试音频不可用','Test audio is unavailable'));
+    if (sound.format !== 'wav' || !sound.data) throw new Error(tr("core.test_audio_is_unavailable"));
     const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:[{role:'user', content:[{type:'input_text',text:'Transcribe the speech in this audio and say which stereo channel each phrase plays on.'},{type:'input_audio',input_audio:{data:sound.data, format:'wav'}}]}], max_output_tokens:512})});
     const answer = String(result.output_text || (result.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('')).trim();
-    if (!answer) throw new Error(tr('模型没有返回音频内容','The model returned nothing about the audio'));
-    notice(tr('音频测试收到回复（应听到左声道 “Front left”、右声道 “Front right”）：','Audio test reply (expect “Front left” on the left, “Front right” on the right): ') + answer.slice(0, 240));
+    if (!answer) throw new Error(tr("core.the_model_returned_nothing_about_the_audio"));
+    notice(tr("core.audio_test_reply_expect_front_left_on_the_left") + answer.slice(0, 240));
     return true;
-  } catch (error) { notice(tr('音频测试未通过：','Audio test did not succeed: ') + upstreamErrorText(error), true); return false; }
+  } catch (error) { notice(tr("core.audio_test_did_not_succeed") + upstreamErrorText(error), true); return false; }
 }
 
 function stopModalFeatures() {
@@ -1143,19 +1128,19 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
   if (serviceContext) modalNavigation.reopen = () => restoreServiceModal(serviceContext, {back});
   const backButton = $('modal_back');
   backButton.hidden = !back; backButton.onclick = back || null;
-  backButton.title = backButton.ariaLabel = tr('返回上一层','Back to previous dialog');
+  backButton.title = backButton.ariaLabel = tr("reports.back_to_previous_dialog");
   const closeButton = $('modal_close');
   closeButton.hidden = Boolean(back);
-  closeButton.title = closeButton.ariaLabel = tr('关闭','Close');
+  closeButton.title = closeButton.ariaLabel = tr("core.close");
   $('modal_title').textContent = title;
   $('modal_body').innerHTML = body;
   services.mount(serviceContext);
   $('modal_body').scrollTop = 0;
   $('modal_status').textContent = '';
-  const button = $('modal_submit'), label = submitLabel || tr('确定','Confirm');
+  const button = $('modal_submit'), label = submitLabel || tr("core.confirm");
   button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false;
   const handler = async () => {
-    button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = '';
+    button.disabled = true; button.textContent = tr("core.working"); $('modal_status').textContent = '';
     try { await submit(); } catch (error) { if (button.onclick === handler) $('modal_status').textContent = error.message; }
     finally {
       if (button.onclick === handler) { button.disabled = false; button.textContent = label; }
@@ -1170,10 +1155,10 @@ function closeModal() { migration.stop(); servicePresentation.hide(); stopModalF
 const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,localizedReleaseNotes,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW),reload:()=>window.location.reload()});
 const {open:openUpdate,stop:stopUpdatePoll,request:requestUpdate,render:renderUpdate,hint:renderUpdateHint,checkHint:checkUpdateHint,openRelease:openLatestRelease,copyCommands:copyLinuxMigrationCommands}=updates;
 async function quitEmp() {
-  if (!confirm(tr('退出 EMP 并恢复原生 Codex？', 'Exit EMP and restore native Codex?'))) return;
+  if (!confirm(tr("core.exit_emp_and_restore_native_codex"))) return;
   try {
     await api('/api/quit', {method:'POST', body:'{}'});
-    openModal(tr('EMP 正在退出', 'EMP is exiting'), `<p>${tr('已恢复原生配置，可以关闭此页面。', 'Native configuration restored. You can close this page.')}</p>`, '', null);
+    openModal(tr("core.emp_is_exiting"), `<p>${tr("core.native_configuration_restored_you_can_close_this_page")}</p>`, '', null);
   } catch (error) { notice(error.message, true); }
 }
 
@@ -1255,7 +1240,6 @@ if (window.addEventListener) {
 </script>
 <script src="/assets/presentation.js"></script>
 <script>
-translations['zh-CN'].statistics='统计';
 const statistics=createStatistics({api,$,tr,esc,getState:()=>state,getLanguage:()=>language,openModal,callReports,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport});
 const presentationSyncMotion=installMotion(refreshResetCountdowns);
 installInteractions();

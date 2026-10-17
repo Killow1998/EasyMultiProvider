@@ -16,7 +16,7 @@ function createMigration() {
     if(decodeButton)decodeButton.disabled=view.busy;
     const box=$('migration_preview_rows');if(!box)return;
     const expanded=new Set([...box.querySelectorAll('details[open]')].map(node=>node.dataset.migrationDetail));
-    $('migration_selected_count').textContent=tr(`已选择 ${selections(view).length} 个服务`,`${selections(view).length} services selected`);
+    $('migration_selected_count').textContent=tr("transfers.services_selected", {count:selections(view).length});
     if(view.mode==='export')box.innerHTML=previewRows(view.rows.filter(row=>row.selected),view,true);
     else if(view.importConfig)box.innerHTML=preferenceRows(view)+previewRows(services(view.importConfig,true,{accounts:view.importConfig.accounts?.map(a=>a.id),providers:view.importConfig.providers?.map(p=>p.id)}),view,true);
     else box.innerHTML=previewRows(view.rows.filter(row=>row.selected),view);
@@ -29,12 +29,12 @@ function createMigration() {
   }
   function render(savedBody=null) {
     const candidate=view, importing=candidate.mode==='import';
-    const submitLabel=candidate.demo?tr('结束演示','Finish demo'):importing?tr('导入','Import'):tr('下载 .emp','Download .emp');
-    openModal(tr('数据迁移','Data migration'),savedBody?'':bodyHtml(candidate),submitLabel,
+    const submitLabel=candidate.demo?tr("transfers.finish_demo"):importing?tr("transfers.import"):tr("core.download_emp");
+    openModal(tr("data_migration"),savedBody?'':bodyHtml(candidate),submitLabel,
       importing&&!candidate.token?null:()=>submit(candidate),null,{back:candidate.parent?()=>back(candidate):null});
     if(savedBody)$('modal_body').append(savedBody);
-    $('modal_title').innerHTML=`<span>${esc(tr('数据迁移','Data migration'))}</span>${shadowHelp(mergeRules())}`;
-    const help=$('modal_title').querySelector('.shadow-help');help.dataset.migrationRulesHelp='';help.setAttribute('aria-label',tr('导入合并规则','Import merge rules'));
+    $('modal_title').innerHTML=`<span>${esc(tr("data_migration"))}</span>${shadowHelp(mergeRules())}`;
+    const help=$('modal_title').querySelector('.shadow-help');help.dataset.migrationRulesHelp='';help.setAttribute('aria-label',tr("transfers.import_merge_rules"));
     const node=$('shadow_migration');
     node.onclick=event=>{
       const mode=event.target.closest('[data-migration-mode]')?.dataset.migrationMode;
@@ -81,7 +81,7 @@ function createMigration() {
     const controller=candidate.controller;
     previewTimer=setTimeout(async()=>{
       if(!active(candidate))return;
-      candidate.busy=true;updatePreview();$('modal_status').textContent=tr('正在更新预览…','Updating preview…');
+      candidate.busy=true;updatePreview();$('modal_status').textContent=tr("transfers.updating_preview");
       try{
         const result=await api('/api/migration/preview',{method:'POST',body:JSON.stringify({token:candidate.token,current_config:migrationScrub(state),selections:selections(candidate),...options(candidate)}),signal:controller.signal});
         if(!active(candidate)||controller.signal.aborted)return;
@@ -104,9 +104,9 @@ function createMigration() {
   async function decode(candidate) {
     if(!active(candidate)||candidate.busy)return;
     const file=$('shadow_migration_file').files[0], password=$('shadow_import_password').value;
-    if(!file||!password){$('modal_status').textContent=tr('请选择文件并填写密码','Select a file and enter its password');return;}
-    if(file.size>32*1024*1024){$('modal_status').textContent=tr('迁移包不能超过 32 MiB','Migration packages cannot exceed 32 MiB');return;}
-    candidate.busy=true;updatePreview();$('modal_status').textContent=tr('正在打开迁移包…','Opening package…');
+    if(!file||!password){$('modal_status').textContent=tr("transfers.select_a_file_and_enter_its_password");return;}
+    if(file.size>32*1024*1024){$('modal_status').textContent=tr("transfers.migration_packages_cannot_exceed_32_mib");return;}
+    candidate.busy=true;updatePreview();$('modal_status').textContent=tr("transfers.opening_package");
     try{
       const bundle=bytesToBase64(new Uint8Array(await file.arrayBuffer()));
       const result=await api('/api/migration/decode',{method:'POST',body:JSON.stringify({password,bundle}),signal:candidate.controller.signal});
@@ -118,10 +118,10 @@ function createMigration() {
   async function submit(candidate) {
     if(!active(candidate)||candidate.busy)return;
     if(candidate.mode==='import'){
-      if(!candidate.token)throw new Error(tr('请选择迁移文件、填写密码，然后点击「打开迁移包」。','Select a migration file, enter its password, then click Open package.'));
-      if(!candidate.previewReady||!candidate.importConfig)throw new Error(tr('服务列表尚未准备好，请稍候再导入。','The service list is not ready yet. Please wait before importing.'));
-      if(candidate.preferenceConflicts?.some(conflict=>Object.values(conflict.fields).some(field=>!field.resolved)))throw new Error(tr('请在导入预览中选择模型显示与上下文设置','Choose model visibility and context settings in this import preview'));
-      if(candidate.demo){closeModal();notice(tr('演示已完成，未保存服务','Demo finished; no services saved'));return;}
+      if(!candidate.token)throw new Error(tr("transfers.select_a_migration_file_enter_its_password_then_click"));
+      if(!candidate.previewReady||!candidate.importConfig)throw new Error(tr("transfers.the_service_list_is_not_ready_yet_please_wait"));
+      if(candidate.preferenceConflicts?.some(conflict=>Object.values(conflict.fields).some(field=>!field.resolved)))throw new Error(tr("transfers.choose_model_visibility_and_context_settings_in_this_import"));
+      if(candidate.demo){closeModal();notice(tr("transfers.demo_finished_no_services_saved"));return;}
       const selected=selections(candidate);
       for(const row of importedNameRows(candidate)){
         const source=selected.find(item=>item.kind===row.kind && item.id===row.record._shadow_source_id);
@@ -130,23 +130,23 @@ function createMigration() {
       await api('/api/migration/import',{method:'POST',body:JSON.stringify({token:candidate.token,selections:selected,...options(candidate)}),signal:candidate.controller.signal});
       if(!active(candidate))return;
       const loaded=await api('/api/config');if(!active(candidate))return;
-      state=loaded;fill();closeModal();notice(tr('所选服务已导入','Selected services imported'));return;
+      state=loaded;fill();closeModal();notice(tr("transfers.selected_services_imported"));return;
     }
     const password=$('shadow_export_password').value, confirmation=$('shadow_export_password_confirm').value;
-    if(password!==confirmation)throw new Error(tr('两次密码不一致','Passwords do not match'));
+    if(password!==confirmation)throw new Error(tr("transfers.passwords_do_not_match"));
     const passwordBytes=new TextEncoder().encode(password.trim()).length;
-    if(passwordBytes>4096)throw new Error(tr('密码不能超过 4096 个 UTF-8 字节','Password cannot exceed 4096 UTF-8 bytes'));
-    if(passwordBytes<12)throw new Error(tr('密码至少需要 12 个 UTF-8 字节','Password requires at least 12 UTF-8 bytes'));
+    if(passwordBytes>4096)throw new Error(tr("transfers.password_cannot_exceed_4096_utf_8_bytes"));
+    if(passwordBytes<12)throw new Error(tr("transfers.password_requires_at_least_12_utf_8_bytes"));
     candidate.busy=true;updatePreview();
     const controls=[...$('shadow_migration').querySelectorAll('input,button')];controls.forEach(control=>control.disabled=true);
-    $('modal_status').textContent=tr('正在加密所选服务…','Encrypting selected services…');
+    $('modal_status').textContent=tr("transfers.encrypting_selected_services");
     let result;try{const authorization=await api('/api/migration/export/confirm',{method:'POST',body:'{}'});result=await api('/api/migration/export',{method:'POST',body:JSON.stringify({confirmation:authorization.confirmation,password,selections:selections(candidate),...options(candidate)}),signal:candidate.controller.signal});}finally{if(active(candidate)){controls.forEach(control=>control.disabled=false);candidate.busy=false;updatePreview();}}
     if(!active(candidate))return;
     const bytes=Uint8Array.from(atob(result.bundle),c=>c.charCodeAt(0));const url=URL.createObjectURL(new Blob([bytes],{type:'application/octet-stream'}));
     const link=document.createElement('a');link.href=url;link.download='EMP.emp';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    closeModal();notice(tr('所选服务已导出','Selected services exported'));
+    closeModal();notice(tr("transfers.selected_services_exported"));
   }
-  return {open(){if(window.EMP_PREVIEW && shadowServicesDemoActive){notice(tr('结束服务演示后可迁移数据','End the service demo to migrate data'));return;}stop();view={mode:'import',rows:[],includeContext:true,includeRename:true,controller:new AbortController()};render();},stop};
+  return {open(){if(window.EMP_PREVIEW && shadowServicesDemoActive){notice(tr("transfers.end_the_service_demo_to_migrate_data"));return;}stop();view={mode:'import',rows:[],includeContext:true,includeRename:true,controller:new AbortController()};render();},stop};
 }
 
 function migrationScrub(value) {

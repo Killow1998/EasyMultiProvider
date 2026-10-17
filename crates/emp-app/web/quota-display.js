@@ -9,7 +9,7 @@ function createQuotaDisplay({read, save}) {
   return {
     mode:() => mode,
     value,
-    label:tr => mode === 'used' ? tr('已用', 'Used') : tr('剩余', 'Remaining'),
+    label:tr => mode === 'used' ? tr("core.used") : tr("core.remaining"),
     set(next) {
       if (!['remaining', 'used'].includes(next)) return;
       mode = next;

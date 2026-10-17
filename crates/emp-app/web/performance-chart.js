@@ -1,7 +1,7 @@
 // Native SVG time chart; missing latency samples stay missing, rather than zero.
 function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
   const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-  const label = metric => metric === 'tokens' ? 'Token' : metric === 'cost_nanos' ? tr('API 估算 · USD','API estimate · USD') : metric === 'calls' ? tr('调用量','Calls') : metric === 'ttft_ms' ? 'TTFT' : 'TPS';
+  const label = metric => metric === 'tokens' ? 'Token' : metric === 'cost_nanos' ? tr("reports.api_estimate_usd") : metric === 'calls' ? tr("reports.calls_3") : metric === 'ttft_ms' ? 'TTFT' : 'TPS';
   const format = (value, metric) => !valid(value) ? '—' : metric === 'cost_nanos' ? 'US$'+(value/1e9).toFixed(4) : metric === 'tokens' ? number(value) : metric === 'calls' ? number(value) : metric === 'ttft_ms' ? seconds(value) : tps(value);
   const date = value => new Date(value*1000).toLocaleString(getLanguage() === 'en' ? 'en-US' : 'zh-CN', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
   function buckets(report) {
@@ -32,9 +32,9 @@ function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
   }
   function html(report, metric) {
     const {step} = buckets(report);
-    const interval = step >= 3600 ? `${+(step/3600).toFixed(1)} ${tr('小时','h')}` : `${+(step/60).toFixed(1)} ${tr('分钟','min')}`;
-    const buttons = [['calls',tr('调用量','Calls')],['tokens_per_second','TPS'],['ttft_ms','TTFT']].map(([key,title]) => `<button type="button" class="secondary${metric === key ? ' active' : ''}" aria-pressed="${metric === key}" data-call-metric="${key}">${title}</button>`).join('');
-    return `<div class="presentation-performance-chart"><div class="presentation-chart-heading"><div><h3>${tr('调用趋势','Call activity')}</h3><p>${tr('每','Per ')} ${esc(interval)} · ${esc(date(report.start))} — ${esc(date(report.end))}</p></div><div class="report-tabs" role="group" aria-label="${tr('指标','Metric')}">${buttons}</div></div><div class="presentation-chart-canvas" tabindex="0" role="group" aria-label="${esc(label(metric))} · ${tr('左右方向键查看数据','Use left and right arrows to inspect data')}"><svg class="presentation-time-chart" role="img" aria-label="${esc(label(metric))}"></svg><div class="presentation-chart-tooltip" hidden role="status" aria-live="polite"></div></div></div>`;
+    const interval = step >= 3600 ? `${+(step/3600).toFixed(1)} ${tr("reports.h")}` : `${+(step/60).toFixed(1)} ${tr("reports.min")}`;
+    const buttons = [['calls',tr("reports.calls_3")],['tokens_per_second','TPS'],['ttft_ms','TTFT']].map(([key,title]) => `<button type="button" class="secondary${metric === key ? ' active' : ''}" aria-pressed="${metric === key}" data-call-metric="${key}">${title}</button>`).join('');
+    return `<div class="presentation-performance-chart"><div class="presentation-chart-heading"><div><h3>${tr("reports.call_activity")}</h3><p>${tr("reports.per")} ${esc(interval)} · ${esc(date(report.start))} — ${esc(date(report.end))}</p></div><div class="report-tabs" role="group" aria-label="${tr("reports.metric")}">${buttons}</div></div><div class="presentation-chart-canvas" tabindex="0" role="group" aria-label="${esc(label(metric))} · ${tr("reports.use_left_and_right_arrows_to_inspect_data")}"><svg class="presentation-time-chart" role="img" aria-label="${esc(label(metric))}"></svg><div class="presentation-chart-tooltip" hidden role="status" aria-live="polite"></div></div></div>`;
   }
   function bind(root, report, metric) {
     const canvas = root.querySelector('.presentation-chart-canvas'); if (!canvas) return () => {};
@@ -60,7 +60,7 @@ function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
       const heading = document.createElement('span'), value = document.createElement('strong'), foot = document.createElement('small');
       heading.textContent = `${date(row.start)} – ${new Date(Math.min(report.end,row.start+step)*1000).toLocaleTimeString(getLanguage() === 'en' ? 'en-US' : 'zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})}`;
       value.textContent = `${label(metric)}  ${format(row[metric],metric)}`;
-      foot.textContent = bar ? `${number(samples)} ${tr('条记录','records')}` : `${number(samples)} ${tr('个样本','samples')}`;
+      foot.textContent = bar ? `${number(samples)} ${tr("reports.records")}` : `${number(samples)} ${tr("reports.samples")}`;
       tip.append(heading,value,foot);
       for (const series of report.chartSeries || []) { const amount = series.values[index] || 0; if (!amount) continue; const item = document.createElement('small'); item.style.color=series.color; item.textContent=series.label+'  '+format(amount,metric); tip.append(item); }
       tip.hidden = false;
@@ -91,7 +91,7 @@ function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
         const first = part[0], last = part.at(-1), points = part.map(point).join(' ');
         return `${part.length > 1 ? `<polygon class="presentation-chart-area" points="${x(first.index)},${bottom} ${points} ${x(last.index)},${bottom}"/><polyline class="presentation-chart-line" points="${points}"/>` : ''}${part.map(p => `<circle class="presentation-chart-point" cx="${x(p.index).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3"/>`).join('')}`;
       }).join('');
-      const empty = !parts.length || (bar && maximum === 0) ? `<text class="presentation-chart-empty" x="${left+plotWidth()/2}" y="96" text-anchor="middle">${tr('此时间段暂无数据','No data in this period')}</text>` : '';
+      const empty = !parts.length || (bar && maximum === 0) ? `<text class="presentation-chart-empty" x="${left+plotWidth()/2}" y="96" text-anchor="middle">${tr("reports.no_data_in_this_period")}</text>` : '';
       svg.innerHTML = `${axis}${ticks}<rect data-chart-cursor visibility="hidden" y="${top}" width="${plotWidth()/rows.length}" height="${bottom-top}"/>${marks}${empty}`;
       if (index >= 0) show(index);
     }

@@ -143,19 +143,19 @@ pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
 fn prepare_input(body: &Value) -> Result<PreparedInput, &'static str> {
     let mut transcript = projection::normalized_transcript(body);
     let system_prompt = super::instructions::take(&mut transcript)?;
-    // Text needs no per-part media markers. In particular, never expand item
-    // metadata into thousands of markers only to discard them afterwards.
-    match projection::transcript(&transcript) {
-        Ok(stdin) => {
-            return Ok(PreparedInput {
-                system_prompt,
-                expected_user_content: ExpectedUserContent::Text(stdin.clone()),
-                stdin,
-                input_format: InputFormat::Text,
-            });
-        }
-        Err("unsupported_input_modality") => {}
-        Err(error) => return Err(error),
+    // Structured history needs stable block boundaries so appending a turn
+    // does not invalidate the entire cached user message.
+    if !matches!(
+        transcript.get("input"),
+        Some(Value::Array(_) | Value::Object(_))
+    ) {
+        let stdin = projection::transcript(&transcript)?;
+        return Ok(PreparedInput {
+            system_prompt,
+            expected_user_content: ExpectedUserContent::Text(stdin.clone()),
+            stdin,
+            input_format: InputFormat::Text,
+        });
     }
     let input = transcript.get("input");
     let items: Vec<&Value> = match input {
@@ -183,6 +183,9 @@ fn prepare_input(body: &Value) -> Result<PreparedInput, &'static str> {
         let item_type = item.get("type").and_then(Value::as_str);
         if is_message(item)
             && let Some(parts) = item.get("content").and_then(Value::as_array)
+            && parts
+                .iter()
+                .any(|part| is_media_type(part.get("type").and_then(Value::as_str)))
         {
             let metadata = object_without(item, "content");
             let before = content.len();
@@ -211,6 +214,9 @@ fn prepare_input(body: &Value) -> Result<PreparedInput, &'static str> {
             item_type,
             Some("function_call_output" | "custom_tool_call_output")
         ) && let Some(parts) = item.get("output").and_then(Value::as_array)
+            && parts
+                .iter()
+                .any(|part| is_media_type(part.get("type").and_then(Value::as_str)))
         {
             let metadata = object_without(item, "output");
             let before = content.len();

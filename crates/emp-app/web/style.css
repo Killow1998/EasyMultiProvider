@@ -110,7 +110,7 @@ button[data-icon]{display:inline-flex}
 .entity-card-actions button:disabled{min-width:74px}
 .entity-card-quota{min-width:0}
 .credit-mark{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:linear-gradient(145deg,#f7d66d,#d99b16);box-shadow:inset 0 0 0 2px rgba(255,255,255,.45);color:#5f4100;font-size:10px;font-weight:800}
-.plan-free{--plan-color:#94a3b8}.plan-go{--plan-color:#2bb5a6}.plan-plus{--plan-color:#4c8bea}.plan-prolite{--plan-color:#d9c98f}.plan-pro{--plan-color:#f2b705}.plan-business{--plan-color:#9b7ad8}.plan-unknown{--plan-color:#94a3b8}
+.plan-free{--plan-color:#94a3b8}.plan-go{--plan-color:#2bb5a6}.plan-plus{--plan-color:#4c8bea}.plan-prolite{--plan-color:#d9c98f}.plan-pro{--plan-color:#f2b705}.plan-promax{--plan-color:#ef795b}.plan-business{--plan-color:#9b7ad8}.plan-unknown{--plan-color:#94a3b8}
 .account-list{container-type:inline-size;container-name:accounts;--account-action-width:80px}
 html[lang="en"] .account-list{--account-action-width:108px}
 .account-card{grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;align-items:center;gap:7px 12px;padding:10px 12px}

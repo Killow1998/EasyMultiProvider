@@ -2,10 +2,10 @@
 function periodLocalInput(date) { return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0,16); }
 const PERIOD_SECONDS = {'1h':3600, '1d':86400, '7d':7*86400, '30d':30*86400};
 const periodPickers = {};
-function periodPresetLabel(preset) { return ({'1h':tr('近 1 小时','Last hour'),'1d':tr('近 1 天','Last day'),'7d':tr('近 7 天','Last 7 days'),'30d':tr('近 30 天','Last 30 days'),all:tr('全部历史','All history')})[preset] || preset; }
+function periodPresetLabel(preset) { return ({'1h':tr("core.last_hour"),'1d':tr("core.last_day"),'7d':tr("core.last_7_days"),'30d':tr("core.last_30_days"),all:tr("core.all_history")})[preset] || preset; }
 function periodPickerHtml(id, presets) {
   const presetButtons = presets.map(preset => `<button type="button" class="secondary" data-ui-action="period-preset" data-id="${esc(id)}" data-preset="${esc(preset)}">${esc(periodPresetLabel(preset))}</button>`).join('');
-  return `<div class="period-picker"><div class="period-presets" role="group" aria-label="${esc(tr('时间段','Period'))}">${presetButtons}</div><div class="period-custom"><label>${tr('开始','From')}<input type="datetime-local" id="${esc(id)}_start" data-ui-action="period-edit" data-id="${esc(id)}"></label><span class="period-sep">—</span><label>${tr('结束','Until')}<input type="datetime-local" id="${esc(id)}_end" data-ui-action="period-edit" data-id="${esc(id)}"></label><button type="button" class="secondary" data-ui-action="period-apply" data-id="${esc(id)}">${tr('查询','Apply')}</button><button type="button" class="secondary" data-report-action="refresh" data-icon="refresh" data-ui-action="period-refresh" data-id="${esc(id)}">${t('refresh')}</button></div></div>`;
+  return `<div class="period-picker"><div class="period-presets" role="group" aria-label="${esc(tr("core.period"))}">${presetButtons}</div><div class="period-custom"><label>${tr("core.from")}<input type="datetime-local" id="${esc(id)}_start" data-ui-action="period-edit" data-id="${esc(id)}"></label><span class="period-sep">—</span><label>${tr("core.until")}<input type="datetime-local" id="${esc(id)}_end" data-ui-action="period-edit" data-id="${esc(id)}"></label><button type="button" class="secondary" data-ui-action="period-apply" data-id="${esc(id)}">${tr("core.apply")}</button><button type="button" class="secondary" data-report-action="refresh" data-icon="refresh" data-ui-action="period-refresh" data-id="${esc(id)}">${t('refresh')}</button></div></div>`;
 }
 function periodPresetRange(preset) {
   const end = Math.ceil(Date.now()/60000)*60;
@@ -34,7 +34,7 @@ function registerPeriodPicker(id, preset, onChange, range = null) {
 function selectPeriodPreset(id, preset) { return setPeriod(id, {preset, ...periodPresetRange(preset)}, {user:true}); }
 function applyCustomPeriod(id) {
   const start = new Date($(`${id}_start`)?.value).getTime()/1000, end = new Date($(`${id}_end`)?.value).getTime()/1000;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return notice(tr('请选择有效的时间段。','Choose a valid period.'), true);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return notice(tr("core.choose_a_valid_period"), true);
   return setPeriod(id, {preset:'', start, end}, {user:true});
 }
 function editPeriod(id) { const picker = periodPickers[id]; if (picker) { picker.preset = ''; markPeriodPreset(id); } }

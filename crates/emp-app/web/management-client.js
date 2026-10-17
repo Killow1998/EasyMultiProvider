@@ -16,26 +16,26 @@ function createManagementClient({tr, fetch, storage, window}) {
   }
   const SESSION_ERRORS = ['management session is required', 'proxy caller authentication is required'];
   const UPSTREAM_ERROR_GROUPS = [
-    [['auth'], ['API Key 无效或已过期，请检查后重新填写。','The API key is invalid or expired. Check it and enter it again.']],
-    [['payment_required'], ['上游账户余额不足或需要付费。','The provider account is out of credit or requires payment.']],
-    [['rate_limit'], ['请求过于频繁，请稍后重试。','Too many requests. Try again later.']],
-    [['network','dns_failure','tls_failure','connect_timeout','proxy_unavailable','proxy_reset'], ['连不上模型服务，请检查网络、代理和 Base URL。','Cannot reach the model service. Check the network, proxy and Base URL.']],
-    [['timeout','upstream_504','first_event_timeout','first_output_timeout','idle_after_output','local_deadline'], ['模型服务响应超时，请稍后重试。','The model service timed out. Try again later.']],
-    [['upstream_5xx','upstream_capacity'], ['模型服务暂时不可用，请稍后重试。','The model service is temporarily unavailable. Try again later.']],
-    [['protocol_rejection'], ['模型服务拒绝了这个请求，可能不支持该模型或参数。','The model service rejected the request; it may not support this model or its parameters.']],
-    [['protocol_error','malformed_terminal','stream_error','stream_incomplete'], ['模型服务返回了无法识别的内容。','The model service returned something EMP could not read.']],
-    [['output_limit'], ['模型输出超过了上限。','The model output hit its limit.']],
-    [['context_length_exceeded'], ['内容超过了模型的上下文上限。','The input exceeds the model context window.']],
-    [['content_filter'], ['内容被模型服务的安全策略拦截。','The model service blocked the content.']],
+    [['auth'], "core.the_api_key_is_invalid_or_expired_check_it"],
+    [['payment_required'], "core.the_provider_account_is_out_of_credit_or_requires"],
+    [['rate_limit'], "core.too_many_requests_try_again_later"],
+    [['network','dns_failure','tls_failure','connect_timeout','proxy_unavailable','proxy_reset'], "core.cannot_reach_the_model_service_check_the_network_proxy"],
+    [['timeout','upstream_504','first_event_timeout','first_output_timeout','idle_after_output','local_deadline'], "core.the_model_service_timed_out_try_again_later"],
+    [['upstream_5xx','upstream_capacity'], "core.the_model_service_is_temporarily_unavailable_try_again_later"],
+    [['protocol_rejection'], "core.the_model_service_rejected_the_request_it_may_not"],
+    [['protocol_error','malformed_terminal','stream_error','stream_incomplete'], "core.the_model_service_returned_something_emp_could_not_read"],
+    [['output_limit'], "core.the_model_output_hit_its_limit"],
+    [['context_length_exceeded'], "core.the_input_exceeds_the_model_context_window"],
+    [['content_filter'], "core.the_model_service_blocked_the_content"],
   ];
   // Turns an api() failure into a sentence that says whether the key, the network or the service is at fault.
   function upstreamErrorText(error, fallback = '') {
     if (error?.session) return error.message;
     const detail = error?.payload?.error || {};
-    if (detail.code === 'active_codex_writer') return tr('Codex 仍在使用对话历史。请先完成活动对话，再关闭 ChatGPT App、Codex CLI 和 IDE 中的 Codex 会话，然后重试。','Codex is still using conversation history. Finish active conversations, close ChatGPT App, Codex CLI and Codex sessions in your IDE, then retry.');
-    if (detail.message === 'provider API key is not configured') return tr('还没有填写 API Key。','No API key has been entered yet.');
+    if (detail.code === 'active_codex_writer') return tr("core.codex_is_still_using_conversation_history_finish_active_conversations");
+    if (detail.message === 'provider API key is not configured') return tr("core.no_api_key_has_been_entered_yet");
     const group = UPSTREAM_ERROR_GROUPS.find(([types]) => types.includes(detail.type));
-    return group ? tr(...group[1]) : error?.message || fallback;
+    return group ? tr(group[1]) : error?.message || fallback;
   }
   async function api(path, options = {}) {
     const headers = new Headers(options.headers || {});
@@ -43,12 +43,12 @@ function createManagementClient({tr, fetch, storage, window}) {
     const response = await managementFetch(path, {...options, headers});
     const text = await response.text();
     let data = {};
-    try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {error:{message:text || tr('服务器返回了无效响应', 'The server returned an invalid response')}}; }
+    try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {error:{message:text || tr("core.the_server_returned_an_invalid_response")}}; }
     if (!response.ok) {
       // Upstream failures carry error.type; EMP's own 401s mean this page lost its session.
       const session = response.status === 401 && SESSION_ERRORS.includes(data.error?.message);
       if (session) clearSessionToken();
-      const error = new Error(session ? tr('管理页登录已失效（EMP 可能已重启）。请从 EMP 重新打开管理页。','This page is no longer signed in (EMP may have restarted). Reopen the management page from EMP.') : data.error?.message || response.statusText || `HTTP ${response.status}`);
+      const error = new Error(session ? tr("core.this_page_is_no_longer_signed_in_emp_may") : data.error?.message || response.statusText || `HTTP ${response.status}`);
       error.session = session;
       error.payload = data;
       error.status = response.status;
@@ -65,7 +65,7 @@ function createManagementClient({tr, fetch, storage, window}) {
       pageUrl.searchParams.delete('bootstrap');
       window.history.replaceState(window.history.state, '', pageUrl.pathname + pageUrl.search + pageUrl.hash);
     }
-    if (bootstrapTokens.length > 1) throw new Error(tr('登录链接无效，请从 EMP 重新打开管理页。','This sign-in link is invalid. Reopen the management page from EMP.'));
+    if (bootstrapTokens.length > 1) throw new Error(tr("core.this_sign_in_link_is_invalid_reopen_the_management"));
     if (bootstrapTokens.length === 1) {
       const response = await fetch('/api/session', {
         method:'POST',
@@ -86,7 +86,7 @@ function createManagementClient({tr, fetch, storage, window}) {
         sessionToken = readStoredSessionToken();
         if (!sessionToken) throw new Error(data.error?.message || response.statusText || `HTTP ${response.status}`);
       } else {
-        if (typeof data.session !== 'string' || !data.session) throw new Error(tr('服务器未返回登录会话。','The server did not return a management session.'));
+        if (typeof data.session !== 'string' || !data.session) throw new Error(tr("core.the_server_did_not_return_a_management_session"));
         saveSessionToken(data.session);
       }
     } else {
@@ -103,7 +103,7 @@ function createManagementClient({tr, fetch, storage, window}) {
         return;
       }
     }
-    if (!legacyCookieAuth && !sessionToken) throw new Error(tr('请从 EMP 启动时提供的链接打开管理页。','Open the management page from the link printed by EMP.'));
+    if (!legacyCookieAuth && !sessionToken) throw new Error(tr("core.open_the_management_page_from_the_link_printed_by"));
   }
   function receiveStorageEvent(event) {
     if (event.key !== SESSION_STORAGE_KEY) return false;

@@ -30,7 +30,7 @@ def main():
         headers['X-EMP-Session']=json.loads((source/'state/web-session.json').read_text())['token']
         assert browser.execute('return !window.EMP_PREVIEW && !!document.getElementById("shadow_migration_open") && !document.querySelector("[data-i18n=export_emp]");')
         assert browser.execute('return !window.EMP_REVIEW_CHOICES && !window.EMP_REVIEW_ACTION && !document.getElementById("demo_account_import");')
-        for path in ['/recovery', '/assets/preview-review.js', '/assets/preview-recovery.js', '/api/recovery']:
+        for path in ['/recovery', '/assets/preview-review.js', '/assets/preview-recovery.js', '/assets/copy-preview.js', '/api/recovery']:
             assert request(base + path, headers=headers)[0] == 404, path
         checks.append('Production serves real product assets only; review adapters, recovery demos and mock actions are unavailable')
         browser.execute('managementEvents.stop();clearInterval(quotaStateTimer);quotaStateTimer=null;')

@@ -24,7 +24,7 @@ function createReportQuery({api, onState, onResult}) {
 function setReportState(root, loading, error, tr) {
   root.setAttribute('aria-busy', String(loading));
   const status = root.querySelector('[data-report-status]');
-  status.textContent = loading ? tr('正在查询…','Loading…') : error;
+  status.textContent = loading ? tr("reports.loading") : error;
   status.dataset.loading = String(loading);
   for (const button of root.querySelectorAll('[data-report-action]')) {
     button.disabled = loading;
