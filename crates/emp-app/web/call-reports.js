@@ -15,7 +15,7 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
   function recordHtml(row) {
     const session = row.session_name || (row.thread_id || row.session_id || '').slice(0,12) || tr("reports.unlinked");
     const selected = row.selected_name || row.client_model || row.model_id || '—';
-    const operation = ({image_generation:tr("reports.image_generation"),image_edit:tr("reports.image_edit")})[row.route];
+    const operation = ({image_generation:tr("reports.image_generation"),image_edit:tr("reports.image_edit"),agent_task_recovery:tr("reports.agent_task_recovery")})[row.route];
     const returned = row.response_model || (row.state === 'active' ? tr("reports.awaiting_response") : '—');
     const models = [operation ? field(tr("reports.operation"),operation) : '',field(operation ? tr("reports.image_model") : tr("reports.selected_in_codex"), selected),field(tr("reports.sent_upstream"),row.upstream_model || '—'),field(tr("reports.reported_upstream"),returned)].join('');
     const inputs = n(row.input_tokens), cached = n(row.cached_input_tokens), written = n(row.cache_write_tokens);

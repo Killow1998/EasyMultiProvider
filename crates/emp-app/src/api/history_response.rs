@@ -57,6 +57,17 @@ pub(crate) fn destination_error_response(
     observation: &mut RequestObservation,
 ) -> Vec<u8> {
     match error {
+        DestinationPrepareError::Collaboration {
+            status,
+            code,
+            message,
+        } => crate::http::response::json_error_response(
+            status,
+            crate::http::response::status_text(status),
+            message,
+            Some(code),
+            &[],
+        ),
         DestinationPrepareError::Router(error) => router_error_response(error),
         DestinationPrepareError::ClaudeCli(error) => {
             crate::api::claude_response::http_response(&error)

@@ -136,6 +136,7 @@ fn default_configuration() -> Value {
         "subscription_search": {"enabled": true, "account_id": ""},
         "auto_enable_on_start": true,
         "auto_review_fallback": true,
+        "external_collaboration": "off",
         "image_routing": {"mode":"follow", "account_id":""},
         "codex_runtime_sources": ["auto"],
         "pricing_aliases": {},
@@ -621,5 +622,16 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
             Some(_) => return Err(ConfigError::new(format!("{key} must be boolean"))),
         };
     }
+    normalized["external_collaboration"] = match raw.get("external_collaboration") {
+        None => Value::String("off".into()),
+        Some(Value::String(mode)) if matches!(mode.as_str(), "off" | "on_demand" | "on") => {
+            Value::String(mode.clone())
+        }
+        _ => {
+            return Err(ConfigError::new(
+                "external_collaboration must be off, on_demand or on",
+            ));
+        }
+    };
     Ok(normalized)
 }

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.7 (2026-10-17)
+
+### 中文
+
+- 修复配置外部 API 服务后自动改写协作工具、导致原生 GPT 生成降速的问题；默认保留官方原生协作工具。
+- 跨服务子代理提供“关闭 / 按需恢复 / 打开”，默认关闭。按需恢复使用原任务账号的 GPT-6 Luna（low），单独记录调用和用量；打开使用明文任务，GPT 生成可能降速。关闭时的错误提示说明开启路径。
+- 设置问号补充三种模式的用途及同模型 TPS、全流程耗时比例；中英文布局支持窄屏。切换模式时更新 WebSocket 工具目录，已恢复任务复用内存缓存，避免重复恢复调用。
+
+### English
+
+- Fix Native GPT slowdown caused by automatically rewriting collaboration tools whenever an external API service is configured. Official native collaboration tools are now preserved by default.
+- Cross-service subagents offers Off / On-demand recovery / On, defaulting to Off. On-demand recovery uses GPT-6 Luna (low) on the task's original account and records its calls and usage separately. On uses plaintext tasks and can slow GPT generation. Disabled-delegation errors explain where to enable it.
+- Explain all three modes and show within-model TPS and full workflow time ratios in Settings help, with Chinese/English narrow-screen layouts. Refresh the WebSocket tool catalog after mode changes and reuse recovered tasks from memory to avoid duplicate recovery calls.
+
 ## 0.13.6 (2026-10-17)
 
 ### 中文

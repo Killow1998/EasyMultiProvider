@@ -351,6 +351,21 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 @media(max-width:500px){.request-route{grid-template-columns:minmax(0,1fr);gap:7px}.request-route-arrow{transform:rotate(90deg);line-height:16px}.request-receipt{padding:12px}.setting-row{gap:10px}}
 .setting-row:last-child{border-bottom:0}
 .setting-row>div{min-width:0}
+.collaboration-setting{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:20px}
+.collaboration-setting>div{max-width:100%}
+.collaboration-setting .setting-help{white-space:normal;overflow:visible;overflow-wrap:break-word}
+.collaboration-setting .quota-display-choice{max-width:100%;flex-wrap:wrap;justify-self:end}
+@media(max-width:500px){.collaboration-setting{grid-template-columns:minmax(0,1fr);gap:10px}}
+.collaboration-title{display:flex;align-items:center;gap:8px}
+.shadow-feedback.shadow-feedback-table{width:640px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:auto;pointer-events:auto;white-space:normal}
+.collaboration-comparison p{margin:8px 0}
+.collaboration-modes{margin:12px 0 16px}
+.collaboration-modes dt{margin-top:10px;font-weight:600}
+.collaboration-modes dd{margin:3px 0 0;color:var(--muted)}
+.collaboration-table{overflow:auto;max-height:45vh}
+.collaboration-table table{display:table;overflow:visible;border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+.collaboration-table th,.collaboration-table td{text-align:left;padding:7px;border-bottom:1px solid var(--border);white-space:nowrap}
+.collaboration-table thead th{position:sticky;top:0;z-index:1;background:var(--panel)}
 .setting-title{font-weight:600;font-size:13px}
 .routing-settings .setting-title{margin:0;color:var(--text)}
 .routing-mode,.routing-account{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,1fr)}

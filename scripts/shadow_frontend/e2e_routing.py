@@ -28,6 +28,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--emp', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--embedded', action='store_true', help='Verify product assets embedded in the supplied binary')
     args = parser.parse_args()
     checks = []
     with tempfile.TemporaryDirectory(prefix='emp-routing-ui-') as temp, contextlib.ExitStack() as stack:
@@ -45,10 +46,27 @@ def main():
         status, _ = request(base + '/api/accounts/import', {'id': 'image-fixture', 'prefix': 'image-fixture',
             'name': 'Image fixture <safe>', 'auth_json': {'tokens': {'access_token': 'imported-fixture', 'account_id': 'imported-owner'}}}, headers)
         assert status == 200
-        frontend, _ = candidate_frontend(stack, base, Path(__file__).resolve().parents[2] / 'crates/emp-app/web')
+        frontend = base
+        if not args.embedded:
+            frontend, _ = candidate_frontend(stack, base, Path(__file__).resolve().parents[2] / 'crates/emp-app/web')
         browser = Browser(stack, root)
         browser.navigate(url.replace(base, frontend))
-        browser.execute('setLanguage("en");openSettings();document.querySelector("[data-ui-action=routing-settings]").click();')
+        if args.embedded:
+            assert browser.execute('return !window.EMP_PREVIEW && !window.EMP_REVIEW_CHOICES;')
+            for path in ['/assets/preview-routing.js', '/assets/preview-review.js', '/assets/copy-preview.js']:
+                assert request(base + path, headers=headers)[0] == 404, path
+            checks.append('Packaged product assets expose no Shadow adapters or preview state')
+        browser.execute('setLanguage("en");openSettings();')
+        collaboration = '[data-ui-action="setting-toggle"][data-id="external_collaboration"]'
+        assert browser.execute('return document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode;', collaboration) == 'off'
+        for enabled in ['on_demand', 'on', 'off']:
+            browser.execute('document.querySelector(arguments[0]+"[data-mode="+arguments[1]+"]").click();', collaboration, enabled)
+            wait_for(lambda: browser.execute('return state.external_collaboration===arguments[0] && document.querySelector(arguments[1]+"[aria-pressed=true]").dataset.mode===arguments[0] && !document.querySelector(arguments[1]).disabled;', enabled, collaboration))
+            assert json.loads((root / 'config.json').read_text())['external_collaboration'] == enabled
+            browser.execute('closeModal();openSettings();')
+            assert browser.execute('return document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode;', collaboration) == enabled
+        checks.append('Cross-service subagents defaults off despite a configured API provider; enabling/disabling persists and survives reopening Settings')
+        browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
         assert browser.execute('return document.getElementById("routing_image_mode").value==="follow" && document.getElementById("routing_image_account_row").hidden;')
         assert browser.execute('return [...document.querySelectorAll("#routing_image_account option")].some(option=>option.textContent==="Image fixture <safe>") && !document.querySelector("#routing_image_account safe");')
         browser.execute('document.getElementById("routing_review").click();')
@@ -87,7 +105,29 @@ def main():
         for language in ['zh-CN', 'en']:
             for width in [420, 1280]:
                 request(browser.base + '/window/rect', {'width': width, 'height': 800})
-                browser.execute('closeModal();setLanguage(arguments[0]);openSettings();document.querySelector("[data-ui-action=routing-settings]").click();', language)
+                browser.execute('closeModal();setLanguage(arguments[0]);openSettings();', language)
+                assert browser.execute('return document.getElementById("collaboration-label").textContent;', language) == ('跨服务子代理' if language == 'zh-CN' else 'Cross-service subagents')
+                assert browser.execute('const row=document.querySelector(".collaboration-setting"),choice=row.querySelector(".quota-display-choice");return Math.abs(row.getBoundingClientRect().right-choice.getBoundingClientRect().right)<=1;')
+                assert browser.execute('const body=document.getElementById("modal_body");return body.scrollWidth<=body.clientWidth+1;'), browser.execute('const body=document.getElementById("modal_body"),bounds=body.getBoundingClientRect();return [...body.querySelectorAll("*")].map(node=>({tag:node.tagName,id:node.id,cls:node.className,width:node.getBoundingClientRect().width,right:node.getBoundingClientRect().right})).filter(row=>row.right>bounds.right+1);')
+                browser.execute('document.querySelector("[data-shadow-help-template=collaboration-comparison]").focus();')
+                wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden;'))
+                assert browser.execute('return [...document.querySelectorAll("#shadow_feedback .collaboration-modes dt")].map(node=>node.textContent);') == (['关闭','按需恢复','打开'] if language == 'zh-CN' else ['Off','On-demand recovery','On'])
+                assert browser.execute('const descriptions=[...document.querySelectorAll("#shadow_feedback .collaboration-modes dd")];return descriptions.every(node=>node.textContent.length>20) && descriptions[1].textContent.includes("GPT-6 Luna") && descriptions[2].textContent.includes(arguments[0]);', '即使没有调用外部子代理' if language == 'zh-CN' else 'even when no external subagent')
+                assert browser.execute('const bubble=document.getElementById("shadow_feedback"),box=bubble.getBoundingClientRect();return bubble.querySelectorAll("tbody tr").length===11 && box.left>=0 && box.right<=innerWidth+1 && box.top>=0 && box.bottom<=innerHeight+1;')
+                assert browser.execute('return document.querySelector("#shadow_feedback tbody tr:nth-child(8) td").textContent;') == ('不允许' if language == 'zh-CN' else 'Not allowed')
+                browser.execute('const table=document.querySelector("#shadow_feedback .collaboration-table");table.scrollTop=table.scrollHeight;table.dispatchEvent(new Event("scroll",{bubbles:true}));')
+                assert browser.execute('return !document.getElementById("shadow_feedback").hidden;')
+                assert browser.execute('const table=document.querySelector("#shadow_feedback .collaboration-table").getBoundingClientRect(),heading=document.querySelector("#shadow_feedback thead th").getBoundingClientRect();return heading.top>=table.top-1 && heading.bottom<=table.bottom;')
+                status, png = request(browser.base + '/screenshot')
+                assert status == 200
+                args.output.with_name('collaboration-comparison-' + language + '-' + str(width) + '.png').write_bytes(base64.b64decode(png['value']))
+                browser.escape()
+                assert browser.execute('return document.getElementById("shadow_feedback").hidden && !document.getElementById("modal_backdrop").classList.contains("hidden");')
+                if width == 1280:
+                    status, png = request(browser.base + '/screenshot')
+                    assert status == 200
+                    args.output.with_name('external-collaboration-' + language + '.png').write_bytes(base64.b64decode(png['value']))
+                browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
                 change(browser, 'routing_image_mode', 'account')
                 assert browser.execute('return document.getElementById("modal_title").textContent===arguments[0] && !document.getElementById("routing_image_account_row").hidden;', '路由设置' if language == 'zh-CN' else 'Routing settings')
                 assert browser.execute('const body=document.getElementById("modal_body"),bounds=body.getBoundingClientRect();return body.scrollWidth<=body.clientWidth+1 && [...document.querySelectorAll(".routing-settings select,.routing-settings label,#routing_review")].every(node=>{const box=node.getBoundingClientRect();return box.left>=bounds.left && box.right<=bounds.right+1;});')
@@ -96,6 +136,7 @@ def main():
                     assert status == 200
                     args.output.with_name('routing-' + language + '.png').write_bytes(base64.b64decode(png['value']))
         checks.append('Simplified Chinese and English render correctly at narrow/desktop widths without overflow')
+        checks.append('Help explains all three modes before the comparison, opens by keyboard, fits both viewports, scrolls without disappearing, and Escape dismisses help before Settings')
         for route, label in [('image_generation', 'Image generation'), ('image_edit', 'Image edit')]:
             assert browser.execute('const container=document.createElement("div");container.innerHTML=callReports.recordHtml({request_id:"fixture",route:arguments[0],model_id:"gpt-image-2",state:"completed"});return container.querySelector("summary").textContent.includes(arguments[1]) && container.textContent.includes("Image model");', route, label)
         assert upstream.calls == 0
@@ -110,6 +151,9 @@ def main():
         save(browser, 'account', 'routing-demo')
         assert json.loads((root / 'config.json').read_text())['image_routing'] == {'mode':'account','account_id':'routing-demo'}
         checks.append('Unified Shadow opens the same routing dialog directly and saves only to its disposable synthetic backend')
+        browser.navigate(shadow + '/?collaboration=1')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-shadow-help-template=collaboration-comparison]");'))
+        checks.append('Unified Shadow directly opens the production-owned three-mode settings via collaboration preview link')
     args.output.write_text(json.dumps({'passed': True, 'checks': checks, 'real_model_requests': 0}, indent=2) + '\n')
     print(json.dumps({'passed': True, 'checks': checks}))
 

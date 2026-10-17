@@ -462,6 +462,19 @@ pub(crate) fn serve_responses_websocket(
                 }
                 continue;
             }
+            Err(DestinationPrepareError::Collaboration {
+                status,
+                code,
+                message,
+            }) => {
+                if websocket
+                    .send_json(&emp_websocket_error(status, code, message))
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
             Err(DestinationPrepareError::Router(error)) => {
                 if websocket
                     .send_json(&websocket_router_error(&error))

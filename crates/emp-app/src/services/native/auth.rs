@@ -44,7 +44,7 @@ fn account_headers(
         .ok_or_else(|| NativeHttpError::router(503, "stored auth.json has no access token"))
 }
 
-pub(super) fn resolve_headers(
+pub(crate) fn resolve_headers(
     state: &ServerState,
     route: &ResolvedRoute,
     incoming: &BTreeMap<String, String>,

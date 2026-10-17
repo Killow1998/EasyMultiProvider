@@ -1,6 +1,7 @@
 //! Observable continuation, isolation, cancellation and upload contracts.
 use super::*;
 use sha2::{Digest, Sha256};
+mod collaboration;
 mod fixture;
 use fixture::*;
 

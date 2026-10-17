@@ -41,14 +41,25 @@ function shadowDetailActions(id, kind, account) {
 function installServicePresentation() {
   document.body.dataset.shadowRefinements='true';
   const bubble=document.createElement('div');bubble.className='shadow-feedback';bubble.hidden=true;bubble.id='shadow_feedback';bubble.setAttribute('role','tooltip');document.body.append(bubble);
-  let owner=null;
-  function hide(){owner?.removeAttribute('aria-describedby');owner=null;bubble.hidden=true;}
-  function show(node){if(!node)return;hide();owner=node;bubble.dataset.tone=node.dataset.shadowTone || 'info';bubble.textContent=node.dataset.shadowHelp;bubble.hidden=false;node.setAttribute('aria-describedby',bubble.id);const rect=node.getBoundingClientRect();const box=bubble.getBoundingClientRect();bubble.style.left=Math.max(12,Math.min(innerWidth-box.width-12,rect.left+rect.width/2-box.width/2))+'px';bubble.style.top=(rect.bottom+box.height+12<innerHeight ? rect.bottom+8 : Math.max(12,rect.top-box.height-8))+'px';}
+  let owner=null, leaveTimer=null;
+  function hide(){clearTimeout(leaveTimer);owner?.removeAttribute('aria-describedby');owner=null;bubble.hidden=true;}
+  function show(node){
+    if(!node)return;
+    hide();owner=node;bubble.dataset.tone=node.dataset.shadowTone || 'info';
+    const template=document.getElementById(node.dataset.shadowHelpTemplate);
+    bubble.classList.toggle('shadow-feedback-table',template instanceof HTMLTemplateElement);
+    if(template instanceof HTMLTemplateElement)bubble.replaceChildren(template.content.cloneNode(true));
+    else bubble.textContent=node.dataset.shadowHelp;
+    bubble.hidden=false;bubble.scrollTop=0;node.setAttribute('aria-describedby',bubble.id);
+    const rect=node.getBoundingClientRect();const box=bubble.getBoundingClientRect();
+    bubble.style.left=Math.max(12,Math.min(innerWidth-box.width-12,rect.left+rect.width/2-box.width/2))+'px';
+    bubble.style.top=(rect.bottom+box.height+12<innerHeight ? rect.bottom+8 : Math.max(12,rect.top-box.height-8))+'px';
+  }
   document.addEventListener('pointerover',event=>show(event.target.closest('[data-shadow-help]')));
-  document.addEventListener('pointerout',event=>{if(owner?.contains(event.target)&&!owner.contains(event.relatedTarget))hide();});
+  document.addEventListener('pointerout',event=>{if(owner?.contains(event.target)||bubble.contains(event.target)){clearTimeout(leaveTimer);leaveTimer=setTimeout(()=>{if(!owner?.matches(':hover')&&!bubble.matches(':hover')&&document.activeElement!==owner)hide();},120);}});
   document.addEventListener('focusin',event=>show(event.target.closest('[data-shadow-help]')));
   document.addEventListener('focusout',hide);
-  document.addEventListener('click',event=>{if(!event.target.closest('[data-shadow-help]'))hide();},true);
-  document.addEventListener('keydown',event=>{if(event.key==='Escape')hide();});window.addEventListener('scroll',hide,true);
+  document.addEventListener('click',event=>{if(!event.target.closest('[data-shadow-help]')&&!bubble.contains(event.target))hide();},true);
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!bubble.hidden){hide();event.stopImmediatePropagation();}},true);window.addEventListener('scroll',event=>{if(!bubble.contains(event.target))hide();},true);
   return {hide};
 }

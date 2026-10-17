@@ -8,12 +8,10 @@ pub(crate) fn payload(state: &ServerState, route: &ResolvedRoute, body: &Value) 
         crate::services::claude_cli::context_estimation_payload(body).ok()
     } else if route.dialect == emp_core::Dialect::CodexNative {
         let body = body.as_object()?;
-        let config = state.backend.configuration.read().ok()?.clone();
-        let plaintext = config["providers"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .any(|provider| provider["auth_mode"] == "api_key");
+        let plaintext = {
+            let config = state.backend.configuration.read().ok()?;
+            crate::services::native::plaintext_collaboration(&config)
+        };
         emp_router::native_http::NativeRouter::new(&state.backend.transport.client)
             .prepare_websocket(route, body, plaintext, std::collections::BTreeMap::new())
             .ok()

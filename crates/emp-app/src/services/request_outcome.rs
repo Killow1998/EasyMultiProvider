@@ -18,6 +18,7 @@ pub(crate) fn profile_request_bytes(body: &Value) -> usize {
 }
 
 pub(crate) struct RequestOutcome<'a> {
+    collaboration_route: Option<String>,
     state: &'a ServerState,
     identity: Option<crate::services::activity::ActivityIdentity>,
     started: Instant,
@@ -128,6 +129,9 @@ impl<'a> RequestOutcome<'a> {
         }));
         let identity = crate::services::activity::ActivityIdentity::from_route(route);
         let result = Self {
+            collaboration_route: (operation == "responses"
+                && route.dialect == emp_core::Dialect::CodexNative)
+                .then(|| route.requested_model.clone()),
             state,
             identity,
             started: Instant::now(),
@@ -150,6 +154,13 @@ impl<'a> RequestOutcome<'a> {
     fn observe_event(&mut self, event: &Value, origin: Option<&str>) {
         if self.finalized {
             return;
+        }
+        if let Some(model) = &self.collaboration_route {
+            self.state.backend.transport.collaboration.observe(
+                model,
+                self.event["usage_owner"].as_str().unwrap_or_default(),
+                event,
+            );
         }
         let now = Instant::now();
         let response = event

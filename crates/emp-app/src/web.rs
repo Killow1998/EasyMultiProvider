@@ -43,6 +43,9 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/quota-history.js" => include_bytes!("../web/quota-history.js"),
         "/assets/quota-display.js" => include_bytes!("../web/quota-display.js"),
         "/assets/settings.js" => include_bytes!("../web/settings.js"),
+        "/assets/collaboration-comparison.js" => {
+            include_bytes!("../web/collaboration-comparison.js")
+        }
         "/assets/routing-settings.js" => include_bytes!("../web/routing-settings.js"),
         "/assets/diagnostics.js" => include_bytes!("../web/diagnostics.js"),
         "/assets/style.css" => include_bytes!("../web/style.css"),

@@ -3,6 +3,7 @@ pub(crate) mod activity;
 pub(crate) mod auto_review;
 pub(crate) mod catalog;
 pub(crate) mod claude_cli;
+pub(crate) mod collaboration;
 pub(crate) mod compaction;
 pub(crate) mod configuration;
 pub(crate) mod connection_admission;

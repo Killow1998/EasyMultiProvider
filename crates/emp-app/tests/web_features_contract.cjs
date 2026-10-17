@@ -203,9 +203,10 @@ test('old bookmarks and Python cookie sessions retain their existing login path'
   }
 });
 
-test('settings wait for a save result and preserve state and disabled controls after failure', async () => {
-  const state = {auto_enable_on_start:true, accounts:[]};
-  const button = {dataset:{id:'auto_enable_on_start'}, disabled:false, isConnected:true, value:'true', getAttribute() { return this.value; }, setAttribute(_key, value) { this.value = value; }};
+for (const [key, initial] of [['auto_enable_on_start', true], ['external_collaboration', 'off']]) {
+test(`settings preserve state and disabled controls after a failed ${key} save`, async () => {
+  const state = {[key]:initial, accounts:[]};
+  const button = {dataset:{id:key,mode:'on_demand'}, disabled:false, isConnected:true, value:String(initial), getAttribute() { return this.value; }, setAttribute(_key, value) { this.value = value; }};
   const unavailable = {disabled:true};
   const status = {textContent:''}, pending = deferred();
   let candidate;
@@ -216,15 +217,16 @@ test('settings wait for a save result and preserve state and disabled controls a
   });
   const saving = settings.toggle(button);
   assert.equal(button.disabled, true);
-  assert.equal(candidate.auto_enable_on_start, false);
-  assert.equal(state.auto_enable_on_start, true);
+  assert.equal(candidate[key], key === 'external_collaboration' ? 'on_demand' : !initial);
+  assert.equal(state[key], initial);
   pending.reject(new Error('save failed'));
   await saving;
-  assert.equal(button.value, 'true');
+  assert.equal(button.value, String(initial));
   assert.equal(button.disabled, false);
   assert.equal(unavailable.disabled, true);
   assert.equal(status.textContent, 'save failed');
 });
+}
 
 test('common call details escape model/session names and keep missing metrics empty', () => {
   const reports = feature('call-reports.js','createCallReports')({tr,esc,getLanguage:() => 'en'});

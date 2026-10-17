@@ -106,6 +106,7 @@
 <script src="/assets/management-events.js"></script>
 <script src="/assets/quota-display.js"></script>
 <script src="/assets/settings.js"></script>
+<script src="/assets/collaboration-comparison.js"></script>
 <script src="/assets/routing-settings.js"></script>
 <script src="/assets/call-outcomes.js"></script>
 <script src="/assets/performance-chart.js"></script><script src="/assets/performance.js"></script><script src="/assets/call-reports.js"></script>
@@ -139,7 +140,7 @@ const managementEvents = createManagementEvents({management,visible:()=>document
   onStart:()=>{updateActivityDots();rescheduleActivityExpiry();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
 const routingSettings = createRoutingSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
-const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice)});
+const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
 const {open:openSettings, toggle:toggleSetting} = settings;
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});

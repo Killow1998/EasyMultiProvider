@@ -58,6 +58,7 @@ impl Requests {
             }
         }
         for field in [
+            "route",
             "client_model",
             "upstream_model",
             "response_model",

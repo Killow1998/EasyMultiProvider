@@ -16,18 +16,11 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 mod auth;
-use auth::resolve_headers;
+pub(crate) use auth::resolve_headers;
 pub(crate) mod images;
 
-fn plaintext_collaboration(config: &Value) -> bool {
-    config
-        .get("providers")
-        .and_then(Value::as_array)
-        .is_some_and(|providers| {
-            providers.iter().any(|provider| {
-                provider.get("auth_mode").and_then(Value::as_str) == Some("api_key")
-            })
-        })
+pub(crate) fn plaintext_collaboration(config: &Value) -> bool {
+    config["external_collaboration"] == "on"
 }
 
 fn replace_catalog_etag(state: &ServerState, headers: &mut BTreeMap<String, String>) {

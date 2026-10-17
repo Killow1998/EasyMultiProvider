@@ -22,17 +22,26 @@ fill = function(...args) {
 };
 routingButton.textContent = tr('路由设置 · 本次新增','Routing settings · New');
 const routingReviewChoices = window.EMP_REVIEW_CHOICES;
-window.EMP_REVIEW_CHOICES = () => reviewChoice('routing','路由设置','Routing settings',
+window.EMP_REVIEW_CHOICES = () => reviewChoice('collaboration','跨服务子代理','Cross-service subagents',
+  '关闭、按需恢复、打开；问号内查看模式比较',
+  'Off, on-demand recovery and On; mode comparison under the question mark') + reviewChoice('routing','路由设置','Routing settings',
   '自动审查与图片路由；跟随对话、指定账号、自动选择',
   'Auto Review and image routing; follow, specific account, automatic') + routingReviewChoices();
 const routingReviewAction = window.EMP_REVIEW_ACTION;
 window.EMP_REVIEW_ACTION = action => {
+  if (action === 'collaboration') { openSettings(); return true; }
   if (action !== 'routing') return routingReviewAction(action);
   routingButton.click(); return true;
 };
 if (new URLSearchParams(location.search).has('routing')) {
   const ready = setInterval(() => {
     if (state?.native_account) { clearInterval(ready); routingButton.click(); }
+  },100);
+  setTimeout(() => clearInterval(ready),10000);
+}
+if (new URLSearchParams(location.search).has('collaboration')) {
+  const ready = setInterval(() => {
+    if (state?.native_account) { clearInterval(ready); openSettings(); }
   },100);
   setTimeout(() => clearInterval(ready),10000);
 }

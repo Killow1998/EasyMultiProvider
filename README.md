@@ -169,7 +169,7 @@ a new model is not visible yet.
   distinct recent state marks completed requests and expires automatically. A
   lost event stream clears active confidence.
 - Preserve text, image, reasoning, and structured tool capabilities when the destination reports or supports them.
-- Let Codex delegate a native child task to an external catalog model by its existing model slug while Codex continues to own the child task and permissions.
+- Choose **Settings > Cross-service subagents** to allow external catalog models as children. The default **Off** keeps Native GPT subagents; **On-demand recovery** recovers encrypted tasks when needed, and **On** uses plaintext collaboration. Codex owns child tasks and permissions; the help compares speed and workflow time.
 - Let external models use Codex standalone web search. EMP prefers the current `.codex` login and can fall back to an available imported account without exposing Provider credentials.
 
 EMP refreshes the model list automatically. An already-open Codex model picker
@@ -271,7 +271,7 @@ Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/REA
 
 ## Codex compatibility
 
-The current source version is **v0.13.6**.
+The current source version is **v0.13.7**.
 
 Maintenance targets the latest stable Codex minor series and the previous nine;
 patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).

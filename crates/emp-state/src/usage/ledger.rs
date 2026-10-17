@@ -225,7 +225,9 @@ impl UsageLedger {
     pub fn record(&self, event: &Value, observed: f64) {
         if !matches!(
             event["route"].as_str(),
-            Some("responses" | "compact" | "image_generation" | "image_edit")
+            Some(
+                "responses" | "compact" | "image_generation" | "image_edit" | "agent_task_recovery"
+            )
         ) || !event["usage_category"]
             .as_str()
             .is_some_and(|value| CATEGORIES.contains(&value))

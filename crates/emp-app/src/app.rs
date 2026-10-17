@@ -73,6 +73,7 @@ pub(crate) struct BackendState {
 }
 
 pub(crate) struct TransportState {
+    pub(crate) collaboration: crate::services::collaboration::CollaborationState,
     pub(crate) client: HttpClient,
     pub(crate) support_network: crate::services::network_evidence::NetworkSnapshot,
     pub(crate) runtime: Runtime,
@@ -157,6 +158,7 @@ impl BackendState {
             diagnostics,
             configuration: ConfigurationState::new(config, config_path.to_path_buf(), vault),
             transport: TransportState {
+                collaboration: Default::default(),
                 client,
                 support_network,
                 runtime,

@@ -30,6 +30,7 @@ pub(super) struct NativeUpstreamConnection {
     url: String,
     proxy: Option<String>,
     identity: BTreeMap<String, String>,
+    plaintext_collaboration: bool,
     pub(super) client: ClientWebSocket,
 }
 
@@ -83,7 +84,11 @@ impl NativeSession {
             .client
             .websocket_proxy_for(&plan.url);
         let endpoint_matches = native_upstream.as_ref().map(|upstream| {
-            upstream.url == plan.url && proxy.as_ref().is_ok_and(|proxy| proxy == &upstream.proxy)
+            // Incremental turns inherit their socket's tool catalog. A policy
+            // change requires full-history recovery on a fresh connection.
+            upstream.url == plan.url
+                && upstream.plaintext_collaboration == plan.plaintext_collaboration
+                && proxy.as_ref().is_ok_and(|proxy| proxy == &upstream.proxy)
         });
         let identity_matches = native_upstream
             .as_ref()
@@ -146,6 +151,7 @@ impl NativeSession {
                         url: plan.url.clone(),
                         proxy: selected_proxy.clone(),
                         identity: plan_identity.clone(),
+                        plaintext_collaboration: plan.plaintext_collaboration,
                         client,
                     });
                     connected_now = true;

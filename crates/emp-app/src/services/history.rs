@@ -31,6 +31,11 @@ pub(crate) fn prepare_history(
 }
 
 pub(crate) enum DestinationPrepareError {
+    Collaboration {
+        status: u16,
+        code: &'static str,
+        message: &'static str,
+    },
     Router(RouterError),
     ClaudeCli(crate::services::claude_cli::ClaudeCliError),
     Disconnected,
@@ -92,6 +97,13 @@ pub(crate) fn prepare_destination_context(
         }
         return Ok(body);
     }
+    let body = crate::services::collaboration::prepare(
+        state,
+        route,
+        body,
+        incoming,
+        monitor.as_deref_mut(),
+    )?;
     let protocol =
         protocol_candidates(route)
             .into_iter()

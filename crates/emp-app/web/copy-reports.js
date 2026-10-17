@@ -48,6 +48,7 @@ registerUiCopy({
   "reports.output_tokens_divided_by_the_full_operation_duration_including": ["输出 token 除以整个调用耗时，包含重试等待。","Output tokens divided by the full operation duration, including retry waits."],
   "reports.unlinked": ["未关联","Unlinked"],
   "reports.image_generation": ["生图","Image generation"],
+  "reports.agent_task_recovery": ["子代理任务恢复","Subagent task recovery"],
   "reports.image_edit": ["改图","Image edit"],
   "reports.awaiting_response": ["等待返回","Awaiting response"],
   "reports.operation": ["调用类型","Operation"],

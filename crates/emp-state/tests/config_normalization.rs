@@ -52,6 +52,7 @@ fn configuration_normalization_matches_frozen_fixture() {
             "auto_review_fallback",
             "language",
             "image_routing",
+            "external_collaboration",
         ] {
             python_compatible.as_object_mut().unwrap().remove(key);
         }
@@ -101,6 +102,7 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
         let defaults = normalize_configuration(input.as_ref()).unwrap();
         assert_eq!(defaults["auto_enable_on_start"], true);
         assert_eq!(defaults["auto_review_fallback"], true);
+        assert_eq!(defaults["external_collaboration"], "off");
         assert_eq!(defaults["subscription_search"]["enabled"], true);
     }
     let disabled = normalize_configuration(Some(&json!({
@@ -123,7 +125,7 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
 #[test]
 fn application_preferences_survive_web_save_and_reject_non_booleans() {
     let current = normalize_configuration(Some(&json!({
-        "auto_enable_on_start": true, "auto_review_fallback": false
+        "auto_enable_on_start": true, "auto_review_fallback": false, "external_collaboration": "on_demand"
     })))
     .unwrap();
     let public =
@@ -132,7 +134,30 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
     let saved = emp_state::merge_web_update(&current, &public).unwrap();
     assert_eq!(saved["auto_enable_on_start"], true);
     assert_eq!(saved["auto_review_fallback"], false);
-    for key in ["auto_enable_on_start", "auto_review_fallback"] {
+    assert_eq!(saved["external_collaboration"], "on_demand");
+    let mut old_client = public.clone();
+    old_client
+        .as_object_mut()
+        .unwrap()
+        .remove("external_collaboration");
+    assert_eq!(
+        emp_state::merge_web_update(&current, &old_client).unwrap()["external_collaboration"],
+        "on_demand"
+    );
+    for key in [
+        "auto_enable_on_start",
+        "auto_review_fallback",
+        "external_collaboration",
+    ] {
         assert!(normalize_configuration(Some(&json!({key: "false"}))).is_err());
+    }
+    for mode in ["off", "on_demand", "on"] {
+        assert_eq!(
+            normalize_configuration(Some(&json!({"external_collaboration":mode}))).unwrap()["external_collaboration"],
+            mode
+        );
+    }
+    for invalid in [json!(false), json!(true), json!(null), json!("auto")] {
+        assert!(normalize_configuration(Some(&json!({"external_collaboration":invalid}))).is_err());
     }
 }
