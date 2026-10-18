@@ -40,6 +40,7 @@ fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
             Some("\"first\""),
         ),
         (403, "", String::new(), Some("W/\"edited\"")),
+        (200, "\"malformed\"", "{broken".into(), Some("W/\"edited\"")),
         (200, "\"invalid\"", "{}".into(), Some("W/\"edited\"")),
         (404, "", String::new(), Some("W/\"edited\"")),
     ];
@@ -96,8 +97,11 @@ fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
         "Edited same-version notes"
     );
     let edited_cache = std::fs::read(&cache_path).unwrap();
-    for _ in 0..2 {
-        assert!(restarted.check().is_err());
+    for expected in ["check_failed", "update_failed", "invalid_release"] {
+        assert_eq!(
+            restarted.check().unwrap_err(),
+            crate::update::UpdateError(expected)
+        );
         assert_eq!(
             restarted.snapshot().release_notes,
             "Edited same-version notes"

@@ -135,7 +135,7 @@ impl UpdateManager {
         if raw.len() > MAX_RELEASE_BYTES {
             return Err(UpdateError("invalid_release"));
         }
-        let release = serde_json::from_slice(&raw).map_err(|_| UpdateError("invalid_release"))?;
+        let release = serde_json::from_slice(&raw).map_err(|_| UpdateError("update_failed"))?;
         self.apply_release(
             &CachedRelease {
                 source: self.0.endpoints.release_api_url.clone(),
