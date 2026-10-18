@@ -359,13 +359,17 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .collaboration-title{display:flex;align-items:center;gap:8px}
 .shadow-feedback.shadow-feedback-table{width:640px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:auto;pointer-events:auto;white-space:normal}
 .collaboration-comparison p{margin:8px 0}
+.collaboration-takeaway{font-weight:600}
+.collaboration-comparison summary{cursor:pointer;font-weight:600}
+.collaboration-comparison h3{font-size:14px;margin:20px 0 6px}
 .collaboration-modes{margin:12px 0 16px}
 .collaboration-modes dt{margin-top:10px;font-weight:600}
 .collaboration-modes dd{margin:3px 0 0;color:var(--muted)}
-.collaboration-table{overflow:auto;max-height:45vh}
+.collaboration-table{overflow:auto}
 .collaboration-table table{display:table;overflow:visible;border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
 .collaboration-table th,.collaboration-table td{text-align:left;padding:7px;border-bottom:1px solid var(--border);white-space:nowrap}
-.collaboration-table thead th{position:sticky;top:0;z-index:1;background:var(--panel)}
+.collaboration-table thead th{white-space:normal}
+@media(max-width:500px){.collaboration-table th,.collaboration-table td{padding:7px 4px}}
 .setting-title{font-weight:600;font-size:13px}
 .routing-settings .setting-title{margin:0;color:var(--text)}
 .routing-mode,.routing-account{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,1fr)}
@@ -382,9 +386,10 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .call-toolbar input,.call-toolbar select{width:auto;max-width:100%;min-width:0}
 .call-toolbar input[type=datetime-local]{max-width:190px}
 .call-record{border-bottom:1px solid var(--border);margin:0;overflow:hidden}
-.call-records{overflow-x:auto}
+.call-records{overflow-x:auto;container-type:inline-size}
 .call-records>.call-record{min-width:880px}
 .call-record>summary{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.3fr) 100px 150px 70px minmax(0,1.2fr);gap:12px;align-items:center;padding:12px;cursor:pointer;text-align:left}
+@container(max-width:880px){.call-records>.call-record{min-width:0}.call-record>summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .call-record>summary>span{min-width:0;overflow-wrap:anywhere}
 .call-record small,.call-model small,.usage-table td small{display:block;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
 .call-model,.call-session{min-width:0;overflow-wrap:anywhere}

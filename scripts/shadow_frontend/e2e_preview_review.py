@@ -30,11 +30,16 @@ def main():
             browser.execute('setLanguage(arguments[0]);document.getElementById("shadow_review_button").click();', lang)
             wait_for(lambda: json.loads((target / 'config.json').read_text())['language'] == lang)
             before = (target / 'config.json').read_bytes()
-            assert browser.execute('return document.querySelectorAll("#modal_body [data-shadow-demo]").length===6;')
-            assert browser.execute('return document.querySelectorAll("#modal_body li").length===4;')
+            assert browser.execute('return document.getElementById("shadow_review_button").textContent===arguments[0] && document.getElementById("modal_title").textContent===arguments[0] && !document.getElementById("shadow_routing_button");', '本次改动' if lang == 'zh-CN' else 'This update')
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['collaboration', 'metrics']
+            assert browser.execute('return !document.getElementById("modal_body").textContent.includes("v0.13.1");')
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             _, png = request(browser.base + '/screenshot')
             args.output.with_name(args.output.stem + f'-overview-{lang}.png').write_bytes(base64.b64decode(png['value']))
+            browser.execute('document.querySelector("#modal_body [data-shadow-demo=collaboration]").click();')
+            wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden && !!document.querySelector("#shadow_feedback .collaboration-takeaway");'))
+            browser.execute('closeModal();document.getElementById("shadow_demo_button").click();')
+            assert browser.execute('return !!document.querySelector("#modal_body [data-shadow-demo=routing]") && !!document.querySelector("#modal_body [data-shadow-demo=recovery]");')
             browser.execute('document.querySelector("#modal_body [data-shadow-demo=lifecycle]").click();')
             assert browser.execute('return document.getElementById("modal_body").textContent.includes(arguments[0]);', '继续运行' if lang == 'zh-CN' else 'stays running')
             browser.execute('document.getElementById("modal_submit").click();')
@@ -46,7 +51,7 @@ def main():
             wait_for(lambda: browser.execute('return document.getElementById("modal_title").textContent.includes(arguments[0]);', '正在退出' if lang == 'zh-CN' else 'is exiting'))
             assert request(backend + '/healthz')[0] == 200
             assert (target / 'config.json').read_bytes() == before
-            checks.append(f'{lang}: overview, restore/re-enable/quit UI without backend mutations')
+            checks.append(f'{lang}: current review opens subagent help, routing and lifecycle stay in Demos; restore/re-enable/quit leave backend state intact')
         for reason in ['key_mismatch', 'key_missing', 'key_invalid', 'key_permissions', 'config_invalid', 'reset_incomplete']:
             request(browser.base + '/url', {'url': frontend + '/recovery?reason=' + reason})
             wait_for(lambda: browser.execute('return !document.getElementById("reset").disabled;'))

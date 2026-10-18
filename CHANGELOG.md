@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.8 (2026-10-18)
+
+### 中文
+
+- 更新说明优先显示本地快取，后台通过 ETag 检查变化；重启后仍可立即查看，检查失败时保留上次成功的说明。
+- 统计区分生成 TPS 和全程 TPS，首字等待按首段正文或工具参数计算。生成速度排除已报告的推理 token；无法可靠测量的历史、缓冲或重试请求显示未知。
+- 修复服务柱状图颜色碰撞，切换 Token／USD 与筛选时保持配色；窄屏调用记录自动换行，展开详情可同时查看两种速度。
+- 设置说明先解释三种跨服务子代理模式，再展开速度和耗时对比；补齐配对样本，增加匿名的导入订阅与原生直连对比，并标明各指标的优劣方向。
+
+### English
+
+- Show locally cached release notes immediately and revalidate changes with ETag in the background. Notes survive restarts and remain readable when a check fails.
+- Separate generation TPS from end-to-end TPS and measure first-token delay from the first text or tool-argument content. Generation speed excludes reported reasoning tokens; historical, buffered or retried calls without reliable timing show an unknown rate.
+- Fix service bar-chart color collisions and retain colors across Token/USD views and filters. Call records reflow in narrow panels, with both speed metrics available in expanded details.
+- Lead Settings help with the three cross-service subagent modes, then expand speed and completion-time comparisons. Complete matched samples, add anonymous imported-subscription versus native-direct results, and explain which direction is better for each metric.
+
 ## 0.13.7 (2026-10-17)
 
 ### 中文

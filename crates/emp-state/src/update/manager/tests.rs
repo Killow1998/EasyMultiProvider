@@ -8,6 +8,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod catalog;
 mod retry;
 
 #[cfg(unix)]

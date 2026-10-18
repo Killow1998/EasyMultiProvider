@@ -41,6 +41,21 @@ test('completed update check retains release notes without an extra status reque
   assert.equal(nodes.update_install.disabled,true);updater.stop();
 });
 
+test('cached notes appear before a new check replies and remain readable after failure',async()=>{
+  const q=queries(),nodes=Object.fromEntries(['update_status','update_version','update_notes','update_progress','update_install','update_release','update_commands','update_manual'].map(id=>[id,{}]));
+  const updater=feature('updates.js','createUpdates')({...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",localizedReleaseNotes:notes=>notes,visible:()=>true,isPreview:()=>false,openModal(){nodes.update_notes.textContent='Loading';}});
+  const cached={state:'available',current_version:'0.13.7',latest_version:'1.0.0',release_notes:'Cached notes'};
+  updater.hint(cached);
+  const opening=updater.open();
+  assert.equal(nodes.update_notes.textContent,'Cached notes','opening must not wait for HTTP');
+  q.calls[0].resolve({...cached,state:'checking'});await opening;
+  assert.equal(nodes.update_notes.textContent,'Cached notes');
+  q.calls[1].resolve({...cached,state:'error',error:'check_failed'});await tick();
+  assert.equal(nodes.update_notes.textContent,'Cached notes');
+  assert.equal(nodes.update_install.hidden,true,'failed validation must not offer an install');
+  updater.stop();
+});
+
 test('update reconnects the existing page once, and stops on rollback, expiry or close',async()=>{
   for(const outcome of ['updated','rollback','expired','closed','unauthorized']) {
     const q=queries(),timers=new Map();let next=0,now=1000,reloads=0;

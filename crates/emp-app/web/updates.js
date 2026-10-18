@@ -121,7 +121,7 @@ function renderUpdate(info) {
     ? `v${info.current_version} → v${info.latest_version}`
     : tr("transfers.current_version_v", {currentVersion:info.current_version});
   const notes=$('update_notes');
-  if(notes)notes.textContent=localizedReleaseNotes(info.release_notes,info.latest_version,getLanguage()) || tr("transfers.english_release_notes_were_not_provided_see_the_official");
+  if(notes)notes.textContent=localizedReleaseNotes(info.release_notes,info.latest_version,getLanguage()) || tr(!info.latest_version && ['idle','checking'].includes(info.state) ? "transfers.loading_release_notes" : "transfers.english_release_notes_were_not_provided_see_the_official");
   $('update_progress').hidden = !['downloading','verifying'].includes(info.state);
   $('update_progress').value = Number(info.progress) || 0;
   const install = $('update_install'); install.disabled=isPreview();if(isPreview())install.title=tr("transfers.preview_only_install_from_the_main_page"); install.hidden = info.state !== 'available' || !info.supported;
@@ -175,6 +175,7 @@ async function requestUpdate(operation) {
 }
 async function openUpdate() {
   openModal(tr("transfers.update_emp"), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite">${tr("transfers.checking")}</div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div class="update-notes"><h3>${tr("transfers.what_changed")}</h3><div id="update_notes" class="update-notes-content">${tr("transfers.loading_release_notes")}</div></div><div id="update_manual" class="muted" hidden><p>${tr("transfers.recommended_download_the_bilingual_linux_installer_exit_emp_then")}</p><p>${tr("transfers.existing_system_install_user_settings_are_kept_source_settings")}</p></div><div class="modal-actions"><button id="update_release" type="button" class="secondary" hidden onclick="openLatestRelease()">${tr("transfers.open_latest_release")}</button><button id="update_commands" type="button" class="secondary" hidden onclick="copyLinuxMigrationCommands()">${tr("transfers.copy_installer_command")}</button><button id="update_install" type="button" data-icon="update" hidden onclick="requestUpdate('install')">${tr("transfers.update_in_background")}</button></div>`, '', null);
+  if(latestUpdateInfo)renderUpdate(latestUpdateInfo);
   await requestUpdate('check');
 }
 

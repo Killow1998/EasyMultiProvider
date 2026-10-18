@@ -30,7 +30,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--embedded', action='store_true', help='Verify product assets embedded in the supplied binary')
     args = parser.parse_args()
-    checks = []
+    checks, viewports = [], []
     with tempfile.TemporaryDirectory(prefix='emp-routing-ui-') as temp, contextlib.ExitStack() as stack:
         root = Path(temp)
         native = root / 'native-codex'
@@ -51,11 +51,10 @@ def main():
             frontend, _ = candidate_frontend(stack, base, Path(__file__).resolve().parents[2] / 'crates/emp-app/web')
         browser = Browser(stack, root)
         browser.navigate(url.replace(base, frontend))
-        if args.embedded:
-            assert browser.execute('return !window.EMP_PREVIEW && !window.EMP_REVIEW_CHOICES;')
-            for path in ['/assets/preview-routing.js', '/assets/preview-review.js', '/assets/copy-preview.js']:
-                assert request(base + path, headers=headers)[0] == 404, path
-            checks.append('Packaged product assets expose no Shadow adapters or preview state')
+        assert browser.execute('return !window.EMP_PREVIEW && !window.EMP_REVIEW_CHOICES;')
+        for path in ['/assets/preview-actions.js', '/assets/preview-review.js', '/assets/copy-preview.js']:
+            assert browser.execute('return fetch(arguments[0]).then(response=>response.status);', path) == 404, path
+        checks.append('Product assets expose no Shadow adapters or preview state')
         browser.execute('setLanguage("en");openSettings();')
         collaboration = '[data-ui-action="setting-toggle"][data-id="external_collaboration"]'
         assert browser.execute('return document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode;', collaboration) == 'off'
@@ -105,6 +104,8 @@ def main():
         for language in ['zh-CN', 'en']:
             for width in [420, 1280]:
                 request(browser.base + '/window/rect', {'width': width, 'height': 800})
+                viewports.append({'language': language, 'requested_width': width,
+                    **browser.execute('return {width:innerWidth,height:innerHeight,pixel_ratio:devicePixelRatio};')})
                 browser.execute('closeModal();setLanguage(arguments[0]);openSettings();', language)
                 assert browser.execute('return document.getElementById("collaboration-label").textContent;', language) == ('跨服务子代理' if language == 'zh-CN' else 'Cross-service subagents')
                 assert browser.execute('const row=document.querySelector(".collaboration-setting"),choice=row.querySelector(".quota-display-choice");return Math.abs(row.getBoundingClientRect().right-choice.getBoundingClientRect().right)<=1;')
@@ -113,16 +114,36 @@ def main():
                 wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden;'))
                 assert browser.execute('return [...document.querySelectorAll("#shadow_feedback .collaboration-modes dt")].map(node=>node.textContent);') == (['关闭','按需恢复','打开'] if language == 'zh-CN' else ['Off','On-demand recovery','On'])
                 assert browser.execute('const descriptions=[...document.querySelectorAll("#shadow_feedback .collaboration-modes dd")];return descriptions.every(node=>node.textContent.length>20) && descriptions[1].textContent.includes("GPT-6 Luna") && descriptions[2].textContent.includes(arguments[0]);', '即使没有调用外部子代理' if language == 'zh-CN' else 'even when no external subagent')
-                assert browser.execute('const bubble=document.getElementById("shadow_feedback"),box=bubble.getBoundingClientRect();return bubble.querySelectorAll("tbody tr").length===11 && box.left>=0 && box.right<=innerWidth+1 && box.top>=0 && box.bottom<=innerHeight+1;')
-                assert browser.execute('return document.querySelector("#shadow_feedback tbody tr:nth-child(8) td").textContent;') == ('不允许' if language == 'zh-CN' else 'Not allowed')
-                browser.execute('const table=document.querySelector("#shadow_feedback .collaboration-table");table.scrollTop=table.scrollHeight;table.dispatchEvent(new Event("scroll",{bubbles:true}));')
-                assert browser.execute('return !document.getElementById("shadow_feedback").hidden;')
-                assert browser.execute('const table=document.querySelector("#shadow_feedback .collaboration-table").getBoundingClientRect(),heading=document.querySelector("#shadow_feedback thead th").getBoundingClientRect();return heading.top>=table.top-1 && heading.bottom<=table.bottom;')
+                assert browser.execute('const bubble=document.getElementById("shadow_feedback");return bubble.querySelector(".collaboration-takeaway").textContent.includes(arguments[0]) && !bubble.querySelector("details").open && !bubble.textContent.includes("Terra");', '“打开”会让多数 GPT 变慢' if language == 'zh-CN' else 'On slows most GPT models')
                 status, png = request(browser.base + '/screenshot')
                 assert status == 200
-                args.output.with_name('collaboration-comparison-' + language + '-' + str(width) + '.png').write_bytes(base64.b64decode(png['value']))
+                args.output.with_name('collaboration-summary-' + language + '-' + str(width) + '.png').write_bytes(base64.b64decode(png['value']))
+                browser.execute('document.querySelector("#shadow_feedback summary").focus();document.querySelector("#shadow_feedback summary").click();')
+                wait_for(lambda: browser.execute('const bubble=document.getElementById("shadow_feedback"),box=bubble.getBoundingClientRect();return !bubble.hidden && bubble.querySelector("details").open && box.left>=0 && box.right<=innerWidth+1 && box.top>=0 && box.bottom<=innerHeight+1;'))
+                for metric, direction in [('tps', '越高越好' if language == 'zh-CN' else 'higher is better'), ('time', '越低越好' if language == 'zh-CN' else 'lower is better')]:
+                    assert browser.execute('const heading=document.getElementById("collaboration-"+arguments[0]+"-title"),table=document.querySelector("#shadow_feedback table[aria-labelledby="+heading.id+"]");return heading.textContent.includes(arguments[1]) && table.querySelectorAll("tbody tr").length===10 && [...table.querySelectorAll("td")].every(cell=>(cell.textContent.match(/×/g)||[]).length<=1);', metric, direction)
+                    assert browser.execute('const table=document.querySelector("#shadow_feedback table[aria-labelledby=collaboration-"+arguments[0]+"-title]"),row=[...table.querySelectorAll("tbody tr")].find(row=>row.textContent.includes("GLM-5.3-Flash"));return row.querySelector("td").textContent;', metric) == ('不允许' if language == 'zh-CN' else 'Not allowed')
+                    browser.execute('const bubble=document.getElementById("shadow_feedback"),title=document.getElementById("collaboration-"+arguments[0]+"-title");bubble.scrollTop+=title.getBoundingClientRect().top-bubble.getBoundingClientRect().top-16;', metric)
+                    assert browser.execute('const table=document.querySelector("#shadow_feedback table[aria-labelledby=collaboration-"+arguments[0]+"-title]"),box=table.parentElement.getBoundingClientRect(),heading=table.querySelector("thead th").getBoundingClientRect();return !document.getElementById("shadow_feedback").hidden && heading.top>=box.top-1 && heading.bottom<=box.bottom;', metric)
+                    status, png = request(browser.base + '/screenshot')
+                    assert status == 200
+                    args.output.with_name('collaboration-' + metric + '-' + language + '-' + str(width) + '.png').write_bytes(base64.b64decode(png['value']))
+                assert browser.execute('''
+                  const title=document.getElementById('subscription-comparison-title');
+                  const table=document.querySelector('table[aria-labelledby="subscription-comparison-title"]');
+                  const rows=[...table.querySelectorAll('tbody tr')];
+                  return title.textContent===arguments[0] && rows.length===5 &&
+                    rows.map(row=>row.querySelector('th').textContent).join(',')==='low,medium,high,xhigh,max' &&
+                    [...table.querySelectorAll('td')].every(cell=>/^\\d+\\.\\d{2}×$/.test(cell.textContent) && cell.title.includes('20')) &&
+                    !/\\b(?:egg|yht)\\b/i.test(document.getElementById('shadow_feedback').textContent);
+                ''', '导入订阅与原生直连' if language == 'zh-CN' else 'Imported subscriptions vs native direct')
+                browser.execute('const bubble=document.getElementById("shadow_feedback"),title=document.getElementById("subscription-comparison-title");bubble.scrollTop+=title.getBoundingClientRect().top-bubble.getBoundingClientRect().top-16;')
+                assert browser.execute('const bubble=document.getElementById("shadow_feedback"),table=document.querySelector("table[aria-labelledby=subscription-comparison-title]"),box=table.parentElement.getBoundingClientRect();return !bubble.hidden && bubble.scrollWidth<=bubble.clientWidth+1 && box.left>=0 && box.right<=innerWidth;')
+                _, png = request(browser.base + '/screenshot')
+                args.output.with_name('subscription-comparison-' + language + '-' + str(width) + '.png').write_bytes(base64.b64decode(png['value']))
+                browser.execute('document.querySelector("#shadow_feedback .collaboration-table").focus({preventScroll:true});')
                 browser.escape()
-                assert browser.execute('return document.getElementById("shadow_feedback").hidden && !document.getElementById("modal_backdrop").classList.contains("hidden");')
+                assert browser.execute('return document.getElementById("shadow_feedback").hidden && !document.getElementById("modal_backdrop").classList.contains("hidden") && document.activeElement.matches("[data-shadow-help-template=collaboration-comparison]");')
                 if width == 1280:
                     status, png = request(browser.base + '/screenshot')
                     assert status == 200
@@ -136,7 +157,8 @@ def main():
                     assert status == 200
                     args.output.with_name('routing-' + language + '.png').write_bytes(base64.b64decode(png['value']))
         checks.append('Simplified Chinese and English render correctly at narrow/desktop widths without overflow')
-        checks.append('Help explains all three modes before the comparison, opens by keyboard, fits both viewports, scrolls without disappearing, and Escape dismisses help before Settings')
+        checks.append('Help leads with the mode recommendation, omits Terra, and expands into separate higher-is-better speed and lower-is-better time tables with one value per cell; keyboard focus, scrolling and Escape preserve Settings')
+        checks.append('Imported/native direct comparison shows five efforts and 20 matched pairs per effort in the existing help, without account names, at narrow/desktop widths in both languages')
         for route, label in [('image_generation', 'Image generation'), ('image_edit', 'Image edit')]:
             assert browser.execute('const container=document.createElement("div");container.innerHTML=callReports.recordHtml({request_id:"fixture",route:arguments[0],model_id:"gpt-image-2",state:"completed"});return container.querySelector("summary").textContent.includes(arguments[1]) && container.textContent.includes("Image model");', route, label)
         assert upstream.calls == 0
@@ -145,16 +167,18 @@ def main():
         shadow, _ = preview(stack, base, '', session)
         browser.navigate(shadow + '/?routing=1')
         wait_for(lambda: browser.execute('return !!document.getElementById("routing_image_mode");'))
-        assert browser.execute('return !!window.EMP_PREVIEW && !!document.getElementById("shadow_routing_button") && document.querySelectorAll("#routing_image_mode option").length===3 && [...document.querySelectorAll("#routing_image_account option")].some(option=>option.value==="routing-demo");')
-        browser.execute('closeModal();setLanguage("en");document.getElementById("shadow_routing_button").click();')
+        assert browser.execute('return !!window.EMP_PREVIEW && !document.getElementById("shadow_routing_button") && document.querySelectorAll("#routing_image_mode option").length===3 && [...document.querySelectorAll("#routing_image_account option")].some(option=>option.value==="routing-demo");')
+        browser.execute('closeModal();setLanguage("en");document.getElementById("shadow_demo_button").click();document.querySelector("#modal_body [data-shadow-demo=routing]").click();')
         wait_for(lambda: browser.execute('return document.getElementById("modal_title").textContent==="Routing settings";'))
         save(browser, 'account', 'routing-demo')
         assert json.loads((root / 'config.json').read_text())['image_routing'] == {'mode':'account','account_id':'routing-demo'}
         checks.append('Unified Shadow opens the same routing dialog directly and saves only to its disposable synthetic backend')
         browser.navigate(shadow + '/?collaboration=1')
-        wait_for(lambda: browser.execute('return !!document.querySelector("[data-shadow-help-template=collaboration-comparison]");'))
-        checks.append('Unified Shadow directly opens the production-owned three-mode settings via collaboration preview link')
-    args.output.write_text(json.dumps({'passed': True, 'checks': checks, 'real_model_requests': 0}, indent=2) + '\n')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-shadow-help-template=collaboration-comparison]") && !document.getElementById("shadow_feedback").hidden;'))
+        browser.execute('closeModal();fill();')
+        assert browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");')
+        checks.append('Unified Shadow opens the production-owned three-mode settings once via the collaboration link; later renders preserve closure')
+    args.output.write_text(json.dumps({'passed': True, 'checks': checks, 'viewports': viewports, 'real_model_requests': 0}, indent=2) + '\n')
     print(json.dumps({'passed': True, 'checks': checks}))
 
 

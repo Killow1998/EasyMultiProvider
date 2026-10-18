@@ -350,19 +350,23 @@ Routing and reliability:
   authenticated local UI; never accept an exception message, stack, URL, DOM
   content, or arbitrary browser field.
 
-Performance schema 2 measures TTFT from EMP dispatch to the first nonempty text,
-refusal or tool-argument delta. Empty items, reasoning summaries and done-only
-buffered output are not first-token samples. TPS estimates per-request delivery
-speed as `(output_tokens - reasoning_tokens - 1) / (last_delta - first_delta)`;
-it requires a completed stream, an explicit reasoning breakdown, a positive token
-count and at least 500 ms between output deltas. Terminal-event waiting is excluded.
-SSE JSON is buffered transiently up to 1 MiB per event and cleared on stream close;
-oversize/malformed measurements suppress TPS without altering forwarded bytes.
-No output content is persisted. Chunk batching means this is an observed estimate,
-not a measurement of GPU generation or proof that EMP caused a slowdown.
-Older schema observations remain available for health/history, but do not enter
-current speed aggregates. See the [NVIDIA metric definitions](https://docs.nvidia.com/nim/benchmarking/llm/1.0.0/metrics.html)
-for the distinction between TTFT, per-user token speed and system throughput.
+Performance schema 5 records `first_content_ms` from EMP dispatch to the first
+nonempty text, refusal or tool-argument delta. Reports use this as TTFT; empty
+items and reasoning do not count. `generation_ms` spans the first-to-last such
+delta, and `generation_tokens_per_second` divides output tokens minus reported
+reasoning tokens by that interval. Missing reasoning usage is treated as zero.
+Only successful streams with a positive interval and no retry contribute a
+generation rate; buffered output and a single coalesced batch remain unknown.
+Terminal-event waiting is excluded. `tokens_per_second` retains the whole-call
+rate, including reasoning, preparation and retry waits, for call details and old
+consumers. Report summaries, model groups and time buckets expose the generation
+rate under their existing `tokens_per_second` aggregate key; raw records retain
+both fields. Old whole-call rates never fill a missing generation sample.
+
+Timings are collected before protocol projection without retaining output
+content. Chunk batching means this is an observed delivery estimate, not a GPU
+measurement or proof that EMP caused a slowdown. The first-visible-token and
+generation-interval distinction follows the [Codex Radar methodology](https://codexradar.com/en/).
 
 Low-frequency management operations should record only outcome metadata:
 

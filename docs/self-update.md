@@ -4,6 +4,16 @@ The management page checks the official repository's latest stable release.
 Checking or installing requires the authenticated local management session. The
 browser never downloads or executes release code itself.
 
+Release metadata and its ETag are cached in `state/update-release.json` beside
+the configuration. Opening the dialog shows the last good notes immediately,
+including after EMP restarts, while a background conditional request checks the
+official source. A `304 Not Modified` response reuses the cached body; changed
+notes replace it even when the version number stays the same. A failed check
+keeps the notes readable. The first successful fetch still needs network access.
+Cache entries are bounded, tied to their source and validated on load; invalid
+files are ignored. Cached metadata alone never enables installation after restart:
+the source must be checked first, and package verification remains unchanged.
+
 When a different release is available, the update dialog shows the current and
 target versions together (`v0.13.4 → v0.13.5`). Update and rollback launches reuse
 the existing management session instead of opening another browser tab. The open

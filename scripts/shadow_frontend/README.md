@@ -1,6 +1,6 @@
 # Shadow frontend
 
-The v0.13.3 product flows are embedded from `crates/emp-app/web` in the normal
+Product flows are embedded from `crates/emp-app/web` in the normal
 executable. The review overview, fault selector and mock lifecycle actions stay
 in this development directory and are injected only by the Shadow launcher.
 `e2e_formal.py` checks the actual executable rejects these development routes;
@@ -12,13 +12,21 @@ Use one entry point for current candidate previews:
 python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --port 4201
 ```
 
-Open `http://127.0.0.1:4201/`. **Changes** (`/?review=1`) lists the ten candidate
-adjustment groups since v0.13.1: six frontend flows (five revised flows and the
-new recovery page) plus four backend groups. agy is separate. The six frontend
-entries cover migration navigation, merged account display, import preference
-conflicts, removal progress, Restore Native versus Quit, and key recovery.
+Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
+review entry. Update `reviewRows` in `preview-review.js` for every review round;
+follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
+The current review opens the subagent mode recommendation and separate speed/time
+tables. Refresh the review E2E expectations together with this list. Reloading the page
+reads the latest review scripts, so list changes do not require a Shadow restart.
 
-The **Demos** menu contains this overview, **Key recovery**, **Restore Native /
+`preview-review.js` owns scenario labels, menu selection and dispatch. Its startup
+link is consumed once after configuration renders; it does not poll for readiness.
+`preview-actions.js` prepares disposable scenarios and opens production controllers.
+`preview.js` owns request isolation and lifecycle simulation. Add a scenario's
+labels and handler to the existing table; do not wrap another module's dispatcher,
+renderer or fetch function to register it.
+
+The **Demos** menu contains this overview, **Routing settings**, **Key recovery**, **Restore Native /
 Quit**, **Remove account**, **Existing preference conflicts**, **Import the same
 account**, **All services running**, and **All service errors**. These use the
 same production frontend modules and a disposable synthetic workspace. Return
@@ -72,6 +80,30 @@ It retains coverage for existing historical preference conflicts; new import
 conflicts are covered by the import-stage acceptance above.
 The same launcher also supports the optional read-only live-data mode below.
 For ordinary candidate review, use the disposable workspace above.
+
+The current **This update** entry also opens a synthetic performance example:
+80 generation TPS and 20 end-to-end TPS. A legacy row retains its full-call rate
+and shows unknown generation speed. These are fixture values, not model benchmarks.
+
+Performance acceptance (Python 3.14 for native zstd request decoding) exercises
+paced upstream events, real durable aggregation,
+single-batch/buffered exclusions, legacy rows and the Chinese/English UI:
+
+```sh
+python3 scripts/shadow_frontend/e2e_performance.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-performance.json
+```
+
+Release-cache acceptance uses a disposable backend and a local release server:
+
+```sh
+python3 scripts/shadow_frontend/e2e_update_cache.py \
+  --emp /path/to/debug/EMP --output /tmp/emp-update-cache.json
+```
+
+It checks persisted notes after restart, Chinese/English display while a request
+is held open, body-free 304 responses, same-version note edits and failed checks.
+`e2e_updates.py` separately covers version labels and same-tab update reconnection.
 
 For read-only inspection of existing local data, preview frontend changes against
 a running EMP without changing its configuration

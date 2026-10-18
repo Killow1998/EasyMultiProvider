@@ -295,9 +295,11 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
         ("local_prepare_ms", 60_000),
         ("upstream_first_event_ms", 3_600_000),
         ("ttft_ms", 3_600_000),
+        ("first_content_ms", 3_600_000),
         ("upstream_first_token_ms", 3_600_000),
         ("generation_ms", 3_600_000),
         ("output_tokens", 10_000_000),
+        ("reasoning_tokens", 10_000_000),
         ("request_item_count", 256),
         ("performance_schema", 100),
         ("request_bytes", 64 * 1024 * 1024),
@@ -359,13 +361,15 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
         .filter(|cached| input.is_some_and(|input| *cached <= input));
     record.insert("input_tokens".into(), json!(input));
     record.insert("cached_input_tokens".into(), json!(cached));
-    record.insert(
-        "tokens_per_second".into(),
-        json!(
-            number(&event["tokens_per_second"])
-                .map(|value| (value.clamp(0.0, 100_000.0) * 100.0).round_ties_even() / 100.0)
-        ),
-    );
+    for field in ["tokens_per_second", "generation_tokens_per_second"] {
+        record.insert(
+            field.into(),
+            json!(
+                number(&event[field])
+                    .map(|value| (value.clamp(0.0, 100_000.0) * 100.0).round_ties_even() / 100.0)
+            ),
+        );
+    }
     if record["decoded_request_bytes"] != json!(0)
         && let Some(ratio) =
             number(&event["compression_ratio"]).filter(|value| (0.0..=64.0).contains(value))

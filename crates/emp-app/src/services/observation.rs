@@ -28,19 +28,6 @@ pub(crate) fn retry_scheduled(
     );
 }
 
-pub(crate) fn request_tokens_per_second(output_tokens: &Value, duration_ms: &Value) -> Option<f64> {
-    let tokens = output_tokens
-        .as_u64()
-        .filter(|tokens| (0..=10_000_000).contains(tokens))?;
-    let duration = duration_ms
-        .as_f64()
-        .filter(|duration| duration.is_finite() && *duration > 0.0 && *duration <= 86_400_000.0)?;
-    let rate = tokens as f64 * 1000.0 / duration;
-    (0.0..=1_000_000.0)
-        .contains(&rate)
-        .then(|| (rate * 100.0).round_ties_even() / 100.0)
-}
-
 /// An attempt is evidence of entering an executor, not proof of provider acceptance.
 pub(crate) fn record_attempt(state: &ServerState, event: &Value, boundary: &'static str) {
     let safe =

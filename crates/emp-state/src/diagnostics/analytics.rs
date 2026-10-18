@@ -239,12 +239,9 @@ pub fn summarize(records: &[Value], now: OffsetDateTime) -> Value {
         .iter()
         .copied()
         .filter(|event| {
-            let schema = event["performance_schema"].as_u64();
-            matches!(schema, Some(2 | 3))
-                && success(event)
-                && (number(&event["ttft_ms"]).unwrap_or(0.0) > 0.0
-                    || (schema == Some(3)
-                        && number(&event["tokens_per_second"]).unwrap_or(0.0) > 0.0))
+            success(event)
+                && (number(&event["first_content_ms"]).unwrap_or(0.0) > 0.0
+                    || number(&event["generation_tokens_per_second"]).unwrap_or(0.0) > 0.0)
                 && observed(&event["observed_at"]).unwrap_or(now)
                     >= now - time::Duration::days(DAYS)
         })
@@ -277,20 +274,10 @@ pub fn summarize(records: &[Value], now: OffsetDateTime) -> Value {
         let last = history.len().saturating_sub(CALLS);
         let calls = &history[last..];
         let previous = &history[history.len().saturating_sub(CALLS * 2)..last];
-        let (ttft, ttft_n) = metric(calls, "ttft_ms");
-        let current_tps = calls
-            .iter()
-            .copied()
-            .filter(|event| event["performance_schema"] == 3)
-            .collect::<Vec<_>>();
-        let (tps, tps_n) = metric(&current_tps, "tokens_per_second");
-        let (old_ttft, old_ttft_n) = metric(previous, "ttft_ms");
-        let previous_tps = previous
-            .iter()
-            .copied()
-            .filter(|event| event["performance_schema"] == 3)
-            .collect::<Vec<_>>();
-        let (old_tps, old_tps_n) = metric(&previous_tps, "tokens_per_second");
+        let (ttft, ttft_n) = metric(calls, "first_content_ms");
+        let (tps, tps_n) = metric(calls, "generation_tokens_per_second");
+        let (old_ttft, old_ttft_n) = metric(previous, "first_content_ms");
+        let (old_tps, old_tps_n) = metric(previous, "generation_tokens_per_second");
         if ttft_n == 0 && tps_n == 0 {
             continue;
         }
@@ -306,17 +293,17 @@ mod tests {
     use time::OffsetDateTime;
     use time::format_description::well_known::Rfc3339;
 
-    fn record(schema: u64, observed_at: &str, ttft_ms: Value, tokens_per_second: Value) -> Value {
+    fn record(observed_at: &str, first_content_ms: Value, generation_tps: Value) -> Value {
         json!({
             "route":"responses",
             "model_id":"gpt-6-luna",
             "speed_mode":"standard",
             "status":200,
             "error_class":"none",
-            "performance_schema":schema,
+            "performance_schema":5,
             "observed_at":observed_at,
-            "ttft_ms":ttft_ms,
-            "tokens_per_second":tokens_per_second,
+            "first_content_ms":first_content_ms,
+            "generation_tokens_per_second":generation_tps,
         })
     }
 
@@ -339,14 +326,16 @@ mod tests {
         assert_eq!(health["unknown_count"], 1);
     }
     #[test]
-    fn schema_two_keeps_ttft_without_mixing_legacy_tps() {
+    fn visible_metrics_exclude_legacy_first_output_and_full_request_rates() {
         let now = OffsetDateTime::parse("2026-09-23T12:00:00Z", &Rfc3339).unwrap();
         let stamp = now.format(&Rfc3339).unwrap();
         let result = summarize(
             &[
-                record(2, &stamp, json!(100), json!(999.0)),
-                record(2, &stamp, Value::Null, json!(888.0)),
-                record(3, &stamp, json!(200), json!(60.0)),
+                json!({"route":"responses","model_id":"gpt-6-luna","speed_mode":"standard",
+                    "status":200,"error_class":"none","performance_schema":4,
+                    "observed_at":stamp,"ttft_ms":1,"tokens_per_second":999.0}),
+                record(&stamp, json!(100), Value::Null),
+                record(&stamp, json!(200), json!(60.0)),
             ],
             now,
         );

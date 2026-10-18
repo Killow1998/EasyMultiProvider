@@ -1,4 +1,5 @@
 //! Release discovery, verified download, and handoff to the replacement worker.
+mod catalog;
 pub(super) mod diagnostics;
 mod operations;
 mod retry;
@@ -50,6 +51,7 @@ struct Inner {
     snapshot: Mutex<Snapshot>,
     start_transition: Mutex<()>,
     asset: Mutex<Option<Asset>>,
+    release_cache: Mutex<Option<catalog::CachedRelease>>,
     executable: PathBuf,
     #[cfg(target_os = "linux")]
     dpkg_query: PathBuf,
@@ -177,6 +179,7 @@ impl UpdateManager {
     ) -> Result<Self> {
         let supported = installation_target(&executable).is_ok();
         let diagnostic_path = diagnostics::path_for(&restart_args);
+        let cached_release = catalog::load(diagnostic_path.as_deref(), &endpoints, version);
         let initial = Snapshot {
             failure: diagnostic_path.as_deref().and_then(diagnostics::read),
             state: if installation_rolled_back {
@@ -185,8 +188,11 @@ impl UpdateManager {
                 "idle".to_owned()
             },
             current_version: version.to_owned(),
-            latest_version: None,
-            release_notes: String::new(),
+            latest_version: cached_release.as_ref().and_then(|cached| cached.version()),
+            release_notes: cached_release
+                .as_ref()
+                .map(|cached| cached.notes())
+                .unwrap_or_default(),
             progress: 0,
             retry_count: 0,
             retry_limit: retry::MAX_RETRIES,
@@ -208,6 +214,7 @@ impl UpdateManager {
             snapshot: Mutex::new(initial),
             start_transition: Mutex::new(()),
             asset: Mutex::new(None),
+            release_cache: Mutex::new(cached_release),
             executable,
             #[cfg(target_os = "linux")]
             dpkg_query: super::linux::default_query().to_owned(),
@@ -270,9 +277,6 @@ impl UpdateManager {
     fn set(&self, state: &str, error: &str, latest: Option<String>, progress: u8) {
         if let Ok(mut snapshot) = self.0.snapshot.lock() {
             snapshot.state = state.to_owned();
-            if state == "checking" {
-                snapshot.release_notes.clear();
-            }
             snapshot.error = error.to_owned();
             snapshot.latest_version = latest;
             snapshot.progress = progress;

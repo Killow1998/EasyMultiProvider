@@ -403,6 +403,14 @@ model inference remain existing shared operations; they are not duplicated.
 Performance navigation stays mounted during data refresh; overview metrics are
 plain facts rather than six equivalent navigation buttons.
 
+Raw stream observations own first/last content timing before projection. Outcomes
+combine those timestamps with reported usage, preserving whole-call speed and a
+separate generation rate. The ledger owns aggregates; frontend controllers only
+format them. Missing stream timing never falls back to the old whole-call rate.
+`request_outcome/performance.rs` owns operation timings and rate validation;
+the outcome finalizer only coordinates accounting, publication and completion.
+See [performance metric fields](diagnostic-journal-spec.md) for the wire contract.
+
 Dialog navigation passes an explicit `back` callback to the shared modal shell.
 The parent supplies a `reopen` callback for child transitions; service tabs carry
 their service identity and selected tab. Root dialogs hide Back, while X clears
@@ -442,6 +450,29 @@ snapshots, diagnostics close/cancel behavior and the shipped script order.
 The real server test also fetches the page's referenced assets before login.
 
 #### Frontend development and acceptance
+
+Keep Shadow navigation stable across review rounds:
+
+- Use **This update** for the current review and **Demos** for established examples.
+  Do not append a new top-level button for each feature or change.
+- Replace `reviewRows` in `scripts/shadow_frontend/preview-review.js` for each round.
+  Describe the current candidate and link each item to its actual interface;
+  remove superseded review labels and version/count claims from the active list.
+- Keep released features available through Demos or their normal product entry.
+  A new preview scenario belongs in those menus, not another toolbar button.
+- Update both Simplified Chinese and English, the preview README, and affected
+  browser checks together. Verify current entries, retained demos and narrow layouts.
+- Preview navigation and synthetic adapters stay under `scripts/shadow_frontend`;
+  promoting a feature must not include review buttons or demo state in product assets.
+
+The disposable Shadow composes one navigation table (`preview-review.js`), concrete
+scenario handlers (`preview-actions.js`) and one isolation adapter (`preview.js`).
+Only the isolation adapter wraps the product render/request boundaries. Navigation
+consumes a deep link once after the first successful configuration render, without
+readiness polling or chained dispatcher replacements. Preserve the gallery write
+guard and the help panel's internal-focus guard: removing either causes an observed
+browser regression. Acceptance tests check these behaviors rather than requiring a
+particular number of HTML child elements.
 
 Frontend changes are reviewed in an interactive local **shadow frontend** before
 integration into the running application. It serves the candidate UI on a separate

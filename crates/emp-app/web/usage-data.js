@@ -1,16 +1,29 @@
 // All chart groupings project the same reconciled rows; grouping cannot alter totals.
 function createUsageData({tr,esc,number}) {
-  const palette = ['#537de0','#279e9b','#c98730','#a371ce','#d2637d','#559746','#77838e','#547db1'];
+  const palette = ['#537de0','#279e9b','#c98730','#a371ce','#d2637d','#559746','#d65c46','#b0942d'];
+  const serviceColors = new Map();
   const key = row => JSON.stringify([row.category,row.owner]);
   const service = row => row.owner_name || (String(row.owner).startsWith('history:') ? tr("reports.unlinked_historical_usage")+' · '+row.owner.slice(8) : /^(account|credential):/.test(row.owner) ? tr("reports.unlinked_account") : row.category === 'native' ? 'Native' : row.owner || tr("reports.unlinked"));
   const category = value => ({native:'Codex · Native',subscription:tr("reports.codex_subscription"),external:tr("reports.external_providers"),unknown:tr("reports.unlinked")})[value] || value;
   const usd = row => row.priced_requests ? 'US$'+(row.cost_nanos/1e9).toFixed(4) : '—';
-  const color = value => palette[[...value].reduce((n,c) => (n*31+c.codePointAt(0))>>>0,0)%palette.length];
+  const colorIndex = value => [...value].reduce((n,c) => (n*31+c.codePointAt(0))>>>0,0)%palette.length;
+  const color = value => palette[colorIndex(value)];
+  function registerServices(report) {
+    const used = new Set(serviceColors.values());
+    const ids = [...new Set([...(report.groups || []),...(report.series || [])].map(key))].sort();
+    for (const id of ids) {
+      if (serviceColors.has(id)) continue;
+      const start = colorIndex(id), choices = [...palette.slice(start),...palette.slice(0,start)];
+      const selected = choices.find(value => !used.has(value)) || palette[start];
+      serviceColors.set(id,selected); used.add(selected);
+    }
+  }
   function chart(report,metric,grouping) {
+    registerServices(report);
     const count = Math.ceil((report.end-report.start)/report.bucket), groups = new Map();
     for (const row of report.series) {
       const id = grouping === 'services' ? key(row) : grouping === 'models' ? row.model : 'all';
-      if (!groups.has(id)) groups.set(id,{label:grouping === 'services' ? service(row) : grouping === 'models' ? row.model : tr("reports.total_usage"),color:grouping === 'none' ? 'var(--accent)' : color(id),values:Array(count).fill(0)});
+      if (!groups.has(id)) groups.set(id,{label:grouping === 'services' ? service(row) : grouping === 'models' ? row.model : tr("reports.total_usage"),color:grouping === 'none' ? 'var(--accent)' : grouping === 'services' ? serviceColors.get(id) : color(id),values:Array(count).fill(0)});
       const index = Math.round((row.start-report.start)/report.bucket);
       groups.get(id).values[index] += metric === 'tokens' ? row.input_tokens+row.output_tokens : row.cost_nanos;
     }

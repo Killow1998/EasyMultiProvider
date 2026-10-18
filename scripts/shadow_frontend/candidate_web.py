@@ -28,7 +28,8 @@ def candidate_frontend(stack, backend, web, index_extra="", port=0, index_head="
                     return
                 body = (web / name).read_bytes()
                 if name == "index.html" and index_extra:
-                    body = body.replace(b"</body>", index_extra.encode() + b"</body>")
+                    extra = index_extra() if callable(index_extra) else index_extra
+                    body = body.replace(b"</body>", extra.encode() + b"</body>")
                 if name == "index.html" and index_head:
                     body = body.replace(b"<head>", b"<head>"+index_head.encode())
                 status, content_type = 200, mimetypes.guess_type(name)[0] or 'application/octet-stream'

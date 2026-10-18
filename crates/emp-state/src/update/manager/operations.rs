@@ -21,7 +21,7 @@ impl UpdateManager {
                     .asset
                     .lock()
                     .map_err(|_| UpdateError("update_failed"))? = None;
-                self.set("checking", "", None, 0);
+                self.set("checking", "", current.latest_version, 0);
                 if let Ok(mut snapshot) = self.0.snapshot.lock() {
                     snapshot.manual_update.clear();
                 }
@@ -77,110 +77,6 @@ impl UpdateManager {
             return Err(UpdateError("update_failed"));
         }
         Ok(self.snapshot())
-    }
-
-    pub(super) fn check(&self) -> Result<()> {
-        self.retry_network(|| {
-            self.stage("check_release");
-            self.check_once()
-        })
-    }
-
-    fn check_once(&self) -> Result<()> {
-        let response = self.get(
-            &self.0.endpoints.release_api_url,
-            "application/vnd.github+json",
-            Duration::from_secs(20),
-            "update_failed",
-        )?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            *self
-                .0
-                .asset
-                .lock()
-                .map_err(|_| UpdateError("update_failed"))? = None;
-            self.set("no_release", "", None, 0);
-            return Ok(());
-        }
-        if !response.status().is_success() {
-            self.http_error(response.status().as_u16());
-            return Err(UpdateError("check_failed"));
-        }
-        self.stage("read_release");
-        let mut raw = Vec::new();
-        response
-            .take((MAX_RELEASE_BYTES + 1) as u64)
-            .read_to_end(&mut raw)
-            .map_err(|error| {
-                self.io_error("read_release", error);
-                UpdateError("update_failed")
-            })?;
-        if raw.len() > MAX_RELEASE_BYTES {
-            return Err(UpdateError("invalid_release"));
-        }
-        let snapshot = self.snapshot();
-        let desired = current_asset_name()?;
-        #[cfg(target_os = "linux")]
-        let migration = snapshot.supported
-            && crate::update::linux::system_install_manual(
-                &installation_target(&self.0.executable)?.0,
-                &self.0.dpkg_query,
-            )?;
-        #[cfg(not(target_os = "linux"))]
-        let migration = false;
-        self.stage("parse_release");
-        let asset = latest_asset(&raw, &desired, &snapshot.current_version, &self.0.endpoints)?;
-        let metadata: serde_json::Value =
-            serde_json::from_slice(&raw).map_err(|_| UpdateError("invalid_release"))?;
-        if let Ok(mut snapshot) = self.0.snapshot.lock() {
-            snapshot.release_notes = metadata
-                .get("body")
-                .and_then(|body| body.as_str())
-                .unwrap_or_default()
-                .chars()
-                .take(65536)
-                .collect();
-        }
-        match asset {
-            Some(asset) => {
-                let latest = asset.version.clone();
-                *self
-                    .0
-                    .asset
-                    .lock()
-                    .map_err(|_| UpdateError("update_failed"))? = Some(asset);
-                self.set_checked(
-                    if migration {
-                        "migration_required"
-                    } else {
-                        "available"
-                    },
-                    Some(latest),
-                    migration,
-                );
-            }
-            None => {
-                *self
-                    .0
-                    .asset
-                    .lock()
-                    .map_err(|_| UpdateError("update_failed"))? = None;
-                let version = metadata
-                    .get("tag_name")
-                    .and_then(|tag| tag.as_str())
-                    .map(|tag| tag.trim_start_matches('v').to_owned());
-                self.set_checked(
-                    if migration {
-                        "migration_required"
-                    } else {
-                        "current"
-                    },
-                    version,
-                    migration,
-                );
-            }
-        }
-        Ok(())
     }
 
     pub(super) fn install(&self) -> Result<()> {
@@ -319,30 +215,40 @@ impl UpdateManager {
             "application/octet-stream",
             Duration::from_secs(600),
             "update_failed",
+            None,
         )
     }
 
-    fn get(
+    pub(super) fn get(
         &self,
         raw_url: &str,
         accept: &str,
         timeout: Duration,
         transport_error: &'static str,
+        etag: Option<&str>,
     ) -> Result<Response> {
         let client = self.client()?;
         let mut url = Url::parse(raw_url).map_err(|_| UpdateError("invalid_download_url"))?;
         for redirect in 0..=MAX_REDIRECTS {
             self.validate_url(&url)?;
-            let response = client
+            let mut request = client
                 .get(url.clone())
                 .timeout(timeout)
-                .header("Accept", accept)
-                .send()
-                .map_err(|error| {
-                    self.transport_error(&error);
-                    UpdateError(transport_error)
-                })?;
-            if !response.status().is_redirection() {
+                .header("Accept", accept);
+            if url.as_str() == raw_url
+                && let Some(etag) = etag
+                    .filter(|value| value.len() <= 1024)
+                    .and_then(|value| reqwest::header::HeaderValue::from_str(value).ok())
+            {
+                request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+            }
+            let response = request.send().map_err(|error| {
+                self.transport_error(&error);
+                UpdateError(transport_error)
+            })?;
+            if !response.status().is_redirection()
+                || response.status() == reqwest::StatusCode::NOT_MODIFIED
+            {
                 return Ok(response);
             }
             if redirect == MAX_REDIRECTS {

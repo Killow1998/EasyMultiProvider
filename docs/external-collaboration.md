@@ -63,7 +63,9 @@ Unrecovered encrypted messages are rejected rather than sent as incomplete tasks
 Mixed-provider inherited histories can still encounter separate history
 projection limitations; recovery does not claim to reconstruct an entire fork.
 
-The question-mark help explains all three modes before its comparison table.
+The question-mark help leads with a plain-language mode recommendation, followed
+by all three explanations. Expandable comparisons separate output speed (higher
+is better) from completion time (lower is better); each cell has one value.
 The comparison uses the same isolated Codex 0.163.0 subagent counting task
 (integers 1 through 1024) and interleaves mode order. The parent is GPT-6.1 Sol at
 low effort; children use low effort except GLM, which has no effort override.
@@ -73,7 +75,8 @@ not zero throughput. Valid timing samples require the requested model, complete
 output and exactly one completed EMP child request, with no failed or retried
 model requests in the workflow. Completions after retries or extra child requests
 are retained as functional results and excluded from speed ratios. TPS uses reported output tokens divided by
-the full child request duration, matching EMP call records; it includes child
+the full child request duration, matching the end-to-end rate retained in EMP
+call details; it includes child
 startup and first-token delay. Buffered Claude output is not treated as an
 instantaneous token-generation rate. Workflow time covers parent dispatch,
 recovery when needed, child execution and the parent's final acknowledgement.
@@ -92,15 +95,35 @@ one GPT-5.6 Luna workflow completed with an extra child request. All 40 external
 On-demand attempts used exactly one recorded recovery inference, including the
 two that retried the child. No other mode or Native child invoked recovery.
 
+On 2026-10-18, ten additional clean workflows filled the five missing pairs:
+one Off/On-demand pair for GPT-5.6 Luna, one Off/On pair for GPT-6 Luna, and
+three On/On-demand pairs for Opus. Both sides were rerun together with new round
+IDs and the original EMP executable. The original failed records remain intact.
+The combined dataset has 340 scenarios and 277 clean timing samples. Every
+displayed non-baseline comparison now has ten valid pairs; the two Luna Off
+references have eleven clean samples each, and the Opus On reference has twelve.
+
 The displayed ranges pair the same model and round, using Off as the Native
 baseline and On as the external baseline. Terra has only one valid pair for each
-comparison, explicitly marked as insufficient for a performance conclusion.
+comparison and is omitted from the user-facing tables because of insufficient data.
 Three separate direct-upstream Terra controls reproduced one incomplete output
 without EMP; they are not included in the 330 samples or ratios. This establishes
 that the symptom also occurs without EMP, not its upstream cause. Model IDs
 absent from the local catalog used a common GPT-6.1 Sol metadata template with
 the requested ID retained, in both EMP and direct controls; these results do not
 establish model-specific harness tuning.
+
+The same help also shows an anonymous imported-subscription comparison for
+GPT-6.1 Sol. Each effort pools twenty valid same-account EMP/direct pairs from
+two subscriptions, totaling 200 calls in the 2026-10-18 parallel counting test.
+The direct arm authenticates that same subscription in the native CLI and is the
+1x baseline; the imported arm routes through EMP with external collaboration Off.
+Cells are medians of individual paired ratios, not ratios of separately pooled
+arm medians. Generation-rate medians span 0.95-1.01x across the five efforts;
+first-text waiting and completion time have their own columns and lower-is-better
+guidance. This uses neither the earlier three-sample Native effort cohort nor
+the subagent workflow TPS definition. Account names and identifiers are omitted
+from the shipped measurements.
 
 Reference: [Codex 0.153.4 tool routing](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/tools/router.rs)
 and [V2 communication](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/tools/handlers/multi_agents_v2.rs).

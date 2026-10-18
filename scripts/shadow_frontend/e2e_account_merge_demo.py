@@ -65,13 +65,14 @@ def main():
         for mode in ['services','service-errors']:
             browser.navigate(frontend+'/?demo='+mode)
             wait_for(lambda:browser.execute('return document.querySelectorAll(".service-card").length>3;'))
+            assert browser.execute('return fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json","X-EMP-Session":localStorage.getItem("emp_management_session_v1")},body:"{}"}).then(response=>response.status);')==403
             assert browser.execute('return Boolean(document.getElementById("shadow_demo_button"));')
             browser.execute('document.getElementById("shadow_demo_button").click();')
             assert browser.execute('return ["import","services","service-errors","review","recovery","lifecycle","removal"].every(mode=>document.querySelector(`[data-shadow-demo="${mode}"]`));')
             browser.execute('document.querySelector(".modal-close").click();document.querySelector("#shadow_services_demo button").click();')
             wait_for(lambda:browser.execute('return !document.getElementById("shadow_services_demo");'))
             assert (target/'config.json').read_bytes()==before_gallery
-            checks.append(mode+': shared menu, return to same workspace, no backend mutation')
+            checks.append(mode+': shared menu, rejected config write, return to same workspace, no backend mutation')
         args.output.write_text(json.dumps({'passed':True,'checks':checks,'real_model_calls':0,'production_state_used':False,'native_auth_unchanged':True},indent=2)+'\n')
         print(json.dumps({'passed':True,'checks':checks}))
 

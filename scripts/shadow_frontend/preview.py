@@ -2,14 +2,45 @@
 import contextlib
 import json
 import signal
+import sqlite3
 import tempfile
 import threading
+import time
 from pathlib import Path
 from candidate_web import candidate_frontend
 from e2e_environment import request, start_backend
 
 HERE = Path(__file__).resolve().parent
 PASSWORD = 'fixture-import-password'
+
+
+def seed_performance(base, state, headers):
+    assert request(base + '/api/calls', headers=headers)[0] == 200
+    with sqlite3.connect(state / 'usage.sqlite3') as database:
+        for index, legacy in enumerate((False, True)):
+            started = time.time() - 20 - index * 20
+            row = {'request_id': 'metrics-' + str(index), 'route': 'responses',
+                'thread_id': 'legacy-example' if legacy else 'stream-example',
+                'model_id': 'preview-speed', 'client_model': 'preview-speed',
+                'state': 'completed', 'success': True, 'status': 200, 'error_class': 'none',
+                'duration_ms': 10000, 'output_tokens': 200, 'reasoning_tokens': 40,
+                'tokens_per_second': 20, 'performance_schema': 4 if legacy else 5,
+                'started_at': started, 'finished_at': started + 10}
+            if not legacy:
+                row.update(first_content_ms=2000, generation_ms=2000, generation_tokens_per_second=80)
+            database.execute('INSERT OR IGNORE INTO call_records '
+                '(request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,state,facts) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?)', (row['request_id'], 'responses', started, started + 10,
+                    '', '@native', row['model_id'], row['thread_id'], 'completed', json.dumps(row)))
+        for index, suffix in enumerate(('c','k','s')):
+            owner = 'account:' + suffix
+            database.execute('INSERT OR IGNORE INTO usage_account_labels VALUES (?,?,?,?,?)',
+                ('subscription',owner,'sample-'+suffix,'Sample '+chr(65+index),''))
+            database.execute('INSERT OR IGNORE INTO usage_events '
+                '(id,observed_at,category,owner,model,service_tier,operation,input_tokens,output_tokens,'
+                'cached_input_tokens,cost_nanos,rates) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('service-color-'+suffix,time.time()-30,'subscription',owner,'preview-speed',
+                 'default','responses',100*(index+1),20*(index+1),0,10000*(index+1),'{}'))
 
 
 def fixture(stack, binary, root):
@@ -44,19 +75,23 @@ def fixture(stack, binary, root):
             'id':'demo-model','selected':False,'name':'Sample model A','context_window':467368,'default_context':272000,'maximum':872000},
             {'id':'shared-model','selected':True,'name':'Sample model B','default_context':272000,'maximum':872000}]}]}, headers)
     assert status == 200, exported
+    base, state, headers, _ = endpoints[1]
+    seed_performance(base, state, headers)
     return endpoints[1], target, exported['bundle']
 
 
 def preview(stack, backend, bundle, session, port=0):
-    script = (HERE / 'preview.js').read_text().replace('__FIXTURE_BUNDLE__',json.dumps(bundle)).replace('__FIXTURE_PASSWORD__',json.dumps(PASSWORD))
-    script += '\n' + (HERE / 'preview-review.js').read_text()
-    script += '\n' + (HERE / 'preview-routing.js').read_text()
+    def preview_script():
+        script = (HERE / 'preview.js').read_text().replace('__FIXTURE_BUNDLE__',json.dumps(bundle)).replace('__FIXTURE_PASSWORD__',json.dumps(PASSWORD))
+        script += '\n' + (HERE / 'preview-review.js').read_text()
+        script += '\n' + (HERE / 'preview-actions.js').read_text()
+        return '<script>' + script + '</script>'
     head='<script>'+ (HERE / 'shadow-service-demo.js').read_text() + '</script><script>localStorage.setItem("emp_management_session_v1",'+json.dumps(session)+');</script>'
     web = HERE.parents[1] / 'crates/emp-app/web'
     def recovery_page():
         shim = '<script>' + (HERE / 'preview-recovery.js').read_text() + '</script>'
         return (web / 'recovery.html').read_text().replace('<script>', shim + '<script>', 1)
-    return candidate_frontend(stack, backend, web, '<script>'+script+'</script>',port=port,index_head=head,
+    return candidate_frontend(stack, backend, web, preview_script,port=port,index_head=head,
                               pages={'/recovery': recovery_page})
 
 

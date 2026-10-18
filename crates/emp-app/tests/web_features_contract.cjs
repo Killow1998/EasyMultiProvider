@@ -237,6 +237,22 @@ test('common call details escape model/session names and keep missing metrics em
   assert.doesNotMatch(html,/0.00 s|0.0 token/);
 });
 
+test('call details distinguish visible generation from the full request rate in both languages', () => {
+  for (const language of ['en','zh-CN']) {
+    const reports = feature('call-reports.js','createCallReports')({tr:uiTranslate(language),esc,getLanguage:() => language});
+    const row = {request_id:'one',state:'completed',duration_ms:10000,ttft_ms:1,
+      first_content_ms:2000,tokens_per_second:20,generation_tokens_per_second:80};
+    const html = reports.recordHtml(row);
+    assert.match(html, /TTFT 2\.00 s · TPS 80\.0/);
+    assert.match(html, /(?:End-to-end TPS|全程 TPS)<\/span><strong>20\.0/);
+    assert.match(html, /(?:excluding reasoning|思考 token)/);
+    delete row.generation_tokens_per_second;
+    const legacy = reports.recordHtml(row);
+    assert.match(legacy, /TTFT 2\.00 s · TPS —/);
+    assert.match(legacy, /(?:End-to-end TPS|全程 TPS)<\/span><strong>20\.0/);
+  }
+});
+
 test('request success separates model failures, recovery and client cancellation', () => {
   const reports = feature('call-reports.js','createCallReports')({tr,esc,getLanguage:() => 'en'});
   const result = reports.outcomes({calls:20,completed:9,failed:1,interrupted:2,cancelled:3,recovery_required:4,unknown:1,success_samples:10,failure_breakdown:[{origin:'transport',code:'upstream_error',count:1}]});
@@ -384,7 +400,7 @@ test('closing diagnostics discards in-flight reports without a polling timer', a
 // Native browser effects are accepted in E2E; this VM checks page binding order.
 function pageEffectsGlobals() {
   const element=()=>({dataset:{},style:{setProperty(){},removeProperty(){}},hidden:true,
-    setAttribute(){},append(){},replaceChildren(){},classList:{toggle(){},contains(){return false;}}});
+    setAttribute(){},append(){},replaceChildren(){},addEventListener(){},classList:{toggle(){},contains(){return false;}}});
   return {matchMedia:()=>({matches:true,addEventListener(){}}),
     MutationObserver:class{observe(){}},IntersectionObserver:class{observe(){}},
     ResizeObserver:class{observe(){} disconnect(){}},
@@ -473,4 +489,23 @@ test('usage services display account labels and distinguish unlinked history wit
   assert.match(html, /Unlinked historical usage · egg/);
   assert.match(html, /Unlinked account/);
   assert.doesNotMatch(html, /fingerprint|history:egg|account:|@native/);
+});
+
+test('usage service colors distinguish colliding identities and stay stable across metrics and filters', () => {
+  const usage = feature('usage-data.js', 'createUsageData')({tr, esc, number:String});
+  const groups = ['a','i','q'].map((id,index) => ({category:'subscription',owner:'account:'+id,
+    owner_name:['Native','egg','yht'][index],model:'model',requests:1,priced_requests:0,
+    input_tokens:10,output_tokens:2,cached_input_tokens:0,cost_nanos:0}));
+  const report = {start:0,end:120,bucket:60,groups,series:groups.map(row=>({...row,start:0})),periods:[]};
+  const serviceChart = usage.chart(report,'tokens','services');
+  const colors = serviceChart.chartSeries.map(row=>row.color);
+  assert.equal(new Set(colors).size,3);
+  usage.chart(report,'tokens','models');
+  for (const group of groups) {
+    const filtered = usage.chart({...report,groups:[group],series:[{...group,start:0}]},'cost_nanos','services');
+    assert.equal(filtered.chartSeries[0].color,serviceChart.chartSeries.find(row=>row.label===group.owner_name).color);
+  }
+  const reversed = usage.chart({...report,groups:[...groups].reverse(),series:[...report.series].reverse()},'tokens','services');
+  assert.deepEqual(reversed.chartSeries.map(row=>row.color),colors);
+  assert.equal(serviceChart.periods.reduce((sum,row)=>sum+row.tokens,0),36);
 });

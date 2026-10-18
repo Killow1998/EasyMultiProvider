@@ -80,10 +80,10 @@ impl UsageLedger {
             SUM(state='unknown') AS unknown,
             SUM(state IN ('completed','failed')) AS success_samples,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.duration_ms') END) AS duration_ms,
-            AVG(CASE WHEN state='completed' AND json_extract(facts,'$.performance_schema')=4 THEN json_extract(facts,'$.ttft_ms') END) AS ttft_ms,
-            COUNT(CASE WHEN state='completed' AND json_extract(facts,'$.performance_schema')=4 THEN json_extract(facts,'$.ttft_ms') END) AS ttft_samples,
-            AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.tokens_per_second') END) AS tokens_per_second,
-            COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.tokens_per_second') END) AS tps_samples
+            AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_ms,
+            COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_samples,
+            AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tokens_per_second,
+            COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tps_samples
             FROM {calls} WHERE {predicate}"), &args)?;
         // Aggregate the full filtered range, independently of record pagination.
         let failures = rows(&connection, &format!("SELECT
@@ -109,8 +109,8 @@ impl UsageLedger {
             json_extract(facts,'$.requested_effort') AS requested_effort,
             COUNT(*) AS calls, SUM(state='completed') AS completed,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.duration_ms') END) AS duration_ms,
-            AVG(CASE WHEN state='completed' AND json_extract(facts,'$.performance_schema')=4 THEN json_extract(facts,'$.ttft_ms') END) AS ttft_ms,
-            AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.tokens_per_second') END) AS tokens_per_second
+            AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_ms,
+            AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tokens_per_second
             FROM {calls} WHERE {predicate}
             GROUP BY provider_id,account_id,model_id,upstream_model,speed_mode,requested_effort");
         let models_total: i64 = connection.query_row(
@@ -131,10 +131,10 @@ impl UsageLedger {
         )?;
         let bucket = ((filter.end - filter.start) / 48.0).max(60.0);
         let periods = rows(&connection, &format!("SELECT CAST((started_at-{})/{bucket} AS INTEGER)*{bucket}+{} AS start,
-            COUNT(*) AS calls, AVG(CASE WHEN state='completed' AND json_extract(facts,'$.performance_schema')=4 THEN json_extract(facts,'$.ttft_ms') END) AS ttft_ms,
-            COUNT(CASE WHEN state='completed' AND json_extract(facts,'$.performance_schema')=4 THEN json_extract(facts,'$.ttft_ms') END) AS ttft_samples,
-            AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.tokens_per_second') END) AS tokens_per_second,
-            COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.tokens_per_second') END) AS tps_samples
+            COUNT(*) AS calls, AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_ms,
+            COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_samples,
+            AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tokens_per_second,
+            COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tps_samples
             FROM {calls} WHERE {predicate} GROUP BY CAST((started_at-{})/{bucket} AS INTEGER) ORDER BY start",filter.start,filter.start,filter.start), &args)?;
         args.extend([
             SqlValue::Integer(filter.limit as i64),
@@ -180,7 +180,7 @@ impl UsageLedger {
         Ok(
             json!({"records":records,"total":count,"offset":filter.offset,"limit":filter.limit,
             "summary":summary.first(),"models":models,"periods":periods,"models_total":models_total,"models_offset":filter.models_offset,"models_limit":50,
-            "start":filter.start,"end":filter.end,"metric_schema":4}),
+            "start":filter.start,"end":filter.end,"metric_schema":5}),
         )
     }
 }

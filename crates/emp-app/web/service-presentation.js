@@ -42,24 +42,31 @@ function installServicePresentation() {
   document.body.dataset.shadowRefinements='true';
   const bubble=document.createElement('div');bubble.className='shadow-feedback';bubble.hidden=true;bubble.id='shadow_feedback';bubble.setAttribute('role','tooltip');document.body.append(bubble);
   let owner=null, leaveTimer=null;
-  function hide(){clearTimeout(leaveTimer);owner?.removeAttribute('aria-describedby');owner=null;bubble.hidden=true;}
+  function hide(){clearTimeout(leaveTimer);owner?.removeAttribute('aria-describedby');if(owner?.hasAttribute('aria-expanded'))owner.setAttribute('aria-expanded','false');owner=null;bubble.hidden=true;}
+  function position(){
+    if(!owner||bubble.hidden)return;
+    const rect=owner.getBoundingClientRect();const box=bubble.getBoundingClientRect();
+    bubble.style.left=Math.max(12,Math.min(innerWidth-box.width-12,rect.left+rect.width/2-box.width/2))+'px';
+    bubble.style.top=(rect.bottom+box.height+12<innerHeight ? rect.bottom+8 : Math.max(12,rect.top-box.height-8))+'px';
+  }
   function show(node){
     if(!node)return;
     hide();owner=node;bubble.dataset.tone=node.dataset.shadowTone || 'info';
     const template=document.getElementById(node.dataset.shadowHelpTemplate);
-    bubble.classList.toggle('shadow-feedback-table',template instanceof HTMLTemplateElement);
-    if(template instanceof HTMLTemplateElement)bubble.replaceChildren(template.content.cloneNode(true));
-    else bubble.textContent=node.dataset.shadowHelp;
-    bubble.hidden=false;bubble.scrollTop=0;node.setAttribute('aria-describedby',bubble.id);
-    const rect=node.getBoundingClientRect();const box=bubble.getBoundingClientRect();
-    bubble.style.left=Math.max(12,Math.min(innerWidth-box.width-12,rect.left+rect.width/2-box.width/2))+'px';
-    bubble.style.top=(rect.bottom+box.height+12<innerHeight ? rect.bottom+8 : Math.max(12,rect.top-box.height-8))+'px';
+    const rich=template instanceof HTMLTemplateElement;
+    bubble.classList.toggle('shadow-feedback-table',rich);
+    bubble.setAttribute('role',rich?'dialog':'tooltip');
+    if(rich){bubble.replaceChildren(template.content.cloneNode(true));bubble.setAttribute('aria-label',node.getAttribute('aria-label'));node.setAttribute('aria-expanded','true');}
+    else {bubble.textContent=node.dataset.shadowHelp;bubble.removeAttribute('aria-label');node.setAttribute('aria-describedby',bubble.id);}
+    bubble.hidden=false;bubble.scrollTop=0;
+    position();
   }
+  bubble.addEventListener('toggle',position,true);
   document.addEventListener('pointerover',event=>show(event.target.closest('[data-shadow-help]')));
-  document.addEventListener('pointerout',event=>{if(owner?.contains(event.target)||bubble.contains(event.target)){clearTimeout(leaveTimer);leaveTimer=setTimeout(()=>{if(!owner?.matches(':hover')&&!bubble.matches(':hover')&&document.activeElement!==owner)hide();},120);}});
+  document.addEventListener('pointerout',event=>{if(owner?.contains(event.target)||bubble.contains(event.target)){clearTimeout(leaveTimer);leaveTimer=setTimeout(()=>{if(!owner?.matches(':hover')&&!bubble.matches(':hover')&&document.activeElement!==owner&&!bubble.contains(document.activeElement))hide();},120);}});
   document.addEventListener('focusin',event=>show(event.target.closest('[data-shadow-help]')));
-  document.addEventListener('focusout',hide);
+  document.addEventListener('focusout',event=>{if(!owner?.contains(event.relatedTarget)&&!bubble.contains(event.relatedTarget))hide();});
   document.addEventListener('click',event=>{if(!event.target.closest('[data-shadow-help]')&&!bubble.contains(event.target))hide();},true);
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!bubble.hidden){hide();event.stopImmediatePropagation();}},true);window.addEventListener('scroll',event=>{if(!bubble.contains(event.target))hide();},true);
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!bubble.hidden){if(bubble.contains(document.activeElement))owner?.focus();hide();event.stopImmediatePropagation();}},true);window.addEventListener('scroll',event=>{if(!bubble.contains(event.target))hide();},true);
   return {hide};
 }

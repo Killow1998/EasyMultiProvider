@@ -11,6 +11,7 @@ pub struct ModelObservation {
     conflict: bool,
     pub first_output: Option<Instant>,
     pub first_content: Option<Instant>,
+    pub last_content: Option<Instant>,
 }
 impl ModelObservation {
     pub fn model(&self) -> Option<&str> {
@@ -91,59 +92,48 @@ impl ModelObservation {
         if !live {
             return;
         }
+        let nonempty = |value: &Value| value.as_str().is_some_and(|value| !value.is_empty());
         let content = matches!(
             kind,
             "response.output_text.delta"
                 | "response.refusal.delta"
                 | "response.function_call_arguments.delta"
                 | "response.custom_tool_call_input.delta"
-        ) && event["delta"].as_str().is_some_and(|v| !v.is_empty());
+        ) && nonempty(&event["delta"]);
         let block = kind == "response.output_item.added" || kind == "content_block_start";
-        let chat = event["choices"].as_array().is_some_and(|choices| {
-            choices.iter().any(|choice| {
-                let delta = &choice["delta"];
-                ["content", "reasoning_content", "reasoning"]
-                    .iter()
-                    .any(|key| delta[*key].as_str().is_some_and(|v| !v.is_empty()))
-                    || delta["tool_calls"]
-                        .as_array()
-                        .is_some_and(|calls| !calls.is_empty())
-            })
-        });
-        let anthropic_delta = kind == "content_block_delta"
-            && ["text", "thinking", "partial_json"]
+        let (mut chat, mut chat_content) = (false, false);
+        for choice in event["choices"].as_array().into_iter().flatten() {
+            let delta = &choice["delta"];
+            let text = nonempty(&delta["content"]);
+            let calls = delta["tool_calls"].as_array();
+            chat |= text
+                || nonempty(&delta["reasoning_content"])
+                || nonempty(&delta["reasoning"])
+                || calls.is_some_and(|calls| !calls.is_empty());
+            chat_content |= text
+                || calls.is_some_and(|calls| {
+                    calls
+                        .iter()
+                        .any(|call| nonempty(&call["function"]["arguments"]))
+                });
+        }
+        let anthropic_content = kind == "content_block_delta"
+            && ["text", "partial_json"]
                 .iter()
-                .any(|key| event["delta"][*key].as_str().is_some_and(|v| !v.is_empty()));
+                .any(|key| nonempty(&event["delta"][*key]));
+        let thinking = kind == "content_block_delta" && nonempty(&event["delta"]["thinking"]);
         let reasoning = matches!(
             kind,
             "response.reasoning_text.delta" | "response.reasoning_summary_text.delta"
-        ) && event["delta"].as_str().is_some_and(|v| !v.is_empty());
-        if content || block || chat || anthropic_delta || reasoning {
-            self.first_output.get_or_insert_with(Instant::now);
-        }
-        if content
-            || (kind == "content_block_delta"
-                && ["text", "partial_json"]
-                    .iter()
-                    .any(|key| event["delta"][*key].as_str().is_some_and(|v| !v.is_empty())))
-            || event["choices"].as_array().is_some_and(|choices| {
-                choices.iter().any(|choice| {
-                    choice["delta"]["content"]
-                        .as_str()
-                        .is_some_and(|v| !v.is_empty())
-                        || choice["delta"]["tool_calls"]
-                            .as_array()
-                            .is_some_and(|calls| {
-                                calls.iter().any(|call| {
-                                    call["function"]["arguments"]
-                                        .as_str()
-                                        .is_some_and(|value| !value.is_empty())
-                                })
-                            })
-                })
-            })
-        {
-            self.first_content.get_or_insert_with(Instant::now);
+        ) && nonempty(&event["delta"]);
+        let visible = content || anthropic_content || chat_content;
+        if visible || block || chat || thinking || reasoning {
+            let now = Instant::now();
+            self.first_output.get_or_insert(now);
+            if visible {
+                self.first_content.get_or_insert(now);
+                self.last_content = Some(now);
+            }
         }
     }
     pub fn project(&self, sent: &str) -> Value {
@@ -169,6 +159,49 @@ impl ModelObservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn content_interval_ignores_reasoning_empty_blocks_and_terminal_metadata() {
+        for (first, last) in [
+            (
+                json!({"type":"response.output_text.delta","delta":"one"}),
+                json!({"type":"response.function_call_arguments.delta","delta":"{}"}),
+            ),
+            (
+                json!({"type":"content_block_delta","delta":{"text":"one"}}),
+                json!({"type":"content_block_delta","delta":{"partial_json":"{}"}}),
+            ),
+            (
+                json!({"choices":[{"delta":{"content":"one"}}]}),
+                json!({"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{}"}}]}}]}),
+            ),
+        ] {
+            let mut observation = ModelObservation::default();
+            observation.observe(
+                &json!({"type":"response.reasoning_text.delta","delta":"thinking"}),
+                true,
+            );
+            assert!(observation.first_content.is_none());
+            observation.observe(&first, true);
+            let start = observation.first_content;
+            observation.observe(&last, true);
+            let end = observation.last_content;
+            for event in [
+                json!({"type":"response.output_text.delta","delta":""}),
+                json!({"type":"content_block_delta","delta":{"thinking":"thought"}}),
+                json!({"choices":[{"delta":{"reasoning_content":"thought"}}]}),
+                json!({"type":"response.completed"}),
+            ] {
+                observation.observe(&event, true);
+            }
+            assert_eq!(observation.first_content, start);
+            assert_eq!(observation.last_content, end);
+            assert!(end >= start);
+            let mut buffered = ModelObservation::default();
+            buffered.observe(&first, false);
+            assert!(buffered.first_content.is_none());
+            assert!(buffered.last_content.is_none());
+        }
+    }
     #[test]
     fn raw_first_terminal_and_header_declarations_survive_projection() {
         let mut observation = ModelObservation::default();

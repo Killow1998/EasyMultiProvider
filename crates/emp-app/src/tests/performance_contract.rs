@@ -1,35 +1,10 @@
 use super::{canonical_root, request, session_header};
 use crate::lifecycle::ServerHandle;
-use crate::services::observation::request_tokens_per_second;
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-
-#[test]
-fn request_tps_respects_observation_boundaries() {
-    let cases = vec![
-        (json!(120), json!(2000), json!(60.0)),
-        (json!(123), json!(4567), json!(26.93)),
-        (json!(1), json!(86_400_000), json!(0.0)),
-        (json!(0), json!(100), json!(0.0)),
-        (json!(120), json!(0), Value::Null),
-        (json!(true), json!(100), Value::Null),
-        (json!(10_000_001), json!(100), Value::Null),
-        (json!(120), json!(99), json!(1212.12)),
-        (json!(120), json!(86_400_001), Value::Null),
-        (json!(120), json!(100_000_000), Value::Null),
-    ];
-    for (output_tokens, duration_ms, expected) in cases {
-        assert_eq!(
-            request_tokens_per_second(&output_tokens, &duration_ms)
-                .map_or(Value::Null, |rate| json!(rate)),
-            expected,
-            "tps for {output_tokens} tokens in {duration_ms} ms"
-        );
-    }
-}
 
 struct TimedUsageUpstream {
     address: SocketAddr,
@@ -121,7 +96,7 @@ fn post_response_stream(server: &ServerHandle, body: &[u8], cookie: &str) -> Str
 }
 
 #[test]
-fn responses_endpoint_records_schema4_full_request_tps_and_preserves_stream_timings() {
+fn responses_endpoint_records_visible_generation_and_full_request_rates_separately() {
     let upstream = TimedUsageUpstream::start();
     let directory = tempfile::tempdir().expect("performance temp directory");
     let root = canonical_root(&directory);
@@ -178,8 +153,9 @@ fn responses_endpoint_records_schema4_full_request_tps_and_preserves_stream_timi
         .iter()
         .find(|record| record["model_id"] == "gpt-6-luna")
         .expect("record for the Responses request");
-    assert_eq!(record["performance_schema"], 4);
+    assert_eq!(record["performance_schema"], 5);
     assert_eq!(record["output_tokens"], 120);
+    assert_eq!(record["reasoning_tokens"], 90);
     assert!(record["ttft_ms"].as_u64().unwrap() >= 100);
     // Upstream deltas can coalesce in the socket under scheduler load; only
     // first-token and total pacing are deterministic EMP contracts.
@@ -189,8 +165,19 @@ fn responses_endpoint_records_schema4_full_request_tps_and_preserves_stream_timi
         duration_ms >= 200,
         "full request duration was {duration_ms}ms"
     );
-    let expected = request_tokens_per_second(&record["output_tokens"], &record["duration_ms"])
-        .expect("measurable full-request TPS");
-    assert_eq!(record["tokens_per_second"], json!(expected));
+    let expected = 120_000.0 / record["duration_ms"].as_f64().unwrap();
+    assert!((record["tokens_per_second"].as_f64().unwrap() - expected).abs() <= 0.01);
+    assert!(record["first_content_ms"].as_u64().unwrap() >= 100);
+    // A single coalesced batch has no measurable generation interval.
+    match record["generation_ms"]
+        .as_f64()
+        .filter(|duration| *duration > 0.0)
+    {
+        Some(duration) => assert!(
+            (record["generation_tokens_per_second"].as_f64().unwrap() - 30_000.0 / duration).abs()
+                <= 0.01
+        ),
+        None => assert!(record["generation_tokens_per_second"].is_null()),
+    }
     server.shutdown().expect("shutdown performance EMP");
 }

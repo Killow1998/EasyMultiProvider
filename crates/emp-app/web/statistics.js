@@ -3,8 +3,8 @@
 function createStatistics({api,$,tr,esc,getState,getLanguage,openModal,callReports,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport}) {
   const {number,seconds,tps,rate,outcomes,bindOutcomes} = callReports;
   const chart=createPerformanceChart({esc,tr,getLanguage,number,seconds,tps});
-  const facts=createPerformanceView({esc,tr,getLanguage,number,seconds,tps,rate,outcomes,bindOutcomes,definition:title=>title === 'TTFT' ? tr("reports.time_from_operation_start_to_the_first_reasoning_text") : title === 'TPS' ? tr("reports.output_tokens_divided_by_the_full_operation_duration_including") : ''});
-  const usage=createUsageData({tr,esc,number,getState});
+  const facts=createPerformanceView({esc,tr,getLanguage,number,seconds,tps,rate,outcomes,bindOutcomes,definition:title=>title === 'TTFT' ? tr("reports.time_to_first_content") : title === 'TPS' ? tr("reports.generation_speed_definition") : ''});
+  const usage=createUsageData({tr,esc,number});
   let root=null, query=null, report=null, view='overview', metric='tokens', grouping='none', filters={}, dispose=() => {}, timer=null;
   const options = rows => rows.map(([id,label])=>`<option value="${esc(id)}">${esc(label)}</option>`).join('');
   function filterHtml() {

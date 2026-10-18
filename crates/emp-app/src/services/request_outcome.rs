@@ -2,13 +2,13 @@
 //! updates existing routing feedback, usage and activity exactly once. Downstream
 //! delivery belongs to the passive request receipt and cannot rewrite this result.
 use crate::app::ServerState;
-use crate::services::observation::request_tokens_per_second;
 use emp_core::ResolvedRoute;
 use emp_state::usage::{account_owner, reported_usage};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::Instant;
 mod execution;
+mod performance;
 mod recording;
 mod shape;
 
@@ -81,7 +81,7 @@ impl<'a> RequestOutcome<'a> {
             .unwrap_or_default();
         let mut event = json!({"route":operation,"usage_category":category,"usage_owner":owner,"upstream_model":route.upstream_model,"route_model":route.requested_model,"usage_turn":turn,"service_tier":body["service_tier"].as_str().filter(|s|!s.is_empty()).unwrap_or("default"),
             "provider_id":route.provider_id,"model_id":route.requested_model,"client_model":body["model"],"resolved_protocol":route.protocol,"dialect":route.dialect,"route_source":route.source,"endpoint_fingerprint":route.endpoint_fingerprint,"deployment_identity":route.deployment_identity,
-            "transport":if body["stream"]==true{"sse"}else{"http"},"protocol_decision":"explicit","fallback_reason":"none","model_trace_source":"emp_dispatch","request_bytes":shape::request_bytes(body),"performance_schema":4,"speed_mode":if matches!(body["service_tier"].as_str(),Some("fast"|"priority"|"ultrafast")){"fast"}else{"standard"}});
+            "transport":if body["stream"]==true{"sse"}else{"http"},"protocol_decision":"explicit","fallback_reason":"none","model_trace_source":"emp_dispatch","request_bytes":shape::request_bytes(body),"performance_schema":5,"speed_mode":if matches!(body["service_tier"].as_str(),Some("fast"|"priority"|"ultrafast")){"fast"}else{"standard"}});
         event
             .as_object_mut()
             .unwrap()
@@ -278,6 +278,8 @@ impl<'a> RequestOutcome<'a> {
         }
         self.source_clock = true;
         self.first_token = observation.first_output;
+        // Content timing changes per delta without changing model declarations.
+        self.models.last_content = observation.last_content;
         if self.models != *observation {
             self.models = observation.clone();
             self.update_model_facts();
@@ -354,14 +356,6 @@ impl<'a> RequestOutcome<'a> {
         if !self.finalized {
             let duration_ms = self.started.elapsed().as_millis() as u64;
             self.event["duration_ms"] = json!(duration_ms);
-            if let Some(first) = self.models.first_content {
-                self.event["first_content_ms"] =
-                    json!(first.saturating_duration_since(self.started).as_millis() as u64);
-            }
-            if let Some(first) = self.first_token {
-                self.event["ttft_ms"] =
-                    json!(first.duration_since(self.started).as_millis() as u64);
-            }
             if self.event["route"] == "prewarm" {
                 self.state.backend.diagnostics.journal.event(
                     "info",
@@ -373,16 +367,7 @@ impl<'a> RequestOutcome<'a> {
                 self.finalized = true;
                 return;
             }
-            self.event
-                .as_object_mut()
-                .expect("route observation is an object")
-                .remove("tokens_per_second");
-            if self.event["success"] == true
-                && let Some(rate) =
-                    request_tokens_per_second(&self.event["output_tokens"], &json!(duration_ms))
-            {
-                self.event["tokens_per_second"] = json!(rate);
-            }
+            self.record_performance(duration_ms);
             if matches!(
                 emp_state::usage::call_state(&self.event),
                 "completed" | "failed"

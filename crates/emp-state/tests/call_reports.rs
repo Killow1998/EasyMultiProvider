@@ -105,6 +105,28 @@ fn legacy_ws_errors_and_recovery_are_not_client_interruptions() {
     assert_eq!(unchanged, "interrupted");
 }
 #[test]
+fn legacy_rates_remain_in_call_details_without_polluting_generation_averages() {
+    let root = tempfile::tempdir().unwrap();
+    let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+    let ledger = UsageLedger::new(root.path().join("usage.sqlite3"), prices);
+    ledger
+        .record_call(
+            &json!({"request_id":"legacy","route":"responses",
+        "model_id":"model","success":true,"performance_schema":4,
+        "ttft_ms":10,"tokens_per_second":25.0}),
+            98.0,
+            100.0,
+        )
+        .unwrap();
+    let report = ledger.query_calls(&filter()).unwrap();
+    assert_eq!(report["summary"]["completed"], 1);
+    assert_eq!(report["summary"]["tokens_per_second"], Value::Null);
+    assert_eq!(report["summary"]["tps_samples"], 0);
+    assert_eq!(report["summary"]["ttft_ms"], Value::Null);
+    assert_eq!(report["records"][0]["tokens_per_second"], 25.0);
+}
+
+#[test]
 fn durable_reports_share_accounting_and_keep_delivery_distinct() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("usage.sqlite3");
@@ -114,7 +136,8 @@ fn durable_reports_share_accounting_and_keep_delivery_distinct() {
         "provider_id":"demo","model_id":"demo/model","upstream_model":"model","client_model":"alias",
         "response_model":"model-revision","model_name_status":"different","thread_id":"thread-one",
         "usage_response_id":"response-one","input_tokens":100,"output_tokens":20,"cached_input_tokens":50,
-        "duration_ms":2000,"ttft_ms":100,"performance_schema":4,"tokens_per_second":10.0,
+        "duration_ms":2000,"ttft_ms":10,"first_content_ms":100,"performance_schema":5,
+        "tokens_per_second":1.0,"generation_tokens_per_second":10.0,"generation_ms":1000,
         "success":true,"status":200,"prompt":"PRIVATE","api_key":"PRIVATE","parent_thread_id":{"text":"PRIVATE"}});
     ledger.record(&first, 100.0);
     ledger.record_call(&first, 98.0, 100.0).unwrap();
@@ -131,8 +154,8 @@ fn durable_reports_share_accounting_and_keep_delivery_distinct() {
     second["usage_response_id"] = json!("response-two");
     second["thread_id"] = json!("thread-two");
     second["upstream_model"] = json!("other-model");
-    second["ttft_ms"] = json!(300);
-    second["tokens_per_second"] = json!(30.0);
+    second["first_content_ms"] = json!(300);
+    second["generation_tokens_per_second"] = json!(30.0);
     ledger.record(&second, 200.0);
     ledger.record_call(&second, 198.0, 200.0).unwrap();
     let mut cancelled = first.clone();
@@ -149,6 +172,9 @@ fn durable_reports_share_accounting_and_keep_delivery_distinct() {
     assert_eq!(report["summary"]["completed"], 2);
     assert_eq!(report["summary"]["tokens_per_second"], 20.0);
     assert_eq!(report["summary"]["ttft_ms"], 200.0);
+    assert_eq!(report["summary"]["tps_samples"], 2);
+    assert_eq!(report["models"][0]["tokens_per_second"], 10.0);
+    assert_eq!(report["periods"][0]["tokens_per_second"], 10.0);
     assert_eq!(report["models_total"], 2);
     assert_eq!(report["records"][0]["state"], "cancelled");
     assert_eq!(report["records"][0]["error_origin"], "client");
@@ -160,6 +186,8 @@ fn durable_reports_share_accounting_and_keep_delivery_distinct() {
     assert_eq!(one["delivery"]["error_code"], "write_failed");
     assert_eq!(one["delivery"]["last_phase"], "execute_and_relay");
     assert_eq!(one["state"], "completed");
+    assert_eq!(one["tokens_per_second"], 1.0);
+    assert_eq!(one["generation_tokens_per_second"], 10.0);
     assert!(one["pricing"].is_object());
     assert_eq!(
         ledger.query(0.0, 1000.0, "all", 1000.0).unwrap()["totals"]["requests"],

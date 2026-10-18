@@ -55,6 +55,8 @@ fn facts(event: &Value) -> Value {
         "ttft_ms",
         "first_content_ms",
         "tokens_per_second",
+        "generation_tokens_per_second",
+        "generation_ms",
         "attempts",
         "retries",
         "attempt_routes",

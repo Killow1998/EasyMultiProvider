@@ -92,6 +92,8 @@ impl Requests {
             "ttft_ms",
             "first_content_ms",
             "tokens_per_second",
+            "generation_tokens_per_second",
+            "generation_ms",
         ] {
             if event[field].is_number() {
                 record[field] = event[field].clone();

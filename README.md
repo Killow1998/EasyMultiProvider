@@ -219,9 +219,10 @@ EMP records local operational metrics so you can see where your coding-agent usa
 - Call details with the session name, selected model, model sent upstream and
   upstream-reported model, tokens, cache reads/writes, duration, TTFT and TPS.
 - Performance summaries and time charts for a selected period, with per-model
-  averages and sample counts. TTFT measures time to the first reasoning, text or
-  tool-output block; TPS divides output tokens by the whole call duration,
-  including retry waits.
+  averages and sample counts. TTFT measures time to the first text or tool
+  arguments. TPS measures visible output over the first-to-last content interval,
+  subtracting reported reasoning tokens. Call details retain end-to-end TPS,
+  including waiting and retries. Buffered responses have no estimated generation TPS.
 - Interrupted, failed and delivered outcomes, dispatch counts and retries.
 - Pricing references: price a model with no public price as another model (for example as `gpt-5.5`). Requests that still have no price count as 0 and are listed as such.
 
@@ -271,7 +272,7 @@ Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/REA
 
 ## Codex compatibility
 
-The current source version is **v0.13.7**.
+The current source version is **v0.13.8**.
 
 Maintenance targets the latest stable Codex minor series and the previous nine;
 patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).
