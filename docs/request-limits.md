@@ -67,6 +67,17 @@ These are adapter memory/encoding boundaries, not Claude model context windows
 or limits reported by Claude Code itself. A small incoming request can exceed
 the prepared-input budget after EMP reconstructs its full visible history.
 
+CPA relay image slots do not reduce this allowance's accounting: original
+image blocks plus system instructions must fit before slots are serialized.
+Context assessment also uses original media. The actual provider receives
+original image sources, not CLI-resized/recompressed copies, so the provider's
+image and request limits still apply. Local-login execution still supplies real
+images directly to Claude Code; it does not use relay slots.
+
+Provider image-limit rejections retain their upstream HTTP status, including
+400 and 413, through the normal error path. EMP does not substitute a smaller
+image or classify a provider rejection as a local transcript mismatch.
+
 Reaching the prepared-input budget during context assessment must not prevent
 history compaction. With a configured context/output budget, EMP treats that
 bounded estimate as unavailable and lets the normal history compactor prepare

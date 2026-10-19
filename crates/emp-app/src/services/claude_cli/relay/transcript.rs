@@ -1,4 +1,4 @@
-//! Validate a single CLI transcript without changing its content or tool authority.
+//! Validate the CLI transport, then restore authoritative source image blocks.
 use super::super::media::ExpectedUserContent;
 use serde_json::Value;
 use std::borrow::Cow;
@@ -21,8 +21,31 @@ fn validate_transcript(
     if !normalize_cli_system_messages(body) {
         return Err("claude_cli_system_format_mismatch");
     }
-    if !messages_match(body, expected_user_content) {
+    let cli_expected = match expected_user_content {
+        ExpectedUserContent::Blocks(blocks) => Some(ExpectedUserContent::Blocks(
+            super::super::media::cli_blocks(blocks),
+        )),
+        ExpectedUserContent::Text(_) => None,
+    };
+    if !messages_match(body, cli_expected.as_ref().unwrap_or(expected_user_content)) {
         return Err("claude_cli_content_mismatch");
+    }
+    if let ExpectedUserContent::Blocks(original) = expected_user_content {
+        let actual = body["messages"][0]["content"]
+            .as_array_mut()
+            .ok_or("claude_cli_content_mismatch")?;
+        if actual.len() != original.len() {
+            return Err("claude_cli_content_mismatch");
+        }
+        for (source, slot) in original.iter().zip(actual) {
+            if source["type"] == "image" {
+                let cache = slot.get("cache_control").cloned();
+                *slot = source.clone();
+                if let Some(cache) = cache {
+                    slot["cache_control"] = cache;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -199,50 +222,11 @@ fn messages_match(body: &Value, expected: &ExpectedUserContent) -> bool {
 }
 
 fn matches_expected_blocks(actual: &[Value], expected: &[Value]) -> bool {
-    // Claude Code adds prompt-cache breakpoints to native content blocks.
-    // Compare without this transport metadata, but forward the original body.
-    let Some(actual) = actual
-        .iter()
-        .map(without_cli_cache_marker)
-        .collect::<Option<Vec<_>>>()
-    else {
-        return false;
-    };
-    let mut actual_index = 0;
-    let mut deferred_resizes = Vec::new();
-    for expected_block in expected {
-        let Some(actual_block) = actual.get(actual_index) else {
-            return false;
-        };
-        if block_matches(expected_block, actual_block) {
-            actual_index += 1;
-            continue;
-        }
-        if expected_block.get("type").and_then(Value::as_str) != Some("image")
-            || actual_block.get("type").and_then(Value::as_str) != Some("image")
-        {
-            return false;
-        }
-        if let Some(note) = actual.get(actual_index + 1)
-            && super::super::image_geometry::matches_resize(expected_block, actual_block, note)
-        {
-            actual_index += 2;
-        } else {
-            deferred_resizes.push((expected_block, actual_block));
-            actual_index += 1;
-        }
-    }
-    let Some(trailing) = actual.get(actual_index..) else {
-        return false;
-    };
-    if trailing.len() != deferred_resizes.len() {
-        return false;
-    }
-    deferred_resizes
-        .iter()
-        .zip(trailing)
-        .all(|((expected_image, actual_image), note)| {
-            super::super::image_geometry::matches_resize(expected_image, actual_image, note)
+    // Image slots need exact positions and bytes. Only CLI cache metadata and
+    // JSON formatting in EMP's history markers are independent of content.
+    actual.len() == expected.len()
+        && actual.iter().zip(expected).all(|(actual, expected)| {
+            without_cli_cache_marker(actual).is_some_and(|actual| block_matches(expected, &actual))
         })
 }
 
@@ -322,3 +306,6 @@ fn has_only_structured_output_carrier(body: &Value) -> bool {
 #[cfg(test)]
 #[path = "transcript_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod private_roundtrip;

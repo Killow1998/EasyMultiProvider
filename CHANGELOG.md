@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### 中文
+
+- 修复含图片的 Codex 会话切换到 Claude CPA 后失败的问题，支持继续追加图片和工具结果；转发时保留原始图片、文字及工具结果顺序。
+
+### English
+
+- Fix failures when switching Codex conversations containing images to Claude CPA, including later image and tool-result turns. Forwarding preserves original images, text and tool-result ordering.
+
 ## 0.13.9 (2026-10-19)
 
 ### 中文

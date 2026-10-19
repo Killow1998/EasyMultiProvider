@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn relay_restores_sources_only_after_exact_slot_and_authority_validation() {
+    let original = vec![
+        serde_json::json!({"type":"text","text":"image from tool call A follows"}),
+        serde_json::json!({"type":"image","source":{"type":"url","url":"https://images.invalid/source.png"}}),
+        serde_json::json!({"type":"text","text":"exact tool output\n  中文\n"}),
+    ];
+    let slots = super::super::super::media::cli_blocks(&original);
+    let body = serde_json::json!({"stream":true,"messages":[{"role":"user","content":slots}],
+        "tools":[{"name":"StructuredOutput"}]});
+    let expected = ExpectedUserContent::Blocks(original.clone());
+    let mut valid = body.clone();
+    assert_eq!(validate(&mut valid, &expected), Ok(()));
+    assert_eq!(valid["messages"][0]["content"], serde_json::json!(original));
+    let mut corruptions = Vec::new();
+    for (index, field, value) in [
+        (0, "text", serde_json::json!("wrong association")),
+        (
+            1,
+            "source",
+            serde_json::json!({"type":"url","url":"https://images.invalid/other.png"}),
+        ),
+        (
+            1,
+            "source",
+            serde_json::json!({"type":"base64","media_type":"image/jpeg","data":"changed"}),
+        ),
+        (
+            1,
+            "cache_control",
+            serde_json::json!({"type":"ephemeral","unexpected":true}),
+        ),
+        (2, "text", serde_json::json!("exact tool output\n  中文")),
+    ] {
+        let mut changed = body.clone();
+        changed["messages"][0]["content"][index][field] = value;
+        corruptions.push(changed);
+    }
+    for content in [
+        serde_json::json!([slots[0], slots[2]]),
+        serde_json::json!([slots[1], slots[0], slots[2]]),
+        serde_json::json!([slots[0],slots[1],slots[2],{"type":"text","text":"[Image: original 2x2, displayed at 1x1. Multiply coordinates by 2 to map to original image.]"}]),
+    ] {
+        let mut changed = body.clone();
+        changed["messages"][0]["content"] = content;
+        corruptions.push(changed);
+    }
+    let mut extra_tool = body;
+    extra_tool["tools"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"name":"Bash"}));
+    corruptions.push(extra_tool);
+    for mut changed in corruptions {
+        assert!(
+            validate(&mut changed, &expected).is_err(),
+            "unvalidated transcript must not forward"
+        );
+    }
+}
+
+#[test]
 fn relay_accepts_cli_cache_markers_without_changing_forwarded_content() {
     let expected = vec![
         serde_json::json!({"type":"text","text":"{\"codex_responses_metadata\":{\"stream\":false}}"}),
@@ -14,12 +75,15 @@ fn relay_accepts_cli_cache_markers_without_changing_forwarded_content() {
             serde_json::json!({"type":"ephemeral","ttl":"5m"}),
             serde_json::json!({"type":"ephemeral","ttl":"1h"}),
         ] {
-            let mut actual = expected.clone();
+            let mut actual = super::super::super::media::cli_blocks(&expected);
             actual[index]["cache_control"] = cache;
             let mut body = serde_json::json!({
                 "stream":true,"messages":[{"role":"user","content":actual}]
             });
-            let original = body.clone();
+            let mut original = body.clone();
+            original["messages"][0]["content"] = serde_json::json!(expected);
+            original["messages"][0]["content"][index]["cache_control"] =
+                actual[index]["cache_control"].clone();
             assert_eq!(
                 validate_transcript(&mut body, &ExpectedUserContent::Blocks(expected.clone())),
                 Ok(())
@@ -125,7 +189,7 @@ fn cli_date_reminder_is_preserved_without_weakening_transcript_matching() {
             ExpectedUserContent::Blocks(content.clone())
         };
         let mut actual = vec![note.clone()];
-        actual.extend(content.clone());
+        actual.extend(super::super::super::media::cli_blocks(&content));
         let body = serde_json::json!({"stream":true,"messages":[{"role":"user","content":actual}]});
         let mut normalized = body.clone();
         assert_eq!(validate_transcript(&mut normalized, &expected), Ok(()));

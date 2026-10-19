@@ -38,6 +38,7 @@ fn claude_server_with_context(
 }
 
 mod compaction;
+mod transcript_roundtrip;
 
 pub(super) fn structured_messages_sse(proposal: &Value) -> Vec<u8> {
     structured_messages_sse_with_usage(
@@ -610,7 +611,7 @@ fn installed_cli_opus_55_forwards_images_and_documents_with_ordered_tool_history
 
 #[test]
 #[ignore = "requires an installed trusted Claude Code CLI on PATH"]
-fn installed_cli_opus_and_sonnet_accept_png_screenshots_recompressed_as_jpeg() {
+fn installed_cli_opus_and_sonnet_preserve_original_png_screenshots() {
     // Match the three-image geometry of the reported relay failures,
     // using generated pixels only. No private screenshots or CPA credentials.
     for model in ["claude-opus-5-5", "claude-sonnet-5-5"] {
@@ -646,16 +647,15 @@ fn installed_cli_opus_and_sonnet_accept_png_screenshots_recompressed_as_jpeg() {
             .filter(|part| part["type"] == "image")
             .collect();
         assert_eq!(images.len(), 3);
-        assert_eq!(
-            images[0]["source"]["data"],
-            STANDARD.encode(synthetic_png(1326, 336, true)),
-            "unscaled image remains exact"
-        );
-        assert_eq!(images[1]["source"]["media_type"], "image/png");
-        assert_eq!(
-            images[2]["source"]["media_type"], "image/jpeg",
-            "installed CLI must exercise the previously rejected MIME conversion"
-        );
+        for (image, (width, height)) in images.iter().zip([(1326, 336), (2866, 572), (2878, 1800)])
+        {
+            assert_eq!(image["source"]["media_type"], "image/png");
+            assert_eq!(
+                image["source"]["data"],
+                STANDARD.encode(synthetic_png(width, height, true)),
+                "all original source bytes must reach the provider, not a CLI re-encoding"
+            );
+        }
         let text = content
             .iter()
             .filter_map(|part| part["text"].as_str())
@@ -761,22 +761,14 @@ fn assert_cli_forwards_images_and_documents_with_ordered_tool_history(model: &st
     assert_eq!(images.len(), 2, "both input images must reach CPA natively");
     assert_eq!(images[0].1["source"]["type"], "base64");
     assert_eq!(images[0].1["source"]["media_type"], "image/png");
-    assert!(images[0].1["source"]["data"].as_str().unwrap().len() > 1000);
-    let displayed_png = STANDARD
-        .decode(images[0].1["source"]["data"].as_str().unwrap())
-        .expect("CLI resized PNG base64");
     assert_eq!(
-        (
-            u32::from_be_bytes(displayed_png[16..20].try_into().unwrap()),
-            u32::from_be_bytes(displayed_png[20..24].try_into().unwrap())
-        ),
-        (2000, 1125),
-        "the installed CLI applies the verified screenshot resize"
+        images[0].1["source"]["data"], screenshot_base64,
+        "the provider must receive the original screenshot bytes"
     );
-    assert!(content.iter().any(|block| {
-        block["type"] == "text"
-            && block["text"]
-                == "[Image: original 2560x1440, displayed at 2000x1125. Multiply coordinates by 1.28 to map to original image.]"
+    assert!(!content.iter().any(|block| {
+        block["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("[Image: original "))
     }));
     assert_eq!(images[1].1["source"]["type"], "url");
     assert_eq!(
