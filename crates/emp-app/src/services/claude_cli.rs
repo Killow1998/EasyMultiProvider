@@ -151,7 +151,12 @@ fn execute_complete_with_cli(
             "claude_cli_local_credentials_present",
         ));
     }
-    let cli_input = media::prepare(body).map_err(ClaudeCliError::Failure)?;
+    let cli_input = if local_login {
+        media::prepare(body)
+    } else {
+        media::prepare_relay(body)
+    }
+    .map_err(ClaudeCliError::Failure)?;
     let stdin = Arc::<[u8]>::from(cli_input.stdin);
     let expected_user_content = cli_input.expected_user_content;
     let model = candidate.upstream_model.as_str();

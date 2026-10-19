@@ -162,7 +162,7 @@ the third became a 2000×1251 JPEG. Resize notes were appended after the transcr
 The existing matcher already handles deferred notes and nominal one-pixel
 rounding, but rejected every MIME change, including that PNG-to-JPEG conversion.
 
-The matcher now permits PNG-to-JPEG only when the existing strict proportional
+In 0.13.9 the matcher permits PNG-to-JPEG only when the existing strict proportional
 downscale, original dimensions, resize-note geometry and rounded scale checks
 all succeed. No general MIME-change or unscaled-recompression bypass is added.
 Image count, ordering, text/history contents and sole `StructuredOutput` tool
@@ -174,3 +174,64 @@ Synthetic unit/transport and installed-CLI tests are separate evidence from a
 real-account desktop acceptance run. No private conversations, screenshots,
 credentials, account aliases or session JSONL belong in the public PR. The
 running application is not upgraded or restarted by the source patch.
+
+### Follow-up: Codex preprocessing plus a second CLI conversion
+
+The 0.13.9 raw-screenshot test did not reproduce the actual failing inputs.
+An explicitly authorized, OS-egress-isolated local replay of both complete
+reported histories with Claude Code 2.1.289 found source PNGs at 1326×336,
+2048×409 and 1995×1248. The CLI changed the second to a 1998×399 PNG while
+claiming 2000×399 in its note (a two-pixel discrepancy), and re-encoded the
+third as JPEG **without changing dimensions or emitting a resize note**.
+This is a distinct second image-processing pass after Codex preprocessing.
+Neither upstream health nor losing the original chat was responsible.
+
+The follow-up does not widen geometry tolerances or accept arbitrary image
+replacement. In CPA relay mode, EMP retains authoritative original image blocks
+and passes fixed valid 1×1 transparent PNG slots through the intermediary CLI.
+It validates the complete ordered text/slot transcript, association markers,
+document blocks, known cache-breakpoint metadata and sole `StructuredOutput`
+tool carrier before forwarding. It restores the original image source at each
+validated position; source MIME, bytes and URL sources remain exact. Invalid
+slots, changed tool text, dropped/reordered blocks and extra tool authority
+still fail closed. The upstream model never receives placeholder images.
+
+This policy applies only to the local CPA relay. Native local-login execution
+has no interception boundary and must keep real images in CLI stdin. Context
+assessment and the combined system/source-byte budget use original media in
+both modes. This avoids introducing a lossy local codec or new dependency, but
+also removes implicit CLI image compression from CPA requests. Providers may
+still reject source media above their own limits; this patch does not claim to
+override those limits. See [Claude vision documentation](https://platform.claude.com/docs/en/build-with-claude/vision).
+
+Private replay inputs are stdin-only, opt-in, never CI fixtures, never logged
+or committed. The guarded subprocess uses an isolated temporary home and dummy
+authentication, with OS network policy allowing only one fake upstream port.
+An independent negative check first denies a second loopback port and an
+external address. Only image counts and pass/fail metadata leave the test;
+temporary runtime files are removed. Public regressions use generated pixels
+and synthetic tool histories, never private conversations or screenshots.
+
+#### Follow-up validation record (2026-10-19, Asia/Shanghai)
+
+- Rust 1.93.1, macOS, installed Claude Code 2.1.289: 65 Claude adapter tests
+  passed; the private stdin acceptance remains ignored by default.
+- Both explicitly authorized complete failed histories passed the opt-in
+  guarded replay with Opus and Sonnet: four cases, three exact source images
+  each, one successful CLI terminal and no error event. A nonblocking fake
+  socket bug caused intermittent test timeouts before its bounded reader was
+  normalized; no image assertion or CLI timeout was widened.
+- All 12 public installed-CLI checks passed in the final serial run, covering
+  original and Codex-preprocessed PNGs,
+  HTTP/WebSocket appended tool-result turns, full-history continuation after
+  rejecting a non-native prior ID, long exact tool text, PDF/URL association,
+  effort/catalog roundtrips, bounded compaction and 429 classification.
+- All 36 frontend contracts, formatting and workspace/all-target Clippy with
+  warnings denied passed.
+- **The full local workspace is not green.** The all-target/no-fail-fast run
+  failed seven targets: `emp-app` lib (including a native image fixture cleanup
+  abort), `emp-app` exit/startup/user-journey integration targets, `emp-codex`
+  lib, router transport failures and transport HTTP-client tests. Directory
+  refresh also timed out when run alone. These failures have not been proven
+  to be introduced by this patch or all established as pre-existing. They are
+  not waived, and this is not full desktop/release acceptance.

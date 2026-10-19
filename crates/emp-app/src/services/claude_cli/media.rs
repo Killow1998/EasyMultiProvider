@@ -22,6 +22,21 @@ pub(super) enum ExpectedUserContent {
     Blocks(Vec<Value>),
 }
 
+/// The relay, not Claude Code's image codec, owns the original media. Only a
+/// fixed image slot crosses the CLI; validation restores the source at that
+/// exact position before any request reaches the provider. Context assessment
+/// and byte budgets continue to use the originals, never these slots.
+pub(super) fn cli_blocks(original: &[Value]) -> Vec<Value> {
+    original.iter().map(|block| {
+        if block["type"] == "image" {
+            json!({"type":"image","source":{"type":"base64","media_type":"image/png",
+                "data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="}})
+        } else {
+            block.clone()
+        }
+    }).collect()
+}
+
 enum Attachment {
     Native(Value),
     Text(String),
@@ -131,7 +146,15 @@ fn preflight_part(part: &Value) -> Result<(), &'static str> {
 }
 
 pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
-    let prepared = prepare_input(body)?;
+    prepare_with_image_slots(body, false)
+}
+
+pub(super) fn prepare_relay(body: &Value) -> Result<PreparedInput, &'static str> {
+    prepare_with_image_slots(body, true)
+}
+
+fn prepare_with_image_slots(body: &Value, relay: bool) -> Result<PreparedInput, &'static str> {
+    let prepared = prepare_input(body, relay)?;
     if prepared.stdin.len()
         > projection::MAX_TRANSCRIPT_BYTES.saturating_sub(prepared.system_prompt.len())
     {
@@ -140,7 +163,7 @@ pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
     Ok(prepared)
 }
 
-fn prepare_input(body: &Value) -> Result<PreparedInput, &'static str> {
+fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static str> {
     let mut transcript = projection::normalized_transcript(body);
     let system_prompt = super::instructions::take(&mut transcript)?;
     // Structured history needs stable block boundaries so appending a turn
@@ -163,7 +186,8 @@ fn prepare_input(body: &Value) -> Result<PreparedInput, &'static str> {
         Some(item @ Value::Object(_)) => vec![item],
         _ => Vec::new(),
     };
-    let mut budget = JsonByteBudget::new(projection::MAX_TRANSCRIPT_BYTES);
+    let mut budget =
+        JsonByteBudget::new(projection::MAX_TRANSCRIPT_BYTES.saturating_sub(system_prompt.len()));
     budget
         .charge(&json!({"type":"user","message":{"role":"user","content":[]}}))
         .map_err(|_| "claude_cli_input_too_large")?;
@@ -257,7 +281,7 @@ fn prepare_input(body: &Value) -> Result<PreparedInput, &'static str> {
 
     let event = json!({
         "type":"user",
-        "message":{"role":"user","content":content}
+        "message":{"role":"user","content":if relay { cli_blocks(&content) } else { content.clone() }}
     });
     let mut stdin = serde_json::to_vec(&event).map_err(|_| "claude_cli_invalid_transcript")?;
     stdin.push(b'\n');
@@ -533,6 +557,55 @@ mod tests {
     use super::*;
 
     const TINY_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+
+    #[test]
+    fn only_cpa_relay_uses_image_slots_not_local_login_or_context_assessment() {
+        let body = json!({"input":[{"role":"user","content":[
+            {"type":"input_image","image_url":format!("data:image/png;base64,{TINY_PNG}")},
+            {"type":"input_image","image_url":"https://images.invalid/original.png"}
+        ]}]});
+        let direct = prepare(&body).unwrap();
+        let relay = prepare_relay(&body).unwrap();
+        let direct_wire: Value = serde_json::from_slice(&direct.stdin).unwrap();
+        let relay_wire: Value = serde_json::from_slice(&relay.stdin).unwrap();
+        let ExpectedUserContent::Blocks(original) = relay.expected_user_content else {
+            panic!("structured input required");
+        };
+        assert_eq!(direct_wire["message"]["content"], json!(original));
+        assert_eq!(
+            context_payload(&body).unwrap()["messages"][0]["content"],
+            json!(original)
+        );
+        assert_eq!(
+            relay_wire["message"]["content"],
+            json!(cli_blocks(&original))
+        );
+        assert_ne!(relay_wire, direct_wire);
+        let images: Vec<_> = original
+            .iter()
+            .filter(|part| part["type"] == "image")
+            .collect();
+        assert_eq!(images[0]["source"]["data"], TINY_PNG);
+        assert_eq!(
+            images[1]["source"]["url"],
+            "https://images.invalid/original.png"
+        );
+    }
+
+    #[test]
+    fn relay_slots_do_not_bypass_original_media_and_system_byte_budget() {
+        let mut bytes = STANDARD.decode(TINY_PNG).unwrap();
+        // The same original-byte budget applies even when CLI slots are tiny.
+        bytes.resize(4 * 1024 * 1024, 0);
+        let body = json!({"instructions":"x".repeat(6 * 1024 * 1024),"input":[
+            {"role":"user","content":[{"type":"input_image","image_url":format!("data:image/png;base64,{}",STANDARD.encode(bytes))}]}
+        ]});
+        assert_eq!(prepare(&body).err(), Some("claude_cli_input_too_large"));
+        assert_eq!(
+            prepare_relay(&body).err(),
+            Some("claude_cli_input_too_large")
+        );
+    }
 
     #[test]
     fn text_input_keeps_the_existing_text_carrier() {

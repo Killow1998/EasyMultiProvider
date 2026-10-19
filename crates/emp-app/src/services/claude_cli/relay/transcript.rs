@@ -1,4 +1,4 @@
-//! Validate a single CLI transcript without changing its content or tool authority.
+//! Validate the CLI transport, then restore authoritative source image blocks.
 use super::super::media::ExpectedUserContent;
 use serde_json::Value;
 use std::borrow::Cow;
@@ -21,8 +21,31 @@ fn validate_transcript(
     if !normalize_cli_system_messages(body) {
         return Err("claude_cli_system_format_mismatch");
     }
-    if !messages_match(body, expected_user_content) {
+    let cli_expected = match expected_user_content {
+        ExpectedUserContent::Blocks(blocks) => Some(ExpectedUserContent::Blocks(
+            super::super::media::cli_blocks(blocks),
+        )),
+        ExpectedUserContent::Text(_) => None,
+    };
+    if !messages_match(body, cli_expected.as_ref().unwrap_or(expected_user_content)) {
         return Err("claude_cli_content_mismatch");
+    }
+    if let ExpectedUserContent::Blocks(original) = expected_user_content {
+        let actual = body["messages"][0]["content"]
+            .as_array_mut()
+            .ok_or("claude_cli_content_mismatch")?;
+        if actual.len() != original.len() {
+            return Err("claude_cli_content_mismatch");
+        }
+        for (source, slot) in original.iter().zip(actual) {
+            if source["type"] == "image" {
+                let cache = slot.get("cache_control").cloned();
+                *slot = source.clone();
+                if let Some(cache) = cache {
+                    slot["cache_control"] = cache;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -322,3 +345,6 @@ fn has_only_structured_output_carrier(body: &Value) -> bool {
 #[cfg(test)]
 #[path = "transcript_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod private_roundtrip;
