@@ -66,6 +66,7 @@ fn collaboration_recovery_rejects_invalid_capture_and_accounts_retries_once() {
         &*session,
         "Authorization: Bearer native-fixture",
         "chatgpt-account-id: native-owner",
+        "x-openai-subagent: collab_spawn",
     ];
     let result = post(
         &server,
@@ -122,6 +123,7 @@ fn collaboration_recovery_rejects_invalid_capture_and_accounts_retries_once() {
             &session,
             "Authorization: Bearer changed",
             "chatgpt-account-id: another-owner",
+            "x-openai-subagent: collab_spawn",
         ],
     );
     assert!(
@@ -193,7 +195,10 @@ fn collaboration_recovery_rejects_invalid_capture_and_accounts_retries_once() {
 fn collaboration_websocket_rejects_disabled_and_unowned_tasks_without_forwarding() {
     let (_directory, server) = configured_server("http://127.0.0.1:1/v1");
     let url = format!("ws://{}/v1/responses", server.local_addr());
-    let headers = BTreeMap::from([("X-EMP-Session".into(), server.session_token().to_owned())]);
+    let headers = BTreeMap::from([
+        ("X-EMP-Session".into(), server.session_token().to_owned()),
+        ("x-openai-subagent".into(), "collab_spawn".into()),
+    ]);
     let mut socket =
         emp_transport::ClientWebSocket::connect(&url, &headers, Duration::from_secs(5)).unwrap();
     let task = json!({"type":"agent_message","author":"/root","recipient":"/root/bench","content":[

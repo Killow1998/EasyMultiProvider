@@ -46,36 +46,105 @@ and was switched to Claude. With external collaboration off, every attempt faile
 at `prepare_destination` with `encrypted_agent_task_requires_recovery`: six
 WebSocket attempts followed by HTTP 409. No Claude request was dispatched.
 
-The history-recovery opt-in is independent of external-child policy. It uses the
-existing GPT-6 Luna low-effort capture on the original observed subscription,
-records helper usage separately, and preserves the other input items and tool
-pairings. No local session files are rewritten. Native requests are unchanged.
-All envelopes/accounts are preflighted before any paid recovery; at most eight
-encrypted envelopes are accepted per request. Each uncached inference has the
-existing 45-second limit and downstream cancellation handling.
+This is a native encrypted `agent_message`, not an EMP-owned `emp1:` compaction
+checkpoint. The existing local `EMP migrate-history --thread-id ID` command only
+converts the latter for direct native resume, with explicit user execution and
+transactional backups. It cannot decrypt these native messages. This report does
+not establish a defect in that checkpoint migration tool.
 
-Origin hashes plus route ownership remain memory-only, bounded to 4096 entries
-for 24 hours. Plaintext remains limited to 64 entries, 256 KiB each, for one hour.
-The longer provenance window covers multi-hour chats without retaining plaintext
-for longer. A restart, eviction, missing observation or account change can still
-make a particular old chat unrecoverable. This patch cannot reconstruct missing
-original-account provenance and does not infer it from the currently selected
-account or merely successful replay of encrypted input.
+Parent history uses the existing Cross-service subagents > On-demand recovery
+mode. This transcribes encrypted agent messages for the current forwarded request
+using the observed original GPT subscription, with accounted extra latency/usage.
+The proposed separate parent-history recovery setting is removed; a legacy flag
+cannot independently enable recovery. Off/On modes explain the existing mode and
+manual alternatives. Session files are never rewritten by this request handling.
 
-### Alternatives and consent
-
-- Automatic GPT recovery: opt in explicitly, accepting extra subscription usage,
-  latency and possible transcription differences. The default remains off;
-  permission from one reporter is not consent on behalf of every EMP user.
-- No automatic GPT recovery: keep the setting off and start a new external chat
-  with a readable, reviewed handoff. EMP explains the failure rather than dropping
-  encrypted items or pretending that their unencrypted headers are the payload.
-  A user may prepare the handoff manually or request it from the original Native
-  model; that explicit Native turn is a separate quota-consuming operation.
-
-These alternatives are also relevant when provenance has already expired. Merely
-enabling recovery cannot repair that situation. Client reconnect behavior is not
+Only current child metadata enables the existing cross-service child policy;
+historical delegation messages cannot make a parent turn count as a child.
+Origin fingerprints remain bounded to 4096 entries for 24 hours, separately from
+the one-hour plaintext cache. Recovery preflights all envelopes/accounts before
+any paid inference and accepts at most eight encrypted envelopes per request.
+Missing or changed accounts fail closed. Review/compaction worker exclusions and
+the 45-second inference limit remain in place. Client reconnect behavior is not
 changed or claimed fixed by this patch.
+
+### Isolated source verification
+
+On Linux, a controlled substitution of the pre-fix accept loop failed the real
+descriptor-exhaustion fixture with connection refusal; the PR accept loop passed.
+The old same-MIME image matcher rejected the observed PNG-to-JPEG downscale; the
+PR matcher passed all eight geometry cases. The installed-CLI three-screenshot
+fixture passed for both Opus and Sonnet against a loopback fake service using
+synthetic credentials and images. These checks do not establish macOS desktop
+acceptance or reproduce every separate failure from the author's full local suite.
+
+The parent-history contract checks Off/On rejection with zero recovery/destination
+calls, then successful HTTP/WS On-demand recovery,
+including inherited outbound tasks. Four forwarded turns share one accounted
+helper inference; input/tool pairs and a synthetic saved session remain intact.
+The Native GPT child reply passes through the real response observation path to
+establish account provenance. A readable completion notification requires no
+recovery call, even when external children are Off. Existing child contracts
+retain ownership checks, accounting and preflight rejection.
+
+The reverse external-parent route also exposed a missing plaintext marker:
+external collaboration calls lacked `encrypted_function_args: []`, which Codex
+requires to recognize readable messages. The protocol regression failed before
+the marker fix and passed afterward for spawn, message and follow-up tools,
+including complete and streamed items. Unrelated tools retain their metadata;
+claimed native encryption from an external provider is rejected. These isolated
+checks are complemented by the real-model app-server acceptance below.
+
+The bilingual settings contract rejects any extra history-recovery control.
+These checks ran in an isolated PR worktree without changing the live service,
+native credentials or conversations. Integration and publication follow the
+normal release gates.
+
+### Real-model switch acceptance and modularization (2026-10-19 UTC)
+
+Codex CLI 0.163.0 and Claude Code 2.1.300 completed the following against an
+isolated Linux candidate, using actual provider/subscription endpoints:
+
+| Same-thread pair | Parent turns | Completed children | Result |
+| --- | --- | --- | --- |
+| Opus 5.5 ↔ Native GPT-6.1 Sol | 8 | Native child from Opus; Opus child from Native | Pass |
+| Chuang Gemma 3.1 ↔ Native GPT-6.1 Sol | 8 | Native child from Gemma; Gemma child from Native | Pass |
+
+Each pair preserves a synthetic remembered code across switching, checks the
+actual spawned child's model, completion and output, then switches again and
+checks that the parent can recall the result. All 16 parent turns completed
+with zero error events. All four actual children completed. Two encrypted Native
+assignments to external children each triggered one successful, accounted GPT-6
+Luna recovery. Normal child completion did not require a helper. Two zero-attempt
+history replay responses were followed by successful full-history continuation;
+there were no failed inference calls. The test does not claim a new macOS/Windows
+desktop run or recovery of old ciphertext with lost account provenance.
+
+The candidate EMP SHA-256 was
+`2780688bba00472f6a8f8308c5a9bcb66180cb697f24d3d34b7c88165cd5a809`.
+The repeatable opt-in [acceptance harness](../scripts/switch_acceptance/README.md)
+uses fresh private state, reads production credentials without changing them,
+and never supplies a refresh token to its disposable Codex. Exact source auth,
+master/provider-key bytes and selected provider/model records remained unchanged.
+The source config's whole-file hash changed during live account/quota updates;
+it is not reported as byte-identical. The installed EMP was not upgraded.
+
+The optimization keeps request policy/preflight in `collaboration.rs` (243 → 136
+lines) and moves bounded provenance/cache ownership into `collaboration/state.rs`.
+Tool projection stays in `tool_bridge.rs` (590 → 237 lines), with definition
+adaptation, response restoration and tests in focused sibling files. No public
+API, new setting, recovery button or session-management layer is added.
+The obsolete separate-setting test matrix is removed; bilingual settings checks
+still require reuse of the existing On-demand mode.
+
+Controlled ablations removed the plaintext marker and bypassed the recovery cache
+independently. The former failed the collaboration protocol assertion; the latter
+failed repeated HTTP/WS parent-history recovery by requesting an extra helper.
+Both were restored before acceptance. Seven collaboration tests, six tool-bridge
+tests, two conversation-switch contracts, 22 frontend feature contracts and two
+copy contracts passed, as did affected-library Clippy with warnings denied.
+These checks establish useful cross-module behavior; they do not remove the need
+to run affected integration paths after future interface changes.
 
 ## Multi-image relay: 502 after starting Claude Code
 

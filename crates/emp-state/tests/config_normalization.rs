@@ -53,7 +53,6 @@ fn configuration_normalization_matches_frozen_fixture() {
             "language",
             "image_routing",
             "external_collaboration",
-            "encrypted_history_recovery",
         ] {
             python_compatible.as_object_mut().unwrap().remove(key);
         }
@@ -104,7 +103,6 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
         assert_eq!(defaults["auto_enable_on_start"], true);
         assert_eq!(defaults["auto_review_fallback"], true);
         assert_eq!(defaults["external_collaboration"], "off");
-        assert_eq!(defaults["encrypted_history_recovery"], false);
         assert_eq!(defaults["subscription_search"]["enabled"], true);
     }
     let disabled = normalize_configuration(Some(&json!({
@@ -127,8 +125,7 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
 #[test]
 fn application_preferences_survive_web_save_and_reject_non_booleans() {
     let current = normalize_configuration(Some(&json!({
-        "auto_enable_on_start": true, "auto_review_fallback": false, "external_collaboration": "on_demand",
-        "encrypted_history_recovery": true
+        "auto_enable_on_start": true, "auto_review_fallback": false, "external_collaboration": "on_demand"
     })))
     .unwrap();
     let public =
@@ -138,20 +135,11 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
     assert_eq!(saved["auto_enable_on_start"], true);
     assert_eq!(saved["auto_review_fallback"], false);
     assert_eq!(saved["external_collaboration"], "on_demand");
-    assert_eq!(saved["encrypted_history_recovery"], true);
     let mut old_client = public.clone();
     old_client
         .as_object_mut()
         .unwrap()
         .remove("external_collaboration");
-    old_client
-        .as_object_mut()
-        .unwrap()
-        .remove("encrypted_history_recovery");
-    assert_eq!(
-        emp_state::merge_web_update(&current, &old_client).unwrap()["encrypted_history_recovery"],
-        true
-    );
     assert_eq!(
         emp_state::merge_web_update(&current, &old_client).unwrap()["external_collaboration"],
         "on_demand"
@@ -160,7 +148,6 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
         "auto_enable_on_start",
         "auto_review_fallback",
         "external_collaboration",
-        "encrypted_history_recovery",
     ] {
         assert!(normalize_configuration(Some(&json!({key: "false"}))).is_err());
     }

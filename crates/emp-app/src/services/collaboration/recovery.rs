@@ -5,6 +5,7 @@ use crate::services::native;
 use crate::services::request_outcome::RequestOutcome;
 use emp_core::resolved_route_from_parts;
 use emp_router::native_http::NativeRouter;
+use std::time::Duration;
 
 const MODEL: &str = "gpt-6-luna";
 

@@ -137,7 +137,6 @@ fn default_configuration() -> Value {
         "auto_enable_on_start": true,
         "auto_review_fallback": true,
         "external_collaboration": "off",
-        "encrypted_history_recovery": false,
         "image_routing": {"mode":"follow", "account_id":""},
         "codex_runtime_sources": ["auto"],
         "pricing_aliases": {},
@@ -631,15 +630,6 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         _ => {
             return Err(ConfigError::new(
                 "external_collaboration must be off, on_demand or on",
-            ));
-        }
-    };
-    normalized["encrypted_history_recovery"] = match raw.get("encrypted_history_recovery") {
-        None => Value::Bool(false),
-        Some(Value::Bool(value)) => Value::Bool(*value),
-        Some(_) => {
-            return Err(ConfigError::new(
-                "encrypted_history_recovery must be boolean",
             ));
         }
     };

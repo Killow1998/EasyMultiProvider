@@ -1,13 +1,11 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
-  "models.encrypted_history_recovery": ["恢复加密历史","Recover encrypted history"],
-  "models.encrypted_history_recovery_help": ["默认关闭。旧主对话切换外部模型时，允许用原账号的 GPT-6 Luna（low）恢复加密子代理消息，会增加延迟并消耗订阅额度，文字可能有差异。不启用外部子代理；来源账号不可确认时仍会停止。关闭时可改用新对话和可读交接。","Off by default. When switching an existing parent chat to an external model, allow GPT-6 Luna (low) on the original account to recover encrypted agent messages. Adds latency and subscription usage; text may differ. Does not enable external subagents. Stops if account provenance is unavailable. With recovery off, use a new chat and readable handoff."],
   "models.external_collaboration": ["跨服务子代理","Cross-service subagents"],
   "models.collaboration_off": ["关闭","Off"],
   "models.collaboration_on_demand": ["按需恢复","On-demand recovery"],
   "models.collaboration_on": ["打开","On"],
   "models.collaboration_off_help": ["默认选择。子代理仅允许使用原生 GPT 订阅模型，保留原生生成速度。","Default. Subagents can only use Native GPT subscription models, preserving native generation speed."],
-  "models.collaboration_on_demand_help": ["允许外部子代理。仅在需要时，用原任务账号的 GPT-6 Luna（low）恢复加密任务；会额外消耗时间与额度，恢复文字可能有差异。","Allow external subagents. Recover encrypted tasks only when needed with GPT-6 Luna (low) on the original account. Recovery adds latency and usage, and the text may differ."],
+  "models.collaboration_on_demand_help": ["允许外部子代理。仅在需要时，用原账号的 GPT-6 Luna（low）恢复加密子代理任务或主对话历史中的子代理消息；会额外消耗时间与额度，恢复文字可能有差异，不改写本地会话。","Allow external subagents. Recover encrypted subagent tasks or historical agent messages in the parent chat only when needed with GPT-6 Luna (low) on the original account. Recovery adds latency and usage, and the text may differ. Local sessions are not rewritten."],
   "models.collaboration_on_help": ["允许外部子代理，直接传递明文任务，无需额外调用恢复模型。启用期间，即使没有调用外部子代理，GPT 生成速度也可能下降。","Allow external subagents with plaintext tasks, without an extra recovery inference. While enabled, GPT generation may slow down even when no external subagent is called."],
   "models.collaboration_help_title": ["跨服务子代理：模式说明与对比","Cross-service subagents: modes and comparison"],
   "models.collaboration_takeaway": ["需要外部子代理时，建议选“按需恢复”：GPT 保持原生速度，恢复任务会增加等待和用量；“打开”会让多数 GPT 变慢。","For external subagents, choose On-demand recovery: GPT keeps its native speed, while task recovery adds waiting time and usage. On slows most GPT models."],

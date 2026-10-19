@@ -203,7 +203,7 @@ test('old bookmarks and Python cookie sessions retain their existing login path'
   }
 });
 
-test('encrypted history recovery is default-off and discloses paid GPT recovery in both locales', () => {
+test('settings reuse on-demand recovery without a separate history control', () => {
   for (const language of ['en', 'zh-CN']) {
     let html;
     const settings = feature('settings.js', 'createSettings')({
@@ -212,14 +212,12 @@ test('encrypted history recovery is default-off and discloses paid GPT recovery 
       tr:uiTranslate(language), quotaDisplay:{mode:() => 'remaining'},
     });
     settings.open();
-    assert.match(html, /aria-checked="false"[^>]+data-id="encrypted_history_recovery"/);
-    assert.match(html, /Adds latency and subscription usage|增加延迟并消耗订阅额度/);
-    assert.match(html, /Does not enable external subagents|不启用外部子代理/);
-    assert.match(html, /new chat and readable handoff|新对话和可读交接/);
+    assert.doesNotMatch(html, /data-id="encrypted_history_recovery"/);
+    assert.match(html, /data-id="external_collaboration" data-mode="on_demand"/);
   }
 });
 
-for (const [key, initial] of [['auto_enable_on_start', true], ['external_collaboration', 'off'], ['encrypted_history_recovery', false]]) {
+for (const [key, initial] of [['auto_enable_on_start', true], ['external_collaboration', 'off']]) {
 test(`settings preserve state and disabled controls after a failed ${key} save`, async () => {
   const state = {[key]:initial, accounts:[]};
   const button = {dataset:{id:key,mode:'on_demand'}, disabled:false, isConnected:true, value:String(initial), getAttribute() { return this.value; }, setAttribute(_key, value) { this.value = value; }};

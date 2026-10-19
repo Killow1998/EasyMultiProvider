@@ -11,17 +11,25 @@ has three modes, persisted as `external_collaboration`:
 | Mode | Value | Behavior |
 | --- | --- | --- |
 | Off (default) | `"off"` | Only Native GPT subscription subagents are allowed. External delegation returns an error explaining where to enable it. |
-| On-demand recovery | `"on_demand"` | Keep native collaboration tools. Recover an encrypted task with GPT-6 Luna, low effort, on its original subscription before forwarding to an external child. |
+| On-demand recovery | `"on_demand"` | Keep native collaboration tools. Recover encrypted subagent tasks or agent messages in parent history with GPT-6 Luna, low effort, on their original subscription before forwarding to an external model. |
 | On | `"on"` | Present plaintext collaboration tools to Native models, permitting external children without a recovery inference. Native generation can slow down. |
 
 Ordinary external conversations without encrypted agent messages and the
 separate Auto Review routing setting are unaffected. A parent conversation can
 contain old encrypted child replies even when its current input is an ordinary
-user message. **Settings > Recover encrypted history** is a separate, default-off
-opt-in (`encrypted_history_recovery: true`): it permits the same accounted recovery
-on top-level external turns without enabling external children or review workers.
-Existing On-demand recovery also permits parent-history recovery. Enabling On
-alone does not retroactively decrypt old messages.
+user message. The existing On-demand recovery mode covers those parent turns as
+well as child tasks. Off/On modes reject encrypted history with guidance to select
+On-demand recovery, explaining extra GPT latency and usage. No separate
+history-recovery setting is exposed; a legacy `encrypted_history_recovery` value
+cannot enable recovery when the existing mode is not On-demand.
+Current child requests are identified by Codex request metadata, not old agent
+messages in inherited history; review and compaction workers remain separate.
+The local `EMP migrate-history --thread-id ID` command converts legacy EMP-owned
+`emp1:` checkpoints for native resume. It cannot decrypt native encrypted agent
+messages. Request-local on-demand transcription is separate from that local tool.
+If original-account provenance is unavailable, continue with the original Native
+model or prepare a readable handoff and start a new external chat. EMP does not
+manage or rewrite saved Codex conversations as part of request routing.
 
 Switching affects subsequent requests; an incremental Native
 WebSocket turn recovers its full history on a fresh upstream socket when the
@@ -66,16 +74,47 @@ envelopes and account ownership are checked before any helper inference starts.
 Each helper inference has its own `agent_task_recovery` call and
 usage record; replaying a cached task does not duplicate that charge.
 
-There are two explicit approaches, not an invisible paid fallback:
+On-demand recovery applies to current child tasks and encrypted agent messages in
+parent history. Review and compaction workers retain their separate policy.
+Preparing a handoff in a user-initiated Native turn is a separate quota-consuming
+operation.
 
-1. Opt into automatic GPT recovery when retaining the encrypted history in the
-   same chat is important. This adds latency and subscription usage and remains
-   model-assisted transcription, not guaranteed byte-exact decryption. Account
-   provenance, valid capture output and the per-request bounds remain required.
-2. Leave recovery off. EMP makes no recovery-model call, explains the block, and
-   the user starts a new external chat with a reviewed readable handoff (prepared
-   manually or in a user-initiated Native turn). This does not preserve opaque
-   messages automatically. A manually requested Native turn can itself use quota.
+### External parent with a Native GPT child
+
+An external parent (for example Opus or DeepSeek) can request a Native GPT child.
+Its `spawn_agent`, `send_message` and `followup_task` calls are restored with
+explicit `encrypted_function_args: []`, so Codex treats the external model's
+readable assignment as plaintext. Only collaboration message tools receive this
+marker; unrelated tools retain their metadata. Claimed ciphertext from an external
+provider is rejected. The child request follows its Native route even when
+external children are Off. The requested GPT model must be available to Codex.
+
+In Codex 0.163.0, normal child completion is delivered as a readable final-result
+notification, which the external parent can consume without a recovery inference.
+A Native child can also explicitly send an encrypted collaboration message. EMP
+observes that ciphertext on the child's Native response and binds it to the
+child's actual subscription; On-demand recovery then transcribes it when the
+external parent consumes it. Missing/changed accounts still fail closed. On
+instead changes subsequent Native collaboration tools to plaintext, with the
+documented possible speed cost.
+
+The isolated contracts check readable completion without recovery, Native
+response-path provenance for an encrypted child reply, and parent HTTP/WS recovery
+with one cached/accounted helper call. A separate real-model Linux app-server E2E
+passed Opus 5.5 ↔ Native GPT-6.1 Sol and Chuang Gemma 3.1 ↔ Native GPT-6.1 Sol,
+including actual children in both directions and subsequent model switching.
+See [acceptance scope and evidence](claude-switch-failures.md#real-model-switch-acceptance-and-modularization-2026-10-19-utc).
+
+Request policy and whole-request preflight belong to
+`emp-app/services/collaboration.rs`; `collaboration/state.rs` owns bounded in-memory
+provenance and cached recovery, while `message.rs` validates envelopes and
+`recovery.rs` resolves/accounts the helper call. `emp-protocol/tool_bridge.rs`
+owns external request identities, with definition adaptation and response
+restoration in sibling modules. These boundaries preserve Codex's agent lifecycle
+and keep external plaintext restoration separate from Native tool rewriting.
+
+References: Codex 0.163.0 [plaintext tool classification](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/src/tools/router.rs)
+and [child completion delivery](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/src/agent/control/completion.rs).
 
 See [Claude switch failure boundaries](claude-switch-failures.md) for the separate
 listener-loss and multi-image Claude Code relay issues and their validation scope.

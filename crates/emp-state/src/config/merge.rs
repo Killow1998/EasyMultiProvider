@@ -250,7 +250,6 @@ fn merge_web_update_at_time(
         "auto_enable_on_start",
         "auto_review_fallback",
         "external_collaboration",
-        "encrypted_history_recovery",
         "image_routing",
     ] {
         if !merged_object.contains_key(key)

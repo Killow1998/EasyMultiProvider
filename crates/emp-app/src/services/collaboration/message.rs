@@ -24,7 +24,7 @@ pub(super) fn has_encrypted_task(item: &Value) -> bool {
                 .is_some_and(|parts| parts.iter().any(|part| part["type"] == "encrypted_content")))
 }
 
-pub(super) fn is_child(body: &Value, headers: &BTreeMap<String, String>) -> bool {
+pub(super) fn is_child(headers: &BTreeMap<String, String>) -> bool {
     // Review/compaction workers also have parents; their own routing is separate.
     if let Some((_, value)) = headers
         .iter()
@@ -34,13 +34,6 @@ pub(super) fn is_child(body: &Value, headers: &BTreeMap<String, String>) -> bool
     }
     headers.iter().any(|(name, value)| {
         name.eq_ignore_ascii_case("x-codex-parent-thread-id") && !value.is_empty()
-    }) || body["input"].as_array().is_some_and(|items| {
-        items.iter().any(|item| {
-            item["type"] == "agent_message"
-                && item["recipient"]
-                    .as_str()
-                    .is_some_and(|path| path.starts_with("/root/"))
-        })
     })
 }
 

@@ -1,61 +1,18 @@
 use super::*;
 
 #[test]
-fn origin_fingerprints_survive_two_hour_chats_but_are_bounded_and_expire() {
-    let state = CollaborationState::default();
-    let cipher = format!("gAAAA{}", "A".repeat(100));
-    let event = |text: &str| {
-        json!({"type":"response.output_item.done","item":{
-            "type":"function_call","namespace":"collaboration","name":"send_message",
-            "arguments":json!({"target":"/root","message":text}).to_string()
-        }})
-    };
-    state.observe("original/gpt", "original-owner", &event(&cipher));
-    let id = key(cipher.as_bytes());
-    state.origins.lock().unwrap().get_mut(&id).unwrap().at =
-        Instant::now() - Duration::from_secs(2 * 3600);
-    state.observe(
-        "original/gpt",
-        "original-owner",
-        &event(&format!("gAAAA{}", "B".repeat(100))),
-    );
-    let origin = state.origins.lock().unwrap().get(&id).unwrap().clone();
-    assert!(origin.at.elapsed() < ORIGIN_RETENTION);
-    assert_eq!(origin.owner, "original-owner");
-    // A replay on another subscription cannot reassign the originating owner.
-    state.observe("other/gpt", "other-owner", &event(&cipher));
-    assert_eq!(state.origins.lock().unwrap()[&id].owner, "original-owner");
-    state.origins.lock().unwrap().get_mut(&id).unwrap().at =
-        Instant::now() - ORIGIN_RETENTION - Duration::from_secs(1);
-    state.observe(
-        "original/gpt",
-        "original-owner",
-        &event(&format!("gAAAA{}", "C".repeat(100))),
-    );
-    assert!(!state.origins.lock().unwrap().contains_key(&id));
-    for number in 0..4100 {
-        state.observe(
-            "original/gpt",
-            "original-owner",
-            &event(&format!("gAAAA{}{number}", "D".repeat(100))),
-        );
-    }
-    assert_eq!(state.origins.lock().unwrap().len(), 4096);
-}
-
-#[test]
 fn collaboration_policy_does_not_capture_review_or_compaction_workers() {
-    // A review can include earlier delegation in its inherited history.
-    let body = json!({"input":[{"type":"agent_message","recipient":"/root/old-worker",
-        "content":[{"type":"input_text","text":"previous task"}]}]});
+    // A parent can inherit old delegation; only current routing metadata
+    // establishes that this request belongs to a child.
+    assert!(!message::is_child(&BTreeMap::new()));
     let mut headers = BTreeMap::from([("x-codex-parent-thread-id".into(), "parent".into())]);
-    assert!(message::is_child(&body, &headers));
+    assert!(message::is_child(&headers));
     for kind in ["review", "compact", "memory_consolidation", "auto_review"] {
         headers.insert("X-OpenAI-Subagent".into(), kind.into());
-        assert!(!message::is_child(&body, &headers), "{kind}");
+        assert!(!message::is_child(&headers), "{kind}");
     }
     headers.insert("X-OpenAI-Subagent".into(), "collab_spawn".into());
-    assert!(message::is_child(&body, &headers));
+    assert!(message::is_child(&headers));
 }
 
 #[test]

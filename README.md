@@ -205,6 +205,11 @@ This migrates only the selected conversation, backs up changed history, and
 preserves its parent and other conversations. It rejects migration while the
 selected conversation is being written. Reopen Codex to load native settings,
 then resume the same conversation. `CODEX_HOME` selects the Codex home as usual.
+This tool converts EMP-owned checkpoints; it cannot decrypt native encrypted
+agent messages. For those messages, the existing Cross-service subagents >
+On-demand recovery setting can transcribe them for the forwarded request using
+the original observed account, adding GPT usage without rewriting the saved
+conversation. No separate history-recovery control is needed.
 
 For details about external subagent delegation, follow-up tasks, and tool calls, see [external collaboration compatibility](docs/external-collaboration.md).
 
@@ -272,7 +277,7 @@ Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/REA
 
 ## Codex compatibility
 
-The current source version is **v0.13.8**.
+The current source version is **v0.13.9**.
 
 Maintenance targets the latest stable Codex minor series and the previous nine;
 patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).

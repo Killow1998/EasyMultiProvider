@@ -4,117 +4,24 @@ use crate::services::disconnect::DisconnectMonitor;
 use crate::services::history::DestinationPrepareError;
 use emp_core::{Dialect, ResolvedRoute};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, VecDeque};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::collections::BTreeMap;
 
 mod message;
 mod recovery;
+mod state;
+pub(crate) use state::CollaborationState;
+use state::Origin;
 #[cfg(test)]
 mod tests;
 
-const RETENTION: Duration = Duration::from_secs(3600);
-// Fingerprints and route ownership are not recovered plaintext. Keep them
-// longer so ordinary long-running parent chats can still switch providers.
-const ORIGIN_RETENTION: Duration = Duration::from_secs(24 * 3600);
 const MAX_RECOVERIES: usize = 8;
 const MAX_TEXT: usize = 256 * 1024;
-type Key = [u8; 32];
-
-#[derive(Clone)]
-struct Origin {
-    model: String,
-    owner: String,
-    at: Instant,
-}
-
-struct Recovered {
-    key: Key,
-    text: String,
-    at: Instant,
-}
-
-#[derive(Default)]
-pub(crate) struct CollaborationState {
-    origins: Mutex<BTreeMap<Key, Origin>>,
-    // Serializes only recovery, including duplicate concurrent requests. Ordinary
-    // Native and external turns never take this lock; no plaintext is persisted.
-    recovered: Mutex<VecDeque<Recovered>>,
-}
-
-fn key(text: &[u8]) -> Key {
-    Sha256::digest(text).into()
-}
 
 fn error(status: u16, code: &'static str, message: &'static str) -> DestinationPrepareError {
     DestinationPrepareError::Collaboration {
         status,
         code,
         message,
-    }
-}
-
-impl CollaborationState {
-    pub(crate) fn observe(&self, model: &str, owner: &str, event: &Value) {
-        if owner.is_empty() || owner.starts_with("unconfirmed:") {
-            return;
-        }
-        let response = event.get("response").unwrap_or(event);
-        let items: Vec<&Value> = if event["type"] == "response.output_item.done" {
-            vec![&event["item"]]
-        } else {
-            response["output"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .collect()
-        };
-        for item in items {
-            if item["type"] != "function_call"
-                || item["namespace"] != "collaboration"
-                || !matches!(
-                    item["name"].as_str(),
-                    Some("spawn_agent" | "send_message" | "followup_task")
-                )
-            {
-                continue;
-            }
-            let Some(arguments) = item["arguments"]
-                .as_str()
-                .and_then(|text| serde_json::from_str::<Value>(text).ok())
-            else {
-                continue;
-            };
-            let Some(ciphertext) = arguments["message"]
-                .as_str()
-                .filter(|s| message::ciphertext(s))
-            else {
-                continue;
-            };
-            let mut origins = self.origins.lock().unwrap();
-            origins.retain(|_, origin| origin.at.elapsed() < ORIGIN_RETENTION);
-            let id = key(ciphertext.as_bytes());
-            if origins.contains_key(&id) {
-                continue;
-            }
-            if origins.len() >= 4096
-                && let Some(oldest) = origins
-                    .iter()
-                    .min_by_key(|(_, origin)| origin.at)
-                    .map(|(key, _)| *key)
-            {
-                origins.remove(&oldest);
-            }
-            origins.insert(
-                id,
-                Origin {
-                    model: model.into(),
-                    owner: owner.into(),
-                    at: Instant::now(),
-                },
-            );
-        }
     }
 }
 
@@ -136,7 +43,7 @@ pub(crate) fn prepare(
         )
     })?;
     let mode = config["external_collaboration"].as_str().unwrap_or("off");
-    let child = message::is_child(&body, incoming);
+    let child = message::is_child(incoming);
     if mode == "off" && child {
         return Err(error(
             403,
@@ -150,20 +57,26 @@ pub(crate) fn prepare(
     {
         return Ok(body);
     }
-    // Root-history recovery has its own opt-in. It must not turn on external
-    // children or charge other users merely because they switch models.
-    let root_request = !child
-        && !incoming.iter().any(|(name, value)| {
+    // Existing On-demand recovery covers parent history and current child tasks.
+    // Other worker kinds retain their separate policy. No session is rewritten.
+    let other_worker = !child
+        && incoming.iter().any(|(name, value)| {
             !value.is_empty()
                 && (name.eq_ignore_ascii_case("x-openai-subagent")
                     || name.eq_ignore_ascii_case("x-codex-parent-thread-id"))
         });
-    let history_recovery = root_request && config["encrypted_history_recovery"] == true;
-    if mode != "on_demand" && !history_recovery {
+    if other_worker {
         return Err(error(
             409,
             "encrypted_agent_task_requires_recovery",
-            "This request contains encrypted agent messages. For an existing parent chat, enable Settings > Recover encrypted history (extra GPT subscription usage), or start a new external chat with a readable handoff. For an external child, select Cross-service subagents > On-demand recovery.",
+            "Encrypted agent messages in review or compaction workers are outside cross-service recovery. Continue with the original Native model or a readable handoff. 审查或压缩工作线程中的加密子代理消息不适用跨服务按需恢复，请使用原 Native 模型或可读交接。",
+        ));
+    }
+    if mode != "on_demand" {
+        return Err(error(
+            409,
+            "encrypted_agent_task_requires_recovery",
+            "This request contains encrypted agent messages. Select Settings > Cross-service subagents > On-demand recovery to transcribe them with GPT on the original account (extra latency and subscription usage), or continue with the original Native model or a readable handoff. 设置 > 跨服务子代理 > 按需恢复：使用原账号 GPT 转写加密子代理消息，会增加等待和订阅用量；也可继续使用原 Native 模型或可读交接。",
         ));
     }
     // Snapshot only recovery work; ordinary requests need no configuration copy.
@@ -192,45 +105,30 @@ pub(crate) fn prepare(
         }
         let task = message::parse(item)?;
         let service = &state.backend.transport.collaboration;
-        let origin = service.origins.lock().unwrap().get(&key(task.ciphertext.as_bytes()))
-            .filter(|origin| origin.at.elapsed() < ORIGIN_RETENTION).cloned()
+        let origin = service.origin(&task.ciphertext)
             .ok_or_else(|| error(409, "agent_task_origin_unknown",
-                "EMP no longer knows this message's original subscription (restart, expiry or eviction). Recovery cannot safely guess an account. For an existing chat, create a readable handoff with the original Native GPT model and continue in a new external chat; for a child, send a new task through EMP."))?;
+                "The encrypted message's original subscription is unavailable (restart, expiry or eviction). Recovery cannot safely guess an account. Continue with the original Native model or prepare a readable handoff; for a child, send a new task through EMP."))?;
         let (recovery_route, headers) =
             recovery::resolve(state, &recovery_config, &origin, incoming)?;
-        let cache_key = key(&serde_json::to_vec(&json!([
-            origin.owner,
-            recovery_route.endpoint_fingerprint,
-            item
-        ]))
-        .expect("task JSON"));
-        pending.push((index, task, recovery_route, headers, cache_key));
+        pending.push((index, task, recovery_route, headers));
     }
-    for (index, task, recovery_route, headers, cache_key) in pending {
+    for (index, task, recovery_route, headers) in pending {
         let item = &mut body["input"][index];
         let service = &state.backend.transport.collaboration;
-        let mut cache = service.recovered.lock().unwrap();
-        cache.retain(|entry| entry.at.elapsed() < RETENTION);
-        let text = if let Some(entry) = cache.iter().find(|entry| entry.key == cache_key) {
-            entry.text.clone()
-        } else {
-            let text = recovery::execute(
-                state,
-                &recovery_route,
-                &headers,
-                item,
-                monitor.as_deref_mut(),
-            )?;
-            if cache.len() == 64 {
-                cache.pop_front();
-            }
-            cache.push_back(Recovered {
-                key: cache_key,
-                text: text.clone(),
-                at: Instant::now(),
-            });
-            text
-        };
+        let text = service.recover(
+            &emp_state::usage::account_owner(&headers),
+            &recovery_route.endpoint_fingerprint,
+            item,
+            || {
+                recovery::execute(
+                    state,
+                    &recovery_route,
+                    &headers,
+                    item,
+                    monitor.as_deref_mut(),
+                )
+            },
+        )?;
         *item = json!({"type":"agent_message", "author":task.author, "recipient":task.recipient,
             "content":[{"type":"input_text", "text":format!("{}{text}", task.header)}]});
     }

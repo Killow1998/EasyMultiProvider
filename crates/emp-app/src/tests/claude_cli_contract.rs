@@ -611,7 +611,7 @@ fn installed_cli_opus_55_forwards_images_and_documents_with_ordered_tool_history
 #[test]
 #[ignore = "requires an installed trusted Claude Code CLI on PATH"]
 fn installed_cli_opus_and_sonnet_accept_png_screenshots_recompressed_as_jpeg() {
-    // Match the three-image geometry of both reported PaperBridge failures,
+    // Match the three-image geometry of the reported relay failures,
     // using generated pixels only. No private screenshots or CPA credentials.
     for model in ["claude-opus-5-5", "claude-sonnet-5-5"] {
         let upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({
