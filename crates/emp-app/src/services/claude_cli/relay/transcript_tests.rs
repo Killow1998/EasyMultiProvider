@@ -95,8 +95,9 @@ fn relay_accepts_cli_cache_markers_without_changing_forwarded_content() {
         }
     }
 
-    let mut cached = expected.clone();
+    let mut cached = super::super::super::media::cli_blocks(&expected);
     cached.last_mut().unwrap()["cache_control"] = serde_json::json!({"type":"ephemeral"});
+    assert!(matches_expected_blocks(&cached, &expected));
     for (index, field, replacement) in [
         (0, "text", serde_json::json!("changed transcript")),
         (
@@ -252,7 +253,7 @@ fn relay_requires_exact_ordered_text_and_media_blocks() {
     ];
     let body = serde_json::json!({
         "stream":true,
-        "messages":[{"role":"user","content":expected}],
+        "messages":[{"role":"user","content":super::super::super::media::cli_blocks(&expected)}],
         "tools":[{"name":"StructuredOutput"}]
     });
     assert!(messages_match(

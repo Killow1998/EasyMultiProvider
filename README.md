@@ -277,7 +277,7 @@ Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/REA
 
 ## Codex compatibility
 
-The current source version is **v0.13.9**.
+The current source version is **v0.13.10**.
 
 Maintenance targets the latest stable Codex minor series and the previous nine;
 patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).

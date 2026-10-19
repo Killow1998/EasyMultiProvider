@@ -1,4 +1,5 @@
 //! Source bytes, not a CLI re-encoding or a plausible resize, are the oracle.
+use super::media::synthetic_png;
 use super::*;
 
 #[test]

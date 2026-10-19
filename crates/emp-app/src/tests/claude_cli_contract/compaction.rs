@@ -1,4 +1,5 @@
 //! Installed-CLI history compaction and its recording upstream fixture.
+use super::media::minimal_pdf;
 use super::*;
 
 fn claude_summary_server_with_context(

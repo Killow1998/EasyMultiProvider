@@ -258,3 +258,26 @@ and synthetic tool histories, never private conversations or screenshots.
   only loopback fixtures are allowed. No real-model calls or runtime updates
   are involved. This is additional evidence to the author's 2.1.289 record,
   not a rerun of the full Mac workspace suite listed above.
+
+#### Release cleanup and ablation (v0.13.10)
+
+The relay compares borrowed original blocks against one shared image-slot value,
+removing a temporary clone of the entire text/document transcript and a repeated
+block-count check. CLI system normalization has a separate module; media unit
+tests and installed-CLI media fixtures live beside their respective owners.
+The relay entry file is 175 lines (previously 311), media preparation is 566
+(previously 791), and the installed-CLI entry file is 674 (previously 995).
+This changes internal ownership and allocation, not routing or supported inputs.
+
+The old raw-screenshot dimension matrix is removed because the geometry matcher
+it exercised no longer exists. The retained exact-source and multi-turn contracts
+check byte preservation, image ordering and tool-result association through the
+real CLI. All 57 adapter tests and the remaining 12 installed-Claude 2.1.300
+contracts pass on Linux with synthetic loopback providers.
+
+Two independent controlled ablations establish why the remaining boundaries stay:
+disabling source restoration fails the installed-CLI assertion at image zero;
+replacing exact content matching with count-only matching fails the rejection of
+an unvalidated transcript. Both changes were restored before the passing final
+run. Formatting, affected-library Clippy with warnings denied and diff checks
+also pass. The tests use no paid model calls or private conversation data.
