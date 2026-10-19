@@ -1,6 +1,8 @@
 //! Native parent -> validated recovery -> external child, including retry and replay.
 use super::*;
 
+mod history;
+
 #[test]
 fn collaboration_recovery_rejects_invalid_capture_and_accounts_retries_once() {
     let ciphertext = format!("gAAAA{}", "A".repeat(100));

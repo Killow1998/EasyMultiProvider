@@ -1,5 +1,7 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  "models.encrypted_history_recovery": ["恢复加密历史","Recover encrypted history"],
+  "models.encrypted_history_recovery_help": ["默认关闭。旧主对话切换外部模型时，允许用原账号的 GPT-6 Luna（low）恢复加密子代理消息，会增加延迟并消耗订阅额度，文字可能有差异。不启用外部子代理；来源账号不可确认时仍会停止。关闭时可改用新对话和可读交接。","Off by default. When switching an existing parent chat to an external model, allow GPT-6 Luna (low) on the original account to recover encrypted agent messages. Adds latency and subscription usage; text may differ. Does not enable external subagents. Stops if account provenance is unavailable. With recovery off, use a new chat and readable handoff."],
   "models.external_collaboration": ["跨服务子代理","Cross-service subagents"],
   "models.collaboration_off": ["关闭","Off"],
   "models.collaboration_on_demand": ["按需恢复","On-demand recovery"],

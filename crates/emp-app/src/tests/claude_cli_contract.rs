@@ -608,6 +608,68 @@ fn installed_cli_opus_55_forwards_images_and_documents_with_ordered_tool_history
     assert_cli_forwards_images_and_documents_with_ordered_tool_history("claude-opus-5-5");
 }
 
+#[test]
+#[ignore = "requires an installed trusted Claude Code CLI on PATH"]
+fn installed_cli_opus_and_sonnet_accept_png_screenshots_recompressed_as_jpeg() {
+    // Match the three-image geometry of both reported PaperBridge failures,
+    // using generated pixels only. No private screenshots or CPA credentials.
+    for model in ["claude-opus-5-5", "claude-sonnet-5-5"] {
+        let upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({
+            "answer":"three screenshots accepted", "tool_calls":[]
+        }))]);
+        let (_directory, server) = claude_server_with_model(&upstream.base_url(), model);
+        let mut parts =
+            vec![json!({"type":"input_text","text":"Compare these synthetic screenshots."})];
+        for (width, height) in [(1326, 336), (2866, 572), (2878, 1800)] {
+            parts.push(json!({"type":"input_image","image_url":format!(
+                "data:image/png;base64,{}", STANDARD.encode(synthetic_png(width, height, true))
+            )}));
+        }
+        let body = json!({"model":"demo/model","stream":false,"reasoning":{"effort":"high"},
+            "input":[{"role":"user","content":parts},
+                {"type":"function_call","call_id":"read-history","name":"read","arguments":"{}"},
+                {"type":"function_call_output","call_id":"read-history","output":"exact tool output\n"},
+                {"role":"user","content":"Continue with the pictures and tool output.\n"}],
+            "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]});
+        let response = post(
+            &server,
+            "/v1/responses",
+            &serde_json::to_vec(&body).unwrap(),
+            &[&session_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200"), "{model}: {response}");
+        assert!(response.contains("three screenshots accepted"));
+        let (_, _, forwarded) = upstream.observed();
+        let content = forwarded["messages"][0]["content"].as_array().unwrap();
+        let images: Vec<_> = content
+            .iter()
+            .filter(|part| part["type"] == "image")
+            .collect();
+        assert_eq!(images.len(), 3);
+        assert_eq!(
+            images[0]["source"]["data"],
+            STANDARD.encode(synthetic_png(1326, 336, true)),
+            "unscaled image remains exact"
+        );
+        assert_eq!(images[1]["source"]["media_type"], "image/png");
+        assert_eq!(
+            images[2]["source"]["media_type"], "image/jpeg",
+            "installed CLI must exercise the previously rejected MIME conversion"
+        );
+        let text = content
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("exact tool output\\n"));
+        assert!(text.contains("Continue with the pictures and tool output.\\n"));
+        assert!(text.contains("read-history"));
+        assert_eq!(forwarded["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(forwarded["tools"][0]["name"], "StructuredOutput");
+        server.shutdown().unwrap();
+    }
+}
+
 fn assert_cli_forwards_images_and_documents_with_ordered_tool_history(model: &str) {
     assert!(
         emp_codex::installed_cli::resolve_claude_cli().is_some(),
@@ -811,13 +873,19 @@ fn minimal_pdf() -> Vec<u8> {
 }
 
 fn synthetic_screenshot_png() -> Vec<u8> {
-    const WIDTH: u32 = 2560;
-    const HEIGHT: u32 = 1440;
-    let mut scanlines = Vec::with_capacity((WIDTH as usize + 1) * HEIGHT as usize);
-    for y in 0..HEIGHT {
+    synthetic_png(2560, 1440, false)
+}
+
+fn synthetic_png(width: u32, height: u32, rgba: bool) -> Vec<u8> {
+    let mut scanlines = Vec::new();
+    for y in 0..height {
         scanlines.push(0);
-        for x in 0..WIDTH {
-            scanlines.push((((x / 24) ^ (y / 20)) & 0xff) as u8);
+        for x in 0..width {
+            if rgba {
+                scanlines.extend_from_slice(&[x as u8, y as u8, (x ^ y) as u8, 255]);
+            } else {
+                scanlines.push((((x / 24) ^ (y / 20)) & 0xff) as u8);
+            }
         }
     }
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -828,9 +896,9 @@ fn synthetic_screenshot_png() -> Vec<u8> {
 
     let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut header = Vec::with_capacity(13);
-    header.extend_from_slice(&WIDTH.to_be_bytes());
-    header.extend_from_slice(&HEIGHT.to_be_bytes());
-    header.extend_from_slice(&[8, 0, 0, 0, 0]);
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    header.extend_from_slice(&[8, if rgba { 6 } else { 0 }, 0, 0, 0]);
     append_png_chunk(&mut png, *b"IHDR", &header);
     append_png_chunk(&mut png, *b"IDAT", &image_data);
     append_png_chunk(&mut png, *b"IEND", &[]);

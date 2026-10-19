@@ -15,6 +15,10 @@ mod recovery;
 mod tests;
 
 const RETENTION: Duration = Duration::from_secs(3600);
+// Fingerprints and route ownership are not recovered plaintext. Keep them
+// longer so ordinary long-running parent chats can still switch providers.
+const ORIGIN_RETENTION: Duration = Duration::from_secs(24 * 3600);
+const MAX_RECOVERIES: usize = 8;
 const MAX_TEXT: usize = 256 * 1024;
 type Key = [u8; 32];
 
@@ -89,7 +93,7 @@ impl CollaborationState {
                 continue;
             };
             let mut origins = self.origins.lock().unwrap();
-            origins.retain(|_, origin| origin.at.elapsed() < RETENTION);
+            origins.retain(|_, origin| origin.at.elapsed() < ORIGIN_RETENTION);
             let id = key(ciphertext.as_bytes());
             if origins.contains_key(&id) {
                 continue;
@@ -132,7 +136,8 @@ pub(crate) fn prepare(
         )
     })?;
     let mode = config["external_collaboration"].as_str().unwrap_or("off");
-    if mode == "off" && message::is_child(&body, incoming) {
+    let child = message::is_child(&body, incoming);
+    if mode == "off" && child {
         return Err(error(
             403,
             "external_subagents_disabled",
@@ -145,26 +150,52 @@ pub(crate) fn prepare(
     {
         return Ok(body);
     }
-    if mode != "on_demand" {
+    // Root-history recovery has its own opt-in. It must not turn on external
+    // children or charge other users merely because they switch models.
+    let root_request = !child
+        && !incoming.iter().any(|(name, value)| {
+            !value.is_empty()
+                && (name.eq_ignore_ascii_case("x-openai-subagent")
+                    || name.eq_ignore_ascii_case("x-codex-parent-thread-id"))
+        });
+    let history_recovery = root_request && config["encrypted_history_recovery"] == true;
+    if mode != "on_demand" && !history_recovery {
         return Err(error(
             409,
             "encrypted_agent_task_requires_recovery",
-            "This task was created with native encryption. Select On-demand recovery, or enable cross-service subagents and send a new task.",
+            "This request contains encrypted agent messages. For an existing parent chat, enable Settings > Recover encrypted history (extra GPT subscription usage), or start a new external chat with a readable handoff. For an external child, select Cross-service subagents > On-demand recovery.",
         ));
     }
     // Snapshot only recovery work; ordinary requests need no configuration copy.
     let recovery_config = config.clone();
     drop(config);
-    for item in body["input"].as_array_mut().unwrap() {
+    let items = body["input"].as_array().unwrap();
+    if items
+        .iter()
+        .filter(|item| message::has_encrypted_task(item))
+        .count()
+        > MAX_RECOVERIES
+    {
+        return Err(error(
+            413,
+            "agent_task_recovery_limit",
+            "Too many encrypted messages for one bounded recovery (maximum 8). Create a readable handoff with the original Native GPT model and continue in a new external chat.",
+        ));
+    }
+    // Validate all envelopes and owners before spending quota on any of them.
+    // A mixed-account/expired entry later in the input must not charge for a
+    // partial recovery which can never be forwarded.
+    let mut pending = Vec::new();
+    for (index, item) in items.iter().enumerate() {
         if !message::has_encrypted_task(item) {
             continue;
         }
         let task = message::parse(item)?;
         let service = &state.backend.transport.collaboration;
         let origin = service.origins.lock().unwrap().get(&key(task.ciphertext.as_bytes()))
-            .filter(|origin| origin.at.elapsed() < RETENTION).cloned()
+            .filter(|origin| origin.at.elapsed() < ORIGIN_RETENTION).cloned()
             .ok_or_else(|| error(409, "agent_task_origin_unknown",
-                "The task's original subscription is unavailable. Send a new task through EMP so it can retain the correct account."))?;
+                "EMP no longer knows this message's original subscription (restart, expiry or eviction). Recovery cannot safely guess an account. For an existing chat, create a readable handoff with the original Native GPT model and continue in a new external chat; for a child, send a new task through EMP."))?;
         let (recovery_route, headers) =
             recovery::resolve(state, &recovery_config, &origin, incoming)?;
         let cache_key = key(&serde_json::to_vec(&json!([
@@ -173,6 +204,11 @@ pub(crate) fn prepare(
             item
         ]))
         .expect("task JSON"));
+        pending.push((index, task, recovery_route, headers, cache_key));
+    }
+    for (index, task, recovery_route, headers, cache_key) in pending {
+        let item = &mut body["input"][index];
+        let service = &state.backend.transport.collaboration;
         let mut cache = service.recovered.lock().unwrap();
         cache.retain(|entry| entry.at.elapsed() < RETENTION);
         let text = if let Some(entry) = cache.iter().find(|entry| entry.key == cache_key) {

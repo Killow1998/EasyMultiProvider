@@ -1,6 +1,7 @@
 //! Service ownership, background-worker registration and ordered shutdown.
 
 mod connections;
+mod resources;
 mod shutdown;
 mod signals;
 mod startup;

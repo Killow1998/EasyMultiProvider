@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### 中文
+
+- 新增默认关闭的“恢复加密历史”设置，允许旧主对话切换外部模型时使用原订阅账号的 GPT 恢复子代理消息，不同时开启外部子代理。明确额外延迟、订阅用量、恢复差异和无来源时的新对话交接方案。
+- 加密消息先统一验证来源和账号，再发起有上限的恢复；账号来源指纹保留 24 小时，明文缓存仍仅保留一小时，不改写本地对话历史。
+- 兼容 Claude Code 缩放大 PNG 截图时转换为 JPEG 的行为，保留文字、图片顺序、几何说明和工具权限校验。
+- 修复接收连接遇到资源耗尽或暂时错误后静默关闭监听的问题；记录并限速重试，启动时仅在进程内部提高允许范围内的文件数软限制，并按实际预算约束连接容量。
+
+### English
+
+- Add default-off encrypted-history recovery for parent conversations switching to external models, using the original observed GPT subscription without enabling external subagents. Explain extra latency, usage, transcription limits and the no-automatic-recovery handoff alternative.
+- Preflight all encrypted envelopes and accounts before bounded recovery. Retain origin fingerprints for 24 hours while keeping the plaintext cache at one hour, without rewriting local chat history.
+- Accept the observed Claude Code PNG-to-JPEG screenshot downscale while retaining transcript, image-order, geometry-note and tool-authority validation.
+- Keep the listener alive across descriptor exhaustion and transient accept failures, with rate-limited diagnostics and retry. Raise only the process soft file limit within its existing hard limit and size admission against the available budget.
+
 ## 0.13.8 (2026-10-18)
 
 ### 中文

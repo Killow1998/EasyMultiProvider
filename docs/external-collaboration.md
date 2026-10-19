@@ -14,8 +14,16 @@ has three modes, persisted as `external_collaboration`:
 | On-demand recovery | `"on_demand"` | Keep native collaboration tools. Recover an encrypted task with GPT-6 Luna, low effort, on its original subscription before forwarding to an external child. |
 | On | `"on"` | Present plaintext collaboration tools to Native models, permitting external children without a recovery inference. Native generation can slow down. |
 
-Ordinary external conversations and the separate Auto Review routing setting
-are unaffected. Switching affects subsequent requests; an incremental Native
+Ordinary external conversations without encrypted agent messages and the
+separate Auto Review routing setting are unaffected. A parent conversation can
+contain old encrypted child replies even when its current input is an ordinary
+user message. **Settings > Recover encrypted history** is a separate, default-off
+opt-in (`encrypted_history_recovery: true`): it permits the same accounted recovery
+on top-level external turns without enabling external children or review workers.
+Existing On-demand recovery also permits parent-history recovery. Enabling On
+alone does not retroactively decrypt old messages.
+
+Switching affects subsequent requests; an incremental Native
 WebSocket turn recovers its full history on a fresh upstream socket when the
 tool policy changes, so it cannot inherit the other mode's catalog.
 
@@ -42,14 +50,35 @@ execute the assignment. Incomplete, ambiguous or opaque output fails closed.
 
 EMP binds a task to the actual subscription observed on its Native parent's
 response. Recovery checks that the configured route still selects that same
-account, including on cache hits. Missing origins, restarts, expired entries or
-account changes require a new task; EMP does not substitute another account.
+account, including on cache hits. Origin fingerprints and route ownership are
+retained in memory for 24 hours, bounded to 4096 entries; this is separate from
+the shorter plaintext cache. Missing origins, restarts, expired entries or account
+changes cannot safely be repaired by guessing a different account. For a child,
+send a new task through EMP. For an existing parent chat, prepare a readable
+handoff with the original Native model and continue in a new external chat.
+Upgrading cannot recover provenance that has already been lost.
 Only validated agent-message envelopes are recovered, never arbitrary encrypted
 reasoning. A bounded memory cache retains up to 64 recovered tasks for one hour,
 at most 256 KiB each, scoped by account, endpoint and full message envelope.
 The recovery cache is memory-only. Recovery is limited to 45 seconds and follows client
-disconnection. Each helper inference has its own `agent_task_recovery` call and
+disconnection. A request may contain at most eight encrypted envelopes, and all
+envelopes and account ownership are checked before any helper inference starts.
+Each helper inference has its own `agent_task_recovery` call and
 usage record; replaying a cached task does not duplicate that charge.
+
+There are two explicit approaches, not an invisible paid fallback:
+
+1. Opt into automatic GPT recovery when retaining the encrypted history in the
+   same chat is important. This adds latency and subscription usage and remains
+   model-assisted transcription, not guaranteed byte-exact decryption. Account
+   provenance, valid capture output and the per-request bounds remain required.
+2. Leave recovery off. EMP makes no recovery-model call, explains the block, and
+   the user starts a new external chat with a reviewed readable handoff (prepared
+   manually or in a user-initiated Native turn). This does not preserve opaque
+   messages automatically. A manually requested Native turn can itself use quota.
+
+See [Claude switch failure boundaries](claude-switch-failures.md) for the separate
+listener-loss and multi-image Claude Code relay issues and their validation scope.
 
 Both standard top-level `tools` and Responses Lite `input[].additional_tools`
 are adapted. Codex builds the latter in `core/src/client.rs`; adapting only the

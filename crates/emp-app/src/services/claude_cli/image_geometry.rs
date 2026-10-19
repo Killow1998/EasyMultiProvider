@@ -39,7 +39,13 @@ pub(super) fn matches_resize(
     let Some((actual_mime, actual_data, displayed)) = image_payload(actual) else {
         return false;
     };
-    if expected_mime != actual_mime || expected_data == actual_data {
+    // Claude Code 2.1.289 can recompress a resized RGBA screenshot as JPEG.
+    // Allow only this observed conversion, with the same strict downscale and
+    // geometry-note checks below. Unscaled replacements and other MIME changes
+    // remain invalid; geometry validation does not establish pixel provenance.
+    let compatible_mime = expected_mime == actual_mime
+        || (expected_mime == "image/png" && actual_mime == "image/jpeg");
+    if !compatible_mime || expected_data == actual_data {
         return false;
     }
     let Some(scale) = proportional_downscale(original, displayed) else {
@@ -455,6 +461,34 @@ mod tests {
         let actual = image_block("image/png", &png_header(1999, 1125));
         let note = geometry_note(2561, 1441, 2000, 1125, "1.28");
         assert!(matches_resize(&expected, &actual, &note));
+    }
+
+    #[test]
+    fn accepts_probed_png_to_jpeg_downscale_but_not_unscaled_or_unrelated_conversion() {
+        let original = image_block("image/png", &png_header(2878, 1800));
+        let jpeg = image_block("image/jpeg", &jpeg_sof(2000, 1251));
+        let note = geometry_note(2878, 1800, 2000, 1251, "1.44");
+        assert!(matches_resize(&original, &jpeg, &note));
+        assert!(!matches_resize(
+            &original,
+            &image_block("image/jpeg", &jpeg_sof(2878, 1800)),
+            &geometry_note(2878, 1800, 2878, 1800, "1.00")
+        ));
+        assert!(!matches_resize(
+            &image_block("image/webp", &webp_vp8x(2878, 1800)),
+            &jpeg,
+            &note
+        ));
+        assert!(!matches_resize(
+            &original,
+            &image_block("image/jpeg", &jpeg_sof(2000, 1200)),
+            &note
+        ));
+        assert!(!matches_resize(
+            &original,
+            &jpeg,
+            &geometry_note(2878, 1800, 2000, 1251, "1.43")
+        ));
     }
 
     #[test]

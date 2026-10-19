@@ -182,6 +182,7 @@ impl ServerHandle {
     }
 
     fn start_with_config_options_inner(context: StartupContext<'_>) -> Result<Self, AppError> {
+        let budget = super::resources::prepare();
         let config_path = emp_state::config::resolve_user_path(context.config_path);
         let diagnostics = Arc::new(emp_state::diagnostics::Diagnostics::new(
             &config_path
@@ -194,6 +195,14 @@ impl ServerHandle {
             "process_start",
             &serde_json::json!({
                 "version":crate::VERSION, "platform":std::env::consts::OS, "pid":std::process::id(),
+            }),
+        );
+        diagnostics.journal.event(
+            "info",
+            "descriptor_budget",
+            &serde_json::json!({
+                "initial_limit":budget.before,"soft_limit":budget.soft,
+                "raised":budget.raised,"os_error":budget.os_error,
             }),
         );
         let result = Self::start_recorded(context, Arc::clone(&diagnostics));
@@ -236,6 +245,7 @@ impl ServerHandle {
             admission,
             enable_catalog_refresh_worker,
         } = context;
+        let admission = super::resources::prepare().admission(admission);
         if !is_loopback(host) {
             return Err(AppError::HostNotLoopback);
         }
