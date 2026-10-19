@@ -196,6 +196,11 @@ validated position; source MIME, bytes and URL sources remain exact. Invalid
 slots, changed tool text, dropped/reordered blocks and extra tool authority
 still fail closed. The upstream model never receives placeholder images.
 
+The obsolete 599-line image-geometry module and resize-note fallback are removed.
+Slot comparison now checks equal block counts and exact ordered contents, with
+only the existing cache metadata and semantic JSON-marker normalization. There
+is no second image-identity rule to maintain alongside source restoration.
+
 This policy applies only to the local CPA relay. Native local-login execution
 has no interception boundary and must keep real images in CLI stdin. Context
 assessment and the combined system/source-byte budget use original media in
@@ -235,3 +240,21 @@ and synthetic tool histories, never private conversations or screenshots.
   refresh also timed out when run alone. These failures have not been proven
   to be introduced by this patch or all established as pre-existing. They are
   not waived, and this is not full desktop/release acceptance.
+
+#### Integration verification (2026-10-19 UTC)
+
+- After removing the unused geometry module and resize fallback, all 57
+  affected Claude adapter tests pass on Linux. These include source-byte
+  budgets, local-login separation, exact slots and tool-authority rejection.
+- All 13 installed-Claude 2.1.300 contracts pass against synthetic loopback
+  upstreams. The added boundary case forwards an original 8001-by-1 PNG and
+  preserves provider 400/413 errors instead of reporting a local mismatch.
+  This tests error propagation; it does not make a real-provider capacity claim.
+- The Mac's running EMP PATH selects a trusted native Claude Code 2.1.303.
+  Using that same CLI selection, the PR's two synthetic image-history checks
+  pass: preprocessed screenshots and multi-turn HTTP/WebSocket tool-result
+  continuation, each covering Opus and Sonnet. macOS denies external outbound
+  connections during these checks, with a negative connection probe first;
+  only loopback fixtures are allowed. No real-model calls or runtime updates
+  are involved. This is additional evidence to the author's 2.1.289 record,
+  not a rerun of the full Mac workspace suite listed above.

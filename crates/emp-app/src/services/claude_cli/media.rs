@@ -539,7 +539,7 @@ fn valid_image(media_type: &str, data: &[u8]) -> bool {
     }
 }
 
-pub(super) fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     if !data.starts_with(b"\x89PNG\r\n\x1a\n") || data.get(12..16) != Some(b"IHDR") {
         return None;
     }

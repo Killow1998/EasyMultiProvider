@@ -10,7 +10,6 @@ pub(crate) mod model_query;
 pub(crate) mod quota;
 pub(crate) mod quota_query;
 use cancellation::Cancellation;
-mod image_geometry;
 mod instructions;
 #[cfg(test)]
 mod instructions_tests;

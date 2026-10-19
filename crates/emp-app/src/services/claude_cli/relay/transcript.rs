@@ -222,50 +222,11 @@ fn messages_match(body: &Value, expected: &ExpectedUserContent) -> bool {
 }
 
 fn matches_expected_blocks(actual: &[Value], expected: &[Value]) -> bool {
-    // Claude Code adds prompt-cache breakpoints to native content blocks.
-    // Compare without this transport metadata, but forward the original body.
-    let Some(actual) = actual
-        .iter()
-        .map(without_cli_cache_marker)
-        .collect::<Option<Vec<_>>>()
-    else {
-        return false;
-    };
-    let mut actual_index = 0;
-    let mut deferred_resizes = Vec::new();
-    for expected_block in expected {
-        let Some(actual_block) = actual.get(actual_index) else {
-            return false;
-        };
-        if block_matches(expected_block, actual_block) {
-            actual_index += 1;
-            continue;
-        }
-        if expected_block.get("type").and_then(Value::as_str) != Some("image")
-            || actual_block.get("type").and_then(Value::as_str) != Some("image")
-        {
-            return false;
-        }
-        if let Some(note) = actual.get(actual_index + 1)
-            && super::super::image_geometry::matches_resize(expected_block, actual_block, note)
-        {
-            actual_index += 2;
-        } else {
-            deferred_resizes.push((expected_block, actual_block));
-            actual_index += 1;
-        }
-    }
-    let Some(trailing) = actual.get(actual_index..) else {
-        return false;
-    };
-    if trailing.len() != deferred_resizes.len() {
-        return false;
-    }
-    deferred_resizes
-        .iter()
-        .zip(trailing)
-        .all(|((expected_image, actual_image), note)| {
-            super::super::image_geometry::matches_resize(expected_image, actual_image, note)
+    // Image slots need exact positions and bytes. Only CLI cache metadata and
+    // JSON formatting in EMP's history markers are independent of content.
+    actual.len() == expected.len()
+        && actual.iter().zip(expected).all(|(actual, expected)| {
+            without_cli_cache_marker(actual).is_some_and(|actual| block_matches(expected, &actual))
         })
 }
 

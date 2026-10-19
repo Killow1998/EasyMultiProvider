@@ -4,13 +4,11 @@
 
 ### 中文
 
-- 修复 Claude CPA relay 在含图片的旧历史、图片工具结果及追加回合中返回 `claude_cli_transcript_mismatch` 的问题。EMP 保留源图片，严格校验 CLI 图像占位与文字/工具顺序后，在转发前逐字节还原原始图片；不再依赖 CLI 再次缩放或有损转码后的近似几何判定。本地 Claude 登录执行路径保持不变，图片仍计入原始上下文和输入字节预算。
-- 增加 Codex 预处理图片、多轮 HTTP/WebSocket、长工具结果及失败后完整历史重放的安装 CLI 回归，并加入图像槽篡改、源字节预算与本地登录隔离检查。
+- 修复含图片的 Codex 会话切换到 Claude CPA 后失败的问题，支持继续追加图片和工具结果；转发时保留原始图片、文字及工具结果顺序。
 
 ### English
 
-- Fix `claude_cli_transcript_mismatch` in Claude CPA relay histories containing images, image tool results and appended turns. EMP owns source images, strictly validates CLI image slots and text/tool ordering, then restores original image bytes before forwarding instead of relying on approximate geometry after CLI resizing/re-encoding. Local Claude login remains unchanged; context assessment and input budgets still account for original media.
-- Add installed-CLI regressions for Codex-preprocessed images, multi-turn HTTP/WebSocket, long tool results and full-history retry, plus slot tampering, source-byte budgeting and local-login separation checks.
+- Fix failures when switching Codex conversations containing images to Claude CPA, including later image and tool-result turns. Forwarding preserves original images, text and tool-result ordering.
 
 ## 0.13.9 (2026-10-19)
 

@@ -1,6 +1,52 @@
 //! Source bytes, not a CLI re-encoding or a plausible resize, are the oracle.
 use super::*;
 
+#[test]
+#[ignore = "requires trusted installed Claude Code CLI; synthetic local upstream only"]
+fn installed_cli_preserves_provider_image_limit_errors() {
+    // Above the direct API's 8000-pixel edge limit, but small enough for EMP's
+    // byte budget. The configured provider, not the CLI codec, owns this limit.
+    let image = STANDARD.encode(synthetic_png(8001, 1, true));
+    for status in [400, 413] {
+        let upstream = OneShotUpstream::start_wire(
+            status,
+            "application/json",
+            None,
+            vec![serde_json::to_vec(&json!({
+                "error":{"type":"invalid_request_error","message":"private provider image limit detail"}
+            })).unwrap()],
+        );
+        let (_directory, server) = claude_server(&upstream.base_url());
+        let response = post(
+            &server,
+            "/v1/responses",
+            &serde_json::to_vec(&json!({"model":"demo/model","input":[
+                {"role":"user","content":[{"type":"input_image",
+                    "image_url":format!("data:image/png;base64,{image}")}]}]
+            }))
+            .unwrap(),
+            &[&session_header(&server)],
+        );
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {status} ")),
+            "{response}"
+        );
+        assert!(!response.contains("claude_cli_content_mismatch"));
+        assert!(!response.contains("private provider image limit detail"));
+        let (path, _, forwarded) = upstream.observed();
+        assert_eq!(path, "/v1/messages");
+        let images: Vec<_> = forwarded["messages"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|part| part["type"] == "image")
+            .collect();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0]["source"]["data"], image);
+        server.shutdown().unwrap();
+    }
+}
+
 struct RoundtripUpstream {
     address: SocketAddr,
     observed: mpsc::Receiver<Value>,

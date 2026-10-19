@@ -74,6 +74,10 @@ original image sources, not CLI-resized/recompressed copies, so the provider's
 image and request limits still apply. Local-login execution still supplies real
 images directly to Claude Code; it does not use relay slots.
 
+Provider image-limit rejections retain their upstream HTTP status, including
+400 and 413, through the normal error path. EMP does not substitute a smaller
+image or classify a provider rejection as a local transcript mismatch.
+
 Reaching the prepared-input budget during context assessment must not prevent
 history compaction. With a configured context/output budget, EMP treats that
 bounded estimate as unavailable and lets the normal history compactor prepare
