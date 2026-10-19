@@ -97,7 +97,9 @@ Responses execution and stream opening. The two operations share a private
 attempt implementation: candidate selection, retry bounds/delay, context-error
 feedback and retry receipts no longer live in the HTTP adapter. Complete
 execution owns one outcome and its activity guard; an opened stream transfers
-completion accounting to its existing relay. Optional disconnect monitoring
+completion accounting to its existing relay. HTTP and WebSocket relays own one
+activity guard across opening, delivery and cancellation, so the shared attempt
+loop must not start a second guard while waiting for upstream headers. Optional disconnect monitoring
 replaces the two previous opening wrappers and duplicated SSE caller branches.
 
 Its interface returns the existing response/stream and typed failures. It does

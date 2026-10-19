@@ -324,8 +324,14 @@ fn early_http_rejections_have_receipts_without_dispatch() {
         .iter()
         .filter(|r| r["event"] == "request_finished")
         .collect();
-    assert_eq!(done[0]["fields"]["last_phase"], "caller_access");
-    assert_eq!(done[1]["fields"]["last_phase"], "read_body");
+    // Response writes can finish before their worker appends the receipt.
+    for (status, phase) in [(401, "caller_access"), (400, "read_body")] {
+        let receipt = done
+            .iter()
+            .find(|record| record["fields"]["response_status"] == status)
+            .expect("receipt for the rejected response");
+        assert_eq!(receipt["fields"]["last_phase"], phase);
+    }
     assert!(
         !serde_json::to_string(&records)
             .unwrap()

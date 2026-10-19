@@ -31,12 +31,18 @@ pub(crate) fn complete(
     let router = ExternalRouter::new(&state.backend.transport.client);
     let mut outcome =
         RequestOutcome::new(state, route, body, incoming, None, "responses").started_at(started);
-    let mut execution = Execution {
+    let _activity_guard =
+        state
+            .backend
+            .activity
+            .begin(crate::services::activity::ActivityIdentity::from_route(
+                route,
+            ));
+    let execution = Execution {
         state,
         route,
         body,
         incoming,
-        activity: None,
     };
     let (result, candidate) =
         execution.run(None, &mut outcome, async |candidate: &ResolvedRoute| {
@@ -56,6 +62,7 @@ pub(crate) fn complete(
 
 /// An opened stream transfers completion accounting to its relay. Opening
 /// retries stop at this interface: no stream output is ever replayed here.
+/// The HTTP/WS relay owns activity through opening, delivery and cancellation.
 pub(crate) fn open_stream<'a>(
     state: &'a ServerState,
     route: &ResolvedRoute,
@@ -73,7 +80,6 @@ pub(crate) fn open_stream<'a>(
         route,
         body,
         incoming,
-        activity: None,
     }
     .run(monitor, &mut outcome, async |candidate: &ResolvedRoute| {
         router.open_stream(candidate, body, incoming, ids).await
@@ -86,13 +92,12 @@ struct Execution<'a> {
     route: &'a ResolvedRoute,
     body: &'a Value,
     incoming: &'a BTreeMap<String, String>,
-    activity: Option<crate::services::activity::ActivityGuard<'a>>,
 }
 
 impl Execution<'_> {
     // The same outcome survives opening retries and transfers to a stream relay.
     fn run<T>(
-        &mut self,
+        &self,
         mut monitor: Option<&mut DisconnectMonitor>,
         outcome: &mut RequestOutcome<'_>,
         mut request: impl AsyncFnMut(&ResolvedRoute) -> Result<T, RouterError>,
@@ -112,11 +117,6 @@ impl Execution<'_> {
             outcome.candidate(&candidate);
             for attempt in 0..3 {
                 outcome.dispatch();
-                self.activity.get_or_insert_with(|| {
-                    state.backend.activity.begin(
-                        crate::services::activity::ActivityIdentity::from_route(route),
-                    )
-                });
                 let result = match raced(
                     &state.backend.transport.runtime,
                     monitor.as_deref_mut(),

@@ -382,7 +382,6 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
     let (_directory, server) =
         configured_protocol_server(&upstream.base_url(), "responses", "api_key");
     let session = session_header(&server);
-    let mut events = open_quota_events(&server, &session);
     let downstream = open_post_stream(
         &server,
         "/v1/responses",
@@ -395,9 +394,14 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
         .expect("stream request reached fake upstream");
     assert_eq!(path, "/v1/responses");
 
-    let active = next_activity_snapshot(&mut events, |snapshot| {
-        snapshot["routes"][0]["in_flight"] == 1
-    });
+    // Dispatch has reached the held upstream. Observe cancellation separately
+    // from SSE delivery, which the held-request contracts already exercise.
+    let active = server
+        .state
+        .backend
+        .activity
+        .snapshot(crate::util::system_now() as u64);
+    assert_eq!(only_route(&active)["in_flight"], 1);
     assert_eq!(only_route(&active)["model_id"], "demo/model");
     drop(downstream);
     upstream
@@ -411,10 +415,20 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
             .expect("upstream observes client cancellation"),
         "downstream cancellation did not close the pending upstream request"
     );
-    let finished = next_activity_snapshot(&mut events, |snapshot| {
-        snapshot["routes"][0]["in_flight"] == 0
-            && snapshot["routes"][0]["last_finished"].as_u64().is_some()
-    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let finished = loop {
+        let snapshot = server
+            .state
+            .backend
+            .activity
+            .snapshot(crate::util::system_now() as u64);
+        let route = only_route(&snapshot);
+        if route["in_flight"] == 0 && route["last_finished"].as_u64().is_some() {
+            break snapshot;
+        }
+        assert!(Instant::now() < deadline, "activity guard was not released");
+        thread::sleep(Duration::from_millis(5));
+    };
     assert_eq!(only_route(&finished)["in_flight"], 0);
     server.shutdown().expect("shutdown activity test server");
 }

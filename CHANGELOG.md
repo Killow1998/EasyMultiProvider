@@ -8,6 +8,7 @@
 - 修复外部主线程发起子代理工具调用时缺少 Codex 明文标记的问题。按需恢复前统一验证全部来源和账号，每次最多八条加密消息；来源指纹保留 24 小时，明文缓存仍仅保留一小时。
 - 兼容 Claude Code 缩放大 PNG 截图时转换为 JPEG 的行为，保留文字、图片顺序、几何说明和工具权限校验。
 - 修复接收连接遇到资源耗尽或暂时错误后静默关闭监听的问题；记录并限速重试，启动时仅在进程内部提高允许范围内的文件数软限制，并按实际预算约束连接容量。
+- 修复外部流式请求等待上游响应时被重复计入进行中请求的问题，取消后正确释放活动计数与上游连接。
 
 ### English
 
@@ -15,6 +16,7 @@
 - Mark external parents' collaboration calls as plaintext for Codex. Preflight all encrypted envelopes and accounts before recovery, with at most eight envelopes per request. Retain origin fingerprints for 24 hours while keeping the plaintext cache at one hour.
 - Accept the observed Claude Code PNG-to-JPEG screenshot downscale while retaining transcript, image-order, geometry-note and tool-authority validation.
 - Keep the listener alive across descriptor exhaustion and transient accept failures, with rate-limited diagnostics and retry. Raise only the process soft file limit within its existing hard limit and size admission against the available budget.
+- Count each external streaming request once while waiting for upstream, and release its activity count and upstream connection on cancellation.
 
 ## 0.13.8 (2026-10-18)
 
