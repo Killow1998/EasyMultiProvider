@@ -461,38 +461,62 @@ fn headers(authorization: &str) -> BTreeMap<String, String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn complete_responses_reuse_connections_without_sharing_authorization() {
-    let server = TestServer::start();
-    let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
-    for authorization in ["Bearer first", "Bearer second"] {
-        let response = client
-            .open(
-                HttpMethod::Get,
-                &server.url("/complete"),
-                headers(authorization),
-                None,
-                false,
-            )
-            .await
-            .expect("complete response");
-        assert_eq!(response.status(), 200);
-        assert_eq!(response.read_all().await.expect("complete body"), b"OK");
+    for through_proxy in [false, true] {
+        let server = TestServer::start();
+        let proxy = if through_proxy {
+            ProxyPolicy::explicit(Some(server.proxy_url("user%40test:pass%3Aword")))
+        } else {
+            ProxyPolicy::default()
+        };
+        let client = HttpClient::new(HttpClientPolicy::new(proxy, TimeoutPolicy::default()))
+            .expect("HTTP client");
+        let url = if through_proxy {
+            "http://origin.test/resource".to_owned()
+        } else {
+            server.url("/complete")
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut sent = 0usize;
+        loop {
+            let authorization = if sent.is_multiple_of(2) {
+                "Bearer first"
+            } else {
+                "Bearer second"
+            };
+            let response = client
+                .open(HttpMethod::Get, &url, headers(authorization), None, false)
+                .await
+                .expect("complete response");
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.read_all().await.expect("complete body"), b"OK");
+            sent += 1;
+            let requests = server.requests();
+            assert_eq!(requests.len(), sent, "a completed GET must not be replayed");
+            let last = requests.last().unwrap();
+            assert_eq!(last.authorization.as_deref(), Some(authorization));
+            assert_eq!(
+                last.proxy_authorization.as_deref(),
+                through_proxy.then_some("Basic dXNlckB0ZXN0OnBhc3M6d29yZA==")
+            );
+            assert_eq!(
+                last.accept_encoding.as_deref(),
+                Some("gzip, br, zstd, deflate")
+            );
+            if requests.windows(2).any(|pair| {
+                pair[0].connection == pair[1].connection
+                    && pair[0].client_port == pair[1].client_port
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "completed responses never returned a reusable connection (proxy={through_proxy})"
+            );
+            // Returning a fully read body to the pool is asynchronous. Observe
+            // actual reuse rather than requiring the very next GET to reuse it.
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
-    let requests = server.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].connection, requests[1].connection);
-    assert_eq!(requests[0].client_port, requests[1].client_port);
-    assert_eq!(
-        requests
-            .iter()
-            .map(|request| request.authorization.as_deref())
-            .collect::<Vec<_>>(),
-        [Some("Bearer first"), Some("Bearer second")]
-    );
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.accept_encoding.as_deref() == Some("gzip, br, zstd, deflate"))
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -697,40 +721,6 @@ async fn non_stream_body_limit_rejects_before_buffering_the_declared_body() {
         .await
         .expect_err("declared body exceeds limit");
     assert_eq!(error.kind(), HttpTransportErrorKind::ResponseTooLarge);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn proxy_credentials_stay_separate_from_origin_authorization() {
-    let proxy = TestServer::start();
-    let policy = HttpClientPolicy::new(
-        ProxyPolicy::explicit(Some(proxy.proxy_url("user%40test:pass%3Aword"))),
-        TimeoutPolicy::default(),
-    );
-    let client = HttpClient::new(policy).expect("proxied HTTP client");
-    for _ in 0..2 {
-        let response = client
-            .open(
-                HttpMethod::Get,
-                "http://origin.test/resource",
-                headers("Bearer origin-only"),
-                None,
-                false,
-            )
-            .await
-            .expect("proxy response");
-        assert_eq!(response.read_all().await.expect("proxy body"), b"OK");
-    }
-    let requests = proxy.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].connection, requests[1].connection);
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.authorization.as_deref() == Some("Bearer origin-only"))
-    );
-    assert!(requests.iter().all(|request| {
-        request.proxy_authorization.as_deref() == Some("Basic dXNlckB0ZXN0OnBhc3M6d29yZA==")
-    }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
