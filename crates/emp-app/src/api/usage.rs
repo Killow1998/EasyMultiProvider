@@ -1,5 +1,6 @@
 //! Existing usage charts and on-demand history refresh endpoints.
 mod labels;
+mod sessions;
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
 use crate::http::request::{Request, query_values, read_json_body};
@@ -40,7 +41,9 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
             .find(|v| !v.is_empty())
     };
     let account_id = value("account_id").or_else(|| value("account"));
-    let result = if value("series").as_deref() == Some("true") {
+    let result = if value("series").as_deref() == Some("true")
+        || value("sessions").as_deref() == Some("true")
+    {
         let owner = match account_id {
             Some(id) => match quota_owner_key(state, &id) {
                 Ok(owner) => Some(owner),
@@ -77,6 +80,9 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
         .any(|v| v.len() > 256 || v.chars().any(char::is_control))
         {
             return invalid();
+        }
+        if value("sessions").as_deref() == Some("true") {
+            return sessions::read(request, state, &filter, now);
         }
         state.backend.usage.ledger.query_series(&filter, now)
     } else {

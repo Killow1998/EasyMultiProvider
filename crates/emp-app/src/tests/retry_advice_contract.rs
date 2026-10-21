@@ -58,6 +58,15 @@ fn upstream_retry_advice_reaches_http_and_websocket_clients() {
                 assert!(!wire.contains("private upstream detail"));
             }
             assert_eq!(upstream.observed().2["model"], "upstream-model");
+            let report = request(&server, "/api/calls", &[&session]);
+            let report: Value =
+                serde_json::from_str(report.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            let call = &report["records"][0];
+            assert_eq!(call["retry_after_seconds"], 301);
+            assert_eq!(call["attempts"], 1);
+            assert_eq!(call["retries"], json!([]));
+            assert_eq!(call["state"], "failed");
+            assert!(!report.to_string().contains("private upstream detail"));
             server.shutdown().unwrap();
         }
     }

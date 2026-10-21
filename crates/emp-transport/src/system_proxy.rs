@@ -90,7 +90,13 @@ fn run_command(
     if timeout.is_zero() {
         return None;
     }
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let mut child = command
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -510,6 +516,20 @@ fn push_nonempty(result: &mut Vec<String>, item: &mut String) {
 mod tests {
     use super::*;
     use crate::http_policy::ProxySnapshot;
+
+    #[cfg(windows)]
+    #[test]
+    fn background_proxy_commands_never_allocate_a_console() {
+        let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let script = "Add-Type 'using System; using System.Runtime.InteropServices; public class Probe { [DllImport(\"kernel32.dll\")] public static extern IntPtr GetConsoleWindow(); }'; [Console]::Write(([Probe]::GetConsoleWindow() -eq [IntPtr]::Zero).ToString())";
+        let output = run_command(
+            powershell,
+            &["-NoProfile", "-NonInteractive", "-Command", script],
+            Duration::from_secs(15),
+        );
+        assert_eq!(output.as_deref(), Some("True"));
+    }
 
     #[test]
     fn gnome_manual_proxy_matches_same_proxy_socks_and_bypass_settings() {

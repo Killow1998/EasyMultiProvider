@@ -1,6 +1,46 @@
 //! Projects supported tool definitions and explicit tool choices.
 use super::ExternalTools;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
+
+/// Validate one schema per alias across both catalog locations, preserving the
+/// first top-level occurrence and every in-place loading boundary.
+pub(super) fn unique_definitions(
+    definitions: Vec<Value>,
+    input: &Value,
+    preserve_loads: bool,
+) -> Result<Vec<Value>, &'static str> {
+    let loaded = input
+        .as_array()
+        .filter(|_| preserve_loads)
+        .into_iter()
+        .flatten()
+        .filter(|item| item["type"] == "additional_tools")
+        .flat_map(|item| item["tools"].as_array().into_iter().flatten());
+    let mut seen = BTreeMap::new();
+    let mut keep = vec![true; definitions.len()];
+    for (index, tool) in definitions.iter().chain(loaded).enumerate() {
+        let definition = tool.get("function").unwrap_or(tool);
+        let key = definition
+            .get("name")
+            .filter(|value| !value.is_null())
+            .map(Value::to_string)
+            .unwrap_or_else(|| super::python_json(tool));
+        if let Some(previous) = seen.insert(key, tool) {
+            if previous != tool {
+                return Err("request projection failed: conflicting tool definitions");
+            }
+            if let Some(keep) = keep.get_mut(index) {
+                *keep = false;
+            }
+        }
+    }
+    Ok(definitions
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(tool, keep)| keep.then_some(tool))
+        .collect())
+}
 
 impl ExternalTools {
     pub(super) fn definitions(

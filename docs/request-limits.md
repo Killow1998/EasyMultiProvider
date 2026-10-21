@@ -61,6 +61,21 @@ protect the local Python service from exhausting threads and memory.
 
 ## Claude Code adapter
 
+All Claude CLI children share one process admission gate, including inference,
+authentication, quota and model-list queries for CPA and local subscriptions.
+It reserves an estimated 192 MiB per admitted child plus 128 MiB headroom from
+currently available memory. The active count also bounds simultaneous spawns
+before the OS has accounted for their allocations. Linux observations include
+cgroup v1/v2 limits and ancestor pressure; Windows/macOS use their existing
+system probes. Unknown memory allows one child at a time. These estimates limit
+bursts; they are not a guarantee against memory changes in other applications.
+
+A new child waits at most 15 seconds, observing disconnect/shutdown/steering
+while waiting. Capacity exhaustion returns 503 with
+`claude_cli_capacity_unavailable`, preserving the known login and quota identity.
+Existing children are not stopped to admit new work. Spawn errors, failure,
+timeout and cancellation all release the reservation through the same owner.
+
 Claude Code routes also have an EMP-owned **10 MiB** prepared-input budget
 (system instructions plus stdin) and a **12 MiB** local relay request budget.
 These are adapter memory/encoding boundaries, not Claude model context windows

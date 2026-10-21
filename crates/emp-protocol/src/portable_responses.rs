@@ -131,7 +131,7 @@ mod stream;
 mod tools;
 mod validation;
 pub(crate) use input::decode_compaction;
-pub use request::project_request;
+pub use request::{project_request, supports_in_place_tools};
 pub use response::{custom_tool_names, project_response};
 pub use stream::PortableStreamProjector;
 pub use validation::{terminal_observation, validate_responses_body};

@@ -1,8 +1,17 @@
+use super::inventory::canonical_home;
+use super::transaction::{
+    RepairManifest, RepairManifestEntry, file_fingerprint, recover_preparing, sha256,
+    write_manifest,
+};
 use super::*;
+use crate::history::CodexHomeHistoryReader;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use emp_history::HistoryAnchor;
+use rusqlite::Connection;
 use rusqlite::params;
 use serde_json::json;
+use serde_json::{Map, Value};
+use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 
 const PARENT_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -831,6 +840,117 @@ fn active_codex_writer_blocks_without_changing_rollout_bytes() {
     let error = repair_before_native_restore(&fixture.home).unwrap_err();
     assert_eq!(error.reason(), "active_codex_writer");
     assert_eq!(fs::read(&fixture.parent_path).unwrap(), original);
+}
+
+#[test]
+fn idle_restore_defers_both_directions_of_a_live_fork_and_repairs_independent_history() {
+    for live_id in [PARENT_ID, CHILD_ID] {
+        let fixture = fixture(false, true, false);
+        let independent_id = "44444444-4444-4444-8444-444444444444";
+        let independent = fixture
+            .parent_path
+            .with_file_name(format!("{independent_id}.jsonl"));
+        let original = String::from_utf8(fixture.parent_plain.clone())
+            .unwrap()
+            .replace(PARENT_ID, independent_id);
+        fs::write(&independent, &original).unwrap();
+        Connection::open(fixture.home.join("state_1.sqlite"))
+            .unwrap()
+            .execute(
+                "INSERT INTO threads (id, rollout_path, history_mode) VALUES (?1, ?2, 'paginated')",
+                params![independent_id, independent.to_string_lossy()],
+            )
+            .unwrap();
+        let directory = fixture.home.join(LOCK_DIRECTORY);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join(COORDINATION_LOCK), []).unwrap();
+        let writer = File::create(directory.join(format!("{live_id}.lock"))).unwrap();
+        writer.lock().unwrap();
+        let (lock, report) = repair_idle_before_native_restore(&fixture.home).unwrap();
+        assert_eq!((report.threads_repaired, report.threads_deferred), (1, 2));
+        assert_eq!(
+            fs::read(&fixture.parent_path).unwrap(),
+            fixture.parent_plain
+        );
+        assert_eq!(
+            fs::read(fixture.child_path.as_ref().unwrap()).unwrap(),
+            *fixture.child_plain.as_ref().unwrap()
+        );
+        assert!(
+            fs::read(&independent)
+                .unwrap()
+                .starts_with(original.as_bytes())
+        );
+        let snapshot = resumed_snapshot(&fixture.home, independent_id);
+        assert!(snapshot.items.iter().any(|item| {
+            item.content
+                .to_string()
+                .contains("Portable EMP summary: keep the task plan")
+        }));
+        drop((lock, writer));
+
+        let (lock, report) = repair_idle_before_native_restore(&fixture.home).unwrap();
+        assert_eq!((report.threads_repaired, report.threads_deferred), (2, 0));
+        for id in [PARENT_ID, CHILD_ID] {
+            let snapshot = resumed_snapshot(&fixture.home, id);
+            assert!(snapshot.items.iter().any(|item| {
+                item.content
+                    .to_string()
+                    .contains("Portable EMP summary: keep the task plan")
+            }));
+        }
+        let repaired = records(&fs::read(&fixture.parent_path).unwrap());
+        assert!(
+            streamed_history(&repaired, latest_checkpoint(&repaired))
+                .iter()
+                .any(|item| item["encrypted_content"] == "native-ciphertext-must-stay-opaque")
+        );
+        assert!(
+            fs::read(&fixture.parent_path)
+                .unwrap()
+                .starts_with(&fixture.parent_plain)
+        );
+        drop(lock);
+        let (_, report) = repair_idle_before_native_restore(&fixture.home).unwrap();
+        assert_eq!(
+            (
+                report.threads_repaired,
+                report.checkpoints_converted,
+                report.threads_deferred
+            ),
+            (0, 0, 0)
+        );
+    }
+}
+
+#[test]
+fn idle_restore_preserves_unfinished_or_uncoordinated_history() {
+    let fixture = fixture(false, false, true);
+    assert_eq!(
+        repair_idle_before_native_restore(&fixture.home)
+            .unwrap_err()
+            .reason(),
+        "writer_coordination_unavailable"
+    );
+    let directory = fixture.home.join(LOCK_DIRECTORY);
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join(COORDINATION_LOCK), []).unwrap();
+    let (lock, report) = repair_idle_before_native_restore(&fixture.home).unwrap();
+    assert_eq!((report.threads_repaired, report.threads_deferred), (0, 1));
+    assert_eq!(
+        fs::read(&fixture.parent_path).unwrap(),
+        fixture.parent_plain
+    );
+    drop(lock);
+}
+
+#[test]
+fn idle_restore_of_an_empty_home_does_not_create_writer_coordination() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (_, report) = repair_idle_before_native_restore(temporary.path()).unwrap();
+    assert_eq!((report.threads_repaired, report.threads_deferred), (0, 0));
+    assert!(!temporary.path().join(LOCK_DIRECTORY).exists());
+    assert!(!temporary.path().join(REPAIR_DIRECTORY).exists());
 }
 
 #[test]

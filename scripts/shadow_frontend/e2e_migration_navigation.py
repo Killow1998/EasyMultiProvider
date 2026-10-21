@@ -31,7 +31,7 @@ def main():
         assert status == 200
         selection = [{'kind': 'provider', 'id': 'demo', 'name': 'Imported fixture', 'models': [{'id': 'demo/model', 'selected': True}]}]
         status, exported = request(base + '/api/migration/export', {'confirmation': confirmation['confirmation'],
-            'password': 'fixture-migration-password', 'selections': selection}, headers)
+            'password': 'fixture-migration-password', 'selections': selection}, headers, timeout=90)
         assert status == 200
         assert base64.b64decode(exported['bundle']).startswith(b'EMP-MIGRATION')
         frontend, server = candidate_frontend(stack, target_base, args.web_root.resolve())
@@ -78,7 +78,7 @@ def main():
         browser.execute(fill, exported['bundle'])
         server.preview_gate = threading.Event()
         browser.execute('document.querySelector("[data-migration-decode]").click();')
-        wait_for(server.preview_started.is_set)
+        wait_for(server.preview_started.is_set, seconds=90)
         assert browser.execute('return document.getElementById("modal_submit").disabled;')
         browser.execute('document.getElementById("modal_back").click();')
         server.preview_gate.set()
@@ -87,6 +87,32 @@ def main():
         assert browser.execute('return document.querySelectorAll("[data-migration-step]")[2].getAttribute("aria-current")==="step";')
         assert (target / 'config.json').read_bytes() == before
         checks.append('Back cancels pending preview; reopened encrypted package becomes importable without stale state or writes')
+        # A response that never arrives must leave a usable retry, not a permanent wait.
+        gate = threading.Event()
+        stack.callback(gate.set)
+        server.preview_gate = gate
+        server.preview_started.clear()
+        checkbox = 'document.getElementById("migration_include_rename")'
+        browser.execute(checkbox + '.click();')
+        wait_for(server.preview_started.is_set)
+        assert browser.execute('return document.getElementById("modal_status").textContent;') == 'Preparing the import preview. Please wait…'
+        wait_for(lambda: browser.execute('return document.getElementById("modal_submit").textContent === "Retry preview" && !document.getElementById("modal_submit").disabled;'), seconds=35)
+        assert browser.execute('return document.getElementById("modal_status").textContent.includes("timed out");')
+        assert browser.execute('return document.getElementById("shadow_migration").getAttribute("aria-busy")==="false" && getComputedStyle(document.getElementById("modal_status")).color!==getComputedStyle(document.querySelector(".migration-steps")).color;')
+        assert browser.execute('return !document.getElementById("migration_include_rename").checked;')
+        assert (target / 'config.json').read_bytes() == before
+        status, screenshot = request(browser.base + '/screenshot')
+        assert status == 200
+        args.output.with_name('migration-preview-timeout.png').write_bytes(base64.b64decode(screenshot['value']))
+        # Keep the old request delayed until a new preview has completed.
+        server.preview_gate = None
+        browser.execute('document.getElementById("modal_submit").click();')
+        assert browser.execute('return document.getElementById("modal_submit").disabled;')
+        wait_for(lambda: browser.execute('return document.getElementById("modal_submit").textContent === "Import" && !document.getElementById("modal_submit").disabled;'))
+        gate.set()
+        assert browser.execute('return !document.getElementById("migration_include_rename").checked && document.getElementById("modal_status").textContent === "";')
+        assert (target / 'config.json').read_bytes() == before
+        checks.append('Stalled preview times out; Retry preserves selections and succeeds in the same backend without importing or restarting')
         browser.execute('document.querySelector("[data-migration-all=false]").click();')
         assert browser.execute('return document.getElementById("modal_submit").disabled;')
         browser.execute('document.querySelector("[data-migration-all=true]").click();')
@@ -163,6 +189,12 @@ def main():
         assert [account['id'] for account in remaining] == [source_id]
         assert native_path.read_bytes() == native_bytes and upstream.calls == 0
         checks.append('Removing a merged imported service through the browser removes all its verified aliases and retains Native credentials')
+        records = [json.loads(line) for log in (target / 'state/logs').glob('*.jsonl') for line in log.read_text().splitlines()]
+        previews = [row['fields'] for row in records if row['event'] == 'operation_finished' and row['fields'].get('operation') == 'migration_preview']
+        assert previews and all(row['outcome'] == 'completed' for row in previews), previews
+        assert all([stage['stage'] for stage in row['stages']] == ['read_configuration', 'resolve_preferences', 'build_preview'] for row in previews)
+        assert 'fixture-migration-password' not in json.dumps(records) and exported['bundle'] not in json.dumps(records)
+        checks.append('Backend preview receipts identify processing stages and completion without the migration password or encrypted package')
         args.output.write_text(json.dumps({'passed': True, 'checks': checks, 'real_model_requests': 0,
             'temporary_backend_only': True, 'production_assets': True}, indent=2) + '\n')
         print(json.dumps({'passed': True, 'checks': checks}))

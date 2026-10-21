@@ -45,7 +45,8 @@ class PacedResponses(BaseHTTPRequestHandler):
         time.sleep(.2)
         event({'type': 'response.output_text.delta', 'delta': 'first'})
         if body['input'] != 'single-batch':
-            time.sleep(.2)
+            if body['input'] != 'coalesced':
+                time.sleep(.2)
             event({'type': 'response.output_text.delta', 'delta': 'last'})
         time.sleep(.2)
         event({'type': 'response.completed', 'response': response})
@@ -73,7 +74,7 @@ def main():
             'upstream_id': 'timing-model', 'enabled': True}]
         assert request(backend + '/api/config', config, headers)[0] == 200
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        for prompt, streamed in [('paced', True), ('single-batch', True), ('buffered', False)]:
+        for prompt, streamed in [('paced', True), ('single-batch', True), ('coalesced', True), ('buffered', False)]:
             body = json.dumps({'model': 'timing/model', 'input': prompt, 'stream': streamed}).encode()
             call = urllib.request.Request(backend + '/v1/responses', body,
                 {**headers, 'Content-Type': 'application/json', 'Authorization': 'Bearer fixture'})
@@ -91,15 +92,22 @@ def main():
         assert abs(measured['generation_tokens_per_second'] - expected) <= .01
         assert measured['generation_tokens_per_second'] > measured['tokens_per_second'] * 2
         unknown = [row for row in rows if row['model_id'] == 'timing/model' and row != measured]
-        assert len(unknown) == 2 and all(row.get('generation_tokens_per_second') is None for row in unknown)
-        checks.append('Paced stream excludes reasoning and terminal waits; single-batch and buffered rates remain unknown')
+        assert len(unknown) == 3 and all(row.get('generation_tokens_per_second') is None for row in unknown)
+        checks.append('Paced stream excludes reasoning and terminal waits; single-batch, burst and buffered rates remain unknown')
         samples = [row['generation_tokens_per_second'] for row in rows if row.get('generation_tokens_per_second') is not None]
         assert report['summary']['tps_samples'] == len(samples) == 2
         assert abs(report['summary']['tokens_per_second'] - sum(samples) / len(samples)) < .01
         group = next(row for row in report['models'] if row['model_id'] == 'timing/model')
         assert group['tokens_per_second'] == measured['generation_tokens_per_second']
         assert next(row for row in rows if row['request_id'] == 'metrics-1')['tokens_per_second'] == 20
+        burst = next(row for row in rows if row['request_id'] == 'metrics-burst')
+        assert burst['generation_ms'] == 6 and burst.get('generation_tokens_per_second') is None
+        assert burst['tokens_per_second'] == 8.36
+        tools = next(row for row in rows if row['request_id'] == 'metrics-0')
+        assert tools['turn_tool_ms'] == 5000
+        assert next(row for row in rows if row['request_id'] == 'metrics-1')['turn_tool_ms'] is None
         checks.append('Summary and model groups use generation samples while legacy call facts retain end-to-end rates')
+        checks.append('Historical 11500 TPS burst is excluded without rewriting facts; real local tool intervals union to 5 seconds and missing telemetry stays unknown')
 
         frontend, _ = preview(stack, backend, bundle, headers['X-EMP-Session'])
         browser = Browser(stack, root)
@@ -108,8 +116,7 @@ def main():
             request(browser.base + '/window/rect', {'width': width, 'height': 1000})
             viewports.append({'language': language, 'requested_width': width,
                 **browser.execute('return {width:innerWidth,height:innerHeight,pixel_ratio:devicePixelRatio};')})
-            browser.execute('setLanguage(arguments[0]);document.getElementById("shadow_review_button").click();', language)
-            browser.execute('document.querySelector("[data-shadow-demo=metrics]").click();')
+            browser.execute('setLanguage(arguments[0]);window.EMP_REVIEW_ACTION("metrics");', language)
             wait_for(lambda: browser.execute('return !!document.querySelector("[data-stats-view=calls]");'))
             browser.execute('document.querySelector("[data-stats-view=calls]").click();')
             wait_for(lambda: browser.execute('return !!document.querySelector("[data-call-id=\\"metrics-0:responses\\"]");'))
@@ -117,8 +124,17 @@ def main():
             text = browser.execute('return document.querySelector("[data-call-id=\\"metrics-0:responses\\"]").textContent;')
             assert 'TTFT 2.00 s · TPS 80.0' in text
             assert full_label in text and '20.0' in text
+            tool_label, unavailable = ('本轮工具耗时','未提供') if language == 'zh-CN' else ('Turn tool time','Unavailable')
+            assert tool_label in text
+            assert browser.execute('''
+              const record=document.querySelector('[data-call-id="metrics-0:responses"]');
+              const fact=[...record.querySelectorAll('.call-fact')].find(node=>node.querySelector('span')?.textContent===arguments[0]);
+              return fact.querySelector('strong').textContent==='5.00 s' && fact.querySelector('span').title.length>50;
+            ''', tool_label)
             legacy = browser.execute('return document.querySelector("[data-call-id=\\"metrics-1:responses\\"]").textContent;')
             assert 'TTFT — · TPS —' in legacy and full_label in legacy
+            assert unavailable in legacy
+            assert 'TPS —' in browser.execute('return document.querySelector("[data-call-id=\\"metrics-burst:responses\\"]").textContent;')
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             assert browser.execute('''
               const record=document.querySelector('[data-call-id="metrics-0:responses"]');
@@ -130,7 +146,7 @@ def main():
             ''', full_label)
             _, png = request(browser.base + '/screenshot')
             args.output.with_name(args.output.stem + '-' + language + '.png').write_bytes(base64.b64decode(png['value']))
-            checks.append(f'{language}: one This update entry opens the real statistics UI; separate rates, unknown legacy TPS and no page overflow')
+            checks.append(f'{language}: real statistics UI shows separate rates, measured 5-second tool time, missing telemetry, hidden burst TPS and no page overflow')
             browser.execute('document.querySelector("[data-stats-view=overview]").click();const select=document.querySelector("[data-stats-group]");select.value="services";select.dispatchEvent(new Event("change",{bubbles:true}));')
             color_check = '''
               const legend=[...document.querySelectorAll('.presentation-chart-legend>span')];

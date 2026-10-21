@@ -1,4 +1,5 @@
-use super::{HistoryRepairError, HistoryRepairReport, safe_rollout_path, session_roots};
+use super::inventory::{safe_rollout_path, session_roots};
+use super::{HistoryRepairError, HistoryRepairReport};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -201,6 +202,7 @@ impl RepairWorkspace {
         Ok(HistoryRepairReport {
             threads_repaired: rewrites.len(),
             checkpoints_converted: converted,
+            threads_deferred: 0,
         })
     }
 }

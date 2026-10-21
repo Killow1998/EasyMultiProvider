@@ -1,6 +1,6 @@
 //! Complete integration commands. Wire adapters only authenticate, decode and render.
 use crate::app::ServerState;
-use crate::services::integration::{integration_summary_with_result, restore_native_configuration};
+use crate::services::integration::integration_summary_with_result;
 use crate::services::observation::operation::{OperationObservation, observe};
 use crate::services::runtime::sync_runtime;
 use emp_integration::IntegrationResult;
@@ -28,6 +28,7 @@ pub(crate) fn execute(
     state: &ServerState,
     operation: &str,
     confirmed: bool,
+    management_connections: usize,
 ) -> Reply {
     let name = match operation {
         "enable" => "integration_enable",
@@ -36,11 +37,11 @@ pub(crate) fn execute(
         "verify" => "integration_verify",
         _ => "integration_unknown",
     };
-    observe(&state.backend.diagnostics, request_id, name, |receipt| {
+    let reply = observe(&state.backend.diagnostics, request_id, name, |receipt| {
         receipt.check("runtime_catalog_matches_target", None);
         receipt.check("request_routing_verified", None);
         receipt.check("desktop_effect_verified", None);
-        let reply = execute_inner(state, operation, confirmed, receipt);
+        let reply = execute_inner(state, operation, confirmed, management_connections, receipt);
         if let Body::Summary(value) = &reply.body {
             let expected = match operation {
                 "enable" | "verify" => Some("emp_applied"),
@@ -62,13 +63,23 @@ pub(crate) fn execute(
             Err(reply)
         }
     })
-    .unwrap_or_else(|reply| reply)
+    .unwrap_or_else(|reply| reply);
+    // A failed follow-up can still leave a committed configuration change.
+    // Every entry point invalidates the same WebUI snapshot after completion.
+    if matches!(operation, "enable" | "restore" | "reload" | "verify") {
+        state
+            .backend
+            .management_events
+            .publish(crate::services::management_events::Change::Integration);
+    }
+    reply
 }
 
 fn execute_inner(
     state: &ServerState,
     operation: &str,
     confirmed: bool,
+    management_connections: usize,
     receipt: &mut OperationObservation,
 ) -> Reply {
     if matches!(operation, "enable" | "restore") && !confirmed {
@@ -86,7 +97,7 @@ fn execute_inner(
         match receipt.step("quiesce", || {
             state
                 .connection_admission
-                .quiesce(1, Duration::from_secs(15))
+                .quiesce(management_connections, Duration::from_secs(15))
                 .ok_or(())
         }) {
             Ok(gate) => Some(gate),
@@ -209,7 +220,10 @@ fn execute_inner(
         },
         "restore" => {
             match receipt.step("restore_configuration", || {
-                restore_native_configuration(manager, Some(&state.backend.integration.search))
+                state
+                    .backend
+                    .integration
+                    .restore_native_configuration(manager)
             }) {
                 Ok(result) => result,
                 Err(reason) => {

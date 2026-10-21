@@ -299,6 +299,7 @@ impl ServerHandle {
                 used: AtomicBool::new(false),
                 expires_at: system_now() + BOOTSTRAP_LIFETIME_SECONDS,
             },
+            reopen_bootstrap: std::sync::Mutex::new(None),
             backend,
             port: local_addr.port(),
             base_url: crate::services::integration::endpoint::codex_base_url(local_addr),

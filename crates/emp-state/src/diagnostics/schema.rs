@@ -302,6 +302,7 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
         ("reasoning_tokens", 10_000_000),
         ("request_item_count", 256),
         ("performance_schema", 100),
+        ("retry_after_seconds", 31_536_000),
         ("request_bytes", 64 * 1024 * 1024),
         ("decoded_request_bytes", 64 * 1024 * 1024),
         ("upstream_request_bytes", 64 * 1024 * 1024),

@@ -56,7 +56,7 @@ pub fn custom_tool_names(body: &Value) -> Result<BTreeSet<String>, PortableProje
     let body = body
         .as_object()
         .ok_or_else(|| error(0, "input", "invalid_input"))?;
-    Ok(raw_tools(body)?
+    Ok(raw_tools(body, true)?
         .into_iter()
         .filter(|tool| tool.value.get("type").and_then(Value::as_str) == Some("custom"))
         .filter_map(|tool| {

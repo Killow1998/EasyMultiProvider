@@ -6,7 +6,8 @@ function createMigration() {
   function active(candidate) { return view===candidate && $('shadow_migration')?.isConnected; }
   function updatePreview() {
     if(!view)return;
-    $('modal_submit').disabled=!selections(view).length || view.busy || (view.mode==='import'&&(!view.token||!view.previewReady||view.preferenceConflicts?.some(conflict=>Object.values(conflict.fields).some(field=>!field.resolved))));
+    $('shadow_migration').setAttribute('aria-busy',String(Boolean(view.busy)));
+    $('modal_submit').disabled=!selections(view).length || view.busy || (view.mode==='import'&&!view.previewError&&(!view.token||!view.previewReady||view.preferenceConflicts?.some(conflict=>Object.values(conflict.fields).some(field=>!field.resolved))));
     const file=$('shadow_migration_file'), password=$('shadow_import_password');
     const step=view.token?2:(file?.files.length&&password?.value?1:0);
     for(const node of document.querySelectorAll('[data-migration-step]')){
@@ -29,9 +30,9 @@ function createMigration() {
   }
   function render(savedBody=null) {
     const candidate=view, importing=candidate.mode==='import';
-    const submitLabel=candidate.demo?tr("transfers.finish_demo"):importing?tr("transfers.import"):tr("core.download_emp");
+    const submitLabel=candidate.previewError?tr("transfers.retry_preview"):candidate.demo?tr("transfers.finish_demo"):importing?tr("transfers.import"):tr("core.download_emp");
     openModal(tr("data_migration"),savedBody?'':bodyHtml(candidate),submitLabel,
-      importing&&!candidate.token?null:()=>submit(candidate),null,{back:candidate.parent?()=>back(candidate):null});
+      importing&&!candidate.token?null:()=>candidate.previewError?schedulePreview(candidate):submit(candidate),null,{back:candidate.parent?()=>back(candidate):null});
     if(savedBody)$('modal_body').append(savedBody);
     $('modal_title').innerHTML=`<span>${esc(tr("data_migration"))}</span>${shadowHelp(mergeRules())}`;
     const help=$('modal_title').querySelector('.shadow-help');help.dataset.migrationRulesHelp='';help.setAttribute('aria-label',tr("transfers.import_merge_rules"));
@@ -66,6 +67,7 @@ function createMigration() {
       updatePreview();schedulePreview(candidate);
     };
     updatePreview();
+    $('modal_status').textContent=candidate.previewError || '';
   }
   function openPreview(candidate,result,isDemo=false) {
     const config={...result.payload.config,model_previews:result.payload.model_previews};
@@ -76,19 +78,27 @@ function createMigration() {
   }
   function schedulePreview(candidate) {
     if(candidate.mode!=='import'||!candidate.token)return;
+    const failed=candidate.previewError;candidate.previewError='';
     candidate.busy=true;candidate.previewReady=false;updatePreview();
+    if(failed)render();
     clearTimeout(previewTimer);candidate.controller.abort();candidate.controller=new AbortController();
     const controller=candidate.controller;
+    $('modal_status').textContent=tr("transfers.updating_preview");
     previewTimer=setTimeout(async()=>{
       if(!active(candidate))return;
-      candidate.busy=true;updatePreview();$('modal_status').textContent=tr("transfers.updating_preview");
+      let timedOut=false;
+      const deadline=setTimeout(()=>{timedOut=true;controller.abort();},30000);
       try{
         const result=await api('/api/migration/preview',{method:'POST',body:JSON.stringify({token:candidate.token,current_config:migrationScrub(state),selections:selections(candidate),...options(candidate)}),signal:controller.signal});
         if(!active(candidate)||controller.signal.aborted)return;
         candidate.importConfig=result.config;candidate.warnings=result.warnings || [];candidate.preferenceConflicts=result.preference_conflicts || [];candidate.previewReady=true;$('modal_status').textContent='';
         candidate.preferenceChoices=Object.fromEntries(candidate.preferenceConflicts.map(conflict=>[conflict.source_id,Object.fromEntries(Object.keys(conflict.fields).filter(kind=>candidate.preferenceChoices?.[conflict.source_id]?.[kind]).map(kind=>[kind,candidate.preferenceChoices[conflict.source_id][kind]]))]));
-      }catch(error){if(active(candidate)&&!controller.signal.aborted)$('modal_status').textContent=error.message;}
-      finally{if(active(candidate)&&!controller.signal.aborted){candidate.busy=false;updatePreview();}}
+      }catch(error){
+        if(active(candidate)&&candidate.controller===controller)candidate.previewError=timedOut?tr("transfers.preview_timed_out"):error.message;
+      }finally{
+        clearTimeout(deadline);
+        if(active(candidate)&&candidate.controller===controller){candidate.busy=false;if(candidate.previewError)render();else updatePreview();}
+      }
     },180);
   }
   async function demo(candidate) {

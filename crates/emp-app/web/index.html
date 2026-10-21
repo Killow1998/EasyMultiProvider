@@ -45,6 +45,11 @@
   </div>
 </header>
 
+<div id="native_history_notice" class="integration-history-notice" role="status" hidden>
+  <p data-i18n="core.native_history_deferred"></p>
+  <button id="native_history_retry" type="button" class="secondary" data-icon="restore" onclick="confirmIntegrationAction('restore')" data-i18n="core.native_history_retry" hidden></button>
+</div>
+
 <div class="workspace-layout">
 <div class="workspace-column">
 <section>
@@ -114,7 +119,7 @@
 <script src="/assets/quota-history.js"></script>
 <script src="/assets/period-controls.js"></script>
 <script src="/assets/usage-report.js"></script>
-<script src="/assets/diagnostics.js"></script><script src="/assets/service-errors.js"></script><script src="/assets/request-errors.js"></script><script src="/assets/interactions.js"></script><script src="/assets/motion.js"></script><script src="/assets/usage-data.js"></script><script src="/assets/statistics.js"></script>
+<script src="/assets/diagnostics.js"></script><script src="/assets/service-errors.js"></script><script src="/assets/request-errors.js"></script><script src="/assets/interactions.js"></script><script src="/assets/motion.js"></script><script src="/assets/usage-data.js"></script><script src="/assets/session-bills.js"></script><script src="/assets/statistics.js"></script>
 <script>
 let state = null;
 let integrationInfo = null;
@@ -178,6 +183,7 @@ const officialProviders = {
   gemini: {id:'gemini', name:'Gemini AI Studio', base_url:'https://generativelanguage.googleapis.com/v1beta/openai', protocol:'chat_completions', auth_mode:'api_key', hint:'Google OpenAI-compatible API'},
   anthropic: {id:'anthropic', name:'Anthropic API', base_url:'https://api.anthropic.com/v1', protocol:'anthropic_messages', auth_mode:'anthropic_api_key', hint:'Anthropic Messages API'},
   deepseek: {id:'deepseek', name:'DeepSeek', base_url:'https://api.deepseek.com', protocol:'chat_completions', auth_mode:'api_key', hint:'DeepSeek OpenAI-compatible API'},
+  inception: {id:'inception', name:'Inception / Mercury', base_url:'https://api.inceptionlabs.ai/v1', protocol:'chat_completions', auth_mode:'api_key'},
   openrouter: {id:'openrouter', name:'OpenRouter', base_url:'https://openrouter.ai/api/v1', protocol:'responses', auth_mode:'api_key', hint:'OpenRouter OpenAI-compatible API'},
   xai: {id:'xai', name:'xAI', base_url:'https://api.x.ai/v1', protocol:'responses', auth_mode:'api_key', hint:'xAI Grok Responses API'},
   moonshot: {id:'moonshot-kimi', name:'Moonshot/Kimi', base_url:'https://api.moonshot.ai/v1', protocol:'chat_completions', auth_mode:'api_key', hint:'Kimi OpenAI-compatible API'},
@@ -485,7 +491,7 @@ async function load() {
       fill();
       managementEvents.start();
       void checkUpdateHint();
-      if (quotaStateTimer === null) quotaStateTimer = setInterval(() => { refreshResetCountdowns(); if (!managementEvents.connected()) requestQuotaSync(); }, 60 * 1000);
+      if (quotaStateTimer === null) quotaStateTimer = setInterval(() => { refreshResetCountdowns(); if (!managementEvents.connected()) { requestQuotaSync(); void integrationUpdated(); } }, 60 * 1000);
     } catch (error) { renderError = error; }
     const loaded = await integration;
     if (renderError) { reportWebClientPhase('window_error', 'failed', renderError); throw renderError; }
@@ -503,6 +509,7 @@ function renderIntegrationToggle() {
   button.textContent = t(button.dataset.i18n);
   button.classList.toggle('secondary', restore);
   button.disabled = integrationBusy || (!restore && mode !== 'native');
+  $('native_history_retry').disabled = integrationBusy;
 }
 // 5x7 dot-matrix glyphs for the header logo, drawn like a small OLED panel.
 const LOGO_GLYPHS = {E:['11111','10000','10000','11110','10000','10000','11111'], M:['10001','11011','10101','10101','10001','10001','10001'], P:['11110','10001','10001','11110','10000','10000','10000']};
@@ -553,8 +560,11 @@ function renderIntegration(info) {
   const view = configuration.state === 'conflict' ? conflictView(configuration)
     : configuration.state === 'emp_applied' || configuration.state === 'native' && runtimeNeedsDisplay ? runtimeView(info.runtime || {})
     : views[configuration.state] || views.unavailable;
+  const historyPending = configuration.state === 'native' && ['partial','deferred'].includes(info.history_restore?.status);
   $('integration_summary').textContent = view[1];
   $('integration_summary').hidden = !['conflict','prepared','restoring','unavailable'].includes(configuration.state || 'unavailable');
+  $('native_history_notice').hidden = !historyPending;
+  $('native_history_retry').hidden = !historyPending;
   const version = info.codex_compatibility?.installed;
   $('codex_version').textContent = version ? `Codex ${version}` : 'Codex';
   $('integration').dataset.state = configuration.state || 'unknown';
@@ -599,12 +609,21 @@ async function loadIntegration() {
   }
 }
 function confirmIntegrationAction(action) {
+  if (action === 'restore' && integrationInfo?.configuration?.state === 'native') {
+    openModal(tr("core.native_history_retry"), `<p>${esc(tr("core.native_history_deferred"))}</p>`, tr("core.native_history_retry"), () => submitIntegrationAction(action));
+    return;
+  }
   const actions = {"enable":[tr("core.apply_emp_to_codex"),tr("core.save_emp_settings_and_check_codex_s_shared_model")],"restore":[tr("core.restore_native_codex"),tr("core.finish_active_requests_before_restoring_native_codex_settings_emp")],"reload":[tr("core.check_codex"),tr("core.read_the_saved_target_and_compare_it_with_codex")]};
   const selected = actions[action]; if (!selected) return;
   openModal(selected[0], `<p>${esc(selected[1])}</p>`, selected[0], () => submitIntegrationAction(action));
 }
 function integrationOutcomeMessage(info, action) {
-  if (action === 'restore') return tr("core.native_codex_settings_restored_emp_is_still_running");
+  if (action === 'restore') {
+    const message=tr("core.native_codex_settings_restored_emp_is_still_running"), history=info?.history_restore;
+    if (['partial','deferred'].includes(history?.status)) return message+' '+tr("core.native_history_deferred");
+    if (history?.report?.threads_repaired>0) return message+' '+tr("core.native_history_converted",{count:history.report.threads_repaired});
+    return message;
+  }
   if (action === 'enable') {
     const runtime = info.runtime || {};
     if (runtime.state === 'catalog_loaded') return runtime.target === 'native'
@@ -625,7 +644,7 @@ async function submitIntegrationAction(action) {
   renderIntegrationToggle();
   const progress = action === 'reload'
     ? tr("core.checking_the_codex_model_catalog")
-    : tr("core.applying_settings");
+    : action === 'restore' ? tr("core.restoring_native_history") : tr("core.applying_settings");
   $('modal_status').textContent = progress;
   notice(progress);
   try {
@@ -1232,6 +1251,7 @@ document.addEventListener('keydown', handleModalKeydown);
 
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { managementEvents.start(); requestQuotaSync(); void checkUpdateHint(); } else managementEvents.stop(); });
 if (window.addEventListener) {
+  window.addEventListener('focus', () => { if (management.isSignedIn()) void integrationUpdated(); });
   window.addEventListener('storage', event => {
     if (management.receiveStorageEvent(event) && document.visibilityState !== 'hidden') managementEvents.start();
   });

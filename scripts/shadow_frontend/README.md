@@ -15,9 +15,16 @@ python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --por
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
 review entry. Update `reviewRows` in `preview-review.js` for every review round;
 follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
-The current review opens the subagent mode recommendation and separate speed/time
-tables. Refresh the review E2E expectations together with this list. Reloading the page
+The current review includes searchable session bills with model/cache breakdowns
+and synthetic missing-price/usage examples, Inception / Mercury 3 setup with folded connection details,
+call outcomes with actual retry counts and upstream wait advice, migration
+import preview with a 30-second deadline and retry that retains selections,
+and the existing Restore Native / Quit scenario with pending-history recovery.
+Statistics retains measured tool time and hidden batched TPS spikes. Refresh the review
+E2E expectations together with this list. Reloading the page
 reads the latest review scripts, so list changes do not require a Shadow restart.
+Session-bill examples are added by the preview launcher and current-review
+acceptance only; unrelated statistics acceptance keeps its own sample set.
 
 `preview-review.js` owns scenario labels, menu selection and dispatch. Its startup
 link is consumed once after configuration renders; it does not poll for readiness.
@@ -58,6 +65,20 @@ python3 scripts/shadow_frontend/e2e_preview_review.py \
   --emp /path/to/candidate/EMP --output /tmp/emp-shadow-review.json
 ```
 
+The actual native-history restore acceptance uses a fresh backend, synthetic
+rollouts, an operating-system writer lock, and real Firefox interaction:
+
+```sh
+python3 scripts/shadow_frontend/e2e_native_history_restore.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-native-history-restore.json
+```
+
+It checks idle conversion, unchanged busy history, restart-persistent recovery,
+Chinese/English narrow and desktop layouts, byte-exact backups, idempotence,
+normal Quit and offline Restore. It never reads a production Codex home or
+makes a model request. Native opaque reasoning and tool pairs remain in the
+converted history; operating-system termination keeps its fast restore path.
+
 Validate that flow with:
 
 ```sh
@@ -74,14 +95,14 @@ python3 scripts/shadow_frontend/e2e_migration_navigation.py \
 ```
 
 It requires Firefox and geckodriver. It covers migration guidance, direct-parent
-Back, cancellation, an encrypted package import, same-account service merging,
+Back, cancellation, stalled-preview retry without restarting EMP, an encrypted package import, same-account service merging,
 visibility/context conflict choices, and removal of a merged imported service.
 It retains coverage for existing historical preference conflicts; new import
 conflicts are covered by the import-stage acceptance above.
 The same launcher also supports the optional read-only live-data mode below.
 For ordinary candidate review, use the disposable workspace above.
 
-The current **This update** entry also opens a synthetic performance example:
+The archived `/?reviewAction=metrics` demo opens a synthetic performance example:
 80 generation TPS and 20 end-to-end TPS. A legacy row retains its full-call rate
 and shows unknown generation speed. These are fixture values, not model benchmarks.
 
@@ -94,6 +115,53 @@ python3 scripts/shadow_frontend/e2e_performance.py \
   --emp /path/to/candidate/EMP --output /tmp/emp-performance.json
 ```
 
+Session-bill acceptance uses a disposable backend, a local fixture request and
+synthetic Codex history, followed by real Firefox interaction:
+
+```sh
+python3 scripts/shadow_frontend/e2e_session_bills.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-session-bills.json
+```
+
+It checks live/history deduplication, cache and frozen-price totals, old-checkpoint
+backfill, SQLite-only name search beyond 100 sessions, pagination, missing versus
+zero prices, shared filters, cancellation and Chinese/English layouts. It makes
+no real model calls and never reads production configuration.
+Queued native expand/collapse events are also tested across list refresh and
+view remount, so a removed row cannot capture the current row's model details.
+
+Legacy upgrade acceptance can use an explicitly selected local ledger and Codex
+home. It takes a read-only SQLite snapshot and copies only the rollout prefixes
+already covered by its checkpoints into disk-backed disposable storage:
+
+```sh
+python3 scripts/shadow_frontend/e2e_session_bill_upgrade.py \
+  --emp /path/to/candidate/EMP --ledger /path/to/state/usage.sqlite3 \
+  --codex-home /path/to/codex-home --scratch-dir /path/to/disk-backed/scratch \
+  --output /path/to/upgrade-receipt.json
+```
+
+This requires a ledger from before session bills. It checks every existing usage
+row and frozen price, reconciles all bill pages including unassigned usage,
+measures the initial scan and health response, and verifies that an unchanged
+second scan updates no files. Credentials and live configuration are not copied;
+the summary contains only counts, timing and accounting digests. Temporary
+history copies are removed on exit. No real model calls are made.
+
+Connection and call guidance acceptance uses Firefox/geckodriver and Python 3.14
+to decode native zstd requests. It starts disposable backends and a local upstream;
+no saved credentials or real model calls are used:
+
+```sh
+python3 scripts/shadow_frontend/e2e_connection_guidance.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-connection-guidance.json
+```
+
+Checks cover preset key retention and saving, empty diagnostics, actual retry
+counts, upstream wait advice, streaming cancellation during backoff, partial-output
+replay prevention and Chinese/English layouts. Non-stream cancellation is outside
+this focused acceptance.
+
 Release-cache acceptance uses a disposable backend and a local release server:
 
 ```sh
@@ -104,6 +172,21 @@ python3 scripts/shadow_frontend/e2e_update_cache.py \
 It checks persisted notes after restart, Chinese/English display while a request
 is held open, body-free 304 responses, same-version note edits and failed checks.
 `e2e_updates.py` separately covers version labels and same-tab update reconnection.
+
+Native desktop-tray acceptance runs on Linux with the system Python's Gio
+bindings and util-linux `script`:
+
+```sh
+/usr/bin/python3 scripts/shadow_frontend/e2e_desktop_tray.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-desktop-tray.json
+```
+
+It starts its own D-Bus watcher and disposable homes. Checks cover the three-item
+Chinese/English menu, menu-only activation, new single-use browser links,
+enable/restore, tray/WebUI exit and startup recovery. The actual user installer
+is also exercised through a private pseudo-terminal: closing that launch
+terminal leaves the detached service available, and Quit ends the service.
+The normal desktop bus, live EMP and installed configuration are preserved.
 
 For read-only inspection of existing local data, preview frontend changes against
 a running EMP without changing its configuration

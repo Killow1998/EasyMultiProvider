@@ -82,6 +82,7 @@ registerUiCopy({
   "services.edit_claude_cpa": ["编辑 Claude CPA","Edit Claude CPA"],
   "services.add_claude_cpa": ["添加 Claude CPA","Add Claude CPA"],
   "services.save_service": ["保存服务","Save service"],
+  "services.connection_details": ["连接详情","Connection details"],
   "services.cpa_base_url_is_required": ["CPA Base URL 不能为空","CPA Base URL is required"],
   "services.service_reference_conflict_reopen_this_dialog": ["服务引用发生冲突，请重新打开此窗口","Service reference conflict; reopen this dialog"],
   "services.enter_the_cpa_api_key": ["请填写 CPA API Key","Enter the CPA API key"],

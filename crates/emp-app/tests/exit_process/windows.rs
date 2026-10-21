@@ -32,6 +32,62 @@ fn start(workspace: &Workspace, flags: u32) -> Emp {
     Emp::spawn(command)
 }
 
+fn start_in_terminal(workspace: &Workspace) -> Emp {
+    use base64::Engine;
+
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$info = [Diagnostics.ProcessStartInfo]::new()
+$info.FileName = $env:EMP_EXIT_BINARY
+$info.Arguments = 'serve --config "' + $env:EMP_EXIT_CONFIG + '" --host 127.0.0.1 --port 0'
+$info.UseShellExecute = $false
+$info.RedirectStandardOutput = $true
+$info.RedirectStandardError = $true
+$child = [Diagnostics.Process]::Start($info)
+$stdout = $child.StandardOutput.BaseStream.CopyToAsync([Console]::OpenStandardOutput())
+$stderr = $child.StandardError.BaseStream.CopyToAsync([Console]::OpenStandardError())
+$child.WaitForExit()
+$stdout.GetAwaiter().GetResult()
+$stderr.GetAwaiter().GetResult()
+exit $child.ExitCode
+"#;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        script
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    let environment = workspace.command();
+    let shell = std::path::PathBuf::from(
+        std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()),
+    )
+    .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let mut command = std::process::Command::new(shell);
+    for (key, value) in environment.get_envs() {
+        if let Some(value) = value {
+            command.env(key, value);
+        } else {
+            command.env_remove(key);
+        }
+    }
+    command
+        .current_dir(environment.get_current_dir().unwrap())
+        .env("EMP_EXIT_BINARY", environment.get_program())
+        .env("EMP_EXIT_CONFIG", &workspace.config_path)
+        // The GUI executable deliberately creates no console. Give its CLI a
+        // private terminal parent, as a real user would, and wait for its exit.
+        // Explicitly relay pipes: shell GUI launches do not inherit them.
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+        ])
+        .arg(encoded)
+        .creation_flags(CREATE_NEW_CONSOLE);
+    Emp::spawn(command)
+}
+
 fn session_window(pid: i32) -> HWND {
     struct Search {
         pid: u32,
@@ -74,7 +130,7 @@ fn closing_the_console_restores_before_windows_terminates_emp() {
     let _serial = CONSOLE.lock().unwrap_or_else(|error| error.into_inner());
     let upstream = Upstream::start();
     let workspace = Workspace::with_routes(&upstream);
-    let mut emp = start(&workspace, CREATE_NEW_CONSOLE);
+    let mut emp = start_in_terminal(&workspace);
     enable(&emp, &workspace);
     // SAFETY: attach only to this test's child and detach before closing its
     // console, so the test runner does not receive CTRL_CLOSE_EVENT itself.

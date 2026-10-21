@@ -405,8 +405,8 @@ def run_created_flow(args: argparse.Namespace, address_space_limit_bytes: int) -
         if not report["shutdown_history_untouched"]:
             fail("configuration-only shutdown modified conversation history")
 
-        # Native restoration never rewrites history. Resume candidates are an
-        # explicit selection, migrated only after their Codex writers close.
+        # This harness retains explicit selected-thread migration coverage;
+        # automatic HTTP/tray restoration has separate lifecycle acceptance.
         report["migrations"] = migrate_selected_threads(
             emp_bin, list(ids.values()), address_space_limit_bytes, env=env, cwd=root,
         )

@@ -215,7 +215,7 @@ fn parse_record(record: &Value, state: &mut Value, routes: &Routes) -> Option<(V
         "history:{}",
         emp_state::usage::identity_hash(&json!([turn, record["timestamp"], model, usage]))
     );
-    event.extend(json!({"observation_id":row_id,"origin":"history","usage_turn":text(state,"turn"),"route_model":model,"route":"responses","usage_category":category,"usage_owner":owner,"upstream_model":upstream,"service_tier":state["tier"].as_str().unwrap_or("default"),"usage_issue":issue}).as_object().unwrap().clone());
+    event.extend(json!({"observation_id":row_id,"origin":"history","session_id":text(state,"thread"),"usage_turn":text(state,"turn"),"route_model":model,"route":"responses","usage_category":category,"usage_owner":owner,"upstream_model":upstream,"service_tier":state["tier"].as_str().unwrap_or("default"),"usage_issue":issue}).as_object().unwrap().clone());
     Some((
         Value::Object(event),
         timestamp.unwrap().unix_timestamp_nanos() as f64 / 1e9,
@@ -346,6 +346,7 @@ impl UsageHistoryScanner {
         let mut offset = 0;
         let mut state = json!({});
         if let Some(saved) = &saved
+            && saved["session_usage_version"] == 1
             && saved["identity"] == identity
             && let Some(position) = saved["offset"].as_u64().filter(|offset| *offset <= size)
             && saved["tail"]
@@ -386,12 +387,12 @@ impl UsageHistoryScanner {
                 Err(_) => state["malformed"] = json!(state["malformed"].as_u64().unwrap_or(0) + 1),
             }
             if events.len() >= 200 {
-                let checkpoint = json!({"identity":identity,"offset":offset,"size":offset,"mtime":mtime as u64,"state":state,"tail":digest(&mut stream,offset.saturating_sub(256),offset.min(256))?});
+                let checkpoint = json!({"session_usage_version":1,"identity":identity,"offset":offset,"size":offset,"mtime":mtime as u64,"state":state,"tail":digest(&mut stream,offset.saturating_sub(256),offset.min(256))?});
                 ledger.record_history(&events, &path.to_string_lossy(), &checkpoint)?;
                 events.clear();
             }
         }
-        let checkpoint = json!({"identity":identity,"offset":offset,"size":size,"mtime":mtime as u64,"state":state,"tail":digest(&mut stream,offset.saturating_sub(256),offset.min(256))?});
+        let checkpoint = json!({"session_usage_version":1,"identity":identity,"offset":offset,"size":size,"mtime":mtime as u64,"state":state,"tail":digest(&mut stream,offset.saturating_sub(256),offset.min(256))?});
         ledger.record_history(&events, &path.to_string_lossy(), &checkpoint)?;
         Ok(true)
     }

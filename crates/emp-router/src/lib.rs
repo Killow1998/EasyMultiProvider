@@ -294,9 +294,16 @@ pub fn observed_protocol(route: &ResolvedRoute) -> Option<Protocol> {
 
 /// Project the exact upstream request judged by EMP's destination context guard.
 pub fn project_external_payload(route: &ResolvedRoute, body: &Value) -> Result<Value, RouterError> {
-    let mut tools = ExternalTools::default();
+    let mut tools = external_tools(route);
     let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
     project_prepared_external_payload(route, prepared.as_ref())
+}
+
+fn external_tools(route: &ResolvedRoute) -> ExternalTools {
+    ExternalTools::with_in_place_loading(
+        route.protocol == Protocol::Responses
+            && emp_protocol::portable_responses::supports_in_place_tools(route.provider.value()),
+    )
 }
 
 fn project_prepared_external_payload(

@@ -61,10 +61,13 @@ jobs:
       - name: Use a real temporary directory
         shell: bash
         run: |
-          path="$(cd "$RUNNER_TEMP" && pwd -P)/emp-package"
-          if [ "$RUNNER_OS" = Windows ]; then path="$(cygpath -w "$path")"; fi
-          mkdir -p "$path"
-          printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\n' "$path" "$path" "$path" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = Windows ]; then
+            package_temp="$(cygpath -w "$(cd "$RUNNER_TEMP" && pwd -P)/emp-package")"
+            mkdir -p "$package_temp"
+          else
+            package_temp="$(mktemp -d /tmp/emp-package.XXXXXX)"
+          fi
+          printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\n' "$package_temp" "$package_temp" "$package_temp" >> "$GITHUB_ENV"
 
       - name: Build and smoke-test native package
         run: cargo +1.93.1 xtask package
@@ -92,7 +95,10 @@ jobs:
       - name: Verify startup recovery and native restoration on exit
         run: >-
           cargo +1.93.1 test --locked -p emp-app
-          --test startup_recovery --test exit_process -- --test-threads=1
+          --test desktop_startup --test startup_recovery --test exit_process -- --test-threads=1
+
+      - name: Verify tray actions preserve admitted requests and publish state
+        run: cargo +1.93.1 test --locked -p emp-app --lib tray::actions::tests -- --test-threads=1
 
       - name: Verify request cancellation and socket teardown
         run: >-
@@ -109,6 +115,10 @@ jobs:
         shell: pwsh
         run: |
           cargo +1.93.1 test --locked -p emp-state --lib update::process::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.93.1 test --locked -p emp-app --lib configured_browser_helpers_never_allocate_a_console
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.93.1 test --locked -p emp-transport --lib background_proxy_commands_never_allocate_a_console
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +1.93.1 test --locked -p emp-state --lib private_windows::tests -- --skip detects_directory_reparse_points
 

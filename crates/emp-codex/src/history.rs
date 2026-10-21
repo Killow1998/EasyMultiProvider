@@ -17,6 +17,7 @@ mod replay;
 mod reverse;
 mod scan;
 mod source;
+pub mod tool_timing;
 mod visible;
 
 #[path = "history_repair.rs"]

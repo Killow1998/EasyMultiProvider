@@ -1,11 +1,86 @@
 //! Restore this service's configuration before its listener goes away.
-use super::{IntegrationState, restore_native_configuration};
+use super::IntegrationState;
 use crate::error::AppError;
 use emp_integration::IntegrationManager;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+pub(crate) fn restore_native_configuration(
+    manager: &IntegrationManager,
+    search: &emp_integration::search::SearchFeatureManager,
+    home: &std::path::Path,
+) -> Result<(emp_integration::IntegrationResult, serde_json::Value), &'static str> {
+    if manager
+        .status()
+        .map_err(|_| "integration_status_unavailable")?
+        .relation
+        == "other"
+    {
+        let result = manager
+            .restore()
+            .map_err(|_| "native_configuration_restore_failed")?;
+        return Ok((result, serde_json::Value::Null));
+    }
+    let migration = emp_codex::history::repair::repair_idle_before_native_restore(home);
+    let (history_lock, report) = match migration {
+        Ok((lock, report)) => (
+            Some(lock),
+            serde_json::json!({"status":if report.threads_deferred == 0 {"complete"} else {"partial"}, "report":report}),
+        ),
+        Err(error) => (
+            None,
+            serde_json::json!({"status":"deferred", "reason":error.reason()}),
+        ),
+    };
+    let path = manager.lease_path().with_file_name("history-restore.json");
+    if let Ok(bytes) = serde_json::to_vec(&serde_json::json!({"codex_home":home,"outcome":report}))
+        && std::fs::read(&path).ok().as_deref() != Some(bytes.as_slice())
+    {
+        let _ = emp_state::atomic_write_private_state(&path, &bytes);
+    }
+    search
+        .restore()
+        .map_err(|_| "search_configuration_restore_failed")?;
+    let result = manager
+        .restore()
+        .map_err(|_| "native_configuration_restore_failed")?;
+    drop(history_lock);
+    Ok((result, report))
+}
+
+pub(super) fn read_history_restore(
+    manager: &IntegrationManager,
+    home: &std::path::Path,
+) -> serde_json::Value {
+    let saved = std::fs::read(manager.lease_path().with_file_name("history-restore.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_default();
+    if saved["codex_home"].as_str() == home.to_str()
+        && matches!(
+            saved["outcome"]["status"].as_str(),
+            Some("partial" | "deferred" | "complete")
+        )
+    {
+        saved["outcome"].clone()
+    } else {
+        serde_json::Value::Null
+    }
+}
+
 impl IntegrationState {
+    pub(crate) fn restore_native_configuration(
+        &self,
+        manager: &IntegrationManager,
+    ) -> Result<emp_integration::IntegrationResult, &'static str> {
+        let (result, report) =
+            restore_native_configuration(manager, &self.search, &self.codex_home)?;
+        if let Ok(mut saved) = self.history_restore.lock() {
+            *saved = report;
+        }
+        Ok(result)
+    }
+
     pub(crate) fn restore_owned(&self) -> Result<(), AppError> {
         self.restore_owned_with(&self.manager, false)
     }
@@ -59,7 +134,7 @@ impl IntegrationState {
                 .restore_owned_fields()
                 .map_err(|_| "native_configuration_restore_failed")
         } else {
-            restore_native_configuration(manager, Some(&self.search))
+            self.restore_native_configuration(manager)
         }
         .map_err(AppError::NativeRestoreBlocked)?;
         if !result.ok() {

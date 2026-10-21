@@ -170,6 +170,7 @@ pub(crate) fn decode_compaction(value: &str) -> Option<String> {
 pub(super) fn portable_input(
     source: Option<&Value>,
     preserve_reasoning_state: bool,
+    in_place_tools: bool,
 ) -> Result<(Value, Vec<String>), PortableProjectionError> {
     let owned;
     let source = match source {
@@ -235,7 +236,12 @@ pub(super) fn portable_input(
                     projected.push(Value::Object(clean));
                 }
             }
-            "additional_tools" => {}
+            "additional_tools" => {
+                if in_place_tools {
+                    projected.push(json!({"type":"additional_tools", "role":"developer",
+                        "tools":super::tools::loaded_tools(item.get("tools"))?}));
+                }
+            }
             "item_reference" => {
                 return Err(error(index, &kind, "opaque_item_reference"));
             }

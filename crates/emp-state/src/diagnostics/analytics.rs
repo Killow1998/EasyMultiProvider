@@ -54,6 +54,10 @@ fn success(event: &Value) -> bool {
 fn metric(records: &[&Value], key: &str) -> (Option<f64>, usize) {
     let mut values = records
         .iter()
+        .filter(|event| {
+            key != "generation_tokens_per_second"
+                || event["generation_ms"].as_u64().is_some_and(|ms| ms >= 100)
+        })
         .filter_map(|event| number(&event[key]).filter(|v| *v > 0.0))
         .collect::<Vec<_>>();
     values.sort_by(f64::total_cmp);
@@ -304,6 +308,7 @@ mod tests {
             "observed_at":observed_at,
             "first_content_ms":first_content_ms,
             "generation_tokens_per_second":generation_tps,
+            "generation_ms":1000,
         })
     }
 
@@ -345,5 +350,11 @@ mod tests {
         assert_eq!(model["ttft_samples"], 2);
         assert_eq!(model["tokens_per_second"], 60.0);
         assert_eq!(model["tps_samples"], 1);
+        let mut burst = record(&stamp, json!(11916), json!(11500.0));
+        burst["generation_ms"] = json!(6);
+        assert_eq!(
+            super::metric(&[&burst], "generation_tokens_per_second"),
+            (None, 0)
+        );
     }
 }

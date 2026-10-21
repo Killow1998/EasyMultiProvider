@@ -13,59 +13,80 @@ pub struct UsageSeriesFilter {
     pub state: Option<String>,
 }
 
+const COUNTERS: [&str; 10] = [
+    "requests",
+    "reported_requests",
+    "priced_requests",
+    "unpriced_requests",
+    "cost_nanos",
+    "input_reports",
+    "output_reports",
+    "cache_reports",
+    "cache_write_reports",
+    "reasoning_reports",
+];
+pub(super) fn sum_fields() -> String {
+    TOKEN_FIELDS
+        .into_iter()
+        .chain(COUNTERS)
+        .map(|field| format!("COALESCE(SUM(u.{field}),0) AS {field}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+pub(super) fn aggregate() -> String {
+    TOKEN_FIELDS.iter().map(|field| format!("SUM(COALESCE(u.{field},0)) AS {field}")).collect::<Vec<_>>().join(",")
+        + ",COUNT(*) AS requests,SUM(u.input_tokens IS NOT NULL AND u.output_tokens IS NOT NULL) AS reported_requests,
+           SUM(u.input_tokens IS NOT NULL) AS input_reports,SUM(u.output_tokens IS NOT NULL) AS output_reports,
+           SUM(u.cached_input_tokens IS NOT NULL) AS cache_reports,SUM(u.cache_write_tokens IS NOT NULL) AS cache_write_reports,
+           SUM(u.reasoning_tokens IS NOT NULL) AS reasoning_reports,
+           SUM(u.cost_nanos IS NOT NULL) AS priced_requests,
+           SUM(u.cost_nanos IS NULL OR u.price_issue IS NOT NULL) AS unpriced_requests,
+           SUM(COALESCE(u.cost_nanos,0)) AS cost_nanos"
+}
+pub(super) fn selection(filter: &UsageSeriesFilter) -> Result<(String, Vec<SqlValue>)> {
+    if !UsageLedger::valid_period(filter.start, filter.end, &filter.category) {
+        return Err(UsageError);
+    }
+    let mut conditions = vec!["u.observed_at >= ?", "u.observed_at < ?"];
+    let mut args = vec![SqlValue::Real(filter.start), SqlValue::Real(filter.end)];
+    for (condition, value) in [
+        (
+            "u.category = ?",
+            (filter.category != "all").then_some(&filter.category),
+        ),
+        ("u.owner = ?", filter.owner.as_ref()),
+        (
+            "u.category = 'external' AND u.owner = ?",
+            filter.provider.as_ref(),
+        ),
+    ] {
+        if let Some(value) = value {
+            conditions.push(condition);
+            args.push(SqlValue::Text(value.clone()));
+        }
+    }
+    if let Some(model) = &filter.model {
+        conditions.push("(u.model = ? OR u.route_model = ?)");
+        args.extend([SqlValue::Text(model.clone()), SqlValue::Text(model.clone())]);
+    }
+    if let Some(session) = &filter.session {
+        conditions.push("u.session_id = ?");
+        args.push(SqlValue::Text(session.clone()));
+    }
+    let mut selection = conditions.join(" AND ");
+    if let Some(state) = &filter.state {
+        selection.push_str(&format!(
+            " AND u.id IN (SELECT json_extract(facts,'$.usage_event_id') FROM {} WHERE state=?)",
+            crate::usage::call_outcome::REPORT_CALLS
+        ));
+        args.push(SqlValue::Text(state.clone()));
+    }
+    Ok((selection, args))
+}
 impl UsageLedger {
     pub fn query_series(&self, filter: &UsageSeriesFilter, now: f64) -> Result<Value> {
-        if !Self::valid_period(filter.start, filter.end, &filter.category) {
-            return Err(UsageError);
-        }
+        let (selection, args) = selection(filter)?;
         let bucket = ((filter.end - filter.start) / 48.0).max(60.0);
-        let mut conditions = vec!["u.observed_at >= ?", "u.observed_at < ?"];
-        let mut args = vec![SqlValue::Real(filter.start), SqlValue::Real(filter.end)];
-        for (condition, value) in [
-            (
-                "u.category = ?",
-                (filter.category != "all").then_some(&filter.category),
-            ),
-            ("u.owner = ?", filter.owner.as_ref()),
-            (
-                "u.category = 'external' AND u.owner = ?",
-                filter.provider.as_ref(),
-            ),
-        ] {
-            if let Some(value) = value {
-                conditions.push(condition);
-                args.push(SqlValue::Text(value.clone()));
-            }
-        }
-        if let Some(model) = &filter.model {
-            conditions.push("(u.model = ? OR u.route_model = ?)");
-            args.extend([SqlValue::Text(model.clone()), SqlValue::Text(model.clone())]);
-        }
-        let mut receipt = Vec::new();
-        if let Some(session) = &filter.session {
-            receipt.push("(session_id = ? OR json_extract(facts,'$.thread_id') = ?)");
-            args.extend([
-                SqlValue::Text(session.clone()),
-                SqlValue::Text(session.clone()),
-            ]);
-        }
-        if let Some(state) = &filter.state {
-            receipt.push("state = ?");
-            args.push(SqlValue::Text(state.clone()));
-        }
-        let mut selection = conditions.join(" AND ");
-        if filter.session.is_some() || filter.state.is_some() {
-            selection.push_str(&format!(
-                " AND u.id IN (SELECT json_extract(facts,'$.usage_event_id') FROM {} WHERE {})",
-                crate::usage::call_outcome::REPORT_CALLS,
-                receipt.join(" AND ")
-            ));
-        }
-        let sums = TOKEN_FIELDS
-            .iter()
-            .map(|field| format!("SUM(COALESCE(u.{field},0)) AS {field}"))
-            .collect::<Vec<_>>()
-            .join(",");
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let connection = self.connect()?;
         let mut query_args = vec![SqlValue::Real(filter.start), SqlValue::Real(bucket)];
@@ -74,18 +95,15 @@ impl UsageLedger {
             &connection,
             &format!(
                 "SELECT CAST((u.observed_at-?)/? AS INTEGER) AS bucket,
-             u.category,u.owner,u.model,{sums},COUNT(*) AS requests,
-             SUM(u.cost_nanos IS NOT NULL) AS priced_requests,
-             SUM(COALESCE(u.cost_nanos,0)) AS cost_nanos
-             FROM {RESOLVED_USAGE} u WHERE {selection}
-             GROUP BY bucket,u.category,u.owner,u.model ORDER BY bucket,u.category,u.owner,u.model"
+             u.category,u.owner,u.model,{}
+             FROM {} u WHERE {selection}
+             GROUP BY bucket,u.category,u.owner,u.model ORDER BY bucket,u.category,u.owner,u.model",
+                aggregate(),
+                sessions::source()
             ),
             &query_args,
         )?;
-        let fields = TOKEN_FIELDS
-            .into_iter()
-            .chain(["requests", "priced_requests", "cost_nanos"])
-            .collect::<Vec<_>>();
+        let fields = TOKEN_FIELDS.into_iter().chain(COUNTERS).collect::<Vec<_>>();
         let mut totals = json!({});
         for field in &fields {
             totals[field] = json!(0);

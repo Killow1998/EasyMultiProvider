@@ -27,12 +27,12 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
     const records = Array.isArray(payload.records) ? payload.records : [];
     const health = payload.health && typeof payload.health === 'object' ? payload.health : {};
     const healthSamples = performanceNumber(health.sample_count) || 0;
-    $('diagnostics_summary').textContent = healthSamples ? tr("reports.health_across_the_latest_requests", {healthSamples:healthSamples}) : tr("reports.aggregates_appear_here_after_a_few_model_calls");
+    $('diagnostics_summary').textContent = healthSamples ? tr("reports.health_across_the_latest_requests", {healthSamples:healthSamples}) : tr(records.length ? "reports.aggregates_appear_here_after_a_few_model_calls" : "reports.no_request_records");
     const fallbackAttempts = performanceNumber(health.fallback_attempt_count) || 0;
     if (fallbackAttempts) $('diagnostics_summary').textContent += tr("reports.transport_fallback_attempts_counted_separately", {fallbackAttempts:fallbackAttempts});
     $('health_summary').innerHTML = healthSamples ? `<div class="health-grid"><div class="health-stat"><span>${tr("reports.success_rate")}</span><strong>${performanceRate(health.success_rate)}</strong><small>${Number(health.success_count || 0).toLocaleString()} / ${Number(health.sample_count || 0).toLocaleString()}</small></div><div class="health-stat"><span>429</span><strong>${performanceRate(health.status_429_rate)}</strong><small>${Number(health.status_429_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>502</span><strong>${performanceRate(health.status_502_rate)}</strong><small>${Number(health.status_502_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>503</span><strong>${performanceRate(health.status_503_rate)}</strong><small>${Number(health.status_503_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>504</span><strong>${performanceRate(health.status_504_rate)}</strong><small>${Number(health.status_504_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>${tr("reports.local_queue_limit")}</span><strong>${performanceRate(health.local_capacity_rate)}</strong><small>${Number(health.local_capacity_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div></div>` : '';
     const failures = records.slice().reverse().filter(record => !['client_disconnect','client_cancelled','client_websocket_close'].includes(record.error_class) && (Number(record.status) >= 400 || (record.error_class && record.error_class !== 'none'))).slice(0, 20);
-    $('diagnostics_records').innerHTML = failures.length ? failures.map(diagnosticFailureHtml).join('') : `<p class="muted">${tr("reports.no_recent_failures")}</p>`;
+    $('diagnostics_records').innerHTML = failures.length ? failures.map(diagnosticFailureHtml).join('') : `<p class="muted">${tr(records.length ? "reports.no_recent_failures" : "reports.no_request_records_advice")}</p>`;
   }
   function diagnosticFailureHtml(record) {
     const status = Number(record.status);
@@ -54,6 +54,8 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
   }
   function diagnosticFailureAdvice(record) {
     if (record.tool_activity || record.output_emitted) return tr("reports.output_arrived_before_interruption_check_the_task_before_retrying");
+    const wait = performanceNumber(record.retry_after_seconds);
+    if (wait !== null) return tr("reports.upstream_retry_after",{seconds:wait.toLocaleString()});
     if (['auth','payment_required'].includes(record.error_class)) return tr("reports.check_the_selected_account_sign_in_provider_key_or");
     if (record.error_class === 'rate_limit') return tr("reports.the_upstream_is_rate_limiting_requests_check_quota_and");
     if (record.error_class === 'proxy_unavailable') return tr("reports.cannot_connect_to_the_configured_proxy_check_that_the");

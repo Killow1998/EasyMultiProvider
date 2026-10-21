@@ -21,10 +21,10 @@ test('Restore Native keeps the page usable and Quit EMP uses a separate action',
   for (const language of ['en', 'zh-CN']) {
     const calls = [], notices = [], modals = [], nodes = new Map();
     let mode = 'emp_applied';
-    const context = vm.createContext({language, integrationBusy:false, esc,
+    const context = vm.createContext({language, integrationBusy:false, integrationInfo:{configuration:{state:mode}}, esc,
       tr:uiTranslate(language),
       $:id => { if(!nodes.has(id)) nodes.set(id,{textContent:''}); return nodes.get(id); },
-      renderIntegrationToggle(){}, renderIntegration:info => { mode=info.configuration.state; },
+      renderIntegrationToggle(){}, renderIntegration:info => { mode=info.configuration.state; context.integrationInfo=info; },
       api:async route => { calls.push(route); mode=route.endsWith('/enable') ? 'emp_applied' : 'native'; return {configuration:{state:mode},runtime:{}}; },
       loadIntegration:async () => ({configuration:{state:mode},runtime:{}}),
       openModal:(...args) => modals.push(args), closeModal(){},

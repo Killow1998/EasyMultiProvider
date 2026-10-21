@@ -588,11 +588,25 @@ fn bootstrap_session(request: Request<'_>, state: &ServerState, now: f64) -> Vec
     else {
         return unauthorized_response();
     };
-    if !state.bootstrap.matches(supplied, now) || !state.bootstrap.consume() {
+    // A tray click issues one fresh link, without persisting another credential
+    // or turning the original ten-minute startup link into a reusable secret.
+    let reopened = state.reopen_bootstrap.lock().ok();
+    let bootstrap = if state.bootstrap.matches(supplied, now) {
+        &state.bootstrap
+    } else if let Some(token) = reopened
+        .as_ref()
+        .and_then(|guard| guard.as_ref())
+        .filter(|token| token.matches(supplied, now))
+    {
+        token
+    } else {
+        return unauthorized_response();
+    };
+    if !bootstrap.consume() {
         return unauthorized_response();
     }
     let Some((token, expires_in)) = state.sessions.rotate(now) else {
-        state.bootstrap.release();
+        bootstrap.release();
         return json_error_response(500, status_text(500), "internal server error", None, &[]);
     };
     let body = serde_json::to_vec(&serde_json::json!({

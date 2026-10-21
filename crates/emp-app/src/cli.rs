@@ -211,6 +211,18 @@ fn serve_error(error: AppError) -> String {
 }
 
 pub(crate) fn run() -> Result<ExitCode, String> {
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().len() == 1
+        && crate::tray::available()
+        && std::env::var_os("EMP_UPDATE_READY").is_none()
+        && std::env::var_os("EMP_UPDATE_RESULT").is_none()
+    {
+        desktop::detach_service().map_err(|error| {
+            crate::tray::startup_error(&error.to_string(), false);
+            error.to_string()
+        })?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let command = match parse_cli(std::env::args().skip(1)) {
         Ok(command) => command,
         Err(error) => {
@@ -248,7 +260,18 @@ pub(crate) fn run() -> Result<ExitCode, String> {
             host,
             port,
             open_browser,
-        } => serve(config, host, port, open_browser).map_err(serve_error)?,
+        } => {
+            let path = config.clone().unwrap_or_else(emp_state::config_path);
+            if let Err(error) = serve(config, host, port, open_browser) {
+                let message = serve_error(error);
+                if open_browser && crate::tray::available() {
+                    let english = emp_state::load_configuration(Some(&path))
+                        .is_ok_and(|config| config["language"] == "en");
+                    crate::tray::startup_error(&message, english);
+                }
+                return Err(message);
+            }
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

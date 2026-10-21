@@ -1,24 +1,30 @@
 //! Streaming rollout parsing and lineage replay for legacy history repair.
 
-use super::{
-    ContextSnapshot, HistoryBound, HistoryRepairError, MAX_LINEAGE_DEPTH, ThreadInfo,
-    file_fingerprint, find_rollout_for_id, resolve_rollout_path, session_roots,
-};
+use super::HistoryRepairError;
+use super::inventory::{ThreadInfo, find_rollout_for_id, resolve_rollout_path, session_roots};
+use super::spool::ContextSnapshot;
+use super::transaction::file_fingerprint;
 use crate::history::{
-    HistoryBase, MAX_ROLLOUT_LINE_BYTES, session_meta_history_base, session_meta_history_mode,
-    session_meta_id, token,
+    HistoryBase, MAX_LINEAGE_SEGMENTS as MAX_LINEAGE_DEPTH, MAX_ROLLOUT_LINE_BYTES,
+    session_meta_history_base, session_meta_history_mode, session_meta_id, token,
 };
 use serde_json::{Map, Value};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
-struct RolloutHeader {
+#[derive(Clone, Copy)]
+pub(super) struct HistoryBound {
+    pub(super) ordinal_exclusive: u64,
+    pub(super) byte_offset: u64,
+}
+
+pub(super) struct RolloutHeader {
     thread_id: String,
     path: PathBuf,
     compressed: bool,
     mode: String,
-    history_base: Option<HistoryBase>,
+    pub(super) history_base: Option<HistoryBase>,
     original_bytes: u64,
 }
 
@@ -34,7 +40,7 @@ pub(super) struct RolloutSummary {
     pub(super) ordinal: Option<u64>,
 }
 
-fn load_rollout_header(
+pub(super) fn load_rollout_header(
     home: &Path,
     info: &ThreadInfo,
 ) -> Result<RolloutHeader, HistoryRepairError> {

@@ -22,9 +22,15 @@ it routes. A self-hosted deployment is neither assumed to match the publisher's
 official limits nor enriched from a family-name guess.
 
 The initial registry covers current notable models from OpenAI, Google Gemini,
-Anthropic, xAI, Meta, Moonshot AI, DeepSeek, and Zhipu AI. OpenRouter contributes
+Anthropic, xAI, Meta, Moonshot AI, DeepSeek, Zhipu AI, and Inception. OpenRouter contributes
 its official Provider contract, while its live `/models` response remains the
 source for its changing model catalog.
+
+The Inception preset uses its Chat Completions endpoint. Mercury 3 defaults cover
+its documented 1,000,000-token context, 131,072-token output limit, text modalities,
+streaming, tools, structured output, and its documented instant/low/medium/high
+efforts. Codex 0.163 accepts model-advertised effort strings; EMP preserves them
+when projecting the model catalogue and the Chat Completions request.
 
 ## Truth precedence
 
@@ -104,3 +110,12 @@ in use. Normal installations need no override.
 - Provider protocols and model capabilities remain separate.
 - Every bundled non-null capability has a primary official source.
 - Package builds include the registry without local configuration or secrets.
+
+On 2026-10-21, Mercury 3 passed isolated browser/backend acceptance: the actual
+service chooser saved its preset and masked key, model discovery filled the
+official limits and capabilities, and two Responses-to-Chat-Completions rounds
+preserved instant/high efforts, streamed text, parallel tool calls and tool
+results. The existing executable read the candidate registry through a local
+override, with only the Inception API root redirected to a synthetic upstream.
+Chinese narrow and English desktop layouts passed. This exercised no real
+Inception account or model quota.

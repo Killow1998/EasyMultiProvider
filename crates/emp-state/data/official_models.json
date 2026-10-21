@@ -251,6 +251,23 @@
       ],
       "reviewed_at": "2026-08-22",
       "notes": "OpenAI-compatible Chat Completions API. International endpoint: https://api.z.ai/api/paas/v4 (documented at docs.z.ai). China endpoint: https://open.bigmodel.cn/api/paas/v4 (documented at https://docs.bigmodel.cn/cn/api/introduction). No documented GET /models endpoint; models are enumerated in the API reference enum field."
+    },
+    {
+      "key": "inception",
+      "display_name": "Inception / Mercury",
+      "role": ["api_provider", "publisher"],
+      "api_base_urls": ["https://api.inceptionlabs.ai/v1"],
+      "auth_modes": ["bearer_api_key"],
+      "supported_protocols": ["chat_completions"],
+      "preferred_protocol": "chat_completions",
+      "model_list_endpoint": "https://api.inceptionlabs.ai/v1/models",
+      "sources": [
+        "https://docs.inceptionlabs.ai/get-started",
+        "https://docs.inceptionlabs.ai/api-reference/models/list-available-models",
+        "https://docs.inceptionlabs.ai/api-reference/chat/create-a-chat-completion"
+      ],
+      "reviewed_at": "2026-10-21",
+      "notes": "OpenAI-compatible Chat Completions with Bearer API keys. Use ordinary streaming; diffusing=true sends intermediate full-text replacements rather than append-only deltas."
     }
   ],
   "models": [
@@ -1408,6 +1425,32 @@
         "https://platform.claude.com/docs/en/models/opus-4-7/overview",
         "https://platform.claude.com/docs/en/build-with-claude/effort",
         "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+      ]}
+    },
+    {
+      "provider_key": "inception",
+      "model_id": "mercury-3",
+      "display_name": "Mercury 3",
+      "reviewed_at": "2026-10-21",
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "supports_reasoning": true,
+      "reasoning_levels": ["instant", "low", "medium", "high"],
+      "reasoning_control": "reasoning_effort",
+      "tool_calling": true,
+      "parallel_tool_calling": true,
+      "structured_output": true,
+      "streaming": true,
+      "protocols": ["chat_completions"],
+      "aliases": [],
+      "sources_by_field": {"all": [
+        "https://docs.inceptionlabs.ai/get-started/models",
+        "https://docs.inceptionlabs.ai/capabilities/reasoning-efforts",
+        "https://docs.inceptionlabs.ai/capabilities/tool-use",
+        "https://docs.inceptionlabs.ai/capabilities/streaming",
+        "https://docs.inceptionlabs.ai/capabilities/structured-outputs"
       ]}
     }
   ]

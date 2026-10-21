@@ -19,7 +19,8 @@ window.EMP_IMPORT_DEMO=()=>{
 };
 let lifecycleDemo=false;
 let lifecycleState='emp_applied';
-const lifecycleInfo=()=>({configuration:{state:lifecycleState},runtime:{state:'not_checked'}});
+let lifecycleHistory=null;
+const lifecycleInfo=()=>({configuration:{state:lifecycleState},runtime:{state:'not_checked'},history_restore:lifecycleHistory});
 const protect=()=>{
   document.getElementById('integration_toggle').disabled=!lifecycleDemo;
   document.querySelector('[data-i18n="quit_emp"]').hidden=!lifecycleDemo;
@@ -35,8 +36,11 @@ window.fetch=async(path,options={})=>{
   const route=String(path).split('?')[0];
   // Lifecycle actions are simulated before even the disposable backend is called.
   if(route==='/api/quit'||route.startsWith('/api/integration')){
-    if(route.endsWith('/restore'))lifecycleState='native';
-    if(route.endsWith('/enable'))lifecycleState='emp_applied';
+    if(route.endsWith('/restore')){
+      lifecycleHistory={status:lifecycleState==='native'?'complete':'partial',report:{threads_repaired:1,threads_deferred:lifecycleState==='native'?0:1}};
+      lifecycleState='native';
+    }
+    if(route.endsWith('/enable')){lifecycleState='emp_applied';lifecycleHistory=null;}
     return new Response(JSON.stringify(route==='/api/quit'?{ok:true}:lifecycleDemo?lifecycleInfo():{configuration:{state:'native'},runtime:{state:'not_checked'}}),{headers:{'Content-Type':'application/json'}});
   }
   if(route.startsWith('/api/accounts/')&&options.method==='DELETE')await new Promise(resolve=>setTimeout(resolve,700));
@@ -45,7 +49,7 @@ window.fetch=async(path,options={})=>{
 const originalRenderIntegration=renderIntegration;
 renderIntegration=function(info){originalRenderIntegration(lifecycleDemo?lifecycleInfo():info);protect();};
 function openLifecycleDemo(){
-  lifecycleDemo=true;lifecycleState='emp_applied';closeModal();renderIntegration(lifecycleInfo());
+  lifecycleDemo=true;lifecycleState='emp_applied';lifecycleHistory=null;closeModal();renderIntegration(lifecycleInfo());
   demoBanner.textContent=tr('生命周期演示 · 恢复、启用和退出均为模拟，不会停止 EMP。','Lifecycle demo · Restore, Enable and Quit are simulated; EMP will not stop.');
   confirmIntegrationAction('restore');
 }
