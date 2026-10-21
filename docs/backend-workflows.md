@@ -115,8 +115,33 @@ reported with the remaining directory. Contracts live in
 | `services/catalog`, `services/account_catalog` | Publish local catalog; separately request existing subscription refresh / fetch and identity-check a subscription catalog | Requested work is not completed work. Source generation and pseudonym identify background outcomes; publication has its own result. No new polling or probes. |
 | `services/migration` | After existing one-use export authorization: encrypt; or decode/decrypt → commit account bundle → publish catalog | Bundle commit and later catalog publication have separate receipts. Passwords and bundles never enter observation. |
 | `services/quota/commands` | Validate account → hold existing account lock → read quota, or explicitly reset then read quota | Reset outcome (`reset`, no credit, nothing to reset, already redeemed) and follow-up read are separate. A failed follow-up read does not cause another reset. |
-| `services/integration/commands` | Confirm → temporarily drain admission for restore → hold operation lock → apply/restore → search step → runtime observation → summary → reopen admission | Restore Native changes configuration and keeps EMP running; the same service can be enabled again. Runtime observation failure does not undo a committed restore. Only the separate quit route requests process exit. |
-| `services/shutdown` | Check update and active-work constraints → restore owned integration → verify native configuration → return readiness | An applied or unresolved previous listener lease keeps EMP running. Readiness is not proof of process exit, client receipt or desktop recovery. HTTP/lifecycle owners perform delivery and stopping. |
+| `services/integration/commands` | Confirm → temporarily drain admission for restore → hold operation lock → convert coordinated idle EMP history with backups → restore search/configuration → runtime observation → summary → reopen admission | Busy or unverified history is deferred without blocking configuration restore. A native WebUI can finish deferred conversion; the same service can be enabled again. Runtime observation failure does not undo a committed restore. Only Quit EMP requests process exit. |
+| `services/shutdown` | Check update and active-work constraints → restore owned integration → verify native configuration → return readiness | An applied or unresolved previous listener lease keeps EMP running. Readiness is not proof of process exit, client receipt or desktop recovery. HTTP, tray and lifecycle owners perform delivery and stopping. |
+
+Desktop menus live in `src/tray`, with separate StatusNotifier, Windows and
+AppKit adapters. Both mouse buttons open the same three-item menu. The
+Linux adapter sets ksni's `MENU_ON_ACTIVATE`; Windows and macOS use tray-icon's
+left/right menu flags. The action
+worker invokes the existing integration and shutdown services directly. HTTP
+restore/quit exempts its own admitted management request; the tray exempts zero
+requests. It never treats a running model request as its own connection.
+Restore Native retains the service and tray. Menu labels follow saved integration
+state and language, and state-changing actions are disabled while a menu operation
+is running. Startup recovery retains the same menu with activation disabled;
+its HTTP worker leaves the main thread available to AppKit.
+
+Integration command completion publishes the existing management invalidation
+event for both HTTP and tray callers, including failed follow-up observations
+after a committed change. Open WebUI pages fetch the current integration state
+without reloading or replacing a dialog. Stream reconnect sends the initial
+snapshot again; focus and the existing disconnected-stream fallback refresh it
+as well. `desktop_tray_started` records successful native event-loop setup.
+
+Open WebUI issues a fresh, single-use ten-minute bootstrap link through one
+in-memory desktop token slot. Replacing that slot invalidates an unopened older
+desktop link. The original startup token, header-based management sessions,
+Host/Origin checks and failed-persistence retry behavior retain their boundaries.
+No new management HTTP endpoint or persisted desktop credential is introduced.
 
 OS exit notifications are owned by `lifecycle/signals` and the Windows session
 window in `lifecycle/windows`. They register before startup integration is

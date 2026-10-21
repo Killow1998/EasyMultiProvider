@@ -17,7 +17,7 @@ impl<'a> ExternalRouter<'a> {
         ids: &ProjectionIds,
     ) -> Result<CompleteResponse, RouterError> {
         request_policy::validate(route, body, false)?;
-        let mut tools = ExternalTools::default();
+        let mut tools = external_tools(route);
         let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
         let body = prepared.as_ref();
         let provider = route.provider.value();
@@ -277,7 +277,7 @@ impl<'a> ExternalRouter<'a> {
     ) -> Result<ExternalStream, RouterError> {
         let request_started = std::time::Instant::now();
         request_policy::validate(route, body, true)?;
-        let mut tools = ExternalTools::default();
+        let mut tools = external_tools(route);
         let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
         let body = prepared.as_ref();
         let provider = route.provider.value();

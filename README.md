@@ -88,13 +88,21 @@ The [package workflow](https://github.com/Killow1998/EasyMultiProvider/actions/w
 
 ### 2. Start EMP
 
-EMP opens an authenticated local Web UI. A successful start prints:
+Desktop launch opens an authenticated local WebUI and keeps an EMP icon in the
+system tray (the menu bar on macOS). Left-click or right-click it for the same
+three actions: **Open WebUI**, **Restore Native / Enable EMP**, and **Quit EMP**.
+Closing the browser leaves EMP running. Restore Native keeps the tray available;
+Quit EMP waits for active requests, restores native settings, and exits.
+The menu follows the language selected in WebUI. Linux desktops need a
+StatusNotifier-compatible tray or panel.
+
+For foreground logs, run `EMP serve`. A successful start prints:
 
 ~~~text
 EMP listening on ...
 ~~~
 
-Keep the EMP process running while using it.
+The service must remain running while EMP routing is enabled.
 
 ### 3. Add what you want to use
 
@@ -105,6 +113,9 @@ In the Web UI, either:
 - or keep only the current native Codex login and use EMP for model visibility and display settings.
 
 For an API Provider, pull the upstream model list, choose the models you want, and optionally edit their context windows.
+
+For Mercury 3, choose **Inception / Mercury**, enter your Inception API key, then
+open **Model settings → Update model list** and select `mercury-3`.
 
 For Claude, open **Add service** and choose **Local subscription** or **CPA**
 in the **Claude Code** section. Both routes require the installed Claude Code CLI.
@@ -140,6 +151,16 @@ provider/model
 With a ChatGPT login, supported Codex clients can pick up catalog changes while
 running. Changes become available on a later request; reopen the model picker if
 a new model is not visible yet.
+
+Confirm the selected source appears in Codex's model picker, then check that a
+request completes under **Statistics → Calls**. A loaded catalog and a successful
+model call verify different parts of the connection.
+
+### Quick tutorials
+
+[Watch the step-by-step GIF tutorials](docs/tutorials.md) for Native model settings,
+imported subscriptions, external API services, and shared import/export controls.
+The recordings use a Chinese interface with Chinese and English captions.
 
 ## What EMP does
 
@@ -219,6 +240,10 @@ EMP records local operational metrics so you can see where your coding-agent usa
 
 - Historical and live token usage by time, account, and Provider.
 - API-equivalent cost estimates with daily price updates.
+- **Statistics > Session bills**: search by session name or ID, sort by recent
+  activity, tokens or estimated USD, and expand model usage and cache reads/writes.
+  Each session, including a subagent session, is counted separately within the
+  selected period. Unknown prices, missing usage and known zero rates stay distinct.
 - Subscription quota snapshots and local trends.
 - Usage grouped by service type and model, with account and service breakdowns.
 - Call details with the session name, selected model, model sent upstream and
@@ -229,7 +254,7 @@ EMP records local operational metrics so you can see where your coding-agent usa
   subtracting reported reasoning tokens. Call details retain end-to-end TPS,
   including waiting and retries. Buffered responses have no estimated generation TPS.
 - Interrupted, failed and delivered outcomes, dispatch counts and retries.
-- Pricing references: price a model with no public price as another model (for example as `gpt-5.5`). Requests that still have no price count as 0 and are listed as such.
+- Pricing references: price a model with no public price as another model (for example as `gpt-5.5`). Records without a known price are marked separately; amounts sum only usage that can be priced.
 
 Performance history survives EMP restarts. Missing upstream cache data is shown as unavailable rather than estimated.
 
@@ -277,7 +302,7 @@ Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/REA
 
 ## Codex compatibility
 
-The current source version is **v0.13.10**.
+The current source version is **v0.13.11**.
 
 Maintenance targets the latest stable Codex minor series and the previous nine;
 patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).
@@ -354,6 +379,19 @@ If using TUN mode, confirm that the proxy software started its TUN interface suc
 with the permissions it requires. System proxy exceptions and TUN routing rules are separate.
 For failed HTTP calls, diagnostics distinguish unavailable proxies, DNS failures, TLS
 failures and connection timeouts, with guidance for the corresponding settings.
+
+### Troubleshooting
+
+| Symptom | Check first | Next step |
+| --- | --- | --- |
+| A model is missing from Codex | EMP model settings and integration status | Select and save the model, enable EMP, then reopen the model picker. If EMP asks you to reopen Codex, finish its current work first. |
+| The client errors, but EMP has no matching call | Client base URL, port and local proxy rules | Confirm the client points to this EMP instance and allows direct local connections. Missing records alone do not identify the cause. |
+| A call is rate limited or interrupted | Statistics call details | Read the upstream retry advice and actual attempts. After output or tool activity, check the task result before deciding to retry. |
+| You want to stop using EMP routing | Tray menu or WebUI | Restore Native keeps EMP available; Quit EMP restores settings and ends the service. |
+
+For a bug report, include EMP/Codex versions, OS, error text, the matching request
+ID and the redacted report downloaded from **Statistics → System diagnostics**.
+Keep API keys, sign-in credentials and full configuration files out of the report.
 
 ## Local security and diagnostics
 

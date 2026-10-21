@@ -27,3 +27,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Native system tray and menus
+
+Windows and macOS use [tray-icon](https://github.com/tauri-apps/tray-icon)
+0.26.1 and [muda](https://github.com/tauri-apps/muda) 0.21.2 under the MIT
+license reproduced above.
+
+Copyright (c) 2022-2022 Tauri Programme within The Commons Conservancy
+
+Linux uses [ksni](https://github.com/iovxw/ksni) 0.3.6 under the Unlicense.

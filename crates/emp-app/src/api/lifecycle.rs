@@ -30,7 +30,7 @@ pub(crate) fn quit_request(
     if let Err(error) = read_json_body(stream, request, body_prefix, state) {
         return (body_error_response(error), false);
     }
-    if let Err(error) = crate::services::shutdown::prepare_quit(request.observation_id, state) {
+    if let Err(error) = crate::services::shutdown::prepare_quit(request.observation_id, state, 1) {
         return (
             json_error_response(409, status_text(409), error.message, error.code, &[]),
             false,

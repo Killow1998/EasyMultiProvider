@@ -12,7 +12,28 @@ python3 -B -m scripts.native_restore_acceptance \
   --root /mnt/test-data/emp-acceptance/created-run-unique
 ```
 
-The created-history flow runs a disposable EMP service and real Codex app-server clients. Codex invokes a real MCP fixture tool, completes an external compaction through EMP, creates a fork before compaction and a fork/grandchild after compaction, then closes before native settings are restored. The harness appends an opaque reasoning probe to each original rollout while leaving the Codex database paths unchanged. EMP resolves the timestamped rollout paths directly; the harness does not create alternate UUID-named lineage files. Provider IDs, account labels, keys, and endpoints are fixture-only; the `OpenAI` display label is the Codex 0.158 compatibility selector for Responses remote-compaction V2, while the configured endpoint remains loopback. A graceful EMP shutdown may already restore native settings; the following restore command may report a no-op only if the exact saved native configuration was verified after shutdown. Shutdown and restore only restore configuration: neither scans nor modifies rollout files. The harness then runs `EMP migrate-history --thread-id ID --json` for each explicitly selected closed fixture conversation. A selected conversation with an active writer is rejected, while unrelated writers do not block migration. Backup and rollout-content assertions apply to these migrations. It resumes the same thread IDs against a local fake native endpoint. Assertions check the upstream fixture requests, actual tool input/result pair, portable summary, opaque reasoning fixture, fork cutoffs, exact native config restoration, pre-restore backups and byte prefixes, and that a second unchanged restore performs no writes.
+The created-history flow runs a disposable EMP service and real Codex app-server
+clients. Codex invokes an MCP fixture, completes external compaction through EMP,
+and creates forks before and after compaction, including a grandchild. It closes
+before native settings are restored. An opaque reasoning probe is appended while
+the original timestamped rollout paths stay unchanged. All provider IDs, keys,
+accounts and endpoints are synthetic; the `OpenAI` display label selects Codex
+0.158's Responses remote-compaction V2, while traffic remains on loopback.
+
+The harness stops EMP by operating-system signal, retaining its fast
+configuration-only exit contract. It then runs `EMP migrate-history --thread-id
+ID --json` for explicitly selected closed conversations before offline Restore.
+A selected active writer is rejected; unrelated writers do not block that
+explicit selection. Offline Restore now also converts eligible idle history;
+after these targeted migrations it should be a history no-op. The separate
+[browser lifecycle acceptance](../shadow_frontend/README.md) checks automatic
+conversion through Restore Native and normal Quit, including deferred writers.
+
+This harness resumes the same thread IDs against a fake native endpoint and
+checks the actual tool pair, summary, opaque reasoning, fork cutoffs, exact
+native settings, byte-exact backups, retained original prefixes and an unchanged
+second restore. A configuration no-op is accepted only after the saved native
+configuration is verified.
 
 Run the old-history restore contract:
 

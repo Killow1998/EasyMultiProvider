@@ -36,7 +36,7 @@ pub(crate) fn management_integration_request(
     };
     let operation = request.raw_path().rsplit('/').next().unwrap_or_default();
     let confirmed = body.get("confirm_reload") == Some(&Value::Bool(true));
-    let reply = commands::execute(request.observation_id, state, operation, confirmed);
+    let reply = commands::execute(request.observation_id, state, operation, confirmed, 1);
     render(reply)
 }
 

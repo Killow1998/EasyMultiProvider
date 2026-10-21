@@ -1,19 +1,54 @@
 # Usage and API-equivalent estimates
 
-Open **Usage** beside **Performance** in the header. Choose Today,
-Last 7 days, Last 30 days, All history, or a custom start/end in the browser's local time.
-Filter Native, Other Subscription, External Provider, or Unknown source.
-Results are grouped by Codex subscriptions, Claude Code/CPA and API, then by
-upstream model ID. Expand a model to see its account/service and tier breakdown.
-Unknown or removed services appear under Other records. Select a daily bar to
-inspect its hours. Idle hours have no usage bars.
+Open **Statistics** and choose the period or a custom start/end in the browser's
+local time. Common service, source-type and model filters apply across Overview,
+Services, Models, Session bills and Calls. Unknown or removed services retain
+their recorded attribution. Historical records are not assigned to today's
+account merely because a route prefix matches.
 
 Click a service badge to open its information and settings. Its lifetime usage
 summary combines rows with the same upstream model ID across dates, service
 tiers and Native/Subscription categories belonging to that verified account.
 Provider summaries include only that provider's records. Input, output and
 priced costs are summed; missing usage remains missing and known zero-cost
-usage remains zero. Use **Usage** for date and category breakdowns.
+usage remains zero. Use **Statistics** for date and category breakdowns.
+
+## Session bills
+
+Choose **Statistics > Session bills** to search session names or IDs and sort by
+recent activity, tokens or estimated USD. The list is paginated; expanding a
+session loads its model breakdown for the same period and filters. Identical
+upstream model IDs are summed across that session's services. Titles come from
+the local Codex index or read-only threads database; unavailable titles use
+**Unnamed session**, with the ID available in the detail.
+
+Each session is counted independently. Subagents are listed under their own
+session IDs and are not silently rolled into a parent bill. The shared accounting
+selection reconciles live and historical observations before aggregation. Cache
+reads/writes and reasoning remain subsets of input/output, not extra tokens to
+add to the total.
+
+Amounts are API-equivalent estimates, not subscription charges or invoices.
+No known price displays **—**; a known zero rate displays **US$0.0000**. An asterisk
+marks a known subtotal when prices or usage fields are missing. Missing output
+or cache data is not replaced with a measured zero. The existing ledger may
+store a zero placeholder for an unknown price; bills check its pricing issue as
+well as the amount so that placeholder cannot be mistaken for a free model.
+
+Session links form a small index beside the existing usage rows. Old call receipts
+populate their verified links on startup. Existing rollout checkpoints receive
+one read-only rescan to populate historical links, with indexing shown in the bill
+view; event IDs, recorded totals and
+frozen rates remain unchanged, and later scans are incremental again. Conflicting
+session evidence and records whose original source is no longer available stay
+unassigned. Their known usage remains in the overall total and is shown separately
+instead of being charged to an arbitrary session.
+
+The authenticated `/api/usage?sessions=true` endpoint accepts the existing period,
+service/source, model and session filters plus `q`, `sort=recent|tokens|cost`,
+`offset` and `limit` (default 20, maximum 100). Model details use the existing
+`series=true&session=ID` projection. Both paths share selection and aggregation;
+there is no second accounting or pricing engine.
 
 ## What is counted
 

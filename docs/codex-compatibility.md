@@ -114,6 +114,21 @@ All ten series passed the common Linux fixture contract. Windows, macOS, App
 and IDE bundled engines need their own acceptance evidence; Linux fixtures do
 not establish real-provider acceptance.
 
+## Candidate idle-history restoration on 2026-10-21
+
+The current unpublished candidate adds idle-history conversion to explicit
+Restore Native, normal Quit and offline Restore. It retains targeted migration
+and the fast configuration-only OS termination path. Busy lineages and
+uncoordinated/unfinished history are deferred without changing their bytes.
+Pending conversion remains accessible in the native WebUI and survives restart.
+
+Focused history contracts and the disposable
+[`e2e_native_history_restore.py`](../scripts/shadow_frontend/e2e_native_history_restore.py)
+cover both directions of active forks, independent idle conversion, restart,
+backups, opaque-state/tool-pair preservation, config conflicts and idempotence.
+This is the candidate lifecycle contract; the dated ten-series results retain
+their original contract and do not represent a new ten-engine run.
+
 ## On-demand migration acceptance on 2026-10-12 UTC
 
 Version 0.13.0 changes native restoration to

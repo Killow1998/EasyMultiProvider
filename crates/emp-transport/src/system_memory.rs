@@ -3,10 +3,14 @@
 use crate::MemoryStatus;
 
 #[cfg(target_os = "linux")]
+mod cgroup;
+
+#[cfg(target_os = "linux")]
 pub fn system_memory_status() -> Option<MemoryStatus> {
     std::fs::read_to_string("/proc/meminfo")
         .ok()
         .and_then(|contents| parse_linux_meminfo(&contents))
+        .map(cgroup::constrain)
 }
 
 #[cfg(windows)]

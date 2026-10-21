@@ -1,0 +1,58 @@
+//! Desktop UI copy follows the saved WebUI language.
+pub(super) struct Copy {
+    pub open: &'static str,
+    pub restore: &'static str,
+    pub enable: &'static str,
+    pub quit: &'static str,
+    pub active: &'static str,
+    pub native: &'static str,
+    pub unresolved: &'static str,
+    pub busy: &'static str,
+    pub failure_title: &'static str,
+    pub active_work: &'static str,
+    pub empty_catalog: &'static str,
+    pub operation_failed: &'static str,
+    pub browser_failed: &'static str,
+    pub tray_unavailable: &'static str,
+    pub startup_failed: &'static str,
+}
+
+pub(super) fn select(english: bool) -> &'static Copy {
+    if english { &EN } else { &ZH }
+}
+
+const ZH: Copy = Copy {
+    open: "打开 WebUI",
+    restore: "恢复原生",
+    enable: "启动 EMP",
+    quit: "退出 EMP",
+    active: "EMP · 已启用",
+    native: "EMP · 原生模式",
+    unresolved: "EMP · 请在 WebUI 中检查配置",
+    busy: "EMP · 正在处理，请稍候",
+    failure_title: "EMP 操作未完成",
+    active_work: "EMP 仍在运行。请先结束正在进行的对话，再重试。",
+    empty_catalog: "请先在 WebUI 中启用至少一个模型，再启动 EMP。",
+    operation_failed: "EMP 仍在运行。请在 WebUI 中检查配置后重试。",
+    browser_failed: "无法打开浏览器。请检查系统默认浏览器设置后重试。",
+    tray_unavailable: "无法显示 EMP 图标，程序仍在运行。请通过 WebUI 退出 EMP，并检查系统托盘是否可用。",
+    startup_failed: "EMP 遇到问题",
+};
+
+const EN: Copy = Copy {
+    open: "Open WebUI",
+    restore: "Restore Native",
+    enable: "Enable EMP",
+    quit: "Quit EMP",
+    active: "EMP · Enabled",
+    native: "EMP · Native mode",
+    unresolved: "EMP · Check configuration in WebUI",
+    busy: "EMP · Working, please wait",
+    failure_title: "EMP could not complete the action",
+    active_work: "EMP is still running. Finish active conversations, then try again.",
+    empty_catalog: "Enable at least one model in WebUI before enabling EMP.",
+    operation_failed: "EMP is still running. Check the configuration in WebUI, then try again.",
+    browser_failed: "The browser could not open. Check the system's default browser settings, then try again.",
+    tray_unavailable: "EMP could not show its tray icon. It is still running; use WebUI to quit and check your desktop's tray support.",
+    startup_failed: "EMP needs attention",
+};

@@ -34,6 +34,7 @@ pub(crate) struct ServerState {
     pub(crate) sessions: Arc<SessionStore>,
     pub(crate) connection_admission: crate::services::connection_admission::ConnectionAdmission,
     pub(crate) bootstrap: BootstrapToken,
+    pub(crate) reopen_bootstrap: Mutex<Option<BootstrapToken>>,
     pub(crate) backend: BackendState,
     pub(crate) port: u16,
     pub(crate) base_url: String,
@@ -41,6 +42,20 @@ pub(crate) struct ServerState {
 }
 
 impl ServerState {
+    pub(crate) fn reopen_url(&self) -> Result<String, AppError> {
+        let token = BootstrapToken {
+            token: crate::util::random_hex(emp_state::WEB_SESSION_TOKEN_BYTES)?,
+            used: AtomicBool::new(false),
+            expires_at: crate::util::system_now() + crate::http::auth::BOOTSTRAP_LIFETIME_SECONDS,
+        };
+        let url = format!("http://127.0.0.1:{}/?bootstrap={}", self.port, token.token);
+        *self
+            .reopen_bootstrap
+            .lock()
+            .map_err(|_| AppError::ServerStopped)? = Some(token);
+        Ok(url)
+    }
+
     pub(crate) fn request_shutdown(&self) {
         self.shutdown
             .store(true, std::sync::atomic::Ordering::Release);

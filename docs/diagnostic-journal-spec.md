@@ -30,6 +30,11 @@ External HTTP/SSE/WebSocket-open retries and protocol fallback record the
 request ID, attempt, delay and fixed failure class. Native reconnect,
 account-refresh and reasoning fallback record the decision, including a failed
 refresh that does not retry. Retries do not add extra usage-ledger entries.
+Durable call facts retain normalized `retry_after_seconds` advice and the
+`delay_ms` planned for each retry. A scheduled retry can be cancelled before
+dispatch; actual retry counts come from `attempts`, not the length of `retries`.
+Missing values remain unknown. Recorded `output_emitted` and `tool_activity`
+support checking the task before retrying; they are not client acknowledgements.
 Connection admission and worker-spawn rejection, sideband command admission /
 write confirmation / failure, history scan queue / start / completion, and
 price-refresh start / result are also recorded. Scan records use a local command
@@ -355,8 +360,11 @@ nonempty text, refusal or tool-argument delta. Reports use this as TTFT; empty
 items and reasoning do not count. `generation_ms` spans the first-to-last such
 delta, and `generation_tokens_per_second` divides output tokens minus reported
 reasoning tokens by that interval. Missing reasoning usage is treated as zero.
-Only successful streams with a positive interval and no retry contribute a
-generation rate; buffered output and a single coalesced batch remain unknown.
+Only successful streams with an interval of at least 100 ms and no retry contribute
+a generation rate; buffered output and short coalesced bursts remain unknown.
+Each raw event is observed once. The read projection also excludes historical
+sub-100-ms generation rates from details, averages and trends without rewriting
+the stored receipts. This is an observation-quality rule, not a maximum TPS cap.
 Terminal-event waiting is excluded. `tokens_per_second` retains the whole-call
 rate, including reasoning, preparation and retry waits, for call details and old
 consumers. Report summaries, model groups and time buckets expose the generation
@@ -367,6 +375,17 @@ Timings are collected before protocol projection without retaining output
 content. Chunk batching means this is an observed delivery estimate, not a GPU
 measurement or proof that EMP caused a slowdown. The first-visible-token and
 generation-interval distinction follows the [Codex Radar methodology](https://codexradar.com/en/).
+
+Call details additionally expose `turn_tool_ms`, resolved read-only from local
+Codex `item_completed` records with explicit start/end timestamps and matching
+thread/turn identities. This is a whole-turn value, repeated on that turn's call
+details, not part of each model request's duration. Concurrent tool intervals are
+unioned rather than summed; missing or invalid timestamps remain unavailable.
+The reader uses the existing thread index and containment checks, caches only
+numeric intervals, and bounds each read to the last 8 MiB, 16 sessions and 128
+turns per file. A turn without its start inside that window is unavailable.
+Remote-client histories, compressed files and unsupported client records are not
+estimated from gaps between requests. No tool arguments or output reach reports.
 
 Low-frequency management operations should record only outcome metadata:
 

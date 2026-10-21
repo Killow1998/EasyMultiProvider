@@ -167,13 +167,6 @@ impl<'a> RequestOutcome<'a> {
             .get("response")
             .filter(|value| value.is_object())
             .unwrap_or(event);
-        if self.event["dialect"] == "codex_native" && !self.source_clock {
-            self.models.observe(
-                event,
-                !self.buffered && !self.source_clock && self.event["transport"] != "http",
-            );
-            self.update_model_facts();
-        }
         let kind = event["type"].as_str().unwrap_or("");
         if let Some(status) = response["status"]
             .as_str()
@@ -188,9 +181,13 @@ impl<'a> RequestOutcome<'a> {
         if tool {
             self.event["tool_activity"] = json!(true);
         }
-        if !self.buffered && !self.source_clock && self.event["transport"] != "http" {
-            self.models.observe(event, true);
+        if !self.source_clock {
+            self.models
+                .observe(event, !self.buffered && self.event["transport"] != "http");
             self.first_token = self.models.first_output;
+            if self.event["dialect"] == "codex_native" {
+                self.update_model_facts();
+            }
         }
         if !kind.is_empty() && self.event.get("upstream_first_event_ms").is_none() {
             self.event["upstream_first_event_ms"] =
@@ -326,6 +323,7 @@ impl<'a> RequestOutcome<'a> {
         self.event["error_origin"] = json!(crate::services::error_origin::router(error));
         self.status(error.status(), error.error_class().as_str());
         self.event["failure_reason"] = json!(error.failure_reason());
+        self.event["retry_after_seconds"] = json!(error.retry_after_seconds());
     }
     pub(crate) fn native_error(&mut self, error: &emp_router::native_http::NativeHttpError) {
         self.event["error_origin"] = error.body["error"]["origin"].clone();
@@ -336,6 +334,8 @@ impl<'a> RequestOutcome<'a> {
                 .unwrap_or_else(|| emp_transport::status_error_class(Some(error.status)).as_str()),
         );
         self.event["failure_reason"] = error.body["error"]["failure_reason"].clone();
+        self.event["retry_after_seconds"] =
+            json!(error.body["error"]["retry_after_seconds"].as_u64());
     }
     pub(crate) fn disconnected(&mut self) {
         self.event["error_origin"] = json!("client");

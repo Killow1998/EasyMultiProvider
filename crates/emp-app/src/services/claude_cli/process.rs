@@ -16,6 +16,7 @@ const CLI_TIMEOUT: Duration = Duration::from_secs(10);
 const CHILD_POLL: Duration = Duration::from_millis(25);
 const AUTH_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 
+mod admission;
 mod command;
 pub(super) use command::{
     CommandConfig, InputFormat, InvocationMode, LocalCommandConfig, auth_status_command, command,
@@ -104,6 +105,14 @@ pub(super) enum CancellationReason {
     Steering,
 }
 
+fn cancellation_error(reason: CancellationReason) -> &'static str {
+    match reason {
+        CancellationReason::DownstreamDisconnected => "claude_cli_disconnected",
+        CancellationReason::ServerShutdown => "claude_cli_shutdown",
+        CancellationReason::Steering => "claude_cli_interrupted",
+    }
+}
+
 fn run_with_timeout_policy(
     mut command: Command,
     input: Arc<[u8]>,
@@ -113,6 +122,7 @@ fn run_with_timeout_policy(
     mut cancellation_requested: impl FnMut() -> Option<CancellationReason>,
     inspect_output: impl FnOnce(&[u8]),
 ) -> Result<Vec<u8>, &'static str> {
+    let _permit = admission::acquire(cancelled, &mut cancellation_requested)?;
     thread::scope(|scope| {
         let child = command.spawn().map_err(|_| "claude_cli_spawn_failed")?;
         let mut tree = ChildTree::new(child)?;
@@ -171,11 +181,7 @@ fn run_with_timeout_policy(
         let too_large = stdout.too_large || stderr.too_large;
         drop(stderr.bytes);
         if let Some(reason) = cancellation_reason {
-            return Err(match reason {
-                CancellationReason::DownstreamDisconnected => "claude_cli_disconnected",
-                CancellationReason::ServerShutdown => "claude_cli_shutdown",
-                CancellationReason::Steering => "claude_cli_interrupted",
-            });
+            return Err(cancellation_error(reason));
         }
         if timed_out {
             return Err("claude_cli_timeout");

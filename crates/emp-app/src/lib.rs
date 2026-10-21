@@ -7,6 +7,7 @@ mod http;
 mod lifecycle;
 mod services;
 mod startup_recovery;
+mod tray;
 mod util;
 mod web;
 

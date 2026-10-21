@@ -44,9 +44,13 @@ fn collect_tools(
 
 pub(super) fn raw_tools(
     body: &Map<String, Value>,
+    include_loaded: bool,
 ) -> Result<Vec<RawTool>, PortableProjectionError> {
     let mut result = Vec::new();
     collect_tools(&mut result, body.get("tools"), &[])?;
+    if !include_loaded {
+        return Ok(result);
+    }
     let owned;
     let source: &[Value] = match body.get("input") {
         Some(Value::Object(item)) => {
@@ -62,6 +66,15 @@ pub(super) fn raw_tools(
         }
     }
     Ok(result)
+}
+
+pub(super) fn loaded_tools(source: Option<&Value>) -> Result<Vec<Value>, PortableProjectionError> {
+    if !source.is_some_and(Value::is_array) {
+        return Err(error(0, "additional_tools", "invalid_tools"));
+    }
+    let mut result = Vec::new();
+    collect_tools(&mut result, source, &[])?;
+    portable_tools(result)
 }
 
 pub(super) fn portable_tools(source: Vec<RawTool>) -> Result<Vec<Value>, PortableProjectionError> {

@@ -14,6 +14,7 @@ struct Identity {
 
 #[derive(Debug, Default)]
 pub struct ExternalTools {
+    preserve_loads: bool,
     identities: BTreeMap<String, Identity>,
     search_name: Option<String>,
     search_indices: BTreeSet<String>,
@@ -21,6 +22,12 @@ pub struct ExternalTools {
 }
 
 impl ExternalTools {
+    pub fn with_in_place_loading(preserve_loads: bool) -> Self {
+        Self {
+            preserve_loads,
+            ..Self::default()
+        }
+    }
     fn has_request_state(&self) -> bool {
         !self.identities.is_empty()
             || self.search_name.is_some()
@@ -135,20 +142,26 @@ impl ExternalTools {
         let mut result = body.clone();
         let mut definitions =
             self.definitions(body.get("tools").unwrap_or(&json!([])), None, "")?;
-        let items = match body.get("input") {
-            Some(Value::Array(items)) => Some(items.clone()),
-            Some(Value::Object(_)) => Some(vec![body["input"].clone()]),
-            _ => None,
-        };
+        let items = result
+            .get_mut("input")
+            .filter(|input| input.is_array() || input.is_object())
+            .map(|input| match input.take() {
+                Value::Array(items) => items,
+                item => vec![item],
+            });
         if let Some(items) = items {
-            let mut converted = Vec::new();
+            let mut converted = Vec::with_capacity(items.len());
             for mut item in items {
                 match item["type"].as_str() {
                     Some("additional_tools" | "tool_search_output") => {
                         let loaded =
                             self.definitions(item.get("tools").unwrap_or(&json!([])), None, "")?;
-                        definitions.extend(loaded.clone());
                         if item["type"] == "additional_tools" {
+                            if self.preserve_loads {
+                                converted.push(json!({"type":"additional_tools", "role":"developer", "tools":loaded}));
+                            } else {
+                                definitions.extend(loaded);
+                            }
                             continue;
                         }
                         if item["execution"] != "client"
@@ -158,6 +171,12 @@ impl ExternalTools {
                         }
                         item = json!({"type":"function_call_output", "call_id":item["call_id"],
                             "output":format!("{{\"status\": {}, \"tools\": {}}}", python_json(&item["status"]), python_json(&json!(loaded)))});
+                        if self.preserve_loads {
+                            converted.push(item);
+                            converted.push(json!({"type":"additional_tools", "role":"developer", "tools":loaded}));
+                            continue;
+                        }
+                        definitions.extend(loaded);
                     }
                     Some("tool_search_call") => {
                         if item["execution"] != "client"
@@ -180,26 +199,12 @@ impl ExternalTools {
                 }
                 converted.push(item);
             }
-            result["input"] = json!(converted);
+            result["input"] = Value::Array(converted);
         }
+        definitions =
+            definitions::unique_definitions(definitions, &result["input"], self.preserve_loads)?;
         if body.get("tools").is_some() || !definitions.is_empty() {
-            let mut unique: Vec<(String, Value)> = Vec::new();
-            for tool in definitions {
-                let definition = tool.get("function").unwrap_or(&tool);
-                let key = definition
-                    .get("name")
-                    .filter(|v| !v.is_null())
-                    .map(Value::to_string)
-                    .unwrap_or_else(|| python_json(&tool));
-                if let Some((_, previous)) = unique.iter().find(|(name, _)| name == &key) {
-                    if previous != &tool {
-                        return Err("request projection failed: conflicting tool definitions");
-                    }
-                } else {
-                    unique.push((key, tool));
-                }
-            }
-            result["tools"] = json!(unique.into_iter().map(|(_, tool)| tool).collect::<Vec<_>>());
+            result["tools"] = Value::Array(definitions);
         }
         if let Some(mut choice) = result.get("tool_choice").filter(|v| v.is_object()).cloned() {
             if choice["type"] == "allowed_tools" {
@@ -214,12 +219,25 @@ impl ExternalTools {
                     .flatten()
                     .filter_map(|v| v["name"].as_str())
                     .collect::<BTreeSet<_>>();
+                let allowed_tool = |tool: &Value| {
+                    tool.get("function").unwrap_or(tool)["name"]
+                        .as_str()
+                        .is_some_and(|name| allowed.contains(name))
+                };
                 if let Some(tools) = result["tools"].as_array_mut() {
-                    tools.retain(|tool| {
-                        tool.get("function").unwrap_or(tool)["name"]
-                            .as_str()
-                            .is_some_and(|name| allowed.contains(name))
-                    });
+                    tools.retain(&allowed_tool);
+                }
+                if self.preserve_loads
+                    && let Some(input) = result["input"].as_array_mut()
+                {
+                    for item in input
+                        .iter_mut()
+                        .filter(|item| item["type"] == "additional_tools")
+                    {
+                        if let Some(tools) = item["tools"].as_array_mut() {
+                            tools.retain(&allowed_tool);
+                        }
+                    }
                 }
                 result["tool_choice"] = choice.get("mode").cloned().unwrap_or(json!("auto"));
             } else {

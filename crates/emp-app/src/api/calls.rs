@@ -74,10 +74,31 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
         .usage
         .sessions
         .resolve(&state.backend.accounts.codex_home, &ids);
+    let queries = report["records"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            Some((
+                row["session_id"].as_str()?.to_owned(),
+                row["turn_id"].as_str()?.to_owned(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let tool_timings = state
+        .backend
+        .usage
+        .tool_timings
+        .resolve(&state.backend.accounts.codex_home, &queries);
     for row in report["records"].as_array_mut().into_iter().flatten() {
         if let Some(name) = row["session_id"].as_str().and_then(|id| names.get(id)) {
             row["session_name"] = json!(name);
         }
+        let key = (
+            row["session_id"].as_str().unwrap_or_default().to_owned(),
+            row["turn_id"].as_str().unwrap_or_default().to_owned(),
+        );
+        row["turn_tool_ms"] = json!(tool_timings.get(&key));
     }
     response(
         "HTTP/1.1 200 OK",

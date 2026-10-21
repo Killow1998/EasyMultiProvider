@@ -29,8 +29,54 @@ pub(crate) fn run(config: &Path, error: &AppError, open_browser: bool) -> Result
         crate::cli::desktop::open_browser(&url);
     }
     let reason = issue(error);
+    let english =
+        emp_state::load_configuration(Some(config)).is_ok_and(|config| config["language"] == "en");
+    if let Some(mut tray) = open_browser
+        .then(|| crate::tray::Recovery::new(url, english))
+        .flatten()
+    {
+        let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_stopped = stopped.clone();
+        let config = config.to_path_buf();
+        let worker = std::thread::Builder::new()
+            .name("emp-recovery".to_owned())
+            .spawn(move || serve(listener, &config, reason, &token, &worker_stopped))?;
+        while !worker.is_finished() {
+            if !tray.poll() {
+                stopped.store(true, std::sync::atomic::Ordering::Release);
+                let _ = TcpStream::connect(("127.0.0.1", port));
+                break;
+            }
+        }
+        let result = worker.join().map_err(|_| AppError::ServerStopped)?;
+        return if stopped.load(std::sync::atomic::Ordering::Acquire) {
+            Ok(false)
+        } else {
+            result
+        };
+    }
+    serve(
+        listener,
+        config,
+        reason,
+        &token,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+}
+
+fn serve(
+    listener: TcpListener,
+    config: &Path,
+    reason: &str,
+    token: &str,
+    stopped: &std::sync::atomic::AtomicBool,
+) -> Result<bool, AppError> {
+    let port = listener.local_addr()?.port();
     for stream in listener.incoming() {
         let mut stream = stream?;
+        if stopped.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(false);
+        }
         stream.set_write_timeout(Some(Duration::from_secs(3)))?;
         let Some(raw) =
             read_request_head_before(&mut stream, Instant::now() + Duration::from_secs(3))

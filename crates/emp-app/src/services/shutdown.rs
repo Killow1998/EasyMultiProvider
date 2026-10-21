@@ -11,6 +11,7 @@ pub(crate) struct ShutdownError {
 pub(crate) fn prepare_quit(
     request_id: Option<&str>,
     state: &ServerState,
+    management_connections: usize,
 ) -> Result<(), ShutdownError> {
     observe(&state.backend.diagnostics, request_id, "quit", |receipt| {
         if matches!(
@@ -24,7 +25,7 @@ pub(crate) fn prepare_quit(
         }
         let Some(restore_gate) = state
             .connection_admission
-            .quiesce(1, Duration::from_secs(15))
+            .quiesce(management_connections, Duration::from_secs(15))
         else {
             return Err(ShutdownError {
                 code: Some("active_conversations"),

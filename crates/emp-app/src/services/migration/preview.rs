@@ -171,7 +171,26 @@ pub(crate) fn preview_request(
                 cache.remove(session, token);
                 return Ok(result);
             }
-            preview(state, &payload, token, &body["preference_choices"])
+            crate::services::observation::operation::observe(
+                &state.backend.diagnostics,
+                request_id,
+                "migration_preview",
+                |receipt| {
+                    let current = receipt.step("read_configuration", || read_config(state))?;
+                    let resolution = receipt.step("resolve_preferences", || {
+                        preferences::resolve(
+                            state,
+                            &current,
+                            &payload,
+                            &body["preference_choices"],
+                            false,
+                        )
+                    })?;
+                    receipt.step("build_preview", || {
+                        preview(state, &current, resolution, token)
+                    })
+                },
+            )
         }
         _ => Err(MigrationError::invalid("Unknown migration operation")),
     }
@@ -179,15 +198,13 @@ pub(crate) fn preview_request(
 
 fn preview(
     state: &ServerState,
-    payload: &Value,
+    current: &Value,
+    resolution: preferences::Resolution,
     token: &str,
-    choices: &Value,
 ) -> Result<Value, MigrationError> {
-    let current = read_config(state)?;
-    let resolution = preferences::resolve(state, &current, payload, choices, false)?;
     let payload = &resolution.payload;
     let (mut config, auth, summary) = emp_state::migration::preview_migration_import(
-        &current,
+        current,
         payload,
         &state.backend.configuration.config_path,
         &state.backend.configuration.vault,

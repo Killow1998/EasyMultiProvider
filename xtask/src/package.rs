@@ -703,7 +703,7 @@ fn info_plist(version: &str) -> String {
     for (key, value) in strings {
         plist.push_str(&format!("\t<key>{key}</key>\n\t<string>{value}</string>\n"));
     }
-    plist.push_str("\t<key>NSHighResolutionCapable</key>\n\t<true/>\n</dict>\n</plist>\n");
+    plist.push_str("\t<key>LSUIElement</key>\n\t<true/>\n\t<key>NSHighResolutionCapable</key>\n\t<true/>\n</dict>\n</plist>\n");
     plist
 }
 
@@ -720,7 +720,7 @@ fn write_macos_app(destination: &Path, executable: &Path, icon: &Path) -> Result
     let scripts = [
         (
             launchers.join(PRODUCT_NAME),
-            "#!/bin/sh\nset -eu\ncontents_dir=$(CDPATH= cd \"$(dirname \"$0\")/..\" && pwd)\nexec /usr/bin/open -a Terminal \"$contents_dir/Resources/launch.command\"\n",
+            "#!/bin/sh\nset -eu\ncontents_dir=$(CDPATH= cd \"$(dirname \"$0\")/..\" && pwd)\nexec \"$contents_dir/Resources/launch.command\"\n",
         ),
         (
             resources.join("launch.command"),
@@ -964,7 +964,7 @@ echo created"#,
         let mut sorted = keys.clone();
         sorted.sort_unstable();
         assert_eq!(keys, sorted);
-        assert_eq!(keys.len(), 11);
+        assert!(plist.contains("<key>LSUIElement</key>\n\t<true/>"));
     }
 
     #[test]

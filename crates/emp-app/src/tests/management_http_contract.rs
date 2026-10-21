@@ -250,8 +250,8 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     assert!(applied.contains("model_catalog_json"));
     assert!(applied.contains("[features]\nweb_search = true"));
 
-    // Restoring configuration never scans or edits even unknown legacy logs,
-    // and an unrelated open conversation is not a configuration blocker.
+    // Uncoordinated or unknown history stays intact, and an unrelated open
+    // conversation is not a configuration blocker.
     let sessions = root.join("sessions");
     std::fs::create_dir_all(&sessions).unwrap();
     let old_history = sessions.join("old.jsonl");

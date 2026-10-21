@@ -11,6 +11,11 @@ pub(crate) enum ClaudeCliError {
 
 pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'static str) {
     match code {
+        "claude_cli_capacity_unavailable" => (
+            503,
+            code,
+            "Claude Code is waiting for available process memory. Other requests are still running; retry after they finish.",
+        ),
         "claude_cli_unavailable" => (
             503,
             "claude_cli_unavailable",

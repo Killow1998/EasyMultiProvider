@@ -39,12 +39,14 @@ def candidate_frontend(stack, backend, web, index_extra="", port=0, index_head="
                 body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
                 if path == '/api/migration/preview' and self.server.preview_gate:
                     self.server.preview_started.set()
-                    self.server.preview_gate.wait(10)
+                    self.server.preview_gate.wait(60)
                 headers = {key: value for key, value in self.headers.items()
                            if key.lower() not in {'host', 'origin', 'connection'}}
                 if 'Origin' in self.headers:
                     headers['Origin'] = backend
-                connection = http.client.HTTPConnection(destination.hostname, destination.port, timeout=15)
+                # Unoptimized scrypt is slow; preview generation keeps its normal deadline.
+                timeout = 90 if path in {'/api/migration/decode', '/api/migration/export'} else 15
+                connection = http.client.HTTPConnection(destination.hostname, destination.port, timeout=timeout)
                 try:
                     connection.request(self.command, self.path, body=body, headers=headers)
                     response = connection.getresponse()

@@ -417,6 +417,7 @@ fn verify_local_subscription(
                 "claude_cli_disconnected" => ClaudeCliError::Disconnected,
                 "claude_cli_shutdown" => ClaudeCliError::ShuttingDown,
                 "claude_cli_interrupted" => ClaudeCliError::Failure("claude_cli_interrupted"),
+                "claude_cli_capacity_unavailable" => ClaudeCliError::Failure(code),
                 "claude_cli_timeout" => ClaudeCliError::Failure("claude_cli_auth_status_timeout"),
                 _ => ClaudeCliError::Failure("claude_cli_auth_status_unavailable"),
             })?;

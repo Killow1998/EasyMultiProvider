@@ -59,11 +59,19 @@ impl RequestOutcome<'_> {
         }
     }
 
-    fn retry_fact(&mut self, reason: &str, status: u16) {
+    fn retry_fact(
+        &mut self,
+        reason: &str,
+        status: u16,
+        delay: Option<std::time::Duration>,
+        retry_after: Option<u64>,
+    ) {
         let retries = self.event["retries"].as_array_mut().unwrap();
         if retries.len() < 16 {
             retries.push(
-                json!({"reason":reason,"status":status,"at":crate::util::system_now() as u64}),
+                json!({"reason":reason,"status":status,"at":crate::util::system_now() as u64,
+                    "delay_ms":delay.map(|value| value.as_millis() as u64),
+                    "retry_after_seconds":retry_after}),
             );
         }
         self.publish(false);
@@ -83,7 +91,12 @@ impl RequestOutcome<'_> {
         } else {
             error.error_class().as_str()
         };
-        self.retry_fact(reason, error.status());
+        self.retry_fact(
+            reason,
+            error.status(),
+            Some(delay),
+            error.retry_after_seconds(),
+        );
         crate::services::observation::retry_scheduled(
             self.state,
             &self.event["request_id"],
@@ -102,7 +115,7 @@ impl RequestOutcome<'_> {
             NativeRetryReason::ReasoningFallback => "reasoning_fallback",
         };
         if decision.retry {
-            self.retry_fact(reason, decision.status);
+            self.retry_fact(reason, decision.status, None, None);
         }
         self.state.backend.diagnostics.journal.event(
             "info",

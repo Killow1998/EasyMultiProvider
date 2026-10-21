@@ -3,7 +3,12 @@ pub(super) fn text(command: Option<&str>) -> String {
     match command {
         Some("migrate-history") => "usage: EMP migrate-history --thread-id THREAD_ID [--json]\n\nMigrate one closed legacy EMP conversation for direct native Codex resume.\nKeeps a transactional backup; does not change Codex configuration or other conversations.\nOnly converts EMP-owned checkpoints; cannot decrypt native encrypted agent messages.\n".to_owned(),
         Some("serve") => "usage: EMP serve [-h] [--config CONFIG] [--host HOST] [--port PORT]\n\noptions:\n  -h, --help       show this help message and exit\n  --config CONFIG  EMP JSON configuration path\n  --host HOST      override the local listen host\n  --port PORT      override the local listen port\n".to_owned(),
-        Some(name @ ("doctor" | "restore")) => format!("usage: EMP {name} [-h] [--state-dir STATE_DIR] [--json]\n\noptions:\n  -h, --help            show this help message and exit\n  --state-dir STATE_DIR\n                        EMP local state directory (default: CODEX_HOME/easy-\n                        multi-provider/integration; relative explicit values\n                        resolve from cwd)\n  --json                print the operation result as JSON\n"),
+        Some(name @ ("doctor" | "restore")) => {
+            let description = if name == "restore" {
+                "Restore native Codex fields and convert coordinated idle EMP history with backups.\nBusy or unverified history stays unchanged. No model requests are made."
+            } else { "Read Codex integration status without changing configuration or history." };
+            format!("usage: EMP {name} [-h] [--state-dir STATE_DIR] [--json]\n\n{description}\n\noptions:\n  -h, --help            show this help message and exit\n  --state-dir STATE_DIR\n                        EMP local state directory (default: CODEX_HOME/easy-\n                        multi-provider/integration; relative explicit values\n                        resolve from cwd)\n  --json                print the operation result as JSON\n")
+        },
         _ => "usage: EMP [-h] [--version] COMMAND ...\n\nEMP Runtime Control Plane commands\n\npositional arguments:\n  COMMAND\n    serve     start the existing EMP service\n    doctor    read Codex integration status without starting a service\n    restore   restore native Codex fields without starting a service\n    migrate-history  migrate one closed legacy conversation for native resume\n\noptions:\n  -h, --help  show this help message and exit\n  --version   show program's version number and exit\n".to_owned(),
     }
 }

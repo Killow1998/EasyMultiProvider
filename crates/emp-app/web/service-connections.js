@@ -113,7 +113,7 @@ function chooseOfficialProvider(key, serviceContext = null, navigation = {}) {
   const preset = presets[key]; const existing = (getState().providers || []).find(p => p.id === preset.id);
   if (existing?.execution_backend === 'claude_cli') return editClaudeProvider(existing, serviceContext, navigation);
   const keyField = preset.auth_mode === 'forward' ? `<p class="muted">${tr("services.use_codex_sign_in")}</p>` : apiKeyField('modal_provider_key', existing?.api_key_set);
-  openModal(tr("services.configure") + preset.name, `<p class="muted">Endpoint: <code>${esc(preset.base_url)}</code><br>${tr("reports.protocol")}: ${esc(protocolLabel(preset.protocol))}<br>${tr("services.authentication")}: ${esc(authLabel(preset.auth_mode))}</p>${keyField}`, tr("services.save_service"), async () => {
+  openModal(tr("services.configure") + preset.name, `${keyField}<details class="provider-connection-details"><summary>${tr("services.connection_details")}</summary><p class="muted">${tr("common.base_url")}: <code>${esc(preset.base_url)}</code><br>${tr("reports.protocol")}: ${esc(protocolLabel(preset.protocol))}<br>${tr("services.authentication")}: ${esc(authLabel(preset.auth_mode))}</p></details>`, tr("services.save_service"), async () => {
     const keyValue = preset.auth_mode === 'forward' ? '' : $('modal_provider_key').value.trim(); if (preset.auth_mode !== 'forward' && !keyValue && !(existing && existing.api_key_set)) throw new Error(tr("services.enter_an_api_key"));
     await saveAndClose(Object.assign({}, preset, {api_key:keyValue}));
   }, serviceContext, navigation);

@@ -37,6 +37,8 @@ pub use calls::CallFilter;
 mod identities;
 mod series;
 pub use series::UsageSeriesFilter;
+mod sessions;
+pub use sessions::SessionBillPage;
 
 pub const RESOLVED_USAGE: &str = include_str!("../../../../contracts/usage-owners.sql");
 
@@ -152,6 +154,7 @@ impl UsageLedger {
         connection.execute_batch(INDEXES)?;
         calls::initialize(&connection)?;
         identities::initialize(&connection)?;
+        sessions::initialize(&connection)?;
         private(&self.path)?;
         self.initialized.store(true, Ordering::Release);
         Ok(connection)
@@ -238,7 +241,11 @@ impl UsageLedger {
         let result = (|| -> Result<()> {
             let values = self.values(event, observed)?;
             let _guard = self.lock.lock().map_err(|_| UsageError)?;
-            insert(&self.connect()?, &values)
+            let mut connection = self.connect()?;
+            let transaction = connection.transaction()?;
+            insert(&transaction, &values, event)?;
+            transaction.commit()?;
+            Ok(())
         })();
         if result.is_err() {
             self.write_error.store(true, Ordering::Release);
@@ -271,8 +278,8 @@ impl UsageLedger {
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let mut connection = self.connect()?;
         let transaction = connection.transaction()?;
-        for values in values {
-            insert(&transaction, &values)?;
+        for (values, (event, _)) in values.iter().zip(events) {
+            insert(&transaction, values, event)?;
         }
         transaction.execute(
             "INSERT OR REPLACE INTO usage_files VALUES (?,?)",
@@ -447,7 +454,7 @@ impl UsageLedger {
         Ok(())
     }
 }
-fn insert(connection: &Connection, values: &[SqlValue]) -> Result<()> {
+fn insert(connection: &Connection, values: &[SqlValue], event: &Value) -> Result<()> {
     connection.execute(
         &format!(
             "INSERT OR IGNORE INTO usage_events VALUES ({})",
@@ -455,6 +462,13 @@ fn insert(connection: &Connection, values: &[SqlValue]) -> Result<()> {
         ),
         params_from_iter(values),
     )?;
+    if let Some(SqlValue::Text(id)) = values.first() {
+        sessions::remember(
+            connection,
+            id,
+            text(event, "thread_id", text(event, "session_id", "")),
+        )?;
+    }
     Ok(())
 }
 fn rows(connection: &Connection, query: &str, parameters: &[SqlValue]) -> Result<Vec<Value>> {

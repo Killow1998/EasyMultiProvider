@@ -4,10 +4,11 @@ import base64
 import contextlib
 import json
 import tempfile
+import threading
 from pathlib import Path
 from e2e import Browser
 from e2e_environment import request, wait_for
-from preview import fixture, preview
+from preview import fixture, preview, seed_session_bills
 
 
 def main():
@@ -19,8 +20,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='emp-review-e2e-') as temp, contextlib.ExitStack() as stack:
         root = Path(temp)
         endpoint, target, bundle = fixture(stack, args.emp.resolve(), root)
+        seed_session_bills(endpoint[1])
         backend, _, headers, upstream = endpoint
-        frontend, _ = preview(stack, backend, bundle, headers['X-EMP-Session'])
+        frontend, server = preview(stack, backend, bundle, headers['X-EMP-Session'])
         browser = Browser(stack, root)
         before = (target / 'config.json').read_bytes()
         native_before = (target / 'codex_home/auth.json').read_bytes()
@@ -31,13 +33,41 @@ def main():
             wait_for(lambda: json.loads((target / 'config.json').read_text())['language'] == lang)
             before = (target / 'config.json').read_bytes()
             assert browser.execute('return document.getElementById("shadow_review_button").textContent===arguments[0] && document.getElementById("modal_title").textContent===arguments[0] && !document.getElementById("shadow_routing_button");', '本次改动' if lang == 'zh-CN' else 'This update')
-            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['collaboration', 'metrics']
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['bills','connection','metrics','migration','lifecycle']
             assert browser.execute('return !document.getElementById("modal_body").textContent.includes("v0.13.1");')
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             _, png = request(browser.base + '/screenshot')
             args.output.with_name(args.output.stem + f'-overview-{lang}.png').write_bytes(base64.b64decode(png['value']))
-            browser.execute('document.querySelector("#modal_body [data-shadow-demo=collaboration]").click();')
-            wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden && !!document.querySelector("#shadow_feedback .collaboration-takeaway");'))
+            browser.execute('document.querySelector("#modal_body [data-shadow-demo=bills]").click();')
+            wait_for(lambda: browser.execute('return document.querySelectorAll("[data-session-bill]").length===4;'))
+            assert browser.execute('return !!document.querySelector("[data-bill-search]") && document.documentElement.scrollWidth<=innerWidth;')
+            _, png = request(browser.base + '/screenshot')
+            args.output.with_name(args.output.stem + f'-bills-{lang}.png').write_bytes(base64.b64decode(png['value']))
+            browser.execute('closeModal();document.getElementById("shadow_review_button").click();')
+            browser.execute('document.querySelector("#modal_body [data-shadow-demo=connection]").click();')
+            assert browser.execute('return !!document.getElementById("modal_provider_key") && !document.querySelector(".provider-connection-details").open && !document.getElementById("modal_back").hidden;')
+            _, png = request(browser.base + '/screenshot')
+            args.output.with_name(args.output.stem + f'-connection-{lang}.png').write_bytes(base64.b64decode(png['value']))
+            browser.execute('document.getElementById("modal_provider_key").value="fixture-draft";document.querySelector(".provider-connection-details").open=true;')
+            assert browser.execute('return document.getElementById("modal_provider_key").value==="fixture-draft" && document.documentElement.scrollWidth<=innerWidth;')
+            browser.execute('document.getElementById("modal_back").click();')
+            assert browser.execute('return !!document.querySelector("#modal_body [data-shadow-demo=migration]");')
+            browser.execute('document.querySelector("#modal_body [data-shadow-demo=migration]").click();')
+            wait_for(lambda: browser.execute('return document.getElementById("shadow_migration_file")?.files.length===1;'))
+            gate = threading.Event()
+            stack.callback(gate.set)
+            server.preview_gate = gate
+            server.preview_started.clear()
+            browser.execute('document.querySelector("[data-migration-decode]").click();')
+            wait_for(server.preview_started.is_set, seconds=90)
+            assert browser.execute('return document.getElementById("modal_status").textContent;') == ('正在生成导入预览，请稍候…' if lang == 'zh-CN' else 'Preparing the import preview. Please wait…')
+            assert browser.execute('return document.getElementById("modal_submit").disabled && document.documentElement.scrollWidth<=innerWidth;')
+            assert browser.execute('return document.getElementById("shadow_migration").getAttribute("aria-busy")==="true" && getComputedStyle(document.getElementById("modal_status")).color===getComputedStyle(document.querySelector(".migration-steps")).color;')
+            _, png = request(browser.base + '/screenshot')
+            args.output.with_name(args.output.stem + f'-waiting-{lang}.png').write_bytes(base64.b64decode(png['value']))
+            gate.set()
+            server.preview_gate = None
+            wait_for(lambda: browser.execute('return !!document.querySelector("[data-migration-preference-source]") && document.getElementById("modal_status").textContent==="";'))
             browser.execute('closeModal();document.getElementById("shadow_demo_button").click();')
             assert browser.execute('return !!document.querySelector("#modal_body [data-shadow-demo=routing]") && !!document.querySelector("#modal_body [data-shadow-demo=recovery]");')
             browser.execute('document.querySelector("#modal_body [data-shadow-demo=lifecycle]").click();')
@@ -45,13 +75,18 @@ def main():
             browser.execute('document.getElementById("modal_submit").click();')
             wait_for(lambda: browser.execute('return document.getElementById("integration").dataset.state==="native";'))
             assert browser.execute('return !document.getElementById("integration_toggle").disabled;')
+            assert browser.execute('return !document.getElementById("native_history_retry").hidden && !document.getElementById("native_history_notice").hidden && document.documentElement.scrollWidth<=innerWidth;')
+            _, png = request(browser.base + '/screenshot')
+            args.output.with_name(args.output.stem + f'-history-{lang}.png').write_bytes(base64.b64decode(png['value']))
+            browser.execute('document.getElementById("native_history_retry").click();document.getElementById("modal_submit").click();')
+            wait_for(lambda: browser.execute('return document.getElementById("native_history_retry").hidden && !document.getElementById("integration_toggle").disabled;'))
             browser.execute('document.getElementById("integration_toggle").click();document.getElementById("modal_submit").click();')
             wait_for(lambda: browser.execute('return document.getElementById("integration").dataset.state==="emp_applied";'))
             browser.execute('window.confirm=()=>true;quitEmp();')
             wait_for(lambda: browser.execute('return document.getElementById("modal_title").textContent.includes(arguments[0]);', '正在退出' if lang == 'zh-CN' else 'is exiting'))
             assert request(backend + '/healthz')[0] == 200
             assert (target / 'config.json').read_bytes() == before
-            checks.append(f'{lang}: current review opens subagent help, routing and lifecycle stay in Demos; restore/re-enable/quit leave backend state intact')
+            checks.append(f'{lang}: current review opens bills, preset setup, migration and pending-history recovery; restore/re-enable/quit leave backend state intact')
         for reason in ['key_mismatch', 'key_missing', 'key_invalid', 'key_permissions', 'config_invalid', 'reset_incomplete']:
             request(browser.base + '/url', {'url': frontend + '/recovery?reason=' + reason})
             wait_for(lambda: browser.execute('return !document.getElementById("reset").disabled;'))

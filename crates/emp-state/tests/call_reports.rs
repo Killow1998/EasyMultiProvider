@@ -124,6 +124,32 @@ fn legacy_rates_remain_in_call_details_without_polluting_generation_averages() {
     assert_eq!(report["summary"]["tps_samples"], 0);
     assert_eq!(report["summary"]["ttft_ms"], Value::Null);
     assert_eq!(report["records"][0]["tokens_per_second"], 25.0);
+    ledger
+        .record_call(
+            &json!({"request_id":"burst","route":"responses","model_id":"model",
+        "success":true,"performance_schema":5,"first_content_ms":11916,"duration_ms":11966,
+        "output_tokens":100,"reasoning_tokens":31,"tokens_per_second":8.36,
+        "generation_ms":6,"generation_tokens_per_second":11500.0}),
+            98.0,
+            100.0,
+        )
+        .unwrap();
+    let report = ledger.query_calls(&filter()).unwrap();
+    assert_eq!(report["summary"]["tps_samples"], 0);
+    assert!(report["summary"]["tokens_per_second"].is_null());
+    assert!(report["models"][0]["tokens_per_second"].is_null());
+    assert!(report["periods"][0]["tokens_per_second"].is_null());
+    let burst = report["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["request_id"] == "burst")
+        .unwrap();
+    assert_eq!(burst["tokens_per_second"], 8.36);
+    assert!(burst["generation_tokens_per_second"].is_null());
+    let db = rusqlite::Connection::open(root.path().join("usage.sqlite3")).unwrap();
+    let saved:f64=db.query_row("SELECT json_extract(facts,'$.generation_tokens_per_second') FROM call_records WHERE request_id='burst'",[],|row|row.get(0)).unwrap();
+    assert_eq!(saved, 11500.0);
 }
 
 #[test]

@@ -171,7 +171,7 @@ fn responses_endpoint_records_visible_generation_and_full_request_rates_separate
     // A single coalesced batch has no measurable generation interval.
     match record["generation_ms"]
         .as_f64()
-        .filter(|duration| *duration > 0.0)
+        .filter(|duration| *duration >= 100.0)
     {
         Some(duration) => assert!(
             (record["generation_tokens_per_second"].as_f64().unwrap() - 30_000.0 / duration).abs()

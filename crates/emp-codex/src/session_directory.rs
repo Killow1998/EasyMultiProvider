@@ -70,23 +70,24 @@ impl SessionDirectory {
             let missing = ids
                 .iter()
                 .filter(|id| valid_id(id) && !names.contains_key(*id))
-                .take(100)
                 .collect::<Vec<_>>();
-            let query = format!(
-                "SELECT id,title FROM threads WHERE id IN ({})",
-                vec!["?"; missing.len()].join(",")
-            );
-            let Ok(mut statement) = connection.prepare(&query) else {
-                continue;
-            };
-            let Ok(rows) = statement.query_map(rusqlite::params_from_iter(missing), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            }) else {
-                continue;
-            };
-            for (id, title) in rows.flatten() {
-                if let Some(title) = title_text(&title) {
-                    names.insert(id, title);
+            for missing in missing.chunks(100) {
+                let query = format!(
+                    "SELECT id,title FROM threads WHERE id IN ({})",
+                    vec!["?"; missing.len()].join(",")
+                );
+                let Ok(mut statement) = connection.prepare(&query) else {
+                    continue;
+                };
+                let Ok(rows) = statement.query_map(rusqlite::params_from_iter(missing), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                }) else {
+                    continue;
+                };
+                for (id, title) in rows.flatten() {
+                    if let Some(title) = title_text(&title) {
+                        names.insert(id, title);
+                    }
                 }
             }
             if ids.iter().all(|id| names.contains_key(id)) {

@@ -159,7 +159,9 @@ pub(crate) fn run_server(
         }
         emp_state::update::worker::mark_ready(crate::VERSION, markers.ready_path.clone())
             .map_err(std::io::Error::other)?;
-        server.state.wait_for_shutdown().await;
+        if !(open_browser && crate::tray::wait(Arc::clone(&server.state))) {
+            server.state.wait_for_shutdown().await;
+        }
         Ok::<bool, std::io::Error>(signals.external_exit())
     });
     // Only the updater's own handoff retains integration. Closing a terminal

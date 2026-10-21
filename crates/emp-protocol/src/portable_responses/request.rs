@@ -21,7 +21,7 @@ const PORTABLE_TOP_LEVEL: &[&str] = &[
     "truncation",
     "service_tier",
 ];
-fn official_openai_responses(provider: &Map<String, Value>) -> bool {
+pub fn supports_in_place_tools(provider: &Map<String, Value>) -> bool {
     let Some(raw) = provider
         .get("base_url")
         .and_then(Value::as_str)
@@ -67,14 +67,16 @@ pub fn project_request(
             projected.insert((*key).to_owned(), value.clone());
         }
     }
-    if official_openai_responses(provider) {
+    let in_place_tools = supports_in_place_tools(provider);
+    if in_place_tools {
         for key in ["store", "include", "prompt_cache_key"] {
             if let Some(value) = body.get(key) {
                 projected.insert(key.to_owned(), value.clone());
             }
         }
     }
-    let (input, hoisted) = portable_input(body.get("input"), preserve_reasoning_state)?;
+    let (input, hoisted) =
+        portable_input(body.get("input"), preserve_reasoning_state, in_place_tools)?;
     projected.insert("input".to_owned(), input);
     let mut instructions = Vec::new();
     match projected.get("instructions") {
@@ -89,7 +91,7 @@ pub fn project_request(
             Value::String(instructions.join("\n\n")),
         );
     }
-    let tools = raw_tools(body)?;
+    let tools = raw_tools(body, !in_place_tools)?;
     if tools.is_empty() {
         projected.remove("tools");
     } else {

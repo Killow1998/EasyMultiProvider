@@ -1,5 +1,7 @@
 (SELECT request_id,operation,started_at,finished_at,
-    provider_id,account_id,model_id,session_id,facts,delivery,
+    provider_id,account_id,model_id,session_id,
+    CASE WHEN COALESCE(json_extract(facts,'$.generation_ms'),0) < 100
+      THEN json_remove(facts,'$.generation_tokens_per_second') ELSE facts END AS facts,delivery,
     CASE
       WHEN json_extract(facts,'$.error_class')='client_cancelled' THEN 'interrupted'
       WHEN json_extract(facts,'$.error_class')='client_disconnect' THEN 'cancelled'

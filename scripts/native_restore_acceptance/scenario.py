@@ -271,8 +271,8 @@ def main() -> int:
         if config_path.read_bytes() != active_config:
             fail("active fixture Codex config changed before EMP restore")
 
-        # Native restoration never rewrites history. Resume candidates are an
-        # explicit selection, migrated only after their Codex writers close.
+        # Retain explicit selected-thread migration coverage independently of
+        # the automatic idle-history restore acceptance.
         report["migrations"] = migrate_selected_threads(
             emp_bin, list(ids.values()), ADDRESS_SPACE_LIMIT_BYTES, env=env, cwd=root,
         )

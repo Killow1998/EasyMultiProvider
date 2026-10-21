@@ -1,6 +1,16 @@
-use super::*;
+use super::HistoryRepairError;
+use super::inventory::{ThreadInfo, find_rollout_for_id, resolve_rollout_path, session_roots};
+use super::replay::HistoryBound;
+use crate::history::{
+    HistoryBase, MAX_LINEAGE_SEGMENTS as MAX_LINEAGE_DEPTH, MAX_ROLLOUT_LINE_BYTES,
+    session_meta_history_base, session_meta_history_mode, session_meta_id, token,
+};
+use serde_json::{Map, Value};
+use std::collections::{BTreeSet, HashMap};
+use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MarkerState {
@@ -60,14 +70,6 @@ impl<'a> MarkerScanner<'a> {
         }
     }
 
-    fn index_rollout(
-        &mut self,
-        info: &ThreadInfo,
-        path: PathBuf,
-    ) -> Result<RolloutIndex, HistoryRepairError> {
-        scan_rollout(info, path, None)
-    }
-
     fn marker_state_for(
         &mut self,
         thread_id: &str,
@@ -107,7 +109,7 @@ impl<'a> MarkerScanner<'a> {
                 path: path.clone(),
                 mode: None,
             };
-            let index = self.index_rollout(&info, path)?;
+            let index = scan_rollout(&info, path, None)?;
             self.indexes.insert(thread_id.to_owned(), index);
         }
 
@@ -164,16 +166,13 @@ pub(super) fn select_affected_rollouts(
     home: &Path,
     infos: &[ThreadInfo],
 ) -> Result<Vec<ThreadInfo>, HistoryRepairError> {
-    if infos.len() > MAX_REPAIR_THREADS {
-        return Err(HistoryRepairError::new("repair_thread_limit_exceeded"));
-    }
     let roots = session_roots(home)?;
     let mut scanner = MarkerScanner::new(home, &roots);
     let mut seen_paths = BTreeSet::new();
 
     for info in infos {
         let path = resolve_rollout_path(home, info, &roots)?;
-        let index = scanner.index_rollout(info, path)?;
+        let index = scan_rollout(info, path, None)?;
         if !seen_paths.insert(index.path.clone()) {
             return Err(HistoryRepairError::new("rollout_path_conflict"));
         }

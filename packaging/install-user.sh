@@ -50,8 +50,8 @@ Name=EMP
 Comment=Local multi-provider control plane for Codex
 Exec="$desktop_exec"
 Icon=$install_dir/easy-multi-provider.svg
-Terminal=true
+Terminal=false
 Categories=Development;
-StartupNotify=true
+StartupNotify=false
 EOF
 printf 'Installed: %s\nConfiguration: %s/config.json\nStart from the application menu or run: %s\n' "$install_dir/EMP" "$config_dir" "$launcher"

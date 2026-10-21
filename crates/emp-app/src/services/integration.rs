@@ -4,6 +4,7 @@ pub(crate) mod enable;
 pub(crate) mod endpoint;
 mod restore;
 use emp_integration::IntegrationManager;
+pub(crate) use restore::restore_native_configuration;
 use std::sync::atomic::AtomicBool;
 
 use crate::app::ServerState;
@@ -175,6 +176,7 @@ fn integration_summary_from_status(state: &ServerState, status: &IntegrationStat
         }
     };
     serde_json::json!({
+        "history_restore":if configuration_state == "native" { state.backend.integration.history_restore.lock().ok().map(|value| value.clone()) } else { None },
         "codex_compatibility":crate::services::runtime::compatibility_snapshot(state, false),
         "configuration":{
             "state":configuration_state,
@@ -240,26 +242,12 @@ pub(crate) struct IntegrationState {
     pub(crate) manager: IntegrationManager,
     pub(crate) search: emp_integration::search::SearchFeatureManager,
     pub(crate) owned: AtomicBool,
+    codex_home: std::path::PathBuf,
+    history_restore: std::sync::Mutex<Value>,
     pub(crate) startup_conflicts: std::sync::Mutex<Vec<String>>,
     pub(crate) runtime: RuntimeState,
     pub(crate) watch: crate::services::runtime::RuntimeWatch,
     pub(crate) inventory: emp_codex::runtime_inventory::RuntimeInventory,
-}
-
-/// Restore owned configuration only. Legacy checkpoint migration is explicit
-/// and thread-scoped; switching off EMP never scans or rewrites conversations.
-pub(crate) fn restore_native_configuration(
-    manager: &IntegrationManager,
-    search: Option<&emp_integration::search::SearchFeatureManager>,
-) -> Result<IntegrationResult, &'static str> {
-    if let Some(search) = search {
-        search
-            .restore()
-            .map_err(|_| "search_configuration_restore_failed")?;
-    }
-    manager
-        .restore()
-        .map_err(|_| "native_configuration_restore_failed")
 }
 
 pub(crate) fn restore_error_message(_reason: &str) -> &'static str {
@@ -273,6 +261,7 @@ impl IntegrationState {
         codex_binary: &str,
     ) -> Self {
         let runtime = RuntimeState::new(manager.lease_path().with_file_name("runtime.json"));
+        let history_restore = restore::read_history_restore(&manager, &codex_home);
         Self {
             search: emp_integration::search::SearchFeatureManager::new(
                 manager.config_path().to_owned(),
@@ -280,6 +269,8 @@ impl IntegrationState {
             ),
             manager,
             owned: AtomicBool::new(false),
+            codex_home: codex_home.clone(),
+            history_restore: std::sync::Mutex::new(history_restore),
             startup_conflicts: std::sync::Mutex::new(Vec::new()),
             runtime,
             watch: Default::default(),

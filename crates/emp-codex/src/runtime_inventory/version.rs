@@ -105,6 +105,11 @@ fn observe_inner(path: &Path, inherited_path: Option<OsString>) -> std::io::Resu
     let mut output = tempfile::tempfile()?;
     let mut errors = tempfile::tempfile()?;
     let mut command = Command::new(prepared.path());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     if let Some(directory) = launch_directory {
         match super::launcher::path_with_node(&directory, inherited_path.clone()) {
             super::launcher::PathAdjustment::Set(child_path) => {

@@ -839,6 +839,20 @@ task performance. A future semantic mapping must preserve arguments, results,
 history and command-session behavior, and be evaluated on completed tasks before
 changing the default. Renaming tools alone does not establish that equivalence.
 
+For the external OpenAI Responses endpoint, `additional_tools` remains at its
+input position and tool-search results append their loaded schemas there.
+Only the documented HTTPS `api.openai.com/v1` or `/v1/responses` endpoint opts
+into this path. The top-level tools and instructions retain their prefix;
+other Responses endpoints, Chat and Anthropic retain schema flattening.
+Completion, streaming and context assessment share this selection. Name
+collision checks and allowed-tool restrictions apply to in-place schemas too.
+One indexed schema check covers both catalog locations. Identical top-level
+repeats collapse in their original order, while in-place loading boundaries
+remain intact. Projection moves the request-owned input through conversion,
+avoiding another complete copy of conversation history.
+This preserves the documented cache structure, without claiming a measured
+cache hit rate or token saving.
+
 ## Service detail ownership (2026-10-08)
 
 Service badges now own information and editing navigation. Codex account dialogs
@@ -970,6 +984,18 @@ cannot write into another window. The shared report-query owner replaces the
 trend's independent request-generation implementation. Page composition routes
 usage notifications explicitly, without replacing feature methods at runtime.
 
+`statistics.js` owns the common period/service/model filters and the Session bills
+tab. `session-bills.js` owns its paged search and open model-breakdown requests,
+using the same `report-query.js` cancellation owner. Closing, filtering or changing
+views cancels obsolete reads; returning to Overview fetches the current filters.
+Detail toggles verify both their view owner and that their row still belongs to
+the current list. Native events queued before a refresh cannot claim or cancel
+the replacement row's request.
+The `emp-state` ledger's session index links existing accounting events without
+copying token or price data. Bills and chart detail share their reconciled selection
+and aggregate projection. See [usage accounting](usage-accounting.md#session-bills)
+for attribution, old-history indexing and missing-price semantics.
+
 Quota sampling remains scheduled backend work at 44-second deadlines. Its
 existing sampler now owns target selection and worker aggregation. Up to four
 scoped workers borrow their inputs and each writes only its own counter; joining
@@ -1036,18 +1062,40 @@ inside the same process after a response ETag changed. This verifies catalog
 refresh, not replacement of an already-open picker or a provider's physical
 context capacity.
 
-Native restoration and exit restore configuration only. Idle WebSockets poll
+Explicit Native restoration and normal Quit also convert eligible idle EMP
+checkpoints before restoring configuration. They share the existing bounded,
+append-only migration and transaction backups; native opaque reasoning and tool
+call/result pairs remain intact. A nonblocking Codex coordination lock protects
+the conversion and configuration restore. Active writers, their ancestors and
+dependent descendants are deferred; uncoordinated, unfinished or unverified
+history is unchanged. A failed history conversion does not prevent removal of
+EMP's routing override. The native WebUI displays a pending-history notice and
+**Continue history conversion** action, retaining the normal **Enable EMP**
+button. The outcome survives restart in a home-scoped private report. HTTP,
+tray and offline Restore use the same operation; no new background scanner or
+model request is added. Explicit restoration scans closed history; the first
+conversion of a large home may take time and the WebUI displays that progress.
+OS termination keeps its short configuration-only exit
+path, rather than delaying the operating system for a history scan.
+
+Inside `emp-codex`, `history_repair.rs` coordinates the operation and retains
+its public entry points. `inventory.rs` owns read-only database/path discovery;
+`coordination.rs` owns writer exclusion and active-fork protection;
+`selection.rs` finds affected checkpoints; and `planning.rs` stages selected
+rewrites. Replay, checkpoint conversion, spool storage and transaction recovery
+retain separate owners. These modules import their concrete dependencies
+directly rather than relying on imports forwarded through the controller.
+
+Idle WebSockets poll
 for the admission-drain state and close with 1001; active executors finish or
 the restore times out and reopens admission. Successful Restore Native also
 reopens admission and keeps EMP's service and management page available for
 Enable EMP. Quit restores configuration and closes admission permanently before
-ending the process. Request-local checkpoint decoding
-continues while EMP is enabled. Direct native resume of a legacy `emp1:` thread
-uses `EMP migrate-history --thread-id ID`: only that database row and bounded
-lineage are read, only that rollout is changed, and the selected writer lock,
-append-only replacement and transactional backup boundaries remain. Native
-opaque reasoning and tool call/result pairs are preserved. Once EMP is disabled
-it cannot intercept native requests; explicit migration is that boundary.
+ending the process. Request-local checkpoint decoding continues while EMP is
+enabled. `EMP migrate-history --thread-id ID` remains available for explicit
+selection: only that database row and bounded lineage are read and only that
+rollout changes. Once EMP is disabled it cannot intercept native requests, so
+deferred legacy history still needs conversion before direct native resume.
 
 ```mermaid
 flowchart LR
@@ -1148,9 +1196,10 @@ single preference without model discovery or engine reload; preview changes stay
 in its draft.
 
 Checkpoint/encrypted-history failures can include a command targeting the validated
-thread UUID. No repair executes on an error, exit or restoration. Users close that
-conversation and run the command explicitly; the running executable path is quoted
-for the platform shell when available. EMP cannot change native Codex errors after
-EMP has been disabled. Legacy ciphertext still requires targeted migration before
-direct native resume. Candidate Windows/macOS application acceptance and release
-remain separate from the isolated Linux tests.
+thread UUID. An error itself never starts repair. Explicit Restore Native and
+normal Quit convert idle, coordinated legacy history; the WebUI retains a way
+to finish deferred conversions after those conversations close. Targeted CLI
+migration remains available, with its executable quoted for the platform shell.
+EMP cannot change native Codex errors after it has been disabled. Candidate
+Windows/macOS application acceptance and release remain separate from isolated
+Linux tests.

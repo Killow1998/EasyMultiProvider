@@ -31,6 +31,9 @@ pub(super) fn with_login<T>(
     );
     let identity = match login {
         Ok(Some(identity)) => identity,
+        Err(ClaudeCliError::Failure("claude_cli_capacity_unavailable")) => {
+            return Err("claude_cli_capacity_unavailable");
+        }
         other => {
             state.backend.claude_quota.begin(None);
             state

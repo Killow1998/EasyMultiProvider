@@ -1,9 +1,9 @@
 //! Checkpoint conversion and bounded JSONL replacement writing.
 
+use super::HistoryRepairError;
 use super::replay::RolloutSummary;
-use super::spool::JsonlSpool;
+use super::spool::{ContextSnapshot, JsonlSpool};
 use super::transaction::file_fingerprint;
-use super::{ContextSnapshot, HistoryRepairError};
 use crate::history::MAX_ROLLOUT_LINE_BYTES;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use serde_json::{Map, Value, json};
@@ -11,6 +11,18 @@ use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::Path;
+
+pub(super) fn has_emp1_tail_record(
+    snapshot: &mut ContextSnapshot,
+) -> Result<bool, HistoryRepairError> {
+    let mut tail = snapshot.tail_records.reader()?;
+    while let Some(record) = tail.next::<Map<String, Value>>()? {
+        if map_contains_emp1_encrypted_content(&record) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 fn convert_emp_item(
     mut item: Map<String, Value>,

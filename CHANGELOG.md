@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.13.11 (2026-10-21)
+
+### 中文
+
+- 桌面启动保留系统匣图标（macOS 菜单栏），左键或右键均打开同一个三项菜单：打开 WebUI、恢复原生／启用 EMP、退出 EMP。关闭网页后可从图标返回；Windows 后台辅助进程不再闪出终端窗口，系统匣操作同步更新网页状态。
+- 新增会话账单：按名称或 ID 搜索会话，查看所选时段的 token、缓存读写、各模型用量与 API 等价 USD；支持排序和分页，并区分未知价格、缺失用量与零价记录。
+- 修正批量返回造成的异常生成 TPS，无法可靠测量时显示未知；调用详情增加按轮次合并的工具耗时，并保留生成 TPS 与全程 TPS 的区别。
+- 数据迁移预览超时后可直接重试并保留选择，更新等待文案；连接详情默认折叠，调用错误显示实际发送次数及对应处理建议。
+- Claude CLI 根据可用内存安排子进程，低内存时有界等待并保留登录状态，避免并发启动挤占资源。
+- 官方 OpenAI Responses 接口保留增量工具加载位置，保持已有提示词前缀；合并工具定义校验，减少对话历史的重复复制。
+- 恢复原生、正常退出和离线恢复会自动转换空闲的 EMP 历史并保留原始备份；正在使用的会话暂缓处理，可在 WebUI 中继续完成。
+- 添加 Inception / Mercury 服务预设，并在快速教程提供 Native 模型、导入订阅、外部服务和数据迁移的操作 GIF。
+
+### English
+
+- Keep a system-tray icon on desktop launch (menu bar on macOS). Either mouse button opens the same three-item menu: Open WebUI, Restore Native / Enable EMP, and Quit EMP. Reopen a closed page from the icon, suppress Windows helper console flashes, and synchronize tray actions with the page.
+- Add session bills with name/ID search, per-model tokens, cache reads/writes and API-equivalent USD for the selected period. Support sorting and pagination while distinguishing unknown prices, missing usage and known zero prices.
+- Exclude batched-delivery spikes from generation TPS when timing cannot measure generation reliably. Add merged tool time for each turn while retaining separate generation and end-to-end TPS.
+- Retry timed-out migration previews without losing selections, with clearer progress text. Fold connection details and show actual send counts with relevant error guidance.
+- Admit Claude CLI processes according to available memory, with bounded waits and preserved login state under capacity pressure.
+- Preserve incremental tool-loading positions on the official OpenAI Responses endpoint to keep the existing prompt prefix. Consolidate schema validation and avoid repeated conversation-history copies.
+- Convert idle EMP history during Restore Native, normal Quit and offline restore, retaining original backups. Defer active conversations and let users finish conversion from WebUI.
+- Add the Inception / Mercury service preset and quick-tutorial GIFs for Native models, imported subscriptions, external services and data migration.
+
 ## 0.13.10 (2026-10-19)
 
 ### 中文

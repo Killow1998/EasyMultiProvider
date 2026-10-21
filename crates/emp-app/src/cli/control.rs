@@ -62,8 +62,9 @@ impl Control {
                 manager.config_path().to_owned(),
                 state_dir.join("search.json"),
             );
-            let result = restore_native_configuration(&manager, Some(&search))
-                .map_err(|reason| format!("EMP native restore stopped: {reason}"))?;
+            let (result, history_restore) =
+                restore_native_configuration(&manager, &search, home)
+                    .map_err(|reason| format!("EMP native restore stopped: {reason}"))?;
             if result.ok() {
                 store
                     .save(
@@ -80,7 +81,7 @@ impl Control {
             }
             let record = store.load().map_err(|_| unavailable())?;
             let runtime = offline_snapshot(record.as_ref(), "offline");
-            print_result(&result, &runtime, self.json);
+            print_result(&result, &runtime, &history_restore, self.json);
             Ok(if result.ok() {
                 ExitCode::SUCCESS
             } else {
@@ -149,14 +150,19 @@ fn print_status(status: &IntegrationStatus, runtime: &Value, as_json: bool) {
     }
 }
 
-fn print_result(result: &IntegrationResult, runtime: &Value, as_json: bool) {
+fn print_result(
+    result: &IntegrationResult,
+    runtime: &Value,
+    history_restore: &Value,
+    as_json: bool,
+) {
     if as_json {
         println!(
             "{}",
             json!({
                 "configuration":{"action":result.action, "state":result.state, "relation":result.relation,
                     "lease_status":result.lease.as_ref().map_or("none",|lease|lease.status.as_str()), "conflicts":result.conflicts},
-                "history_repair":{"mode":"on_demand"},
+                "history_restore":history_restore,
                 "runtime":runtime, "next_action":next_action(&result.state)
             })
         );
@@ -167,11 +173,12 @@ fn print_result(result: &IntegrationResult, runtime: &Value, as_json: bool) {
             result.conflicts.join(",")
         };
         println!(
-            "action: {}\nstate: {}\nrelation: {}\nconflicts: {}\nhistory migration: on demand\nruntime state: {}\nruntime confidence: {}",
+            "action: {}\nstate: {}\nrelation: {}\nconflicts: {}\nhistory migration: {}\nruntime state: {}\nruntime confidence: {}",
             result.action,
             result.state,
             result.relation,
             conflicts,
+            history_restore["status"].as_str().unwrap_or("deferred"),
             runtime["state"].as_str().unwrap_or_default(),
             runtime["confidence"].as_str().unwrap_or_default()
         );

@@ -37,11 +37,25 @@ layout, desktop metadata, platform icons, and SHA-256 sidecars under
 Cargo-derived file/product versions into the executable, and the build reads
 the final PE resources back to verify them.
 
+Desktop launch owns the system-tray entry. Windows uses the GUI subsystem;
+explicit CLI commands attach to an existing parent console while preserving
+redirected output. Background browser, proxy and version helpers use
+`CREATE_NO_WINDOW`. The tray hides only a legacy console owned solely by EMP.
+Linux user
+entries set `Terminal=false` and `StartupNotify=false`; argument-free GUI launch
+starts the service in its own session so an older terminal-based launcher can
+close safely. Explicit `serve` remains foreground. Linux uses the desktop's
+StatusNotifier/D-Bus support without a GTK runtime dependency. macOS sets
+`LSUIElement` and executes `Resources/launch.command` directly from the bundle
+launcher, keeping AppKit on the original thread. The existing bundle paths and
+updater arguments are preserved.
+
 `cargo xtask package-smoke` hands a synthetic installation to the packaged
 `--emp-apply-update` worker twice: once to replace it and once with a broken
 candidate that must roll back. On macOS it installs from the real `.dmg`. On
 Linux it also installs the archive with `install-user.sh` into an isolated
-desktop-user home. Neither the repository nor any shipped script uses Python.
+desktop-user home. The packaged runtime and its install/update scripts do not
+require Python.
 The Linux bootstrap installer (`EMP-linux-x86_64-install.sh`) needs only
 `curl`, `tar`, `gzip` and `sha256sum`: it resolves the latest stable tag from
 the `releases/latest` redirect, verifies the archive against the published

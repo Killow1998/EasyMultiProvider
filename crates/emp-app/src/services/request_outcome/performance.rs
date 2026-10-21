@@ -20,6 +20,10 @@ fn generation_tokens_per_second(
     reasoning_tokens: &Value,
     duration_ms: &Value,
 ) -> Option<f64> {
+    // A few milliseconds of batched delivery cannot measure generation speed.
+    if duration_ms.as_u64()? < 100 {
+        return None;
+    }
     let output = output_tokens
         .as_u64()
         .filter(|tokens| *tokens <= 10_000_000)?;
@@ -104,6 +108,9 @@ mod tests {
             (json!(120), json!(121), json!(500), None),
             (json!(120), json!(-1), json!(500), None),
             (json!(120), json!(90), json!(0), None),
+            (json!(100), json!(31), json!(6), None),
+            (json!(120), json!(90), json!(99), None),
+            (json!(120), json!(90), json!(100), Some(300.0)),
         ] {
             assert_eq!(
                 generation_tokens_per_second(&output, &reasoning, &duration),

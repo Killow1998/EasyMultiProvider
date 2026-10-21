@@ -200,7 +200,7 @@ fn exit_serializes_an_admitted_enable_and_rejects_later_activation() {
     drop(operation);
     exit.join().unwrap().unwrap();
     let before = std::fs::read(state.backend.integration.manager.config_path()).unwrap();
-    let reply = crate::services::integration::commands::execute(None, &state, "enable", true);
+    let reply = crate::services::integration::commands::execute(None, &state, "enable", true, 0);
     assert_eq!(reply.status, 503);
     crate::services::startup::reconcile(&state).unwrap();
     assert_eq!(

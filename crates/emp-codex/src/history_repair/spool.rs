@@ -1,9 +1,13 @@
-use super::*;
+use super::HistoryRepairError;
+use crate::history::MAX_ROLLOUT_LINE_BYTES;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
+use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 pub(super) struct JsonlSpool {
     path: PathBuf,
@@ -178,5 +182,31 @@ impl TurnStore {
                 |row| row.get::<_, bool>(0),
             )
             .map_err(|_| HistoryRepairError::new("turn_lifecycle_store_unavailable"))
+    }
+}
+
+pub(super) struct ContextSnapshot {
+    pub(super) directory: PathBuf,
+    pub(super) history: JsonlSpool,
+    pub(super) metadata: JsonlSpool,
+    pub(super) tail_records: JsonlSpool,
+    pub(super) latest_checkpoint: Option<Map<String, Value>>,
+    pub(super) latest_token_usage: Option<Value>,
+    pub(super) turns: TurnStore,
+}
+
+impl ContextSnapshot {
+    pub(super) fn new(directory: &Path) -> Result<Self, HistoryRepairError> {
+        fs::create_dir(directory)
+            .map_err(|_| HistoryRepairError::new("repair_spool_unavailable"))?;
+        Ok(Self {
+            directory: directory.to_path_buf(),
+            history: JsonlSpool::create(directory.join("history.jsonl"))?,
+            metadata: JsonlSpool::create(directory.join("metadata.jsonl"))?,
+            tail_records: JsonlSpool::create(directory.join("tail.jsonl"))?,
+            latest_checkpoint: None,
+            latest_token_usage: None,
+            turns: TurnStore::open(&directory.join("turns.sqlite"))?,
+        })
     }
 }
