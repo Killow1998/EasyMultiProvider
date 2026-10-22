@@ -242,8 +242,9 @@ EMP records local operational metrics so you can see where your coding-agent usa
 - API-equivalent cost estimates with daily price updates.
 - **Statistics > Session bills**: search by session name or ID, sort by recent
   activity, tokens or estimated USD, and expand model usage and cache reads/writes.
-  Each session, including a subagent session, is counted separately within the
-  selected period. Unknown prices, missing usage and known zero rates stay distinct.
+  Auto Review, Sidechat and subagent usage belongs to the main conversation, with
+  model and task breakdowns for the selected period. Unknown prices, missing usage
+  and known zero rates stay distinct.
 - Subscription quota snapshots and local trends.
 - Usage grouped by service type and model, with account and service breakdowns.
 - Call details with the session name, selected model, model sent upstream and
@@ -298,11 +299,11 @@ External Provider models. Manage each service’s models from its own Model sett
 control changes catalog labels, not context windows or request limits.
 
 
-Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/README.md), which defaults to a disposable backend with synthetic data. Its review controls and simulated failures are not included in the normal management page.
+Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/README.md), which defaults to read-only management data and candidate accounting over isolated snapshots of real usage. Synthetic demos require an explicit selection. Review controls and simulated failures are not included in the normal management page.
 
 ## Codex compatibility
 
-The current source version is **v0.13.11**.
+The current source version is **v0.13.12**.
 
 Maintenance targets the latest stable Codex minor series and the previous nine;
 patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.13.12 (2026-10-22)
+
+### 中文
+
+- 会话账单将 Auto Review、Sidechat 和子代理用量归入所属主会话，保留模型与任务明细；修正会话名称、搜索及缺失元数据造成的未知会话显示。
+- 上下文问号说明区分配置窗口、有效窗口与压缩阈值，同时显示已有覆盖配置的影响。
+- 新增记忆整理模型路由：可选择 GPT 模型，使用当前会话的订阅账号；外部模型会话使用 Native。账号不可用或额度耗尽时说明原因，模型设置不改变记忆权限。
+- 提供 Codex 后台压缩 Beta 开关，默认关闭；启用后默认在窗口占用 65% 时触发，保留已有自定义比例。保存后请重启 Codex；App／IDE 用户请重启其 Codex 后台服务。
+- 设置按显示、通用服务、外部服务和原生服务分组，修正窄屏问号说明的定位与滚动，并在保存失败时回滚本次配置写入。
+- macOS 菜单栏改用纯色模板图标，随系统明暗外观显示。
+
+### English
+
+- Attribute Auto Review, Sidechat and subagent usage to the owning main conversation, retaining model and task breakdowns. Fix conversation names, search and unknown-session display caused by missing metadata.
+- Explain configured and effective context windows and compaction thresholds in context help, including the effect of existing overrides.
+- Add GPT memory-model routing using the current conversation's subscription account, or Native for external-model conversations. Explain unavailable or exhausted accounts without changing memory permissions.
+- Add an optional Codex background-compaction Beta switch, off by default. Enabling it uses a default 65% window trigger while preserving existing custom percentages. Restart Codex after saving; App/IDE users should restart their Codex backend service.
+- Group Settings into display, general services, external services and native services. Fix narrow-screen help positioning and scrolling, and roll back configuration writes when saving fails.
+- Use a monochrome template menu-bar icon on macOS that follows the system appearance.
+
 ## 0.13.11 (2026-10-21)
 
 ### 中文
