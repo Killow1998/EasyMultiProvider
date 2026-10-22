@@ -13,6 +13,7 @@ mod installed_codex;
 mod installed_tool_search;
 mod interrupt;
 mod interrupt_http;
+mod memory;
 mod oversized;
 mod sse;
 mod support;

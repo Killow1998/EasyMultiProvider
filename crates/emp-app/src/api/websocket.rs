@@ -14,9 +14,7 @@ use crate::services::history::DestinationPrepareError;
 use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
 use crate::services::observation::request::{Phase, RequestObservation};
-use crate::services::request_preparation::{
-    PreparedRequest, RequestOperation, RequestPreparationError, prepare_request,
-};
+use crate::services::request_preparation::{PreparedRequest, RequestPreparationError};
 use crate::util::projection_ids;
 use crate::util::random_hex;
 use emp_history::HistoryError;
@@ -330,10 +328,10 @@ pub(crate) fn serve_responses_websocket(
         let etag = response_catalog_etag(state).unwrap_or_default();
         if websocket.send_json(&serde_json::json!({"type":"codex.response.metadata","headers":{"x-models-etag":etag}})).is_err(){return;}
         websocket.observation.phase(Phase::ResolveRoute);
-        let (config, route, mut request_body) = match prepare_request(
+        let (config, route, mut request_body) = match crate::services::memory_routing::prepare(
             state,
             Value::Object(request_body),
-            RequestOperation::Responses,
+            &incoming,
         ) {
             Ok(PreparedRequest {
                 config,
@@ -352,6 +350,14 @@ pub(crate) fn serve_responses_websocket(
                     "type":"error", "status":error.status(),
                     "error":{"code":"router_error","origin":"emp","message":crate::services::error_origin::message("emp", &error.to_string())}
                 }));
+                continue;
+            }
+            Err(RequestPreparationError::MemoryUnavailable(reason)) => {
+                let _ = websocket.send_json(&emp_websocket_error(
+                    503,
+                    "memory_routing_unavailable",
+                    crate::services::memory_routing::error_message(reason),
+                ));
                 continue;
             }
             Ok(_) | Err(_) => {

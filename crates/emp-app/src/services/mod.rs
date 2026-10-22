@@ -13,6 +13,7 @@ pub(crate) mod failure_feedback;
 pub(crate) mod history;
 pub(crate) mod integration;
 pub(crate) mod management_events;
+pub(crate) mod memory_routing;
 pub(crate) mod native;
 pub(crate) mod providers;
 pub(crate) mod quota;

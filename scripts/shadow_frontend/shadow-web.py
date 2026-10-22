@@ -14,7 +14,6 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from shadow_usage import aggregate, parameters
 from frontend import frontend
 from shadow_migration import MigrationPreview
 from migration_selection import PreviewError
@@ -88,42 +87,31 @@ class ShadowHandler(BaseHTTPRequestHandler):
             if '/' in name or name in {'', '.', '..'}:
                 return self.error(404, 'Not found')
             try:
-                body = frontend(name, self.server.bootstrap)
+                body = frontend(name, self.server.bootstrap, getattr(self.server, 'real_context', None))
             except FileNotFoundError:
                 return self.error(404, 'Not found')
             return self.send(200, body, mimetypes.guess_type(name)[0] or 'application/octet-stream')
         if not secrets.compare_digest(self.headers.get('X-EMP-Session', ''), self.server.session):
             return self.error(401, 'management session is required')
+        snapshot = getattr(self.server, 'snapshot', None)
+        if path == '/api/shadow/status' and snapshot:
+            return self.send(200, snapshot.status())
+        if path == '/api/usage' and snapshot:
+            try:
+                def source_read(target):
+                    from local_backend import request
+                    token = json.loads(self.server.state_dir.joinpath('web-session.json').read_text())['token']
+                    origin = f'http://127.0.0.1:{self.server.backend_port}'
+                    return request(origin+target,headers={'X-EMP-Session':token,'Origin':origin},timeout=30)
+                status, payload = snapshot.usage(self.path, source_read)
+                return self.send(status, payload)
+            except (OSError, ValueError, http.client.HTTPException):
+                return self.error(503, '无法读取候选版账单快照 / Candidate accounting snapshot is unavailable')
         if path == '/api/shadow/release-notes':
             try:
                 return self.send(200,self.server.release_notes.read())
             except (OSError,ValueError):
                 return self.error(502,'无法读取官方更新说明，请稍后重试。 / Could not read official release notes.')
-        if path == '/api/shadow/usage':
-            try:
-                filters = parameters(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query))
-            except (ValueError, OverflowError):
-                return self.error(400, '请选择有效的统计时间段与筛选条件。')
-            connection = http.client.HTTPConnection('127.0.0.1', self.server.backend_port, timeout=30)
-            try:
-                query = {key: filters[key] for key in ['start', 'end', 'category']}
-                if filters.get('account'):
-                    query['account_id'] = filters['account']
-                token = json.loads(self.server.state_dir.joinpath('web-session.json').read_text(encoding='utf-8'))['token']
-                connection.request('GET', '/api/usage?'+urllib.parse.urlencode(query), headers={
-                    'X-EMP-Session': token, 'Origin': f'http://127.0.0.1:{self.server.backend_port}',
-                })
-                upstream = connection.getresponse()
-                body = upstream.read()
-                if upstream.status != 200:
-                    return self.send(upstream.status, body)
-                return self.send(200, aggregate(self.server.state_dir/'usage.sqlite3', filters, json.loads(body)))
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            except (OSError, ValueError, KeyError, sqlite3.Error, http.client.HTTPException):
-                return self.error(503, '统计数据读取失败，请重试。')
-            finally:
-                connection.close()
         if not allowed_read(path):
             return self.error(404, 'Not found')
         connection = http.client.HTTPConnection('127.0.0.1', self.server.backend_port, timeout=30)
@@ -135,7 +123,16 @@ class ShadowHandler(BaseHTTPRequestHandler):
             })
             upstream = connection.getresponse()
             if path != '/api/accounts/events' or upstream.status != 200:
-                return self.send(upstream.status, upstream.read(), upstream.getheader('Content-Type', 'application/json'))
+                body = upstream.read()
+                if path == '/api/config' and snapshot and upstream.status == 200:
+                    body = json.loads(body)
+                    status, candidate = snapshot.read('/api/config')
+                    if status != 200:
+                        return self.error(503, 'Candidate configuration is unavailable')
+                    for key in ['emp_version', 'codex_context_settings']:
+                        if key in candidate:
+                            body[key] = candidate[key]
+                return self.send(upstream.status, body, upstream.getheader('Content-Type', 'application/json'))
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
             self.send_header('Cache-Control', 'no-store')
@@ -160,6 +157,17 @@ class ShadowHandler(BaseHTTPRequestHandler):
         if self.path == '/api/session' and secrets.compare_digest(
                 self.headers.get('X-EMP-Bootstrap', ''), self.server.bootstrap):
             return self.send(200, {'session': self.server.session})
+        if self.path in {'/api/shadow/snapshot', '/api/shadow/demo'} and getattr(self.server, 'snapshot', None):
+            if not secrets.compare_digest(self.headers.get('X-EMP-Session', ''), self.server.session):
+                return self.error(401, 'management session is required')
+            try:
+                if self.path.endswith('/demo'):
+                    return self.send(200, {'url':self.server.open_demo()})
+                info = self.server.snapshot.refresh()
+                self.send(200, {'snapshot':info, 'command_id':0})
+                return
+            except (OSError, ValueError, sqlite3.Error, TimeoutError):
+                return self.error(503, '无法更新影子快照 / Could not refresh the Shadow snapshot')
         if self.path in {'/api/shadow/migration/decode', '/api/shadow/migration/preview', '/api/shadow/migration/export','/api/shadow/migration/demo'}:
             if not secrets.compare_digest(self.headers.get('X-EMP-Session',''),self.server.session):
                 return self.error(401,'management session is required')
@@ -185,7 +193,10 @@ class ShadowHandler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=4201)
-    parser.add_argument('--emp', type=Path, help='Candidate binary for the unified disposable Shadow workspace')
+    parser.add_argument('--emp', type=Path, help='Candidate binary; preview real data with isolated accounting by default')
+    parser.add_argument('--demo', action='store_true', help='Explicitly use synthetic demonstration data')
+    parser.add_argument('--codex-home', type=Path, help='Read-only Codex metadata source for candidate accounting')
+    parser.add_argument('--scratch-dir', type=Path, help='Disk-backed private directory for disposable snapshots')
     parser.add_argument('--backend-port', type=int, default=4200)
     parser.add_argument('--state-dir', type=Path, default=default_state_dir(), help='EMP state directory containing web-session.json and usage.sqlite3')
     parser.add_argument('--open', action='store_true')
@@ -193,10 +204,23 @@ def main():
     parser.add_argument('--config',type=Path,help='Read-only production configuration for migration preview')
     parser.add_argument('--release-api',help='Loopback release metadata endpoint for isolated acceptance')
     args = parser.parse_args()
+    if args.release_api and urllib.parse.urlsplit(args.release_api).hostname != '127.0.0.1':
+        parser.error('--release-api must use a loopback fixture')
+    project = Path(__file__).resolve().parents[2]
+    name = 'shadow_migration_codec.exe' if sys.platform == 'win32' else 'shadow_migration_codec'
+    candidates = [project/'target/debug/examples'/name,
+                  project.parent/'.emp-rust-target-root/per-worktree'/project.name/'debug/examples'/name]
+    args.migration_helper = args.migration_helper or next((path for path in candidates if path.is_file()),None)
     if args.emp:
-        from preview import serve
-        serve(args.emp, args.port, args.open)
+        if args.demo:
+            from preview import serve
+            serve(args.emp, args.port, args.open)
+        else:
+            from real_preview import serve
+            serve(ShadowHandler, args)
         return
+    if args.demo:
+        parser.error('--demo requires --emp')
     server = ThreadingHTTPServer(('127.0.0.1', args.port), ShadowHandler)
     server.daemon_threads = True
     port = server.server_port
@@ -205,16 +229,9 @@ def main():
     server.state_dir = args.state_dir.expanduser().resolve()
     server.bootstrap = secrets.token_urlsafe(32)
     server.session = secrets.token_urlsafe(32)
-    project = Path(__file__).resolve().parents[2]
-    name = 'shadow_migration_codec.exe' if sys.platform == 'win32' else 'shadow_migration_codec'
-    candidates = [project/'target/debug/examples'/name,
-                  project.parent/'.emp-rust-target-root/per-worktree'/project.name/'debug/examples'/name]
-    helper = args.migration_helper or next((path for path in candidates if path.is_file()),None)
     config = args.config or Path(os.environ.get('EASY_MULTI_PROVIDER_CONFIG',server.state_dir.parent/'config.json'))
     native_auth = Path(os.environ.get('CODEX_HOME',Path.home()/'.codex'))/'auth.json'
-    server.migration = MigrationPreview(helper,config,native_auth)
-    if args.release_api and urllib.parse.urlsplit(args.release_api).hostname != '127.0.0.1':
-        parser.error('--release-api must use a loopback fixture')
+    server.migration = MigrationPreview(args.migration_helper,config,native_auth)
     server.release_notes = ReleaseNotes(args.release_api) if args.release_api else ReleaseNotes()
     if args.open:
         threading.Timer(0.5, lambda: webbrowser.open(f'http://127.0.0.1:{port}/')).start()

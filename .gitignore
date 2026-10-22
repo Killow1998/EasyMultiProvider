@@ -28,6 +28,7 @@ docs/v0.5-implementation-plan.md
 
 # Python developer previews
 __pycache__/
+/.shadow-state/
 
 # The Rust account owner is source; keep sibling data ignored.
 !crates/emp-app/src/services/accounts/

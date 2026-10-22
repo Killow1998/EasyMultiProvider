@@ -241,6 +241,7 @@ fn suppress_unsettled_runtime(
 pub(crate) struct IntegrationState {
     pub(crate) manager: IntegrationManager,
     pub(crate) search: emp_integration::search::SearchFeatureManager,
+    pub(crate) preferences: emp_integration::preferences::CodexPreferences,
     pub(crate) owned: AtomicBool,
     codex_home: std::path::PathBuf,
     history_restore: std::sync::Mutex<Value>,
@@ -263,6 +264,10 @@ impl IntegrationState {
         let runtime = RuntimeState::new(manager.lease_path().with_file_name("runtime.json"));
         let history_restore = restore::read_history_restore(&manager, &codex_home);
         Self {
+            preferences: emp_integration::preferences::CodexPreferences::new(
+                manager.config_path().to_owned(),
+                manager.lease_path().with_file_name("compaction.json"),
+            ),
             search: emp_integration::search::SearchFeatureManager::new(
                 manager.config_path().to_owned(),
                 manager.lease_path().with_file_name("search.json"),
@@ -282,14 +287,23 @@ impl IntegrationState {
     }
 }
 
-pub(crate) fn sync_search(state: &ServerState) -> Result<(), ()> {
-    let enabled = state.backend.configuration.read().map_err(|_| ())?["subscription_search"]["enabled"]
-        == true;
+pub(crate) fn sync_features(state: &ServerState) -> Result<(), ()> {
+    let config = state.backend.configuration.read().map_err(|_| ())?.clone();
+    let enabled = config["subscription_search"]["enabled"] == true;
     state
         .backend
         .integration
         .search
         .apply(enabled)
+        .map_err(|_| ())?;
+    state
+        .backend
+        .integration
+        .preferences
+        .apply(
+            config["background_compaction"].as_bool(),
+            config["memory_model"].as_str().unwrap_or_default(),
+        )
         .map_err(|_| ())
 }
 

@@ -5,6 +5,10 @@ pub(crate) fn headroom(quota: Option<&Value>) -> Option<f64> {
     capacity(quota, None)
 }
 
+pub(crate) fn current_headroom(quota: Option<&Value>) -> Option<f64> {
+    capacity(quota, Some(crate::util::system_now()))
+}
+
 fn capacity(quota: Option<&Value>, now: Option<f64>) -> Option<f64> {
     let quota = quota?.as_object()?;
     if quota

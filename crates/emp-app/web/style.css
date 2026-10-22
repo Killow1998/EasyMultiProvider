@@ -326,6 +326,8 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .account-value-row button{height:36px;margin:0;flex:none}
 .account-usage .usage-table{overflow:auto}
 .settings-list{min-width:0}
+.settings-group+.settings-group{margin-top:10px;padding-top:18px;border-top:1px solid var(--border)}
+.settings-group-title{margin:0;font-size:13px;font-weight:600;color:var(--muted)}
 .setting-row{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:14px 0;border-bottom:1px solid var(--border)}
 .setting-switch{--switch-width:36px;--switch-height:22px;--switch-inset:3px;position:relative;flex:none;width:var(--switch-width);min-width:var(--switch-width);max-width:var(--switch-width);height:var(--switch-height);min-height:var(--switch-height);max-height:var(--switch-height);margin:0;padding:0;border:0;border-radius:99px;background:var(--border-strong);box-shadow:none}
 .setting-switch::before{content:"";position:absolute;left:var(--switch-inset);top:var(--switch-inset);width:calc(var(--switch-height) - 2 * var(--switch-inset));height:calc(var(--switch-height) - 2 * var(--switch-inset));border-radius:50%;background:#fff;transition:left .15s}
@@ -405,6 +407,9 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .session-bill[open]>summary::before{content:'⌄'}
 .session-bill>summary span{min-width:0;overflow-wrap:anywhere}.session-bill small{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
 .session-bill-detail{border-top:1px solid var(--border);padding:0 0 14px}.session-bill-id{overflow-wrap:anywhere;font-size:12px;color:var(--muted)}
+.session-bill-detail [data-bill-components]{display:table;table-layout:fixed;min-width:0;overflow:visible;white-space:normal}
+.session-bill-detail [data-bill-components] th,.session-bill-detail [data-bill-components] td{overflow-wrap:anywhere}
+.session-bill-detail [data-bill-components] th:first-child{width:38%}.session-bill-detail [data-bill-components] th:nth-child(2){width:22%}.session-bill-detail [data-bill-components] th:last-child{width:22%}
 #presentation_stats .report-status:empty{display:none}
 @media(max-width:650px){.session-bill>summary{grid-template-columns:repeat(2,minmax(0,1fr))}.session-bill>summary>span:first-child{grid-column:1/-1}}
 .call-result{margin:0 0 14px;overflow-wrap:anywhere}

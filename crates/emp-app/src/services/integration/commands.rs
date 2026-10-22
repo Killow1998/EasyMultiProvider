@@ -261,7 +261,7 @@ fn execute_inner(
         if result.state == "active"
             && receipt
                 .step("apply_search", || {
-                    crate::services::integration::sync_search(state)
+                    crate::services::integration::sync_features(state)
                 })
                 .is_err()
         {

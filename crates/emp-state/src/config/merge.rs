@@ -251,6 +251,8 @@ fn merge_web_update_at_time(
         "auto_review_fallback",
         "external_collaboration",
         "image_routing",
+        "memory_model",
+        "background_compaction",
     ] {
         if !merged_object.contains_key(key)
             && let Some(value) = current.get(key)

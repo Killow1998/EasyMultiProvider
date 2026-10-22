@@ -39,6 +39,8 @@ mod series;
 pub use series::UsageSeriesFilter;
 mod sessions;
 pub use sessions::SessionBillPage;
+mod session_scope;
+pub use session_scope::{SessionMetadata, SessionScope};
 
 pub const RESOLVED_USAGE: &str = include_str!("../../../../contracts/usage-owners.sql");
 

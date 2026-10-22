@@ -1,5 +1,5 @@
 // Model draft and async metadata belong to the editor that opened them.
-function createModelEditor({getState, $, tr, esc, api, persistState, openModal, closeModal, notice,
+function createModelEditor({getState, $, tr, esc, api, persistState, openModal, closeModal, notice, help, contextHelp,
   upstreamErrorText, testModelAudio, testModelVision, movePresentation, format}) {
   const {visionStatus, modalityLabel, compactContext, usableContext} = format;
   const COMMON_MODALITIES = ['text','image'];
@@ -47,7 +47,7 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
     modalVisionStatus = vision;
     modalModalitiesEdited = false;
     modalReasoningEdited = false;
-    const body = `<div class="grid"><div><label>${tr("common.provider")}</label><select id="modal_model_provider" data-editor-change="route">${options}</select></div><div><label id="modal_model_upstream_label">${upstreamLabel}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${upstreamPlaceholder}" data-editor-input="route"></div><div class="wide"><label>${tr("models.maximum_context_window")}</label><div class="input-action"><input id="modal_model_context" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.context_window || 0)}" data-editor-input="context"><button id="modal_model_context_inspect" type="button" class="secondary" data-editor-action="inspect" ${localClaude ? 'hidden' : ''}>${tr("models.fetch_upstream_maximum")}</button></div><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr("models.codex_uses", {context:compactContext(usableContext(existing))}) : ''}</small></div><div class="wide"><label>${tr("models.available_reasoning_levels")}</label><div id="modal_model_reasoning" class="modality-options">${reasoningOptions(modalReasoningLevels || [])}</div><small class="muted">${tr("models.choose_the_effort_when_selecting_a_model_in_codex")}</small></div><div class="wide"><label>${tr("models.input_modalities")}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}</div></div><div class="wide"><code id="modal_model_route" hidden></code></div></div><p class="muted">${tr("models.set_the_model_name_and_context_label_in_model")}</p>`;
+    const body = `<div class="grid"><div><label>${tr("common.provider")}</label><select id="modal_model_provider" data-editor-change="route">${options}</select></div><div><label id="modal_model_upstream_label">${upstreamLabel}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${upstreamPlaceholder}" data-editor-input="route"></div><div class="wide"><label>${tr("models.maximum_context_window")} ${help('').replace('data-shadow-help=', 'id="modal_model_context_help" data-shadow-help=')}</label><div class="input-action"><input id="modal_model_context" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.context_window || 0)}" data-editor-input="context"><button id="modal_model_context_inspect" type="button" class="secondary" data-editor-action="inspect" ${localClaude ? 'hidden' : ''}>${tr("models.fetch_upstream_maximum")}</button></div><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr("models.codex_uses", {context:compactContext(usableContext(existing))}) : ''}</small></div><div class="wide"><label>${tr("models.available_reasoning_levels")}</label><div id="modal_model_reasoning" class="modality-options">${reasoningOptions(modalReasoningLevels || [])}</div><small class="muted">${tr("models.choose_the_effort_when_selecting_a_model_in_codex")}</small></div><div class="wide"><label>${tr("models.input_modalities")}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}</div></div><div class="wide"><code id="modal_model_route" hidden></code></div></div><p class="muted">${tr("models.set_the_model_name_and_context_label_in_model")}</p>`;
     openModal(modelId ? tr("models.edit_model") : tr("add_model"), `<div id="model_editor">${body}</div>`, tr("models.save_model"), async () => { const node = $('model_editor'); await saveManualModel(); if ($('model_editor') === node) closeModal(); }, null, navigation);
     const root = $('model_editor');
     root.onchange = event => {
@@ -60,6 +60,7 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
     root.onclick = event => { const action = event.target.closest('[data-editor-action]')?.dataset.editorAction; if (action === 'inspect') inspectModalModel(); else if (action === 'vision') testModalVision(); else if (action === 'audio') testModalAudio(); };
     if (selectedProviderId) $('modal_model_provider').value = selectedProviderId;
     updateManualModelRoute();
+    previewModalContext();
   }
   function reasoningOptions(selected) {
     const levels = [...new Set(['low','medium','high','xhigh','max', ...selected])];
@@ -79,7 +80,13 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
     if (upstream) upstream.placeholder = localClaude ? tr("models.enter_a_claude_code_model_alias_or_full_id") : tr("models.for_example_glm");
     if (inspect) inspect.hidden = Boolean(localClaude);
   }
-  function previewModalContext() { const value = Number($('modal_model_context').value) || 0; $('modal_model_context_usable').textContent = value ? tr("models.codex_uses", {context:compactContext(usableContext({context_window:value}))}) : ''; }
+  function previewModalContext() {
+    const value = Number($('modal_model_context').value) || 0;
+    const model = (getState().models || []).find(model => model.id === editingModelId) || {};
+    $('modal_model_context_usable').textContent = value ? tr('models.codex_uses', {context:compactContext(contextHelp.budget(model,value,{external:true})?.usable || 0)}) : '';
+    const button = $('modal_model_context_help');
+    if (button) { button.dataset.shadowHelp = contextHelp.describe(model,value,{external:true}); button.setAttribute('aria-label',tr('models.context_compression_details')); }
+  }
   async function inspectModalModel() {
     const provider = $('modal_model_provider').value, upstream = $('modal_model_upstream').value.trim();
     if (!provider || !upstream) return notice(tr("models.enter_a_provider_and_upstream_model_name"), true);
@@ -90,6 +97,7 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
       const result = await api('/api/models/metadata', {method:'POST',body:JSON.stringify({provider,model:upstream}),signal:controller.signal});
       if (controller.signal.aborted || $('model_editor') !== root) return;
       $('modal_model_context').value = result.context_window;
+      previewModalContext();
       modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : [];
       modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null;
       modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null;

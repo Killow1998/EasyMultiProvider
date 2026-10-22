@@ -42,6 +42,8 @@ impl<'a> RequestOutcome<'a> {
         // Use the explicit wire flag, never output_tokens == 0 as a heuristic.
         let operation = if operation == "responses" && body["generate"] == false {
             "prewarm"
+        } else if operation == "responses" {
+            crate::services::memory_routing::kind(body, incoming).unwrap_or(operation)
         } else {
             operation
         };
@@ -381,6 +383,7 @@ impl<'a> RequestOutcome<'a> {
                 );
             }
             self.prepare_call_facts();
+            crate::services::memory_routing::observe(self.state, &self.event);
             crate::services::observation::record_completion(self.state, &self.event);
             self.persist_call();
             self.publish(true);

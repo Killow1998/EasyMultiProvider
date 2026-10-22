@@ -2,6 +2,10 @@
 pub(super) const SIZE: u32 = 48;
 
 pub(super) fn rgba() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    #[cfg(target_os = "macos")]
+    let source = include_bytes!("../../../../assets/branding/native/easy-multi-provider-tray.png")
+        .as_slice();
+    #[cfg(not(target_os = "macos"))]
     let source = include_bytes!("../../../../assets/branding/easy-multi-provider-icon-1024.png");
     let mut decoder = png::Decoder::new(std::io::Cursor::new(source));
     decoder.set_transformations(png::Transformations::normalize_to_color8());

@@ -177,6 +177,7 @@ test('model editor cancels metadata when routes change and discards replies to a
   let nodes={}, editor, notices=[];
   const q=queries(), document={querySelectorAll:() => []};
   editor=feature('model-editor.js','createModelEditor',{document})({...q,getState:() => ({providers:[{id:'api'}],models:[]}),$:id => nodes[id],tr,esc,
+    help:()=>'',contextHelp:feature('context-help.js','createContextHelp')({getState:()=>({}),tr}),
     openModal() {editor.stop();nodes=Object.fromEntries(['model_editor','modal_model_provider','modal_model_upstream','modal_model_route','modal_model_upstream_label','modal_model_context','modal_model_context_inspect','modal_model_context_usable','modal_model_reasoning'].map(id => [id,{value:'',textContent:''}]));nodes.modal_model_upstream.value='first';},
     closeModal(){editor.stop();nodes={};},persistState(){},notice:text => notices.push(text),upstreamErrorText:error => error.message,testModelAudio(){},testModelVision(){},
     format:{visionStatus:() => 'unknown',modalityLabel:x => x,compactContext:String,usableContext:() => 1}});

@@ -29,7 +29,7 @@ fn resolve_shared_route(
     })
 }
 
-fn make_review_server(
+pub(super) fn make_review_server(
     base_url: &str,
     accounts: &[Value],
     native_auth: Option<&str>,
@@ -119,7 +119,7 @@ fn make_review_server(
 }
 
 #[cfg_attr(windows, allow(dead_code))]
-fn write_owned_account_catalog(
+pub(super) fn write_owned_account_catalog(
     server: &ServerHandle,
     account: &Value,
     base_url: &str,

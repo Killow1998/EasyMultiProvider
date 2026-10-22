@@ -1,4 +1,4 @@
-//! Page session bills from reconciled usage and resolve only local index titles.
+//! Page main-conversation bills using reconciled usage and local ownership metadata.
 use super::*;
 use emp_state::usage::ledger::SessionBillPage;
 
@@ -24,48 +24,21 @@ pub(super) fn read(
     {
         return invalid();
     }
-    let ledger = &state.backend.usage.ledger;
-    let directory = &state.backend.usage.sessions;
-    let home = &state.backend.accounts.codex_home;
-    let matching_sessions = if query.is_empty() {
-        None
-    } else {
-        let Ok(ids) = ledger.session_ids(filter) else {
-            return unavailable();
-        };
-        let names = directory.resolve(home, &ids);
-        Some(
-            ids.into_iter()
-                .filter(|id| {
-                    id.to_lowercase().contains(&query)
-                        || names
-                            .get(id)
-                            .is_some_and(|name| name.to_lowercase().contains(&query))
-                })
-                .collect(),
-        )
-    };
     let page = SessionBillPage {
         offset,
         limit,
         sort,
-        matching_sessions,
+        matching_sessions: None,
     };
-    let Ok(mut payload) = ledger.query_sessions(filter, &page, now) else {
+    let Ok(mut payload) = state.backend.usage.query_sessions(
+        &state.backend.accounts.codex_home,
+        filter,
+        page,
+        &query,
+        now,
+    ) else {
         return unavailable();
     };
-    let ids = payload["records"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row["session_id"].as_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    let names = directory.resolve(home, &ids);
-    for row in payload["records"].as_array_mut().into_iter().flatten() {
-        if let Some(name) = row["session_id"].as_str().and_then(|id| names.get(id)) {
-            row["session_name"] = json!(name);
-        }
-    }
     payload["history"] = state.backend.usage.status();
     json_response(200, &payload)
 }

@@ -83,6 +83,14 @@ results for reproducibility; defer further async-specific adaptation and
 steering/account/routing combinations until the feature itself becomes stable,
 then reassess whether to include it in EMP's maintained test scope.
 
+EMP exposes an opt-in Beta switch for Codex 0.163+ without expanding that routine
+acceptance scope. The setting preserves a user-specified trigger percentage
+(default 65% of the full window), and its help distinguishes the trigger from
+compression retention. After saving, restart Codex or the App/IDE Codex backend
+to reload the configuration; EMP itself need not restart. Restore Native and
+Quit restore the pre-EMP value, also requiring Codex to reload it. Existing
+configured feature values are retained until the user explicitly changes them.
+
 The exploratory real-engine async-compaction harness passed four cases with the
 feature explicitly disabled or enabled: disabled control; adoption of a pending
 result by explicit compaction with only one upstream compaction request; a new

@@ -12,7 +12,8 @@ pub(super) fn initialize(connection: &Connection) -> Result<()> {
         finished_at REAL NOT NULL, provider_id TEXT NOT NULL, account_id TEXT NOT NULL,
         model_id TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL, facts TEXT NOT NULL,
         delivery TEXT, PRIMARY KEY(request_id, operation));
-        CREATE INDEX IF NOT EXISTS call_period ON call_records(started_at);",
+        CREATE INDEX IF NOT EXISTS call_period ON call_records(started_at);
+        CREATE INDEX IF NOT EXISTS call_session ON call_records(session_id);",
     )?;
     Ok(())
 }
@@ -33,6 +34,7 @@ fn facts(event: &Value) -> Value {
         "thread_id",
         "turn_id",
         "parent_thread_id",
+        "session_kind",
         "resolved_protocol",
         "transport",
         "response_model_source",
@@ -95,6 +97,25 @@ fn facts(event: &Value) -> Value {
 }
 
 impl UsageLedger {
+    /// The last completed conversation turn identifies its account across restarts.
+    /// Auxiliary jobs must never replace the conversation's selected route.
+    pub fn latest_conversation_call(&self, thread: &str) -> Result<Option<Value>> {
+        let _guard = self.lock.lock().map_err(|_| UsageError)?;
+        rows(
+            &self.connect()?,
+            "SELECT facts FROM call_records WHERE session_id=? AND operation='responses'
+             AND state='completed' AND COALESCE(json_extract(facts,'$.session_kind'),'')
+             NOT IN ('review','memory','memory_extraction','memory_consolidation')
+             ORDER BY finished_at DESC,request_id DESC LIMIT 1",
+            &[SqlValue::Text(thread.into())],
+        )?
+        .first()
+        .map(|row| {
+            serde_json::from_str(row["facts"].as_str().ok_or(UsageError)?).map_err(|_| UsageError)
+        })
+        .transpose()
+    }
+
     pub fn record_call(&self, event: &Value, started: f64, finished: f64) -> Result<()> {
         let id = text(event, "request_id", "");
         if id.is_empty() || id.len() > 256 || !started.is_finite() || !finished.is_finite() {

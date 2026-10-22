@@ -17,14 +17,18 @@ usage remains zero. Use **Statistics** for date and category breakdowns.
 
 Choose **Statistics > Session bills** to search session names or IDs and sort by
 recent activity, tokens or estimated USD. The list is paginated; expanding a
-session loads its model breakdown for the same period and filters. Identical
-upstream model IDs are summed across that session's services. Titles come from
-the local Codex index or read-only threads database; unavailable titles use
-**Unnamed session**, with the ID available in the detail.
+conversation loads its model breakdown and task/branch breakdown for the same
+period and filters. Identical upstream model IDs are summed across its services.
+Titles come from the local Codex index or read-only threads database; a confirmed
+main conversation without a title displays a shortened ID.
 
-Each session is counted independently. Subagents are listed under their own
-session IDs and are not silently rolled into a parent bill. The shared accounting
-selection reconciles live and historical observations before aggregation. Cache
+One bill belongs to one main conversation, including its linked Auto Review,
+Sidechat and nested subagents. Expanding it retains each component's type, tokens
+and estimate. Ownership comes from recorded request parents and Codex's read-only
+thread metadata and spawn edges; ephemeral children do not need a saved rollout.
+Cycles, conflicting parents and unavailable roots remain unassigned, rather than
+becoming unnamed user conversations. The shared accounting selection reconciles
+live and historical observations before aggregation. Cache
 reads/writes and reasoning remain subsets of input/output, not extra tokens to
 add to the total.
 
@@ -39,16 +43,23 @@ Session links form a small index beside the existing usage rows. Old call receip
 populate their verified links on startup. Existing rollout checkpoints receive
 one read-only rescan to populate historical links, with indexing shown in the bill
 view; event IDs, recorded totals and
-frozen rates remain unchanged, and later scans are incremental again. Conflicting
-session evidence and records whose original source is no longer available stay
-unassigned. Their known usage remains in the overall total and is shown separately
-instead of being charged to an arbitrary session.
+frozen rates remain unchanged, and later scans are incremental again. Conversation
+ownership is resolved from existing metadata at query time, without a new rollout
+rescan. Inherited copies of one event count once if all owners resolve to the same
+main conversation; disagreeing copies remain unassigned. Their known usage stays
+in the overall total and is shown separately instead of being charged arbitrarily.
 
 The authenticated `/api/usage?sessions=true` endpoint accepts the existing period,
 service/source, model and session filters plus `q`, `sort=recent|tokens|cost`,
 `offset` and `limit` (default 20, maximum 100). Model details use the existing
-`series=true&session=ID` projection. Both paths share selection and aggregation;
-there is no second accounting or pricing engine.
+`series=true&conversation=true&session=MAIN_ID` projection, including `components`.
+Omitting `conversation=true` retains the individual-thread projection. Both paths
+share selection and aggregation; there is no second accounting or pricing engine.
+An authenticated caller may select an already observed opaque `owner` directly,
+instead of resolving the current `account`/`account_id` credential. These choices
+are mutually exclusive; owner filters are bounded and cannot contain control
+characters. Shadow uses this to calculate account-scoped snapshot reports without
+copying credentials or guessing account identity from historical labels.
 
 ## What is counted
 

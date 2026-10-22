@@ -45,7 +45,7 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
     let result = manager.recover(true, true).map_err(|_| ())?;
     if result.ok() && result.action == "re_adopted" && result.state == "active" {
         integration.owned.store(true, Ordering::Release);
-        crate::services::integration::sync_search(state)?;
+        crate::services::integration::sync_features(state)?;
         integration
             .startup_conflicts
             .lock()
@@ -126,7 +126,7 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
             return Err(());
         }
         integration.owned.store(true, Ordering::Release);
-        if super::integration::sync_search(state).is_err() {
+        if super::integration::sync_features(state).is_err() {
             let _ = manager.restore();
             return Err(());
         }

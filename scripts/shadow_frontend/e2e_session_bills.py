@@ -16,6 +16,7 @@ from candidate_web import candidate_frontend
 from e2e_environment import request, start_backend, wait_for
 from e2e_refinements import Browser
 from session_bill_lifecycle import check_bill_lifecycle
+from session_bill_lineage import check_conversation_ownership
 
 FIRST='11111111-1111-4111-8111-111111111111'
 SECOND='22222222-2222-4222-8222-222222222222'
@@ -31,7 +32,7 @@ class BillUpstream(BaseHTTPRequestHandler):
     def do_POST(self):
         self.rfile.read(int(self.headers['Content-Length']))
         type(self).calls+=1
-        body=json.dumps({'id':'bill-fixture','model':'upstream-model',
+        body=json.dumps({'id':f'bill-fixture-{type(self).calls}','model':'upstream-model',
             'choices':[{'index':0,'message':{'role':'assistant','content':'ok'},'finish_reason':'stop'}],
             'usage':{'prompt_tokens':10,'completion_tokens':2,
                 'prompt_tokens_details':{'cached_tokens':0}}}).encode()
@@ -83,7 +84,7 @@ def main():
         threading.Thread(target=fixture_upstream.serve_forever,daemon=True).start()
         stack.callback(fixture_upstream.shutdown)
         base,_,state,headers,upstream=start_backend(stack,args.emp.resolve(),root,
-            {'codex_base_url':'http://127.0.0.1:9/fixture-only','providers':[
+            {'codex_base_url':'http://127.0.0.1:9/fixture-only','external_collaboration':'on','providers':[
                 {'id':'demo','name':'Billing fixture','base_url':f'http://127.0.0.1:{fixture_upstream.server_port}/v1',
                  'protocol':'chat_completions','auth_mode':'api_key','api_key':'fixture-only'}]},
             {'PATH':'/usr/bin:/bin','HTTP_PROXY':'http://127.0.0.1:9',
@@ -156,6 +157,8 @@ def main():
         assert restored['totals']==detail['totals'],restored
         assert request(base+'/api/usage?'+query,headers=headers)[1]['totals']==all_usage['totals']
         checks.append('An old history checkpoint rebuilds session links without duplicating or repricing previously recorded usage')
+        check_conversation_ownership(base,state,home,headers,query,FIRST)
+        checks.append('Real request headers and Sidechat metadata merge review, Sidechat and nested agents into the main bill; search follows child names and orphan usage remains unassigned')
         web=Path(__file__).resolve().parents[2]/'crates/emp-app/web'
         head='<script>localStorage.setItem("emp_management_session_v1",'+json.dumps(headers['X-EMP-Session'])+');</script>'
         frontend,_=candidate_frontend(stack,base,web,index_head=head)
@@ -170,10 +173,15 @@ def main():
             assert browser.execute('return document.querySelector("[data-session-bill]").textContent.includes(arguments[0]) && !document.querySelector("[data-bill-list] img") && !window.billXss;',TITLE)
             browser.execute('document.querySelector("[data-session-bill]").open=true;')
             wait_for(lambda: browser.execute('return document.querySelector("[data-bill-detail]").textContent.includes("second-model");'))
-            assert browser.execute('return document.querySelectorAll("[data-bill-detail] tbody tr").length===2;')
+            assert browser.execute('return document.querySelectorAll("[data-bill-models] tbody tr").length===2 && document.querySelectorAll("[data-bill-components] tbody tr").length===4;')
+            assert browser.execute('return document.querySelector("[data-bill-components]").textContent.includes("Sidechat") && document.querySelector("[data-bill-components]").textContent.includes("Guardian review");')
+            assert browser.execute('const box=document.querySelector("[data-bill-components]").closest(".usage-table");return box.scrollWidth<=box.clientWidth+1;')
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             _,png=request(browser.base+'/screenshot')
             args.output.with_name(args.output.stem+'-'+language+'.png').write_bytes(base64.b64decode(png['value']))
+            browser.execute('document.querySelector("[data-bill-components]").scrollIntoView({block:"center"});')
+            _,png=request(browser.base+'/screenshot')
+            args.output.with_name(args.output.stem+'-components-'+language+'.png').write_bytes(base64.b64decode(png['value']))
             viewports.append(browser.execute('return {language:arguments[0],width:innerWidth,height:innerHeight};',language))
             for term,expected in [('Unknown price','—'),('Zero price','US$0.0000')]:
                 browser.execute('const input=document.querySelector("[data-bill-search]");input.value=arguments[0];input.dispatchEvent(new Event("input",{bubbles:true}));',term)
@@ -188,9 +196,9 @@ def main():
             browser.execute('const select=document.querySelector("[data-bill-sort]");select.value="cost";select.dispatchEvent(new Event("change",{bubbles:true}));')
             wait_for(lambda: browser.execute('return document.querySelector("[data-session-bill]").dataset.sessionBill===arguments[0];',FIRST))
             browser.execute('const select=document.querySelector("[data-stats-filter=service]");select.value="provider:demo";select.dispatchEvent(new Event("change",{bubbles:true}));')
-            wait_for(lambda: browser.execute('return document.querySelectorAll("[data-session-bill]").length===1 && document.querySelector("[data-session-bill] summary").textContent.includes("12");'))
+            wait_for(lambda: browser.execute('return document.querySelectorAll("[data-session-bill]").length===1 && document.querySelector("[data-session-bill] summary").textContent.includes("48");'))
             browser.execute('document.querySelector("[data-stats-view=overview]").click();')
-            wait_for(lambda: browser.execute('return [...document.querySelectorAll(".presentation-stat")].some(node=>node.querySelector(".presentation-stat-label")?.textContent==="Token" && node.querySelector("strong").textContent==="12");'))
+            wait_for(lambda: browser.execute('return [...document.querySelectorAll(".presentation-stat")].some(node=>node.querySelector(".presentation-stat-label")?.textContent==="Token" && node.querySelector("strong").textContent==="60");'))
             checks.append(language+': search, escaped titles, model expansion, missing versus zero prices, empty results, sorting, paging, service-filter navigation and layout pass')
             browser.execute('closeModal();')
         browser.execute('statistics.open();document.querySelector("[data-stats-view=sessions]").click();')
@@ -205,9 +213,9 @@ def main():
         checks.append('Closing statistics cancels an in-flight model breakdown; a late result cannot reopen or replace another view')
         check_bill_lifecycle(browser)
         checks.append('Queued native toggle events from replaced rows cannot claim or cancel the current bill details during refresh or remount')
-        assert BillUpstream.calls==1 and upstream.calls==0
+        assert BillUpstream.calls==5 and upstream.calls==0
     receipt={'passed':True,'checks':checks,'viewports':viewports,'real_model_calls':0,
-        'fixture_model_calls':1,'production_state_used':False}
+        'fixture_model_calls':5,'production_state_used':False}
     args.output.write_text(json.dumps(receipt,indent=2,ensure_ascii=False)+'\n')
     print(json.dumps(receipt,ensure_ascii=False))
 

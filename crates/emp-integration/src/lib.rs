@@ -12,6 +12,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
+pub mod preferences;
 pub mod runtime;
 pub mod search;
 pub(crate) use files::{MAX_CODEX_CONFIG_BYTES, MAX_LEASE_BYTES, absolute, read_text_limited};

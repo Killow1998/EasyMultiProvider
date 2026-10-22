@@ -227,7 +227,7 @@ def main():
         result['formal'] = check_page(browser, False)
         browser.navigate(shadow)
         result['shadow'] = check_page(browser, True)
-        usage = browser.api('/api/shadow/usage?start=0&end=' + str(time.time()+60) + '&state=completed')
+        usage = browser.api('/api/usage?series=true&start=0&end=' + str(time.time()+60) + '&state=completed')
         assert usage['totals']['input_tokens'] == 10 and usage['totals']['output_tokens'] == 2, usage
         assert request(shadow + 'api/config', {'providers': []})[0] == 403
         assert request(shadow + 'api/accounts/fixture', method='DELETE')[0] == 403

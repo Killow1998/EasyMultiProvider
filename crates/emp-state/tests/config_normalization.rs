@@ -53,6 +53,8 @@ fn configuration_normalization_matches_frozen_fixture() {
             "language",
             "image_routing",
             "external_collaboration",
+            "memory_model",
+            "background_compaction",
         ] {
             python_compatible.as_object_mut().unwrap().remove(key);
         }
@@ -103,6 +105,8 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
         assert_eq!(defaults["auto_enable_on_start"], true);
         assert_eq!(defaults["auto_review_fallback"], true);
         assert_eq!(defaults["external_collaboration"], "off");
+        assert_eq!(defaults["memory_model"], "");
+        assert_eq!(defaults["background_compaction"], Value::Null);
         assert_eq!(defaults["subscription_search"]["enabled"], true);
     }
     let disabled = normalize_configuration(Some(&json!({
@@ -125,7 +129,8 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
 #[test]
 fn application_preferences_survive_web_save_and_reject_non_booleans() {
     let current = normalize_configuration(Some(&json!({
-        "auto_enable_on_start": true, "auto_review_fallback": false, "external_collaboration": "on_demand"
+        "auto_enable_on_start": true, "auto_review_fallback": false, "external_collaboration": "on_demand",
+        "memory_model":"gpt-6-luna", "background_compaction":true
     })))
     .unwrap();
     let public =
@@ -135,6 +140,8 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
     assert_eq!(saved["auto_enable_on_start"], true);
     assert_eq!(saved["auto_review_fallback"], false);
     assert_eq!(saved["external_collaboration"], "on_demand");
+    assert_eq!(saved["memory_model"], "gpt-6-luna");
+    assert_eq!(saved["background_compaction"], true);
     let mut old_client = public.clone();
     old_client
         .as_object_mut()
@@ -144,10 +151,18 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
         emp_state::merge_web_update(&current, &old_client).unwrap()["external_collaboration"],
         "on_demand"
     );
+    for key in ["memory_model", "background_compaction"] {
+        old_client.as_object_mut().unwrap().remove(key);
+        assert_eq!(
+            emp_state::merge_web_update(&current, &old_client).unwrap()[key],
+            current[key]
+        );
+    }
     for key in [
         "auto_enable_on_start",
         "auto_review_fallback",
         "external_collaboration",
+        "background_compaction",
     ] {
         assert!(normalize_configuration(Some(&json!({key: "false"}))).is_err());
     }
@@ -159,5 +174,14 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
     }
     for invalid in [json!(false), json!(true), json!(null), json!("auto")] {
         assert!(normalize_configuration(Some(&json!({"external_collaboration":invalid}))).is_err());
+    }
+    for invalid in [
+        json!(false),
+        json!(null),
+        json!("external/gpt-6-luna"),
+        json!("claude-opus"),
+        json!("gpt-../../auth"),
+    ] {
+        assert!(normalize_configuration(Some(&json!({"memory_model":invalid}))).is_err());
     }
 }

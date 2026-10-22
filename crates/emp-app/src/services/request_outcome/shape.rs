@@ -130,6 +130,17 @@ pub(super) fn facts(body: &Value, headers: &BTreeMap<String, String>) -> Value {
             .map(str::to_owned)
             .or_else(|| text(&metadata["forked_from_thread_id"]))
     );
+    let model = body["model"].as_str().unwrap_or("");
+    result["session_kind"] =
+        if crate::services::memory_routing::kind(body, headers) == Some("memory_consolidation") {
+            json!("memory_consolidation")
+        } else if model == "codex-auto-review" || model.ends_with("/codex-auto-review") {
+            json!("review")
+        } else if text(&metadata["forked_from_thread_id"]).is_some() {
+            json!("sidechat")
+        } else {
+            Value::Null
+        };
     result
 }
 #[cfg_attr(feature = "hotpath", hotpath::measure)]

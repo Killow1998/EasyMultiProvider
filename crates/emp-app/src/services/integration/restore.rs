@@ -8,6 +8,7 @@ use std::time::Duration;
 pub(crate) fn restore_native_configuration(
     manager: &IntegrationManager,
     search: &emp_integration::search::SearchFeatureManager,
+    preferences: &emp_integration::preferences::CodexPreferences,
     home: &std::path::Path,
 ) -> Result<(emp_integration::IntegrationResult, serde_json::Value), &'static str> {
     if manager
@@ -41,6 +42,9 @@ pub(crate) fn restore_native_configuration(
     search
         .restore()
         .map_err(|_| "search_configuration_restore_failed")?;
+    preferences
+        .restore()
+        .map_err(|_| "compaction_configuration_restore_failed")?;
     let result = manager
         .restore()
         .map_err(|_| "native_configuration_restore_failed")?;
@@ -73,8 +77,12 @@ impl IntegrationState {
         &self,
         manager: &IntegrationManager,
     ) -> Result<emp_integration::IntegrationResult, &'static str> {
-        let (result, report) =
-            restore_native_configuration(manager, &self.search, &self.codex_home)?;
+        let (result, report) = restore_native_configuration(
+            manager,
+            &self.search,
+            &self.preferences,
+            &self.codex_home,
+        )?;
         if let Ok(mut saved) = self.history_restore.lock() {
             *saved = report;
         }
@@ -129,6 +137,11 @@ impl IntegrationState {
         } else {
             Ok(())
         };
+        let compaction = if exiting {
+            self.preferences.restore()
+        } else {
+            Ok(())
+        };
         let result = if exiting {
             manager
                 .restore_owned_fields()
@@ -144,6 +157,9 @@ impl IntegrationState {
         }
         search
             .map_err(|_| AppError::NativeRestoreBlocked("search_configuration_restore_failed"))?;
+        compaction.map_err(|_| {
+            AppError::NativeRestoreBlocked("compaction_configuration_restore_failed")
+        })?;
         self.owned.store(false, Ordering::Release);
         Ok(())
     }

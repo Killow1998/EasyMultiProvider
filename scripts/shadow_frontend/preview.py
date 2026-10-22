@@ -1,5 +1,6 @@
 """One Shadow workspace with production assets and disposable synthetic state."""
 import contextlib
+import base64
 import json
 import signal
 import sqlite3
@@ -88,7 +89,7 @@ def fixture(stack, binary, root):
         catalog = Path(config['native_catalog_path']); assert catalog.is_relative_to(directory)
         catalog.parent.mkdir(parents=True, exist_ok=True)
         catalog.write_text(json.dumps({'models':[{'slug':slug,'display_name':name,
-            'context_window':272000,'max_context_window':872000,'visibility':'list','base_instructions':'fixture'} for slug,name in [('demo-model','Sample model A'),('shared-model','Sample model B')]]}))
+            'context_window':272000,'max_context_window':872000,'auto_compact_token_limit':200000,'visibility':'list','base_instructions':'fixture'} for slug,name in [('demo-model','Sample model A'),('shared-model','Sample model B'),('gpt-6.1-sol','GPT-6.1 Sol'),('gpt-6-luna','GPT-6 Luna')]]}))
         config['native_hidden_models'] = ['demo-model'] if directory == source else []
         config['native_model_context_windows'] = {'demo-model':467368 if directory == source else 400000}
         status, result = request(base + '/api/config', config, headers)
@@ -112,7 +113,10 @@ def seed_session_bills(state):
     examples = [
         ('33333333-3333-4333-8333-333333333333','修复模型切换 / Fix model switching',[
             ('gpt-6.1-sol',12000,2000,9000,0,40000000),
-            ('claude-opus-5-5',3000,600,2000,0,50000000)]),
+            ('claude-opus-5-5',3000,600,2000,0,50000000),
+            ('codex-auto-review',1200,80,1000,0,1000000),
+            ('gpt-6-luna',1500,200,1000,0,2000000),
+            ('claude-sonnet-5-5',2000,400,1500,0,3000000)]),
         ('44444444-4444-4444-8444-444444444444','未计价模型 / Unpriced model',[
             ('custom-model',2500,500,0,0,None)]),
         ('55555555-5555-4555-8555-555555555555','用量不完整 / Incomplete usage',[
@@ -120,6 +124,11 @@ def seed_session_bills(state):
         ('66666666-6666-4666-8666-666666666666','零价模型 / Zero-rate model',[
             ('local-model',300,40,0,0,0)]),
     ]
+    related = {
+        2: ('77777777-7777-4777-8777-777777777777','review',examples[0][0]),
+        3: ('88888888-8888-4888-8888-888888888888','sidechat',examples[0][0]),
+        4: ('99999999-9999-4999-8999-999999999999','subagent','88888888-8888-4888-8888-888888888888'),
+    }
     with sqlite3.connect(state/'usage.sqlite3') as database:
         for index,(session,title,models) in enumerate(examples):
             for part,(model,inputs,outputs,cached,written,cost) in enumerate(models):
@@ -130,7 +139,14 @@ def seed_session_bills(state):
                     'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     (identifier,time.time()-index-2,'external','bill-fixture',model,'default',
                      'responses',inputs,outputs,cached,written,cost,'{}'))
-                database.execute('INSERT OR IGNORE INTO usage_sessions VALUES (?,?)',(identifier,session))
+                child,kind,parent = related.get(part,(session,'','')) if index==0 else (session,'','')
+                database.execute('INSERT OR IGNORE INTO usage_sessions VALUES (?,?)',(identifier,child))
+                if child != session:
+                    facts=json.dumps({'parent_thread_id':parent,'session_kind':kind})
+                    database.execute('INSERT OR IGNORE INTO call_records '
+                        '(request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,state,facts) '
+                        'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                        (identifier,'responses',time.time()-3,time.time()-2,'bill-fixture','',model,child,'completed',facts))
     home=state.parent/'codex_home'
     with (home/'session_index.jsonl').open('a',encoding='utf-8') as index:
         for session,title,_ in examples:
@@ -160,13 +176,16 @@ def seed_retry_examples(state):
                  status,json.dumps(row),json.dumps(delivery)))
 
 
-def preview(stack, backend, bundle, session, port=0):
+def preview(stack, backend, bundle, session, port=0, return_url=None):
     def preview_script():
         script = (HERE / 'preview.js').read_text().replace('__FIXTURE_BUNDLE__',json.dumps(bundle)).replace('__FIXTURE_PASSWORD__',json.dumps(PASSWORD))
-        script += '\n' + (HERE / 'preview-review.js').read_text()
+        icon = 'data:image/png;base64,' + base64.b64encode((HERE.parents[1] / 'assets/branding/native/easy-multi-provider-tray.png').read_bytes()).decode()
+        script += '\n' + (HERE / 'preview-review.js').read_text().replace('__TRAY_TEMPLATE_ICON__',icon)
         script += '\n' + (HERE / 'preview-actions.js').read_text()
         return '<script>' + script + '</script>'
     head='<script>'+ (HERE / 'shadow-service-demo.js').read_text() + '</script><script>localStorage.setItem("emp_management_session_v1",'+json.dumps(session)+');</script>'
+    if return_url:
+        head += '<script>window.EMP_REAL_SHADOW_URL=' + json.dumps(return_url) + ';</script>'
     web = HERE.parents[1] / 'crates/emp-app/web'
     def recovery_page():
         shim = '<script>' + (HERE / 'preview-recovery.js').read_text() + '</script>'

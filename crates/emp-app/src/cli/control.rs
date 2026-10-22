@@ -62,9 +62,16 @@ impl Control {
                 manager.config_path().to_owned(),
                 state_dir.join("search.json"),
             );
-            let (result, history_restore) =
-                restore_native_configuration(&manager, &search, home)
-                    .map_err(|reason| format!("EMP native restore stopped: {reason}"))?;
+            let (result, history_restore) = restore_native_configuration(
+                &manager,
+                &search,
+                &emp_integration::preferences::CodexPreferences::new(
+                    manager.config_path().to_owned(),
+                    state_dir.join("compaction.json"),
+                ),
+                home,
+            )
+            .map_err(|reason| format!("EMP native restore stopped: {reason}"))?;
             if result.ok() {
                 store
                     .save(

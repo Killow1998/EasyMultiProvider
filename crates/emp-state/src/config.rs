@@ -138,6 +138,8 @@ fn default_configuration() -> Value {
         "auto_review_fallback": true,
         "external_collaboration": "off",
         "image_routing": {"mode":"follow", "account_id":""},
+        "memory_model": "",
+        "background_compaction": null,
         "codex_runtime_sources": ["auto"],
         "pricing_aliases": {},
     })
@@ -577,6 +579,33 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         normalize_catalog_presentations(raw.get("catalog_family_presentations"))?;
     let subscription_search = normalize_subscription_search(raw.get("subscription_search"))?;
     let image_routing = image_routing::normalize(raw.get("image_routing"))?;
+    let memory_model = match raw.get("memory_model") {
+        None => "",
+        Some(Value::String(model))
+            if model.is_empty()
+                || (model.starts_with("gpt-")
+                    && model.len() <= 128
+                    && model.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_')
+                    })) =>
+        {
+            model
+        }
+        _ => {
+            return Err(ConfigError::new(
+                "memory_model must be an unprefixed GPT model ID or empty",
+            ));
+        }
+    };
+    let background_compaction = match raw.get("background_compaction") {
+        None | Some(Value::Null) => Value::Null,
+        Some(Value::Bool(enabled)) => Value::Bool(*enabled),
+        _ => {
+            return Err(ConfigError::new(
+                "background_compaction must be boolean or null",
+            ));
+        }
+    };
     let pricing_aliases = normalize_pricing_aliases(raw.get("pricing_aliases"))?;
     let codex_runtime_sources = if raw.contains_key("codex_runtime_sources") {
         normalize_codex_runtime_sources(raw.get("codex_runtime_sources"))?
@@ -601,6 +630,8 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "catalog_family_presentations": catalog_family_presentations,
         "subscription_search": subscription_search,
         "image_routing": image_routing,
+        "memory_model": memory_model,
+        "background_compaction": background_compaction,
         "codex_runtime_sources": codex_runtime_sources,
         "pricing_aliases": pricing_aliases,
     });

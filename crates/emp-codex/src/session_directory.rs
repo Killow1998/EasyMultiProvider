@@ -1,4 +1,5 @@
 //! Read-only names from Codex's own index. No rollout/body scans or child processes.
+use emp_state::usage::ledger::SessionScope;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs::{File, Metadata};
@@ -6,6 +7,10 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
+mod database;
+#[cfg(test)]
+#[path = "session_directory/tests.rs"]
+mod lineage_tests;
 
 type Signature = (PathBuf, Option<SystemTime>, u64);
 #[derive(Default)]
@@ -14,11 +19,28 @@ pub struct SessionDirectory {
 }
 impl SessionDirectory {
     pub fn resolve(&self, home: &Path, ids: &[String]) -> BTreeMap<String, String> {
+        let mut scope = SessionScope::default();
+        for id in ids {
+            scope.observe(id, "", "");
+        }
+        self.enrich(home, &mut scope);
+        ids.iter()
+            .filter_map(|id| {
+                scope
+                    .0
+                    .get(id)
+                    .filter(|node| !node.name.is_empty())
+                    .map(|node| (id.clone(), node.name.clone()))
+            })
+            .collect()
+    }
+
+    pub fn enrich(&self, home: &Path, scope: &mut SessionScope) {
         let Ok(home) = home.canonicalize() else {
-            return BTreeMap::new();
+            return;
         };
+        database::read(&home, scope);
         let path = home.join("session_index.jsonl");
-        let mut names = BTreeMap::new();
         if let Ok(meta) = std::fs::symlink_metadata(&path)
             && meta.is_file()
             && !meta.is_symlink()
@@ -29,72 +51,13 @@ impl SessionDirectory {
                 *cache = Some((signature, read_index(&path, &meta)));
             }
             if let Some((_, index)) = &*cache {
-                for id in ids {
+                for (id, node) in &mut scope.0 {
                     if let Some(name) = index.get(id) {
-                        names.insert(id.clone(), name.clone());
+                        node.name.clone_from(name);
                     }
                 }
             }
         }
-        if ids.iter().all(|id| names.contains_key(id) || !valid_id(id)) {
-            return names;
-        }
-        // Index names take precedence; older clients may only have the threads table.
-        let mut databases = std::fs::read_dir(&home)
-            .ok()
-            .into_iter()
-            .flatten()
-            .take(128)
-            .filter_map(Result::ok)
-            .filter_map(|entry| {
-                let name = entry.file_name().into_string().ok()?;
-                let version = name
-                    .strip_prefix("state_")?
-                    .strip_suffix(".sqlite")?
-                    .parse::<u32>()
-                    .ok()?;
-                let kind = entry.file_type().ok()?;
-                (kind.is_file() && !kind.is_symlink()).then_some((version, entry.path()))
-            })
-            .collect::<Vec<_>>();
-        databases.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
-        for (_, path) in databases.into_iter().take(4) {
-            let Ok(connection) = rusqlite::Connection::open_with_flags(
-                path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            ) else {
-                continue;
-            };
-            let _ = connection.busy_timeout(std::time::Duration::from_millis(100));
-            let missing = ids
-                .iter()
-                .filter(|id| valid_id(id) && !names.contains_key(*id))
-                .collect::<Vec<_>>();
-            for missing in missing.chunks(100) {
-                let query = format!(
-                    "SELECT id,title FROM threads WHERE id IN ({})",
-                    vec!["?"; missing.len()].join(",")
-                );
-                let Ok(mut statement) = connection.prepare(&query) else {
-                    continue;
-                };
-                let Ok(rows) = statement.query_map(rusqlite::params_from_iter(missing), |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                }) else {
-                    continue;
-                };
-                for (id, title) in rows.flatten() {
-                    if let Some(title) = title_text(&title) {
-                        names.insert(id, title);
-                    }
-                }
-            }
-            if ids.iter().all(|id| names.contains_key(id)) {
-                break;
-            }
-        }
-        names
     }
 }
 fn valid_id(id: &str) -> bool {

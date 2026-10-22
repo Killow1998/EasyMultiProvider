@@ -76,7 +76,7 @@ fn chart_series_preserve_totals_and_filter_by_receipt_and_service() {
         session: None,
         state: None,
     };
-    let series = ledger.query_series(&filter, 1000.0).unwrap();
+    let series = ledger.query_series(&filter, None, 1000.0).unwrap();
     assert_eq!(series["totals"]["input_tokens"], 60);
     assert_eq!(series["totals"]["requests"], 3);
     assert_eq!(
@@ -95,25 +95,25 @@ fn chart_series_preserve_totals_and_filter_by_receipt_and_service() {
     filter.provider = Some("first".into());
     filter.model = Some("route/model".into());
     assert_eq!(
-        ledger.query_series(&filter, 1000.0).unwrap()["totals"]["input_tokens"],
+        ledger.query_series(&filter, None, 1000.0).unwrap()["totals"]["input_tokens"],
         30
     );
     filter.session = Some("b".into());
     filter.state = Some("completed".into());
     assert_eq!(
-        ledger.query_series(&filter, 1000.0).unwrap()["totals"]["input_tokens"],
+        ledger.query_series(&filter, None, 1000.0).unwrap()["totals"]["input_tokens"],
         20
     );
     filter.state = Some("failed".into());
     assert_eq!(
-        ledger.query_series(&filter, 1000.0).unwrap()["totals"]["requests"],
+        ledger.query_series(&filter, None, 1000.0).unwrap()["totals"]["requests"],
         0
     );
     filter.state = None;
     filter.session = None;
     filter.category = "native".into();
     assert_eq!(
-        ledger.query_series(&filter, 1000.0).unwrap()["totals"]["requests"],
+        ledger.query_series(&filter, None, 1000.0).unwrap()["totals"]["requests"],
         0
     );
 }
@@ -161,7 +161,7 @@ fn historical_identity_requires_a_unique_matching_turn_and_route() {
         state: None,
     };
     assert_eq!(
-        ledger.query_series(&filter, 1000.0).unwrap()["totals"]["input_tokens"],
+        ledger.query_series(&filter, None, 1000.0).unwrap()["totals"]["input_tokens"],
         70
     );
     ledger

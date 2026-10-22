@@ -52,9 +52,13 @@ impl Tray {
         );
         let quit = MenuItem::with_id("emp-quit", copy.quit, true, None);
         let menu = Menu::with_items(&[&open, &toggle, &quit])?;
-        let icon = TrayIconBuilder::new()
-            .with_id("easy-multi-provider")
-            .with_icon(Icon::from_rgba(icon::rgba()?, icon::SIZE, icon::SIZE)?)
+        let image = Icon::from_rgba(icon::rgba()?, icon::SIZE, icon::SIZE)?;
+        let builder = TrayIconBuilder::new().with_id("easy-multi-provider");
+        #[cfg(target_os = "macos")]
+        let builder = builder.with_icon_templated(image);
+        #[cfg(windows)]
+        let builder = builder.with_icon(image);
+        let icon = builder
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(true)
             .with_menu_on_right_click(true)

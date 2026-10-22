@@ -210,6 +210,8 @@ test('settings reuse on-demand recovery without a separate history control', () 
       getState:() => ({accounts:[]}), cloneState:() => ({}), persistState() {},
       openModal:(_title, body) => { html = body; }, $() {}, esc, t:x => x,
       tr:uiTranslate(language), quotaDisplay:{mode:() => 'remaining'},
+      help:message => `<button>${esc(message)}</button>`,
+      contextHelp:feature('context-help.js','createContextHelp')({getState:() => ({}),tr:uiTranslate(language)}),
     });
     settings.open();
     assert.doesNotMatch(html, /data-id="encrypted_history_recovery"/);

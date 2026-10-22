@@ -41,24 +41,32 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
             .find(|v| !v.is_empty())
     };
     let account_id = value("account_id").or_else(|| value("account"));
+    let explicit_owner = value("owner");
+    if (account_id.is_some() && explicit_owner.is_some())
+        || explicit_owner
+            .as_ref()
+            .is_some_and(|owner| owner.len() > 256 || owner.chars().any(char::is_control))
+    {
+        return invalid();
+    }
+    let owner = match account_id {
+        Some(id) => match quota_owner_key(state, &id) {
+            Ok(owner) => Some(owner),
+            Err(_) => {
+                return json_error_response(
+                    404,
+                    status_text(404),
+                    "Account usage is unavailable",
+                    None,
+                    &[],
+                );
+            }
+        },
+        None => explicit_owner,
+    };
     let result = if value("series").as_deref() == Some("true")
         || value("sessions").as_deref() == Some("true")
     {
-        let owner = match account_id {
-            Some(id) => match quota_owner_key(state, &id) {
-                Ok(owner) => Some(owner),
-                Err(_) => {
-                    return json_error_response(
-                        404,
-                        status_text(404),
-                        "Account usage is unavailable",
-                        None,
-                        &[],
-                    );
-                }
-            },
-            None => None,
-        };
         let filter = UsageSeriesFilter {
             start,
             end,
@@ -84,25 +92,19 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
         if value("sessions").as_deref() == Some("true") {
             return sessions::read(request, state, &filter, now);
         }
-        state.backend.usage.ledger.query_series(&filter, now)
+        state.backend.usage.query_series(
+            &state.backend.accounts.codex_home,
+            &filter,
+            value("conversation").as_deref() == Some("true"),
+            now,
+        )
     } else {
-        match account_id {
-            Some(id) => {
-                let Ok(owner) = quota_owner_key(state, &id) else {
-                    return json_error_response(
-                        404,
-                        status_text(404),
-                        "Account usage is unavailable",
-                        None,
-                        &[],
-                    );
-                };
-                state
-                    .backend
-                    .usage
-                    .ledger
-                    .query_owner(start, end, &owner, now)
-            }
+        match owner {
+            Some(owner) => state
+                .backend
+                .usage
+                .ledger
+                .query_owner(start, end, &owner, now),
             None => state.backend.usage.ledger.query(start, end, &category, now),
         }
     };

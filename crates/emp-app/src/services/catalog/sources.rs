@@ -73,6 +73,13 @@ impl CatalogSources {
             .claude_quota
             .snapshot(crate::util::system_now());
         public["emp_version"] = json!(crate::VERSION);
+        public["memory_routing_status"] = state.backend.memory_status.snapshot();
+        public["codex_context_settings"] = state
+            .backend
+            .integration
+            .preferences
+            .snapshot()
+            .unwrap_or_else(|_| json!({"unavailable":true}));
         public["native_account"] =
             crate::services::accounts::native_account_snapshot(state, config);
         let views = emp_codex::management_views::model_views(

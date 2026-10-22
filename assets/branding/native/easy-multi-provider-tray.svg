@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <title>EMP menu bar template</title>
+  <g fill="none" stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14 7v4l4 6M24 6v10M34 7v4l-4 6"/>
+    <circle cx="14" cy="5.5" r="1.6"/><circle cx="24" cy="4.5" r="1.6"/><circle cx="34" cy="5.5" r="1.6"/>
+    <circle cx="24" cy="25" r="13.4"/>
+    <path d="M18 31c3.5 4.5 8.5 4.5 12 0M24 38.5v5M21 42l3 3 3-3"/>
+  </g>
+  <path d="M11 20c4-1.6 8-1.5 12 .1l-1 5c-.6 3-3 4.2-5.9 3.6-3-.6-4.5-2.2-4.8-4.6zm26 0c-4-1.6-8-1.5-12 .1l1 5c.6 3 3 4.2 5.9 3.6 3-.6 4.5-2.2 4.8-4.6z" fill="#000"/>
+  <path d="M22 21.5h4M11 21l-2-1M37 21l2-1" fill="none" stroke="#000" stroke-width="1.8" stroke-linecap="round"/>
+</svg>

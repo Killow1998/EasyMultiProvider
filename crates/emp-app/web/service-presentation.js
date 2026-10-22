@@ -67,6 +67,12 @@ function installServicePresentation() {
   document.addEventListener('focusin',event=>show(event.target.closest('[data-shadow-help]')));
   document.addEventListener('focusout',event=>{if(!owner?.contains(event.relatedTarget)&&!bubble.contains(event.relatedTarget))hide();});
   document.addEventListener('click',event=>{if(!event.target.closest('[data-shadow-help]')&&!bubble.contains(event.target))hide();},true);
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!bubble.hidden){if(bubble.contains(document.activeElement))owner?.focus();hide();event.stopImmediatePropagation();}},true);window.addEventListener('scroll',event=>{if(!bubble.contains(event.target))hide();},true);
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!bubble.hidden){if(bubble.contains(document.activeElement))owner?.focus();hide();event.stopImmediatePropagation();}},true);
+  window.addEventListener('scroll',event=>{
+    if(bubble.contains(event.target))return;
+    // Focusing an off-screen help button scrolls its dialog after focusin.
+    if(owner?.contains(document.activeElement)||bubble.contains(document.activeElement))position();
+    else hide();
+  },true);
   return {hide};
 }

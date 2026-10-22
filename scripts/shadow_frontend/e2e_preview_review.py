@@ -33,7 +33,7 @@ def main():
             wait_for(lambda: json.loads((target / 'config.json').read_text())['language'] == lang)
             before = (target / 'config.json').read_bytes()
             assert browser.execute('return document.getElementById("shadow_review_button").textContent===arguments[0] && document.getElementById("modal_title").textContent===arguments[0] && !document.getElementById("shadow_routing_button");', '本次改动' if lang == 'zh-CN' else 'This update')
-            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['bills','connection','metrics','migration','lifecycle']
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['settings','bills','context','routing','tray']
             assert browser.execute('return !document.getElementById("modal_body").textContent.includes("v0.13.1");')
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             _, png = request(browser.base + '/screenshot')
@@ -41,18 +41,22 @@ def main():
             browser.execute('document.querySelector("#modal_body [data-shadow-demo=bills]").click();')
             wait_for(lambda: browser.execute('return document.querySelectorAll("[data-session-bill]").length===4;'))
             assert browser.execute('return !!document.querySelector("[data-bill-search]") && document.documentElement.scrollWidth<=innerWidth;')
+            browser.execute('document.querySelector(arguments[0]).open=true;', '[data-session-bill="33333333-3333-4333-8333-333333333333"]')
+            wait_for(lambda: browser.execute('return document.querySelectorAll("[data-bill-components] tbody tr").length===4;'))
+            assert browser.execute('return document.querySelector("[data-bill-components]").textContent.includes("Sidechat") && document.querySelectorAll("[data-bill-models] tbody tr").length===5;')
+            assert browser.execute('const box=document.querySelector("[data-bill-components]").closest(".usage-table");return box.scrollWidth<=box.clientWidth+1;')
             _, png = request(browser.base + '/screenshot')
             args.output.with_name(args.output.stem + f'-bills-{lang}.png').write_bytes(base64.b64decode(png['value']))
             browser.execute('closeModal();document.getElementById("shadow_review_button").click();')
-            browser.execute('document.querySelector("#modal_body [data-shadow-demo=connection]").click();')
+            browser.execute('window.EMP_REVIEW_ACTION("connection");')
             assert browser.execute('return !!document.getElementById("modal_provider_key") && !document.querySelector(".provider-connection-details").open && !document.getElementById("modal_back").hidden;')
             _, png = request(browser.base + '/screenshot')
             args.output.with_name(args.output.stem + f'-connection-{lang}.png').write_bytes(base64.b64decode(png['value']))
             browser.execute('document.getElementById("modal_provider_key").value="fixture-draft";document.querySelector(".provider-connection-details").open=true;')
             assert browser.execute('return document.getElementById("modal_provider_key").value==="fixture-draft" && document.documentElement.scrollWidth<=innerWidth;')
             browser.execute('document.getElementById("modal_back").click();')
-            assert browser.execute('return !!document.querySelector("#modal_body [data-shadow-demo=migration]");')
-            browser.execute('document.querySelector("#modal_body [data-shadow-demo=migration]").click();')
+            assert browser.execute('return !!document.querySelector("#modal_body [data-shadow-demo=bills]");')
+            browser.execute('window.EMP_REVIEW_ACTION("migration");')
             wait_for(lambda: browser.execute('return document.getElementById("shadow_migration_file")?.files.length===1;'))
             gate = threading.Event()
             stack.callback(gate.set)
@@ -69,7 +73,7 @@ def main():
             server.preview_gate = None
             wait_for(lambda: browser.execute('return !!document.querySelector("[data-migration-preference-source]") && document.getElementById("modal_status").textContent==="";'))
             browser.execute('closeModal();document.getElementById("shadow_demo_button").click();')
-            assert browser.execute('return !!document.querySelector("#modal_body [data-shadow-demo=routing]") && !!document.querySelector("#modal_body [data-shadow-demo=recovery]");')
+            assert browser.execute('return !document.querySelector("#modal_body [data-shadow-demo=routing]") && !!document.querySelector("#modal_body [data-shadow-demo=recovery]");')
             browser.execute('document.querySelector("#modal_body [data-shadow-demo=lifecycle]").click();')
             assert browser.execute('return document.getElementById("modal_body").textContent.includes(arguments[0]);', '继续运行' if lang == 'zh-CN' else 'stays running')
             browser.execute('document.getElementById("modal_submit").click();')
@@ -86,7 +90,7 @@ def main():
             wait_for(lambda: browser.execute('return document.getElementById("modal_title").textContent.includes(arguments[0]);', '正在退出' if lang == 'zh-CN' else 'is exiting'))
             assert request(backend + '/healthz')[0] == 200
             assert (target / 'config.json').read_bytes() == before
-            checks.append(f'{lang}: current review opens bills, preset setup, migration and pending-history recovery; restore/re-enable/quit leave backend state intact')
+            checks.append(f'{lang}: this update includes grouped Settings, billing, context, routing and the macOS template icon; archived demos remain functional')
         for reason in ['key_mismatch', 'key_missing', 'key_invalid', 'key_permissions', 'config_invalid', 'reset_incomplete']:
             request(browser.base + '/url', {'url': frontend + '/recovery?reason=' + reason})
             wait_for(lambda: browser.execute('return !document.getElementById("reset").disabled;'))

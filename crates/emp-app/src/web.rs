@@ -31,6 +31,7 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/updates.js" => include_bytes!("../web/updates.js"),
         "/assets/release-notes.js" => include_bytes!("../web/release-notes.js"),
         "/assets/model-editor.js" => include_bytes!("../web/model-editor.js"),
+        "/assets/context-help.js" => include_bytes!("../web/context-help.js"),
         "/assets/account-details.js" => include_bytes!("../web/account-details.js"),
         "/assets/account-import.js" => include_bytes!("../web/account-import.js"),
         "/assets/call-outcomes.js" => include_bytes!("../web/call-outcomes.js"),

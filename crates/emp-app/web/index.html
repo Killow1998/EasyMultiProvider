@@ -110,7 +110,7 @@
 <script src="/assets/management-client.js"></script>
 <script src="/assets/management-events.js"></script>
 <script src="/assets/quota-display.js"></script>
-<script src="/assets/settings.js"></script>
+<script src="/assets/context-help.js"></script><script src="/assets/settings.js"></script>
 <script src="/assets/collaboration-comparison.js"></script>
 <script src="/assets/routing-settings.js"></script>
 <script src="/assets/call-outcomes.js"></script>
@@ -144,8 +144,9 @@ const {request:api, fetch:managementFetch, establish:establishSession, errorText
 const managementEvents = createManagementEvents({management,visible:()=>document.visibilityState !== 'hidden',onEvent:processManagementEvent,
   onStart:()=>{updateActivityDots();rescheduleActivityExpiry();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
-const routingSettings = createRoutingSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
-const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
+const contextHelp = createContextHelp({getState:() => state, tr});
+const routingSettings = createRoutingSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
+const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, help:shadowHelp, contextHelp, presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
 const {open:openSettings, toggle:toggleSetting} = settings;
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});
@@ -971,6 +972,8 @@ async function refreshQuotaState() {
     const previousById = new Map(previous.map(account => [account.id, account]));
     const claudeChanged = JSON.stringify(state.claude_quota || null) !== JSON.stringify(snapshot.claude_quota || null);
     state.claude_quota = snapshot.claude_quota || null;
+    state.memory_routing_status = snapshot.memory_routing_status || null;
+    routingSettings.refresh();
     let changed = claudeChanged || JSON.stringify({native_account:state.native_account || null,accounts:state.accounts || []}) !== JSON.stringify({native_account:snapshot.native_account || null,accounts:snapshot.accounts || []});
     // Background samples update the numbers quietly; only a refresh the user clicked animates.
     for (const account of next) if (accountQuotaSignature(previousById.get(account.id)) !== accountQuotaSignature(account)) delete refreshErrors[account.id];
@@ -1060,7 +1063,7 @@ const codexAccountImport = createCodexAccountImport({$, tr, esc, api, openModal,
     fill(); await loadIntegration(); notice(tr("core.subscription_imported"));
   }
 });
-const subscriptionSettings=createSubscriptionSettings({getState:()=>state,cloneState,$,tr,esc,api,services,persistState,closeModal,notice,help:shadowHelp,compactNumber:shadowCompactNumber,compactContext,canonicalDisplayName,modelSort,uiIcon});
+const subscriptionSettings=createSubscriptionSettings({getState:()=>state,cloneState,$,tr,esc,api,services,persistState,closeModal,notice,help:shadowHelp,contextHelp,compactNumber:shadowCompactNumber,compactContext,canonicalDisplayName,modelSort,uiIcon});
 function editAccount(id,navigation={}) { return subscriptionSettings.open(id,navigation); }
 function quotaErrorText(error, id) {
   const code = error.payload?.error?.code;
@@ -1095,7 +1098,7 @@ async function removeAccount(id, element) { return accountDetails.remove(id, ele
 
 const serviceConnections=createServiceConnections({getState:()=>state,getLanguage:()=>language,cloneState,$,tr,esc,api,openModal,closeModal,persistState,notice,presets:officialProviders,protocolLabel,authLabel,randomId:()=>crypto.randomUUID(),confirmRemoval:question=>confirm(question)});
 const {openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openCustomProviderForm,editProvider,removeProvider}=serviceConnections;
-const modelEditorOptions = {getState:() => state, $, tr, esc, api, persistState, openModal, closeModal, notice, upstreamErrorText, testModelAudio, testModelVision, movePresentation, format:{visionStatus, modalityLabel, compactContext, usableContext}};
+const modelEditorOptions = {getState:() => state, $, tr, esc, api, persistState, openModal, closeModal, notice, help:shadowHelp, contextHelp, upstreamErrorText, testModelAudio, testModelVision, movePresentation, format:{visionStatus, modalityLabel, compactContext, usableContext}};
 const modelEditor = createModelEditor(modelEditorOptions);
 const {open:openManualModelModal} = modelEditor;
 const providerModelSettings = createProviderModelManager({getState:()=>state,cloneState,$,tr,esc,api,persistState,openModal,notice,modelSort,compactContext,capabilitySummary:model=>capabilitySummary(model),uiIcon,testModel,

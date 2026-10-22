@@ -43,7 +43,7 @@ function applySubscriptionPreferences(candidate, source) {
   return candidate;
 }
 
-function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,persistState,closeModal,notice,help,compactNumber,compactContext,canonicalDisplayName,modelSort,uiIcon}) {
+function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,persistState,closeModal,notice,help,contextHelp,compactNumber,compactContext,canonicalDisplayName,modelSort,uiIcon}) {
   let editor=null;
   function stop(){editor?.controller.abort();editor=null;}
   function current(candidate){return editor===candidate&&!$('modal_backdrop').classList.contains('hidden');}
@@ -56,10 +56,11 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
   function preview(input,index){
     const model=editor?.models[index];if(!model)return;
     const tokens=input.value===''?Number(model.default_context_window||0):Number(input.value);
-    const percent=Number(model.effective_context_window_percent??95),usable=Math.floor(tokens*percent/100);
+    const usable=contextHelp.budget(model,tokens,{custom:input.value!==''})?.usable || 0;
     $('shadow_usable_'+index).textContent=tr("models.codex_usable")+compactNumber(usable);
     const button=$('subscription_model_list').querySelector(`[data-shadow-context-help="${index}"]`);
-    button.dataset.shadowHelp=tr(input.value===''?'models.catalog_context_help':'models.custom_context_help', {tokens:tokens.toLocaleString('en-US'),percent,usable:usable.toLocaleString('en-US')});
+    button.dataset.shadowHelp=contextHelp.describe(model,tokens,{custom:input.value!==''});
+    button.setAttribute('aria-label', tr('models.context_compression_details'));
   }
   function sync(index){
     const model=editor?.models[index];if(!model)return;

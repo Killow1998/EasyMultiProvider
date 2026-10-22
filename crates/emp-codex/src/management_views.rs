@@ -41,6 +41,7 @@ pub fn subscription_model_options(catalog: &Value) -> Vec<Value> {
             "description":text(model,"description"), "context_window":usable_context(&effective),
             "default_context_window":model.get("context_window").cloned().unwrap_or(json!(0)),
             "max_context_window":maximum, "effective_context_window_percent":percentage,
+            "auto_compact_token_limit":model.get("auto_compact_token_limit"),
             "supports_reasoning_summaries":model.get("supports_reasoning_summary_parameter")==Some(&Value::Bool(true))
                 || model.get("supports_reasoning_summaries")==Some(&Value::Bool(true)),
         })

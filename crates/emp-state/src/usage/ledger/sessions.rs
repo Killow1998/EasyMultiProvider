@@ -45,7 +45,7 @@ pub(super) fn source() -> String {
 
 impl UsageLedger {
     pub fn session_ids(&self, filter: &UsageSeriesFilter) -> Result<Vec<String>> {
-        let (selection, args) = series::selection(filter)?;
+        let (selection, args) = series::selection(filter, false)?;
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let values = rows(
             &self.connect()?,
@@ -65,6 +65,7 @@ impl UsageLedger {
         &self,
         filter: &UsageSeriesFilter,
         page: &SessionBillPage,
+        scope: Option<&SessionScope>,
         now: f64,
     ) -> Result<Value> {
         let order = match page.sort.as_str() {
@@ -76,21 +77,28 @@ impl UsageLedger {
         if !(1..=100).contains(&page.limit) || page.offset > i64::MAX as usize {
             return Err(UsageError);
         }
-        let (mut selection, mut args) = series::selection(filter)?;
+        let (mut selection, mut args) = series::selection(filter, scope.is_some())?;
+        let session = if scope.is_some() {
+            "conversation_id"
+        } else {
+            "session_id"
+        };
         if let Some(ids) = &page.matching_sessions {
-            selection.push_str(" AND u.session_id IN (SELECT value FROM json_each(?))");
+            selection.push_str(&format!(
+                " AND u.{session} IN (SELECT value FROM json_each(?))"
+            ));
             args.push(SqlValue::Text(json!(ids).to_string()));
         }
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let connection = self.connect()?;
         connection.execute_batch("PRAGMA temp_store=MEMORY")?;
+        let source = scoped_source(&connection, scope)?;
         connection.execute(
             &format!(
-                "CREATE TEMP TABLE session_bills AS SELECT u.session_id,
+                "CREATE TEMP TABLE session_bills AS SELECT u.{session} AS session_id,
                 MIN(u.observed_at) AS first_at,MAX(u.observed_at) AS last_at,{}
-                FROM {} u WHERE {selection} GROUP BY u.session_id",
-                series::aggregate(),
-                source()
+                FROM {source} u WHERE {selection} GROUP BY u.{session}",
+                series::aggregate()
             ),
             params_from_iter(&args),
         )?;
@@ -125,4 +133,23 @@ impl UsageLedger {
             "pricing":self.prices.snapshot(now),"currency":"USD"}),
         )
     }
+}
+
+pub(super) fn scoped_source(
+    connection: &Connection,
+    scope: Option<&SessionScope>,
+) -> Result<String> {
+    let Some(scope) = scope else {
+        return Ok(source());
+    };
+    scope.install(connection)?;
+    // Fork copies may have several leaf owners, but one agreed conversation.
+    Ok(format!(
+        "(SELECT s.*,COALESCE((SELECT MIN(m.root_id) FROM usage_sessions e
+          LEFT JOIN conversation_scope m ON m.thread_id=e.session_id WHERE e.event_id=s.id
+          HAVING COUNT(DISTINCT COALESCE(m.root_id,''))=1),'') AS conversation_id,
+          COALESCE(n.name,'') AS session_name,COALESCE(n.kind,'shared') AS session_kind
+          FROM {} s LEFT JOIN conversation_scope n ON n.thread_id=s.session_id)",
+        source()
+    ))
 }

@@ -27,9 +27,7 @@ use crate::services::history::prepare_history;
 use crate::services::native;
 use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::providers::persist_protocol_observation;
-use crate::services::request_preparation::{
-    PreparedRequest, RequestOperation, RequestPreparationError, prepare_request,
-};
+use crate::services::request_preparation::{PreparedRequest, RequestPreparationError};
 use crate::util::projection_ids;
 use crate::util::python_truthy;
 use emp_history::HistoryError;
@@ -69,12 +67,20 @@ pub(crate) fn responses_request(
         Err(error) => return ResponsesRequestResult::Buffered(body_error_response(error)),
     };
     observation.body(body.get("reasoning"), body.get("stream"));
+    let incoming: BTreeMap<String, String> = request
+        .headers
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
+        .collect();
+    let incoming = observation.headers(incoming);
     observation.phase(Phase::ResolveRoute);
     let PreparedRequest {
         config,
         route,
         mut body,
-    } = match prepare_request(state, body, RequestOperation::Responses) {
+    } = match crate::services::memory_routing::prepare(state, body, &incoming) {
         Ok(prepared) => prepared,
         Err(RequestPreparationError::ModelRequired) => {
             return ResponsesRequestResult::Buffered(request_router_error_response(
@@ -84,6 +90,12 @@ pub(crate) fn responses_request(
         }
         Err(RequestPreparationError::Route(error)) => {
             return ResponsesRequestResult::Buffered(route_resolution_response(error));
+        }
+        Err(RequestPreparationError::MemoryUnavailable(reason)) => {
+            return ResponsesRequestResult::Buffered(request_router_error_response(
+                503,
+                crate::services::memory_routing::error_message(reason),
+            ));
         }
         Err(_) => {
             return ResponsesRequestResult::Buffered(json_error_response(
@@ -116,14 +128,6 @@ pub(crate) fn responses_request(
             ));
         }
     };
-    let incoming: BTreeMap<String, String> = request
-        .headers
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
-        .collect();
-    let incoming = observation.headers(incoming);
     let stream_requested = python_truthy(body.get("stream"));
     observation.phase(Phase::PrepareHistory);
     body = match prepare_history(state, &route, body, &incoming) {

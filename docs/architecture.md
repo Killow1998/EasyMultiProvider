@@ -453,6 +453,12 @@ The real server test also fetches the page's referenced assets before login.
 
 #### Frontend development and acceptance
 
+Settings uses four flat, labelled groups: display preferences; general startup
+and cross-service collaboration; external-model web search; and native-service
+compaction/routing. Grouping changes navigation only. Existing controllers keep
+their persistence and validation ownership; display choices remain browser-local,
+and Auto Review, image and memory routes retain one shared child dialog.
+
 Keep Shadow navigation stable across review rounds:
 
 - Use **This update** for the current review and **Demos** for established examples.
@@ -467,9 +473,33 @@ Keep Shadow navigation stable across review rounds:
 - Preview navigation and synthetic adapters stay under `scripts/shadow_frontend`;
   promoting a feature must not include review buttons or demo state in product assets.
 
-The disposable Shadow composes one navigation table (`preview-review.js`), concrete
-scenario handlers (`preview-actions.js`) and one isolation adapter (`preview.js`).
-Only the isolation adapter wraps the product render/request boundaries. Navigation
+Default Shadow uses real management reads and candidate accounting over isolated
+SQLite snapshots (`real_preview.py`, `real_snapshot.py`). The existing statistics
+Refresh action replaces the snapshot; an unsuccessful refresh retains the previous
+one and reports the failure. Copies retain original names, missing fields and
+parent relationships. No preview adapter may fill them in to make the bill appear
+correct. Credentials and rollout bodies are excluded, and production receives
+only allowed GET requests. Account-scoped usage uses the running backend only
+to resolve the current opaque owner fingerprint, then calculates the report in
+the candidate backend too. The authenticated usage API accepts either a local
+account ID or an explicit owner filter, rejects ambiguous/oversized filters and
+uses the same ledger selection in both cases. This avoids copying credentials or
+guessing identity from cached labels. Browser drafts are private to each launch.
+Statistics use the product usage API in both preview modes. The retired Python
+aggregation endpoint is removed; the bridge does not maintain a second selection,
+pricing or conversation-attribution implementation.
+
+`local_backend.py` owns local HTTP requests and disposable EMP process startup,
+environment isolation and cleanup. Real snapshots use it directly. The acceptance
+fixture composes the same launcher with its synthetic upstream and sample config;
+real snapshot refreshes do not import that factory or start its unused server.
+
+Synthetic demos require explicit selection and a separate disposable origin;
+they offer a return to real data. They cannot be the default review, silently
+replace failed reads or serve as evidence of real-data accounting correctness.
+Both pages share one navigation table (`preview-review.js`). Demo-only scenario
+handlers (`preview-actions.js`) and lifecycle simulation (`preview.js`) stay off
+the real-data page. Navigation
 consumes a deep link once after the first successful configuration render, without
 readiness polling or chained dispatcher replacements. Preserve the gallery write
 guard and the help panel's internal-focus guard: removing either causes an observed
@@ -483,7 +513,8 @@ remain in that origin's private browser storage; they do not save production
 configuration or execute account, inference, installer or lifecycle actions.
 The bridge forwards only explicitly allowed read requests and reuses the existing
 management session server-side, without exposing or rotating production credentials.
-Creating this preview does not require rebuilding, installing or restarting EMP.
+Frontend asset updates do not require rebuilding or restarting the installed EMP.
+Backend changes require a rebuilt candidate for the isolated snapshot process.
 Encrypted migration preview additionally uses the optional `emp-state`
 `shadow_migration_codec` example. It calls the production read-only export builder
 and import planner, so account identity conflicts follow the real migration rules.
@@ -550,6 +581,41 @@ and Codex's usable window. Read the effective percentage from model metadata,
 using 95% only as the existing fallback; usable context is not the separate
 compaction threshold. Unverified input modalities remain unknown rather than
 being converted into an unsupported-image claim.
+
+`web/context-help.js` derives the saved-config explanation shared by subscription
+and external-model editors: configured window, effective usable window and normal
+compaction trigger are separate quantities. Preserve explicit Codex overrides;
+custom subscription windows use the default 90% trigger, while external catalog
+entries publish 80%. Runtime/profile/CLI overrides may supersede this projection.
+Async compaction has a separate full-window trigger (65% unless configured), not
+a promised retention ratio. Its switch is explicitly Beta and defaults off for
+clean settings; retain a user's existing value until they choose an override.
+Saving requires Codex to reload its configuration; the help recommends restarting
+Codex or the desktop/IDE backend, without restarting EMP or interrupting a session.
+
+`emp-integration::preferences::CodexPreferences` owns only async-compaction and
+the two memory model keys through separate compare-and-restore journals. Writes
+share the integration operation lock; restore and exit retain unrelated TOML,
+comments, thresholds and memory permissions. A prepared write records its prior
+value so interrupted updates remain recoverable. Typed apply/rollback entries own
+both groups; callers do not assemble journal writes. Apply stops on the first
+error, while rollback attempts both groups even if one journal is unavailable.
+The configuration owner rolls back rejected writes and failed commits without
+persisting the rejected configuration. Selecting a memory model also
+sets Codex's extraction/consolidation model budget; it never enables memories.
+`services/memory_routing.rs` serves HTTP and WebSocket at the same preparation
+boundary. Account selection and final route preparation share one configuration
+snapshot, including when the memory override is disabled; concurrent settings
+edits cannot substitute a second configuration midway through that decision.
+Per-chat extraction follows its latest durable main-call subscription;
+external chats, global consolidation and unconfirmed sources use Native. Known
+unavailable or exhausted accounts pause visibly without switching subscriptions.
+Memory work has distinct call labels; global consolidation is not charged to the
+single conversation that happened to launch it.
+
+macOS uses the transparent monochrome brand asset as a native template image;
+AppKit supplies its menu-bar coloring. The browser preview illustrates that asset
+on light/dark backgrounds, independently of native macOS menu acceptance.
 Confirm that preview edits leave production settings and the active runtime intact.
 Do not run unrelated suites or paid inference to verify presentation changes.
 
@@ -985,15 +1051,22 @@ trend's independent request-generation implementation. Page composition routes
 usage notifications explicitly, without replacing feature methods at runtime.
 
 `statistics.js` owns the common period/service/model filters and the Session bills
-tab. `session-bills.js` owns its paged search and open model-breakdown requests,
+tab. `session-bills.js` owns its paged search and open model/task-breakdown requests,
 using the same `report-query.js` cancellation owner. Closing, filtering or changing
 views cancels obsolete reads; returning to Overview fetches the current filters.
 Detail toggles verify both their view owner and that their row still belongs to
 the current list. Native events queued before a refresh cannot claim or cancel
 the replacement row's request.
 The `emp-state` ledger's session index links existing accounting events without
-copying token or price data. Bills and chart detail share their reconciled selection
-and aggregate projection. See [usage accounting](usage-accounting.md#session-bills)
+copying token or price data. `SessionScope` resolves recorded parent relationships;
+`SessionDirectory` enriches them with read-only Codex names, thread origins and spawn
+edges. `services/usage/queries.rs` owns their composition for list, child-name
+search and expanded detail; HTTP adapters validate parameters and render results
+without assembling parent relationships or reading Codex metadata themselves.
+These views share this ownership map, so
+Auto Review, Sidechat and nested agents belong to one main-conversation bill.
+Ambiguous ownership stays unassigned. Bills and chart detail share their reconciled
+selection and aggregate projection. See [usage accounting](usage-accounting.md#session-bills)
 for attribution, old-history indexing and missing-price semantics.
 
 Quota sampling remains scheduled backend work at 44-second deadlines. Its

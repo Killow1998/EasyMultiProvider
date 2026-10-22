@@ -16,6 +16,13 @@ pub(crate) fn update(
         request_id,
         "configuration_update",
         |receipt| {
+            // Integration commands acquire this lock before configuration reads.
+            let _operation = state
+                .backend
+                .integration
+                .manager
+                .operation_lock()
+                .map_err(|_| ChangeError::Unavailable)?;
             let mut current = state
                 .backend
                 .configuration
@@ -29,9 +36,40 @@ pub(crate) fn update(
                 .validate_update(&updated, &current)
                 .map_err(ChangeError::invalid)?;
             let before = current.clone();
-            receipt
+            let preferences = &state.backend.integration.preferences;
+            let preferences_changed = (before["background_compaction"]
+                != updated["background_compaction"]
+                || before["memory_model"] != updated["memory_model"])
+                && state
+                    .backend
+                    .integration
+                    .owned
+                    .load(std::sync::atomic::Ordering::Acquire);
+            if preferences_changed {
+                let applied = preferences.apply(
+                    updated["background_compaction"].as_bool(),
+                    updated["memory_model"].as_str().unwrap_or_default(),
+                );
+                if let Err(error) = applied {
+                    let _ = preferences.rollback(
+                        before["background_compaction"].as_bool(),
+                        before["memory_model"].as_str().unwrap_or_default(),
+                    );
+                    return Err(ChangeError::invalid(error));
+                }
+            }
+            if receipt
                 .step("commit_configuration", || current.commit(&updated))
-                .map_err(|_| ChangeError::Unavailable)?;
+                .is_err()
+            {
+                if preferences_changed {
+                    let _ = preferences.rollback(
+                        before["background_compaction"].as_bool(),
+                        before["memory_model"].as_str().unwrap_or_default(),
+                    );
+                }
+                return Err(ChangeError::Unavailable);
+            }
             receipt.check("configuration_committed", Some(true));
             for id in changed_account_ids(&before, &current) {
                 state.catalog_refresh.account_changed(&id);

@@ -1,6 +1,6 @@
 // Executed in the existing page scope. Production configuration never receives a write.
 const shadowNativeFetch = window.fetch.bind(window);
-const shadowStorageKey = 'emp.shadow.config.v1';
+const shadowStorageKey = window.EMP_SHADOW_DRAFT_KEY || 'emp.shadow.config.v1';
 let shadowDraft;
 try { shadowDraft = JSON.parse(localStorage.getItem(shadowStorageKey) || 'null'); } catch (_) { shadowDraft = null; }
 function shadowScrub(value) {
@@ -87,6 +87,8 @@ window.fetch = async function(path, options = {}) {
   }
   let payload = {};
   if (route.startsWith('/api/shadow/migration/')) return shadowNativeFetch(path, options);
+  if (window.EMP_REAL_SHADOW && ['/api/shadow/demo','/api/shadow/snapshot'].includes(route)) return shadowNativeFetch(path,options);
+  if (window.EMP_REAL_SHADOW && route === '/api/usage/scan') return shadowNativeFetch('/api/shadow/snapshot',options);
   try { payload = JSON.parse(options.body || '{}'); } catch (_) { return shadowReply({error:{message:'请输入有效 JSON。'}},400); }
   if(route==='/api/updates/check'){
     const info=await shadowRead('/api/updates',options),release=await shadowRead('/api/shadow/release-notes',options);

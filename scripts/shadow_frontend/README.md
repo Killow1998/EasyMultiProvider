@@ -1,42 +1,110 @@
 # Shadow frontend
 
 Product flows are embedded from `crates/emp-app/web` in the normal
-executable. The review overview, fault selector and mock lifecycle actions stay
-in this development directory and are injected only by the Shadow launcher.
+executable. Review navigation stays in this development directory. Fault selectors
+and mock lifecycle actions are injected only into explicitly selected demos.
 `e2e_formal.py` checks the actual executable rejects these development routes;
 `e2e_startup_recovery.py` checks real reset and exit against disposable data.
 
-Use one entry point for current candidate previews:
+Use one entry point for current candidate previews. **Real data is the default**:
 
 ```sh
 python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --port 4201
 ```
 
+The page reads the running EMP on port 4200. Existing account/status data is
+read-only; configuration edits remain in this preview's browser draft. Global
+accounting and conversation bills run through the candidate backend against
+SQLite backups of the real ledger and Codex metadata. Original titles, missing
+fields and parent edges are retained; the launcher must not repair attribution
+or invent representative conversations. No credentials or rollout bodies are
+copied. For account-scoped usage, the running backend only resolves the current
+opaque owner fingerprint through a read-only query. The candidate then computes
+the filtered report from its snapshot too; no source report or cached name is
+substituted for candidate accounting.
+All charts use the existing product usage API; there is no separate Python
+statistics fallback to maintain or accept in place of candidate results.
+
+Real snapshots and acceptance share the disposable EMP launcher in
+`local_backend.py`, including environment isolation and process cleanup.
+Only the synthetic fixture adds a fake upstream and example configuration;
+real snapshot refreshes launch only the candidate backend.
+
+The banner shows the accounting snapshot time. The existing statistics Refresh
+button creates a new snapshot and reloads the candidate results. Failure leaves
+the previous snapshot available and reports the error; it never substitutes
+sample data. Snapshots are stored in disk-backed, private `.shadow-state/`
+directories (ignored by Git), and removed on refresh/exit. `--scratch-dir` can
+select another private disk directory. `--state-dir`, `--backend-port` and
+`--codex-home` select an explicitly chosen source.
+
+**Demos** explicitly opens a separate disposable origin with synthetic data.
+Use its **Return to real-data Shadow** entry to return. Demo state never merges
+into the real-data page. A synthetic-only launcher remains available explicitly:
+
+```sh
+python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --demo --port 4202
+```
+
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
 review entry. Update `reviewRows` in `preview-review.js` for every review round;
 follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
-The current review includes searchable session bills with model/cache breakdowns
-and synthetic missing-price/usage examples, Inception / Mercury 3 setup with folded connection details,
-call outcomes with actual retry counts and upstream wait advice, migration
-import preview with a 30-second deadline and retry that retains selections,
-and the existing Restore Native / Quit scenario with pending-history recovery.
-Statistics retains measured tool time and hidden batched TPS spikes. Refresh the review
+The current review covers grouped Settings, conversation billing,
+context/compaction help, memory routing and the monochrome macOS icon. Settings
+groups display preferences, general service controls, external-service search,
+and native-service compaction/routing in four flat sections. Background compaction
+remains available in the native-service section and uses its existing controller.
+Auto Review, Sidechat and nested subagents belong to their main conversation,
+with model and task breakdowns. Examples retain missing-price/usage cases and
+unassigned usage. Previously shipped
+setup, statistics, migration and lifecycle scenarios remain available as demos.
+Refresh the review
 E2E expectations together with this list. Reloading the page
 reads the latest review scripts, so list changes do not require a Shadow restart.
-Session-bill examples are added by the preview launcher and current-review
-acceptance only; unrelated statistics acceptance keeps its own sample set.
+Session-bill examples are added only to explicitly selected demos and synthetic
+acceptance. The default real-data review never seeds examples.
 
-`preview-review.js` owns scenario labels, menu selection and dispatch. Its startup
+Verify the source boundary and actual browser refresh/navigation with:
+
+```sh
+python3 scripts/shadow_frontend/e2e_real_shadow.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-real-shadow.json
+```
+
+It checks raw missing/auxiliary metadata, candidate attribution, unassigned usage,
+refreshing the source snapshot, unchanged source settings/auth/metadata, rejected
+production writes, and opt-in demo navigation in both directions.
+
+Context, memory routing and Beta preference acceptance uses the embedded product
+assets, disposable Codex settings and synthetic credentials:
+
+```sh
+python3 scripts/shadow_frontend/e2e_codex_preferences.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-codex-preferences.json
+```
+
+It checks both languages, narrow/desktop layouts, client memory-model budgets,
+preserved memory permissions and trigger percentages, failed saves, Restore Native,
+re-enable and Quit. A rejected memory-journal write must also roll back an already
+applied background toggle without committing the rejected configuration.
+The icon demo uses the actual monochrome asset; native macOS
+menu-bar rendering is a separate platform check.
+
+`preview-review.js` shares review labels and dispatch between the real page and
+explicit demos. Current entries open actual product dialogs with the selected
+data source; archived synthetic scenarios require a switch to the demo origin.
+Its startup
 link is consumed once after configuration renders; it does not poll for readiness.
-`preview-actions.js` prepares disposable scenarios and opens production controllers.
-`preview.js` owns request isolation and lifecycle simulation. Add a scenario's
+`preview-actions.js` prepares disposable demo scenarios and opens production controllers.
+`preview.js` owns demo request isolation and lifecycle simulation; it is never
+injected into the default real-data page. Add a scenario's
 labels and handler to the existing table; do not wrap another module's dispatcher,
 renderer or fetch function to register it.
 
-The **Demos** menu contains this overview, **Routing settings**, **Key recovery**, **Restore Native /
+Inside synthetic mode, the **Demos** menu contains this overview, **Key recovery**, **Restore Native /
 Quit**, **Remove account**, **Existing preference conflicts**, **Import the same
 account**, **All services running**, and **All service errors**. These use the
-same production frontend modules and a disposable synthetic workspace. Return
+same production frontend modules and an explicitly selected synthetic workspace. Return
 from a service demo to the same workspace; there is no separate import-demo URL
 or launcher. Production backend configuration and credentials are not read.
 
@@ -188,7 +256,7 @@ is also exercised through a private pseudo-terminal: closing that launch
 terminal leaves the detached service available, and Quit ends the service.
 The normal desktop bus, live EMP and installed configuration are preserved.
 
-For read-only inspection of existing local data, preview frontend changes against
+For frontend-only read-only inspection without a candidate backend, preview frontend changes against
 a running EMP without changing its configuration
 or interrupting requests. Python 3.10+ is sufficient; no packages are required.
 
@@ -214,8 +282,8 @@ The default follows EMP's platform configuration directory, or
 `EASY_MULTI_PROVIDER_CONFIG`. Run as the user who owns those files. Close the
 server with Ctrl+C.
 
-The server forwards only listed GET endpoints. It reads usage SQLite data in
-read-only mode and creates a separate preview session. Config edits stay in this
+This frontend-only mode forwards only listed GET endpoints and creates a separate
+preview session. It does not validate candidate backend changes. Config edits stay in this
 origin's browser storage; credential fields are removed before persistence.
 Starting/restoring EMP, installing updates and model requests are disabled in the preview.
 Check updates reads public release notes before any installation decision; the
@@ -332,11 +400,12 @@ controller owns its modal requests and cancellation. The preview supplies isolat
 and demonstration adapters; it no longer carries duplicate accepted UI assets.
 
 - `shadow-web.py`: loopback HTTP permissions and read-only backend access.
+- `real_preview.py`: default real-data composition and explicit demo switching.
+- `real_snapshot.py`: private database copies and the isolated candidate lifecycle.
 - `frontend.py`: shared assets plus preview isolation hooks.
 - `shadow-drafts.js`: preview-only edits and credential scrubbing.
 - `shadow-ui.js`: preview command guards and demo integration.
 - `crates/emp-app/web/model-manager.js`: shared service-scoped model operations and editor navigation.
-- `shadow_usage.py`: read-only statistics fallback for older installed backends.
 - `shadow-service-demo.js`: sample services and demonstration state.
 - `preview-review.js`: candidate change inventory, synthetic removal/preferences
   and simulated lifecycle actions using production dialogs.
