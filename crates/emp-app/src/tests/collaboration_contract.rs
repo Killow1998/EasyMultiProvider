@@ -143,7 +143,7 @@ fn collaboration_recovery_rejects_invalid_capture_and_accounts_retries_once() {
         &serde_json::to_vec(&json!({"model":"demo/model","input":"plain task"})).unwrap(),
         &[&session, "x-openai-subagent: collab_spawn"],
     );
-    assert!(blocked.starts_with("HTTP/1.1 403"), "{blocked}");
+    assert!(blocked.starts_with("HTTP/1.1 400"), "{blocked}");
     assert!(
         blocked.contains("external_subagents_disabled")
             && blocked.contains("Settings > Cross-service subagents")
@@ -224,6 +224,7 @@ fn collaboration_websocket_rejects_disabled_and_unowned_tasks_without_forwarding
             event = socket.receive_json().unwrap().unwrap();
         }
         assert_eq!(event["type"], "error", "{event}");
+        assert_eq!(event["status"], 400, "{event}");
         assert_eq!(event["error"]["code"], code, "{event}");
         if mode == "off" {
             assert!(

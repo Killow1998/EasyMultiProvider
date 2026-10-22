@@ -24,10 +24,19 @@ pub(crate) fn restore_native_configuration(
     }
     let migration = emp_codex::history::repair::repair_idle_before_native_restore(home);
     let (history_lock, report) = match migration {
-        Ok((lock, report)) => (
-            Some(lock),
-            serde_json::json!({"status":if report.threads_deferred == 0 {"complete"} else {"partial"}, "report":report}),
-        ),
+        Ok((lock, report)) => {
+            let status = if report.threads_deferred > 0 {
+                "partial"
+            } else if report.threads_skipped > 0 {
+                "unchecked"
+            } else {
+                "complete"
+            };
+            (
+                Some(lock),
+                serde_json::json!({"status":status, "report":report}),
+            )
+        }
         Err(error) => (
             None,
             serde_json::json!({"status":"deferred", "reason":error.reason()}),
@@ -63,10 +72,24 @@ pub(super) fn read_history_restore(
     if saved["codex_home"].as_str() == home.to_str()
         && matches!(
             saved["outcome"]["status"].as_str(),
-            Some("partial" | "deferred" | "complete")
+            Some("partial" | "unchecked" | "deferred" | "complete")
         )
     {
-        saved["outcome"].clone()
+        let mut outcome = saved["outcome"].clone();
+        if outcome["status"] == "partial"
+            && outcome["report"].is_object()
+            && outcome["report"]["threads_skipped"].is_null()
+        {
+            // Older reports counted uninspected histories as deferred. They
+            // cannot establish that an EMP checkpoint actually needs repair.
+            let count = outcome["report"]["threads_deferred"].as_u64().unwrap_or(0);
+            outcome["status"] = "unchecked".into();
+            outcome["report"]["threads_deferred"] = 0.into();
+            outcome["report"]["threads_skipped"] = count.into();
+            outcome["report"]["skipped_reasons"] =
+                serde_json::json!({"legacy_report_unclassified":count});
+        }
+        outcome
     } else {
         serde_json::Value::Null
     }

@@ -1,6 +1,7 @@
 //! Shared rewrite planning for explicit and idle-history migration.
 use super::checkpoint::{has_emp1_tail_record, write_replacement_rollout};
 use super::inventory::ThreadInfo;
+use super::paths::RolloutPaths;
 use super::replay::context_for;
 use super::selection::select_affected_rollouts;
 use super::spool::ContextSnapshot;
@@ -14,39 +15,46 @@ pub(super) fn repair(
     repair_root: &Path,
     infos: &[ThreadInfo],
     automatic: bool,
-) -> Result<HistoryRepairReport, HistoryRepairError> {
+    paths: &RolloutPaths<'_>,
+    report: &mut HistoryRepairReport,
+) -> Result<(), HistoryRepairError> {
     if infos.is_empty() {
-        return Ok(HistoryRepairReport::default());
+        return Ok(());
     }
-    let affected = select_affected_rollouts(home, infos)?;
+    let affected = select_affected_rollouts(paths, infos)?;
     if affected.is_empty() {
-        return Ok(HistoryRepairReport::default());
+        return Ok(());
     }
     let workspace = RepairWorkspace::begin(home, repair_root)?;
     let mut rewrites = Vec::new();
-    let (mut converted, mut deferred) = (0usize, 0usize);
-    for info in affected {
-        match plan_rewrite(home, &workspace, &info) {
+    let mut converted = 0usize;
+    for affected in affected {
+        match plan_rewrite(paths, &workspace, affected.info) {
             Ok(Some((rewrite, changed))) => {
                 converted = converted.saturating_add(changed);
                 rewrites.push(rewrite);
             }
             Ok(None) => {}
-            Err(_) if automatic => deferred += 1,
+            Err(error) if automatic => {
+                if affected.confirmed {
+                    report.defer(error.reason());
+                } else {
+                    report.skip(error.reason());
+                }
+            }
             Err(error) => return Err(error),
         }
     }
-    let mut report = if rewrites.is_empty() {
-        HistoryRepairReport::default()
-    } else {
-        workspace.apply_rewrites(rewrites, converted)?
-    };
-    report.threads_deferred = deferred;
-    Ok(report)
+    if !rewrites.is_empty() {
+        let applied = workspace.apply_rewrites(rewrites, converted)?;
+        report.threads_repaired += applied.threads_repaired;
+        report.checkpoints_converted += applied.checkpoints_converted;
+    }
+    Ok(())
 }
 
 fn plan_rewrite(
-    home: &Path,
+    paths: &RolloutPaths<'_>,
     workspace: &RepairWorkspace,
     info: &ThreadInfo,
 ) -> Result<Option<(PlannedRewrite, usize)>, HistoryRepairError> {
@@ -56,7 +64,7 @@ fn plan_rewrite(
         .join("workspace")
         .join(format!("lineage-{thread_id}"));
     let mut snapshot = ContextSnapshot::new(&lineage_directory)?;
-    let rollout = context_for(home, &mut snapshot, info, None, &mut Vec::new())?;
+    let rollout = context_for(paths, &mut snapshot, info, None, &mut Vec::new())?;
     if snapshot.turns.has_open_turns()? {
         return Err(HistoryRepairError::new("unfinished_turn_in_history"));
     }

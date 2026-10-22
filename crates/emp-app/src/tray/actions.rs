@@ -9,7 +9,7 @@ use std::time::Duration;
 #[cfg(test)]
 mod tests;
 
-pub(super) fn snapshot(state: &ServerState, busy: bool) -> Snapshot {
+pub(super) fn snapshot(state: &ServerState, busy: Option<Action>) -> Snapshot {
     let english = state
         .backend
         .configuration
@@ -36,7 +36,7 @@ pub(super) fn run(
     updates: mpsc::SyncSender<Snapshot>,
 ) {
     while !state.shutdown.load(Ordering::Acquire) {
-        let current = snapshot(&state, false);
+        let current = snapshot(&state, None);
         let _ = updates.try_send(current);
         let action = match actions.recv_timeout(Duration::from_millis(750)) {
             Ok(action) => action,
@@ -60,11 +60,11 @@ pub(super) fn run(
             continue;
         }
         let _ = updates.try_send(Snapshot {
-            busy: true,
+            busy: Some(action),
             ..current
         });
         let error = execute(&state, action);
-        let _ = updates.try_send(snapshot(&state, false));
+        let _ = updates.try_send(snapshot(&state, None));
         if state.shutdown.load(Ordering::Acquire) {
             break;
         }

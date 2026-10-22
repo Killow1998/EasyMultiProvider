@@ -38,7 +38,30 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
             .store(true, Ordering::Release);
         let admitted = state.connection_admission.acquire_request().unwrap();
         let waiting = Arc::clone(&state);
-        let worker = std::thread::spawn(move || execute(&waiting, action));
+        let (actions, receive) = mpsc::sync_channel(4);
+        let (updates, observed) = mpsc::sync_channel(8);
+        let worker = std::thread::spawn(move || run(waiting, receive, updates));
+        actions.send(action).unwrap();
+        let busy = loop {
+            let snapshot = observed.recv_timeout(Duration::from_secs(2)).unwrap();
+            if snapshot.busy == Some(action) {
+                break snapshot;
+            }
+        };
+        assert!(busy.toggle().is_none());
+        assert_eq!(
+            if action == Action::Quit {
+                busy.quit_label()
+            } else {
+                busy.toggle_label()
+            },
+            if action == Action::Quit {
+                "正在退出 EMP…"
+            } else {
+                "正在恢复原生…"
+            }
+        );
+        assert!(busy.tooltip().contains("历史"));
         let deadline = Instant::now() + Duration::from_secs(2);
         while state.connection_admission.acquire_request().is_some() {
             assert!(Instant::now() < deadline);
@@ -55,7 +78,10 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
         );
         assert!(!state.shutdown.load(Ordering::Acquire));
         drop(admitted);
-        assert_eq!(worker.join().unwrap(), None);
+        let ready = observed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(ready.busy, None);
+        drop(actions);
+        worker.join().unwrap();
         if action == Action::Restore {
             assert!(changes.next(Duration::ZERO).unwrap().integration);
         }

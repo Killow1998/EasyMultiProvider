@@ -1,7 +1,8 @@
 // Replace this list for each review round; shipped demos belong in Demos below.
 // Production controllers own their dialogs and text.
-const reviewRows=['settings','bills','context','routing','tray'];
+const reviewRows=['lifecycle'];
 const realShadow=window.EMP_REAL_SHADOW===true;
+const syntheticScenarios=['migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical'];
 const previewScenarios={
   review:{title:['本次改动','This update'],detail:['查看当前待检阅的修改','Review the current changes'],open:openReview},
   settings:{title:['设置分组','Settings groups'],detail:['显示、通用服务、外部服务与原生服务分组；后台压缩和路由集中在原生服务中。','Grouped display, general, external and native service settings, with background compaction and routing under native services.'],open:()=>openSettings()},
@@ -14,7 +15,7 @@ const previewScenarios={
   routing:{title:['路由设置','Routing settings'],detail:['自动审查、图片和记忆整理；记忆只选 GPT 模型，账号跟随会话。','Auto Review, images and memories; select a GPT memory model while its account follows the conversation.'],open:()=>realShadow?routingSettings.open({back:openSettings}):openRoutingDemo()},
   tray:{title:['macOS 菜单栏图标','macOS menu-bar icon'],detail:['纯色透明图标，预览浅色和深色背景；实际菜单交互仍由系统提供。','A transparent monochrome icon on light and dark backgrounds; the OS provides the actual menu interaction.'],open:openTrayPreview},
   recovery:{title:['key 异常恢复','Key recovery'],detail:['实际恢复页，模拟清除重建和退出','Actual recovery page with simulated reset and exit'],open:()=>location.assign('/recovery')},
-  lifecycle:{title:['恢复原生 / 退出','Restore Native / Quit'],detail:['合成示例：闲置历史转换，使用中的历史保留，并可在结束会话后继续转换。恢复与退出仍为两个操作。','Synthetic example: convert idle history, preserve busy sessions, and continue conversion once they close. Restore and Quit remain separate.'],open:()=>openLifecycleDemo()},
+  lifecycle:{title:['恢复原生 / 退出','Restore Native / Quit'],detail:['合成示例：区分已确认待转换与未检查的历史。恢复时共用目录索引，系统菜单显示操作进度；恢复与退出仍为两个操作。','Synthetic example: distinguish confirmed pending conversions from unchecked history. Restore shares one directory inventory; the tray shows action progress. Restore and Quit remain separate.'],open:()=>openLifecycleDemo()},
   removal:{title:['移除账号','Remove account'],detail:['可重复创建和移除示例账号','Create and remove a disposable sample account'],open:()=>openRemovalDemo()},
   historical:{title:['已有设置冲突','Existing preference conflicts'],detail:['模型设置中的历史重复账号选择','Resolve existing duplicate preferences in model settings'],open:()=>openHistoricalDemo()}
 };
@@ -23,7 +24,7 @@ function reviewChoice(id){
   const {title,detail}=previewScenarios[id];
   return `<button type="button" class="choice" data-shadow-demo="${id}"><strong>${tr(...title)}</strong><small>${tr(...detail)}</small></button>`;
 }
-window.EMP_REVIEW_CHOICES=()=> (window.EMP_REAL_SHADOW_URL?`<button type="button" class="choice" data-shadow-demo="real_shadow"><strong>${tr('返回真实资料 Shadow','Return to real-data Shadow')}</strong></button>`:'')+(realShadow?['migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical']:['review','recovery','lifecycle','removal','historical']).map(reviewChoice).join('');
+window.EMP_REVIEW_CHOICES=()=> (window.EMP_REAL_SHADOW_URL?`<button type="button" class="choice" data-shadow-demo="real_shadow"><strong>${tr('返回真实资料 Shadow','Return to real-data Shadow')}</strong></button>`:'')+(realShadow?syntheticScenarios:['review','recovery','lifecycle','removal','historical']).map(reviewChoice).join('');
 function openTrayPreview(){
   const icon='__TRAY_TEMPLATE_ICON__';
   const label=tr('模板图像预览；实际 macOS 图标由系统着色。','Template image preview; macOS supplies the actual icon color.');
@@ -35,7 +36,7 @@ function openReview(){
 window.EMP_REVIEW_ACTION=action=>{
   if(action==='background')action='settings';
   if(action==='real_shadow'&&window.EMP_REAL_SHADOW_URL){location.assign(window.EMP_REAL_SHADOW_URL);return true;}
-  if(realShadow && ![...reviewRows,'review'].includes(action)){
+  if(realShadow && syntheticScenarios.includes(action)){
     void window.EMP_OPEN_SYNTHETIC(action);return true;
   }
   if(!Object.hasOwn(previewScenarios,action))return false;

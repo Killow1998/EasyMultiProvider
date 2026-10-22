@@ -1140,19 +1140,29 @@ checkpoints before restoring configuration. They share the existing bounded,
 append-only migration and transaction backups; native opaque reasoning and tool
 call/result pairs remain intact. A nonblocking Codex coordination lock protects
 the conversion and configuration restore. Active writers, their ancestors and
-dependent descendants are deferred; uncoordinated, unfinished or unverified
-history is unchanged. A failed history conversion does not prevent removal of
-EMP's routing override. The native WebUI displays a pending-history notice and
-**Continue history conversion** action, retaining the normal **Enable EMP**
-button. The outcome survives restart in a home-scoped private report. HTTP,
+dependent descendants remain unchanged. The report distinguishes confirmed EMP
+checkpoints awaiting conversion (`threads_deferred`) from histories not yet
+classified (`threads_skipped`), retaining reason counts for each. A busy writer
+or missing file alone is not evidence of a checkpoint needing conversion.
+A failed history conversion does not prevent removal of EMP's routing override.
+The native WebUI offers **Continue history conversion** for confirmed pending
+checkpoints and **Check history** for unverified/skipped history, retaining the
+normal **Enable EMP** button. Older combined deferred counts are read as
+unclassified, rather than presented as confirmed pending conversions.
+The outcome survives restart in a home-scoped private report. HTTP,
 tray and offline Restore use the same operation; no new background scanner or
 model request is added. Explicit restoration scans closed history; the first
-conversion of a large home may take time and the WebUI displays that progress.
+conversion of a large home may take time. WebUI and tray copy identify the
+operation while it runs; repeated menu actions remain disabled.
 OS termination keeps its short configuration-only exit
 path, rather than delaying the operating system for a history scan.
 
 Inside `emp-codex`, `history_repair.rs` coordinates the operation and retains
-its public entry points. `inventory.rs` owns read-only database/path discovery;
+its public entry points. `inventory.rs` owns read-only database discovery and
+path validation. `paths.rs` shares one lazily discovered directory inventory
+across writer guards, selection and replay, including failed/missing lookups.
+It lasts only for that restore; a later operation discovers returned files anew.
+Resolved paths are still checked for unsafe paths, symlinks and ambiguity.
 `coordination.rs` owns writer exclusion and active-fork protection;
 `selection.rs` finds affected checkpoints; and `planning.rs` stages selected
 rewrites. Replay, checkpoint conversion, spool storage and transaction recovery

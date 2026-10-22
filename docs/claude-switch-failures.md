@@ -39,7 +39,22 @@ that running service to Claude Opus 5.5 completed exactly once with a fixed shor
 answer, no failure/error events and no tool execution. This establishes fresh
 turn recovery, not validation of the uninstalled source patch or every old chat.
 
-## Encrypted parent history: 409 before destination execution
+## Legacy Claude CLI date reminder (2026-10-22 UTC)
+
+A Windows desktop-engine retest reproduced `claude_cli_content_mismatch` before
+any CPA request, using valid caller-selected `low` effort. A synthetic recording
+isolated the difference: Claude Code 2.1.222 prepends its older multi-line
+`currentDate` reminder, while the relay recognized only the shorter reminder
+emitted by newer installed versions. The conversation blocks themselves matched.
+
+The relay now recognizes both complete date wrappers and validates the calendar
+date, preserving the reminder as system metadata. It still requires the entire
+ordered transcript, source media slots and sole structured-output tool to match.
+Arbitrary reminder text, extra fields/instructions, invalid dates and changed
+history remain rejected. The regression fails before the fix and passes after it;
+no CLI update or relaxation of conversation integrity is required.
+
+## Encrypted parent history and retry classification
 
 A top-level Native conversation contained four historical encrypted child replies
 and was switched to Claude. With external collaboration off, every attempt failed
@@ -65,8 +80,37 @@ Origin fingerprints remain bounded to 4096 entries for 24 hours, separately from
 the one-hour plaintext cache. Recovery preflights all envelopes/accounts before
 any paid inference and accepts at most eight encrypted envelopes per request.
 Missing or changed accounts fail closed. Review/compaction worker exclusions and
-the 45-second inference limit remain in place. Client reconnect behavior is not
-changed or claimed fixed by this patch.
+the 45-second inference limit remain in place. The original parent-recovery
+change did not alter client reconnect behavior.
+
+### Unrecoverable request retries (2026-10-22 UTC)
+
+Local collaboration policy and input failures now return **400** over HTTP and
+in the WebSocket error envelope, retaining the specific EMP reason code and
+actionable message. This includes disabled external children, encrypted history
+without enabled recovery, unavailable or changed original accounts, malformed
+envelopes and the per-request recovery limit. These requests require changed
+input or settings; resending them cannot resolve the failure. Codex treats 400
+as an invalid request, while the former 403/409/413 statuses entered its transport
+retry path. Recovery inference keeps its upstream failure status, including
+rate limits, service failures and timeouts.
+
+The same actual Codex 0.163.0 engine, with its default retry settings, verifies
+the change against a disposable EMP and synthetic CPA upstream:
+
+| Rejected generation attempts per turn | Before | After |
+| --- | --- | --- |
+| WebSocket enabled | 6 WS + 6 HTTP | 1 WS; no fallback |
+| HTTP only | 6 HTTP | 1 HTTP |
+
+Both recovery-off and On-demand-with-unknown-origin cases terminate with zero
+retry notifications and zero upstream inference. Error reporting takes about
+0.07–0.09 seconds in this fixture, versus 6–13 seconds before. A fresh ordinary
+thread on each same client completes afterward. Separate 429-then-200 and
+503-then-200 controls complete over both transports, preserving retry for actual
+transient upstream failures. Native account provenance checks, plaintext caching,
+accounted recovery and saved history preservation remain covered by the existing
+collaboration contracts.
 
 ### Isolated source verification
 

@@ -1,7 +1,8 @@
 //! Streaming rollout parsing and lineage replay for legacy history repair.
 
 use super::HistoryRepairError;
-use super::inventory::{ThreadInfo, find_rollout_for_id, resolve_rollout_path, session_roots};
+use super::inventory::ThreadInfo;
+use super::paths::RolloutPaths;
 use super::spool::ContextSnapshot;
 use super::transaction::file_fingerprint;
 use crate::history::{
@@ -41,11 +42,10 @@ pub(super) struct RolloutSummary {
 }
 
 pub(super) fn load_rollout_header(
-    home: &Path,
+    paths: &RolloutPaths<'_>,
     info: &ThreadInfo,
 ) -> Result<RolloutHeader, HistoryRepairError> {
-    let roots = session_roots(home)?;
-    let path = resolve_rollout_path(home, info, &roots)?;
+    let path = paths.resolve(info)?;
     let (source, compressed, original_bytes) = open_rollout_reader(&path)?;
     let mut reader = BufReader::new(source);
     let mut line = Vec::new();
@@ -163,7 +163,7 @@ fn parse_repair_record(line: &[u8]) -> Result<Option<Map<String, Value>>, Histor
 }
 
 pub(super) fn context_for(
-    home: &Path,
+    paths: &RolloutPaths<'_>,
     snapshot: &mut ContextSnapshot,
     info: &ThreadInfo,
     bound: Option<HistoryBound>,
@@ -174,20 +174,19 @@ pub(super) fn context_for(
         return Err(HistoryRepairError::new("lineage_invalid"));
     }
     visiting.push(thread_id.to_owned());
-    let header = load_rollout_header(home, info)?;
+    let header = load_rollout_header(paths, info)?;
     if let Some(base) = &header.history_base {
         if header.mode != "paginated" {
             return Err(HistoryRepairError::new("legacy_lineage_unsupported"));
         }
-        let roots = session_roots(home)?;
-        let path = find_rollout_for_id(home, &base.thread_id, &roots)?;
+        let path = paths.find(&base.thread_id)?;
         let parent = ThreadInfo {
             id: base.thread_id.clone(),
             path,
             mode: None,
         };
         context_for(
-            home,
+            paths,
             snapshot,
             &parent,
             Some(HistoryBound {

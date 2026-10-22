@@ -18,6 +18,9 @@ const PARENT_ID: &str = "11111111-1111-4111-8111-111111111111";
 const CHILD_ID: &str = "22222222-2222-4222-8222-222222222222";
 const GRANDCHILD_ID: &str = "33333333-3333-4333-8333-333333333333";
 
+#[path = "restore_delay_tests.rs"]
+mod restore_delay;
+
 struct Fixture {
     _temporary: tempfile::TempDir,
     home: PathBuf,
@@ -843,7 +846,7 @@ fn active_codex_writer_blocks_without_changing_rollout_bytes() {
 }
 
 #[test]
-fn idle_restore_defers_both_directions_of_a_live_fork_and_repairs_independent_history() {
+fn idle_restore_skips_both_directions_of_a_live_fork_and_repairs_independent_history() {
     for live_id in [PARENT_ID, CHILD_ID] {
         let fixture = fixture(false, true, false);
         let independent_id = "44444444-4444-4444-8444-444444444444";
@@ -867,7 +870,14 @@ fn idle_restore_defers_both_directions_of_a_live_fork_and_repairs_independent_hi
         let writer = File::create(directory.join(format!("{live_id}.lock"))).unwrap();
         writer.lock().unwrap();
         let (lock, report) = repair_idle_before_native_restore(&fixture.home).unwrap();
-        assert_eq!((report.threads_repaired, report.threads_deferred), (1, 2));
+        assert_eq!(
+            (
+                report.threads_repaired,
+                report.threads_deferred,
+                report.threads_skipped
+            ),
+            (1, 0, 2)
+        );
         assert_eq!(
             fs::read(&fixture.parent_path).unwrap(),
             fixture.parent_plain

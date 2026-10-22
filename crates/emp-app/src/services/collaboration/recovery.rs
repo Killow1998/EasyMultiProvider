@@ -17,7 +17,7 @@ pub(super) fn resolve(
 ) -> Result<(ResolvedRoute, BTreeMap<String, String>), DestinationPrepareError> {
     let unavailable = || {
         error(
-            409,
+            400,
             "agent_task_account_changed",
             "The task's original subscription is unavailable or has changed. Send a new task with an available Native account.",
         )

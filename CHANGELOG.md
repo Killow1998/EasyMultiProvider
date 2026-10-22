@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.13.13 (2026-10-22)
+
+### 中文
+
+- 修复恢复原生和退出时因旧会话路径失效而反复扫描历史目录、长时间无响应的问题；系统匣菜单显示当前处理进度。
+- 历史报告区分已确认待转换的 EMP 压缩点与未检查会话，显示对应的检查或继续转换操作。
+- 修复 Claude Code 旧版日期提示造成的历史格式误判，恢复 Windows 上相关 Claude 模型请求。
+- 无法恢复的加密协作历史直接返回具体处理说明，避免同一请求反复重连；上游限流和临时故障仍可重试。
+
+### English
+
+- Fix repeated history-directory scans and long stalls during Restore Native and Quit when saved session paths are stale. Show the active operation in the tray menu.
+- Distinguish confirmed EMP checkpoints awaiting conversion from unchecked sessions, with the corresponding check or continue-conversion action.
+- Accept the legacy Claude Code date reminder without misclassifying conversation history, restoring affected Claude requests on Windows.
+- Report unrecoverable encrypted collaboration history directly instead of repeatedly reconnecting the same request. Preserve retries for upstream rate limits and transient failures.
+
 ## 0.13.12 (2026-10-22)
 
 ### 中文

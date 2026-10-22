@@ -1,5 +1,6 @@
 use super::HistoryRepairError;
-use super::inventory::{ThreadInfo, find_rollout_for_id, resolve_rollout_path, session_roots};
+use super::inventory::ThreadInfo;
+use super::paths::RolloutPaths;
 use super::replay::HistoryBound;
 use crate::history::{
     HistoryBase, MAX_LINEAGE_SEGMENTS as MAX_LINEAGE_DEPTH, MAX_ROLLOUT_LINE_BYTES,
@@ -10,7 +11,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MarkerState {
@@ -55,17 +56,15 @@ struct RolloutIndex {
     prefix: MarkerTransform,
 }
 
-struct MarkerScanner<'a> {
-    home: &'a Path,
-    roots: &'a [PathBuf],
+struct MarkerScanner<'a, 'home> {
+    paths: &'a RolloutPaths<'home>,
     indexes: HashMap<String, RolloutIndex>,
 }
 
-impl<'a> MarkerScanner<'a> {
-    fn new(home: &'a Path, roots: &'a [PathBuf]) -> Self {
+impl<'a, 'home> MarkerScanner<'a, 'home> {
+    fn new(paths: &'a RolloutPaths<'home>) -> Self {
         Self {
-            home,
-            roots,
+            paths,
             indexes: HashMap::new(),
         }
     }
@@ -97,7 +96,7 @@ impl<'a> MarkerScanner<'a> {
             return Ok(MarkerState::Unknown);
         }
         if !self.indexes.contains_key(thread_id) {
-            let path = match find_rollout_for_id(self.home, thread_id, self.roots) {
+            let path = match self.paths.find(thread_id) {
                 Ok(path) => path,
                 Err(error) if error.reason() == "lineage_source_missing" => {
                     return Ok(MarkerState::Unknown);
@@ -162,16 +161,20 @@ impl<'a> MarkerScanner<'a> {
     }
 }
 
-pub(super) fn select_affected_rollouts(
-    home: &Path,
-    infos: &[ThreadInfo],
-) -> Result<Vec<ThreadInfo>, HistoryRepairError> {
-    let roots = session_roots(home)?;
-    let mut scanner = MarkerScanner::new(home, &roots);
+pub(super) struct AffectedRollout<'a> {
+    pub(super) info: &'a ThreadInfo,
+    pub(super) confirmed: bool,
+}
+
+pub(super) fn select_affected_rollouts<'a>(
+    paths: &RolloutPaths<'_>,
+    infos: &'a [ThreadInfo],
+) -> Result<Vec<AffectedRollout<'a>>, HistoryRepairError> {
+    let mut scanner = MarkerScanner::new(paths);
     let mut seen_paths = BTreeSet::new();
 
     for info in infos {
-        let path = resolve_rollout_path(home, info, &roots)?;
+        let path = paths.resolve(info)?;
         let index = scan_rollout(info, path, None)?;
         if !seen_paths.insert(index.path.clone()) {
             return Err(HistoryRepairError::new("rollout_path_conflict"));
@@ -185,7 +188,12 @@ pub(super) fn select_affected_rollouts(
     for info in infos {
         let state = scanner.marker_state_for(&info.id, None)?;
         if state != MarkerState::Clear {
-            affected.push(info.clone());
+            affected.push(AffectedRollout {
+                info,
+                confirmed: state == MarkerState::Present
+                    || scanner.indexes[&info.id].prefix.apply(MarkerState::Clear)
+                        == MarkerState::Present,
+            });
         }
     }
 

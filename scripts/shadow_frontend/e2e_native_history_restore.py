@@ -101,7 +101,17 @@ def main():
         busy = history(home, '2')
         writer = stack.enter_context((locks / f'{busy[0]}.lock').open('w'))
         fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        legacy_path = home / 'easy-multi-provider/integration/history-restore.json'
+        legacy_path.parent.mkdir(parents=True)
+        legacy_report = json.dumps({'codex_home': str(home), 'outcome': {'status': 'partial', 'report': {
+            'threads_repaired': 0, 'checkpoints_converted': 0, 'threads_deferred': 111}}})
+        legacy_path.write_text(legacy_report)
         process, base, url, headers = launch(stack, binary, root, env, 1)
+        legacy = request(base + '/api/integration', headers=headers)[1]['history_restore']
+        assert legacy['status'] == 'unchecked' and legacy['report']['threads_deferred'] == 0
+        assert legacy['report']['threads_skipped'] == 111
+        assert legacy_path.read_text() == legacy_report
+        checks.append('Older deferred counts are presented as unclassified without rewriting the saved report')
 
         def post(path):
             current = {'X-EMP-Session': json.loads((root / 'state/web-session.json').read_text())['token']}
@@ -113,8 +123,9 @@ def main():
         outcome = post('/api/integration/restore')
         assert outcome['configuration']['state'] == 'native'
         report = outcome['history_restore']
-        assert report['status'] == 'partial' and report['report']['threads_repaired'] == 1
-        assert report['report']['threads_deferred'] == 1
+        assert report['status'] == 'unchecked' and report['report']['threads_repaired'] == 1
+        assert report['report']['threads_deferred'] == 0 and report['report']['threads_skipped'] == 1
+        assert report['report']['skipped_reasons'] == {'active_codex_writer': 1}
         converted(idle[1], idle[2])
         assert busy[1].read_bytes() == busy[2]
         assert (home / 'config.toml').read_text() == original_config
@@ -129,7 +140,9 @@ def main():
             wait_for(lambda: browser.execute('return !document.getElementById("native_history_retry").hidden;'))
             assert browser.execute('return !document.getElementById("native_history_notice").hidden && !document.getElementById("integration_toggle").disabled && document.getElementById("integration_toggle").dataset.action==="enable";')
             assert browser.execute('return document.getElementById("native_history_retry").textContent;') == (
-                '继续转换历史' if language == 'zh-CN' else 'Continue history conversion')
+                '检查历史' if language == 'zh-CN' else 'Check history')
+            assert browser.execute('return document.getElementById("native_history_notice").textContent.includes(arguments[0]);',
+                                   '不代表需要转换' if language == 'zh-CN' else 'does not mean they need conversion')
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             assert browser.execute('const button=document.getElementById("native_history_retry").getBoundingClientRect(), text=document.querySelector("#native_history_notice p");return button.left>=0 && button.right<=innerWidth && button.bottom<=innerHeight && text.scrollWidth<=text.clientWidth;')
             _, screenshot = request(browser.base + '/screenshot')
@@ -139,7 +152,7 @@ def main():
         stop(process)
         process, base, url, headers = launch(stack, binary, root, env, 2)
         pending = request(base + '/api/integration', headers=headers)[1]
-        assert pending['history_restore']['status'] == 'partial'
+        assert pending['history_restore']['status'] == 'unchecked'
         assert busy[1].read_bytes() == busy[2]
         fcntl.flock(writer, fcntl.LOCK_UN)
         writer.close()

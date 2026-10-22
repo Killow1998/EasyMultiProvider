@@ -1,7 +1,7 @@
 //! Reversible, append-only conversion of EMP portable checkpoints for native Codex.
 use crate::history::uuid_shape;
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +14,8 @@ mod checkpoint;
 mod coordination;
 #[path = "history_repair/inventory.rs"]
 mod inventory;
+#[path = "history_repair/paths.rs"]
+mod paths;
 #[path = "history_repair/planning.rs"]
 mod planning;
 #[path = "history_repair/replay.rs"]
@@ -34,7 +36,24 @@ use transaction::{pending_manifests, recover_pending};
 pub struct HistoryRepairReport {
     pub threads_repaired: usize,
     pub checkpoints_converted: usize,
+    /// Confirmed EMP checkpoints whose conversion could not finish safely.
     pub threads_deferred: usize,
+    /// Histories left untouched before confirming a conversion was needed.
+    pub threads_skipped: usize,
+    pub deferred_reasons: BTreeMap<String, usize>,
+    pub skipped_reasons: BTreeMap<String, usize>,
+}
+
+impl HistoryRepairReport {
+    fn skip(&mut self, reason: &str) {
+        self.threads_skipped += 1;
+        *self.skipped_reasons.entry(reason.to_owned()).or_default() += 1;
+    }
+
+    fn defer(&mut self, reason: &str) {
+        self.threads_deferred += 1;
+        *self.deferred_reasons.entry(reason.to_owned()).or_default() += 1;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,14 +168,17 @@ fn repair_selected(
     if !automatic && !active.is_empty() {
         return Err(HistoryRepairError::new("active_codex_writer"));
     }
-    let mut deferred = 0;
+    let paths = paths::RolloutPaths::new(&home)?;
+    let mut report = HistoryRepairReport::default();
     if automatic {
         // A transaction is indivisible, even if another interrupted manifest
         // shares one of its threads. Expand the blocked set before recovering.
+        let mut blocked_reason = "active_codex_writer";
         loop {
             let before = active.len();
-            if coordination::protect_active_lineages(&home, &infos, &mut active).is_err() {
+            if coordination::protect_active_lineages(&paths, &infos, &mut active).is_err() {
                 active.extend(lock_ids.iter().cloned());
+                blocked_reason = "active_lineage_unverified";
             }
             for (_, manifest) in &pending {
                 if manifest
@@ -178,15 +200,24 @@ fn repair_selected(
                 .any(|entry| active.contains(&entry.thread_id))
         });
         recover_pending(&home, &repair_root, pending)?;
-        let before = infos.len();
-        infos.retain(|info| coordination::lineage_is_idle(&home, info, &active).unwrap_or(false));
-        deferred = before - infos.len();
+        infos.retain(
+            |info| match coordination::lineage_is_idle(&paths, info, &active) {
+                Ok(true) => true,
+                Ok(false) => {
+                    report.skip(blocked_reason);
+                    false
+                }
+                Err(error) => {
+                    report.skip(error.reason());
+                    false
+                }
+            },
+        );
     } else {
         recover_pending(&home, &repair_root, pending)?;
     }
 
-    let mut report = planning::repair(&home, &repair_root, &infos, automatic)?;
-    report.threads_deferred += deferred;
+    planning::repair(&home, &repair_root, &infos, automatic, &paths, &mut report)?;
     Ok((
         HistoryRepairLock {
             _coordination: Some(coordination),

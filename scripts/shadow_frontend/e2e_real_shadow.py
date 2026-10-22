@@ -111,8 +111,8 @@ def main():
         checks.append('Account-scoped bills use source-resolved identity with candidate accounting; explicit owner selection is bounded and ambiguous filters are rejected')
         for language in ['zh-CN','en']:
             browser.execute('setLanguage(arguments[0]);document.getElementById("shadow_review_button").click();',language)
-            assert browser.execute('return !document.getElementById("modal_body").textContent.includes("Synthetic examples");')
-            browser.execute('document.querySelector("[data-shadow-demo=bills]").click();')
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['lifecycle']
+            browser.execute('closeModal();document.querySelector("[data-i18n=statistics]").click();document.querySelector("[data-stats-view=sessions]").click();')
             wait_for(lambda:browser.execute('return document.querySelectorAll("[data-session-bill]").length===1;'))
             assert browser.execute('return document.querySelector("[data-session-bill]").textContent.includes("Raw source conversation");')
             _,png=request(browser.base+'/screenshot')

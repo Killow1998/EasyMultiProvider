@@ -32,7 +32,7 @@ enum Mode {
 struct Snapshot {
     english: bool,
     mode: Mode,
-    busy: bool,
+    busy: Option<Action>,
 }
 
 impl Snapshot {
@@ -41,7 +41,7 @@ impl Snapshot {
     }
 
     fn toggle(self) -> Option<Action> {
-        if self.busy {
+        if self.busy.is_some() {
             return None;
         }
         match self.mode {
@@ -52,6 +52,12 @@ impl Snapshot {
     }
 
     fn toggle_label(self) -> &'static str {
+        if self.busy == Some(Action::Restore) {
+            return self.copy().restoring;
+        }
+        if self.busy == Some(Action::Enable) {
+            return self.copy().enabling;
+        }
         if self.mode == Mode::Emp {
             self.copy().restore
         } else {
@@ -59,10 +65,21 @@ impl Snapshot {
         }
     }
 
+    fn quit_label(self) -> &'static str {
+        if self.busy == Some(Action::Quit) {
+            self.copy().quitting
+        } else {
+            self.copy().quit
+        }
+    }
+
     fn tooltip(self) -> &'static str {
         let copy = self.copy();
-        if self.busy {
-            return copy.busy;
+        match self.busy {
+            Some(Action::Quit) => return copy.quitting_history,
+            Some(Action::Restore) => return copy.restoring_history,
+            Some(_) => return copy.enabling,
+            None => {}
         }
         match self.mode {
             Mode::Emp => copy.active,
@@ -99,7 +116,7 @@ impl Recovery {
         let snapshot = Snapshot {
             english,
             mode: Mode::Unresolved,
-            busy: false,
+            busy: None,
         };
         let tray = match platform::Tray::new(snapshot, sender) {
             Ok(tray) => tray,
@@ -143,7 +160,7 @@ pub(crate) fn wait(state: Arc<ServerState>) -> bool {
     if !available() {
         return false;
     }
-    let initial = actions::snapshot(&state, false);
+    let initial = actions::snapshot(&state, None);
     let (send, receive) = mpsc::sync_channel(4);
     let mut tray = match platform::Tray::new(initial, send) {
         Ok(tray) => tray,

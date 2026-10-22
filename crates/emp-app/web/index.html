@@ -46,8 +46,8 @@
 </header>
 
 <div id="native_history_notice" class="integration-history-notice" role="status" hidden>
-  <p data-i18n="core.native_history_deferred"></p>
-  <button id="native_history_retry" type="button" class="secondary" data-icon="restore" onclick="confirmIntegrationAction('restore')" data-i18n="core.native_history_retry" hidden></button>
+  <p id="native_history_message"></p>
+  <button id="native_history_retry" type="button" class="secondary" data-icon="restore" onclick="confirmIntegrationAction('restore')" hidden></button>
 </div>
 
 <div class="workspace-layout">
@@ -561,11 +561,14 @@ function renderIntegration(info) {
   const view = configuration.state === 'conflict' ? conflictView(configuration)
     : configuration.state === 'emp_applied' || configuration.state === 'native' && runtimeNeedsDisplay ? runtimeView(info.runtime || {})
     : views[configuration.state] || views.unavailable;
-  const historyPending = configuration.state === 'native' && ['partial','deferred'].includes(info.history_restore?.status);
+  const historyMessage = nativeHistoryMessage(info.history_restore);
+  const historyPending = configuration.state === 'native' && !!historyMessage;
   $('integration_summary').textContent = view[1];
   $('integration_summary').hidden = !['conflict','prepared','restoring','unavailable'].includes(configuration.state || 'unavailable');
   $('native_history_notice').hidden = !historyPending;
   $('native_history_retry').hidden = !historyPending;
+  $('native_history_message').textContent = historyMessage;
+  $('native_history_retry').textContent = nativeHistoryAction(info.history_restore);
   const version = info.codex_compatibility?.installed;
   $('codex_version').textContent = version ? `Codex ${version}` : 'Codex';
   $('integration').dataset.state = configuration.state || 'unknown';
@@ -609,9 +612,22 @@ async function loadIntegration() {
     return false;
   }
 }
+function nativeHistoryMessage(history) {
+  if (!['partial','unchecked','deferred'].includes(history?.status)) return '';
+  const report = history.report;
+  if (typeof report?.threads_skipped !== 'number') return tr('core.native_history_unverified');
+  return [report.threads_deferred > 0 && tr('core.native_history_deferred', {count:report.threads_deferred}),
+    report.threads_skipped > 0 && tr('core.native_history_unchecked', {count:report.threads_skipped})]
+    .filter(Boolean).join(' ') || tr('core.native_history_unverified');
+}
+function nativeHistoryAction(history) {
+  return tr(typeof history?.report?.threads_skipped === 'number' && history.report.threads_deferred > 0
+    ? 'core.native_history_retry' : 'core.native_history_check');
+}
 function confirmIntegrationAction(action) {
   if (action === 'restore' && integrationInfo?.configuration?.state === 'native') {
-    openModal(tr("core.native_history_retry"), `<p>${esc(tr("core.native_history_deferred"))}</p>`, tr("core.native_history_retry"), () => submitIntegrationAction(action));
+    const history = integrationInfo.history_restore;
+    openModal(nativeHistoryAction(history), `<p>${esc(nativeHistoryMessage(history))}</p>`, nativeHistoryAction(history), () => submitIntegrationAction(action));
     return;
   }
   const actions = {"enable":[tr("core.apply_emp_to_codex"),tr("core.save_emp_settings_and_check_codex_s_shared_model")],"restore":[tr("core.restore_native_codex"),tr("core.finish_active_requests_before_restoring_native_codex_settings_emp")],"reload":[tr("core.check_codex"),tr("core.read_the_saved_target_and_compare_it_with_codex")]};
@@ -621,7 +637,8 @@ function confirmIntegrationAction(action) {
 function integrationOutcomeMessage(info, action) {
   if (action === 'restore') {
     const message=tr("core.native_codex_settings_restored_emp_is_still_running"), history=info?.history_restore;
-    if (['partial','deferred'].includes(history?.status)) return message+' '+tr("core.native_history_deferred");
+    const pending = nativeHistoryMessage(history);
+    if (pending) return message+' '+pending;
     if (history?.report?.threads_repaired>0) return message+' '+tr("core.native_history_converted",{count:history.report.threads_repaired});
     return message;
   }

@@ -17,6 +17,8 @@ mod tests;
 const MAX_RECOVERIES: usize = 8;
 const MAX_TEXT: usize = 256 * 1024;
 
+// Local policy/envelope failures use 400: Codex retries 403/409/413 as
+// transport errors. Recovery inference failures retain their upstream status.
 fn error(status: u16, code: &'static str, message: &'static str) -> DestinationPrepareError {
     DestinationPrepareError::Collaboration {
         status,
@@ -46,7 +48,7 @@ pub(crate) fn prepare(
     let child = message::is_child(incoming);
     if mode == "off" && child {
         return Err(error(
-            403,
+            400,
             "external_subagents_disabled",
             "External subagents are disabled. Use a Native GPT subagent, or open EMP Settings > Cross-service subagents and select On-demand recovery or On. 设置 > 跨服务子代理：选择按需恢复或打开。",
         ));
@@ -67,14 +69,14 @@ pub(crate) fn prepare(
         });
     if other_worker {
         return Err(error(
-            409,
+            400,
             "encrypted_agent_task_requires_recovery",
             "Encrypted agent messages in review or compaction workers are outside cross-service recovery. Continue with the original Native model or a readable handoff. 审查或压缩工作线程中的加密子代理消息不适用跨服务按需恢复，请使用原 Native 模型或可读交接。",
         ));
     }
     if mode != "on_demand" {
         return Err(error(
-            409,
+            400,
             "encrypted_agent_task_requires_recovery",
             "This request contains encrypted agent messages. Select Settings > Cross-service subagents > On-demand recovery to transcribe them with GPT on the original account (extra latency and subscription usage), or continue with the original Native model or a readable handoff. 设置 > 跨服务子代理 > 按需恢复：使用原账号 GPT 转写加密子代理消息，会增加等待和订阅用量；也可继续使用原 Native 模型或可读交接。",
         ));
@@ -90,7 +92,7 @@ pub(crate) fn prepare(
         > MAX_RECOVERIES
     {
         return Err(error(
-            413,
+            400,
             "agent_task_recovery_limit",
             "Too many encrypted messages for one bounded recovery (maximum 8). Create a readable handoff with the original Native GPT model and continue in a new external chat.",
         ));
@@ -106,7 +108,7 @@ pub(crate) fn prepare(
         let task = message::parse(item)?;
         let service = &state.backend.transport.collaboration;
         let origin = service.origin(&task.ciphertext)
-            .ok_or_else(|| error(409, "agent_task_origin_unknown",
+            .ok_or_else(|| error(400, "agent_task_origin_unknown",
                 "The encrypted message's original subscription is unavailable (restart, expiry or eviction). Recovery cannot safely guess an account. Continue with the original Native model or prepare a readable handoff; for a child, send a new task through EMP."))?;
         let (recovery_route, headers) =
             recovery::resolve(state, &recovery_config, &origin, incoming)?;

@@ -49,8 +49,11 @@ python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --dem
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
 review entry. Update `reviewRows` in `preview-review.js` for every review round;
 follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
-The current review covers grouped Settings, conversation billing,
-context/compaction help, memory routing and the monochrome macOS icon. Settings
+The current review covers Restore Native / Quit: unverified history is distinct
+from confirmed pending conversion. This lifecycle example explicitly opens the
+separate synthetic demo; real-source lifecycle writes remain blocked. The tray's
+actual action feedback is verified on a private D-Bus, rather than simulated as
+a browser menu. Settings
 groups display preferences, general service controls, external-service search,
 and native-service compaction/routing in four flat sections. Background compaction
 remains available in the native-service section and uses its existing controller.

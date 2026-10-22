@@ -109,11 +109,16 @@ fn is_cli_date_reminder(block: &Value) -> bool {
     if clean.as_object().is_none_or(|fields| fields.len() != 2) || clean["type"] != "text" {
         return false;
     }
-    let Some(date) = clean["text"]
-        .as_str()
-        .and_then(|text| text.strip_prefix("<system-reminder>\nToday's date is "))
-        .and_then(|text| text.strip_suffix(".\n</system-reminder>\n"))
-    else {
+    // Older installed CLIs wrap the same date in a longer context reminder.
+    // Match the complete known wrappers, never arbitrary system-reminder text.
+    let Some(date) = clean["text"].as_str().and_then(|text| {
+        [
+            ("<system-reminder>\nToday's date is ", ".\n</system-reminder>\n"),
+            ("<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is ", ".\n\n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n\n"),
+        ]
+        .into_iter()
+        .find_map(|(prefix, suffix)| text.strip_prefix(prefix)?.strip_suffix(suffix))
+    }) else {
         return false;
     };
     if date.len() != 10

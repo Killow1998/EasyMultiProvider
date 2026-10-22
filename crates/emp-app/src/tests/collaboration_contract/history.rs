@@ -181,28 +181,26 @@ fn parent_encrypted_history_uses_existing_on_demand_mode_on_http_and_websocket()
         .as_array_mut()
         .unwrap()
         .push(agent(&format!("gAAAA{}", "U".repeat(100))));
-    let unknown_result = send_child(&unknown);
-    assert!(
-        unknown_result.contains("agent_task_origin_unknown"),
-        "{unknown_result}"
-    );
     let other = format!("gAAAA{}", "O".repeat(100));
     service.observe("native-fixture/gpt", "another-owner", &origin(&other));
     let mut mixed = request.clone();
     mixed["input"].as_array_mut().unwrap().push(agent(&other));
-    let mixed_result = send_child(&mixed);
-    assert!(
-        mixed_result.contains("agent_task_account_changed"),
-        "{mixed_result}"
-    );
     let mut malformed = request.clone();
     let mut invalid = agent(&cipher);
     invalid["content"][0]["text"] = json!("invalid header");
     malformed["input"].as_array_mut().unwrap().push(invalid);
-    assert!(send_child(&malformed).contains("invalid_agent_task"));
     let mut oversized = request.clone();
     oversized["input"] = json!(vec![agent(&cipher); 9]);
-    assert!(send_child(&oversized).contains("agent_task_recovery_limit"));
+    for (body, code) in [
+        (&unknown, "agent_task_origin_unknown"),
+        (&mixed, "agent_task_account_changed"),
+        (&malformed, "invalid_agent_task"),
+        (&oversized, "agent_task_recovery_limit"),
+    ] {
+        let rejected = send_child(body);
+        assert!(rejected.starts_with("HTTP/1.1 400"), "{rejected}");
+        assert!(rejected.contains(code), "{rejected}");
+    }
     // A root turn can inherit outbound tasks as well as inbound replies.
     let mut inherited = request.clone();
     inherited["input"].as_array_mut().unwrap().insert(
@@ -225,7 +223,7 @@ fn parent_encrypted_history_uses_existing_on_demand_mode_on_http_and_websocket()
         }
         for body in [&request, &inherited] {
             let response = send(body);
-            assert!(response.starts_with("HTTP/1.1 409"), "{mode}: {response}");
+            assert!(response.starts_with("HTTP/1.1 400"), "{mode}: {response}");
             assert!(
                 response.contains("encrypted_agent_task_requires_recovery"),
                 "{response}"
@@ -254,6 +252,7 @@ fn parent_encrypted_history_uses_existing_on_demand_mode_on_http_and_websocket()
             event = socket.receive_json().unwrap().unwrap();
         }
         assert_eq!(event["type"], "error", "{event}");
+        assert_eq!(event["status"], 400, "{event}");
         assert_eq!(
             event["error"]["code"], "encrypted_agent_task_requires_recovery",
             "{event}"

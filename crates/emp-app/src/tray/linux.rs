@@ -87,7 +87,10 @@ impl ksni::Tray for LinuxTray {
         vec![
             self.item(copy.open, Some(Action::Open)),
             self.item(self.snapshot.toggle_label(), self.snapshot.toggle()),
-            self.item(copy.quit, (!self.snapshot.busy).then_some(Action::Quit)),
+            self.item(
+                self.snapshot.quit_label(),
+                self.snapshot.busy.is_none().then_some(Action::Quit),
+            ),
         ]
     }
 }

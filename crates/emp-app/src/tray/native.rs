@@ -50,7 +50,12 @@ impl Tray {
             snapshot.toggle().is_some(),
             None,
         );
-        let quit = MenuItem::with_id("emp-quit", copy.quit, true, None);
+        let quit = MenuItem::with_id(
+            "emp-quit",
+            snapshot.quit_label(),
+            snapshot.busy.is_none(),
+            None,
+        );
         let menu = Menu::with_items(&[&open, &toggle, &quit])?;
         let image = Icon::from_rgba(icon::rgba()?, icon::SIZE, icon::SIZE)?;
         let builder = TrayIconBuilder::new().with_id("easy-multi-provider");
@@ -80,8 +85,8 @@ impl Tray {
         self.open.set_text(copy.open);
         self.toggle.set_text(snapshot.toggle_label());
         self.toggle.set_enabled(snapshot.toggle().is_some());
-        self.quit.set_text(copy.quit);
-        self.quit.set_enabled(!snapshot.busy);
+        self.quit.set_text(snapshot.quit_label());
+        self.quit.set_enabled(snapshot.busy.is_none());
         let _ = self.icon.set_tooltip(Some(snapshot.tooltip()));
         self.snapshot = snapshot;
     }
@@ -92,7 +97,7 @@ impl Tray {
             let action = match event.id.as_ref() {
                 "emp-open" => Some(Action::Open),
                 "emp-toggle" => self.snapshot.toggle(),
-                "emp-quit" if !self.snapshot.busy => Some(Action::Quit),
+                "emp-quit" if self.snapshot.busy.is_none() => Some(Action::Quit),
                 _ => None,
             };
             if let Some(action) = action {

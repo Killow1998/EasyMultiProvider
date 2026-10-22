@@ -16,7 +16,7 @@ const serviceUsage = () => feature('service-usage.js', 'createServiceUsage')({es
 
 test('Restore Native keeps the page usable and Quit EMP uses a separate action', async () => {
   const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
-  const integration = html.slice(html.indexOf('function confirmIntegrationAction('), html.indexOf('let catalogSync ='));
+  const integration = html.slice(html.indexOf('function nativeHistoryMessage('), html.indexOf('let catalogSync ='));
   const quit = html.slice(html.indexOf('async function quitEmp('), html.indexOf('function dynamicActionElement('));
   for (const language of ['en', 'zh-CN']) {
     const calls = [], notices = [], modals = [], nodes = new Map();

@@ -1,6 +1,7 @@
 //! Writer exclusion and active-fork protection for native history repair.
 use super::HistoryRepairError;
-use super::inventory::{ThreadInfo, find_rollout_for_id, session_roots};
+use super::inventory::ThreadInfo;
+use super::paths::RolloutPaths;
 use super::replay::load_rollout_header;
 use crate::history::{MAX_LINEAGE_SEGMENTS as MAX_LINEAGE_DEPTH, uuid_shape};
 use std::collections::BTreeSet;
@@ -131,16 +132,15 @@ pub(super) fn probe_codex_writers(
 /// A live descendant may still refer to its parent's byte offsets. Protect
 /// those ancestors too; only the immutable session header is read here.
 pub(super) fn protect_active_lineages(
-    home: &Path,
+    paths: &RolloutPaths<'_>,
     infos: &[ThreadInfo],
     active: &mut BTreeSet<String>,
 ) -> Result<(), HistoryRepairError> {
-    let roots = session_roots(home)?;
     for id in active.clone() {
         let mut info = match infos.iter().find(|info| info.id == id) {
             Some(info) => info.clone(),
             None => ThreadInfo {
-                path: find_rollout_for_id(home, &id, &roots)?,
+                path: paths.find(&id)?,
                 id,
                 mode: None,
             },
@@ -151,7 +151,7 @@ pub(super) fn protect_active_lineages(
                 return Err(HistoryRepairError::new("lineage_invalid"));
             }
             active.insert(info.id.clone());
-            let header = load_rollout_header(home, &info)?;
+            let header = load_rollout_header(paths, &info)?;
             let Some(base) = header.history_base else {
                 break;
             };
@@ -159,7 +159,7 @@ pub(super) fn protect_active_lineages(
                 return Err(HistoryRepairError::new("lineage_invalid"));
             }
             info = ThreadInfo {
-                path: find_rollout_for_id(home, &base.thread_id, &roots)?,
+                path: paths.find(&base.thread_id)?,
                 id: base.thread_id,
                 mode: None,
             };
@@ -169,13 +169,12 @@ pub(super) fn protect_active_lineages(
 }
 
 pub(super) fn lineage_is_idle(
-    home: &Path,
+    paths: &RolloutPaths<'_>,
     info: &ThreadInfo,
     active: &BTreeSet<String>,
 ) -> Result<bool, HistoryRepairError> {
     let mut info = info.clone();
     let mut visited = BTreeSet::new();
-    let roots = session_roots(home)?;
     for _ in 0..MAX_LINEAGE_DEPTH {
         if active.contains(&info.id) {
             return Ok(false);
@@ -183,14 +182,14 @@ pub(super) fn lineage_is_idle(
         if !visited.insert(info.id.clone()) {
             return Err(HistoryRepairError::new("lineage_invalid"));
         }
-        let header = load_rollout_header(home, &info)?;
+        let header = load_rollout_header(paths, &info)?;
         let Some(base) = header.history_base else {
             return Ok(true);
         };
         if active.contains(&base.thread_id) {
             return Ok(false);
         }
-        let path = find_rollout_for_id(home, &base.thread_id, &roots)?;
+        let path = paths.find(&base.thread_id)?;
         info = ThreadInfo {
             id: base.thread_id,
             path,
