@@ -12,7 +12,8 @@ The maintenance target is **0.155–0.164**, following the official stable
 [0.164.0 release](https://github.com/openai/codex/releases/tag/rust-v0.164.0)
 (2026-10-23 04:48:10 UTC). Series 0.154 remains in the historical record below.
 
-The current development candidate based on EMP 0.13.13 passed the created-history
+The EMP 0.13.14 implementation, validated before tagging at commit `5054928`,
+passed the created-history
 contract with official Linux engines **0.155.1, 0.156.1, 0.157.1, 0.158.0,
 0.159.3, 0.160.1, 0.161.0, 0.162.1, 0.163.0 and 0.164.0**. Each passed
 51 assertions: real MCP before/after external compaction; parent, early/later
