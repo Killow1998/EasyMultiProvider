@@ -118,17 +118,18 @@ test('usage owns scan cancellation, fallback timers and pricing-save navigation'
   scan.resolve({}); await tick(); assert.equal(q.calls.length,4);
 });
 
-test('account details cancel reads and cannot update another service after a save', async () => {
+test('account details retain shared reads without updating another service after a save', async () => {
   let nodes={}, details, mounted=0;
   const q=queries(), save=deferred();
   const state={accounts:[{id:'first',name:'First'},{id:'second',name:'Second'}]};
   const services={open() { details.stop();nodes={account_usage:{innerHTML:''},account_alias:{value:'New alias'},modal_status:{textContent:''}}; },mount() {mounted++;}};
   details=feature('account-details.js','createAccountDetails')({...q,getState:() => state,$:id => nodes[id],tr,esc,services,
-    serviceUsage:{render:data => data.model},persistState:() => save.promise,uiIcon:x => x,subscriptionPlanLabel:() => '',resetCreditCount:() => 0});
+    serviceUsage:{render:data => data.groups[0].model},persistState:() => save.promise,uiIcon:x => x,subscriptionPlanLabel:() => '',resetCreditCount:() => 0});
   const first=details.open('first'), second=details.open('second');
-  assert.equal(q.calls[0].options.signal.aborted,true);
-  q.calls[0].resolve({model:'stale'}); await first; assert.equal(nodes.account_usage.innerHTML,'');
-  q.calls[1].resolve({model:'fresh'}); await second; assert.equal(nodes.account_usage.innerHTML,'fresh');
+  const loading=nodes.account_usage.innerHTML;
+  assert.equal(q.calls[0].options.signal.aborted,false);
+  q.calls[0].resolve({groups:[{model:'stale'}]}); await first; assert.equal(nodes.account_usage.innerHTML,loading);
+  q.calls[1].resolve({groups:[{model:'fresh'}]}); await second; assert.equal(nodes.account_usage.innerHTML,'fresh');
   const alias=details.saveAlias({dataset:{id:'second'}});
   details.stop(); nodes={}; save.resolve(); await alias;
   assert.equal(mounted,0,'saving a departed account must not reopen its tabs');

@@ -11,6 +11,7 @@ document.querySelector('.page-header').after(demoBanner);
 window.EMP_IMPORT_DEMO=()=>{
   if(shadowServicesDemoActive){const url=new URL(location.href);url.searchParams.delete("demo");url.searchParams.set("import","1");location.assign(url);return;}
   document.getElementById('shadow_migration_open').click();
+  document.querySelector('[data-migration-mode="import"]').click();
   const transfer=new DataTransfer();
   transfer.items.add(new File([Uint8Array.from(atob(fixtureBundle),c=>c.charCodeAt(0))],'account-example.emp'));
   const file=document.getElementById('shadow_migration_file');file.files=transfer.files;
@@ -23,7 +24,6 @@ let lifecycleHistory=null;
 const lifecycleInfo=()=>({configuration:{state:lifecycleState},runtime:{state:'not_checked'},history_restore:lifecycleHistory});
 const protect=()=>{
   document.getElementById('integration_toggle').disabled=!lifecycleDemo;
-  document.querySelector('[data-i18n="quit_emp"]').hidden=!lifecycleDemo;
 };
 const originalFill=fill;fill=function(){
   if(shadowServicesDemoActive)state=shadowServiceDemoState(state);

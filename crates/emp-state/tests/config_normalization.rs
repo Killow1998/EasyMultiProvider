@@ -54,7 +54,9 @@ fn configuration_normalization_matches_frozen_fixture() {
             "image_routing",
             "external_collaboration",
             "memory_model",
+            "memory_extraction_model",
             "background_compaction",
+            "ultra_reasoning_efforts",
         ] {
             python_compatible.as_object_mut().unwrap().remove(key);
         }
@@ -96,6 +98,7 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
     assert_eq!(defaults["port"], 4200);
     assert_eq!(defaults["catalog_show_context"], true);
     assert_eq!(defaults["language"], "zh-CN");
+    assert_eq!(defaults["ultra_reasoning_efforts"], json!({}));
     assert_eq!(
         normalize_configuration(Some(&json!({"language":"en"}))).unwrap()["language"],
         "en"
@@ -106,6 +109,7 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
         assert_eq!(defaults["auto_review_fallback"], true);
         assert_eq!(defaults["external_collaboration"], "off");
         assert_eq!(defaults["memory_model"], "");
+        assert_eq!(defaults["memory_extraction_model"], "");
         assert_eq!(defaults["background_compaction"], Value::Null);
         assert_eq!(defaults["subscription_search"]["enabled"], true);
     }
@@ -141,6 +145,7 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
     assert_eq!(saved["auto_review_fallback"], false);
     assert_eq!(saved["external_collaboration"], "on_demand");
     assert_eq!(saved["memory_model"], "gpt-6-luna");
+    assert_eq!(saved["memory_extraction_model"], "gpt-6-luna");
     assert_eq!(saved["background_compaction"], true);
     let mut old_client = public.clone();
     old_client
@@ -151,7 +156,11 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
         emp_state::merge_web_update(&current, &old_client).unwrap()["external_collaboration"],
         "on_demand"
     );
-    for key in ["memory_model", "background_compaction"] {
+    for key in [
+        "memory_model",
+        "memory_extraction_model",
+        "background_compaction",
+    ] {
         old_client.as_object_mut().unwrap().remove(key);
         assert_eq!(
             emp_state::merge_web_update(&current, &old_client).unwrap()[key],
@@ -182,6 +191,36 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
         json!("claude-opus"),
         json!("gpt-../../auth"),
     ] {
-        assert!(normalize_configuration(Some(&json!({"memory_model":invalid}))).is_err());
+        for key in ["memory_model", "memory_extraction_model"] {
+            assert!(normalize_configuration(Some(&json!({key:invalid}))).is_err());
+        }
+    }
+}
+
+#[test]
+fn memory_models_upgrade_once_and_save_independent_defaults() {
+    let legacy = normalize_configuration(Some(&json!({"memory_model":"gpt-6-luna"}))).unwrap();
+    assert_eq!(legacy["memory_extraction_model"], "gpt-6-luna");
+    for (extraction, consolidation) in [
+        ("gpt-6.1-sol", "gpt-6-luna"),
+        ("", "gpt-6-luna"),
+        ("gpt-6.1-sol", ""),
+    ] {
+        let mut update = legacy.clone();
+        update["memory_extraction_model"] = json!(extraction);
+        update["memory_model"] = json!(consolidation);
+        let saved = emp_state::merge_web_update(&legacy, &update).unwrap();
+        let reloaded = normalize_configuration(Some(&saved)).unwrap();
+        assert_eq!(reloaded["memory_extraction_model"], extraction);
+        assert_eq!(reloaded["memory_model"], consolidation);
+        let mut old_client = saved.clone();
+        old_client
+            .as_object_mut()
+            .unwrap()
+            .remove("memory_extraction_model");
+        assert_eq!(
+            emp_state::merge_web_update(&saved, &old_client).unwrap()["memory_extraction_model"],
+            extraction
+        );
     }
 }

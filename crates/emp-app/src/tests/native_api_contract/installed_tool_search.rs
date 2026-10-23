@@ -233,7 +233,7 @@ fn tool_search(protocol: &'static str, native: bool) {
     assert_eq!(last["fields"]["tool_pairing_status"], "paired");
 }
 
-fn response_events(protocol: &str, id: &str, item: &Value) -> Vec<Value> {
+pub(super) fn response_events(protocol: &str, id: &str, item: &Value) -> Vec<Value> {
     let final_message = item["type"] == "message";
     let name = &item["name"];
     let args = item["arguments"]

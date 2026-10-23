@@ -50,10 +50,18 @@ def main():
                 # Language selection intentionally saves the error-language preference.
                 wait_for(lambda: json.loads((target / 'config.json').read_text()).get('language') == language)
                 before = (target / 'config.json').read_bytes()
-                initial = browser.execute('return {submit:document.getElementById("modal_submit").style.display,steps:document.querySelectorAll("[data-migration-step]").length,current:document.querySelectorAll("[data-migration-step]")[0]?.getAttribute("aria-current"),status:document.getElementById("modal_status").textContent};')
-                assert initial == {'submit': 'none', 'steps': 3, 'current': 'step', 'status': ''}, initial
+                browser.execute('document.querySelector("[data-migration-mode=import]").click();')
                 browser.execute(fill, exported['bundle'])
-                assert browser.execute('return document.querySelectorAll("[data-migration-step]")[1].getAttribute("aria-current")==="step" && !!document.querySelector(".migration-open-hint").textContent;')
+                browser.execute('document.getElementById("modal_back").click();document.querySelector("[data-migration-mode=export]").click();document.getElementById("shadow_export_password").value="export-draft-password";document.getElementById("shadow_export_password_confirm").value="export-draft-password";document.getElementById("migration_include_context").click();document.getElementById("modal_back").click();document.querySelector("[data-migration-mode=tunnel]").click();document.getElementById("lan_code").value="x".repeat(49);')
+                browser.escape()
+                browser.execute('document.querySelector("[data-migration-mode=export]").click();')
+                assert browser.execute('return document.getElementById("shadow_export_password").value==="export-draft-password" && document.getElementById("shadow_export_password_confirm").value==="export-draft-password" && !document.getElementById("migration_include_context").checked;')
+                browser.escape()
+                browser.execute('document.querySelector("[data-migration-mode=tunnel]").click();')
+                assert browser.execute('return document.getElementById("lan_code").value==="x".repeat(49);')
+                browser.escape()
+                browser.execute('document.querySelector("[data-migration-mode=import]").click();')
+                assert browser.execute('return document.getElementById("shadow_migration_file").files[0].name==="fixture.emp" && document.getElementById("shadow_import_password").value==="fixture-migration-password";')
                 assert browser.execute('return document.documentElement.scrollWidth<=document.documentElement.clientWidth && document.getElementById("shadow_migration").scrollWidth<=document.getElementById("shadow_migration").clientWidth;')
                 if language == 'zh-CN':
                     status, screenshot = request(browser.base + '/screenshot')
@@ -63,18 +71,20 @@ def main():
                 wait_for(lambda: browser.execute('return !!document.querySelector(".migration-demo-note") && !document.getElementById("modal_submit").disabled;'))
                 assert browser.execute('return !document.getElementById("modal_back").hidden;')
                 browser.execute('document.getElementById("modal_back").click();')
-                assert browser.execute('return !document.querySelector(".migration-demo-note") && document.getElementById("shadow_migration_file").files[0].name==="fixture.emp" && document.getElementById("shadow_import_password").value==="fixture-migration-password" && document.getElementById("modal_back").hidden;')
+                assert browser.execute('return !document.querySelector(".migration-demo-note") && document.getElementById("shadow_migration_file").files[0].name==="fixture.emp" && document.getElementById("shadow_import_password").value==="fixture-migration-password";')
                 assert (target / 'config.json').read_bytes() == before
                 browser.execute('document.querySelector("[data-migration-demo]").click();')
                 wait_for(lambda: browser.execute('return !!document.querySelector(".migration-demo-note") && !document.getElementById("modal_submit").disabled;'))
                 assert browser.execute('return document.getElementById("modal_close").hidden;')
                 browser.escape()
                 assert browser.execute('return !document.querySelector(".migration-demo-note") && document.getElementById("shadow_migration_file").files[0].name==="fixture.emp" && document.getElementById("shadow_import_password").value==="fixture-migration-password";')
-                browser.execute('document.querySelector(".modal-close").click();')
+                browser.escape()
+                wait_for(lambda:browser.execute('return !!document.getElementById("migration_chooser");'))
+                browser.execute('document.getElementById("modal_close").click();')
                 assert browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");')
                 assert (target / 'config.json').read_bytes() == before
-        checks.append('Both languages/themes: one child Back, Back/Escape preserve file/password, root X closes, no writes')
-        browser.execute('document.getElementById("shadow_migration_open").click();')
+        checks.append('Both languages/themes: chooser, forms and preview return to their immediate parent; import file/password, export password/options and tunnel code survive switching; root X closes without writes')
+        browser.execute('document.getElementById("shadow_migration_open").click();document.querySelector("[data-migration-mode=import]").click();')
         browser.execute(fill, exported['bundle'])
         server.preview_gate = threading.Event()
         browser.execute('document.querySelector("[data-migration-decode]").click();')
@@ -84,7 +94,6 @@ def main():
         server.preview_gate.set()
         browser.execute('document.querySelector("[data-migration-decode]").click();')
         wait_for(lambda: browser.execute('return !!document.querySelector("[data-migration-name]") && !document.getElementById("modal_submit").disabled;'), seconds=90)
-        assert browser.execute('return document.querySelectorAll("[data-migration-step]")[2].getAttribute("aria-current")==="step";')
         assert (target / 'config.json').read_bytes() == before
         checks.append('Back cancels pending preview; reopened encrypted package becomes importable without stale state or writes')
         # A response that never arrives must leave a usable retry, not a permanent wait.
@@ -98,7 +107,7 @@ def main():
         assert browser.execute('return document.getElementById("modal_status").textContent;') == 'Preparing the import preview. Please wait…'
         wait_for(lambda: browser.execute('return document.getElementById("modal_submit").textContent === "Retry preview" && !document.getElementById("modal_submit").disabled;'), seconds=35)
         assert browser.execute('return document.getElementById("modal_status").textContent.includes("timed out");')
-        assert browser.execute('return document.getElementById("shadow_migration").getAttribute("aria-busy")==="false" && getComputedStyle(document.getElementById("modal_status")).color!==getComputedStyle(document.querySelector(".migration-steps")).color;')
+        assert browser.execute('return document.getElementById("shadow_migration").getAttribute("aria-busy")==="false";')
         assert browser.execute('return !document.getElementById("migration_include_rename").checked;')
         assert (target / 'config.json').read_bytes() == before
         status, screenshot = request(browser.base + '/screenshot')

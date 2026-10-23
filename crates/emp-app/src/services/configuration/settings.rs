@@ -39,7 +39,8 @@ pub(crate) fn update(
             let preferences = &state.backend.integration.preferences;
             let preferences_changed = (before["background_compaction"]
                 != updated["background_compaction"]
-                || before["memory_model"] != updated["memory_model"])
+                || before["memory_model"] != updated["memory_model"]
+                || before["memory_extraction_model"] != updated["memory_extraction_model"])
                 && state
                     .backend
                     .integration
@@ -48,11 +49,17 @@ pub(crate) fn update(
             if preferences_changed {
                 let applied = preferences.apply(
                     updated["background_compaction"].as_bool(),
+                    updated["memory_extraction_model"]
+                        .as_str()
+                        .unwrap_or_default(),
                     updated["memory_model"].as_str().unwrap_or_default(),
                 );
                 if let Err(error) = applied {
                     let _ = preferences.rollback(
                         before["background_compaction"].as_bool(),
+                        before["memory_extraction_model"]
+                            .as_str()
+                            .unwrap_or_default(),
                         before["memory_model"].as_str().unwrap_or_default(),
                     );
                     return Err(ChangeError::invalid(error));
@@ -65,6 +72,9 @@ pub(crate) fn update(
                 if preferences_changed {
                     let _ = preferences.rollback(
                         before["background_compaction"].as_bool(),
+                        before["memory_extraction_model"]
+                            .as_str()
+                            .unwrap_or_default(),
                         before["memory_model"].as_str().unwrap_or_default(),
                     );
                 }

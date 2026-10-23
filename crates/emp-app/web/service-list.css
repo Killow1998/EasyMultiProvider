@@ -47,11 +47,10 @@
 
 .usage-service-group{margin:18px 0}.usage-service-group>h3{margin:0 0 8px}.usage-models{min-width:600px}.usage-model-columns{display:grid;grid-template-columns:minmax(180px,1.5fr) repeat(3,minmax(90px,1fr)) 70px;gap:12px;align-items:start;padding:9px 8px;font-variant-numeric:tabular-nums}.usage-model-columns>span:not(:first-child){text-align:right;overflow-wrap:anywhere}.usage-model-heading{color:var(--muted);font-size:12px;border-bottom:1px solid var(--border)}.usage-model{border-bottom:1px solid var(--border);font-size:12px}.usage-model>summary{cursor:pointer;list-style:none}.usage-model>summary::-webkit-details-marker{display:none}.usage-model-name{display:flex;gap:7px;overflow-wrap:anywhere;font-weight:600}.usage-model-name::before{content:"›";flex:none;display:inline-block;transition:transform .15s}.usage-model[open] .usage-model-name::before{transform:rotate(90deg)}.usage-model-columns small{display:block;color:var(--muted);font-size:11px}.usage-model>.usage-table{padding:0 8px 8px}.usage-model>summary:hover{background:var(--panel-soft)}.usage-model>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
-.modal.service-detail-modal,.modal.service-detail-modal:has(#subscription_model_list){width:min(760px,100%);height:min(680px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden}
-.service-detail-modal #service_detail_nav{flex:none;border-bottom:1px solid var(--border);margin-bottom:14px}
+.modal.service-detail-modal,.modal.service-detail-modal:has(#subscription_model_list){width:min(760px,100%);height:min(680px,100%);max-height:100%}
+.service-detail-modal #service_detail_nav{border-bottom:1px solid var(--border);margin-bottom:14px}
 .service-detail-modal .service-detail-tabs{margin:0;padding-bottom:10px}
-.service-detail-modal #modal_body{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable}
-.service-detail-modal .modal-header,.service-detail-modal .modal-actions,.service-detail-modal .modal-status{flex:none}
+.service-detail-modal #modal_body{flex:1}
 .service-detail-modal .modal-actions{min-height:34px}
 .service-detail-actions{display:flex;justify-content:flex-end;margin-bottom:8px}
 .service-detail-actions button{margin:0}

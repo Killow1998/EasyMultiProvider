@@ -223,7 +223,7 @@ def main():
         password='fixture-preview-password'
         encoded=codec(args.helper,{'operation':'encode','password':password,'payload':package})['bundle']
         browser.execute('state.providers[0].name="Earlier draft";shadowSave(state);');
-        browser.execute('document.getElementById("shadow_migration_open").click();')
+        browser.execute('document.getElementById("shadow_migration_open").click();document.querySelector("[data-migration-mode=import]").click();')
         browser.execute('''const bytes=Uint8Array.from(atob(arguments[0]),c=>c.charCodeAt(0));const data=new DataTransfer();data.items.add(new File([bytes],'fixture.emp'));document.getElementById('shadow_migration_file').files=data.files;document.getElementById('shadow_import_password').value=arguments[1];document.querySelector('[data-migration-decode]').click();''',encoded,password)
         wait_for(lambda:browser.execute('return document.querySelectorAll(".migration-service").length===2 && !document.getElementById("modal_submit").disabled;'),seconds=90)
         assert browser.execute('return !document.querySelector(".migration-service [data-migration-name],[data-migration-model-name],[data-migration-model-context]") && !document.querySelector(".migration-service details");')
@@ -249,7 +249,7 @@ def main():
         assert next(p for p in repeat_result['config']['providers'] if p['id']=='demo')['name']=='Earlier draft'
         checks.append('Prior shadow edits survive import and repeat account identity remains stable')
         assert any('已确认同一账号' in warning['message'] for warning in repeat_result['warnings'])
-        browser.execute('document.getElementById("shadow_migration_open").click();')
+        browser.execute('document.getElementById("shadow_migration_open").click();document.querySelector("[data-migration-mode=import]").click();')
         browser.execute('const bytes=Uint8Array.from(atob(arguments[0]),c=>c.charCodeAt(0)),data=new DataTransfer();data.items.add(new File([bytes],"same.emp"));document.getElementById("shadow_migration_file").files=data.files;document.getElementById("shadow_import_password").value=arguments[1];document.querySelector("[data-migration-decode]").click();',encoded,password)
         wait_for(lambda:browser.execute('return document.querySelector("[data-shadow-tone=warning]") && !document.getElementById("modal_submit").disabled;'),seconds=90)
         browser.execute('const detail=[...document.querySelectorAll("[data-migration-detail]")].find(node=>node.dataset.migrationDetail==="provider:imported");detail.open=true;detail.querySelector("[data-migration-model-select]").click();')
@@ -257,10 +257,10 @@ def main():
         assert browser.execute('const detail=[...document.querySelectorAll("[data-migration-detail]")].find(node=>node.dataset.migrationDetail==="provider:imported");return detail.open && detail.querySelector("summary").textContent.includes("0");')
         browser.execute('[...document.querySelectorAll("[data-migration-detail]")].find(node=>node.dataset.migrationDetail==="provider:imported").querySelector("[data-migration-model-select]").click();')
         wait_for(lambda:browser.execute('return !document.getElementById("modal_submit").disabled;'))
-        browser.execute('const field=document.querySelector("[data-migration-name]");field.value="Discard this rename";field.dispatchEvent(new Event("input",{bubbles:true}));document.getElementById("modal_back").click();document.querySelector(".modal-close").click();')
+        browser.execute('const field=document.querySelector("[data-migration-name]");field.value="Discard this rename";field.dispatchEvent(new Event("input",{bubbles:true}));document.getElementById("modal_back").click();document.getElementById("modal_back").click();document.getElementById("modal_close").click();')
         assert browser.execute('return localStorage.getItem("emp.shadow.config.v1");')==stored
         checks.append('Actual duplicate-ID import stays enabled; model expansion survives selection; closing discards inline name edits')
-        browser.execute('document.getElementById("shadow_migration_open").click();document.querySelector("[data-migration-demo]").click();')
+        browser.execute('document.getElementById("shadow_migration_open").click();document.querySelector("[data-migration-mode=import]").click();document.querySelector("[data-migration-demo]").click();')
         wait_for(lambda:browser.execute('return document.querySelector(".migration-demo-note") && document.querySelector("[data-shadow-tone=warning]") && !document.getElementById("modal_submit").disabled;'))
         assert browser.execute('return !document.getElementById("modal_submit").disabled && !document.querySelector(".migration-service input:not([type=checkbox])") && [...document.querySelectorAll(".migration-preview-models")].every(node=>!node.open);')
         assert browser.execute('return [...document.querySelectorAll("[data-shadow-tone=warning]")].some(node=>node.dataset.shadowHelp.includes("名称相同不影响导入")) && !/服务 ID|新 ID|名称：/.test(document.getElementById("migration_preview_rows").textContent);')

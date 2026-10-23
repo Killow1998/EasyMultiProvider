@@ -1,0 +1,22 @@
+.modal:has(#tutorials){width:min(1280px,100%);max-height:100%}
+.modal:has(#tutorials)>.modal-actions{display:none}
+#tutorials{display:grid;grid-template-columns:230px minmax(0,1fr);gap:24px;align-items:start}
+#tutorial_list{position:relative;min-width:0;border-right:1px solid var(--border);padding-right:16px}
+.tutorial-group+.tutorial-group{margin-top:18px}
+.tutorial-group h3{margin:0 0 6px;font-size:12px;color:var(--muted);font-weight:500}
+.tutorial-group button{display:block;width:100%;margin:2px 0;padding:9px 10px;text-align:left;font-size:13px;font-weight:400;line-height:1.5;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--text);transition:background-color 250ms ease-out,color 250ms ease-out}
+.tutorial-group button:hover{background:var(--panel-soft)}
+.tutorial-group button[aria-pressed=true]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.tutorial-group button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+#tutorial_demo{min-width:0}
+.tutorial-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px}
+.tutorial-heading h3{margin:0;font-size:14px}
+.tutorial-heading a{flex:none;color:var(--muted);font-size:12px}
+#tutorial_media{position:relative;aspect-ratio:1280/920;background:var(--panel-soft);border:1px solid var(--border);border-radius:4px;overflow:hidden}
+#tutorial_media img{width:100%;height:auto;display:block}
+#tutorial_media img[hidden],.tutorial-placeholder[hidden]{display:none}
+.tutorial-placeholder{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px;text-align:center;font-size:13px;color:var(--muted)}
+.tutorial-placeholder p,.tutorial-placeholder button{margin:0}
+@media(max-width:760px){#tutorials{grid-template-columns:160px minmax(0,1fr);gap:12px}#tutorial_list{padding-right:10px}.tutorial-group button{padding:7px 6px}.tutorial-heading{flex-wrap:wrap;gap:6px}}
+@media(max-width:650px){#tutorials{grid-template-columns:minmax(0,1fr)}#tutorial_list{border-right:0;border-bottom:1px solid var(--border);padding:0 0 12px;max-height:180px;overflow:auto}}
+@media(prefers-reduced-motion:reduce){.tutorial-group button{transition:none}}

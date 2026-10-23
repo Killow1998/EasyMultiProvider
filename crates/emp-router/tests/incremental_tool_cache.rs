@@ -160,6 +160,6 @@ fn in_place_loading_keeps_allowed_tool_restrictions_and_conflict_validation() {
     assert_eq!(projected["input"][0]["tools"].as_array().unwrap().len(), 1);
     assert_eq!(projected["input"][0]["tools"][0]["name"], "allowed");
     assert_eq!(projected["tool_choice"], "required");
-    body["tools"] = json!([{"type":"function", "name":"allowed", "parameters":{"type":"object", "properties":{"different":{"type":"string"}}}}]);
+    body["input"][0]["tools"].as_array_mut().unwrap().push(json!({"type":"function", "name":"allowed", "parameters":{"type":"object", "properties":{"different":{"type":"string"}}}}));
     assert!(project_external_payload(&route, &body).is_err());
 }

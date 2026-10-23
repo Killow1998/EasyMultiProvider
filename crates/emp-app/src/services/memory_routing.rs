@@ -37,7 +37,7 @@ pub(crate) fn kind(body: &Value, headers: &BTreeMap<String, String>) -> Option<&
     };
     match header("x-openai-subagent") {
         Some("memory_consolidation") => return Some("memory_consolidation"),
-        Some("memory") => return Some("memory_extraction"),
+        Some("memory" | "memory_extraction") => return Some("memory_extraction"),
         _ => {}
     }
     let metadata = body["client_metadata"]["x-codex-turn-metadata"]
@@ -70,10 +70,12 @@ pub(crate) fn prepare(
         .read()
         .map_err(|_| RequestPreparationError::ConfigurationUnavailable)?
         .clone();
-    let selected = config["memory_model"]
-        .as_str()
-        .unwrap_or_default()
-        .to_owned();
+    let field = if kind == "memory_extraction" {
+        "memory_extraction_model"
+    } else {
+        "memory_model"
+    };
+    let selected = config[field].as_str().unwrap_or_default().to_owned();
     if selected.is_empty() {
         return prepare_with_config(state, config, body, RequestOperation::Responses);
     }
@@ -81,7 +83,7 @@ pub(crate) fn prepare(
         if state
             .backend
             .memory_status
-            .update(json!({"state":"paused","reason":reason,"model":selected}))
+            .update(json!({"state":"paused","reason":reason,"model":selected,"kind":kind}))
         {
             state
                 .backend
@@ -181,19 +183,19 @@ pub(crate) fn prepare(
 pub(crate) fn error_message(reason: &str) -> &'static str {
     match reason {
         "quota_exhausted" => {
-            "Memory generation paused: the conversation's subscription has no quota. Wait for its reset; external conversations and global consolidation use Native. 记忆整理已暂停：所用订阅额度不足，请等待重置；外部会话及全局整理使用 Native。"
+            "Memory generation paused: the conversation's subscription has no quota. Wait for its reset; external conversations and global consolidation use Native. 记忆任务已暂停：所用订阅额度不足，请等待重置；外部会话及全局整理使用 Native。"
         }
         "native_unavailable" => {
-            "Memory generation paused: Native authentication is unavailable. Sign in to Native Codex first. 记忆整理已暂停：Native 未登录，请先完成原生登录。"
+            "Memory generation paused: Native authentication is unavailable. Sign in to Native Codex first. 记忆任务已暂停：Native 未登录，请先完成原生登录。"
         }
         "account_unavailable" => {
-            "Memory generation paused: the conversation's subscription is unavailable. Restore that subscription in EMP. 记忆整理已暂停：会话订阅不可用，请在 EMP 中恢复该订阅。"
+            "Memory generation paused: the conversation's subscription is unavailable. Restore that subscription in EMP. 记忆任务已暂停：会话订阅不可用，请在 EMP 中恢复该订阅。"
         }
         "source_conflict" => {
-            "Memory generation paused: the conversation source could not be confirmed. Check the request's conversation metadata. 记忆整理已暂停：无法确认会话来源，请检查请求的会话标识。"
+            "Memory generation paused: the conversation source could not be confirmed. Check the request's conversation metadata. 记忆任务已暂停：无法确认会话来源，请检查请求的会话标识。"
         }
         _ => {
-            "Memory generation paused: the selected GPT model is unavailable on the conversation's account. Choose an available GPT model in EMP Routing settings. 记忆整理已暂停：所选 GPT 模型在此账号不可用，请在 EMP 路由设置中调整。"
+            "Memory generation paused: the selected GPT model is unavailable on the conversation's account. Choose an available GPT model in EMP Routing settings. 记忆任务已暂停：所选 GPT 模型在此账号不可用，请在 EMP 路由设置中调整。"
         }
     }
 }
@@ -218,7 +220,7 @@ pub(crate) fn observe(state: &ServerState, event: &Value) {
     };
     if state.backend.memory_status.update(
         json!({"state":if reason.is_some() {"paused"} else {"ready"},"reason":reason,
-            "model":event["upstream_model"],"account_id":event["account_id"]}),
+            "model":event["upstream_model"],"account_id":event["account_id"],"kind":event["route"]}),
     ) {
         state
             .backend

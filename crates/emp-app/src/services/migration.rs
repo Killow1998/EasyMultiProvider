@@ -8,6 +8,7 @@ use emp_state::{ExportGroups, decrypt_migration_bundle, export_migration_bundle_
 use serde_json::Value;
 
 const MIN_EXPORT_PASSWORD_UTF8_BYTES: usize = 12;
+pub(crate) mod lan;
 mod preferences;
 mod preview;
 pub(crate) use preview::{MigrationPreviews, preview_request};

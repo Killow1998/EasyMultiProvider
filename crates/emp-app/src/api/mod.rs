@@ -6,6 +6,7 @@ pub(crate) mod inspection;
 pub(crate) mod integration;
 pub(crate) mod lifecycle;
 pub(crate) mod migration;
+pub(crate) mod native_login;
 pub(crate) mod provider_quota;
 pub(crate) mod quota;
 pub(crate) mod realtime;

@@ -265,7 +265,13 @@ fn execute_inner(
                 })
                 .is_err()
         {
-            let _ = receipt.step("rollback_configuration", || manager.restore());
+            if receipt
+                .step("rollback_configuration", || manager.restore())
+                .is_ok_and(|result| result.ok())
+            {
+                let _ =
+                    emp_integration::local_auth::restore(&state.backend.accounts.native_auth_path);
+            }
             return unavailable(409);
         }
         if let Ok(mut conflicts) = state.backend.integration.startup_conflicts.lock() {

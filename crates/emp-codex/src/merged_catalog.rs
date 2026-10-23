@@ -376,6 +376,22 @@ fn effort_description(level: &str) -> &str {
         _ => level,
     }
 }
+
+/// Only concrete efforts advertised alongside Ultra are eligible overrides.
+pub(crate) fn ultra_reasoning_levels(model: &Value) -> Vec<String> {
+    let levels = array(model.get("supported_reasoning_levels"));
+    if !levels.iter().any(|level| text(level, "effort") == "ultra") {
+        return Vec::new();
+    }
+    normalize_reasoning_levels(Some(&json!(
+        levels
+            .iter()
+            .filter_map(|level| level.get("effort").and_then(Value::as_str))
+            .filter(|effort| emp_state::model_values::is_concrete_reasoning_effort(effort))
+            .collect::<Vec<_>>()
+    )))
+}
+
 fn apply_presentation(config: &Value, entry: &mut Value) {
     let empty = json!({});
     let family = config
@@ -410,6 +426,20 @@ fn apply_presentation(config: &Value, entry: &mut Value) {
         entry["default_reasoning_summary"] = json!("none");
     } else if policy == "show" && supports {
         entry["default_reasoning_summary"] = json!("auto");
+    }
+    let effort = config
+        .get("ultra_reasoning_efforts")
+        .and_then(|values| values.get(text(entry, "_emp_family")))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    // External entries do not carry the official collaboration harness.
+    // A stale preference cannot advertise an unsupported effort after refresh.
+    if integer(entry.get("_emp_source_rank")) < 2
+        && ultra_reasoning_levels(entry)
+            .iter()
+            .any(|level| level == effort)
+    {
+        entry["multi_agent_reasoning_effort"] = json!(effort);
     }
 }
 fn display_name(model: &Value, presentation: &Value, show_context: bool) -> String {

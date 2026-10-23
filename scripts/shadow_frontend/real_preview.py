@@ -34,23 +34,29 @@ def serve(handler, args):
         server.backend_port, server.state_dir = args.backend_port, state
         server.bootstrap, server.session = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         server.snapshot = snapshot
-        server.real_context = {'url':url,'draft_key':'emp.shadow.real.' + server.bootstrap}
+        server.real_context = {'url':url,'draft_key':os.environ.get('EMP_SHADOW_DRAFT_KEY') or 'emp.shadow.real.' + server.bootstrap}
         # Real-page migration is a local preview; it never forwards a production write.
         config = args.config or Path(os.environ.get('EASY_MULTI_PROVIDER_CONFIG', state.parent / 'config.json'))
         server.migration = MigrationPreview(args.migration_helper, config, home / 'auth.json')
         server.release_notes = ReleaseNotes(args.release_api) if args.release_api else ReleaseNotes()
-        demo_url = None
+        demo_urls = {}
         demo_lock = threading.Lock()
-        def open_demo():
-            nonlocal demo_url
+        def open_demo(scenario=''):
             with demo_lock:
-                if demo_url is None:
+                kind='onboarding' if scenario in {'onboarding','lan'} else 'general'
+                if kind not in demo_urls:
                     from preview import fixture, preview, seed_session_bills
-                    root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix='emp-shadow-demo-',dir=snapshot.scratch)))
-                    endpoint, _, bundle = fixture(stack, args.emp.resolve(), root)
-                    seed_session_bills(endpoint[1])
-                    demo_url, _ = preview(stack, endpoint[0], bundle, endpoint[2]['X-EMP-Session'], return_url=url)
-                return demo_url
+                    with contextlib.ExitStack() as pending:
+                        root = Path(pending.enter_context(tempfile.TemporaryDirectory(prefix='emp-shadow-demo-',dir=snapshot.scratch)))
+                        if kind=='onboarding':
+                            from onboarding_preview import start
+                            demo_urls[kind]=start(pending,args.emp.resolve(),root,url)
+                        else:
+                            endpoint, _, bundle = fixture(pending, args.emp.resolve(), root)
+                            seed_session_bills(endpoint[1])
+                            demo_urls[kind], _ = preview(pending, endpoint[0], bundle, endpoint[2]['X-EMP-Session'], return_url=url)
+                        stack.enter_context(pending.pop_all())
+                return demo_urls[kind]
         server.open_demo = open_demo
         done = threading.Event()
         signal.signal(signal.SIGTERM, lambda *_:done.set())

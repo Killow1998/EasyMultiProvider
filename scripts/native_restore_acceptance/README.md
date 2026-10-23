@@ -47,7 +47,7 @@ python3 -B -m scripts.native_restore_acceptance \
 
 `--large-history` incrementally appends more than 128 MiB of historical `event_msg/token_count` rows to a disposable paginated rollout after its bounded forks are created. Point `--root` at a new directory on a disk filesystem with enough free space; do not use tmpfs for this scenario. These rows do not enlarge model input. The selected migration, restore and Codex resume processes run under the same memory limit; backup verification streams the files instead of loading them into memory. Omit `--large-history` for the smaller three-thread differential scenario.
 
-The supplied versions and executable hashes are recorded rather than pinned to one historical release. Disposable app-server clients disable plugins. The current created-history contract passed with official Linux Codex 0.154.0, 0.155.1, 0.156.1, 0.157.1, 0.158.0, 0.159.3, 0.160.1, 0.161.0, 0.162.1 and 0.163.0 against EMP 0.13.4 source on 2026-10-16 UTC. The earlier restore-time migration results remain dated separately in [compatibility results](../../docs/codex-compatibility.md).
+The supplied versions and executable hashes are recorded rather than pinned to one historical release. Disposable app-server clients disable plugins. On 2026-10-23 UTC the current created-history contract passed all 51 assertions per engine with official Linux Codex 0.155.1, 0.156.1, 0.157.1, 0.158.0, 0.159.3, 0.160.1, 0.161.0, 0.162.1, 0.163.0 and 0.164.0 against the EMP 0.13.13 development candidate. Earlier acceptance remains dated separately in [compatibility results](../../docs/codex-compatibility.md).
 
 ## Exploratory background compaction
 

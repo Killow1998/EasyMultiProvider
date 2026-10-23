@@ -63,7 +63,25 @@ fn collect_tools(body: &Value) -> BTreeSet<ToolIdentity> {
                 item.get("type").and_then(Value::as_str),
                 Some("additional_tools" | "tool_search_output")
             ) {
-                collect_tool_definitions(item.get("tools"), "", &mut tools);
+                let mut updated = BTreeSet::new();
+                collect_tool_definitions(item.get("tools"), "", &mut updated);
+                tools.retain(|old| {
+                    !updated
+                        .iter()
+                        .any(|new| old.namespace == new.namespace && old.name == new.name)
+                });
+                tools.extend(updated);
+            } else {
+                for removed in emp_protocol::tool_bridge::removed_tool_names(item) {
+                    tools.retain(|tool| {
+                        let qualified = if tool.namespace.is_empty() {
+                            tool.name.clone()
+                        } else {
+                            format!("{}.{}", tool.namespace, tool.name)
+                        };
+                        removed != qualified && removed != tool.namespace
+                    });
+                }
             }
         }
     }

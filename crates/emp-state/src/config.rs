@@ -139,7 +139,9 @@ fn default_configuration() -> Value {
         "external_collaboration": "off",
         "image_routing": {"mode":"follow", "account_id":""},
         "memory_model": "",
+        "memory_extraction_model": "",
         "background_compaction": null,
+        "ultra_reasoning_efforts": {},
         "codex_runtime_sources": ["auto"],
         "pricing_aliases": {},
     })
@@ -579,24 +581,15 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         normalize_catalog_presentations(raw.get("catalog_family_presentations"))?;
     let subscription_search = normalize_subscription_search(raw.get("subscription_search"))?;
     let image_routing = image_routing::normalize(raw.get("image_routing"))?;
-    let memory_model = match raw.get("memory_model") {
-        None => "",
-        Some(Value::String(model))
-            if model.is_empty()
-                || (model.starts_with("gpt-")
-                    && model.len() <= 128
-                    && model.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_')
-                    })) =>
-        {
-            model
-        }
-        _ => {
-            return Err(ConfigError::new(
-                "memory_model must be an unprefixed GPT model ID or empty",
-            ));
-        }
-    };
+    let memory_model =
+        presentation::normalize_memory_model(raw.get("memory_model"), "memory_model")?;
+    // Older configurations used one model for both stages. An explicit empty
+    // extraction preference instead restores that stage's original Codex setting.
+    let memory_extraction_model = presentation::normalize_memory_model(
+        raw.get("memory_extraction_model")
+            .or_else(|| raw.get("memory_model")),
+        "memory_extraction_model",
+    )?;
     let background_compaction = match raw.get("background_compaction") {
         None | Some(Value::Null) => Value::Null,
         Some(Value::Bool(enabled)) => Value::Bool(*enabled),
@@ -631,7 +624,9 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "subscription_search": subscription_search,
         "image_routing": image_routing,
         "memory_model": memory_model,
+        "memory_extraction_model": memory_extraction_model,
         "background_compaction": background_compaction,
+        "ultra_reasoning_efforts": presentation::normalize_ultra_efforts(raw.get("ultra_reasoning_efforts"))?,
         "codex_runtime_sources": codex_runtime_sources,
         "pricing_aliases": pricing_aliases,
     });

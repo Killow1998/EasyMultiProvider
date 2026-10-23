@@ -9,7 +9,8 @@ fn fixture() -> Value {
         "config":{"accounts":[account],"providers":[{"id":"p","name":"API","api_key_file":"private/key"},{"id":"q"}],
             "models":[{"id":"p/m","provider":"p","upstream_id":"m"},{"id":"q/m","provider":"q","upstream_id":"m"}],
             "catalog_presentations":{"a/gpt-test":{"catalog_alias":"Old"},"q/m":{"catalog_alias":"Unselected"}},
-            "catalog_family_presentations":{"gpt-test":{"catalog_alias":"Old"},"unselected":{"catalog_alias":"Other"}}},
+            "catalog_family_presentations":{"gpt-test":{"catalog_alias":"Old"},"unselected":{"catalog_alias":"Other"}},
+            "ultra_reasoning_efforts":{"gpt-test":"low","unselected":"high"}},
         "accounts":[{"metadata":account,"auth":{"tokens":{"access_token":"fixture"}}}],
         "provider_keys":{"p":"selected-key","q":"other-key"}})
 }
@@ -30,6 +31,7 @@ fn selected_provider_export_excludes_other_credentials_without_mutating_source()
     assert_eq!(result["provider_keys"], json!({"p":"selected-key"}));
     assert_eq!(result["accounts"], json!([]));
     assert_eq!(result["config"]["catalog_presentations"], json!({}));
+    assert_eq!(result["config"]["ultra_reasoning_efforts"], json!({}));
     assert!(
         result["config"]["providers"][0]
             .get("api_key_file")
@@ -71,6 +73,10 @@ fn native_export_remaps_selected_routes_and_rejects_reserved_identity() {
     let result = select_migration_payload(&source, &[choice.clone()], true, true).unwrap();
     assert_eq!(result["accounts"][0]["metadata"]["id"], "a9z2");
     assert_eq!(result["accounts"][0]["metadata"]["prefix"], "a9z2");
+    assert_eq!(
+        result["config"]["ultra_reasoning_efforts"],
+        json!({"gpt-test":"low"})
+    );
     assert!(
         result["config"]["catalog_presentations"]
             .get("a9z2/gpt-test")

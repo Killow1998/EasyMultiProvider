@@ -10,11 +10,12 @@ function createSettings({getState, cloneState, persistState, openModal, $, esc, 
     const mode = state.external_collaboration || 'off';
     const collaboration = `<div class="setting-row collaboration-setting"><div><div class="setting-title collaboration-title"><span id="collaboration-label">${tr("models.external_collaboration")}</span>${collaborationHelp()}</div><p class="setting-help" id="collaboration-help">${esc(tr('models.collaboration_' + mode + '_help'))}</p></div><div class="quota-display-choice" role="group" aria-labelledby="collaboration-label" aria-describedby="collaboration-help">${['off','on_demand','on'].map(value => `<button type="button" class="secondary" data-ui-action="setting-toggle" data-id="external_collaboration" data-mode="${value}" aria-pressed="${mode === value}">${tr('models.collaboration_' + value)}</button>`).join('')}</div></div>`;
     const routing = `<div class="setting-row"><div class="setting-title">${tr("models.routing_settings")}</div><button type="button" class="secondary" data-ui-action="routing-settings" aria-label="${tr("models.open_routing_settings")}">›</button></div>`;
+    const ultra = `<div class="setting-row"><div class="setting-title">${tr('models.ultra_actual_effort')}</div><button type="button" class="secondary" data-ui-action="ultra-settings" aria-label="${tr('models.ultra_actual_effort')}">›</button></div>`;
     const groups = [
       ['display', 'models.settings_display', presentation],
       ['general', 'models.settings_general', toggle('auto_enable_on_start', state.auto_enable_on_start !== false, 'models.start_emp_automatically', 'models.enable_emp_when_the_app_opens') + collaboration],
       ['external', 'models.settings_external', toggle('subscription_search', state.subscription_search?.enabled !== false, 'models.codex_web_search_for_external_models', 'models.use_a_codex_subscription_for_external_model_web_searches')],
-      ['native', 'models.settings_native', background + routing]
+      ['native', 'models.settings_native', background + ultra + routing]
     ];
     openModal(t('settings_menu'), `<div class="settings-list">${groups.map(([id, title, rows]) => `<div class="settings-group" role="region" aria-labelledby="settings-${id}-title"><h3 class="settings-group-title" id="settings-${id}-title">${tr(title)}</h3>${rows}</div>`).join('')}</div>`, '', null);
   }

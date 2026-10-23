@@ -57,6 +57,7 @@ pub(crate) fn native_account_snapshot(state: &ServerState, config: &Value) -> Va
         "name": "Current Codex login",
         "prefix": "",
         "native": true,
+        "auth_mode": emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path),
         "credential_set": regular_file(&state.backend.accounts.native_auth_path),
         "hidden_models": config
             .get("native_hidden_models")

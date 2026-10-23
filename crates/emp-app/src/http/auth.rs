@@ -274,11 +274,12 @@ fn native_access_token(path: &Path) -> Option<String> {
         .get("tokens")
         .and_then(Value::as_object)
         .unwrap_or(auth);
-    tokens
-        .get("access_token")
-        .and_then(Value::as_str)
+    [tokens.get("access_token"), auth.get("OPENAI_API_KEY")]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .find(|value| !value.is_empty())
         .map(str::to_owned)
 }
 

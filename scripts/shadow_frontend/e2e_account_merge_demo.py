@@ -54,7 +54,7 @@ def main():
             assert browser.execute('return document.querySelectorAll(".service-account").length===1;')
             browser.execute('document.querySelector(`[data-service="account:@native"] [data-ui-action="account-details"]`).click();document.querySelector(`[data-ui-action="account-edit"]`).click();')
             wait_for(lambda:browser.execute('return document.querySelectorAll("[data-preference-kind]").length===0;'))
-            browser.execute('document.querySelector(".modal-close").click();')
+            browser.execute('document.getElementById("modal_close").click();')
             checks.append(f'{language}/{theme}: import-page choices, one service preview, Back preserves package, no early writes, one commit, no post-import conflict')
             # Reset only this disposable fixture for the second browser case.
             status,result=request(backend+'/api/accounts/'+account['id'],headers=headers,method='DELETE');assert status==200,result
@@ -69,7 +69,7 @@ def main():
             assert browser.execute('return Boolean(document.getElementById("shadow_demo_button"));')
             browser.execute('document.getElementById("shadow_demo_button").click();')
             assert browser.execute('return ["import","services","service-errors","review","recovery","lifecycle","removal"].every(mode=>document.querySelector(`[data-shadow-demo="${mode}"]`));')
-            browser.execute('document.querySelector(".modal-close").click();document.querySelector("#shadow_services_demo button").click();')
+            browser.execute('document.getElementById("modal_close").click();document.querySelector("#shadow_services_demo button").click();')
             wait_for(lambda:browser.execute('return !document.getElementById("shadow_services_demo");'))
             assert (target/'config.json').read_bytes()==before_gallery
             checks.append(mode+': shared menu, rejected config write, return to same workspace, no backend mutation')

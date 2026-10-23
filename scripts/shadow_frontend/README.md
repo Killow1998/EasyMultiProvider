@@ -49,11 +49,21 @@ python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --dem
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
 review entry. Update `reviewRows` in `preview-review.js` for every review round;
 follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
-The current review covers Restore Native / Quit: unverified history is distinct
-from confirmed pending conversion. This lifecycle example explicitly opens the
-separate synthetic demo; real-source lifecycle writes remain blocked. The tray's
-actual action feedback is verified on a private D-Bus, rather than simulated as
-a browser menu. Settings
+The current review includes **Help and dialog controls**, **Ultra actual reasoning
+effort**, **Routing settings**, **Codex sign-in and import**, **Data migration**,
+**Tutorials**, and **Notifications and inbox**.
+Ultra uses the production dialog with live catalog capabilities and a browser-local
+preference draft. When
+the source backend predates this capability projection, the read-only bridge reads
+its actual `/v1/models` metadata; it never invents available efforts. Saving in
+Shadow leaves the source configuration untouched. The default option names the
+official effort. Memory extraction and consolidation have separate GPT selectors,
+each naming its original model or the verified Codex default for that stage.
+Saving or resetting one selection leaves the other unchanged. Existing combined
+overrides are retained for both stages when first upgraded; active EMP overrides
+do not replace the displayed original values. Candidate snapshots copy these
+public preferences only.
+Settings
 groups display preferences, general service controls, external-service search,
 and native-service compaction/routing in four flat sections. Background compaction
 remains available in the native-service section and uses its existing controller.
@@ -64,8 +74,51 @@ setup, statistics, migration and lifecycle scenarios remain available as demos.
 Refresh the review
 E2E expectations together with this list. Reloading the page
 reads the latest review scripts, so list changes do not require a Shadow restart.
+
+Verify Ultra's actual save/reset and read-only preview with
+`e2e_ultra_effort.py --emp /path/to/candidate/EMP --output /tmp/emp-ultra`.
+This also checks memory defaults, partial overrides and restoration without
+writing display defaults into the user's configuration.
+Then run `e2e_ultra_runtime.py --codex /path/to/codex --catalogs /tmp/emp-ultra`
+to check the installed engine against those published catalogs and a loopback
+Responses fixture. These checks do not call a paid model.
 Session-bill examples are added only to explicitly selected demos and synthetic
 acceptance. The default real-data review never seeds examples.
+
+The onboarding and tunnel entries open two disposable backends with production
+assets. Their banner identifies synthetic credentials: the device code completes
+after eight seconds without real sign-in, and migration connects only the local
+test pair. The receiver link supports the actual approval, preview and import
+workflow. Import, Export and Tunnel reuse the Add Service choice-card layout.
+Import and export share service/model selection. Back keeps form drafts and
+returns to the immediate parent. The tunnel displays sending and receiving
+together, with automatic network selection, a fixed five-minute code lifetime
+and no IP controls.
+Each view grows with its content; service lists are not capped to a few rows.
+The header's Tutorials entry uses the same ten GIFs as `docs/tutorials.md`, served
+locally in both Shadow and the executable. Run `e2e_tutorials.py --emp /path/to/EMP
+--output /tmp/emp-tutorials` for selection, asset recovery, keyboard navigation,
+reduced-motion playback and migration visual evidence.
+Notifications use a top capsule and a bottom-right inbox, with the latest 50
+messages stored in that browser origin. The current-review entry opens the real
+inbox; it does not seed demonstration messages. `e2e_notifications.py --emp
+/path/to/EMP --output /tmp/emp-notifications` checks countdown/pause behavior,
+reload persistence, safe text rendering, clearing and independent form navigation.
+The sign-in review opens Add Service: device-code sign-in adds a subscription,
+while auth.json file selection and paste share one form. Native replacement
+remains available from the local-key row and uses a separate pending login job.
+Returning to real-data Shadow never merges fixture state. Failed setup
+cleans up its own processes before a retry.
+
+`e2e_onboarding.py --emp /path/to/candidate/EMP --codex /path/to/codex
+--output /tmp/emp-onboarding` checks external-only startup with an installed
+engine, key removal, device-login cancellation/replacement, a concurrent login,
+independent subscription sign-in, unified auth.json file/paste and deduplication,
+automatic LAN selection, one-use encrypted transfer and bilingual narrow layouts. It uses synthetic
+credentials and a loopback Responses upstream. With Shadow running,
+`e2e_onboarding_preview.py --url 'http://127.0.0.1:4201/?review=1'
+--output /tmp/emp-onboarding` additionally drives the opt-in browser workflow,
+including receive cancellation/resumption and Back to the retained preview.
 
 Verify the source boundary and actual browser refresh/navigation with:
 
@@ -86,7 +139,7 @@ python3 scripts/shadow_frontend/e2e_codex_preferences.py \
   --emp /path/to/candidate/EMP --output /tmp/emp-codex-preferences.json
 ```
 
-It checks both languages, narrow/desktop layouts, client memory-model budgets,
+It checks both languages, narrow/desktop layouts, independent memory-model budgets,
 preserved memory permissions and trigger percentages, failed saves, Restore Native,
 re-enable and Quit. A rejected memory-journal write must also roll back an already
 applied background toggle without committing the rejected configuration.

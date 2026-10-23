@@ -81,6 +81,11 @@ fn incremental_catalogs_search_history_and_namespaces_round_trip_across_external
         "saved history is never rewritten by projection"
     );
     let mut conflicting = body.clone();
-    conflicting["input"][2]["tools"][0]["tools"][0]["parameters"] = json!({"type":"string"});
+    let mut duplicate = files;
+    duplicate["tools"][0]["parameters"] = json!({"type":"string"});
+    conflicting["input"][2]["tools"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
     assert!(ExternalTools::default().prepare(&conflicting).is_err());
 }

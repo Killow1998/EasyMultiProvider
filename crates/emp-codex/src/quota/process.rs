@@ -3,6 +3,7 @@
 use super::*;
 
 mod child;
+pub(super) mod device_login;
 mod pipe;
 use child::QuotaChild;
 use pipe::CancellablePipe;
@@ -188,16 +189,46 @@ pub(super) fn run_isolated_quota_process<'a>(
         b"cli_auth_credentials_store = \"file\"\nmodel_catalog_json = \"quota-models.json\"\n\n[features]\nplugins = false\n",
     )?;
 
+    let mut command = app_server_command(binary, directory.path())?;
+    let mut child = QuotaChild::spawn(&mut command).map_err(|_| quota_check_failed())?;
+    let result = query_child(
+        &mut child,
+        control,
+        allow_refresh,
+        reset_idempotency_key,
+        reset_credit_id,
+    );
+    drop(child);
+    let refreshed_auth = fs::read(&auth_path)
+        .ok()
+        .filter(|raw| raw.len() <= MAX_AUTH_BYTES as usize)
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .filter(|value| value != auth && account_auth_headers(value).is_some());
+    if let (Some(persist), Some(refreshed)) = (&mut persist_rotation, &refreshed_auth) {
+        persist(refreshed)?;
+    }
+    let output = result?;
+    Ok(QuotaProcessResult {
+        quota: if reset_idempotency_key.is_some() {
+            json!({"outcome": reset_outcome(&output, 3)?})
+        } else {
+            parse_app_server_output(&output)?
+        },
+        refreshed_auth,
+    })
+}
+
+fn app_server_command(binary: &TrustedBinary, directory: &Path) -> Result<Command, QuotaError> {
     binary.verify()?;
     let mut command = Command::new(binary.executable.path());
     command
         .arg("app-server")
         .arg("--stdio")
-        .current_dir(directory.path())
+        .current_dir(directory)
         .env_clear()
-        .env("CODEX_HOME", directory.path())
-        .env("HOME", directory.path())
-        .env("USERPROFILE", directory.path())
+        .env("CODEX_HOME", directory)
+        .env("HOME", directory)
+        .env("USERPROFILE", directory)
         .env("PATH", env::var_os("PATH").unwrap_or_default())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -221,34 +252,7 @@ pub(super) fn run_isolated_quota_process<'a>(
             command.env(key, value);
         }
     }
-    let mut child = QuotaChild::spawn(&mut command).map_err(|_| quota_check_failed())?;
-    let result = query_child(
-        &mut child,
-        control,
-        allow_refresh,
-        reset_idempotency_key,
-        reset_credit_id,
-    );
-    // Stop every helper before reading its final auth file, including errors
-    // that occur before query_child has started its pipe readers.
-    drop(child);
-    let refreshed_auth = fs::read(&auth_path)
-        .ok()
-        .filter(|raw| raw.len() <= MAX_AUTH_BYTES as usize)
-        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
-        .filter(|value| value != auth && account_auth_headers(value).is_some());
-    if let (Some(persist), Some(refreshed)) = (&mut persist_rotation, &refreshed_auth) {
-        persist(refreshed)?;
-    }
-    let output = result?;
-    Ok(QuotaProcessResult {
-        quota: if reset_idempotency_key.is_some() {
-            json!({"outcome": reset_outcome(&output, 3)?})
-        } else {
-            parse_app_server_output(&output)?
-        },
-        refreshed_auth,
-    })
+    Ok(command)
 }
 
 /// Temporary `CODEX_HOME` directories hold a decrypted `auth.json` while one

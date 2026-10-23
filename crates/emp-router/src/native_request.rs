@@ -82,7 +82,10 @@ pub fn request_headers(
                 ("authorization", "Authorization"),
                 ("chatgpt-account-id", "chatgpt-account-id"),
             ] {
-                if let Some(value) = lower.get(source).filter(|value| !value.is_empty()) {
+                if let Some(value) = lower
+                    .get(source)
+                    .filter(|value| !value.is_empty() && !value.starts_with("Bearer emp-local-"))
+                {
                     headers.insert(target.to_owned(), (*value).clone());
                 }
             }

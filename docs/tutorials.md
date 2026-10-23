@@ -2,6 +2,11 @@
 
 [English README](../README.md) · [中文 README](../README.zh-CN.md)
 
+These ten GIFs are also available offline from **Tutorials** in the WebUI header:
+choose an operation on the left and watch it on the right.
+
+也可在 WebUI 顶栏打开 **使用教程**：左侧选择操作，右侧观看演示，十支 GIF 均可离线观看。
+
 Expand a task to view its GIF. Each recording uses the actual EMP interface with
 sample data, a Chinese UI, and Chinese and English captions.
 

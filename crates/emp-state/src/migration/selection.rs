@@ -250,6 +250,12 @@ pub fn select_migration_payload(
             }
         }
     }
+    if let Some(efforts) = config
+        .get_mut("ultra_reasoning_efforts")
+        .and_then(Value::as_object_mut)
+    {
+        efforts.retain(|family, _| families.contains(family));
+    }
     if rename {
         let presentations = config
             .entry("catalog_presentations")

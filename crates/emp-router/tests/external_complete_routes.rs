@@ -16,6 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+#[path = "external_complete_routes/incremental.rs"]
+mod incremental;
+
 #[derive(Debug, Clone)]
 struct RecordedRequest {
     path: String,

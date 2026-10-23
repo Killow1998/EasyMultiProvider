@@ -12,7 +12,6 @@ fill = function() {
   mountShadowServiceDemo();
   $('emp_version').textContent += tr(' · 影子',' · Shadow');
   $('emp_version').title = tr('修改只保存在影子页面','Changes are saved only in this shadow page');
-  document.querySelector('[data-i18n="quit_emp"]').hidden = true;
   $('integration_toggle').disabled = true;
   $('integration_toggle').onclick = null;
   if (shadowErrorDemoActive) {

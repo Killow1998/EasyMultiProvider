@@ -37,6 +37,37 @@ pub(crate) fn management_migration_request(
         Err(error) => return body_error_response(error),
     };
     let operation = request.raw_path().rsplit('/').next().unwrap_or_default();
+    if request.raw_path().starts_with("/api/migration/lan/") {
+        if operation == "start"
+            && !state.sessions.consume_export_confirmation(
+                body["confirmation"].as_str().unwrap_or_default(),
+                EXPORT_CONFIRMATION_OPERATION,
+                now,
+            )
+        {
+            return json_error_response(
+                403,
+                status_text(403),
+                "export confirmation is required",
+                Some("export_confirmation_required"),
+                &[],
+            );
+        }
+        return match crate::services::migration::lan::execute(
+            state,
+            request.session_token().as_deref().unwrap_or_default(),
+            operation,
+            &body,
+        ) {
+            Ok(value) => response(
+                "HTTP/1.1 200 OK",
+                "application/json",
+                &serde_json::to_vec(&value).unwrap(),
+                &[("Cache-Control", "no-store")],
+            ),
+            Err(error) => migration_error(error),
+        };
+    }
     if matches!(operation, "decode" | "preview" | "demo")
         || (operation == "import" && body.get("token").is_some())
     {

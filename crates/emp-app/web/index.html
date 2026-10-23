@@ -6,6 +6,8 @@
 <title>EMP</title>
 <link rel="stylesheet" href="/assets/style.css">
 <link rel="stylesheet" href="/assets/service-list.css">
+<link rel="stylesheet" href="/assets/tutorials.css">
+<link rel="stylesheet" href="/assets/notifications.css">
 
 <link rel="stylesheet" href="/assets/presentation.css"><script src="/assets/service-presentation.js"></script><script src="/assets/migration-view.js"></script><script src="/assets/migration.js"></script><script src="/assets/model-manager.js"></script><script src="/assets/subscription-settings.js"></script><link rel="stylesheet" href="/assets/service-presentation.css"><link rel="stylesheet" href="/assets/migration.css"></head>
 <body>
@@ -26,8 +28,6 @@
     </div>
     <div class="header-group">
       <button type="button" class="secondary" data-icon="settings" onclick="openSettings()" data-i18n="settings_menu"></button>
-      <button id="shadow_migration_open" type="button" class="secondary" data-icon="upload" onclick="migration.open()" data-i18n="data_migration"></button>
-      <input id="migration_file" type="file" hidden accept=".emp,application/octet-stream" onchange="migrationFileChosen(this)">
     </div>
     <div class="header-group">
       <a class="repo-link" href="https://github.com/Killow1998/EasyMultiProvider" target="_blank" rel="noopener noreferrer">GitHub</a>
@@ -41,7 +41,7 @@
         <select id="theme_select" data-i18n-aria-label="theme_label" onchange="setTheme(this.value)"><option value="system" data-i18n="theme_system"></option><option value="light" data-i18n="theme_light"></option><option value="dark" data-i18n="theme_dark"></option></select>
       </label>
     </div>
-    <button type="button" class="secondary" onclick="quitEmp()" data-i18n="quit_emp"></button>
+    <button id="tutorials_open" type="button" class="secondary" onclick="tutorials.open()" data-i18n="tutorials.title"></button>
   </div>
 </header>
 
@@ -53,7 +53,14 @@
 <div class="workspace-layout">
 <div class="workspace-column">
 <section>
-<div class="services-heading"><h2 data-i18n="services_title"></h2><div class="toolbar"><button data-icon="plus" onclick="openServiceChooser()" data-i18n="add_provider"></button><button id="refresh_all" class="secondary" data-icon="refresh" onclick="refreshAllAccounts()" data-i18n="refresh_quotas"></button></div></div>
+<div class="services-heading">
+  <h2 data-i18n="services_title"></h2>
+  <div class="toolbar">
+    <button id="refresh_all" class="secondary" data-icon="refresh" onclick="refreshAllAccounts()" data-i18n="refresh_quotas"></button>
+    <button data-icon="plus" onclick="openServiceChooser()" data-i18n="add_provider"></button>
+    <button id="shadow_migration_open" type="button" class="secondary" data-icon="upload" onclick="migration.open()" data-i18n="data_migration"></button>
+  </div>
+</div>
 <input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="codexAccountImport.fileChosen(this)">
 <div id="services" class="entity-list service-list"></div>
 </section>
@@ -84,13 +91,18 @@
 
 </main>
 
-<div id="notification" hidden><span id="status" class="muted" role="status" aria-live="polite" aria-atomic="true"></span><button id="notification_close" type="button" class="notification-close" data-i18n-aria-label="core.close_notification" onclick="dismissNotice()">&times;</button></div>
+<div id="notification" popover="manual" hidden><span id="notification_symbol" aria-hidden="true"></span><span id="status" role="status" aria-live="polite" aria-atomic="true"></span><button id="notification_close" type="button" class="notification-close" data-i18n-aria-label="core.close_notification">&times;</button><div class="notification-track" aria-hidden="true"><span id="notification_progress"></span></div></div>
+<button id="notification_mailbox" type="button" popovertarget="notification_inbox" aria-haspopup="dialog" aria-expanded="false" data-i18n-aria-label="notifications.inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span id="notification_unread" hidden aria-hidden="true"></span></button>
+<div id="notification_inbox" popover="auto" role="dialog" aria-labelledby="notification_inbox_title">
+  <div class="notification-inbox-header"><h2 id="notification_inbox_title" data-i18n="notifications.title"></h2><span id="notification_count"></span><button id="notification_clear" type="button" class="secondary" data-icon="trash" data-i18n-aria-label="notifications.clear"></button><button type="button" class="modal-close" popovertarget="notification_inbox" popovertargetaction="hide" data-i18n-aria-label="notifications.close">&times;</button></div>
+  <p id="notification_empty" data-i18n="notifications.empty"></p><ol id="notification_history"></ol>
+</div>
 
 <div id="modal_backdrop" class="modal-backdrop hidden">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal_title">
     <div class="modal-header"><h2 id="modal_title"></h2><div class="modal-navigation"><button id="modal_back" type="button" class="secondary modal-back" data-icon="restore" hidden></button><button id="modal_close" type="button" class="modal-close" data-i18n-aria-label="core.close" onclick="closeModal()">&times;</button></div></div>
     <div id="service_detail_nav" hidden></div>
-    <div id="modal_body"></div>
+    <div id="modal_body" class="modal-body"></div>
     <div id="modal_status" class="modal-status" role="alert" aria-live="polite"></div>
     <div class="modal-actions"><button id="modal_submit" data-icon="check"></button></div>
   </div>
@@ -98,6 +110,8 @@
 
 <script src="/assets/i18n.js"></script>
 <script src="/assets/copy-core.js"></script><script src="/assets/copy-services.js"></script>
+<script src="/assets/copy-tutorials.js"></script><script src="/assets/tutorials.js"></script>
+<script src="/assets/copy-notifications.js"></script><script src="/assets/notifications.js"></script>
 <script src="/assets/copy-models.js"></script><script src="/assets/copy-reports.js"></script><script src="/assets/copy-transfers.js"></script>
 <script src="/assets/service-icons.js"></script><script src="/assets/brand-colors.js"></script>
 <script src="/assets/service-list.js"></script>
@@ -113,6 +127,11 @@
 <script src="/assets/context-help.js"></script><script src="/assets/settings.js"></script>
 <script src="/assets/collaboration-comparison.js"></script>
 <script src="/assets/routing-settings.js"></script>
+<script src="/assets/ultra-settings.js"></script>
+<script src="/assets/copy-login.js"></script>
+<script src="/assets/copy-lan.js"></script>
+<script src="/assets/migration-lan.js"></script>
+<script src="/assets/native-login.js"></script>
 <script src="/assets/call-outcomes.js"></script>
 <script src="/assets/performance-chart.js"></script><script src="/assets/performance.js"></script><script src="/assets/call-reports.js"></script>
 <script src="/assets/report-query.js"></script>
@@ -123,7 +142,6 @@
 <script>
 let state = null;
 let integrationInfo = null;
-let pendingMigrationFile = null;
 let quotaStateTimer = null;
 let quotaStateBusy = false;
 let activitySnapshot = null;
@@ -142,16 +160,20 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const management = createManagementClient({tr, fetch: (...args) => fetch(...args), storage:() => localStorage, window});
 const {request:api, fetch:managementFetch, establish:establishSession, errorText:upstreamErrorText} = management;
 const managementEvents = createManagementEvents({management,visible:()=>document.visibilityState !== 'hidden',onEvent:processManagementEvent,
-  onStart:()=>{updateActivityDots();rescheduleActivityExpiry();},onDisconnect:clearActivityConfidence});
+  onStart:()=>{updateActivityDots();rescheduleActivityExpiry();void accountDetails.refresh();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
 const contextHelp = createContextHelp({getState:() => state, tr});
 const routingSettings = createRoutingSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
+const ultraSettings = createUltraSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
+const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
+const tutorials = createTutorials({openModal, $, tr, esc});
 const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, help:shadowHelp, contextHelp, presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
 const {open:openSettings, toggle:toggleSetting} = settings;
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
 let language = 'zh-CN';
+const notifications = createNotifications({$,tr,getLanguage:()=>language});
 function storedPreference(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch (_) { return fallback; } }
 function savePreference(key, value) { try { localStorage.setItem(key, value); } catch (_) {} }
 function t(key, values) { return translateUiCopy(key, language, values); }
@@ -162,6 +184,7 @@ function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach(element => { element.textContent = t(element.dataset.i18n); });
   document.querySelectorAll('[data-i18n-placeholder]').forEach(element => { element.placeholder = t(element.dataset.i18nPlaceholder); });
   document.querySelectorAll('[data-i18n-aria-label]').forEach(element => { element.setAttribute('aria-label', t(element.dataset.i18nAriaLabel)); });
+  notifications.refresh();
   if (integrationInfo) renderIntegration(integrationInfo);
   else $('integration_badge').textContent = t('loading');
 }
@@ -204,7 +227,7 @@ const {render:renderServices, details:openProviderDetails} = services;
 const accountDetails = createAccountDetails({renderInfo:shadowAccountInfo,getState:() => state, $, tr, esc, api, services, serviceUsage, persistState, uiIcon, subscriptionPlanLabel, resetCreditCount,
   confirmRemoval:question=>confirm(question),notice,closeModal,syncSavedCatalog,onRemoved:value=>{state=value;fill();}});
 const {open:openAccountDetails, saveAlias:saveAccountAlias} = accountDetails;
-const {open:openServiceChooser, importCodex:openCodexImportChooser} = createServiceChooser({tr, esc, presets:officialProviders, icon:serviceIconHtml, openModal, getState:() => state});
+const {open:openServiceChooser} = createServiceChooser({tr, esc, presets:officialProviders, icon:serviceIconHtml, openModal, getState:() => state});
 
 const confirmedCapabilitySources = new Set(['manual','observed','advertised','official']);
 function confirmedField(model, field) {
@@ -259,49 +282,8 @@ if (typeof window?.addEventListener === 'function') {
   window.addEventListener('unhandledrejection', event => reportWebClientPhase('unhandled_rejection', 'failed', event.reason instanceof Error ? event.reason : new Error('unhandled rejection')));
 }
 function bytesToBase64(bytes) { let binary = ''; const chunk = 0x8000; for (let index = 0; index < bytes.length; index += chunk) binary += String.fromCharCode(...bytes.subarray(index, index + chunk)); return btoa(binary); }
-async function exportMigration() {
-  openModal(tr("core.export_emp_data"), `<p class="muted">${tr("core.choose_what_to_export")}</p><div class="grid"><label class="inline-check"><input id="export_native" type="checkbox" checked>${tr("common.native")}</label><label class="inline-check"><input id="export_subscriptions" type="checkbox" checked>${tr("core.other_subscriptions")}</label><label class="inline-check"><input id="export_external" type="checkbox" checked>${tr("common.external_provider")}</label></div><p class="muted">${tr("core.native_includes_this_machine_s_login_credentials_import_adds")}</p><p class="muted">${tr("core.exports_require_at_least_12_utf_8_bytes_legacy")}</p><label>${tr("core.migration_password")}<input id="modal_migration_password" type="password" autocomplete="new-password" autofocus></label><label>${tr("core.confirm_password")}<input id="modal_migration_password_confirm" type="password" autocomplete="new-password"></label>`, tr("core.download_emp"), async () => {
-    const groups = ['native','subscriptions','external'].filter(group => $('export_' + group).checked);
-    if (!groups.length) throw new Error(tr("core.select_at_least_one_export_category"));
-    const password = $('modal_migration_password').value; const confirmPassword = $('modal_migration_password_confirm').value;
-    if (password !== confirmPassword) throw new Error(tr("core.the_migration_passwords_do_not_match")); if (new TextEncoder().encode(password).length < 12) throw new Error(tr("core.export_passwords_must_be_at_least_12_utf_8"));
-    const exportRequest = {password, groups};
-    if (!management.usesLegacyCookies()) {
-      const confirmation = await api('/api/migration/export/confirm', {method:'POST', body:'{}'});
-      exportRequest.confirmation = confirmation.confirmation;
-    }
-    const response = await managementFetch('/api/migration/export', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(exportRequest)});
-    if (!response.ok) { let data = {}; try { data = await response.json(); } catch (_) {} if (response.status === 401) management.clear(); throw new Error(data.error?.message || response.statusText); }
-    const summary = JSON.parse(response.headers.get('X-EMP-Export-Summary') || '{}');
-    const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 0); closeModal();
-    const missing = summary.native_login_missing;
-    notice(tr("core.exported_accounts_providers_models", {accounts:summary.accounts ?? 0, providers:summary.providers ?? 0, models:summary.models ?? 0}) + (missing ? tr("core.native_login_credentials_were_not_found_only_its_settings") : ''), missing);
-  });
-}
-function migrationFilename() { return 'EMP.emp'; }
-function selectMigrationFile() { $('migration_file').click(); }
-async function migrationFileChosen(input) {
-  const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice(tr("core.emp_files_cannot_exceed_32_mb"), true); }
-  pendingMigrationFile = file;
-  openModal(tr("core.import_emp_data"), `<p class="muted">${tr("services.selected")}：${esc(file.name)}<br>${tr("core.verified_matching_accounts_or_connections_update_existing_services_different")}</p><label>${tr("core.migration_password")}<input id="modal_import_migration_password" type="password" autocomplete="current-password" autofocus></label>`, tr("core.import_and_merge"), submitMigrationImport);
-}
-async function submitMigrationImport() {
-  const password = $('modal_import_migration_password').value; if (!password) throw new Error(tr("core.enter_the_migration_password")); if (!pendingMigrationFile) throw new Error(tr("core.select_the_emp_file_again"));
-  const encoded = bytesToBase64(new Uint8Array(await pendingMigrationFile.arrayBuffer()));
-  const result = await api('/api/migration/import', {method:'POST', body:JSON.stringify({password, bundle:encoded})});
-  pendingMigrationFile = null; $('migration_file').value = ''; closeModal(); state = await api('/api/config'); fill(); await loadIntegration(); notice(tr("core.migration_complete_accounts_providers_models", {accounts:result.accounts, providers:result.providers, models:result.models}) + (result.renamed_accounts ? tr("core.conflicting_accounts_renamed", {renamedAccounts:result.renamed_accounts}) : ''));
-}
-let noticeTimer = null;
-function dismissNotice() { clearTimeout(noticeTimer); noticeTimer = null; $('notification').hidden = true; $('status').textContent = ''; }
-function notice(message, error = false) {
-  dismissNotice();
-  if (!message) return;
-  $('status').textContent = message;
-  $('status').className = error ? 'danger-text' : 'muted';
-  $('notification_close').setAttribute('aria-label', tr("core.dismiss_notification"));
-  $('notification').hidden = false;
-  if (!error) noticeTimer = setTimeout(dismissNotice, 4000);
-}
+function dismissNotice() { notifications.dismiss(); }
+function notice(message, error = false) { notifications.show(message, error); }
 function protocolLabel(value) { return ({auto:tr("core.auto_detect"),responses:'Responses',chat_completions:'Chat Completions',anthropic_messages:'Anthropic Messages'}[value] || value); }
 function authLabel(value) { return ({api_key:'Bearer API Key',anthropic_api_key:'Anthropic API Key',forward:'Forward Codex auth'}[value] || value); }
 function formatDate(value) {
@@ -494,9 +476,8 @@ async function load() {
       void checkUpdateHint();
       if (quotaStateTimer === null) quotaStateTimer = setInterval(() => { refreshResetCountdowns(); if (!managementEvents.connected()) { requestQuotaSync(); void integrationUpdated(); } }, 60 * 1000);
     } catch (error) { renderError = error; }
-    const loaded = await integration;
+    await integration;
     if (renderError) { reportWebClientPhase('window_error', 'failed', renderError); throw renderError; }
-    if (loaded) notice(tr("core.configuration_loaded"));
   } catch (error) { notice(error.message, true); }
 }
 let integrationBusy = false;
@@ -730,6 +711,7 @@ function subscriptionPlanLabel(value) {
 function subscriptionPlanColor(value) { return ({free:'#94a3b8',go:'#2bb5a6',plus:'#4c8bea',prolite:'#d9c98f',pro:'#f2b705',promax:'#ef795b',business:'#9b7ad8'})[subscriptionPlanKey(value)] || '#94a3b8'; }
 function uiIcon(name) {
   const paths = {
+    copy:'<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M5 13H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1"/>',
     refresh:'<path d="M17 7a7 7 0 0 0-12-2L2 8m0-5v5h5M3 13a7 7 0 0 0 12 2l3-3m0 5v-5h-5"/>',
     reset:'<path d="M4 12H2v6h16v-6h-2"/><rect x="4" y="3" width="12" height="11" rx="2"/><path d="M7 8h6"/>',
     eye:'<path d="M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z"/><circle cx="10" cy="10" r="2.5"/>',
@@ -1001,6 +983,7 @@ async function refreshQuotaState() {
       changed = changed || before !== JSON.stringify(refreshErrors);
     }
     state.native_account = snapshot.native_account || null; state.accounts = Array.isArray(snapshot.accounts) ? snapshot.accounts : [];
+    void accountDetails.sync();
     if (changed) renderServices();
     return changed;
   } catch (_) { return false; }
@@ -1073,11 +1056,15 @@ const quotaHistory = createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,com
   periods:{periodPickerHtml,registerPeriodPicker,periodPickers,setPeriod,periodPresetRange,refreshPeriod,timeAxisTicks,timeAxisSvg}});
 const {open:openQuotaHistory} = quotaHistory;
 
-const codexAccountImport = createCodexAccountImport({$, tr, esc, api, openModal, closeModal, notice, modalReturn,
+async function refreshImportedAccounts() {
+  accountDetails.reset();
+  state = await api('/api/config');
+  await api('/api/catalog/refresh', {method:'POST', body:'{}'});
+  fill(); await loadIntegration();
+}
+const codexAccountImport = createCodexAccountImport({$, tr, api, openModal, closeModal, notice, modalReturn,
   onSaved:async () => {
-    state = await api('/api/config');
-    await api('/api/catalog/refresh', {method:'POST', body:'{}'});
-    fill(); await loadIntegration(); notice(tr("core.subscription_imported"));
+    await refreshImportedAccounts(); notice(tr("core.subscription_imported"));
   }
 });
 const subscriptionSettings=createSubscriptionSettings({getState:()=>state,cloneState,$,tr,esc,api,services,persistState,closeModal,notice,help:shadowHelp,contextHelp,compactNumber:shadowCompactNumber,compactContext,canonicalDisplayName,modelSort,uiIcon});
@@ -1150,7 +1137,7 @@ async function testModelAudio(id) {
 
 function stopModalFeatures() {
   statistics.stop();
-  callReports.stop(); usageReport.stop(); accountDetails.stop(); providerModelSettings.stop(); modelEditor.stop(); services.stop();
+  callReports.stop(); usageReport.stop(); accountDetails.stop(); providerModelSettings.stop(); modelEditor.stop(); services.stop(); nativeLogin.stop();
   stopDiagnostics(); stopUpdatePoll(); quotaHistory.stop(); subscriptionSettings.stop();
 }
 let modalNavigation = {};
@@ -1218,7 +1205,9 @@ function runDynamicUiAction(element) {
       return true;
     case 'setting-toggle': toggleSetting(element); return true;
     case 'routing-settings': routingSettings.open({back:openSettings}); return true;
-    case 'account-details': openAccountDetails(id); return true;
+    case 'ultra-settings': ultraSettings.open({back:openSettings}); return true;
+    case 'native-login': nativeLogin.open(); return true;
+    case 'account-details': if(id==='@native'&&state.native_account?.auth_mode&&state.native_account.auth_mode!=='subscription')nativeLogin.open();else openAccountDetails(id); return true;
     case 'account-alias-save': saveAccountAlias(element); return true;
     case 'account-remove': removeAccount(id, element); return true;
     case 'account-edit': editAccount(id); return true;
@@ -1235,9 +1224,8 @@ function runDynamicUiAction(element) {
     case 'provider-add-model': openManualModelModal('', id, {back:modalReturn()}); return true;
     case 'provider-edit': editProvider(id); return true;
     case 'provider-details': openProviderDetails(id); return true;
-    case 'service-native': if (state.native_account) openAccountDetails(state.native_account.id, {back:modalReturn()}); return true;
-    case 'service-import-account': openCodexImportChooser({back:modalReturn()}); return true;
-    case 'account-import-paste': codexAccountImport.paste(); return true;
+    case 'account-import-device': nativeLogin.open({importing:true,back:modalReturn()}); return true;
+    case 'account-import-auth': codexAccountImport.open(); return true;
     case 'account-import-file': codexAccountImport.chooseFile(); return true;
     case 'service-custom-api': openCustomProviderForm({}, null, {back:modalReturn()}); return true;
     case 'provider-remove': removeProvider(id); return true;
@@ -1260,6 +1248,7 @@ function handleDynamicUiChange(event) {
   if (element?.dataset.uiAction === 'period-edit') runDynamicUiAction(element);
 }
 function handleModalKeydown(event) {
+  if (event.defaultPrevented || notifications.isOpen()) return;
   if (event.key === 'Escape' && !$('modal_backdrop').classList.contains('hidden')) {
     event.preventDefault();
     (modalNavigation.back || closeModal)();

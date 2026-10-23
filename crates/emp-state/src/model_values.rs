@@ -15,6 +15,11 @@ const REASONING_EFFORT_ORDER: [&str; 8] = [
     "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
 ];
 
+/// An actual model effort, excluding the Ultra collaboration mode.
+pub fn is_concrete_reasoning_effort(value: &str) -> bool {
+    value != "ultra" && REASONING_EFFORT_ORDER.contains(&value)
+}
+
 /// Apply Python `str.strip()` semantics, including the four C0 file separators.
 fn python_trim(value: &str) -> &str {
     value.trim_matches(|character: char| {

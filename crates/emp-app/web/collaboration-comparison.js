@@ -28,6 +28,20 @@ function subscriptionComparison() {
   return `<h3 id="subscription-comparison-title">${tr('models.subscription_comparison_title')}</h3><p class="collaboration-takeaway">${tr('models.subscription_comparison_takeaway')}</p><p>${tr('models.subscription_comparison_baseline')}</p><p>${tr('models.subscription_comparison_guide')}</p><div class="collaboration-table" tabindex="0" role="region" aria-labelledby="subscription-comparison-title"><table aria-labelledby="subscription-comparison-title"><thead><tr><th scope="col">${tr('models.subscription_comparison_effort')}</th>${columns.map(metric => `<th scope="col">${tr('models.subscription_comparison_'+metric)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div><p>${tr('models.subscription_comparison_context',{date:'2026-10-18',version:'0.163.0',count:20})}</p>`;
 }
 
+// 2026-10-23 UTC, standalone 0.164.0 Code Mode, GPT-6.1 Sol xhigh.
+// Three samples per arm; these are ratios of medians, not paired-ratio medians.
+function codeModeComparison() {
+  const baseline = {tps:54.12654564662915, ttft:8.05089005397167, time:47.58282882999629};
+  const measured = [
+    {mode:'off', tps:56.38226790722568, ttft:7.338474391959608, time:43.89440695394296},
+    {mode:'on_demand', tps:57.517867000559285, ttft:7.774420959991403, time:43.91945511905942},
+    {mode:'on', tps:52.55539971973242, ttft:7.259282188955694, time:48.18346161104273}
+  ];
+  const metrics = ['tps','ttft','time'];
+  const rows = measured.map(row => `<tr><th scope="row">${tr('models.collaboration_'+row.mode)}</th>${metrics.map(metric => `<td>${tr('models.collaboration_ratio',{ratio:(row[metric]/baseline[metric]).toFixed(2)})}</td>`).join('')}</tr>`).join('');
+  return `<details><summary>${tr('models.collaboration_current_title')}</summary><p>${tr('models.collaboration_current_context')}</p><p>${tr('models.subscription_comparison_guide')}</p><div class="collaboration-table" tabindex="0" role="region" aria-label="${esc(tr('models.collaboration_current_title'))}"><table><thead><tr><th scope="col">${tr('models.collaboration_mode')}</th>${metrics.map(metric => `<th scope="col">${tr('models.subscription_comparison_'+metric)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div><p>${tr('models.collaboration_current_scope')}</p></details>`;
+}
+
 function collaborationComparison() {
   const modes = ['off','on_demand','on'];
   const ratio = values => {
@@ -47,5 +61,5 @@ function collaborationComparison() {
     }).join('')}</tr>`).join('');
     return `<h3 id="collaboration-${metric}-title">${tr('models.collaboration_' + metric + '_title')}</h3><p>${tr('models.collaboration_' + metric + '_guide')}</p><div class="collaboration-table" tabindex="0" role="region" aria-labelledby="collaboration-${metric}-title"><table aria-labelledby="collaboration-${metric}-title"><thead><tr><th scope="col">${tr('reports.model')}</th>${modes.map(mode => `<th scope="col">${tr('models.collaboration_' + mode)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
   }).join('');
-  return `<button type="button" class="shadow-help" data-shadow-help="" data-shadow-help-template="collaboration-comparison" aria-label="${tr('models.collaboration_help_title')}" aria-haspopup="dialog" aria-expanded="false" aria-controls="shadow_feedback">?</button><template id="collaboration-comparison"><div class="collaboration-comparison"><strong>${tr('models.collaboration_help_title')}</strong><p class="collaboration-takeaway">${tr('models.collaboration_takeaway')}</p><dl class="collaboration-modes">${descriptions}</dl><details><summary>${tr('models.collaboration_comparison')}</summary><p>${tr('models.collaboration_comparison_baseline')}</p>${tables}<p>${tr('models.collaboration_comparison_context', {date:'2026-10-18',version:'0.163.0',count:10})}</p><p>${tr('models.collaboration_comparison_metric')}</p><p>${tr('models.collaboration_comparison_variation')}</p>${subscriptionComparison()}</details></div></template>`;
+  return `<button type="button" class="shadow-help" data-shadow-help="" data-shadow-help-template="collaboration-comparison" aria-label="${tr('models.collaboration_help_title')}" aria-haspopup="dialog" aria-expanded="false" aria-controls="shadow_feedback">?</button><template id="collaboration-comparison"><div class="collaboration-comparison"><strong>${tr('models.collaboration_help_title')}</strong><p class="collaboration-takeaway">${tr('models.collaboration_takeaway')}</p><dl class="collaboration-modes">${descriptions}</dl>${codeModeComparison()}<details><summary>${tr('models.collaboration_comparison')}</summary><p>${tr('models.collaboration_comparison_context', {date:'2026-10-18',version:'0.163.0',count:10})}</p><p>${tr('models.collaboration_comparison_baseline')}</p>${tables}<p>${tr('models.collaboration_comparison_metric')}</p><p>${tr('models.collaboration_comparison_variation')}</p>${subscriptionComparison()}</details></div></template>`;
 }

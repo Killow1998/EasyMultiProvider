@@ -12,7 +12,7 @@ async function readShadowSource(){shadowSnapshot=await api('/api/shadow/status')
 window.EMP_OPEN_SYNTHETIC=async action=>{
   openModal(tr('演示','Demos'),`<p>${tr('正在准备独立的合成演示…','Preparing the separate synthetic demo…')}</p>`,'',null);
   try{
-    const result=await api('/api/shadow/demo',{method:'POST',body:'{}'}),url=new URL(result.url);
+    const result=await api('/api/shadow/demo',{method:'POST',body:JSON.stringify({scenario:action})}),url=new URL(result.url);
     if(['services','service-errors'].includes(action))url.searchParams.set('demo',action);
     else if(action==='import')url.searchParams.set('import','1');
     else if(action)url.searchParams.set('reviewAction',action);
@@ -24,7 +24,6 @@ fill=function(){
   realShadowFill();
   $('emp_version').textContent+= ' · Shadow';
   $('integration_toggle').disabled=true;
-  document.querySelector('[data-i18n="quit_emp"]').hidden=true;
   let button=$('shadow_demo_button');
   if(!button){
     button=document.createElement('button');button.id='shadow_demo_button';button.type='button';button.className='secondary';

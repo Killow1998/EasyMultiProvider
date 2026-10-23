@@ -45,21 +45,6 @@ test('Restore Native keeps the page usable and Quit EMP uses a separate action',
   }
 });
 
-test('unified chooser preserves local Claude identity and exposes direct connection choices', () => {
-  let html = '';
-  const state = {native_account:{credential_set:true}, providers:[{id:'existing-local', name:'Renamed account', execution_backend:'claude_cli', auth_mode:'claude_login'}]};
-  const chooser = feature('service-chooser.js', 'createServiceChooser')({
-    tr, esc, presets:{chatgpt:{name:'Legacy forward'}, openai:{name:'OpenAI'}, anthropic:{name:'Anthropic'}},
-    icon:() => '', getState:() => state, openModal:(_title, body) => { html = body; },
-  });
-  chooser.open();
-  assert.match(html, /data-ui-action="claude-local-choose" data-id="existing-local"/);
-  assert.match(html, /data-ui-action="claude-cpa-choose"/);
-  assert.match(html, /data-ui-action="service-import-account"/);
-  assert.match(html, /data-ui-action="service-native"/);
-  assert.doesNotMatch(html, /Legacy forward|execution_backend|claude-provider-choose/);
-});
-
 test('service details isolate provider usage and discard results after navigation', async () => {
   let box, html;
   const pending = [], calls = [];
@@ -416,7 +401,7 @@ test('closing diagnostics discards in-flight reports without a polling timer', a
 // Native browser effects are accepted in E2E; this VM checks page binding order.
 function pageEffectsGlobals() {
   const element=()=>({dataset:{},style:{setProperty(){},removeProperty(){}},hidden:true,
-    setAttribute(){},append(){},replaceChildren(){},addEventListener(){},classList:{toggle(){},contains(){return false;}}});
+    setAttribute(){},append(){},replaceChildren(){},addEventListener(){},matches(){return false;},classList:{toggle(){},contains(){return false;}}});
   return {matchMedia:()=>({matches:true,addEventListener(){}}),
     MutationObserver:class{observe(){}},IntersectionObserver:class{observe(){}},
     ResizeObserver:class{observe(){} disconnect(){}},
@@ -431,7 +416,7 @@ test('the shipped page initializes its bindings and retains translated integrati
   const pending = deferred();
   const nodes = new Map();
   const node = id => {
-    if (!nodes.has(id)) nodes.set(id, {textContent:'', dataset:{}, childElementCount:1, parentElement:{classList:{contains:()=>true}}, classList:{toggle() {}}});
+    if (!nodes.has(id)) nodes.set(id, {textContent:'', dataset:{}, addEventListener(){}, matches(){return false;}, childElementCount:1, parentElement:{classList:{contains:()=>true}}, classList:{toggle() {}}});
     return nodes.get(id);
   };
   if (html.match(/<span id="integration_badge"[^>]*>/)?.[0].includes('data-i18n="loading"')) node('integration_badge').dataset.i18n = 'loading';

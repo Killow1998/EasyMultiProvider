@@ -363,6 +363,9 @@ pub fn emp_command() -> Command {
         "EASY_MULTI_PROVIDER_CONFIG",
         "EASY_MULTI_PROVIDER_MASTER_KEY_FILE",
         "BROWSER",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "DBUS_SESSION_BUS_ADDRESS",
     ] {
         command.env_remove(key);
     }

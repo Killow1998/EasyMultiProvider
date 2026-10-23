@@ -17,6 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::os::unix::fs::MetadataExt;
 
 mod process;
+pub use process::device_login::DeviceLogin;
 mod projection;
 use process::{TrustedBinary, read_native_auth, rpc_http_status, run_isolated_quota_process};
 mod rpc;

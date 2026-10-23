@@ -69,6 +69,14 @@ pub(crate) fn resolve_headers(
         selected = Some(account_headers(state, account)?);
         NativeAuth::Account(selected.as_ref().expect("account headers"))
     } else if provider.get("implicit_native") == Some(&Value::Bool(true)) {
+        if emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path)
+            == "local_key"
+        {
+            return Err(NativeHttpError::router(
+                503,
+                "Sign in to a Codex subscription or select an external service model",
+            ));
+        }
         selected = native_auth_document(&state.backend.accounts.native_auth_path)
             .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
             .and_then(|auth| account_auth_headers(&auth));

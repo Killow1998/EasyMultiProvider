@@ -34,7 +34,7 @@ function createCallOutcomes({esc,tr,number,time}) {
       const titleId='call-outcome-'+Math.random().toString(36).slice(2);
       dialog.setAttribute('aria-labelledby',titleId);
       const range = n(report.start) !== null && n(report.end) !== null ? `<p class="muted">${esc(time(report.start))} — ${esc(time(report.end))}</p>` : '';
-      dialog.innerHTML=`<div class="modal-header"><h2 id="${titleId}">${tr("reports.call_outcomes")}</h2><div class="modal-navigation"><button type="button" class="secondary modal-back" data-icon="restore" aria-label="${tr("reports.back_to_previous_dialog")}"></button></div></div><div>${range}${outcomes(summary).detailsHtml}</div>`;
+      dialog.innerHTML=`<div class="modal-header"><h2 id="${titleId}">${tr("reports.call_outcomes")}</h2><div class="modal-navigation"><button type="button" class="secondary modal-back" data-icon="restore" aria-label="${tr("reports.back_to_previous_dialog")}"></button></div></div><div class="modal-body">${range}${outcomes(summary).detailsHtml}</div>`;
       doc.body.appendChild(dialog);
       dialog.querySelector('.modal-back').onclick=close;
       dialog.addEventListener('cancel',event=>{event.preventDefault();close();});

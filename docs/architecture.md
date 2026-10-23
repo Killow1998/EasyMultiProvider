@@ -3,6 +3,9 @@
 For the current crate map and the latest ownership changes, see
 [Current architecture and lifecycle ablation](#current-architecture-and-lifecycle-ablation-2026-10-11).
 
+Daily build/check scope, candidate E2E and cache retention follow the
+[Rust development SOP](development-sop.md).
+
 For the current whole-backend ownership contract, before/after diagrams and
 acceptance checklist, see [Backend workflows](backend-workflows.md). The
 assessment below records the earlier passes; availability gates, cooldowns and
@@ -387,6 +390,19 @@ private. The page supplies current-state/language getters and UI operations.
 A changed language or new configuration therefore does not leave a stale copy
 inside a feature.
 
+`notifications.js` owns transient WebUI messages and their browser-local inbox.
+Existing callers retain `notice(message, error)`; they do not manage timers or
+storage. One animated progress bar controls dismissal (five seconds normally,
+ten for errors), pausing on hover, keyboard focus, window blur and hidden tabs.
+The top capsule is a manual native popover; the inbox uses an independent auto
+popover, so Escape/Close leaves an underlying editor and its draft intact.
+The last 50 plain-text messages, timestamps and read states are stored per
+browser origin. Storage failure falls back to the current page's memory. Clearing
+the inbox is explicit. Both notice paths share one owner; legacy toast styles
+and presentation overrides are removed. Interaction references:
+[Radix Toast](https://www.radix-ui.com/primitives/docs/components/toast) and the
+[native Popover API](https://developer.mozilla.org/en-US/docs/Web/API/Popover_API/Using).
+
 `report-query.js` owns cancellation and latest-result selection for usage and
 call/performance queries. Its interface is `run`/`cancel` plus result/state
 callbacks; callers do not coordinate request counters. Refresh failures retain
@@ -395,7 +411,15 @@ custom-date query and refresh behavior to all time-based views. `usage-report.js
 save lifecycle behind `open`/`refresh`/`stop`. It reads configuration and language
 through getters and receives period controls explicitly. DOM actions stay inside
 the report root instead of adding page-level usage handlers.
-`account-details.js` owns account usage reads and alias interaction;
+`account-details.js` owns account usage reads and alias interaction. It retains
+compact lifetime aggregates per account in page memory for one minute. Tab changes
+detach the view while an in-flight read completes for that account; reopening
+renders cached aggregates immediately. Usage events invalidate freshness and
+refresh only the visible account, coalescing events during a read into a follow-up.
+Expired data stays visible during refresh; failures preserve it with an error,
+while authorization failures clear it. Account identity metadata changes, removal,
+and the import/sign-in workflow discard affected cached data. Reconnecting the
+management stream invalidates freshness. Cached report series are not retained.
 `model-editor.js` owns the model draft, capability edits and metadata cancellation.
 `model-settings.js` owns cached/discovered lists. The page composes these owners
 and calls their cleanup when replacing or closing a modal. Provider detail reads
@@ -419,8 +443,8 @@ their service identity and selected tab. Root dialogs hide Back, while X clears
 navigation and closes the dialog. Replacing a view runs its existing feature
 cleanup. Model editing uses this shell instead of separate shadow header buttons,
 retaining its manager search on return. The call-outcome dialog remains an overlay:
-Back removes it without rebuilding the report; X closes the containing report.
-Both header controls are transparent and borderless.
+its single Back control or Escape removes it without rebuilding the report.
+Root dialog close controls remain separate. Headers stay outside the scrolling body.
 
 ```mermaid
 flowchart LR
@@ -430,7 +454,6 @@ flowchart LR
   Shell -->|X and cleanup| Closed[Closed]
   Report[Report and filters] --> Overlay[Call outcomes overlay]
   Overlay -->|Back removes overlay| Report
-  Overlay -->|X closes report| Closed
 ```
 
 HTTP error serialization shares a status/body/retry-header function.
@@ -458,6 +481,16 @@ and cross-service collaboration; external-model web search; and native-service
 compaction/routing. Grouping changes navigation only. Existing controllers keep
 their persistence and validation ownership; display choices remain browser-local,
 and Auto Review, image and memory routes retain one shared child dialog.
+
+The shared dialog shell keeps its title, navigation, service tabs and footer
+outside the scrolling `.modal-body`. Migration, tutorials and service details
+only customize their dimensions; the native request-outcome dialog uses the same
+body rule. The shared body reserves a scrollbar gutter and spacing in the dialog's
+outer padding, so a scrolling thumb does not touch controls or table content.
+Help bubbles state the behavior, triggering conditions and required action
+directly. Keep factual limits and measured-data boundaries explicit;
+avoid speculative explanations and repeated guarantee disclaimers. Maintain
+Simplified Chinese and English together in the copy dictionaries.
 
 Keep Shadow navigation stable across review rounds:
 
@@ -593,6 +626,85 @@ clean settings; retain a user's existing value until they choose an override.
 Saving requires Codex to reload its configuration; the help recommends restarting
 Codex or the desktop/IDE backend, without restarting EMP or interrupting a session.
 
+Ultra's concrete effort is a separate family-scoped `ultra_reasoning_efforts`
+preference. An absent entry follows official metadata, including later refreshes.
+The catalog builder changes only `multi_agent_reasoning_effort` on Native and
+imported subscription entries that advertise both Ultra and the selected concrete
+effort; unsupported saved values fall back to upstream metadata. Ordinary efforts,
+collaboration instructions and route aliases remain independent. The native-service
+settings dialog identifies models by their upstream names, offers the supported-effort
+intersection for each visible family and asks users to restart Codex Runtime after
+saving. Display aliases remain in the model catalog. Selection/export/import retain
+only relevant family preferences, while older clients cannot erase an omitted map.
+No external Auto Review selection is added by this setting.
+
+Default labels name the resolved values: Ultra uses unmodified catalog metadata;
+memory routing uses the original Codex preferences, including those retained in an
+active EMP ownership journal. Unset memory stages display the upstream defaults:
+`gpt-5.6-luna` for extraction and `gpt-5.6-terra` for consolidation, verified against
+Codex [0.163.0](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/model-provider/src/provider.rs)
+and [0.164.0](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/model-provider/src/provider.rs).
+These are display fallbacks; selecting the default restores the original settings
+and does not pin either model in `config.toml`. Recheck these two constants when
+updating Codex compatibility. Extraction and consolidation overrides are independent.
+
+External-only onboarding uses `emp-integration::local_auth` under the existing
+integration operation lock. When `auth.json` is absent, a private ownership
+journal stages an `emp-local-` API credential and publishes it without overwriting
+an existing file. Restore removes only an unchanged, owned credential. Caller
+authentication accepts the local key, while native forwarding rejects it and
+never sends it upstream. Existing subscription/API authentication is retained.
+
+`emp-codex::quota::DeviceLogin` reuses the verified executable, isolated home,
+bounded pipes and child-tree cleanup of the quota helper. Official app-server
+device-code RPC returns only the verification URL, code and status to the browser.
+`services/native_login.rs` owns separate pending operations for Native replacement
+and subscription import. Native replacement installs credentials only if the
+original authentication is unchanged, then requests a Codex Runtime restart.
+Subscription sign-in uses the existing account/vault transaction and preserves
+Native authentication. Cancellation cannot affect the other destination. The
+Add Service chooser offers device-code sign-in and one auth.json form for both
+file selection and pasted JSON; both import paths refresh the shared catalog.
+EMP does not stop an active runtime.
+
+LAN migration is a transport for the existing encrypted `.emp` package and
+session-bound import preview. Its entry reuses the Add Service choice cards for
+Import, Export and Tunnel. Import opens a package before using the same service
+and model selection view as Export; the data source and final commit differ.
+The retired homepage import/export functions, hidden file input, pending-file
+state and unused copy are removed. The migration controller owns file selection,
+preview and submission for both transports; there is no second frontend import path.
+Back returns to the immediate parent and retains the form nodes, including file
+selection, passwords and tunnel code. Closing the root drops those drafts.
+Each working view takes its height from its content, bounded by the viewport.
+Service lists expand naturally; only the dialog body scrolls when space runs out.
+Views with inline actions do not reserve an empty footer or status row.
+Reveals use 250 ms fades and respect reduced motion. Transfer polling does not
+collapse the service chooser. The tunnel
+page owns separate send and receive states; returning from the import preview
+retains the received package token rather than consuming the code again.
+`if-addrs` enumerates usable private IPv4 interfaces without shell commands.
+Selection prefers an active LAN interface over a VPN/TUN route, then uses the
+operating system route preference. The UI has no address or adapter controls.
+The selector returns one address directly rather than building and deduplicating
+a sorted list that callers immediately discard. Removing LAN priority in the
+ablation selected the TUN route and failed the existing behavior regression, so
+the priority rule remains.
+Its 49-character code carries a version, private
+IPv4 endpoint and 232-bit random secret. The receiver sends a nonce and HMAC
+proof rather than the secret; the sender requires explicit approval before
+transmitting the encrypted package. The server fixes code lifetime at five minutes;
+clients cannot change it. Each code is
+consumed once. Transfer size, connection reads and delivery time are bounded;
+cancellation closes the listener and drops the package. The receiver still uses
+the existing service selection, conflict resolution and explicit import commit.
+No discovery server, cloud relay or automatic firewall change is introduced.
+
+Onboarding acceptance exercises installed Codex against a synthetic Responses
+upstream, authentication cancellation/replacement and two isolated EMP instances.
+Shadow keeps real source data read-only; its onboarding/LAN entries use the same
+product UI and backend with explicitly synthetic device login and loopback peers.
+
 `emp-integration::preferences::CodexPreferences` owns only async-compaction and
 the two memory model keys through separate compare-and-restore journals. Writes
 share the integration operation lock; restore and exit retain unrelated TOML,
@@ -601,8 +713,16 @@ value so interrupted updates remain recoverable. Typed apply/rollback entries ow
 both groups; callers do not assemble journal writes. Apply stops on the first
 error, while rollback attempts both groups even if one journal is unavailable.
 The configuration owner rolls back rejected writes and failed commits without
-persisting the rejected configuration. Selecting a memory model also
-sets Codex's extraction/consolidation model budget; it never enables memories.
+persisting the rejected configuration. Extraction and consolidation have independent
+GPT selectors. `memory_extraction_model` owns `memories.extract_model`; the existing
+`memory_model` field owns `memories.consolidation_model`. When loading a legacy
+configuration without the extraction field, normalization preserves its former
+two-stage behavior by copying `memory_model` once. An explicit empty value restores
+only that stage's original Codex setting, including an absent key, without changing
+the other stage. Partial resets compose from the journal's original values, never
+from the last EMP override. The two default labels resolve each original model
+separately. Selecting a model sets that stage's client-side context budget after
+restarting Codex; it never enables memories.
 `services/memory_routing.rs` serves HTTP and WebSocket at the same preparation
 boundary. Account selection and final route preparation share one configuration
 snapshot, including when the memory override is disabled; concurrent settings
@@ -610,6 +730,8 @@ edits cannot substitute a second configuration midway through that decision.
 Per-chat extraction follows its latest durable main-call subscription;
 external chats, global consolidation and unconfirmed sources use Native. Known
 unavailable or exhausted accounts pause visibly without switching subscriptions.
+Request kind selects the corresponding preference in both HTTP and WebSocket;
+pause status carries the stage so its explanation appears under the correct selector.
 Memory work has distinct call labels; global consolidation is not charged to the
 single conversation that happened to launch it.
 

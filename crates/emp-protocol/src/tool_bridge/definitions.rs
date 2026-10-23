@@ -3,36 +3,23 @@ use super::ExternalTools;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// Validate one schema per alias across both catalog locations, preserving the
-/// first top-level occurrence and every in-place loading boundary.
-pub(super) fn unique_definitions(
-    definitions: Vec<Value>,
-    input: &Value,
-    preserve_loads: bool,
-) -> Result<Vec<Value>, &'static str> {
-    let loaded = input
-        .as_array()
-        .filter(|_| preserve_loads)
-        .into_iter()
-        .flatten()
-        .filter(|item| item["type"] == "additional_tools")
-        .flat_map(|item| item["tools"].as_array().into_iter().flatten());
+pub(super) fn tool_key(tool: &Value) -> String {
+    tool.get("function").unwrap_or(tool)["name"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| super::python_json(tool))
+}
+
+/// A declaration batch cannot assign two schemas to the same identity.
+fn unique_definitions(definitions: Vec<Value>) -> Result<Vec<Value>, &'static str> {
     let mut seen = BTreeMap::new();
     let mut keep = vec![true; definitions.len()];
-    for (index, tool) in definitions.iter().chain(loaded).enumerate() {
-        let definition = tool.get("function").unwrap_or(tool);
-        let key = definition
-            .get("name")
-            .filter(|value| !value.is_null())
-            .map(Value::to_string)
-            .unwrap_or_else(|| super::python_json(tool));
-        if let Some(previous) = seen.insert(key, tool) {
+    for (index, tool) in definitions.iter().enumerate() {
+        if let Some(previous) = seen.insert(tool_key(tool), tool) {
             if previous != tool {
                 return Err("request projection failed: conflicting tool definitions");
             }
-            if let Some(keep) = keep.get_mut(index) {
-                *keep = false;
-            }
+            keep[index] = false;
         }
     }
     Ok(definitions
@@ -121,7 +108,7 @@ impl ExternalTools {
             }
             result.push(Value::Object(tool));
         }
-        Ok(result)
+        unique_definitions(result)
     }
 
     pub(super) fn prepare_choice(&mut self, item: &mut Value) -> Result<(), &'static str> {

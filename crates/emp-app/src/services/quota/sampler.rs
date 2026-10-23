@@ -58,7 +58,12 @@ pub(crate) fn run(state: &Arc<ServerState>) {
 
 fn quota_sample_targets(state: &ServerState) -> Vec<String> {
     let mut targets = Vec::new();
-    if regular_file(&state.backend.accounts.native_auth_path) {
+    if regular_file(&state.backend.accounts.native_auth_path)
+        && !matches!(
+            emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path),
+            "local_key" | "api_key"
+        )
+    {
         targets.push("@native".to_owned());
     }
     let Some(config) = state

@@ -93,6 +93,16 @@ pub(crate) fn native_search_request(
         });
     if let Some(credentials) = credentials {
         headers.extend(credentials);
+    } else if emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path)
+        == "local_key"
+    {
+        return json_error_response(
+            503,
+            status_text(503),
+            "Subscription web search requires a signed-in or imported Codex subscription",
+            Some("subscription_required"),
+            &[],
+        );
     } else {
         for name in ["authorization", "chatgpt-account-id"] {
             if let Some(value) = request.header(name) {

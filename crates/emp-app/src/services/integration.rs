@@ -302,6 +302,9 @@ pub(crate) fn sync_features(state: &ServerState) -> Result<(), ()> {
         .preferences
         .apply(
             config["background_compaction"].as_bool(),
+            config["memory_extraction_model"]
+                .as_str()
+                .unwrap_or_default(),
             config["memory_model"].as_str().unwrap_or_default(),
         )
         .map_err(|_| ())

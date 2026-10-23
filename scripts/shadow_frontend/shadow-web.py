@@ -124,8 +124,32 @@ class ShadowHandler(BaseHTTPRequestHandler):
             upstream = connection.getresponse()
             if path != '/api/accounts/events' or upstream.status != 200:
                 body = upstream.read()
-                if path == '/api/config' and snapshot and upstream.status == 200:
+                if path == '/api/config' and upstream.status == 200:
                     body = json.loads(body)
+                    # Older live backends lack this projection. Read their actual
+                    # catalog; never substitute demonstration models into Shadow.
+                    # Versionless reads intentionally strip Ultra for old clients.
+                    models = body.get('catalog_models', [])
+                    if any('ultra_reasoning_levels' not in model or 'ultra_default_effort' not in model for model in models):
+                        from local_backend import request
+                        status, catalog = request(f'http://127.0.0.1:{self.server.backend_port}/v1/models?client_version=0.163.0',
+                            headers={'X-EMP-Session':token}, timeout=30)
+                        if status != 200:
+                            return self.error(503, 'Could not read the live model catalog')
+                        entries = {model['slug']:model for model in catalog.get('models', [])}
+                        concrete = ['none','minimal','low','medium','high','xhigh','max']
+                        for model in models:
+                            entry = entries.get(model['id'], {})
+                            ordered_levels = [level.get('effort') for level in entry.get('supported_reasoning_levels', [])]
+                            levels = set(ordered_levels)
+                            model['ultra_reasoning_levels'] = [level for level in concrete if level in levels] if model.get('source_type') != 'provider' and 'ultra' in levels else []
+                            if 'ultra_default_effort' not in model:
+                                # Published catalogs can contain an EMP override; never label that as official.
+                                override = body.get('ultra_reasoning_efforts', {}).get(model.get('family_id'))
+                                default = entry.get('multi_agent_reasoning_effort')
+                                fallback = next((level for level in reversed(ordered_levels) if level in concrete), 'medium')
+                                model['ultra_default_effort'] = (default if default in concrete and default in levels else 'max' if 'max' in levels else fallback) if model['ultra_reasoning_levels'] and not override else None
+                if path == '/api/config' and snapshot and upstream.status == 200:
                     status, candidate = snapshot.read('/api/config')
                     if status != 200:
                         return self.error(503, 'Candidate configuration is unavailable')
@@ -162,7 +186,10 @@ class ShadowHandler(BaseHTTPRequestHandler):
                 return self.error(401, 'management session is required')
             try:
                 if self.path.endswith('/demo'):
-                    return self.send(200, {'url':self.server.open_demo()})
+                    length=int(self.headers.get('Content-Length','0'))
+                    if not 0<length<=256:return self.error(400,'Invalid scenario')
+                    scenario=json.loads(self.rfile.read(length)).get('scenario','')
+                    return self.send(200, {'url':self.server.open_demo(scenario)})
                 info = self.server.snapshot.refresh()
                 self.send(200, {'snapshot':info, 'command_id':0})
                 return

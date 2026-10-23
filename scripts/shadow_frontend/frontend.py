@@ -1,6 +1,7 @@
 """Preview isolation around the same assets shipped by EMP."""
 import json
 from pathlib import Path
+from candidate_web import asset_file
 HERE = Path(__file__).resolve().parent
 WEB = HERE.parents[1] / 'crates/emp-app/web'
 PREVIEW_ASSETS = {'shadow-ui.js', 'shadow-drafts.js', 'shadow-service-demo.js'}
@@ -8,8 +9,11 @@ PREVIEW_ASSETS = {'shadow-ui.js', 'shadow-drafts.js', 'shadow-service-demo.js'}
 def frontend(name, bootstrap, real_context=None):
     if name in PREVIEW_ASSETS:
         return (HERE / name).read_bytes()
-    if name.endswith(('.png', '.wav')):
-        return (WEB / name).read_bytes()
+    if name.endswith(('.png', '.wav', '.gif')):
+        asset = asset_file(WEB, name)
+        if asset is None:
+            raise FileNotFoundError(name)
+        return asset.read_bytes()
     text = (WEB / name).read_text(encoding='utf-8')
     if name == 'index.html':
         text = text.replace('<title>EMP</title>', '<title>EMP · 影子预览</title>')

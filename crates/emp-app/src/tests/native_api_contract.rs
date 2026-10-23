@@ -11,6 +11,7 @@ mod incremental;
 mod installed_catalog;
 mod installed_codex;
 mod installed_tool_search;
+mod installed_tool_updates;
 mod interrupt;
 mod interrupt_http;
 mod memory;

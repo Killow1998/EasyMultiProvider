@@ -1,5 +1,8 @@
 use super::response::cli_usage;
 use super::*;
+
+#[path = "tool_history_tests.rs"]
+mod tool_history;
 use crate::services::claude_cli::ClaudeCliError;
 use emp_core::ResolvedRoute;
 

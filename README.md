@@ -59,6 +59,13 @@ setting on the same port and preserves the original settings for restoration.
 No special launch command is needed. An already-open Codex client may need a
 normal restart after its current work finishes to load changed settings.
 
+You can use external models without a Codex subscription. Add an external service
+and enable EMP; if Codex is signed out, EMP creates a key for the local connection.
+Open **EMP local key** in the service list to remove it or **Sign in to a
+subscription** with an official OpenAI device code. Successful sign-in replaces
+the local key; restart Codex Runtime afterward. Removing the key restores the
+native connection while EMP keeps running.
+
 If saved settings or their encryption key cannot be opened, EMP shows a recovery
 page with **Clear old settings and set up again** and **Quit EMP**.
 Clearing requires confirmation and creates new settings and a new master key;
@@ -157,6 +164,9 @@ request completes under **Statistics → Calls**. A loaded catalog and a success
 model call verify different parts of the connection.
 
 ### Quick tutorials
+
+Select **Tutorials** in the WebUI header, then choose a task on the left to watch
+its demonstration on the right. The ten GIFs are bundled for offline viewing.
 
 [Watch the step-by-step GIF tutorials](docs/tutorials.md) for Native model settings,
 imported subscriptions, external API services, and shared import/export controls.
@@ -416,6 +426,14 @@ See [diagnostic journal specification](docs/diagnostic-journal-spec.md).
 
 EMP can export and import password-protected `.emp` migration files.
 
+Data migration offers **Import**, **Export** and **Tunnel** from one chooser.
+Import and export share the service selection view; Back keeps your entries.
+For two computers on the same LAN, choose **Tunnel**. Select
+services on the sender and create a 49-character code, valid for a fixed five
+minutes. Paste it on the receiver, approve that receiver on the sender, then preview
+and import. EMP selects the local network automatically. Sending and receiving
+share one page. Credentials are encrypted in transit and each code works once.
+
 Choose the `.emp` file, enter its export password, then click **Open migration
 package**. Review the services before clicking **Import**. The preview and demo
 have a Back button that retains the chosen file and password; closing discards
@@ -465,6 +483,9 @@ cargo build --locked --release -p emp-app --bin EMP
 ~~~
 
 Run the tests with `cargo test --locked --workspace --all-targets`. The Rust test suite is self-contained: it uses temporary directories and local fake upstreams, and never touches your real `~/.codex` or calls a real provider.
+
+For the daily edit/check/E2E loop, cache retention and CI handoff, see the
+[Rust development SOP](docs/development-sop.md) (Simplified Chinese).
 
 ## Configuration locations
 

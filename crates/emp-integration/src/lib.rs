@@ -12,6 +12,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
+pub mod local_auth;
 pub mod preferences;
 pub mod runtime;
 pub mod search;

@@ -6,9 +6,98 @@ the window. The engine used by the CLI, App or IDE is the compatibility input,
 independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 
-## Current acceptance on 2026-10-16 UTC
+## Current acceptance on 2026-10-23 UTC
 
-The maintenance target is **0.154–0.163**, following the official stable
+The maintenance target is **0.155–0.164**, following the official stable
+[0.164.0 release](https://github.com/openai/codex/releases/tag/rust-v0.164.0)
+(2026-10-23 04:48:10 UTC). Series 0.154 remains in the historical record below.
+
+The current development candidate based on EMP 0.13.13 passed the created-history
+contract with official Linux engines **0.155.1, 0.156.1, 0.157.1, 0.158.0,
+0.159.3, 0.160.1, 0.161.0, 0.162.1, 0.163.0 and 0.164.0**. Each passed
+51 assertions: real MCP before/after external compaction; parent, early/later
+forks and grandchild; selected-history migration; native resumes; exact native
+settings and backup preservation; and an unchanged second restore. Downloaded
+archives and executables were verified against official digests; installed
+engine hashes and the candidate binary hash were recorded. Engines and fixture
+state were removed after each run. All requests used synthetic credentials and
+loopback upstreams.
+
+Codex **0.164.0** also passed **49 native API contracts**, including seven
+real-engine checks. The new check switches between models with changed Code Mode
+instructions, switches to direct tools, restores Code Mode and resumes the saved
+model in a new process. All five turns complete through Chat Completions,
+Anthropic Messages and external Responses. The actual rollout must contain
+incremental declarations and a typed removal notice. Existing checks cover
+catalog refresh, proxy bypass, steering, WebSocket interrupt/continuation,
+same-named Tool Search and standalone image generation/editing. The related
+protocol, router and Claude CLI suites pass **57**, **8** and **60** tests.
+
+### Code Mode collaboration
+
+The official standalone Linux **0.164.0** CLI and matching
+`codex-code-mode-host` passed nine additional cases: external Responses,
+Chat Completions and Anthropic Messages, each with cross-service subagents
+Off, On-demand recovery and On. The real engine executes `spawn_agent`,
+`send_message`, `followup_task` and `wait_agent` through Code Mode. Acceptance
+requires the selected child model's actual completion, delivery of its latest
+result to the parent, and that result surviving parent resume in a new process.
+The upstreams and credentials are synthetic; no subscription inference is used.
+
+Saved typed `agent_message` items preserve plaintext task/message content and
+the correct sender/recipient, matching upstream
+[#55633](https://github.com/openai/codex/pull/55633). On-demand recovery therefore
+makes **zero recovery calls** for these messages. Off still rejects the external
+child before any external inference and returns the settings guidance. On also
+passes; this check does not measure its speed. Older encrypted messages still
+use the existing on-demand recovery path.
+
+Run from the repository root:
+
+```sh
+python3 -B -m scripts.code_mode_collaboration_acceptance \
+  --codex /path/to/codex --emp /path/to/EMP --output /path/to/evidence
+```
+
+Install the matching official `codex-code-mode-host` beside the standalone CLI: the CLI
+archive alone does not include it and Code Mode can otherwise fall back to direct
+tools. The harness fails closed on that fallback, isolates homes and loopback
+listeners, and records binary hashes, requests, events and typed agent messages.
+It uses `wait_agent` to await parent delivery: a child's completed turn alone
+does not establish that its final message has reached the parent's next input.
+Child acceptance also waits for the matching `turn/completed` event and saved
+turn status to agree; an immediate history read can precede the final rollout write.
+
+### Incremental catalog updates
+
+Codex 0.164 enables incremental tools by default. Its
+[catalog implementation](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/context/world_state/top_level_tools.rs)
+appends revised definitions and removal notices to existing history. EMP now
+resolves that catalog chronologically: later declarations replace the same
+identity, removed tools stop being offered, and a later declaration can restore
+them. Historical calls/results and namespace aliases remain intact. Conflicting
+definitions in the same batch still fail before forwarding. Endpoints supporting
+in-place loading retain unchanged loading boundaries; obsolete declarations are
+removed only from the projected request, never from saved history.
+
+Removal parsing uses Codex's per-content classification when present. For custom
+providers, Codex's
+[client](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/client.rs)
+strips that internal metadata; EMP then recognizes the complete official
+developer-notice format. User messages, quoted fragments and differently
+classified content cannot remove tools. The local Claude CLI response validator
+uses the same removal parser and rejects removed tools or superseded tool kinds.
+
+Async compaction and App Server WebSocket compression remain upstream
+`UnderDevelopment` features, disabled by default in the
+[0.164 feature catalog](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/features/src/lib.rs).
+The existing background-compaction Beta setting and acceptance scope are
+unchanged. App Server compression is separate from EMP's Responses transport.
+The upstream context-estimation fix does not change EMP's TPS or usage formulas.
+
+## Acceptance on 2026-10-16 UTC
+
+The maintenance target at that checkpoint was **0.154–0.163**, following the official stable
 [0.163.0 release](https://github.com/openai/codex/releases/tag/rust-v0.163.0)
 (2026-10-15 21:30:38 UTC). Series 0.153 remains in the historical record below.
 
@@ -251,7 +340,7 @@ Use the [native restore harness](../scripts/native_restore_acceptance/README.md)
 for isolated behavior checks. Record the actual engine version and tested paths
 when moving the maintenance window.
 
-Run the real-engine Tool Search contract with an official Linux 0.163.0 binary:
+Run the real-engine Tool Search contract with an official Linux 0.163+ binary:
 
 ```sh
 EMP_TEST_CODEX_CLI=/path/to/codex cargo test -p emp-app --lib \
@@ -262,6 +351,15 @@ EMP_TEST_CODEX_CLI=/path/to/codex cargo test -p emp-app --lib \
 The contract creates disposable Codex homes, randomized loopback EMP/upstream
 ports and local read fixtures. It disables plugins and uses synthetic keys; it
 neither uses the installed EMP service nor consumes real provider quota.
+
+For the catalog update/removal and saved-model resume contract, use an official
+Linux 0.164+ binary:
+
+```sh
+EMP_TEST_CODEX_CLI=/path/to/codex cargo test -p emp-app --lib \
+  installed_codex_switches_and_resumes_incremental_tool_revisions \
+  -- --ignored --nocapture
+```
 
 ## Runtime discovery and update acceptance
 

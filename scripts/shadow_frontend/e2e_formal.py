@@ -43,9 +43,10 @@ def main():
                 browser.execute('closeModal();openServiceChooser();')
                 assert browser.execute('return document.getElementById("modal_back").hidden;')
                 browser.execute('document.querySelector("[data-ui-action=service-custom-api]").click();')
-                assert browser.execute('const controls=[document.getElementById("modal_back"),document.querySelector(".modal-close")];return controls.every(n=>getComputedStyle(n).borderTopWidth==="0px");')
-                browser.execute('document.getElementById("modal_back").click();closeModal();')
-        checks.append('Formal service/account/model presentation, physical Reset and borderless navigation in EN/ZH and light/dark')
+                browser.execute('document.getElementById("modal_back").click();')
+                assert browser.execute('return !!document.querySelector("[data-ui-action=service-custom-api]") && document.getElementById("modal_back").hidden;')
+                browser.execute('closeModal();')
+        checks.append('Formal service/account/model presentation, physical Reset and return to the chooser in EN/ZH and light/dark')
         browser.execute('setLanguage("zh-CN");setTheme("light");editProvider("demo");')
         assert browser.execute('const key=document.getElementById("modal_provider_key");return key.type==="text" && key.placeholder==="******";')
         before=(source/'config.json').read_bytes()
@@ -95,7 +96,7 @@ def main():
         browser.navigate(target_url)
         wait_for(lambda:browser.execute('return !!state?.providers?.length;'))
         target_headers['X-EMP-Session']=json.loads((target/'state/web-session.json').read_text())['token']
-        browser.execute('managementEvents.stop();clearInterval(quotaStateTimer);quotaStateTimer=null;migration.open();')
+        browser.execute('managementEvents.stop();clearInterval(quotaStateTimer);quotaStateTimer=null;migration.open();document.querySelector("[data-migration-mode=import]").click();')
         target_before=(target/'config.json').read_bytes()
         browser.execute('''
           const input=document.getElementById('shadow_migration_file');const data=Uint8Array.from(atob(arguments[0]),c=>c.charCodeAt(0));
@@ -108,7 +109,7 @@ def main():
         browser.execute('const field=document.querySelector("[data-migration-name]");field.value="Imported Alias";field.dispatchEvent(new Event("input",{bubbles:true}));closeModal();')
         assert (target/'config.json').read_bytes()==target_before
         checks.append('Actual encrypted package opens without writes or credential exposure; cancel discards inline names')
-        browser.execute('migration.open();const input=document.getElementById("shadow_migration_file"),transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(arguments[0]),c=>c.charCodeAt(0))],"fixture.emp"));input.files=transfer.files;document.getElementById("shadow_import_password").value="formal-fixture-password";document.querySelector("[data-migration-decode]").click();',bundle)
+        browser.execute('migration.open();document.querySelector("[data-migration-mode=import]").click();const input=document.getElementById("shadow_migration_file"),transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(arguments[0]),c=>c.charCodeAt(0))],"fixture.emp"));input.files=transfer.files;document.getElementById("shadow_import_password").value="formal-fixture-password";document.querySelector("[data-migration-decode]").click();',bundle)
         wait_for(lambda:browser.execute('return !!document.querySelector("[data-migration-name]") && !document.getElementById("modal_submit").disabled;'),seconds=90)
         browser.execute('const field=document.querySelector("[data-migration-name]");field.value="Imported Alias";field.dispatchEvent(new Event("input",{bubbles:true}));document.getElementById("modal_submit").click();')
         wait_for(lambda:browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");'),seconds=60)
@@ -119,7 +120,7 @@ def main():
         assert stored['providers'][0]['name']=='Demo'
         checks.append('One Import saves the inline name and verified independent connection; existing service and model routes remain')
         for theme in ['light','dark']:
-            browser.execute('setTheme(arguments[0]);migration.open();document.querySelector("[data-migration-demo]").click();',theme)
+            browser.execute('setTheme(arguments[0]);migration.open();document.querySelector("[data-migration-mode=import]").click();document.querySelector("[data-migration-demo]").click();',theme)
             wait_for(lambda:browser.execute('return !!document.querySelector("[data-migration-name]") && !document.getElementById("modal_submit").disabled;'))
             before=(target/'config.json').read_bytes()
             browser.execute('document.getElementById("modal_submit").click();')

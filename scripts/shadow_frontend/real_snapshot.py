@@ -23,7 +23,7 @@ def database_copy(source, target):
 
 
 def context_settings(home, target):
-    """Copy only public context preferences, never auth or provider configuration."""
+    """Copy only public context/memory preferences, never auth or provider configuration."""
     path = home / 'config.toml'
     if not path.exists():
         return
@@ -42,6 +42,23 @@ def context_settings(home, target):
         for key in ['enabled', 'model_async_compact_threshold_percent']:
             if isinstance(feature.get(key), (bool, int)):
                 lines.append(key + ' = ' + json.dumps(feature[key]))
+    memory = settings.get('memories', {})
+    journal = home / 'easy-multi-provider/integration/memory-model.json'
+    if journal.exists():
+        if journal.is_symlink() or not journal.is_file():
+            raise ValueError('Memory preference journal must be a regular file')
+        lease = json.loads(journal.read_text())
+        if lease.get('status') != 'restored':
+            if (lease.get('schema') != 'easy-multi-provider.codex-preference' or
+                    lease.get('version') != 1 or lease.get('memory') is not True or
+                    Path(lease.get('config_path', '')).resolve() != path.resolve()):
+                raise ValueError('Memory preference journal does not match the source')
+            original = lease.get('original')
+            memory = tomllib.loads(original).get('value', {}) if isinstance(original, str) else {}
+    names = {key:memory[key] for key in ['extract_model','consolidation_model'] if isinstance(memory.get(key), str)}
+    if names:
+        lines.append('[memories]')
+        lines.extend(key + ' = ' + json.dumps(value) for key,value in names.items())
     (target / 'config.toml').write_text('\n'.join(lines) + '\n')
 
 

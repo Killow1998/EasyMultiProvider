@@ -333,7 +333,20 @@ mod tests {
         assert_eq!(inventory.prepared_executable().unwrap().path(), binary);
 
         std::fs::remove_file(&binary).unwrap();
-        assert!(inventory.prepared_executable().is_none());
+        // A system-wide desktop runtime may still be available as a fallback.
+        assert!(
+            inventory
+                .prepared_executable()
+                .is_none_or(|prepared| prepared.path() != binary)
+        );
+        let refreshed = inventory.snapshot(false);
+        let configured = refreshed["runtimes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|runtime| runtime["source"] == "configured")
+            .unwrap();
+        assert_eq!(configured["available"], false);
     }
 
     #[test]
@@ -351,7 +364,14 @@ mod tests {
             Some(OsString::new()),
             Vec::new(),
         );
-        assert!(inventory.prepared_executable().is_none());
+        let snapshot = inventory.snapshot(false);
+        assert!(
+            snapshot["runtimes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|runtime| runtime["source"] == "codex_app")
+        );
     }
 
     #[test]

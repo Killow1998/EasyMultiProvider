@@ -127,7 +127,10 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
         }
         integration.owned.store(true, Ordering::Release);
         if super::integration::sync_features(state).is_err() {
-            let _ = manager.restore();
+            if manager.restore().is_ok_and(|result| result.ok()) {
+                let _ =
+                    emp_integration::local_auth::restore(&state.backend.accounts.native_auth_path);
+            }
             return Err(());
         }
         mark_pending(state, "emp", "EMP configuration applied")?;

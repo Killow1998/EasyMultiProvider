@@ -1,5 +1,6 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  'services.auth_import_help':['选择 auth.json 文件，或粘贴完整内容。','Choose an auth.json file or paste its full contents.'],
   "services.cli_available": ["已找到 Claude Code CLI，EMP 可以访问。","Claude Code CLI is available to EMP."],
   "services.cli_unavailable": ["未找到可用的 Claude Code CLI。请安装或检查 EMP 是否能够访问。","Claude Code CLI was not found. Install it or check that EMP can access it, then reopen this form."],
   "services.name": ["名称","Name"],
@@ -24,7 +25,6 @@ registerUiCopy({
   "services.auth_json_contains_invalid_json": ["auth.json 内容不是有效 JSON","auth.json contains invalid JSON"],
   "services.auth_json_must_contain_a_json_object": ["auth.json 内容需要是 JSON 对象","auth.json must contain a JSON object"],
   "services.import_codex_subscription": ["导入 Codex 订阅","Import Codex subscription"],
-  "services.selected": ["已选择","Selected"],
   "services.auth_json_contents": ["auth.json 内容","auth.json contents"],
   "services.paste_the_complete_auth_json_contents": ["粘贴 auth.json 的完整内容","Paste the complete auth.json contents"],
   "services.for_example_work_account": ["例如 工作账号","for example Work account"],

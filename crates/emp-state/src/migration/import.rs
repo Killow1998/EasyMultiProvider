@@ -247,6 +247,18 @@ fn merge_import(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    if let Some(efforts) = source
+        .get("ultra_reasoning_efforts")
+        .and_then(Value::as_object)
+    {
+        let mut merged = target
+            .get("ultra_reasoning_efforts")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        merged.extend(efforts.clone());
+        target["ultra_reasoning_efforts"] = Value::Object(merged);
+    }
     if let Some(source_presentations) = source
         .get("catalog_family_presentations")
         .and_then(Value::as_object)

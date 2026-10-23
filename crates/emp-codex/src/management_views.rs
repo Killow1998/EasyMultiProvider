@@ -14,6 +14,7 @@ pub fn model_views(
     let mut baseline_config = config.clone();
     baseline_config["catalog_presentations"] = json!({});
     baseline_config["catalog_family_presentations"] = json!({});
+    baseline_config["ultra_reasoning_efforts"] = json!({});
     let baseline = build_catalog(&baseline_config, native, account_catalogs, duplicates);
     let models = catalog_models(config, native, &catalog, &baseline);
     let families = catalog_families(config, &models);
@@ -65,16 +66,44 @@ fn catalog_models(config: &Value, native: &Value, catalog: &Value, baseline: &Va
         } else {
             ("native", "", native_model(native,route), route, true)
         };
-        let default_name = array(baseline,"models").iter().find(|entry|text(entry,"slug")==route)
-            .and_then(|entry|nonempty(entry,"display_name")).unwrap_or(route);
+        let original = array(baseline,"models").iter().find(|entry|text(entry,"slug")==route).unwrap_or(&Value::Null);
+        let default_name = nonempty(original,"display_name").unwrap_or(route);
         json!({
             "id":route, "display_name":nonempty(model,"display_name").unwrap_or(route),
             "default_display_name":strip_context_prefix(default_name), "context_window":usable_context(model),
             "source_type":kind, "source_id":source_id, "family_id":family_identity(source,fallback),
             "family_verified":verified,
+            "ultra_reasoning_levels":if kind == "provider" { Vec::new() } else { crate::merged_catalog::ultra_reasoning_levels(model) },
+            "ultra_default_effort":if kind == "provider" { None } else { ultra_default_effort(original) },
             "supports_reasoning_summaries":model.get("supports_reasoning_summary_parameter")==Some(&Value::Bool(true)),
         })
     }).collect()
+}
+
+// Match Codex's Ultra resolution: advertised override, max, then last concrete preset.
+fn ultra_default_effort(model: &Value) -> Option<&str> {
+    let levels = array(model, "supported_reasoning_levels");
+    if !levels.iter().any(|level| text(level, "effort") == "ultra") {
+        return None;
+    }
+    nonempty(model, "multi_agent_reasoning_effort")
+        .filter(|effort| {
+            *effort != "ultra" && levels.iter().any(|level| text(level, "effort") == *effort)
+        })
+        .or_else(|| {
+            levels
+                .iter()
+                .find(|level| text(level, "effort") == "max")
+                .map(|_| "max")
+        })
+        .or_else(|| {
+            levels
+                .iter()
+                .rev()
+                .map(|level| text(level, "effort"))
+                .find(|effort| !effort.is_empty() && *effort != "ultra")
+        })
+        .or(Some("medium"))
 }
 
 /// Keep native/account/provider preference and first-seen family ordering.

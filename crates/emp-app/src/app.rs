@@ -86,6 +86,9 @@ pub(crate) struct BackendState {
     pub(crate) usage: crate::services::usage::UsageState,
     pub(crate) diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
     pub(crate) migration_previews: crate::services::migration::MigrationPreviews,
+    pub(crate) native_login: crate::services::native_login::DeviceLoginSession,
+    pub(crate) account_login: crate::services::native_login::DeviceLoginSession,
+    pub(crate) lan_migration: crate::services::migration::lan::LanMigration,
 }
 
 pub(crate) struct TransportState {
@@ -200,6 +203,9 @@ impl BackendState {
             auto_review: Default::default(),
             memory_status: Default::default(),
             migration_previews: Default::default(),
+            native_login: Default::default(),
+            account_login: Default::default(),
+            lan_migration: Default::default(),
             claude_quota: crate::services::claude_cli::quota::LocalQuota::new(
                 state_root.join("claude_quota_history.sqlite3"),
             ),

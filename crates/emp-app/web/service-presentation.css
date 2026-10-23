@@ -19,13 +19,11 @@ body[data-shadow-refinements] .shadow-context-row,body[data-shadow-refinements] 
 .shadow-context-control input{min-width:0;margin:0}
 .shadow-help{display:inline-grid;place-items:center;flex:none;border:1px solid var(--border-strong);border-radius:50%;width:20px;height:20px;min-height:20px;padding:0;background:transparent;color:var(--muted);font-size:12px}
 .shadow-feedback{position:fixed;z-index:10000;max-width:min(340px,calc(100vw - 24px));padding:10px 12px;border:1px solid var(--border-strong);border-radius:7px;background:var(--panel);box-shadow:0 5px 18px #0002;color:var(--text);font-size:12px;line-height:1.6;white-space:pre-line;pointer-events:none}
-body[data-shadow-refinements] #notification{background:var(--panel);border:1px solid var(--border-strong);border-radius:7px;box-shadow:0 5px 18px #0002}
 body[data-shadow-refinements] .subscription-model-context{display:flex;align-items:center;gap:8px}
 body[data-shadow-refinements] .subscription-model-context>small{display:none}
 body[data-shadow-refinements] .presentation-service-error-bubble{border-radius:7px;box-shadow:0 5px 18px #0002;font-size:12px;line-height:1.6}
 @container services (max-width:720px){body[data-shadow-refinements][data-quota-style=ring] #services .subscription-plan{display:none}body[data-shadow-refinements][data-quota-style=ring] #services .service-identity{min-width:0;max-width:100%}body[data-shadow-refinements][data-quota-style=ring] #services .account-summary{display:flex;max-width:100%;overflow:hidden}body[data-shadow-refinements][data-quota-style=ring] #services .account-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}body[data-shadow-refinements][data-quota-style=ring] #services .account-segment:not(.account-name){flex:none}}
 
-body[data-shadow-refinements] #notification[hidden]{display:none}
 
 /* Detail values share one line box, regardless of whether they contain inputs. */
 .shadow-compact-account>div>.account-value{display:flex;align-items:center;flex:1;font-size:13px}

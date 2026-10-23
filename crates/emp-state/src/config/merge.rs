@@ -252,7 +252,9 @@ fn merge_web_update_at_time(
         "external_collaboration",
         "image_routing",
         "memory_model",
+        "memory_extraction_model",
         "background_compaction",
+        "ultra_reasoning_efforts",
     ] {
         if !merged_object.contains_key(key)
             && let Some(value) = current.get(key)

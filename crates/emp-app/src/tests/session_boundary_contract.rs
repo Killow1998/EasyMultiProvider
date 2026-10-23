@@ -562,6 +562,16 @@ fn caller_authorization_tracks_the_live_native_token() {
     assert!(!valid_caller_authorization(Some("Bearer "), &auth));
     assert!(!valid_caller_authorization(Some(""), &auth));
     assert!(!valid_caller_authorization(None, &auth));
+    std::fs::write(
+        &auth,
+        br#"{"tokens":{"access_token":null},"OPENAI_API_KEY":"emp-local-example"}"#,
+    )
+    .expect("write API authentication");
+    assert!(valid_caller_authorization(
+        Some("Bearer emp-local-example"),
+        &auth
+    ));
+    assert!(!valid_caller_authorization(Some("Bearer rotated"), &auth));
 }
 
 #[test]

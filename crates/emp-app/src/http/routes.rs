@@ -106,6 +106,19 @@ pub(crate) fn handle_connection(
         match Some(request) {
             Some(request)
                 if request.method == RequestMethod::Post
+                    && (request.raw_path().starts_with("/api/native/login/")
+                        || request.raw_path().starts_with("/api/accounts/login/")) =>
+            {
+                Some(crate::api::native_login::request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
                     && matches!(
                         request.raw_path(),
                         "/api/updates/check" | "/api/updates/install"
@@ -288,6 +301,11 @@ pub(crate) fn handle_connection(
                             | "/api/migration/decode"
                             | "/api/migration/preview"
                             | "/api/migration/demo"
+                            | "/api/migration/lan/start"
+                            | "/api/migration/lan/status"
+                            | "/api/migration/lan/approve"
+                            | "/api/migration/lan/cancel"
+                            | "/api/migration/lan/receive"
                     ) =>
             {
                 Some(management_migration_request(

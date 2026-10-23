@@ -14,6 +14,42 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/copy-models.js" => include_bytes!("../web/copy-models.js"),
         "/assets/copy-reports.js" => include_bytes!("../web/copy-reports.js"),
         "/assets/copy-transfers.js" => include_bytes!("../web/copy-transfers.js"),
+        "/assets/copy-tutorials.js" => include_bytes!("../web/copy-tutorials.js"),
+        "/assets/tutorials.js" => include_bytes!("../web/tutorials.js"),
+        "/assets/tutorials.css" => include_bytes!("../web/tutorials.css"),
+        "/assets/copy-notifications.js" => include_bytes!("../web/copy-notifications.js"),
+        "/assets/notifications.js" => include_bytes!("../web/notifications.js"),
+        "/assets/notifications.css" => include_bytes!("../web/notifications.css"),
+        "/assets/tutorial-00-native-context.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/00-native-context.gif")
+        }
+        "/assets/tutorial-00-native-name.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/00-native-name.gif")
+        }
+        "/assets/tutorial-00-remove-subscription.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/00-remove-subscription.gif")
+        }
+        "/assets/tutorial-01-add-service.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/01-add-service.gif")
+        }
+        "/assets/tutorial-02-import-service.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/02-import-service.gif")
+        }
+        "/assets/tutorial-03-export-service.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/03-export-service.gif")
+        }
+        "/assets/tutorial-04-remove-service.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/04-remove-service.gif")
+        }
+        "/assets/tutorial-05-change-context.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/05-change-context.gif")
+        }
+        "/assets/tutorial-06-rename.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/06-rename.gif")
+        }
+        "/assets/tutorial-07-context-label.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/07-context-label.gif")
+        }
         "/assets/copy-recovery.js" => include_bytes!("../web/copy-recovery.js"),
         "/assets/service-presentation.js" => include_bytes!("../web/service-presentation.js"),
         "/assets/service-presentation.css" => include_bytes!("../web/service-presentation.css"),
@@ -48,6 +84,11 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
             include_bytes!("../web/collaboration-comparison.js")
         }
         "/assets/routing-settings.js" => include_bytes!("../web/routing-settings.js"),
+        "/assets/ultra-settings.js" => include_bytes!("../web/ultra-settings.js"),
+        "/assets/copy-login.js" => include_bytes!("../web/copy-login.js"),
+        "/assets/copy-lan.js" => include_bytes!("../web/copy-lan.js"),
+        "/assets/migration-lan.js" => include_bytes!("../web/migration-lan.js"),
+        "/assets/native-login.js" => include_bytes!("../web/native-login.js"),
         "/assets/diagnostics.js" => include_bytes!("../web/diagnostics.js"),
         "/assets/style.css" => include_bytes!("../web/style.css"),
         "/assets/brand-colors.js" => include_bytes!("../web/brand-colors.js"),
@@ -68,6 +109,8 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "HTTP/1.1 200 OK",
         if path.ends_with(".css") {
             "text/css; charset=utf-8"
+        } else if path.ends_with(".gif") {
+            "image/gif"
         } else {
             "text/javascript; charset=utf-8"
         },

@@ -6,6 +6,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 
+def asset_file(web, name):
+    if '/' in name or '\\' in name or name in {'', '.', '..'}:
+        return None
+    if name.startswith('tutorial-') and name.endswith('.gif'):
+        return web.parents[2] / 'docs/assets/tutorials' / name.removeprefix('tutorial-')
+    return web / name
+
+
 def candidate_frontend(stack, backend, web, index_extra="", port=0, index_head="", pages=None):
     destination = urlsplit(backend)
 
@@ -23,10 +31,11 @@ def candidate_frontend(stack, backend, web, index_extra="", port=0, index_head="
                 status, content_type, body = 403, 'application/json', b'{"error":"preview_only"}'
             elif self.command == 'GET' and (path == '/' or path.startswith('/assets/')):
                 name = 'index.html' if path == '/' else path.removeprefix('/assets/')
-                if '/' in name or not (web / name).is_file():
+                asset = asset_file(web, name)
+                if asset is None or not asset.is_file():
                     self.send_error(404)
                     return
-                body = (web / name).read_bytes()
+                body = asset.read_bytes()
                 if name == "index.html" and index_extra:
                     extra = index_extra() if callable(index_extra) else index_extra
                     body = body.replace(b"</body>", extra.encode() + b"</body>")
@@ -45,7 +54,7 @@ def candidate_frontend(stack, backend, web, index_extra="", port=0, index_head="
                 if 'Origin' in self.headers:
                     headers['Origin'] = backend
                 # Unoptimized scrypt is slow; preview generation keeps its normal deadline.
-                timeout = 90 if path in {'/api/migration/decode', '/api/migration/export'} else 15
+                timeout = 90 if path in {'/api/migration/decode', '/api/migration/export', '/api/migration/lan/start', '/api/migration/lan/receive'} else 15
                 connection = http.client.HTTPConnection(destination.hostname, destination.port, timeout=timeout)
                 try:
                     connection.request(self.command, self.path, body=body, headers=headers)

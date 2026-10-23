@@ -20,6 +20,11 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     return `<button type="button" class="secondary" ${glyph ? `data-icon="${glyph}"` : ''} data-ui-action="${name}" data-id="${esc(id)}" ${disabled ? 'disabled' : ''} ${extra}>${label}</button>`;
   }
   function accountRow(account) {
+    if(account.native && ['local_key','missing','api_key','unavailable'].includes(account.auth_mode)) {
+      const label=account.auth_mode==='local_key'?tr('login.local_key'):'Native';
+      const summary=`<button type="button" class="account-summary service-summary" data-ui-action="native-login" data-id="@native" aria-haspopup="dialog" title="${esc(tr('login.mode_'+account.auth_mode))}"><span class="account-segment account-name"><span>${esc(label)}</span></span><span class="account-segment service-type">${tr(account.auth_mode==='local_key'?'login.local_connection':'login.connection')}</span></button>`;
+      return `<article class="entity-card service-card service-account" data-service="account:@native"><div class="service-main">${serviceIcon('account','@native',label,'codex',false)}<div class="service-identity">${summary}</div></div><div class="service-actions">${action('native-login','@native',tr('login.sign_in'),'')}</div></article>`;
+    }
     const busy = refreshingAccounts.has(account.id), duplicate = account.duplicate && account.duplicate_of === '当前 Codex 登录';
     const label = account.native ? 'Native' : account.name || account.id;
     const status = !account.credential_set ? tr("services.not_signed_in") : account.credential_status === 'invalid' ? tr("services.sign_in_expired") : '';

@@ -281,12 +281,12 @@ by ETags, fingerprints, usage IDs and match keys remains exact.
    run real operations, not remain an empty skeleton.
 4. Review the integration draft in place and retain working lease logic.
    Snapshot-only operations are not implementations of reload or verification.
-5. Record and clean rebuildable target artifacts once. Use one target and
-   consistent feature/profile flags; reduce dependency debug information and
-   use limited application debug information in dev/test. Retain a useful
-   incremental cache rather than cleaning every test. Measure after rebuilding
-   before claiming savings. Preserve source, fixtures, installed programs,
-   user state and toolchains.
+5. Follow the [Rust development SOP](development-sop.md): keep one stable target
+   per active worktree and consistent toolchain/feature/profile/incremental flags.
+   Use limited application debug information and no dependency debug information
+   in dev/test. Retain active compilation caches; inspect retired targets first
+   when disk space is low. Measure rebuilds before claiming savings. Preserve
+   source, fixtures, installed programs, user state and toolchains.
 
 Root acceptance: explicit ownership, a thin entry and a running Rust server
 that still serves unchanged assets and existing HTTP/SSE/WS operations.

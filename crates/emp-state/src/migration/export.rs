@@ -281,6 +281,7 @@ pub fn select_export_config(
         }
         if !selected.contains(ExportGroup::Native) && !selected.contains(ExportGroup::Subscriptions)
         {
+            object.insert("ultra_reasoning_efforts".to_owned(), serde_json::json!({}));
             object.insert(
                 "subscription_search".to_owned(),
                 serde_json::json!({"enabled": false, "account_id": ""}),

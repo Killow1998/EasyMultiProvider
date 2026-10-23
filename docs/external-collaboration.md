@@ -11,8 +11,45 @@ has three modes, persisted as `external_collaboration`:
 | Mode | Value | Behavior |
 | --- | --- | --- |
 | Off (default) | `"off"` | Only Native GPT subscription subagents are allowed. External delegation returns an error explaining where to enable it. |
-| On-demand recovery | `"on_demand"` | Keep native collaboration tools. Recover encrypted subagent tasks or agent messages in parent history with GPT-6 Luna, low effort, on their original subscription before forwarding to an external model. |
-| On | `"on"` | Present plaintext collaboration tools to Native models, permitting external children without a recovery inference. Native generation can slow down. |
+| On-demand recovery | `"on_demand"` | Keep official collaboration tools and forward plaintext directly. Recover only encrypted subagent tasks or agent messages with GPT-6 Luna, low effort, on their original subscription. |
+| On | `"on"` | Rewrite native collaboration tools for plaintext compatibility, permitting external children without a recovery inference. The speed measurements below distinguish client versions and test scope. |
+
+### Measurements by date, client version and scope
+
+Codex **0.164.0 Code Mode** emits readable collaboration messages. On-demand
+recovery forwards these directly without a recovery inference. Existing encrypted
+tasks and history still use the original-account recovery path. A separate
+Linux standalone acceptance matrix passed nine cases: Responses, Chat Completions
+and Anthropic Messages, each in Off, On-demand recovery and On. Enabled cases
+exercise child creation, message delivery, completion and parent resume; Off
+rejects external children. These use synthetic upstreams and test protocol behavior.
+
+**2026-10-23 UTC — parent-model speed.** The official standalone CLI and Code Mode
+host ran GPT-6.1 Sol, xhigh, standard tier, with one subscription and the same
+integers 1–1024 task. Twelve interleaved requests completed: three per arm. The
+table reports medians; generation TPS measures first-to-last text delta time.
+
+| Route | Generation TPS | First-text delay | Turn time |
+| --- | ---: | ---: | ---: |
+| Direct | 54.13 | 8.05 s | 47.58 s |
+| EMP Off | 56.38 | 7.34 s | 43.89 s |
+| EMP On-demand recovery | 57.52 | 7.77 s | 43.92 s |
+| EMP On | 52.56 | 7.26 s | 48.18 s |
+
+This cohort contains no external child inference. It did not reproduce the
+earlier halving of speed; all samples, including On's 85.26 TPS run, are retained.
+The UI divides each group median by the simultaneous direct-control median.
+Three samples per arm describe this run, not a fixed speed multiplier.
+
+**2026-10-18 — Codex 0.163.0 child workflows.** The historical UI tables use at
+least ten valid pairs per model and compare dispatch, task recovery, child
+execution and result return. The imported-subscription table separately uses
+twenty matched pairs per effort. These older ratios retain their original scope
+and calculation. Dates, client versions, baselines and measured work differ from
+the 0.164 parent-output cohort; the results are not pooled or used to claim a
+version-induced speed change.
+
+### Request and history handling
 
 Ordinary external conversations without encrypted agent messages and the
 separate Auto Review routing setting are unaffected. A parent conversation can

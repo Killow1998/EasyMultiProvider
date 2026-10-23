@@ -60,11 +60,11 @@ def main():
         assert stored()['features']['async_compaction']['model_async_compact_threshold_percent'] == 73
         browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
         assert set(browser.execute('return [...document.querySelectorAll("#routing_memory_model option")].map(node=>node.value);')) == {'', 'gpt-6.1-sol','gpt-6-luna'}
-        browser.execute('document.getElementById("routing_memory_model").value="gpt-6-luna";document.getElementById("modal_submit").click();')
+        browser.execute('document.getElementById("routing_memory_model").value="gpt-6-luna";document.getElementById("routing_memory_extraction_model").value="gpt-6.1-sol";document.getElementById("modal_submit").click();')
         wait_for(lambda: browser.execute('return !document.getElementById("routing_memory_model") && state.memory_model==="gpt-6-luna";'))
         assert stored()['memories'] == {'generate_memories':False,'use_memories':False,
-            'extract_model':'gpt-6-luna','consolidation_model':'gpt-6-luna'}
-        checks.append('Saving applies both memory model budgets and background activation, preserving memory permissions and the user threshold')
+            'extract_model':'gpt-6.1-sol','consolidation_model':'gpt-6-luna'}
+        checks.append('Saving applies independent memory models and background activation, preserving memory permissions and the user threshold')
         for language in ['zh-CN','en']:
             for width in [390,1280]:
                 request(browser.base + '/window/rect',{'width':width,'height':900})
@@ -81,14 +81,15 @@ def main():
                 browser.execute('document.getElementById("background-compaction-label").parentNode.querySelector(".shadow-help").focus();')
                 wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden;'))
                 text = browser.execute('return document.getElementById("shadow_feedback").textContent;')
-                assert '73%' in text and 'GA' in text and '0.163' in text
-                assert ('重启 Codex' if language == 'zh-CN' else 'restart Codex') in text
+                assert '73%' in text and '0.163' in text
+                assert ('重启 Codex' if language == 'zh-CN' else 'restart Codex').lower() in text.lower(), (language,text)
                 browser.escape()
                 browser.execute('document.querySelector("[aria-labelledby=settings-native-title] [data-ui-action=routing-settings]").scrollIntoView({block:"center"});')
                 assert browser.execute('const box=document.querySelector("[aria-labelledby=settings-native-title] [data-ui-action=routing-settings]").getBoundingClientRect();return box.top>=0 && box.bottom<=innerHeight;')
                 screenshot(browser,args.output,f'native-settings-{language}-{width}')
                 browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
                 assert browser.execute('return document.getElementById("routing_memory_model").value;') == 'gpt-6-luna'
+                assert browser.execute('return document.getElementById("routing_memory_extraction_model").value;') == 'gpt-6.1-sol'
                 browser.execute('document.querySelector("label[for=routing_memory_model]").parentNode.querySelector(".shadow-help").focus();')
                 wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden;'))
                 text = browser.execute('return document.getElementById("shadow_feedback").textContent;')
@@ -116,14 +117,14 @@ def main():
         checks.append('Chinese/English at narrow/desktop widths: grouped settings keep local display choices, service controls and a single native routing entry; context and Beta help fit without overflow')
         browser.execute('closeModal();openSettings();document.querySelector("[data-ui-action=routing-settings]").click();window.savedFetch=window.fetch;window.fetch=(path,options)=>String(path)==="/api/config"&&options?.method==="POST"?Promise.resolve(new Response(JSON.stringify({error:{message:"Fixture save failure"}}),{status:500})):window.savedFetch(path,options);document.getElementById("routing_memory_model").value="gpt-6.1-sol";document.getElementById("modal_submit").click();')
         wait_for(lambda: browser.execute('return !!document.getElementById("modal_status").textContent && !document.getElementById("modal_submit").disabled;'))
-        assert stored()['memories']['extract_model'] == 'gpt-6-luna'
+        assert stored()['memories']['extract_model'] == 'gpt-6.1-sol'
         assert browser.execute('return document.getElementById("routing_memory_model").value==="gpt-6.1-sol" && state.memory_model==="gpt-6-luna";')
         browser.execute('window.fetch=window.savedFetch;closeModal();')
         lease = home / 'easy-multi-provider/integration/memory-model.json'
         saved_lease, before = lease.read_bytes(), stored()
         headers = {'X-EMP-Session':json.loads((state_dir / 'web-session.json').read_text())['token']}
         update = request(base + '/api/config',headers=headers)[1]
-        update.update(background_compaction=False,memory_model='gpt-6.1-sol')
+        update.update(background_compaction=False,memory_model='gpt-6.1-sol',memory_extraction_model='gpt-6-luna')
         lease.write_text('invalid fixture journal')
         try:
             status, error = request(base + '/api/config',update,headers)
@@ -131,6 +132,7 @@ def main():
             assert stored() == before, 'A rejected memory write must roll back the background toggle'
             persisted = request(base + '/api/config',headers=headers)[1]
             assert persisted['memory_model'] == 'gpt-6-luna' and persisted['background_compaction'] is True
+            assert persisted['memory_extraction_model'] == 'gpt-6.1-sol'
         finally:
             lease.write_bytes(saved_lease)
         post('/api/integration/restore')
@@ -138,15 +140,13 @@ def main():
         assert '# Preserve user settings' in config_path.read_text() and '# Keep this comment' in config_path.read_text()
         assert request(base + '/healthz')[0] == 200
         post('/api/integration/enable')
-        assert stored()['memories']['extract_model'] == 'gpt-6-luna'
+        assert stored()['memories']['extract_model'] == 'gpt-6.1-sol'
         assert stored()['features']['async_compaction']['enabled'] is True
         checks.append('Failed saves preserve the draft; a rejected memory journal rolls back the background toggle without committing settings; Restore Native and re-enable preserve original values/comments and keep EMP running')
         session = browser.execute('return localStorage.getItem("emp_management_session_v1");')
         shadow, _ = preview(stack,base,'',session)
         browser.navigate(shadow + '/?review=1')
-        wait_for(lambda: browser.execute('return !!document.querySelector("[data-shadow-demo=tray]");'))
-        assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['settings','bills','context','routing','tray']
-        browser.execute('document.querySelector("[data-shadow-demo=tray]").click();')
+        browser.execute('openTrayPreview();')
         assert browser.execute('return [...document.querySelectorAll("#modal_body [role=img]")].every(node=>getComputedStyle(node).maskImage.startsWith("url("));')
         screenshot(browser,args.output,'mac-template')
         checks.append('Shadow groups current changes in the existing review dialog and previews the actual monochrome PNG on light/dark backgrounds')

@@ -57,6 +57,10 @@ pub(crate) fn restore_native_configuration(
     let result = manager
         .restore()
         .map_err(|_| "native_configuration_restore_failed")?;
+    if result.ok() {
+        emp_integration::local_auth::restore(&home.join("auth.json"))
+            .map_err(|_| "native_authentication_restore_failed")?;
+    }
     drop(history_lock);
     Ok((result, report))
 }
@@ -178,6 +182,8 @@ impl IntegrationState {
                 "native_configuration_conflict",
             ));
         }
+        emp_integration::local_auth::restore(&self.codex_home.join("auth.json"))
+            .map_err(|_| AppError::NativeRestoreBlocked("native_authentication_restore_failed"))?;
         search
             .map_err(|_| AppError::NativeRestoreBlocked("search_configuration_restore_failed"))?;
         compaction.map_err(|_| {

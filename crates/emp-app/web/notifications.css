@@ -1,0 +1,35 @@
+#notification{position:fixed;inset:16px auto auto 50%;margin:0;width:max-content;max-width:min(560px,calc(100vw - 32px));padding:12px 12px 16px 16px;transform:translateX(-50%);background:var(--panel);color:var(--text);border:1px solid var(--border-strong);border-radius:24px;box-shadow:0 8px 30px #0003;overflow:hidden}
+#notification:popover-open{display:flex;align-items:center;gap:12px}
+#notification[hidden]{display:none}
+#notification_symbol{color:var(--accent);display:flex;flex:none}
+.notification-symbol svg,#notification_symbol svg{width:20px;height:20px;display:block}
+#notification[data-kind=error] #notification_symbol{color:var(--danger-text)}
+#status{min-width:0;max-height:25vh;overflow:auto;overflow-wrap:anywhere;white-space:pre-wrap;color:inherit;line-height:1.5;font-size:13px}
+#notification .notification-close{width:28px;height:28px;min-height:28px;flex:none;margin:0;padding:0;border:0;background:transparent;color:var(--muted);font-size:22px;line-height:1;border-radius:50%}
+#notification .notification-close:hover{background:var(--secondary-hover);color:var(--text)}
+.notification-track{position:absolute;bottom:3px;left:20px;right:20px;height:2px;background:var(--border);border-radius:2px;overflow:hidden}
+#notification_progress{display:block;width:100%;height:100%;background:var(--accent);transform-origin:left}
+#notification[data-kind=error] #notification_progress{background:var(--danger-text)}
+#notification_mailbox{position:fixed;right:20px;bottom:20px;z-index:19;display:grid;place-items:center;width:46px;height:46px;margin:0;padding:0;border:1px solid var(--border-strong);border-radius:50%;background:var(--panel);color:var(--text);box-shadow:0 4px 16px #0002;transition:background-color 250ms ease-out}
+#notification_mailbox:hover{background:var(--secondary-hover)}
+#notification_mailbox svg{width:22px;height:22px}
+#notification_unread{position:absolute;top:-4px;right:-4px;min-width:19px;height:19px;padding:0 4px;border:2px solid var(--panel);border-radius:10px;background:var(--accent);color:#fff;font-size:10px;font-weight:600;line-height:15px;text-align:center;font-variant-numeric:tabular-nums}
+#notification_inbox{position:fixed;inset:auto 20px 80px auto;margin:0;width:min(400px,calc(100vw - 32px));max-height:min(560px,calc(100dvh - 110px));padding:0;border:1px solid var(--border-strong);border-radius:8px;background:var(--panel);color:var(--text);box-shadow:0 12px 40px #0003;overflow:hidden}
+#notification_inbox:popover-open{display:flex;flex-direction:column}
+.notification-inbox-header{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);flex:none}
+.notification-inbox-header h2{margin:0;font-size:14px}
+#notification_count{flex:1;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.notification-inbox-header button{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;min-height:30px;margin:0;padding:0;border-color:transparent;background:transparent;color:var(--muted)}
+.notification-inbox-header button:hover{background:var(--secondary-hover)}
+#notification_history{list-style:none;margin:0;padding:0;overflow:auto;min-height:0;scrollbar-width:thin}
+#notification_history li{display:grid;grid-template-columns:20px minmax(0,1fr);gap:10px;padding:14px 16px;border-bottom:1px solid var(--border)}
+#notification_history li:last-child{border-bottom:0}
+#notification_history .notification-symbol{color:var(--accent);padding-top:1px}
+#notification_history [data-kind=error] .notification-symbol{color:var(--danger-text)}
+#notification_history p{margin:0 0 6px;color:var(--text);font-size:13px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+#notification_history time{color:var(--muted);font-size:11px}
+#notification_empty{padding:42px 16px;margin:0;text-align:center;color:var(--muted);font-size:13px}
+#notification_mailbox:focus-visible,#notification button:focus-visible,#notification_inbox button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+#notification button:focus-visible{outline-offset:0}
+@media(max-width:650px){#notification{top:10px}#notification_mailbox{right:16px;bottom:16px}#notification_inbox{right:16px;bottom:74px}}
+@media(prefers-reduced-motion:reduce){#notification_mailbox{transition:none}}

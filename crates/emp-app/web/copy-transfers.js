@@ -1,9 +1,9 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
-  "transfers.codex_subscriptions_verified_matching_accounts_update_the_existing_service": ["Codex 订阅：确认同一账号时更新已有服务；不同账号或无法确认身份时保留为独立服务。","Codex subscriptions: verified matching accounts update the existing service; different or unverifiable accounts remain separate."],
-  "transfers.external_api_services_matching_connection_methods_exact_base_url": ["外部 API 服务：连接方式相同且完整 base URL 与非空 API key 都确认一致时合并；任一不同或无法确认时保留双方。相同上游模型更新，其他模型保留。","External API services: matching connection methods, exact base URL and verified nonempty API key merge; different or unverifiable connections remain separate. Matching upstream models update; other models remain."],
+  "transfers.codex_subscriptions_verified_matching_accounts_update_the_existing_service": ["Codex 订阅：账号身份一致时更新已有服务，其余情况新增服务。","Codex subscriptions: matching account identities update the existing service; other accounts are added separately."],
+  "transfers.external_api_services_matching_connection_methods_exact_base_url": ["外部 API 服务：连接方式、完整地址与非空 API key 全部一致时合并，其余情况新增服务。合并时更新同名上游模型，并保留其他模型。","External API services merge when their connection method, full URL and nonempty API key all match; otherwise they are added separately. Merging updates matching upstream models and keeps other models."],
   "transfers.local_claude_subscriptions_retain_a_separate_service_when_account": ["本机 Claude 订阅：没有可验证的账号身份时保留为独立服务。","Local Claude subscriptions: retain a separate service when account identity cannot be verified."],
-  "transfers.names_are_for_display_matching_names_do_not_merge": ["名称仅用于显示，同名不会导致合并或阻止导入。右侧预览和黄色提醒说明每项的实际处理。","Names are for display; matching names do not merge services or prevent import. The preview and yellow notices describe each action."],
+  "transfers.names_are_for_display_matching_names_do_not_merge": ["服务名称仅用于显示，合并依据账号或连接信息。导入预览列出每项的处理结果。","Service names are display labels. Merging uses account or connection details. The import preview lists the action for each service."],
   "transfers.local_claude_subscription": ["本机 Claude 订阅","Local Claude subscription"],
   "transfers.external_api_service": ["外部 API 服务","External API service"],
   "transfers.hide_models": ["隐藏 {count} 个模型","Hide {count} models"],
@@ -21,6 +21,9 @@ registerUiCopy({
   "transfers.select_services_to_preview": ["选择服务后显示预览","Select services to preview"],
   "transfers.import": ["导入","Import"],
   "transfers.export": ["导出","Export"],
+  "transfers.import_entry": ["从 .emp 文件导入服务","Import services from an .emp file"],
+  "transfers.export_entry": ["选择服务，保存为加密文件","Save selected services to an encrypted file"],
+  "transfers.tunnel_entry": ["通过代码在局域网内迁移","Transfer over your LAN with a code"],
   "transfers.import_steps": ["导入步骤","Import steps"],
   "transfers.choose_file_and_password": ["选择文件与密码","Choose file and password"],
   "transfers.open_package": ["打开迁移包","Open package"],

@@ -126,3 +126,16 @@ fn implicit_native_without_a_login_falls_back_to_caller_auth() {
     assert!(!headers.contains_key("Authorization"));
     assert!(!headers.contains_key("chatgpt-account-id"));
 }
+
+#[test]
+fn local_connection_keys_never_become_upstream_credentials() {
+    let incoming = BTreeMap::from([("Authorization".into(), "Bearer emp-local-example".into())]);
+    for auth in [NativeAuth::Forward, NativeAuth::Implicit(None)] {
+        assert_eq!(
+            request_headers(auth, &incoming, false)
+                .unwrap_err()
+                .status(),
+            401
+        );
+    }
+}

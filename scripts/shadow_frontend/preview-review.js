@@ -1,18 +1,23 @@
 // Replace this list for each review round; shipped demos belong in Demos below.
 // Production controllers own their dialogs and text.
-const reviewRows=['lifecycle'];
+const reviewRows=['settings','ultra','routing','onboarding','lan','tutorials','notifications'];
 const realShadow=window.EMP_REAL_SHADOW===true;
-const syntheticScenarios=['migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical'];
+const syntheticScenarios=['onboarding','lan','migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical'];
 const previewScenarios={
   review:{title:['本次改动','This update'],detail:['查看当前待检阅的修改','Review the current changes'],open:openReview},
-  settings:{title:['设置分组','Settings groups'],detail:['显示、通用服务、外部服务与原生服务分组；后台压缩和路由集中在原生服务中。','Grouped display, general, external and native service settings, with background compaction and routing under native services.'],open:()=>openSettings()},
+  tutorials:{title:['使用教程','Tutorials'],detail:['顶栏入口；左侧选择操作，右侧观看已有的十支教学 GIF。','Header entry with a task list on the left and ten existing GIF demonstrations on the right.'],open:()=>tutorials.open()},
+  notifications:{title:['通知与信箱','Notifications and inbox'],detail:['顶部浮层与倒计时条；右下角信箱保留此浏览器最近 50 条通知，刷新后仍可查看。','Top notification with a countdown bar; the bottom-right inbox keeps the last 50 messages in this browser across reloads.'],open:()=>{closeModal();$('notification_mailbox').click();}},
+  onboarding:{title:['Codex 登录与导入','Codex sign-in and import'],detail:['添加订阅只有装置码登录与 auth.json 两个入口；本地 Key 与原生登录仍在服务列表中。使用独立合成账号验收。','Add subscriptions through device-code sign-in or auth.json. Local key and native sign-in remain in the service list. Uses separate synthetic accounts.'],open:()=>openServiceChooser()},
+  lan:{title:['数据迁移','Data migration'],detail:['导入、导出、隧道三个入口；窗口随内容展开，服务列表不再限制为三行，返回保留已填内容。','Three entries: Import, Export and Tunnel. Content determines dialog height; service lists expand fully and Back keeps your entries.'],open:()=>migration.open()},
+  settings:{title:['说明与弹窗操作','Help and dialog controls'],detail:['问号说明直接交代条件和操作；滚动内容时，标题、返回、关闭与保存按钮保持可见。','Help states conditions and actions directly. Titles, Back, Close and Save stay visible while the content scrolls.'],open:()=>openSettings()},
+  ultra:{title:['Ultra 实际推理强度','Ultra actual reasoning effort'],detail:['模型按上游原名显示；Native 与导入订阅共用推理强度，保存后重启 Codex Runtime。','Models use their upstream names. Native and imported subscriptions share the effort setting; restart Codex Runtime after saving.'],open:()=>ultraSettings.open({back:openReview})},
   bills:{title:['会话账单归属','Conversation billing'],detail:['合成示例：自动审查、子代理与 Sidechat 合并到主会话；展开可查看模型及任务用量，归属不明的用量保留在总计中。','Synthetic examples: Auto Review, subagents and Sidechat belong to the main conversation. Expand model and task usage; unassigned usage remains in totals.'],open:()=>{statistics.open();document.querySelector('[data-stats-view="sessions"]').click();}},
   migration:{title:['迁移导入预览','Migration import preview'],detail:['清晰的等待提示；预览超时后保留选择，可直接重新预览。','Clear progress messages; keep selections and retry after a preview timeout.'],open:()=>window.EMP_IMPORT_DEMO()},
   connection:{title:['服务接入：Mercury 3','Service setup: Mercury 3'],detail:['新增 Inception / Mercury 预设；填写 Key，连接参数按需展开，保存只影响演示数据。','New Inception / Mercury preset: enter a key and expand connection details when needed. Saves affect demo data only.'],open:()=>chooseOfficialProvider('inception',null,{back:openReview})},
   collaboration:{title:['子代理与订阅性能对比','Subagent and subscription comparisons'],detail:['模式建议、速度与耗时对比，以及匿名的导入订阅／原生直连实测。','Mode recommendations, speed/time comparisons and anonymous imported/native direct measurements.'],open:()=>openCollaborationDemo()},
   metrics:{title:['调用结果与性能统计','Call outcomes and performance'],detail:['合成示例：重试完成、上游等待建议和输出中断；保留速度与工具耗时示例。','Synthetic examples: successful retries, upstream wait advice and interrupted output, alongside speed and tool timing.'],open:()=>statistics.open()},
   context:{title:['上下文与压缩说明','Context and compaction'],detail:['在现有模型设置的问号中查看有效窗口、自动压缩阈值和调整方式。','Use the existing model settings help to inspect usable context, compaction triggers and adjustments.'],open:()=>editAccount(state.native_account.id,{back:openReview})},
-  routing:{title:['路由设置','Routing settings'],detail:['自动审查、图片和记忆整理；记忆只选 GPT 模型，账号跟随会话。','Auto Review, images and memories; select a GPT memory model while its account follows the conversation.'],open:()=>realShadow?routingSettings.open({back:openSettings}):openRoutingDemo()},
+  routing:{title:['路由设置','Routing settings'],detail:['自动审查、图片及记忆路由；记忆提取、记忆整理可分别选择 GPT 模型。','Auto Review, image and memory routing; choose GPT models independently for memory extraction and consolidation.'],open:()=>realShadow?routingSettings.open({back:openSettings}):openRoutingDemo()},
   tray:{title:['macOS 菜单栏图标','macOS menu-bar icon'],detail:['纯色透明图标，预览浅色和深色背景；实际菜单交互仍由系统提供。','A transparent monochrome icon on light and dark backgrounds; the OS provides the actual menu interaction.'],open:openTrayPreview},
   recovery:{title:['key 异常恢复','Key recovery'],detail:['实际恢复页，模拟清除重建和退出','Actual recovery page with simulated reset and exit'],open:()=>location.assign('/recovery')},
   lifecycle:{title:['恢复原生 / 退出','Restore Native / Quit'],detail:['合成示例：区分已确认待转换与未检查的历史。恢复时共用目录索引，系统菜单显示操作进度；恢复与退出仍为两个操作。','Synthetic example: distinguish confirmed pending conversions from unchecked history. Restore shares one directory inventory; the tray shows action progress. Restore and Quit remain separate.'],open:()=>openLifecycleDemo()},
@@ -48,7 +53,7 @@ window.EMP_REVIEW_ACTION=action=>{
 };
 const reviewButton=document.createElement('button');reviewButton.type='button';reviewButton.id='shadow_review_button';reviewButton.className='secondary';reviewButton.textContent=tr('本次改动','This update');reviewButton.onclick=openReview;demoBanner.after(reviewButton);
 const reviewParameters=new URLSearchParams(location.search);
-let previewStartupAction=['import','settings','routing','collaboration','context','background','tray','review'].find(action=>reviewParameters.has(action))||reviewParameters.get('reviewAction');
+let previewStartupAction=['import','settings','routing','ultra','collaboration','context','background','tray','review'].find(action=>reviewParameters.has(action))||reviewParameters.get('reviewAction');
 function syncPreviewReview(){
   reviewButton.textContent=tr(...previewScenarios.review.title);
   if(!state?.native_account||!previewStartupAction)return;

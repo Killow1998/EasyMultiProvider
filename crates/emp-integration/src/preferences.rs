@@ -9,6 +9,10 @@ use toml_edit::{DocumentMut, Item};
 const SCHEMA: &str = "easy-multi-provider.codex-preference";
 const KEY: &str = "async_compaction";
 const MEMORY_KEYS: [&str; 2] = ["extract_model", "consolidation_model"];
+// Codex 0.163.0/0.164.0: codex-rs/model-provider/src/provider.rs.
+// Display fallback only; leaving a preference unset must still follow Codex.
+const DEFAULT_MEMORY_EXTRACTION_MODEL: &str = "gpt-5.6-luna";
+const DEFAULT_MEMORY_CONSOLIDATION_MODEL: &str = "gpt-5.6-terra";
 
 pub struct CodexPreferences {
     config: PathBuf,
@@ -81,18 +85,24 @@ impl CodexPreferences {
             .map_err(|_| IntegrationError("unable to update Codex preferences"))
     }
     /// The application holds its integration operation lock across preference writes.
-    pub fn apply(&self, enabled: Option<bool>, memory_model: &str) -> Result<(), IntegrationError> {
+    pub fn apply(
+        &self,
+        enabled: Option<bool>,
+        extraction: &str,
+        consolidation: &str,
+    ) -> Result<(), IntegrationError> {
         self.apply_background(enabled)?;
-        self.apply_memory(memory_model)
+        self.apply_memory(extraction, consolidation)
     }
     pub fn rollback(
         &self,
         enabled: Option<bool>,
-        memory_model: &str,
+        extraction: &str,
+        consolidation: &str,
     ) -> Result<(), IntegrationError> {
         // Independent journals must both be attempted, including during rollback.
         let background = self.apply_background(enabled);
-        let memory = self.apply_memory(memory_model);
+        let memory = self.apply_memory(extraction, consolidation);
         background.and(memory)
     }
     fn apply_background(&self, enabled: Option<bool>) -> Result<(), IntegrationError> {
@@ -115,16 +125,26 @@ impl CodexPreferences {
         self.apply_value(value)
     }
     /// Configuring models changes their client-side input budget, not memory permissions.
-    fn apply_memory(&self, model: &str) -> Result<(), IntegrationError> {
+    fn apply_memory(&self, extraction: &str, consolidation: &str) -> Result<(), IntegrationError> {
         let manager = self.memories();
-        if model.is_empty() {
+        if extraction.is_empty() && consolidation.is_empty() {
             return manager.restore_current();
         }
-        let mut table = toml_edit::Table::new();
-        for key in MEMORY_KEYS {
-            table.insert(key, toml_edit::value(model));
+        let current = encode(&manager.read()?, true)?;
+        let original = manager
+            .read_lease()?
+            .filter(|lease| lease["status"] != "restored")
+            .map_or(current, |lease| lease["original"].clone());
+        let mut value = decode(&original)?.unwrap_or_else(|| Item::Table(toml_edit::Table::new()));
+        let table = value
+            .as_table_like_mut()
+            .ok_or(IntegrationError("invalid Codex memory preference lease"))?;
+        for (key, model) in MEMORY_KEYS.into_iter().zip([extraction, consolidation]) {
+            if !model.is_empty() {
+                table.insert(key, toml_edit::value(model));
+            }
         }
-        manager.apply_value(Item::Table(table))
+        manager.apply_value(value)
     }
     fn apply_value(&self, value: Item) -> Result<(), IntegrationError> {
         let mut document = self.read()?;
@@ -200,6 +220,22 @@ impl CodexPreferences {
         let memory = self.memories().restore_current();
         background.and(memory)
     }
+    fn memory_defaults(&self, document: &DocumentMut) -> Result<Value, IntegrationError> {
+        let current = encode(document, true)?;
+        let manager = self.memories();
+        let lease = manager.read_lease()?;
+        let original = lease
+            .as_ref()
+            .filter(|lease| lease["status"] != "restored")
+            .filter(|lease| matches_lease(&current, lease).unwrap_or(false))
+            .map(|lease| &lease["original"])
+            .unwrap_or(&current);
+        let models = decode(original)?;
+        Ok(json!({
+            "extract_model":models.as_ref().and_then(|models| models.get("extract_model")).and_then(Item::as_str).unwrap_or(DEFAULT_MEMORY_EXTRACTION_MODEL),
+            "consolidation_model":models.as_ref().and_then(|models| models.get("consolidation_model")).and_then(Item::as_str).unwrap_or(DEFAULT_MEMORY_CONSOLIDATION_MODEL),
+        }))
+    }
     /// Credential-free hints; command-line/profile/session overrides remain client-owned.
     pub fn snapshot(&self) -> Result<Value, IntegrationError> {
         let document = self.read()?;
@@ -219,6 +255,7 @@ impl CodexPreferences {
             "model_context_window":document.get("model_context_window").and_then(Item::as_integer),
             "model_auto_compact_token_limit":document.get("model_auto_compact_token_limit").and_then(Item::as_integer),
             "model_auto_compact_token_limit_scope":document.get("model_auto_compact_token_limit_scope").and_then(Item::as_str).unwrap_or("total"),
+            "memory_default_models":self.memory_defaults(&document).ok(),
             "source":"user_config","restart_required":true}),
         )
     }

@@ -2,6 +2,28 @@
 
 use super::*;
 
+pub(super) fn normalize_memory_model<'a>(
+    raw: Option<&'a Value>,
+    field: &str,
+) -> ConfigResult<&'a str> {
+    match raw {
+        None => Ok(""),
+        Some(Value::String(model))
+            if model.is_empty()
+                || (model.starts_with("gpt-")
+                    && model.len() <= 128
+                    && model.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_')
+                    })) =>
+        {
+            Ok(model)
+        }
+        _ => Err(ConfigError::new(format!(
+            "{field} must be an unprefixed GPT model ID or empty"
+        ))),
+    }
+}
+
 const MAX_CATALOG_ALIAS_BYTES: usize = 512;
 const RUNTIME_SOURCES: [&str; 8] = [
     "auto",
@@ -173,6 +195,40 @@ pub fn normalize_catalog_presentations(raw: Option<&Value>) -> ConfigResult<Valu
             Value::String(reasoning_summary),
         );
         result.insert(route, Value::Object(normalized));
+    }
+    Ok(Value::Object(result))
+}
+
+/// Family-scoped Ultra overrides are independent of aliases and route display.
+pub(super) fn normalize_ultra_efforts(raw: Option<&Value>) -> ConfigResult<Value> {
+    let raw = match raw {
+        None | Some(Value::Null) => return Ok(serde_json::json!({})),
+        Some(Value::Object(raw)) => raw,
+        _ => {
+            return Err(ConfigError::new(
+                "ultra_reasoning_efforts must be an object",
+            ));
+        }
+    };
+    let mut result = Map::new();
+    for (model, value) in raw {
+        let model = normalize_route(model)?;
+        let effort = value
+            .as_str()
+            .ok_or_else(|| {
+                ConfigError::new("ultra_reasoning_efforts values must be concrete efforts or auto")
+            })?
+            .trim()
+            .to_lowercase();
+        if effort == "auto" {
+            continue;
+        }
+        if !crate::model_values::is_concrete_reasoning_effort(&effort) {
+            return Err(ConfigError::new(
+                "ultra_reasoning_efforts values must be concrete efforts or auto",
+            ));
+        }
+        result.insert(model, Value::String(effort));
     }
     Ok(Value::Object(result))
 }

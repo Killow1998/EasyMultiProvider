@@ -49,6 +49,7 @@ fn import_merges_without_deleting_local_entries_and_reencrypts_provider_keys() {
         "models": [{"id": "local/model", "provider": "local"}],
         "catalog_presentations": {"local/model": {"catalog_alias": "Local"}},
         "catalog_family_presentations": {"local-family": {"catalog_alias": "Local family"}},
+        "ultra_reasoning_efforts": {"local-family":"high","shared":"xhigh"},
         "native_hidden_models": ["native-local"]
     })))
     .expect("current configuration");
@@ -59,6 +60,7 @@ fn import_merges_without_deleting_local_entries_and_reencrypts_provider_keys() {
         "models": [{"id": "deepseek/chat", "provider": "deepseek"}],
         "catalog_presentations": {"deepseek/chat": {"catalog_alias": "Imported"}},
         "catalog_family_presentations": {"deepseek-family": {"catalog_alias": "Imported family"}},
+        "ultra_reasoning_efforts": {"imported-family":"medium","shared":"low"},
         "native_hidden_models": ["native-imported"]
     });
     let package = payload(
@@ -97,6 +99,10 @@ fn import_merges_without_deleting_local_entries_and_reencrypts_provider_keys() {
     assert_eq!(summary.models, 1);
     assert_eq!(summary.renamed_accounts, 0);
     assert_eq!(imported["port"], 4299);
+    assert_eq!(
+        imported["ultra_reasoning_efforts"],
+        json!({"local-family":"high","imported-family":"medium","shared":"low"})
+    );
     assert_eq!(
         imported["providers"]
             .as_array()

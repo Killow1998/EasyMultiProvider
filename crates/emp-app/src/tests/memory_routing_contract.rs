@@ -18,13 +18,16 @@ pub(super) fn fixture(base_url: &str) -> (TempDir, ServerHandle) {
     )
     .unwrap();
     write_owned_account_catalog(&server, &config["accounts"][0], base_url, models);
-    server
+    let mut preferences = server
         .state
         .backend
         .configuration
         .test_config()
         .lock()
-        .unwrap()["memory_model"] = json!("gpt-6-luna");
+        .unwrap();
+    preferences["memory_model"] = json!("gpt-6-luna");
+    preferences["memory_extraction_model"] = json!("gpt-6.1-sol");
+    drop(preferences);
     (directory, server)
 }
 
@@ -44,31 +47,88 @@ pub(super) fn body() -> Value {
 
 #[test]
 fn memory_http_follows_subscription_and_uses_native_for_external_and_global_jobs() {
-    for (category, global, expected) in [
-        ("subscription", false, "selected-token"),
-        ("external", false, "native-secret"),
-        ("subscription", true, "native-secret"),
+    for (category, global, header, extraction, consolidation, expected_model, expected_token) in [
+        (
+            "subscription",
+            false,
+            false,
+            "gpt-6.1-sol",
+            "gpt-6-luna",
+            "gpt-6.1-sol",
+            "selected-token",
+        ),
+        (
+            "external",
+            false,
+            true,
+            "gpt-6.1-sol",
+            "gpt-6-luna",
+            "gpt-6.1-sol",
+            "native-secret",
+        ),
+        (
+            "subscription",
+            true,
+            true,
+            "gpt-6.1-sol",
+            "gpt-6-luna",
+            "gpt-6-luna",
+            "native-secret",
+        ),
+        (
+            "external",
+            false,
+            false,
+            "",
+            "gpt-6-luna",
+            "gpt-6.1-sol",
+            "native-secret",
+        ),
+        (
+            "external",
+            true,
+            true,
+            "gpt-6-luna",
+            "",
+            "gpt-6.1-sol",
+            "native-secret",
+        ),
     ] {
         let upstream = OneShotUpstream::start(
             json!({"id":"memory-response","object":"response","status":"completed","model":"gpt-6-luna","output":[],"usage":{"input_tokens":10,"output_tokens":1}}),
         );
         let (_directory, server) = fixture(&upstream.base_url());
+        {
+            let mut preferences = server
+                .state
+                .backend
+                .configuration
+                .test_config()
+                .lock()
+                .unwrap();
+            preferences["memory_extraction_model"] = json!(extraction);
+            preferences["memory_model"] = json!(consolidation);
+        }
         prior(&server, category);
         let auth = session_header(&server);
         let mut headers = vec![auth.as_str()];
         if global {
             headers.push("x-openai-subagent: memory_consolidation");
+        } else if header {
+            headers.push("x-openai-subagent: memory_extraction");
         }
+        let mut request = body();
+        request["model"] = json!("gpt-6.1-sol");
         let wire = post(
             &server,
             "/v1/responses",
-            &serde_json::to_vec(&body()).unwrap(),
+            &serde_json::to_vec(&request).unwrap(),
             &headers,
         );
         assert!(wire.starts_with("HTTP/1.1 200"), "{wire}");
         let (_, headers, sent) = upstream.observed();
-        assert_eq!(headers["authorization"], format!("Bearer {expected}"));
-        assert_eq!(sent["model"], "gpt-6-luna");
+        assert_eq!(headers["authorization"], format!("Bearer {expected_token}"));
+        assert_eq!(sent["model"], expected_model);
         assert_eq!(
             server
                 .state
@@ -106,6 +166,10 @@ fn memory_quota_pause_is_visible_and_does_not_redirect_to_another_account() {
     assert_eq!(
         server.state.backend.memory_status.snapshot()["reason"],
         "quota_exhausted"
+    );
+    assert_eq!(
+        server.state.backend.memory_status.snapshot()["kind"],
+        "memory_extraction"
     );
     server
         .state

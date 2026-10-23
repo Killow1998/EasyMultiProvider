@@ -140,8 +140,7 @@ impl ExternalTools {
 
     pub fn prepare(&mut self, body: &Value) -> Result<Value, &'static str> {
         let mut result = body.clone();
-        let mut definitions =
-            self.definitions(body.get("tools").unwrap_or(&json!([])), None, "")?;
+        let definitions = self.definitions(body.get("tools").unwrap_or(&json!([])), None, "")?;
         let items = result
             .get_mut("input")
             .filter(|input| input.is_array() || input.is_object())
@@ -157,11 +156,7 @@ impl ExternalTools {
                         let loaded =
                             self.definitions(item.get("tools").unwrap_or(&json!([])), None, "")?;
                         if item["type"] == "additional_tools" {
-                            if self.preserve_loads {
-                                converted.push(json!({"type":"additional_tools", "role":"developer", "tools":loaded}));
-                            } else {
-                                definitions.extend(loaded);
-                            }
+                            converted.push(json!({"type":"additional_tools", "role":"developer", "tools":loaded}));
                             continue;
                         }
                         if item["execution"] != "client"
@@ -171,12 +166,11 @@ impl ExternalTools {
                         }
                         item = json!({"type":"function_call_output", "call_id":item["call_id"],
                             "output":format!("{{\"status\": {}, \"tools\": {}}}", python_json(&item["status"]), python_json(&json!(loaded)))});
-                        if self.preserve_loads {
-                            converted.push(item);
-                            converted.push(json!({"type":"additional_tools", "role":"developer", "tools":loaded}));
-                            continue;
-                        }
-                        definitions.extend(loaded);
+                        converted.push(item);
+                        converted.push(
+                            json!({"type":"additional_tools", "role":"developer", "tools":loaded}),
+                        );
+                        continue;
                     }
                     Some("tool_search_call") => {
                         if item["execution"] != "client"
@@ -201,11 +195,10 @@ impl ExternalTools {
             }
             result["input"] = Value::Array(converted);
         }
-        definitions =
-            definitions::unique_definitions(definitions, &result["input"], self.preserve_loads)?;
         if body.get("tools").is_some() || !definitions.is_empty() {
             result["tools"] = Value::Array(definitions);
         }
+        self.resolve_catalog(&mut result);
         if let Some(mut choice) = result.get("tool_choice").filter(|v| v.is_object()).cloned() {
             if choice["type"] == "allowed_tools" {
                 if let Some(choices) = choice["tools"].as_array_mut() {
@@ -249,6 +242,8 @@ impl ExternalTools {
     }
 }
 
+mod catalog;
+pub use catalog::removed_tool_names;
 mod definitions;
 mod restore;
 #[cfg(test)]

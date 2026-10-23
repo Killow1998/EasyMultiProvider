@@ -1,0 +1,21 @@
+registerUiCopy({
+  'tutorials.title':['使用教程','Tutorials'],
+  'tutorials.gpt':['GPT 模型与订阅','GPT models & subscriptions'],
+  'tutorials.external':['外部服务','External services'],
+  'tutorials.shared':['通用操作','Shared controls'],
+  'tutorials.native_context':['修改 GPT 上下文','Change GPT context'],
+  'tutorials.native_name':['修改 GPT 模型名称','Rename GPT models'],
+  'tutorials.remove_subscription':['移除导入的订阅','Remove an imported subscription'],
+  'tutorials.add':['添加外部服务','Add an external service'],
+  'tutorials.context':['修改外部模型上下文','Change external model context'],
+  'tutorials.rename':['修改服务与模型名称','Rename a service and model'],
+  'tutorials.remove':['移除外部服务','Remove an external service'],
+  'tutorials.labels':['切换上下文显示','Toggle context labels'],
+  'tutorials.export':['导出订阅与服务','Export subscriptions and services'],
+  'tutorials.import':['导入订阅与服务','Import subscriptions and services'],
+  'tutorials.loading':['正在加载演示…','Loading demonstration…'],
+  'tutorials.failed':['演示加载失败，请重试。','Could not load the demonstration. Please retry.'],
+  'tutorials.retry':['重新加载','Retry'],
+  'tutorials.play':['播放演示','Play demonstration'],
+  'tutorials.full_size':['查看原尺寸','View full size']
+});

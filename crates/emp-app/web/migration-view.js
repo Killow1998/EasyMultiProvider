@@ -56,7 +56,8 @@ function createMigrationView(getState) {
   }
   function services(config, importing = false, credentials = {}) {
     const state = getState();
-    let accounts = importing ? config.accounts || [] : [state.native_account, ...(state.accounts || [])].filter(Boolean);
+    let accounts = importing ? config.accounts || [] : [state.native_account, ...(state.accounts || [])]
+      .filter(account=>account && account.auth_mode!=='local_key');
     if(importing&&config._shadow_merge_preview){
       accounts=[...(config.native_account?[config.native_account]:[]),...accounts];
       accounts=accounts.filter(account=>!account.duplicate||!accounts.some(owner=>account.duplicate_of==='当前 Codex 登录'?owner.native:owner.id===account.duplicate_of));
@@ -154,17 +155,17 @@ function createMigrationView(getState) {
         <span class="migration-service-label"><strong>${esc(row.name)}</strong><small>${serviceType(row)}</small></span></span></label>`;
   }
   function bodyHtml(candidate) {
+    if(candidate.mode==='choose')return `<div id="shadow_migration"><div id="migration_chooser" class="choice-grid">${[
+      ['import','upload','transfers.import','transfers.import_entry'],
+      ['export','download','transfers.export','transfers.export_entry'],
+      ['tunnel','sync','lan.tunnel','transfers.tunnel_entry'],
+    ].map(([mode,icon,label,description])=>`<button type="button" class="choice service-choice" data-icon="${icon}" data-migration-mode="${mode}"><span><strong>${tr(label)}</strong><small>${tr(description)}</small></span></button>`).join('')}</div></div>`;
     const importing = candidate.mode === 'import';
-    const tabs = `<div class="report-tabs">
-      <button type="button" data-migration-mode="import" class="secondary ${importing ? 'active' : ''}">${tr("transfers.import")}</button>
-      <button type="button" data-migration-mode="export" class="secondary ${!importing ? 'active' : ''}">${tr("transfers.export")}</button></div>`;
-    const steps=importing?`<ol class="migration-steps" aria-label="${tr("transfers.import_steps")}">
-      ${[tr("transfers.choose_file_and_password"),tr("transfers.open_package"),tr("transfers.review_and_import")].map((label,index)=>`<li data-migration-step="${index}"><span aria-hidden="true">${index+1}</span>${label}</li>`).join('')}</ol>`:'';
-    const chooser = importing && !candidate.token ? `
+    const chooser = importing && !candidate.token ? `<div class="migration-import-form">
       <p class="migration-open-hint">${tr("transfers.choose_a_emp_file_and_enter_its_export_password")}</p>
       <label>${tr("transfers.migration_file")}<input type="file" id="shadow_migration_file" accept=".emp"></label>
       <label><span class="migration-field-label">${tr("core.migration_password")}${shadowHelp(tr("transfers.use_the_export_password_legacy_8_byte_passwords_remain"))}</span><input id="shadow_import_password" type="password" autocomplete="current-password"></label>
-      <button type="button" class="primary" data-migration-decode>${tr("transfers.open_package")}</button><button type="button" class="secondary" data-migration-demo>${tr("transfers.preview_an_example_import")}</button>` : '';
+      <div class="migration-import-actions"><button type="button" class="primary" data-migration-decode>${tr("transfers.open_package")}</button><button type="button" class="secondary" data-migration-demo>${tr("transfers.preview_an_example_import")}</button></div></div>` : '';
     const list = `<div class="migration-workspace"><div class="migration-choices">
       <div class="toolbar"><button type="button" class="secondary" data-migration-all="true">${tr("transfers.select_all")}</button>
         <button type="button" class="secondary" data-migration-all="false">${tr("transfers.select_none")}</button></div>
@@ -175,10 +176,11 @@ function createMigrationView(getState) {
     const flags = `<div class="migration-options">
       <label><input type="checkbox" id="migration_include_context" ${candidate.includeContext ? 'checked' : ''}>${tr("transfers.include_subscription_model_context_settings")}</label>
       <label><input type="checkbox" id="migration_include_rename" ${candidate.includeRename ? 'checked' : ''}>${tr("transfers.include_subscription_model_display_names")}</label></div>`;
+    if(candidate.mode==='tunnel')return `<div id="shadow_migration"><div class="migration-panel">${lanMigrationControls(candidate.rows.map(rowHtml).join(''),flags)}</div></div>`;
     const passwords = !importing ? `<div class="migration-passwords">
       <label><span class="migration-field-label">${tr("core.migration_password")}${shadowHelp(tr("transfers.12_4096_utf_8_bytes_at_least_12_characters"))}</span><input type="password" id="shadow_export_password" autocomplete="new-password"></label>
       <label><span class="migration-field-label">${tr("transfers.confirm_password")}${shadowHelp(tr("transfers.both_entries_must_match_exactly"))}</span><input type="password" id="shadow_export_password_confirm" autocomplete="new-password"></label></div>` : '';
-    return `<div id="shadow_migration">${tabs}${steps}${candidate.demo ? `<p class="migration-demo-note">${tr("transfers.sample_data_no_services_will_be_saved_or_imported")}</p>` : ''}${chooser}${candidate.rows.length ? flags+list : ''}${passwords}</div>`;
+    return `<div id="shadow_migration"><div class="migration-panel">${candidate.demo ? `<p class="migration-demo-note">${tr("transfers.sample_data_no_services_will_be_saved_or_imported")}</p>` : ''}${chooser}${candidate.rows.length ? list+flags : ''}${passwords}</div></div>`;
   }
   return {services,selections,options,importedNameRows,warningHtml,previewRows,bodyHtml,mergeRules,preferenceRows};
 }

@@ -81,6 +81,21 @@ const MASK: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2
 const AT: &str = "2026-08-22T00:00:00+00:00";
 
 #[test]
+fn older_clients_preserve_ultra_overrides_but_an_explicit_reset_removes_them() {
+    let current =
+        normalize_configuration(Some(&json!({"ultra_reasoning_efforts":{"gpt-test":"low"}})))
+            .unwrap();
+    let saved = merge_web_update_with_time(&current, &json!({"models":[]}), AT).unwrap();
+    assert_eq!(
+        saved["ultra_reasoning_efforts"],
+        current["ultra_reasoning_efforts"]
+    );
+    let reset =
+        merge_web_update_with_time(&saved, &json!({"ultra_reasoning_efforts":{}}), AT).unwrap();
+    assert_eq!(reset["ultra_reasoning_efforts"], json!({}));
+}
+
+#[test]
 fn changing_provider_origin_does_not_carry_over_a_stored_key() {
     for base_url in [
         "https://attacker.example/v1",

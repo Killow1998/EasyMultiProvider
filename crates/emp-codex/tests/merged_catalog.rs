@@ -3,6 +3,98 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 #[test]
+fn ultra_override_preserves_the_harness_and_tracks_supported_subscription_efforts() {
+    let model = json!({"slug":"gpt-ultra","display_name":"Ultra fixture","visibility":"list",
+        "default_reasoning_level":"high","multi_agent_reasoning_effort":"xhigh","multi_agent_version":"v2",
+        "model_messages":{"multi_agent":{"mode":"official"}},
+        "supported_reasoning_levels":[{"effort":"low"},{"effort":"high"},{"effort":"xhigh"},{"effort":"ultra"}]});
+    let native = json!({"models":[model]});
+    let accounts = BTreeMap::from([("sub".into(), native.clone())]);
+    let mut config = json!({"accounts":[{"id":"sub","prefix":"sub","auth_file":"fixture"}],
+        "providers":[{"id":"external","protocol":"responses"}],
+        "models":[{"id":"external/gpt-ultra","provider":"external","upstream_id":"gpt-ultra","reasoning_levels":["low","high","ultra"]}],
+        "catalog_presentations":{"gpt-ultra":{"catalog_alias":"Native alias"},"sub/gpt-ultra":{"catalog_alias":"Imported alias"}},
+        "ultra_reasoning_efforts":{"gpt-ultra":"low"}});
+    let build =
+        |config: &Value, native: &Value| build_catalog(config, native, &accounts, &BTreeMap::new());
+    let mut baseline_config = config.clone();
+    baseline_config["ultra_reasoning_efforts"] = json!({});
+    let baseline = build(&baseline_config, &native);
+    let overridden = build(&config, &native);
+    let mut expected = baseline.clone();
+    for entry in expected["models"].as_array_mut().unwrap() {
+        if entry["slug"] != "external/gpt-ultra" {
+            entry["multi_agent_reasoning_effort"] = json!("low");
+        }
+    }
+    assert_eq!(
+        overridden, expected,
+        "Only the subscription Ultra mapping changes"
+    );
+    assert_ne!(
+        emp_state::catalog_etag(&overridden),
+        emp_state::catalog_etag(&baseline)
+    );
+    let views =
+        emp_codex::management_views::model_views(&config, &native, &accounts, &BTreeMap::new());
+    for entry in views["catalog_models"].as_array().unwrap() {
+        assert_eq!(
+            entry["ultra_default_effort"],
+            if entry["source_type"] == "provider" {
+                Value::Null
+            } else {
+                json!("xhigh")
+            }
+        );
+        assert_eq!(
+            entry["ultra_reasoning_levels"],
+            if entry["source_type"] == "provider" {
+                json!([])
+            } else {
+                json!(["low", "high", "xhigh"])
+            }
+        );
+    }
+    for value in ["max", "ultra", "unknown"] {
+        config["ultra_reasoning_efforts"]["gpt-ultra"] = json!(value);
+        assert_eq!(
+            build(&config, &native),
+            baseline,
+            "Unsupported override {value} uses official metadata"
+        );
+    }
+    config["ultra_reasoning_efforts"] = json!({});
+    assert_eq!(build(&config, &native), baseline);
+    config["ultra_reasoning_efforts"]["gpt-ultra"] = json!("low");
+    let mut refreshed = native.clone();
+    refreshed["models"][0]["supported_reasoning_levels"] =
+        json!([{"effort":"high"},{"effort":"ultra"}]);
+    refreshed["models"][0]["multi_agent_reasoning_effort"] = json!("high");
+    let catalog = build(&config, &refreshed);
+    assert_eq!(
+        catalog["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["slug"] == "gpt-ultra")
+            .unwrap()["multi_agent_reasoning_effort"],
+        "high"
+    );
+    refreshed["models"][0]["supported_reasoning_levels"] =
+        json!([{"effort":"low"},{"effort":"high"}]);
+    let catalog = build(&config, &refreshed);
+    assert_eq!(
+        catalog["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["slug"] == "gpt-ultra")
+            .unwrap()["multi_agent_reasoning_effort"],
+        "high"
+    );
+}
+
+#[test]
 fn claude_model_picker_uses_cli_defaults_with_model_specific_effort_levels() {
     for (id, default, count) in [
         ("claude-haiku-5-5", "medium", 5),

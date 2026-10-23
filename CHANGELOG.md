@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### 中文
+
+- 无 Codex 订阅也能连接外部模型：EMP 为未登录的 Codex 创建本地连接 Key，可在服务列表中取消并恢复原生。
+- 在 WebUI 中通过官方装置码登录订阅；成功后替换本地 Key，重启 Codex 生效。添加订阅提供装置码登录与 auth.json 两个入口，文件选择和粘贴共用导入表单。
+- 服务迁移增加局域网隧道：自动选择本地网络，生成固定 5 分钟有效的一次性 49 位代码；发送端确认后，接收端预览并选择导入。
+- 导入、导出、隧道共用服务选择与预览流程；返回保留已填内容。服务工具列按刷新额度、添加服务、服务迁移排列。
+- Ultra 可按模型选择实际推理强度；显示上游模型名称及当前官方默认值，Native 与导入订阅共用设置。
+- 记忆提取与记忆整理可分别选择 GPT 模型、查看默认模型并单独还原，保留已有设置；保存后重启 Codex 生效。
+- WebUI 提供使用教程，左侧选择操作、右侧播放本地 GIF；通知改为顶部提示及倒计时条，右下角信箱保留最近 50 条通知。
+- 帐号用量复用缓存并合并读取，切换模型页后返回可立即显示已有数据；固定弹窗标题与关闭按钮，取消每次打开页面的配置加载提示。
+- 修复 Codex 0.164 切换模型后增量工具定义冲突、已移除工具仍可调用的问题；保留工具历史，支持更新后继续会话和恢复会话。
+- 跨服务子代理说明区分 0.164 Code Mode 明文任务与旧加密历史；新旧速度测试分别标注日期、版本和测量范围。
+- 完成 Codex 0.155–0.164 十个正式系列的 Linux 历史恢复回归。
+
+### English
+
+- Use external models without a Codex subscription. EMP creates a local connection key for signed-out Codex; cancel it from the service list to restore the native connection.
+- Sign in to a subscription with the official device code in WebUI. Successful sign-in replaces the local key; restart Codex to apply it. Add subscriptions through device-code sign-in or one auth.json form supporting file selection and paste.
+- Transfer services over a LAN tunnel with automatic local-network selection and a single-use 49-character code valid for five minutes. The sender approves delivery before the receiver reviews and selects the import.
+- Import, Export and Tunnel share service selection and preview; Back preserves form entries. The service toolbar orders Refresh quotas, Add service and Service migration.
+- Choose Ultra's actual reasoning effort per model, with upstream names and concrete official defaults. Native and imported subscriptions share the setting.
+- Choose GPT models independently for memory extraction and consolidation, with separate default labels and reset controls that preserve existing settings. Restart Codex after saving.
+- Open tutorials in WebUI with a left-hand operation list and local GIF playback. Notifications appear at the top with a countdown; a bottom-right inbox retains the latest 50 messages.
+- Reuse account-usage totals and coalesce reads so returning from model settings shows cached data immediately. Keep dialog titles and close controls visible, and remove routine configuration-loaded notifications.
+- Fix conflicting incremental tool definitions and stale callable tools after model switches in Codex 0.164. Preserve tool history across updates and conversation resumes.
+- Distinguish plaintext Code Mode tasks in 0.164 from older encrypted history in cross-service subagent help. Label current and historical speed measurements separately by date, version and scope.
+- Complete Linux history-restoration regression coverage for the ten stable Codex series 0.155–0.164.
+
 ## 0.13.13 (2026-10-22)
 
 ### 中文

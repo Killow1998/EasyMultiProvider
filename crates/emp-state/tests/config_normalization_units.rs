@@ -25,6 +25,28 @@ fn presentation_normalization_matches_fixture() {
 }
 
 #[test]
+fn ultra_effort_accepts_only_concrete_values_and_auto_removes_the_override() {
+    for invalid in [json!("ultra"), json!("made-up"), json!(true), Value::Null] {
+        assert!(
+            emp_state::normalize_configuration(Some(
+                &json!({"ultra_reasoning_efforts":{"model":invalid}})
+            ))
+            .is_err()
+        );
+    }
+    let saved = emp_state::normalize_configuration(Some(
+        &json!({"ultra_reasoning_efforts":{"model":" LOW "}}),
+    ))
+    .unwrap();
+    assert_eq!(saved["ultra_reasoning_efforts"]["model"], "low");
+    let following = emp_state::normalize_configuration(Some(
+        &json!({"ultra_reasoning_efforts":{"model":"auto"}}),
+    ))
+    .unwrap();
+    assert_eq!(following["ultra_reasoning_efforts"], json!({}));
+}
+
+#[test]
 fn search_and_runtime_selection_match_fixture() {
     let fixture = fixture();
     let search = &fixture["subscription_search"];

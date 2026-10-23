@@ -47,6 +47,7 @@ fn category_selection_matches_migration_groups() {
         ],
         "native_hidden_models": ["gpt-hidden"],
         "catalog_show_context": false,
+        "ultra_reasoning_efforts": {"gpt-x": "low"},
         "catalog_presentations": {
             "gpt-x": {"catalog_alias": "Native model"},
             "other/gpt-x": {"catalog_alias": "Other model"},
@@ -153,6 +154,14 @@ fn category_selection_matches_migration_groups() {
         );
         assert_eq!(result["native_hidden_models"], json!(hidden));
         assert_eq!(result["catalog_show_context"], false);
+        assert_eq!(
+            result["ultra_reasoning_efforts"],
+            if groups.contains(&"native") || groups.contains(&"subscriptions") {
+                json!({"gpt-x":"low"})
+            } else {
+                json!({})
+            }
+        );
     }
 
     assert_eq!(
