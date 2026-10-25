@@ -39,6 +39,10 @@ Formal migration previews keep decrypted packages server-side, at most four for
 an opaque token and scrubbed metadata. The pure Rust selection owner excludes
 unselected services, models and credentials. Import uses existing account locks
 and transactions; observation retains separate commit/catalog publication stages.
+While Import commits, the browser locks selection, naming, options and Back/Escape.
+Submission does not share the preview's cancellation signal: cancelling a preview
+cannot discard the result of a committed import. Successful submission reloads the
+configuration and closes only the same import view.
 The Shadow bridge keeps its own read-only cache and never forwards a write.
 
 The HTTP response owner now contains decoded reads, size/deadline enforcement and
@@ -315,6 +319,16 @@ attempt without automatic replay. Downstream disconnect releases the same
 upstream owner. Scope/route/credential mismatches still reject continuation;
 locally rejecting an incompatible request no longer erases an otherwise valid
 base. Explicit `previous_response_id:null` remains a full request.
+
+Some native backends reject supplied input IDs with the explicit
+`unsupported_parameter` / persisted-item lookup error. Before any response
+creation or generation event, the native WebSocket owner can resend once after
+removing IDs only from complete inline messages and tool declarations. It
+retains message content/phase, tool call/output IDs, opaque items, references and
+`previous_response_id`. The adaptation is remembered on that upstream socket
+and resets with its route/credential owner. Generic errors and failures after
+response creation are never replayed by this policy. The rejected send and
+recovery share one operation/usage receipt, with both dispatches counted.
 
 The [continuation receipt contract](diagnostic-journal-spec.md#native-continuation-receipts)
 separates local rejection, actual upstream rejection, connection reuse and byte
@@ -654,6 +668,10 @@ journal stages an `emp-local-` API credential and publishes it without overwriti
 an existing file. Restore removes only an unchanged, owned credential. Caller
 authentication accepts the local key, while native forwarding rejects it and
 never sends it upstream. Existing subscription/API authentication is retained.
+Native subscription consumers share one validated credential-header reader.
+The presence of
+`auth.json` alone does not make Native eligible; local/API keys and invalid files
+must not prevent Auto Review from selecting an imported subscription.
 
 `emp-codex::quota::DeviceLogin` reuses the verified executable, isolated home,
 bounded pipes and child-tree cleanup of the quota helper. Official app-server
@@ -661,10 +679,15 @@ device-code RPC returns only the verification URL, code and status to the browse
 `services/native_login.rs` owns separate pending operations for Native replacement
 and subscription import. Native replacement installs credentials only if the
 original authentication is unchanged, then requests a Codex Runtime restart.
-Subscription sign-in uses the existing account/vault transaction and preserves
+Other subscription sign-in uses the existing account/vault transaction and preserves
 Native authentication. Cancellation cannot affect the other destination. The
 Add Service chooser offers device-code sign-in and one auth.json form for both
-file selection and pasted JSON; both import paths refresh the shared catalog.
+file selection and pasted JSON. Before requesting a device code, the user chooses
+Other or Native. Other adds an imported subscription without changing the current
+Codex authentication; Native explicitly replaces the current subscription or
+local/API key and requires a runtime restart. The destination is locked while the
+device-code job is pending; cancel it before changing destination. The auth.json
+form always imports as Other. Both import paths refresh the shared catalog.
 EMP does not stop an active runtime.
 
 LAN migration is a transport for the existing encrypted `.emp` package and

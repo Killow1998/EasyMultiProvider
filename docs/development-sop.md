@@ -92,6 +92,8 @@ python3 scripts/shadow_frontend/e2e_native_history_restore.py \
 隔离系统安装的 ChatGPT 引擎：只改 PATH 不足以改变 EMP 的引擎优先顺序。
 Linux 可用 Bubblewrap 为测试进程单独遮蔽 `/usr/lib/chatgpt`，保留临时目录和
 结果目录可写；不要重命名或卸载用户正在使用的 App 来适配测试。
+隔离后核对可执行文件和祖先目录的属主，避免挂载方式改变引擎信任判断。
+Snap 环境可直接使用包内的 Firefox 和 geckodriver 二进制运行无界面测试。
 
 ## 4. 候选与发布
 

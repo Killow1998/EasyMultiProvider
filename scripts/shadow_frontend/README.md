@@ -88,13 +88,22 @@ acceptance. The default real-data review never seeds examples.
 The onboarding and tunnel entries open two disposable backends with production
 assets. Their banner identifies synthetic credentials: the device code completes
 after eight seconds without real sign-in, and migration connects only the local
-test pair. The receiver link supports the actual approval, preview and import
+test pair. Device sign-in offers Other or Native before requesting the code;
+Native explicitly replaces the current local/API key or subscription, while
+auth.json file/paste import always preserves Native. The receiver link supports
+the actual approval, preview and import
 workflow. Import, Export and Tunnel reuse the Add Service choice-card layout.
+The import confirmation locks selections and Back/Escape until the commit
+finishes; cancelling a preview cannot cancel the committed result.
 Import and export share service/model selection. Back keeps form drafts and
 returns to the immediate parent. The tunnel displays sending and receiving
 together, with automatic network selection, a fixed five-minute code lifetime
 and no IP controls.
 Each view grows with its content; service lists are not capped to a few rows.
+Run `e2e_login_destination.py --emp /path/to/candidate/EMP --output /tmp/emp-login`
+to verify both destinations from local-key and subscription states, cancellation,
+Native byte preservation, file/paste imports and the restart indication. Use the
+isolated helper setup in [the development SOP](../../docs/development-sop.md).
 The header's Tutorials entry uses the same ten GIFs as `docs/tutorials.md`, served
 locally in both Shadow and the executable. Run `e2e_tutorials.py --emp /path/to/EMP
 --output /tmp/emp-tutorials` for selection, asset recovery, keyboard navigation,
@@ -104,9 +113,9 @@ messages stored in that browser origin. The current-review entry opens the real
 inbox; it does not seed demonstration messages. `e2e_notifications.py --emp
 /path/to/EMP --output /tmp/emp-notifications` checks countdown/pause behavior,
 reload persistence, safe text rendering, clearing and independent form navigation.
-The sign-in review opens Add Service: device-code sign-in adds a subscription,
-while auth.json file selection and paste share one form. Native replacement
-remains available from the local-key row and uses a separate pending login job.
+The sign-in review opens the same Add Service destinations described above;
+the local-key row selects Native by default. Native and Other sign-in jobs remain
+independent.
 Returning to real-data Shadow never merges fixture state. Failed setup
 cleans up its own processes before a retry.
 

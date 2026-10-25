@@ -22,7 +22,7 @@ function createMigration() {
     for(const node of box.querySelectorAll('details'))node.open=expanded.has(node.dataset.migrationDetail);
   }
   function back(candidate) {
-    if(!active(candidate)||!candidate.parent)return;
+    if(!active(candidate)||!candidate.parent||candidate.committing)return;
     clearTimeout(previewTimer);candidate.controller.abort();
     if(candidate.parent.view.mode==='choose')candidate.parent.view.drafts.set(candidate.mode,{view:candidate,body:$('shadow_migration')});
     view=candidate.parent.view;render(candidate.parent.body);
@@ -40,6 +40,7 @@ function createMigration() {
     const help=$('modal_title').querySelector('.shadow-help');help.dataset.migrationRulesHelp='';help.setAttribute('aria-label',tr("transfers.import_merge_rules"));
     const node=$('shadow_migration');
     node.onclick=event=>{
+      if(candidate.committing)return;
       const mode=event.target.closest('[data-migration-mode]')?.dataset.migrationMode;
       if(mode&&candidate.mode==='choose'){
         const saved=candidate.drafts.get(mode);
@@ -52,6 +53,7 @@ function createMigration() {
       const all=event.target.closest('[data-migration-all]');if(all){candidate.rows.forEach(row=>row.selected=row.exportable!==false&&all.dataset.migrationAll==='true');render();schedulePreview(candidate);}
     };
     node.oninput=event=>{
+      if(candidate.committing)return;
       const input=event.target;
       if(input.dataset.migrationPreferenceSource!==undefined){
         candidate.preferenceChoices ||= {};candidate.preferenceChoices[input.dataset.migrationPreferenceSource] ||= {};
@@ -85,7 +87,7 @@ function createMigration() {
     render();schedulePreview(view);
   }
   function schedulePreview(candidate) {
-    if(candidate.mode!=='import'||!candidate.token)return;
+    if(candidate.mode!=='import'||!candidate.token||candidate.committing)return;
     const failed=candidate.previewError;candidate.previewError='';
     candidate.busy=true;candidate.previewReady=false;updatePreview();
     if(failed)render();
@@ -149,10 +151,22 @@ function createMigration() {
         const source=selected.find(item=>item.kind===row.kind && item.id===row.record._shadow_source_id);
         if(source)source.name=candidate.nameEdits?.get(row.kind+':'+row.id)?.trim() || row.name;
       }
-      await api('/api/migration/import',{method:'POST',body:JSON.stringify({token:candidate.token,selections:selected,...options(candidate)}),signal:controller.signal});
-      if(!active(candidate)||controller.signal.aborted)return;
-      const loaded=await api('/api/config');if(!active(candidate)||controller.signal.aborted)return;
-      state=loaded;fill();closeModal();notice(tr("transfers.selected_services_imported"));return;
+      candidate.committing=true;candidate.busy=true;
+      const controls=[...$('shadow_migration').querySelectorAll('input,select,button'),$('modal_back')].map(control=>[control,control.disabled]);
+      controls.forEach(([control])=>control.disabled=true);
+      $('shadow_migration').setAttribute('aria-busy','true');
+      try {
+        // Preview cancellation must not discard a committed import's result.
+        await api('/api/migration/import',{method:'POST',body:JSON.stringify({token:candidate.token,selections:selected,...options(candidate)})});
+        state=await api('/api/config');fill();
+        if(active(candidate))closeModal();
+        notice(tr("transfers.selected_services_imported"));
+      } finally {
+        candidate.committing=false;candidate.busy=false;
+        controls.forEach(([control,disabled])=>control.disabled=disabled);
+        if(active(candidate))updatePreview();
+      }
+      return;
     }
     const password=$('shadow_export_password').value, confirmation=$('shadow_export_password_confirm').value;
     if(password!==confirmation)throw new Error(tr("transfers.passwords_do_not_match"));

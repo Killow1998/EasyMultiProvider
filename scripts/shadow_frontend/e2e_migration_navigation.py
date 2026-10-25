@@ -126,12 +126,26 @@ def main():
         assert browser.execute('return document.getElementById("modal_submit").disabled;')
         browser.execute('document.querySelector("[data-migration-all=true]").click();')
         wait_for(lambda: browser.execute('return !document.getElementById("modal_submit").disabled;'))
-        browser.execute('document.getElementById("modal_submit").click();')
+        browser.execute('''window.importCommitted=false;window.migrationFetch=window.fetch;
+          window.fetch=function(input,options){
+            if(String(input)==='/api/migration/import')return window.migrationFetch(input,options).then(response=>new Promise(resolve=>{
+              window.importCommitted=true;window.releaseImport=()=>resolve(response);
+            }));
+            return window.migrationFetch(input,options);
+          };
+          document.getElementById('modal_submit').click();''')
+        wait_for(lambda:browser.execute('return window.importCommitted;'))
+        assert any(provider['name']=='Imported fixture' for provider in json.loads((target/'config.json').read_text())['providers'])
+        assert browser.execute('return document.getElementById("migration_include_rename").disabled && document.getElementById("modal_back").disabled;')
+        browser.execute('document.getElementById("migration_include_rename").click();document.getElementById("modal_back").click();')
+        browser.escape()
+        assert browser.execute('return !!document.getElementById("migration_preview_rows");')
+        browser.execute('window.releaseImport();window.fetch=window.migrationFetch;')
         wait_for(lambda: browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");'))
         stored = json.loads((target / 'config.json').read_text())
         assert any(provider['name'] == 'Imported fixture' for provider in stored['providers'])
         assert upstream.calls == 0
-        checks.append('Selection changes gate Import; one explicit Import saves the selected service through real backend')
+        checks.append('A delayed committed import locks selection and Back/Escape; completion closes the preview and preserves the saved service')
         # Same-account roles share one card, with explicit choices only for differing preferences.
         native_path = target / 'codex_home/auth.json'
         identity_token = 'fixture.' + base64.urlsafe_b64encode(json.dumps({

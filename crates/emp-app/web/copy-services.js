@@ -1,6 +1,6 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
-  'services.auth_import_help':['选择 auth.json 文件，或粘贴完整内容。','Choose an auth.json file or paste its full contents.'],
+  'services.auth_import_help':['选择 auth.json 文件或粘贴完整内容，添加为其他订阅，保留当前 Native 登录。','Choose an auth.json file or paste its full contents to add another subscription, keeping the current Native login.'],
   "services.cli_available": ["已找到 Claude Code CLI，EMP 可以访问。","Claude Code CLI is available to EMP."],
   "services.cli_unavailable": ["未找到可用的 Claude Code CLI。请安装或检查 EMP 是否能够访问。","Claude Code CLI was not found. Install it or check that EMP can access it, then reopen this form."],
   "services.name": ["名称","Name"],
