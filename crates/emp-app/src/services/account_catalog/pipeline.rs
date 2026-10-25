@@ -1,6 +1,6 @@
 use crate::app::ServerState;
 use crate::services::accounts::{
-    account_catalog_headers, duplicate_accounts, native_auth_document,
+    account_catalog_headers, duplicate_accounts, native_subscription_headers,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -28,8 +28,7 @@ impl RefreshSource {
         base: &str,
         client_version: String,
     ) -> Option<Self> {
-        let headers = native_auth_document(&state.backend.accounts.native_auth_path)
-            .and_then(|auth| emp_codex::account_auth_headers(&auth))?;
+        let headers = native_subscription_headers(&state.backend.accounts.native_auth_path)?;
         let owner = emp_codex::native_catalog_owner(&headers);
         let credential_fingerprint = credential_fingerprint(&headers);
         let path = emp_codex::native_catalog_path(config.as_object()?);
@@ -209,8 +208,7 @@ pub(crate) fn persist_fetched_catalog(
         return Err(PersistError::SourceChanged);
     }
     let path = if source.native {
-        let current_headers = native_auth_document(&state.backend.accounts.native_auth_path)
-            .and_then(|auth| emp_codex::account_auth_headers(&auth));
+        let current_headers = native_subscription_headers(&state.backend.accounts.native_auth_path);
         let Some(current_map) = current.as_object() else {
             return Err(PersistError::SourceChanged);
         };

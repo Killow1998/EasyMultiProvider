@@ -123,6 +123,12 @@ pub(crate) fn native_auth_document(path: &Path) -> Option<Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
+pub(crate) fn native_subscription_headers(path: &Path) -> Option<BTreeMap<String, String>> {
+    native_auth_document(path)
+        .and_then(|auth| validate_auth_json(&auth).ok())
+        .and_then(|auth| account_auth_headers(&auth))
+}
+
 pub(crate) fn import_account_state(
     request_id: Option<&str>,
     state: &ServerState,

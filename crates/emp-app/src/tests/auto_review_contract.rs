@@ -348,6 +348,38 @@ fn http_auto_review_skips_symlink_native_and_missing_account_catalog_without_lea
     );
 }
 
+#[test]
+fn http_auto_review_uses_imported_subscription_when_native_has_no_subscription() {
+    for native_auth in [
+        None,
+        Some(r#"{"OPENAI_API_KEY":"emp-local-fixture","emp_local_connection":true}"#),
+        Some(r#"{"OPENAI_API_KEY":"fixture-api-key"}"#),
+        Some(r#"{"tokens":{"access_token":" "}}"#),
+        Some("invalid JSON"),
+    ] {
+        let upstream = OneShotUpstream::start(json!({
+            "id":"review-fixture","object":"response","status":"completed",
+            "model":"codex-auto-review","output":[]
+        }));
+        let accounts =
+            [json!({"id":"imported","name":"Imported","prefix":"imported","enabled":true})];
+        let (_directory, server, _) = make_review_server(&upstream.base_url(), &accounts, None);
+        if let Some(auth) = native_auth {
+            std::fs::write(&server.state.backend.accounts.native_auth_path, auth).unwrap();
+        }
+        let wire = post(
+            &server,
+            "/v1/responses",
+            br#"{"model":"codex-auto-review","input":"review"}"#,
+            &[&session_header(&server)],
+        );
+        assert!(wire.starts_with("HTTP/1.1 200 OK\r\n"), "{wire}");
+        let (_, headers, body) = upstream.observed();
+        assert_eq!(headers["authorization"], "Bearer imported-token");
+        assert_eq!(body["model"], "codex-auto-review");
+    }
+}
+
 #[cfg_attr(windows, allow(dead_code))]
 struct ReviewStreamUpstream {
     address: SocketAddr,

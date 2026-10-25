@@ -58,9 +58,7 @@ pub(super) fn enrich(state: &ServerState, config: &Value, payload: &mut Value) {
                 .or_insert_with(|| json!({"name":name,"local_id":id,"email":email}));
         }
     }
-    if let Some(headers) = native_auth_document(&state.backend.accounts.native_auth_path)
-        .and_then(|auth| emp_codex::account_auth_headers(&auth))
-    {
+    if let Some(headers) = native_subscription_headers(&state.backend.accounts.native_auth_path) {
         let owner = account_owner(&headers);
         if !owner.is_empty() {
             let email = state

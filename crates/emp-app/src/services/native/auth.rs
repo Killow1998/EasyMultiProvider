@@ -1,6 +1,6 @@
 //! Native credential selection; imported-account rotation stays in the quota owner.
 use super::*;
-use crate::services::accounts::native_auth_document;
+use crate::services::accounts::native_subscription_headers;
 use crate::services::quota::refresh_account_serialized;
 use emp_codex::account_auth_headers;
 use emp_router::native_request::{NativeAuth, request_headers};
@@ -77,9 +77,7 @@ pub(crate) fn resolve_headers(
                 "Sign in to a Codex subscription or select an external service model",
             ));
         }
-        selected = native_auth_document(&state.backend.accounts.native_auth_path)
-            .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
-            .and_then(|auth| account_auth_headers(&auth));
+        selected = native_subscription_headers(&state.backend.accounts.native_auth_path);
         NativeAuth::Implicit(selected.as_ref())
     } else {
         NativeAuth::Forward

@@ -2,7 +2,7 @@ mod state;
 pub(crate) use state::ReviewState;
 
 use crate::app::ServerState;
-use crate::services::accounts::regular_file;
+use crate::services::accounts::native_subscription_headers;
 use crate::services::subscription_quota::headroom as quota_headroom;
 use emp_core::{ResolvedRoute, RouteResolutionError, RouteSource, resolved_route_from_parts};
 use serde_json::{Map, Value, json};
@@ -33,7 +33,8 @@ pub(crate) fn resolve_auto_review_route(
         return None;
     }
     let config_object = config.as_object()?;
-    let native_available = regular_file(&state.backend.accounts.native_auth_path);
+    let native_available =
+        native_subscription_headers(&state.backend.accounts.native_auth_path).is_some();
     let native_quota = state
         .backend
         .accounts

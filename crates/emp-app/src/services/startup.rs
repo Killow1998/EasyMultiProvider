@@ -1,6 +1,6 @@
 //! Recover only an integration lease that targets this actual listener/catalog.
 use crate::app::ServerState;
-use crate::services::accounts::native_auth_document;
+use crate::services::accounts::native_subscription_headers;
 use crate::services::catalog::{generated_catalog_path, refresh_catalog};
 use crate::services::integration::endpoint::is_previous_loopback_url;
 use crate::services::runtime::mark_pending;
@@ -57,9 +57,8 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
             "EMP restarted; runtime catalog was not assumed",
         )?;
         refresh_catalog(state)?;
-        let dynamic = native_auth_document(&state.backend.accounts.native_auth_path)
-            .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
-            .is_some();
+        let dynamic =
+            native_subscription_headers(&state.backend.accounts.native_auth_path).is_some();
         if let Some(lease) = result.lease.as_ref()
             && (is_previous_loopback_url(
                 lease.fields["openai_base_url"].applied.value.as_deref(),

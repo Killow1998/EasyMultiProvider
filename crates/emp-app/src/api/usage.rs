@@ -8,7 +8,9 @@ use crate::http::response::{
     body_error_response, cross_origin_response, json_error_response, response, status_text,
     unauthorized_response,
 };
-use crate::services::accounts::{account_catalog_headers, native_auth_document, quota_owner_key};
+use crate::services::accounts::{
+    account_catalog_headers, native_subscription_headers, quota_owner_key,
+};
 use crate::util::system_now;
 use emp_state::usage::{
     account_owner,

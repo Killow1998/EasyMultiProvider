@@ -11,7 +11,7 @@ use crate::http::response::body_error_response;
 use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
-use crate::services::accounts::native_auth_document;
+use crate::services::accounts::native_subscription_headers;
 use crate::util::random_hex;
 use emp_codex::account_auth_headers;
 use emp_transport::HttpMethod;
@@ -71,8 +71,7 @@ pub(crate) fn native_search_request(
         ("Accept".to_owned(), "application/json".to_owned()),
         ("User-Agent".to_owned(), format!("EMP/{VERSION}")),
     ]);
-    let credentials = native_auth_document(&state.backend.accounts.native_auth_path)
-        .and_then(|auth| account_auth_headers(&auth))
+    let credentials = native_subscription_headers(&state.backend.accounts.native_auth_path)
         .or_else(|| {
             config
                 .get("accounts")

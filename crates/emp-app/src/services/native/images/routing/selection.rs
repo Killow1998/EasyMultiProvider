@@ -1,6 +1,6 @@
 //! Image eligibility uses both shared subscription capacity and image limits.
 use super::*;
-use crate::services::accounts::{native_auth_document, regular_file};
+use crate::services::accounts::{native_subscription_headers, regular_file};
 use crate::services::subscription_quota::image_headroom;
 use emp_core::RouteSource;
 
@@ -13,10 +13,7 @@ fn available(account: &Value) -> bool {
 }
 
 fn native_available(state: &ServerState) -> bool {
-    native_auth_document(&state.backend.accounts.native_auth_path)
-        .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
-        .and_then(|auth| emp_codex::account_auth_headers(&auth))
-        .is_some()
+    native_subscription_headers(&state.backend.accounts.native_auth_path).is_some()
 }
 
 fn image_supported(quota: Option<&Value>) -> bool {

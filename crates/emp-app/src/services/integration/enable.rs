@@ -1,6 +1,6 @@
 //! Shared explicit and opt-in startup activation; callers hold the operation lock.
 use crate::app::ServerState;
-use crate::services::accounts::native_auth_document;
+use crate::services::accounts::native_subscription_headers;
 use crate::services::catalog::{refresh_catalog, server_catalog};
 use emp_integration::IntegrationResult;
 
@@ -39,9 +39,7 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
     let (catalog_path, _) = refresh_catalog(state).map_err(|_| EnableError::Unavailable(503))?;
     // Subscription authentication uses Codex's online model discovery.
     // API-only engines retain the catalog-file compatibility fallback.
-    let dynamic = native_auth_document(&state.backend.accounts.native_auth_path)
-        .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
-        .is_some();
+    let dynamic = native_subscription_headers(&state.backend.accounts.native_auth_path).is_some();
     let base_url = &state.base_url;
     let path = catalog_path.to_string_lossy();
     if dynamic {
