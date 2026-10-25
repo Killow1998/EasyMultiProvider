@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.15 (2026-10-25)
+
+### 中文
+
+- 修复部分 Native 和导入订阅请求因输入项目 ID 返回 400 的问题；保留消息、工具结果和增量会话关系，避免重复执行已开始的请求。
+- 当前 Codex 使用本地 Key、API Key 或未登录时，自动审查可正常选择可用的导入订阅；订阅凭证判断在各入口保持一致。
+- 装置码登录前可选择添加为 Other 或替换 Native；替换成功后提示重启 Codex Runtime。auth.json 文件选择与粘贴仍统一导入为 Other。
+- 修复迁移提交结果被预览取消操作丢弃的问题；提交期间锁定编辑和返回，成功后刷新服务列表。
+
+### English
+
+- Recover Native and imported-subscription requests rejected with an input-item ID lookup error. Preserve messages, tool results and incremental continuation; never replay a request that has started generating.
+- Let Auto Review select an available imported subscription when Codex uses a local key, an API key or no login. Share validated subscription eligibility across entry points.
+- Choose Other or Native before device-code sign-in, with a runtime restart prompt after Native replacement. File selection and pasted auth.json both continue to import as Other.
+- Preserve migration commit results independently of preview cancellation. Lock editing and Back during commit, then refresh the service list after success.
+
 ## 0.13.14 (2026-10-23)
 
 ### 中文
