@@ -56,8 +56,13 @@ impl NativeSession {
         } = turn;
         let mut native_turn_activity = None;
         let mut fallback_usage = None;
-        let plan = match native::websocket_plan(state, route, config, request_body, request_headers)
-        {
+        let mut plan = match native::websocket_plan(
+            state,
+            route,
+            config,
+            request_body,
+            request_headers,
+        ) {
             Ok(plan) => plan,
             Err(error) => {
                 websocket.reject(state, route, request_body, request_headers,
@@ -96,6 +101,9 @@ impl NativeSession {
             ..
         } = self;
         if let Some(upstream) = native_upstream.as_mut() {
+            if upstream.replay_inline_ids {
+                emp_protocol::native_responses::remove_inline_input_ids(&mut plan.payload);
+            }
             websocket
                 .observation
                 .native_continuation()
@@ -182,6 +190,7 @@ impl NativeSession {
             let mut projected_error = false;
             let mut received_upstream_event = false;
             let mut delivered_output = false;
+            let mut replay_allowed = true;
             while let Ok(Some(message)) =
                 duplex.next(client, websocket.inner, pending_request.is_none())
             {
@@ -218,6 +227,33 @@ impl NativeSession {
                         continue;
                     }
                 };
+                if replay_allowed
+                    && emp_protocol::native_responses::persisted_input_lookup_rejected(&event)
+                {
+                    let mut retry_payload = payload.as_ref().clone();
+                    if emp_protocol::native_responses::remove_inline_input_ids(&mut retry_payload)
+                        > 0
+                    {
+                        // A 400 before response creation has not executed the task.
+                        // Keep this adaptation local to the selected upstream socket.
+                        replay_allowed = false;
+                        upstream.replay_inline_ids = true;
+                        usage.native_retry(emp_router::native_http::NativeRetryDecision {
+                            reason: emp_router::native_http::NativeRetryReason::InlineInputReplay,
+                            status: 400,
+                            retry: true,
+                        });
+                        usage.dispatch();
+                        if client.send_json(&retry_payload).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+                replay_allowed &= matches!(
+                    event["type"].as_str(),
+                    Some("response.metadata" | "codex.response.metadata" | "codex.rate_limits")
+                );
                 received_upstream_event = true;
                 if event["error"]["code"] == "previous_response_not_found"
                     || event["response"]["error"]["code"] == "previous_response_not_found"

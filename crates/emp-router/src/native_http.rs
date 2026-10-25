@@ -175,6 +175,7 @@ pub enum NativeRetryReason {
     Network,
     AccountRefresh,
     ReasoningFallback,
+    InlineInputReplay,
 }
 #[derive(Clone, Copy)]
 pub struct NativeRetryDecision {

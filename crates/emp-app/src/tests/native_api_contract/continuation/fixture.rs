@@ -13,6 +13,7 @@ pub(super) struct Traffic {
     pub(super) application_bytes: usize,
     pub(super) generated_hashes: Vec<String>,
     pub(super) cancelled_prefills: usize,
+    pub(super) inline_rejections: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -23,6 +24,10 @@ pub(super) enum Fault {
     RejectPrefill,
     GeneratePrefill,
     SilentPrefill,
+    RejectInlineIds,
+    RejectAllInputs,
+    RejectOtherInput,
+    RejectAfterCreated,
 }
 
 pub(super) struct Upstream {
@@ -131,10 +136,34 @@ impl Upstream {
                         }
                         let body: Value = serde_json::from_str(&text).unwrap();
                         let warmup = body["generate"] == false;
+                        if !warmup
+                            && (matches!(fault, Fault::RejectAllInputs | Fault::RejectOtherInput)
+                                || (matches!(fault, Fault::RejectInlineIds | Fault::RejectAfterCreated)
+                                    && body["input"].as_array().unwrap().iter().any(|item| {
+                                        matches!(item["type"].as_str(), Some("message" | "additional_tools"))
+                                            && item.get("id").is_some()
+                                            && (item["content"].is_array() || item["tools"].is_array())
+                                    })))
+                        {
+                            traffic.lock().unwrap().inline_rejections += 1;
+                            if fault == Fault::RejectAfterCreated {
+                                ws.send_json(&json!({"type":"response.created","response":{"id":"resp_started","status":"in_progress"}})).unwrap();
+                            }
+                            let message = if fault == Fault::RejectOtherInput {
+                                "another unsupported input"
+                            } else {
+                                "Supplied input item IDs require persisted-item lookup that is not supported by rustponsesapi."
+                            };
+                            ws.send_json(&json!({"type":"error","status":400,"error":{
+                                "code":"unsupported_parameter","param":"input",
+                                "message":message
+                            }})).unwrap();
+                            continue;
+                        }
                         let fault_applies = match fault {
                             Fault::DisconnectIncremental | Fault::RejectIncremental => body["previous_response_id"].is_string(),
                             Fault::RejectPrefill | Fault::GeneratePrefill | Fault::SilentPrefill => warmup,
-                            Fault::None => false,
+                            Fault::None | Fault::RejectInlineIds | Fault::RejectAllInputs | Fault::RejectOtherInput | Fault::RejectAfterCreated => false,
                         };
                         if fault_applies && !fault_used.swap(true, Ordering::AcqRel) {
                             match fault {
@@ -166,7 +195,7 @@ impl Upstream {
                                     }
                                     break;
                                 }
-                                Fault::None => unreachable!(),
+                                _ => unreachable!(),
                             }
                         }
                         if let Some(previous) = body["previous_response_id"].as_str() {
@@ -186,7 +215,15 @@ impl Upstream {
                         sequence += 1;
                         last_id = format!("resp_{connection}_{sequence}");
                         ws.send_json(&json!({"type":"response.created","response":{"id":last_id,"status":"in_progress"}})).unwrap();
-                        ws.send_json(&json!({"type":"response.completed","response":{"id":last_id,"object":"response","status":"completed","model":"gpt-fixture","output":[],"usage":{"input_tokens":41,"output_tokens":if warmup {0}else{1}}}})).unwrap();
+                        let mut output = Vec::new();
+                        if !warmup && fault == Fault::RejectInlineIds {
+                            let item = json!({"id":format!("msg_{connection}_{sequence}"),"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OK","annotations":[]}]});
+                            ws.send_json(&json!({"type":"response.output_item.added","output_index":0,"item":item})).unwrap();
+                            ws.send_json(&json!({"type":"response.output_text.delta","item_id":item["id"],"output_index":0,"content_index":0,"delta":"OK"})).unwrap();
+                            ws.send_json(&json!({"type":"response.output_item.done","output_index":0,"item":item})).unwrap();
+                            output.push(item);
+                        }
+                        ws.send_json(&json!({"type":"response.completed","response":{"id":last_id,"object":"response","status":"completed","model":"gpt-fixture","output":output,"end_turn":!warmup,"usage":{"input_tokens":41,"output_tokens":if warmup {0}else{1},"total_tokens":if warmup {41}else{42}}}})).unwrap();
                     }
                 }));
             }

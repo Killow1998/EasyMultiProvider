@@ -3,6 +3,7 @@ use super::*;
 use sha2::{Digest, Sha256};
 mod collaboration;
 mod fixture;
+mod inline_ids;
 use fixture::*;
 
 #[test]

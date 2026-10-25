@@ -32,6 +32,7 @@ pub(super) struct NativeUpstreamConnection {
     identity: BTreeMap<String, String>,
     plaintext_collaboration: bool,
     pub(super) client: ClientWebSocket,
+    pub(super) replay_inline_ids: bool,
 }
 
 impl NativeSession {
@@ -153,6 +154,7 @@ impl NativeSession {
                         identity: plan_identity.clone(),
                         plaintext_collaboration: plan.plaintext_collaboration,
                         client,
+                        replay_inline_ids: false,
                     });
                     connected_now = true;
                 }

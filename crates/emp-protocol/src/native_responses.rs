@@ -144,6 +144,44 @@ pub fn project_request(body: &Map<String, Value>) -> Result<Value, NativeProject
     Ok(Value::Object(projected))
 }
 
+/// Match the explicit pre-generation rejection, never a generic input error.
+pub fn persisted_input_lookup_rejected(event: &Value) -> bool {
+    event["type"] == "error"
+        && event["status"] == 400
+        && event["error"]["code"] == "unsupported_parameter"
+        && event["error"]["param"] == "input"
+        && event["error"]["message"]
+            == "Supplied input item IDs require persisted-item lookup that is not supported by rustponsesapi."
+}
+
+/// Inline text/media and tool declarations do not need a persisted lookup.
+/// References, opaque native items and tool-call/output identities stay intact.
+pub fn remove_inline_input_ids(body: &mut Value) -> usize {
+    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    input
+        .iter_mut()
+        .filter_map(|item| {
+            let inline = match item["type"].as_str() {
+                Some("message") => item["content"].is_array(),
+                Some("additional_tools") => item["tools"].is_array(),
+                _ => false,
+            };
+            if inline
+                && item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+            {
+                item.as_object_mut()?.remove("id")
+            } else {
+                None
+            }
+        })
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -113,6 +113,7 @@ impl RequestOutcome<'_> {
             NativeRetryReason::Network => "network",
             NativeRetryReason::AccountRefresh => "account_refresh",
             NativeRetryReason::ReasoningFallback => "reasoning_fallback",
+            NativeRetryReason::InlineInputReplay => "inline_input_replay",
         };
         if decision.retry {
             self.retry_fact(reason, decision.status, None, None);
