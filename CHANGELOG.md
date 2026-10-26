@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.13.16 (2026-10-26)
+
+### 中文
+
+- 外部模型新增最大输出 Tokens 设置；请求采用模型设置与调用方限制中较小的值，留空取消额外上限。
+- 统计中的诊断增加连接与模型探测记录，单独展示目录读取及文本、图片、音频测试。模型测试的实际用量照常统计，不计入会话账单和对话性能样本。
+- 更新说明汇总当前版本至目标正式版之间的改进与修复，支持中英文分组显示和本地缓存；跨预发布页面继续读取正式版说明，异常或超大返回保留已有缓存。
+- 统一服务、模型和会话账单的用量显示，区分未返回用量、已报告零用量及部分统计，避免将未知值显示为零。
+- 修复 Codex 配置目录文件较多时遗漏会话标题和父子关系的问题。
+- 修复读取系统代理时阻塞并发请求的问题，刷新期间继续使用已有代理结果。
+- 修复频繁模型测试挤占普通请求诊断样本的问题，重启后仍分别保留普通请求和探测记录。
+
+### English
+
+- Set a maximum output token limit for external models. Requests use the smaller of the model setting and the caller's limit; leave the setting blank to remove the additional cap.
+- View connection and model checks separately in Statistics diagnostics, including catalog reads and text, image and audio tests. Actual test usage stays in usage totals, while tests stay out of session bills and conversation performance samples.
+- Read improvements and fixes from intervening stable releases, grouped in Chinese and English with local caching. Continue across preview-only pages and preserve the last durable cache when metadata fails validation or exceeds the cache limit.
+- Share usage formatting across services, models and session bills. Keep missing usage, reported zero and partial totals distinct.
+- Preserve conversation titles and parent relationships when the Codex configuration directory contains many unrelated files.
+- Keep concurrent requests responsive while system proxy settings refresh, reusing the last available proxy result.
+- Prevent frequent model tests from displacing ordinary diagnostic samples. Restore ordinary requests and check receipts separately after restart.
+
 ## 0.13.15 (2026-10-25)
 
 ### 中文
