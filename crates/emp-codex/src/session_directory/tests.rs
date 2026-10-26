@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn unrelated_home_entries_do_not_hide_conversation_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("state_5.sqlite");
+    let database = rusqlite::Connection::open(&path).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT);
+        CREATE TABLE thread_spawn_edges(parent_thread_id TEXT,child_thread_id TEXT);
+        INSERT INTO threads VALUES('main','Main conversation'),('review','Review');
+        INSERT INTO thread_spawn_edges VALUES('main','review');",
+        )
+        .unwrap();
+    drop(database);
+    let original = std::fs::read(&path).unwrap();
+    for index in 0..512 {
+        std::fs::write(root.path().join(format!("unrelated-{index}")), b"").unwrap();
+    }
+    let mut scope = SessionScope::default();
+    scope.observe("review", "", "review");
+    SessionDirectory::default().enrich(root.path(), &mut scope);
+    assert_eq!(scope.root("review"), Some("main"));
+    assert_eq!(scope.0["main"].name, "Main conversation");
+    assert_eq!(std::fs::read(path).unwrap(), original);
+}
+
+#[test]
 fn parent_metadata_handles_ephemeral_review_sidechat_and_nested_agents_read_only() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("state_5.sqlite");

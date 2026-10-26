@@ -2,15 +2,7 @@
 function createSessionBills({api,tr,esc,number,getLanguage}) {
   let current=null, searchTimer=null;
   const time=value=>new Date(value*1000).toLocaleString(getLanguage()==='en'?'en-US':'zh-CN',{hour12:false});
-  const count=(row,field,coverage)=>{
-    if (!row[coverage]) return '—';
-    const value=number(row[field]);
-    if (row[coverage]>=row.requests) return value;
-    const help=coverage.startsWith('cache') ? tr('reports.bill_partial_cache') : tr('reports.bill_missing_usage',{count:number(row.requests-row[coverage])});
-    return `<span title="${esc(help)}">${value} *</span>`;
-  };
-  const tokens=row=>row.input_reports || row.output_reports ? number(row.input_tokens+row.output_tokens)+(row.reported_requests<row.requests?' *':'') : '—';
-  const usd=row=>row.requests>row.unpriced_requests ? 'US$'+(row.cost_nanos/1e9).toFixed(4)+(row.unpriced_requests?' *':'') : '—';
+  const {count,tokens,usd}=createUsageValues({tr,esc,number});
   function notices(row) {
     return [row.unpriced_requests ? tr('reports.bill_unpriced',{count:number(row.unpriced_requests)}) : '',
       row.reported_requests<row.requests ? tr('reports.bill_missing_usage',{count:number(row.requests-row.reported_requests)}) : '']

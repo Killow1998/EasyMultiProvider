@@ -11,7 +11,6 @@ pub(super) fn read(home: &Path, scope: &mut SessionScope) {
         .ok()
         .into_iter()
         .flatten()
-        .take(128)
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;

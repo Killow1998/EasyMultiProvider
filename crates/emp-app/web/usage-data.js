@@ -1,3 +1,17 @@
+// Reported zero and missing usage remain distinct across tables and bills.
+function createUsageValues({tr,esc,number}) {
+  const count=(row,field,coverage,html=true)=>{
+    if (!row[coverage]) return '—';
+    const value=number(row[field]);
+    if (row[coverage]>=row.requests) return value;
+    const help=coverage.startsWith('cache') ? tr('reports.bill_partial_cache') : tr('reports.bill_missing_usage',{count:number(row.requests-row[coverage])});
+    return html ? `<span title="${esc(help)}">${value} *</span>` : `${value} *`;
+  };
+  const tokens=row=>row.input_reports || row.output_reports ? number(row.input_tokens+row.output_tokens)+(row.reported_requests<row.requests?' *':'') : '—';
+  const usd=row=>row.priced_requests && row.requests>(row.unpriced_requests || 0) ? 'US$'+(row.cost_nanos/1e9).toFixed(4)+(row.unpriced_requests?' *':'') : '—';
+  return {count,tokens,usd};
+}
+
 // All chart groupings project the same reconciled rows; grouping cannot alter totals.
 function createUsageData({tr,esc,number}) {
   const palette = ['#537de0','#279e9b','#c98730','#a371ce','#d2637d','#559746','#d65c46','#b0942d'];
@@ -5,7 +19,7 @@ function createUsageData({tr,esc,number}) {
   const key = row => JSON.stringify([row.category,row.owner]);
   const service = row => row.owner_name || (String(row.owner).startsWith('history:') ? tr("reports.unlinked_historical_usage")+' · '+row.owner.slice(8) : /^(account|credential):/.test(row.owner) ? tr("reports.unlinked_account") : row.category === 'native' ? 'Native' : row.owner || tr("reports.unlinked"));
   const category = value => ({native:'Codex · Native',subscription:tr("reports.codex_subscription"),external:tr("reports.external_providers"),unknown:tr("reports.unlinked")})[value] || value;
-  const usd = row => row.priced_requests ? 'US$'+(row.cost_nanos/1e9).toFixed(4) : '—';
+  const values=createUsageValues({tr,esc,number}), {count,usd}=values;
   const colorIndex = value => [...value].reduce((n,c) => (n*31+c.codePointAt(0))>>>0,0)%palette.length;
   const color = value => palette[colorIndex(value)];
   function registerServices(report) {
@@ -33,18 +47,19 @@ function createUsageData({tr,esc,number}) {
   }
   function table(report,mode) {
     const groups = new Map();
+    const fields=['input_tokens','output_tokens','cached_input_tokens','cost_nanos','requests','priced_requests','unpriced_requests','reported_requests','input_reports','output_reports','cache_reports'];
     for (const row of report.groups) {
       const id = JSON.stringify([row.category,row.owner,...(mode === 'models' ? [row.model] : [])]);
-      if (!groups.has(id)) groups.set(id,{...row,input_tokens:0,output_tokens:0,cached_input_tokens:0,cost_nanos:0,requests:0,priced_requests:0});
-      for (const field of ['input_tokens','output_tokens','cached_input_tokens','cost_nanos','requests','priced_requests']) groups.get(id)[field]+=row[field];
+      if (!groups.has(id)) groups.set(id,{...row,...Object.fromEntries(fields.map(field=>[field,0]))});
+      for (const field of fields) groups.get(id)[field]+=row[field] || 0;
     }
     const rows=[...groups.values()].sort((a,b) => a.category.localeCompare(b.category)||service(a).localeCompare(service(b))||a.model.localeCompare(b.model));
     let previous='';
     const html=rows.map(row => {
       const heading=row.category !== previous ? `<tr class="presentation-usage-category"><th colspan="6">${esc(category(row.category))}</th></tr>` : ''; previous=row.category;
-      return `${heading}<tr><td><strong>${esc(mode === 'models' ? row.model : service(row))}</strong>${mode === 'models' ? `<small>${esc(service(row))}</small>` : row.owner_email ? `<small>${esc(row.owner_email)}</small>` : ''}</td><td>${number(row.requests)}</td><td>${number(row.input_tokens)}</td><td>${number(row.output_tokens)}</td><td>${number(row.cached_input_tokens)}</td><td>${usd(row)}</td></tr>`;
+      return `${heading}<tr><td><strong>${esc(mode === 'models' ? row.model : service(row))}</strong>${mode === 'models' ? `<small>${esc(service(row))}</small>` : row.owner_email ? `<small>${esc(row.owner_email)}</small>` : ''}</td><td>${number(row.requests)}</td><td>${count(row,'input_tokens','input_reports')}</td><td>${count(row,'output_tokens','output_reports')}</td><td>${count(row,'cached_input_tokens','cache_reports')}</td><td>${usd(row)}</td></tr>`;
     }).join('');
     return `<div class="usage-table"><table><thead><tr>${[mode === 'models' ? tr("reports.model_service") : tr("reports.service"),tr("reports.records_2"),tr("services.input"),tr("services.output"),tr("reports.cache_read"),'API · USD'].map(title=>`<th>${esc(title)}</th>`).join('')}</tr></thead><tbody>${html || `<tr><td colspan="6">${tr("reports.no_usage_in_this_period")}</td></tr>`}</tbody></table></div>`;
   }
-  return {chart,table,usd};
+  return {chart,table,...values};
 }
