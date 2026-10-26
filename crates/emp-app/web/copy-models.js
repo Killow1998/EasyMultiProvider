@@ -1,5 +1,9 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  "models.maximum_output": ["最大输出 Tokens","Maximum output tokens"],
+  "models.output_default": ["留空不额外限制","Leave blank for no additional limit"],
+  "models.maximum_output_help": ["限制单次回复的输出长度，并为上下文预算预留输出空间。请求自身设置了更小的上限时，使用较小值。留空取消此上限。","Limit the output of each reply and reserve room in the context budget. A smaller limit in the request takes precedence. Leave blank to remove this limit."],
+  "models.invalid_output_limit": ["最大输出请输入正整数，或留空取消此上限。","Enter a positive whole number for maximum output, or leave it blank to remove this limit."],
   "models.settings_display": ["显示","Display"],
   "models.settings_general": ["通用服务设置","General service settings"],
   "models.settings_external": ["外部服务设置","External service settings"],

@@ -1,5 +1,8 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  "transfers.release_improvements": ["新增与改进","New and improved"],
+  "transfers.release_fixes": ["问题修复","Fixes"],
+  "transfers.release_history_more": ["更早的版本说明请查看完整发布记录。","See the full release history for earlier versions."],
   "transfers.codex_subscriptions_verified_matching_accounts_update_the_existing_service": ["Codex 订阅：账号身份一致时更新已有服务，其余情况新增服务。","Codex subscriptions: matching account identities update the existing service; other accounts are added separately."],
   "transfers.external_api_services_matching_connection_methods_exact_base_url": ["外部 API 服务：连接方式、完整地址与非空 API key 全部一致时合并，其余情况新增服务。合并时更新同名上游模型，并保留其他模型。","External API services merge when their connection method, full URL and nonempty API key all match; otherwise they are added separately. Merging updates matching upstream models and keeps other models."],
   "transfers.local_claude_subscriptions_retain_a_separate_service_when_account": ["本机 Claude 订阅：没有可验证的账号身份时保留为独立服务。","Local Claude subscriptions: retain a separate service when account identity cannot be verified."],

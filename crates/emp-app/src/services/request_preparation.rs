@@ -111,8 +111,8 @@ pub(super) fn prepare_with_config(
     })
 }
 
-/// Apply Python's external reasoning-summary policy exactly once to an owned
-/// body and its frozen route. Native routes keep both inputs untouched.
+/// Apply external output and reasoning-summary settings once to the owned body
+/// and its frozen route. Native routes keep both inputs untouched.
 fn prepare_external_request(
     config: &Value,
     mut route: ResolvedRoute,
@@ -123,6 +123,19 @@ fn prepare_external_request(
     }
 
     let model = route.model.value();
+    if let Some(limit) = model
+        .get("output_limit")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+    {
+        match body.get("max_output_tokens") {
+            None | Some(Value::Null) => body["max_output_tokens"] = limit.into(),
+            Some(value) if value.as_u64().is_some_and(|value| value > limit) => {
+                body["max_output_tokens"] = limit.into()
+            }
+            _ => {}
+        }
+    }
     let policy = summary_policy(config, &route, model);
     let supported = model
         .get("supports_reasoning_summaries")

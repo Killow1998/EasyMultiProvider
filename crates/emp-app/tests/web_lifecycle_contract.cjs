@@ -1,6 +1,7 @@
 // Public feature interfaces own requests even when a transport ignores abort.
 const {test} = require('node:test');
 const {assert, feature, tr, esc, deferred} = require('./web_fixture.cjs');
+const releaseHistoryText = feature('release-notes.js', 'releaseHistoryText');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const queries = () => {
   const calls=[];
@@ -22,7 +23,7 @@ test('connection Save retains the stored key and cannot close a replacement wind
 
 test('update window owns requests and discards a late check after closing',async()=>{
   const q=queries();let updater,nodes={};
-  updater=feature('updates.js','createUpdates')({...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",localizedReleaseNotes:()=>"",visible:()=>true,isPreview:()=>false,
+  updater=feature('updates.js','createUpdates')({...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",releaseHistoryText,visible:()=>true,isPreview:()=>false,
     openModal(){updater.stop();nodes={update_install:{disabled:false},update_status:{textContent:''}};}});
   const opening=updater.open();assert.equal(q.calls.length,1);
   updater.stop();nodes={};assert.equal(q.calls[0].options.signal.aborted,true);
@@ -33,7 +34,7 @@ test('update window owns requests and discards a late check after closing',async
 
 test('completed update check retains release notes without an extra status request',async()=>{
   const q=queries(),nodes=Object.fromEntries(['update_status','update_version','update_notes','update_progress','update_install','update_release','update_commands','update_manual'].map(id=>[id,{}]));
-  const updater=feature('updates.js','createUpdates')({...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",localizedReleaseNotes:notes=>notes,visible:()=>true,isPreview:()=>true,openModal(){}});
+  const updater=feature('updates.js','createUpdates')({...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",releaseHistoryText,visible:()=>true,isPreview:()=>true,openModal(){}});
   const opening=updater.open();q.calls[0].resolve({state:'available',current_version:'0.13.0',latest_version:'1.0.0',supported:false,release_notes:'Literal <script> markup'});await opening;await tick();
   assert.equal(q.calls.length,1,'terminal checks must not overwrite notes with an older status read');
   assert.equal(nodes.update_notes.textContent,'Literal <script> markup');
@@ -43,7 +44,7 @@ test('completed update check retains release notes without an extra status reque
 
 test('cached notes appear before a new check replies and remain readable after failure',async()=>{
   const q=queries(),nodes=Object.fromEntries(['update_status','update_version','update_notes','update_progress','update_install','update_release','update_commands','update_manual'].map(id=>[id,{}]));
-  const updater=feature('updates.js','createUpdates')({...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",localizedReleaseNotes:notes=>notes,visible:()=>true,isPreview:()=>false,openModal(){nodes.update_notes.textContent='Loading';}});
+  const updater=feature('updates.js','createUpdates')({...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",releaseHistoryText,visible:()=>true,isPreview:()=>false,openModal(){nodes.update_notes.textContent='Loading';}});
   const cached={state:'available',current_version:'0.13.7',latest_version:'1.0.0',release_notes:'Cached notes'};
   updater.hint(cached);
   const opening=updater.open();
@@ -61,7 +62,7 @@ test('update reconnects the existing page once, and stops on rollback, expiry or
     const q=queries(),timers=new Map();let next=0,now=1000,reloads=0;
     const nodes=Object.fromEntries(['update_status','update_version','update_notes','update_progress','update_install','update_release','update_commands','update_manual'].map(id=>[id,{}]));
     const updater=feature('updates.js','createUpdates',{Date:{now:()=>now},setTimeout:callback=>{timers.set(++next,callback);return next;},clearTimeout:id=>timers.delete(id)})({
-      ...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",localizedReleaseNotes:()=>'',visible:()=>true,isPreview:()=>false,openModal(){},reload(){reloads++;}
+      ...q,$:id=>nodes[id],tr,t:key=>key,esc,notice(){},getLanguage:()=>"en",releaseHistoryText,visible:()=>true,isPreview:()=>false,openModal(){},reload(){reloads++;}
     });
     updater.render({state:'available',current_version:'0.13.4',latest_version:'0.13.5',supported:true});
     const installing=updater.request('install');q.calls[0].resolve({state:'installing',current_version:'0.13.4',latest_version:'0.13.5'});await installing;

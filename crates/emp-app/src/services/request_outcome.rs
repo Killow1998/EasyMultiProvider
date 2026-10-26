@@ -43,7 +43,11 @@ impl<'a> RequestOutcome<'a> {
         let operation = if operation == "responses" && body["generate"] == false {
             "prewarm"
         } else if operation == "responses" {
-            crate::services::memory_routing::kind(body, incoming).unwrap_or(operation)
+            incoming
+                .get("X-EMP-Probe")
+                .map(String::as_str)
+                .or_else(|| crate::services::memory_routing::kind(body, incoming))
+                .unwrap_or(operation)
         } else {
             operation
         };
@@ -88,6 +92,12 @@ impl<'a> RequestOutcome<'a> {
             .as_object_mut()
             .unwrap()
             .extend(shape::facts(body, incoming).as_object().unwrap().clone());
+        if emp_state::diagnostics::MODEL_TEST_OPERATIONS.contains(&operation) {
+            event["session_id"] = Value::Null;
+            event["thread_id"] = Value::Null;
+            event["parent_thread_id"] = Value::Null;
+            event["session_kind"] = json!("probe");
+        }
         if event["request_id"].is_null() {
             event["request_id"] = json!(crate::util::random_hex(8).ok());
         }

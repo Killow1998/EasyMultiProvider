@@ -61,6 +61,15 @@ pub(crate) fn responses_request(
             &[],
         ));
     }
+    if same_origin(request, state.port)
+        && state
+            .sessions
+            .contains(request.session_token().as_deref(), now)
+        && let Some(kind) = request.header("x-emp-probe")
+        && emp_state::diagnostics::MODEL_TEST_OPERATIONS.contains(&kind)
+    {
+        observation.probe(kind);
+    }
     observation.phase(Phase::ReadBody);
     let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,

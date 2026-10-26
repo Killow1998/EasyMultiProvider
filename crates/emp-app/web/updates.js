@@ -1,5 +1,5 @@
 // Update metadata, polling and presentation have one cancellable window owner.
-function createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage,localizedReleaseNotes,visible,openLink,copyText,isPreview,reload}) {
+function createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage,releaseHistoryText,visible,openLink,copyText,isPreview,reload}) {
 let updatePollTimer = null;
 let updatePollGeneration = 0;
 let latestUpdateInfo = null;
@@ -121,7 +121,7 @@ function renderUpdate(info) {
     ? `v${info.current_version} → v${info.latest_version}`
     : tr("transfers.current_version_v", {currentVersion:info.current_version});
   const notes=$('update_notes');
-  if(notes)notes.textContent=localizedReleaseNotes(info.release_notes,info.latest_version,getLanguage()) || tr(!info.latest_version && ['idle','checking'].includes(info.state) ? "transfers.loading_release_notes" : "transfers.english_release_notes_were_not_provided_see_the_official");
+  if(notes)notes.textContent=releaseHistoryText(info,getLanguage(),tr) || tr(!info.latest_version && ['idle','checking'].includes(info.state) ? "transfers.loading_release_notes" : "transfers.english_release_notes_were_not_provided_see_the_official");
   $('update_progress').hidden = !['downloading','verifying'].includes(info.state);
   $('update_progress').value = Number(info.progress) || 0;
   const install = $('update_install'); install.disabled=isPreview();if(isPreview())install.title=tr("transfers.preview_only_install_from_the_main_page"); install.hidden = info.state !== 'available' || !info.supported;

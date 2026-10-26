@@ -1107,13 +1107,13 @@ const modelEditor = createModelEditor(modelEditorOptions);
 const {open:openManualModelModal} = modelEditor;
 const providerModelSettings = createProviderModelManager({getState:()=>state,cloneState,$,tr,esc,api,persistState,openModal,notice,modelSort,compactContext,capabilitySummary:model=>capabilitySummary(model),uiIcon,testModel,
   createEditor:options=>createModelEditor({...modelEditorOptions,...options}),isPreview:()=>Boolean(window.EMP_PREVIEW)});
-async function testModel(id) { try { notice(tr("core.testing", {id:id})); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr("core.test_succeeded") + (result.output_text || tr("core.model_response_received"))); } catch (error) { notice(tr("core.test_failed") + error.message, true); } }
+async function testModel(id) { try { notice(tr("core.testing", {id:id})); const result = await api('/v1/responses', {method:'POST', headers:{'X-EMP-Probe':'model_test'}, body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr("core.test_succeeded") + (result.output_text || tr("core.model_response_received"))); } catch (error) { notice(tr("core.test_failed") + error.message, true); } }
 async function testModelVision(id) {
   try {
     notice(tr("core.sending_the_emp_icon_to", {id:id}));
     const image = await api('/api/models/vision-test-image');
     if (!String(image.data_url || '').startsWith('data:image/png;base64,')) throw new Error(tr("core.test_image_is_unavailable"));
-    const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:[{role:'user', content:[{type:'input_text',text:'Describe this image in one short sentence.'},{type:'input_image',image_url:image.data_url}]}], max_output_tokens:512})});
+    const result = await api('/v1/responses', {method:'POST', headers:{'X-EMP-Probe':'vision_test'}, body:JSON.stringify({model:id, input:[{role:'user', content:[{type:'input_text',text:'Describe this image in one short sentence.'},{type:'input_image',image_url:image.data_url}]}], max_output_tokens:512})});
     const answer = String(result.output_text || (result.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('')).trim();
     if (!answer) throw new Error(tr("core.the_model_returned_no_image_description"));
     notice(tr("core.image_test_received_a_reply_observed_compatibility_not_an") + answer.slice(0, 240));
@@ -1127,7 +1127,7 @@ async function testModelAudio(id) {
     notice(tr("core.sending_the_channel_test_audio_to", {id:id}));
     const sound = await api('/api/models/audio-test-sound');
     if (sound.format !== 'wav' || !sound.data) throw new Error(tr("core.test_audio_is_unavailable"));
-    const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:[{role:'user', content:[{type:'input_text',text:'Transcribe the speech in this audio and say which stereo channel each phrase plays on.'},{type:'input_audio',input_audio:{data:sound.data, format:'wav'}}]}], max_output_tokens:512})});
+    const result = await api('/v1/responses', {method:'POST', headers:{'X-EMP-Probe':'audio_test'}, body:JSON.stringify({model:id, input:[{role:'user', content:[{type:'input_text',text:'Transcribe the speech in this audio and say which stereo channel each phrase plays on.'},{type:'input_audio',input_audio:{data:sound.data, format:'wav'}}]}], max_output_tokens:512})});
     const answer = String(result.output_text || (result.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('')).trim();
     if (!answer) throw new Error(tr("core.the_model_returned_nothing_about_the_audio"));
     notice(tr("core.audio_test_reply_expect_front_left_on_the_left") + answer.slice(0, 240));
@@ -1179,7 +1179,7 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
 }
 function closeModal() { migration.stop(); servicePresentation.hide(); stopModalFeatures(); modalNavigation = {}; $('modal_back').onclick = null; $('modal_back').hidden = true; $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 
-const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,localizedReleaseNotes,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW),reload:()=>window.location.reload()});
+const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,releaseHistoryText,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW),reload:()=>window.location.reload()});
 const {open:openUpdate,stop:stopUpdatePoll,request:requestUpdate,render:renderUpdate,hint:renderUpdateHint,checkHint:checkUpdateHint,openRelease:openLatestRelease,copyCommands:copyLinuxMigrationCommands}=updates;
 async function quitEmp() {
   if (!confirm(tr("core.exit_emp_and_restore_native_codex"))) return;

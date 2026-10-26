@@ -47,7 +47,14 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
     modalVisionStatus = vision;
     modalModalitiesEdited = false;
     modalReasoningEdited = false;
-    const body = `<div class="grid"><div><label>${tr("common.provider")}</label><select id="modal_model_provider" data-editor-change="route">${options}</select></div><div><label id="modal_model_upstream_label">${upstreamLabel}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${upstreamPlaceholder}" data-editor-input="route"></div><div class="wide"><label>${tr("models.maximum_context_window")} ${help('').replace('data-shadow-help=', 'id="modal_model_context_help" data-shadow-help=')}</label><div class="input-action"><input id="modal_model_context" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.context_window || 0)}" data-editor-input="context"><button id="modal_model_context_inspect" type="button" class="secondary" data-editor-action="inspect" ${localClaude ? 'hidden' : ''}>${tr("models.fetch_upstream_maximum")}</button></div><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr("models.codex_uses", {context:compactContext(usableContext(existing))}) : ''}</small></div><div class="wide"><label>${tr("models.available_reasoning_levels")}</label><div id="modal_model_reasoning" class="modality-options">${reasoningOptions(modalReasoningLevels || [])}</div><small class="muted">${tr("models.choose_the_effort_when_selecting_a_model_in_codex")}</small></div><div class="wide"><label>${tr("models.input_modalities")}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}</div></div><div class="wide"><code id="modal_model_route" hidden></code></div></div><p class="muted">${tr("models.set_the_model_name_and_context_label_in_model")}</p>`;
+    const body = `<div class="grid">
+      <div><label>${tr("common.provider")}</label><select id="modal_model_provider" data-editor-change="route">${options}</select></div>
+      <div><label id="modal_model_upstream_label">${upstreamLabel}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${upstreamPlaceholder}" data-editor-input="route"></div>
+      <div class="wide"><label>${tr("models.maximum_context_window")} ${help('').replace('data-shadow-help=', 'id="modal_model_context_help" data-shadow-help=')}</label><div class="input-action"><input id="modal_model_context" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.context_window || 0)}" data-editor-input="context"><button id="modal_model_context_inspect" type="button" class="secondary" data-editor-action="inspect" ${localClaude ? 'hidden' : ''}>${tr("models.fetch_upstream_maximum")}</button></div><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr("models.codex_uses", {context:compactContext(usableContext(existing))}) : ''}</small></div>
+      <div class="wide"><label for="modal_model_output">${tr('models.maximum_output')} ${help(tr('models.maximum_output_help'))}</label><input id="modal_model_output" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.output_limit || 0) || ''}" placeholder="${tr('models.output_default')}"></div>
+      <div class="wide"><label>${tr("models.available_reasoning_levels")}</label><div id="modal_model_reasoning" class="modality-options">${reasoningOptions(modalReasoningLevels || [])}</div><small class="muted">${tr("models.choose_the_effort_when_selecting_a_model_in_codex")}</small></div>
+      <div class="wide"><label>${tr("models.input_modalities")}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}</div></div>
+      <div class="wide"><code id="modal_model_route" hidden></code></div></div><p class="muted">${tr("models.set_the_model_name_and_context_label_in_model")}</p>`;
     openModal(modelId ? tr("models.edit_model") : tr("add_model"), `<div id="model_editor">${body}</div>`, tr("models.save_model"), async () => { const node = $('model_editor'); await saveManualModel(); if ($('model_editor') === node) closeModal(); }, null, navigation);
     const root = $('model_editor');
     root.onchange = event => {
@@ -97,6 +104,7 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
       const result = await api('/api/models/metadata', {method:'POST',body:JSON.stringify({provider,model:upstream}),signal:controller.signal});
       if (controller.signal.aborted || $('model_editor') !== root) return;
       $('modal_model_context').value = result.context_window;
+      $('modal_model_output').value = Number(result.output_token_limit) || '';
       previewModalContext();
       modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : [];
       modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null;
@@ -115,6 +123,9 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
     const upstream = entered.startsWith(prefix) ? entered.slice(prefix.length) : entered;
     const id = prefix + upstream;
     const previous = getState().models.find(m => m.id === editingModelId);
+    const outputText = $('modal_model_output').value.trim();
+    const outputLimit = outputText ? Number(outputText) : 0;
+    if (outputText && (!/^\d+$/.test(outputText) || !Number.isSafeInteger(outputLimit) || outputLimit<=0)) throw new Error(tr('models.invalid_output_limit'));
     const collision = getState().models.find(m => m.id === id && m.id !== editingModelId);
     if (collision) throw new Error(tr("models.that_model_route_already_exists_and_cannot_overwrite_another"));
     const imageChecked = Boolean(document.querySelector('[data-modality][value="image"]:checked'));
@@ -137,6 +148,7 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
       family_id:previous?.family_id || '', supports_reasoning:support,
       supports_reasoning_summaries:summarySupport, reasoning_levels:levels,
       context_window:Number($('modal_model_context').value) || 0,
+      output_limit:outputLimit,
       input_modalities:modalities, created_at:previous?.created_at || 0,
       capability_sources:{...(previous?.capability_sources || {}),
         ...(modalModalitiesEdited ? {input_modalities:{source:'manual'}} : {}),

@@ -1,3 +1,26 @@
+// Combine maintained notes without translating or dropping migration instructions.
+function releaseHistoryText(info,locale,tr) {
+  const releases=Array.isArray(info.release_history) && info.release_history.length ? info.release_history : [{version:info.latest_version,body:info.release_notes}];
+  const groups={improvements:[],fixes:[]}, other=[];
+  for(const release of releases) {
+    const text=localizedReleaseNotes(release.body,release.version,locale);
+    if(!text)continue;
+    if(releases.length===1)return text+(info.release_history_complete===false?'\n\n'+tr('transfers.release_history_more'):'');
+    const lines=text.split('\n');
+    // Keep rich or nested notes intact; only flat bullet lists can be regrouped safely.
+    if(lines.some(line=>line.trim() && !/^[-*]\s+/.test(line))) {
+      other.push(`${release.version}\n${text}`);continue;
+    }
+    for(const line of lines.filter(line=>line.trim())) {
+      const item=line.replace(/^[-*]\s+/,''), fixed=/^(修复|修正|解决|fix(?:ed|es)?\b|correct(?:ed)?\b|resolve(?:d)?\b)/i.test(item);
+      groups[fixed?'fixes':'improvements'].push(`- [${release.version}] ${item}`);
+    }
+  }
+  let text=[...Object.entries(groups).filter(([,items])=>items.length).map(([key,items])=>`${tr('transfers.release_'+key)}\n${items.join('\n')}`),...other].join('\n\n');
+  if(info.release_history_complete===false)text+='\n\n'+tr('transfers.release_history_more');
+  return text;
+}
+
 // Prefer maintained language sections; never substitute a machine translation.
 function localizedReleaseNotes(body,version,locale) {
   const text=String(body||'').trim(), chinese=locale!=='en';

@@ -24,6 +24,7 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
   function performanceNumber(value) { if (value === null || value === undefined || value === '') return null; const number = Number(value); return Number.isFinite(number) && number >= 0 ? number : null; }
   function performanceRate(value) { const number = performanceNumber(value); return number == null ? '—' : number.toFixed(1)+'%'; }
   function renderDiagnostics(payload) {
+    const probesOpen=Boolean($('diagnostics_probes')?.open);
     const records = Array.isArray(payload.records) ? payload.records : [];
     const health = payload.health && typeof payload.health === 'object' ? payload.health : {};
     const healthSamples = performanceNumber(health.sample_count) || 0;
@@ -32,7 +33,15 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
     if (fallbackAttempts) $('diagnostics_summary').textContent += tr("reports.transport_fallback_attempts_counted_separately", {fallbackAttempts:fallbackAttempts});
     $('health_summary').innerHTML = healthSamples ? `<div class="health-grid"><div class="health-stat"><span>${tr("reports.success_rate")}</span><strong>${performanceRate(health.success_rate)}</strong><small>${Number(health.success_count || 0).toLocaleString()} / ${Number(health.sample_count || 0).toLocaleString()}</small></div><div class="health-stat"><span>429</span><strong>${performanceRate(health.status_429_rate)}</strong><small>${Number(health.status_429_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>502</span><strong>${performanceRate(health.status_502_rate)}</strong><small>${Number(health.status_502_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>503</span><strong>${performanceRate(health.status_503_rate)}</strong><small>${Number(health.status_503_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>504</span><strong>${performanceRate(health.status_504_rate)}</strong><small>${Number(health.status_504_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div><div class="health-stat"><span>${tr("reports.local_queue_limit")}</span><strong>${performanceRate(health.local_capacity_rate)}</strong><small>${Number(health.local_capacity_count || 0).toLocaleString()} ${tr("reports.calls_2")}</small></div></div>` : '';
     const failures = records.slice().reverse().filter(record => !['client_disconnect','client_cancelled','client_websocket_close'].includes(record.error_class) && (Number(record.status) >= 400 || (record.error_class && record.error_class !== 'none'))).slice(0, 20);
-    $('diagnostics_records').innerHTML = failures.length ? failures.map(diagnosticFailureHtml).join('') : `<p class="muted">${tr(records.length ? "reports.no_recent_failures" : "reports.no_request_records_advice")}</p>`;
+    const failureHtml = failures.length ? failures.map(diagnosticFailureHtml).join('') : `<p class="muted">${tr(records.length ? "reports.no_recent_failures" : "reports.no_request_records_advice")}</p>`;
+    const probes=Array.isArray(payload.probes) ? payload.probes : [];
+    $('diagnostics_records').innerHTML=failureHtml+`<details class="diagnostics-details" id="diagnostics_probes" ${probesOpen?'open':''}><summary>${tr('reports.probes')} · ${probes.length}</summary><p class="muted">${tr('reports.probes_help')}</p>${probes.length ? probes.slice().reverse().map(probeHtml).join('') : `<p class="muted">${tr('reports.no_probes')}</p>`}</details>`;
+  }
+  function probeHtml(record) {
+    const completed=record.outcome==='completed' || (!record.outcome && record.delivery==='terminal_written' && !record.error_code && (record.downstream_terminal==='completed' || Number(record.response_status)>=200 && Number(record.response_status)<300));
+    const outcome=completed ? 'completed' : record.outcome==='interrupted' || record.delivery==='partial' ? 'interrupted' : 'failed';
+    const stage=record.last_stage || record.last_phase || '';
+    return `<details class="request-failure"><summary><span>${tr('reports.probe_'+record.operation)}</span><span>${tr('reports.probe_'+outcome)} · ${Number(record.duration_ms || 0).toLocaleString()} ms</span><time class="muted">${esc(localTimeText(Date.parse(record.observed_at)))}</time></summary><dl><dt>${tr('reports.requested_model')}</dt><dd>${esc(record.model_id || '—')}</dd><dt>${tr('reports.probe_stage')}</dt><dd>${esc(stage || '—')}</dd><dt>${tr('reports.diagnostic_id')}</dt><dd>${esc(record.request_id || record.operation_id || '—')}</dd></dl></details>`;
   }
   function diagnosticFailureHtml(record) {
     const status = Number(record.status);

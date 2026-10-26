@@ -228,14 +228,14 @@ impl UsageLedger {
         Ok(values)
     }
     pub fn record(&self, event: &Value, observed: f64) {
-        if !matches!(
-            event["route"].as_str(),
-            Some(
-                "responses" | "compact" | "image_generation" | "image_edit" | "agent_task_recovery"
-            )
-        ) || !event["usage_category"]
-            .as_str()
-            .is_some_and(|value| CATEGORIES.contains(&value))
+        let operation = event["route"].as_str().unwrap_or("");
+        if !(matches!(
+            operation,
+            "responses" | "compact" | "image_generation" | "image_edit" | "agent_task_recovery"
+        ) || crate::diagnostics::MODEL_TEST_OPERATIONS.contains(&operation))
+            || !event["usage_category"]
+                .as_str()
+                .is_some_and(|value| CATEGORIES.contains(&value))
             || event["recovery_mode"] == "native_http_fallback"
         {
             return;

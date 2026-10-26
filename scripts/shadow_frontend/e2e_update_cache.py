@@ -3,6 +3,7 @@ import argparse
 import contextlib
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -20,6 +21,7 @@ class Releases(BaseHTTPRequestHandler):
     revision = 1
     fail = False
     version = ''
+    history = False
 
     def log_message(self, *args):
         pass
@@ -31,10 +33,19 @@ class Releases(BaseHTTPRequestHandler):
             return
         etag = f'"notes-{self.revision}"'
         status = 403 if self.fail else 304 if validator == etag else 200
-        body = b'' if status != 200 else json.dumps({
+        release = {
             'tag_name': 'v' + self.version, 'draft': False, 'prerelease': False, 'assets': [],
             'body': f'## 简体中文\n本地更新说明 {self.revision}\n## English\nCached release notes {self.revision}',
-        }).encode()
+        }
+        if self.history:
+            name = 'EMP-linux-x86_64.tar.gz'
+            latest = {**release, 'tag_name': 'v9.0.2',
+                'body': '## 简体中文\n- 修复最新版本问题\n## English\n- Fix latest issue',
+                'assets': [{'name': name, 'digest': 'sha256:' + 'a' * 64, 'size': 8,
+                    'browser_download_url': f'http://127.0.0.1:{self.server.server_port}/releases/download/v9.0.2/{name}'}]}
+            release = [release, {**latest, 'tag_name': 'v9.0.3-beta1', 'prerelease': True},
+                {**release, 'tag_name': 'v9.0.1', 'body': '## 简体中文\n- 改进中间版本\n## English\n- Improve intermediate version'}, latest]
+        body = b'' if status != 200 else json.dumps(release).encode()
         self.send_response(status)
         self.send_header('ETag', etag)
         self.send_header('Content-Length', str(len(body)))
@@ -71,6 +82,10 @@ def main():
     checks = []
     with tempfile.TemporaryDirectory(prefix='emp-update-cache-') as temp, contextlib.ExitStack() as stack:
         root = Path(temp)
+        # A read-only source checkout correctly requires manual installation.
+        # Exercise portable updates on a writable, disposable installation instead.
+        binary = root / args.emp.name
+        shutil.copy2(args.emp.resolve(), binary)
         releases = ThreadingHTTPServer(('127.0.0.1', 0), Releases)
         stack.callback(releases.server_close)
         threading.Thread(target=releases.serve_forever, daemon=True).start()
@@ -79,13 +94,17 @@ def main():
         release_base = f'http://127.0.0.1:{releases.server_port}'
         Releases.gate.set()
         with contextlib.ExitStack() as first:
-            base, _, headers = backend(first, args.emp.resolve(), root, release_base)
+            base, _, headers = backend(first, binary, root, release_base)
             assert request(base + '/api/updates/check', {}, headers)[0] == 202
-            wait_for(lambda: request(base + '/api/updates', headers=headers)[1]['state'] == 'current')
+            def current():
+                snapshot = request(base + '/api/updates', headers=headers)[1]
+                assert snapshot['state'] != 'error', {'snapshot': snapshot, 'requests': Releases.seen}
+                return snapshot['state'] == 'current'
+            wait_for(current)
             assert Releases.seen == [None]
         assert (root / 'state/update-release.json').exists()
         Releases.gate.clear()
-        base, url, headers = backend(stack, args.emp.resolve(), root, release_base)
+        base, url, headers = backend(stack, binary, root, release_base)
         assert 'Cached release notes 1' in request(base + '/api/updates', headers=headers)[1]['release_notes']
         frontend, _ = candidate_frontend(stack, base, Path(__file__).resolve().parents[2] / 'crates/emp-app/web')
         browser = Browser(stack, root)
@@ -118,6 +137,17 @@ def main():
         assert browser.execute('return document.getElementById("update_notes").textContent;') == 'Cached release notes 2'
         assert request(browser.base + '/window/handles')[1]['value'] == original_windows
         checks.append('Failed validation and reopening retain the last good notes; no installation or extra browser tab')
+        Releases.fail, Releases.history, Releases.revision = False, True, 3
+        browser.execute('closeModal();openUpdate();')
+        wait_for(lambda: request(base + '/api/updates', headers=headers)[1]['state'] == 'available')
+        for language, expected in [('zh-CN', ['新增与改进', '问题修复', '改进中间版本', '修复最新版本问题']),
+                                   ('en', ['New and improved', 'Fixes', 'Improve intermediate version', 'Fix latest issue'])]:
+            browser.execute('setLanguage(arguments[0]);closeModal();openUpdate();', language)
+            wait_for(lambda: browser.execute('return document.getElementById("update_notes").textContent.includes(arguments[0]);', expected[-1]))
+            notes = browser.execute('return document.getElementById("update_notes").textContent;')
+            assert all(part in notes for part in expected), notes
+            assert 'v9.0.1' in notes and 'v9.0.2' in notes and 'beta' not in notes and 'Cached release notes' not in notes
+        checks.append('Cross-version notes include intermediate stable releases, group improvements/fixes and exclude installed versions and previews in both languages')
     args.output.write_text(json.dumps({'passed': True, 'checks': checks,
         'real_downloads': 0, 'real_model_requests': 0}, indent=2) + '\n')
     print(json.dumps({'passed': True, 'checks': checks}))

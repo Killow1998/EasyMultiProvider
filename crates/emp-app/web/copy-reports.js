@@ -1,5 +1,18 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  "reports.probes": ["连接与模型探测","Connection and model checks"],
+  "reports.probes_help": ["目录读取和模型测试请求单独展示，不计入对话成功率。读取目录不消耗模型 Tokens；模型测试的实际用量仍计入统计。","Catalog reads and model test requests are listed separately from conversation health. Catalog reads use no model tokens; actual model test usage remains included in usage totals."],
+  "reports.no_probes": ["暂无探测记录。","No checks recorded yet."],
+  "reports.probe_model_metadata": ["读取模型参数","Read model limits"],
+  "reports.probe_model_discovery": ["读取模型列表","Read model list"],
+  "reports.probe_catalog_refresh": ["刷新模型目录","Refresh model catalog"],
+  "reports.probe_model_test": ["文本测试请求","Text test request"],
+  "reports.probe_vision_test": ["图片测试请求","Image test request"],
+  "reports.probe_audio_test": ["音频测试请求","Audio test request"],
+  "reports.probe_completed": ["请求完成","Request completed"],
+  "reports.probe_failed": ["请求失败","Request failed"],
+  "reports.probe_interrupted": ["请求中断","Request interrupted"],
+  "reports.probe_stage": ["最后阶段","Last stage"],
   "reports.memory_extraction": ["会话记忆提取","Chat memory extraction"],
   "reports.memory_consolidation": ["全局记忆整理","Global memory consolidation"],
   "reports.sessions": ["会话账单","Session bills"],

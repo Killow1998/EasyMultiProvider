@@ -99,6 +99,11 @@ for one request-local configuration, credential hydration, route selection and
 summary policy. History/context preparation and transport presentation remain
 at their existing boundaries.
 
+The same request preparation owner applies an external model's configured
+`output_limit` to `max_output_tokens`, retaining a smaller caller limit. An unset
+limit leaves the request unchanged, and Native requests bypass this adjustment.
+History budgeting and all wire projections therefore observe one output cap.
+
 [`external.rs`](../crates/emp-app/src/services/external.rs) now owns complete
 Responses execution and stream opening. The two operations share a private
 attempt implementation: candidate selection, retry bounds/delay, context-error
@@ -207,6 +212,11 @@ single accounting entry; `RequestObservation` records the failed write. It does
 not reinterpret success, update eligibility, replay output or switch sources.
 The [journal contract](diagnostic-journal-spec.md#request-receipt-contract)
 defines what each observation proves and the remaining unknowns.
+
+Probe classification belongs to `emp-state::diagnostics::MODEL_TEST_OPERATIONS`;
+request admission, receipt creation, accounting and reports share it. Journal
+writing/redaction and bounded replay have separate owners within the same module.
+Replay separates probes before applying the ordinary-request retention limit.
 
 Native complete/compact forwarding now returns the existing structured result
 (status, raw body, content type and preserved headers). The native API renderer
@@ -440,6 +450,12 @@ and calls their cleanup when replacing or closing a modal. Provider detail reads
 also cancel on closure. Late query results, save errors and draft cleanup cannot
 alter a replacement window. Configuration persistence, formatting policy and
 model inference remain existing shared operations; they are not duplicated.
+The output-limit editor uses the existing configuration provenance owner; it
+does not keep a second frontend source-of-truth for advertised versus manual
+limits. `usage-data.js` supplies the common value formatter for service/model
+tables, overview totals and session bills. Aggregation sums coverage counters
+alongside usage: absent usage is `—`, reported zero is `0`, and partial totals
+carry the existing coverage marker.
 Performance navigation stays mounted during data refresh; overview metrics are
 plain facts rather than six equivalent navigation buttons.
 

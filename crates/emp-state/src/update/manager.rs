@@ -33,6 +33,8 @@ pub struct Snapshot {
     pub current_version: String,
     pub latest_version: Option<String>,
     pub release_notes: String,
+    pub release_history: Vec<serde_json::Value>,
+    pub release_history_complete: bool,
     pub progress: u8,
     pub retry_count: u8,
     pub retry_limit: u8,
@@ -193,6 +195,13 @@ impl UpdateManager {
                 .as_ref()
                 .map(|cached| cached.notes())
                 .unwrap_or_default(),
+            release_history: cached_release
+                .as_ref()
+                .map(|cached| cached.history(version))
+                .unwrap_or_default(),
+            release_history_complete: cached_release
+                .as_ref()
+                .is_none_or(|cached| cached.history_complete(version)),
             progress: 0,
             retry_count: 0,
             retry_limit: retry::MAX_RETRIES,
@@ -261,6 +270,8 @@ impl UpdateManager {
                 current_version: String::new(),
                 latest_version: None,
                 release_notes: String::new(),
+                release_history: Vec::new(),
+                release_history_complete: true,
                 progress: 0,
                 retry_count: 0,
                 retry_limit: retry::MAX_RETRIES,

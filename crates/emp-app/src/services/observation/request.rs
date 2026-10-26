@@ -105,11 +105,23 @@ impl RequestObservation {
         mut incoming: BTreeMap<String, String>,
     ) -> BTreeMap<String, String> {
         // A caller's case variant must not shadow EMP's correlation identifier.
-        incoming.retain(|name, _| !name.eq_ignore_ascii_case("x-emp-request-id"));
+        incoming.retain(|name, _| {
+            !name.eq_ignore_ascii_case("x-emp-request-id")
+                && !name.eq_ignore_ascii_case("x-emp-probe")
+        });
         if let Some(id) = self.fields["request_id"].as_str() {
             incoming.insert("X-EMP-Request-ID".into(), id.into());
         }
+        if let Some(kind) = self.fields["operation"].as_str()
+            && emp_state::diagnostics::MODEL_TEST_OPERATIONS.contains(&kind)
+        {
+            incoming.insert("X-EMP-Probe".into(), kind.into());
+        }
         incoming
+    }
+
+    pub(crate) fn probe(&mut self, kind: &str) {
+        self.fields["operation"] = json!(kind);
     }
 
     pub(crate) fn phase(&mut self, phase: Phase) {

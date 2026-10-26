@@ -17,6 +17,27 @@ HTTP status and duration, including failures before upstream forwarding.
 Their request ID now links them to the enclosing request receipt.
 Update failures also have separate durable phase/error receipts.
 
+The authenticated diagnostics snapshot exposes the latest 64 catalog/metadata
+checks and model-test receipts in `probes`. The existing journal supplies them in
+the same bounded read as route observations, including after restart. Probe
+classification runs before the conversation buffer and replay limits, so tests
+cannot consume the 512 ordinary-request slots. The journal writer owns redaction
+and rotation; its private `journal/replay.rs` reader owns bounded parsing and
+receipt selection. Returned fields are restricted to operation, result/delivery,
+fixed stage, duration, model identifier, correlation identifier and timestamp. Prompt contents and
+credentials are never added. A completed test request describes transport/model
+completion, not an assertion that the tested capability is supported.
+
+Text, image and audio tests retain the normal Responses execution path. Only the
+authenticated local management session can assign `X-EMP-Probe`; the observation
+owner replaces caller-supplied internal markers. Their actual usage and estimated
+cost stay in the existing ledger, while test calls do not become user sessions or
+conversation-performance samples. A direct request-ID lookup still retrieves
+their call receipt. Catalog/metadata reads do not create model usage events.
+`MODEL_TEST_OPERATIONS` is the shared classification for authentication, request
+receipts, usage accounting and call reports; those consumers do not keep separate
+lists of model-test operation names.
+
 Every admitted HTTP handler now has paired start/completion records, including
 malformed requests, authentication rejection, socket setup/write failures and
 panic unwinding. Static route names are retained; query strings, arbitrary

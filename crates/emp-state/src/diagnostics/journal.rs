@@ -3,9 +3,10 @@ use regex::Regex;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
+mod replay;
 const MAX_RECORD: usize = 16 * 1024;
 const MAX_PART: u64 = 2 * 1024 * 1024;
 const MAX_DIRECTORY: u64 = 10 * 1024 * 1024;
@@ -312,66 +313,5 @@ impl Journal {
                 error.kind()
             );
         }
-    }
-    pub fn read_routes(&self, limit: usize) -> Vec<Value> {
-        let mut recent = Vec::new();
-        let mut order = 0;
-        for (_, _, path, _) in self.parts() {
-            let mut options = OpenOptions::new();
-            options.read(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.custom_flags(libc::O_NOFOLLOW);
-            }
-            let Ok(file) = options.open(path) else {
-                continue;
-            };
-            let mut reader = BufReader::new(file);
-            let mut line = Vec::new();
-            let mut oversized = false;
-            loop {
-                let Ok(buffer) = reader.fill_buf() else {
-                    break;
-                };
-                if buffer.is_empty() {
-                    break;
-                }
-                let length = buffer
-                    .iter()
-                    .position(|byte| *byte == b'\n')
-                    .map_or(buffer.len(), |i| i + 1);
-                let ended = buffer[length - 1] == b'\n';
-                if line.len() + length > MAX_RECORD + 1 {
-                    oversized = true;
-                }
-                if !oversized {
-                    line.extend_from_slice(&buffer[..length]);
-                }
-                reader.consume(length);
-                if !ended {
-                    continue;
-                }
-                if !oversized
-                    && let Ok(record) = serde_json::from_slice::<Value>(&line)
-                    && record["event"] == "route_observation"
-                    && record["fields"].is_object()
-                {
-                    recent.push((
-                        record["timestamp"].as_str().unwrap_or("").to_owned(),
-                        order,
-                        record["fields"].clone(),
-                    ));
-                    order += 1;
-                    recent.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
-                    if recent.len() > limit {
-                        recent.remove(0);
-                    }
-                }
-                line.clear();
-                oversized = false;
-            }
-        }
-        recent.into_iter().map(|(_, _, fields)| fields).collect()
     }
 }

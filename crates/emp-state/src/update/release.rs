@@ -4,8 +4,8 @@ use serde::Deserialize;
 
 pub const REPOSITORY_URL: &str = "https://github.com/Killow1998/EasyMultiProvider";
 pub const RELEASE_API_URL: &str =
-    "https://api.github.com/repos/Killow1998/EasyMultiProvider/releases/latest";
-pub const MAX_RELEASE_BYTES: usize = 1024 * 1024;
+    "https://api.github.com/repos/Killow1998/EasyMultiProvider/releases?per_page=100";
+pub const MAX_RELEASE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -77,7 +77,7 @@ pub(crate) fn parse_version(value: &str) -> Result<(u64, u64, u64)> {
     parse_stable_version(value)
 }
 
-fn normalize_current_version(value: &str) -> Result<(u64, u64, u64)> {
+pub(super) fn normalize_current_version(value: &str) -> Result<(u64, u64, u64)> {
     let stable = value
         .rsplit_once("beta")
         .filter(|(_, suffix)| suffix.bytes().all(|byte| byte.is_ascii_digit()))

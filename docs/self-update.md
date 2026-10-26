@@ -14,6 +14,21 @@ Cache entries are bounded, tied to their source and validated on load; invalid
 files are ignored. Cached metadata alone never enables installation after restart:
 the source must be checked first, and package verification remains unchanged.
 
+The release index supplies stable notes between the installed and target versions.
+The cache retains versioned notes; changing the installed version recalculates the
+visible range without another download. Drafts and previews are excluded. Flat
+bullet lists are grouped as improvements and fixes with their source versions;
+structured notes and migration instructions retain their original layout. Both
+languages use the maintained release text, rendered as text rather than HTML.
+Older pages are read only when needed, up to five 100-entry pages and a 4 MiB
+cache bound. A full page containing only previews does not end pagination. The
+serialized cache is also checked before writing: oversized metadata leaves the
+last durable cache intact while its valid network result remains usable. Missing
+older notes link to the release history and never prevent an otherwise valid
+update. A later check can complete a partial cache even when
+the first page returns 304. Old single-release caches remain readable; their ETag
+is not reused against the new index endpoint.
+
 When a different release is available, the update dialog shows the current and
 target versions together (`v0.13.4 → v0.13.5`). Update and rollback launches reuse
 the existing management session instead of opening another browser tab. The open
@@ -27,8 +42,11 @@ after its first upgrade to this behavior.
 
 Release checks and downloads use proxy environment variables first, then the
 Windows or macOS system proxy. Each network attempt reads the current settings,
-including a proxy enabled after EMP started. Linux uses proxy environment
-variables. HTTPS validation and official GitHub download hosts remain enforced.
+including a proxy enabled after EMP started. Linux also supports the existing
+GNOME system-proxy fallback. System reads have a one-second cache and a bounded
+750 ms query. One caller refreshes an expired cache while other warm readers use
+its last valid result; a failed query preserves that result. HTTPS validation and
+official GitHub download hosts remain enforced.
 
 For supported user-writable installations, **Update in background** downloads the
 platform asset, enforces a 512 MiB ceiling, verifies the exact size and

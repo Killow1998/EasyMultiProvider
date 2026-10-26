@@ -28,6 +28,12 @@ impl UsageLedger {
         }
         let mut conditions = vec!["started_at >= ?".to_owned(), "started_at <= ?".to_owned()];
         let mut args = vec![SqlValue::Real(filter.start), SqlValue::Real(filter.end)];
+        if filter.request.is_none() {
+            for operation in crate::diagnostics::MODEL_TEST_OPERATIONS {
+                conditions.push("operation != ?".into());
+                args.push(SqlValue::Text(operation.into()));
+            }
+        }
         for (column, value) in [
             ("provider_id", &filter.provider),
             ("account_id", &filter.account),

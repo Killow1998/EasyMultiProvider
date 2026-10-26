@@ -9,6 +9,16 @@ use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Mutex;
 pub const CAPACITY: usize = 512;
+const PROBE_CAPACITY: usize = 64;
+/// Model checks consume usage but do not belong to conversations or performance samples.
+pub const MODEL_TEST_OPERATIONS: [&str; 3] = ["model_test", "vision_test", "audio_test"];
+
+fn is_probe(operation: &str) -> bool {
+    matches!(
+        operation,
+        "model_metadata" | "model_discovery" | "catalog_refresh"
+    ) || MODEL_TEST_OPERATIONS.contains(&operation)
+}
 
 pub struct Diagnostics {
     pub journal: Journal,
@@ -24,6 +34,9 @@ impl Diagnostics {
     pub fn record(&self, event: &Value) {
         let record = schema::route_record(event, &self.journal);
         self.journal.event("info", "route_observation", &record);
+        if is_probe(record["route"].as_str().unwrap_or("")) {
+            return;
+        }
         let mut recent = self.recent.lock().expect("diagnostic observations");
         if recent.len() == CAPACITY {
             recent.pop_front();
@@ -37,7 +50,7 @@ impl Diagnostics {
         recovery::previous_rejection(&recent, record).map(str::to_owned)
     }
     pub fn snapshot(&self) -> Value {
-        let persisted = self.journal.read_routes(CAPACITY);
+        let (persisted, probes) = self.journal.read_observations(CAPACITY);
         let recent = self.recent.lock().expect("diagnostic observations");
         let mut records = VecDeque::new();
         let mut seen = HashSet::new();
@@ -60,6 +73,7 @@ impl Diagnostics {
         result["sample_count"] = json!(records.len());
         result["continuation_recovery"] = recovery::summary(&records);
         result["records"] = json!(&records[records.len().saturating_sub(64)..]);
+        result["probes"] = json!(probes);
         result
     }
 }

@@ -113,6 +113,15 @@ fn rejected_commands_do_not_claim_side_effects_or_expose_input() {
         server.state.backend.configuration.snapshot().unwrap(),
         before
     );
+    let diagnostic = server.state.backend.diagnostics.snapshot();
+    assert_eq!(diagnostic["sample_count"], 0);
+    let probes = diagnostic["probes"].as_array().unwrap();
+    assert_eq!(probes.len(), 1);
+    assert_eq!(probes[0]["operation"], "model_discovery");
+    assert_eq!(probes[0]["outcome"], "failed");
+    assert!(!diagnostic.to_string().contains("private-provider"));
+    let persisted = emp_state::diagnostics::Diagnostics::new(&canonical_root(&root).join("state"));
+    assert_eq!(persisted.snapshot()["probes"], diagnostic["probes"]);
     server.shutdown().unwrap();
     for operation in [
         "account_import",
