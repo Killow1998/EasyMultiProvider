@@ -1,62 +1,26 @@
+mod cache;
 use crate::http_policy::ProxyEnvironment;
+use cache::SystemProxyCache;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::Read;
 #[cfg(any(windows, test))]
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
 const SYSTEM_PROXY_READ_TIMEOUT: Duration = Duration::from_millis(750);
-const SYSTEM_PROXY_CACHE_TTL: Duration = Duration::from_secs(1);
 #[cfg(any(windows, test))]
 const WINDOWS_INTERNET_SETTINGS_KEY: &str =
     r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
 
 pub(crate) fn capture() -> Option<ProxyEnvironment> {
     static CACHE: OnceLock<SystemProxyCache> = OnceLock::new();
-    CACHE.get_or_init(SystemProxyCache::default).resolve_with(
-        Instant::now,
-        false,
-        read_system_proxy,
-    )
-}
-
-#[derive(Default)]
-struct SystemProxyCache {
-    value: Mutex<Option<ProxyEnvironment>>,
-    last_attempt: Mutex<Option<Instant>>,
-}
-
-impl SystemProxyCache {
-    fn resolve_with<C, R>(&self, clock: C, force: bool, reader: R) -> Option<ProxyEnvironment>
-    where
-        C: Fn() -> Instant,
-        R: FnOnce() -> Result<Option<ProxyEnvironment>, ()>,
-    {
-        let mut value = self
-            .value
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut last_attempt = self
-            .last_attempt
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let now = clock();
-        let is_fresh = last_attempt
-            .and_then(|last| now.checked_duration_since(last))
-            .is_some_and(|elapsed| elapsed < SYSTEM_PROXY_CACHE_TTL);
-        if !force && is_fresh {
-            return value.clone();
-        }
-        if let Ok(entry) = reader() {
-            *value = entry;
-        }
-        *last_attempt = Some(clock());
-        value.clone()
-    }
+    CACHE
+        .get_or_init(SystemProxyCache::default)
+        .resolve_with(Instant::now, read_system_proxy)
 }
 
 fn read_system_proxy() -> Result<Option<ProxyEnvironment>, ()> {
@@ -678,61 +642,5 @@ mod tests {
         let selected = ProxySnapshot::select(ProxyEnvironment::default(), Some(invalid_system));
         assert_eq!(selected.source, crate::http_policy::ProxySource::Direct);
         assert!(!selected.environment.has_proxy());
-    }
-
-    #[test]
-    fn system_proxy_cache_uses_ttl_force_refresh_and_keeps_last_valid_on_error() {
-        let cache = SystemProxyCache::default();
-        let start = Instant::now();
-        let calls = std::cell::Cell::new(0);
-        let first = ProxyEnvironment {
-            https: Some("http://first.system:8080".to_owned()),
-            ..ProxyEnvironment::default()
-        };
-        assert_eq!(
-            cache.resolve_with(
-                || start,
-                false,
-                || {
-                    calls.set(calls.get() + 1);
-                    Ok(Some(first.clone()))
-                }
-            ),
-            Some(first.clone())
-        );
-        assert_eq!(
-            cache.resolve_with(
-                || start + Duration::from_millis(999),
-                false,
-                || -> Result<Option<ProxyEnvironment>, ()> { panic!("fresh cache must not read") }
-            ),
-            Some(first)
-        );
-        let refreshed = ProxyEnvironment {
-            https: Some("http://second.system:8080".to_owned()),
-            ..ProxyEnvironment::default()
-        };
-        assert_eq!(
-            cache.resolve_with(
-                || start + Duration::from_secs(1),
-                false,
-                || {
-                    calls.set(calls.get() + 1);
-                    Ok(Some(refreshed.clone()))
-                }
-            ),
-            Some(refreshed.clone())
-        );
-        assert_eq!(calls.get(), 2);
-        assert_eq!(
-            cache.resolve_with(|| start + Duration::from_secs(2), true, || Err(())),
-            Some(refreshed.clone()),
-            "a failed forced read keeps the last valid proxy snapshot"
-        );
-        assert_eq!(
-            cache.resolve_with(|| start + Duration::from_secs(2), true, || Ok(None)),
-            None,
-            "a successful direct read clears the previous proxy"
-        );
     }
 }
