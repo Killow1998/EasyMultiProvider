@@ -78,6 +78,9 @@ impl Upstream {
                 let stop = Arc::clone(&stopping);
                 let fault_used = Arc::clone(&fault_used);
                 workers.push(thread::spawn(move || {
+                    // Exercise macOS's inherited mode on Linux before blocking fixture reads.
+                    stream.set_nonblocking(true).unwrap();
+                    stream.set_nonblocking(false).unwrap();
                     stream.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
                     let raw = read_request_head(&mut stream).unwrap();
                     let request = parse_request(&raw.head).unwrap();
