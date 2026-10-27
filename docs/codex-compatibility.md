@@ -6,7 +6,7 @@ the window. The engine used by the CLI, App or IDE is the compatibility input,
 independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 
-## Current acceptance on 2026-10-23 UTC
+## Current acceptance on 2026-10-26 UTC
 
 The maintenance target is **0.155–0.164**, following the official stable
 [0.164.0 release](https://github.com/openai/codex/releases/tag/rust-v0.164.0)
@@ -69,6 +69,36 @@ does not establish that its final message has reached the parent's next input.
 Child acceptance also waits for the matching `turn/completed` event and saved
 turn status to agree; an immediate history read can precede the final rollout write.
 
+### Installed App and IDE engines (2026-10-26 UTC)
+
+The public EMP **v0.13.16** Windows x64 package and Intel macOS package were
+verified against their release digests and run in disposable native environments.
+The probes used the engines already installed with each App/IDE, with matching
+Code Mode hosts:
+
+| Platform and entry point | Engine | Passed cases |
+| --- | --- | --- |
+| Windows x64 App | 0.164.0-alpha.11.1 | 9 collaboration + 3 tool-catalog revisions |
+| Intel macOS App | 0.164.0-alpha.11.1 | 9 collaboration + 3 tool-catalog revisions |
+| Windows x64 IDE | 0.154.0-alpha.6.2 | 3 legacy model-switch/resume |
+| Intel macOS IDE | 0.155.0-alpha.16.3 | 3 legacy model-switch/resume |
+
+Each App collaboration set covers three protocols and all three subagent modes,
+including actual child completion, parent delivery and resumed history. Each
+catalog case changes the Code Mode definition, removes it for direct tools,
+redeclares it and resumes in a new process; saved history must contain the
+incremental declarations and typed removal notice. The older IDE engines run
+their own model-switch/resume baseline without forcing 0.164-only features.
+The Windows 0.154 IDE result remains historical coverage and does not move the
+stable maintenance window.
+
+The native adapter reuses the existing collaboration assertions with native pipe
+reading and subprocess launch. Its SQLite reader now closes explicitly so Windows
+can remove the disposable history; a focused collaboration rerun exits cleanly.
+These are native engine/package checks with synthetic credentials and loopback
+upstreams, without real model calls or the Linux harness's memory bound. Existing
+App sessions and EMP installations remain untouched.
+
 ### Incremental catalog updates
 
 Codex 0.164 enables incremental tools by default. Its
@@ -95,6 +125,39 @@ Async compaction and App Server WebSocket compression remain upstream
 The existing background-compaction Beta setting and acceptance scope are
 unchanged. App Server compression is separate from EMP's Responses transport.
 The upstream context-estimation fix does not change EMP's TPS or usage formulas.
+
+### Prerelease protocol check (2026-10-27 UTC)
+
+Official Linux [**0.166.0-alpha.2**](https://github.com/openai/codex/releases/tag/rust-v0.166.0-alpha.2)
+passed three targeted App Server checks through
+the current EMP candidate. This is prerelease evidence; the stable maintenance
+window remains **0.155–0.164**.
+
+| Upstream change | Observed result and EMP boundary |
+| --- | --- |
+| Flat `ThreadItem` with `startedAtMs` / `completedAtMs` | Three actual turns, including resume in a new process, retain replies and valid lifecycle times. The payload stays flat. EMP history does not deserialize an upstream `ThreadItem` enum. |
+| `ThreadUsage.nativeUsageUsdMicros` | The actual App Server preserves absent/null, zero and nonzero backend values independently of credit/USD estimates. Four account-usage reads leave EMP's three inference usage records and estimated USD unchanged. EMP bills its existing inference receipts; it does not import or add these account totals. |
+| Negotiated App Server Zstd | A request without server acknowledgment and a legacy client both retain JSON text. With both sides enabled, initialization and configuration reads use binary messages and one persistent stream per direction; reconnect starts fresh streams. Enabling the feature does not change EMP's stdio helper protocol. |
+
+Compression is still `UnderDevelopment` and default-off in this tested engine.
+It belongs to App Server RPC; EMP's Responses inference transport is unchanged.
+The check adds no runtime codec, billing data source, setting or dependency.
+It uses synthetic credentials, a local backend and a network namespace without
+external access. It does not run real subscription inference.
+
+The reusable harness requires Python 3.14 and the optional `websockets==17.2`
+test client, installed in a disposable environment. Run from the repository root
+inside the isolated test network:
+
+```sh
+python3 -B -m scripts.codex_upstream_acceptance \
+  --codex /path/to/codex-0.166.0-alpha.2 \
+  --emp /path/to/candidate/EMP --output /path/to/evidence
+```
+
+The output records the exact engine and candidate hashes, account-usage cases,
+message encodings and bill totals. The official downloaded engine is temporary;
+it is not installed over the user's CLI or used to advance the stable window.
 
 ## Acceptance on 2026-10-16 UTC
 

@@ -258,7 +258,7 @@ def case(binary, codex, root, output, protocol, mode):
                 assert any(MESSAGE in json.dumps(row) and FOLLOWUP in json.dumps(row) for row in child_requests)
             assert not upstream.errors, upstream.errors
             assert_plaintext(agent_messages(home), mode)
-            with sqlite3.connect(f'file:{state}/usage.sqlite3?mode=ro',uri=True) as ledger:
+            with contextlib.closing(sqlite3.connect((state/'usage.sqlite3').as_uri()+'?mode=ro',uri=True)) as ledger:
                 calls = [json.loads(row[0]) for row in ledger.execute('SELECT facts FROM call_records')]
             assert not any(row.get('route')=='agent_task_recovery' for row in calls), calls
             report = {'protocol':protocol,'mode':mode,'passed':True,
