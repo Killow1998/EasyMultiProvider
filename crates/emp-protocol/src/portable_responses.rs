@@ -1,4 +1,4 @@
-//! Python-compatible projection for external Responses providers.
+//! Projection for external Responses providers.
 //!
 //! External gateways receive a complete, stateless history. Plaintext
 //! reasoning is never returned to Codex, while explicitly enabled opaque state

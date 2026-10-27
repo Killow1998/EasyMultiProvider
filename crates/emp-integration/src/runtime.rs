@@ -1,4 +1,4 @@
-//! Python-compatible durable runtime accounting and offline status projection.
+//! Durable runtime accounting and offline status projection.
 use crate::IntegrationError;
 use crate::storage::now;
 use serde::{Deserialize, Serialize};

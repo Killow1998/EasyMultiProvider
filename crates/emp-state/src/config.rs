@@ -353,16 +353,8 @@ pub fn save_configuration_in_transaction(
     Ok(path)
 }
 
-/// Load, normalize and canonicalize the private paths in a configuration file.
-///
-/// This is Python's `config.load`. Missing files return the default
-/// configuration. A successful UTF-8 JSON decode is passed through full
-/// configuration normalization, then through managed-path canonicalization.
-///
-/// Python preserves the native `OSError` for non-JSON I/O failures while Rust
-/// has no exception hierarchy, so this boundary records the corresponding
-/// Python-visible error class while keeping a stable message. JSON syntax
-/// errors remain `ConfigError`; parser-specific diagnostic wording may differ.
+/// Load JSON, normalize configuration and canonicalize managed private paths.
+/// Missing files use defaults; I/O failures retain their legacy error classes.
 pub fn load_configuration(path: Option<&Path>) -> ConfigResult<Value> {
     let path = match path {
         Some(path) => path.to_path_buf(),

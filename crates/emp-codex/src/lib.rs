@@ -93,8 +93,7 @@ fn load_native_catalog_from_map(config: &Map<String, Value>) -> Value {
     }
 }
 
-/// Resolve one native/subscription model with Python-compatible cache
-/// ownership and context-window projection.
+/// Resolve a subscription model using its catalog owner and context settings.
 ///
 /// `account_headers` keeps credential storage outside this crate. It must
 /// return the Authorization and optional chatgpt-account-id headers derived

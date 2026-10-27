@@ -1,10 +1,10 @@
 use emp_transport::{
     ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod, ProxyEnvironment,
-    ProxyPolicy, StreamingReadState, TimeoutPolicy,
+    ProxyPolicy, TimeoutPolicy,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn headers() -> BTreeMap<String, String> {
     BTreeMap::from([
@@ -35,11 +35,6 @@ fn plan_uses_same_origin_and_negotiates_supported_response_encodings() {
         plan.headers.get("accept-encoding"),
         Some(&"gzip, br, zstd, deflate".to_owned())
     );
-    assert_eq!(
-        plan.redirect_policy,
-        emp_transport::RedirectPolicy::Disabled
-    );
-    assert_eq!(plan.retry_policy, emp_transport::RetryPolicy::Disabled);
     assert_eq!(plan.timeout_policy.stream_idle, Duration::from_secs(300));
 
     let custom_encoding = policy
@@ -212,20 +207,7 @@ fn dynamic_proxy_resolution_keeps_plans_immutable_and_reloads_no_proxy() {
 }
 
 #[test]
-fn timeout_boundaries_are_configurable_and_fail_closed() {
-    let policy = TimeoutPolicy {
-        first_event: Duration::from_secs(120),
-        ..TimeoutPolicy::default()
-    };
-    let mut state = StreamingReadState::new(policy, Instant::now()).expect("valid policy");
-    assert!(!state.output_emitted());
-    state.observe_output();
-    assert!(state.output_emitted());
-    assert_eq!(
-        state.read_timeout_at(Instant::now()).unwrap(),
-        Duration::from_secs(300)
-    );
-
+fn zero_timeout_is_rejected_during_request_planning() {
     let invalid = TimeoutPolicy {
         cleanup: Duration::ZERO,
         ..TimeoutPolicy::default()
@@ -239,12 +221,6 @@ fn timeout_boundaries_are_configurable_and_fail_closed() {
         )
         .expect_err("zero timeout");
     assert_eq!(error, HttpClientPolicyError::InvalidTimeout);
-
-    let streaming = StreamingReadState::new(TimeoutPolicy::default(), Instant::now()).unwrap();
-    assert_eq!(
-        streaming.read_timeout_at(Instant::now()).unwrap(),
-        Duration::from_secs(300)
-    );
 }
 
 #[test]

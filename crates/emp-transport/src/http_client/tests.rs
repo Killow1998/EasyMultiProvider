@@ -81,11 +81,7 @@ fn new_requests_and_websockets_resolve_proxy_again_and_pool_is_bounded() {
                 ..ProxyEnvironment::default()
             };
             assert_eq!(
-                client
-                    .policy
-                    .transport_proxy_for(&plan.route)
-                    .unwrap()
-                    .as_deref(),
+                plan.route.transport_proxy_url().as_deref(),
                 Some("http://proxy-0.example:8080"),
                 "an existing plan retains its selected proxy"
             );

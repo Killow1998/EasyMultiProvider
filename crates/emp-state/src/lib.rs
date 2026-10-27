@@ -1,15 +1,5 @@
-//! State cryptography and migration envelope compatibility for EMP.
-//!
-//! This crate preserves the Python implementation's encrypted-at-rest formats
-//! without introducing a filesystem layer. It provides:
-//!
-//! - [`vault`]: `easy-multi-provider-v1\n` + Fernet token encoding.
-//! - [`migration`]: `EMP-MIGRATION\x01\n` + JSON envelope with
-//!   scrypt-derived Fernet encryption.
-//! - [`fernet`]: Fernet key material and token operations.
-//!
-//! Crypto primitives come from the RustCrypto ecosystem crates; sensitive
-//! buffers are zeroized.
+//! Encrypted configuration, private files and portable migration envelopes.
+//! Vault and migration formats remain compatible with existing EMP data.
 
 pub mod accounts;
 pub mod config;

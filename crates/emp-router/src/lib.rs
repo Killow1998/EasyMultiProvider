@@ -1,7 +1,6 @@
 //! Request orchestration for one immutable EMP route.
 //!
-//! This vertical slice executes complete and streamed external Responses,
-//! Chat Completions, and Anthropic Messages requests over the native transport.
+//! Executes complete and streamed Responses, Chat Completions and Anthropic requests.
 
 use emp_core::{Dialect, Protocol, ResolvedRoute};
 use emp_protocol::anthropic_projection::{

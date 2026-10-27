@@ -1,8 +1,4 @@
-//! Pure native response-header metadata projection.
-//!
-//! This is the bounded Rust port of the Python response boundary: select the
-//! headers native Codex consumes, project only known upstream model headers,
-//! and preserve the event's response model.
+//! Project native headers and model metadata without exposing other headers.
 
 use serde_json::{Map, Value};
 

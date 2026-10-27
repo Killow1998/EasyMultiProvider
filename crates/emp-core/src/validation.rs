@@ -1,10 +1,6 @@
 use super::*;
 
-/// A bounded opaque JSON object.
-///
-/// Unknown native protocol fields must survive a Rust round trip.  The size
-/// bound keeps an admission decision deterministic without interpreting any
-/// field as a final protocol type.
+/// Size-bounded JSON that preserves unknown protocol fields.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct OpaqueJson {
@@ -22,8 +18,7 @@ impl<'de> Deserialize<'de> for OpaqueJson {
 }
 
 impl OpaqueJson {
-    /// Current request-body admission bound until transport policies move to
-    /// this crate.
+    /// Maximum serialized provider or model snapshot size.
     pub const MAX_BYTES: usize = 64 * 1024 * 1024;
 
     /// Validate and retain an opaque JSON object.
@@ -31,28 +26,12 @@ impl OpaqueJson {
         Self::with_limit(value, Self::MAX_BYTES)
     }
 
-    /// Validate against a non-default limit.  Persistence and transport always
-    /// use [`Self::MAX_BYTES`], so the retained object has no per-instance
-    /// policy that can bypass validation after deserialization.
+    /// Validate against a caller-supplied limit; deserialization uses `MAX_BYTES`.
     pub fn with_limit(
         value: Map<String, Value>,
         max_bytes: usize,
     ) -> Result<Self, OpaqueJsonError> {
-        let result = Self { value };
-        result.validate(max_bytes)?;
-        Ok(result)
-    }
-
-    pub fn value(&self) -> &Map<String, Value> {
-        &self.value
-    }
-
-    pub fn into_value(self) -> Map<String, Value> {
-        self.value
-    }
-
-    fn validate(&self, max_bytes: usize) -> Result<(), OpaqueJsonError> {
-        let encoded = serde_json::to_vec(&self.value).map_err(|error| OpaqueJsonError {
+        let encoded = serde_json::to_vec(&value).map_err(|error| OpaqueJsonError {
             reason: OpaqueJsonErrorReason::Serialization,
             message: error.to_string(),
         })?;
@@ -66,7 +45,15 @@ impl OpaqueJson {
                 ),
             });
         }
-        Ok(())
+        Ok(Self { value })
+    }
+
+    pub fn value(&self) -> &Map<String, Value> {
+        &self.value
+    }
+
+    pub fn into_value(self) -> Map<String, Value> {
+        self.value
     }
 }
 

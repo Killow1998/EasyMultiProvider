@@ -510,12 +510,9 @@ fn normalize_model_provenance(
     }))
 }
 
-/// Normalize capability provenance for an already-normalized model record.
-///
-/// `values` must have the shape produced by Python `_normalize_model`; in
-/// particular, top-level capability values take precedence over the nested
-/// `capabilities` object even when the top-level value is null. Explicitness is
-/// raw model-key presence and is supplied by the caller.
+/// Capability provenance for a normalized model. Top-level values, including
+/// null, override nested capabilities. `explicit_fields` records raw top-level
+/// and nested key presence.
 pub fn normalize_model_capability_sources(
     raw: Option<&Value>,
     values: &Value,

@@ -3,9 +3,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::{Duration, Instant};
 
-/// The policy layer used by the future socket client. It deliberately owns no
-/// sockets and no request bytes: protocol projection keeps request content,
-/// while this layer decides transport identity, limits, and reusable pools.
+/// Default connection timeout for HTTP and WebSocket transports.
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(300);
 pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -45,7 +43,6 @@ impl HttpMethod {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpClientPolicyError {
-    InvalidMethod,
     InvalidUrl,
     InvalidProxy,
     InvalidHeaderName,
@@ -58,7 +55,6 @@ pub enum HttpClientPolicyError {
 impl fmt::Display for HttpClientPolicyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidMethod => "invalid HTTP method",
             Self::InvalidUrl => "invalid upstream URL",
             Self::InvalidProxy => "invalid configured proxy",
             Self::InvalidHeaderName => "invalid HTTP header name",
@@ -318,60 +314,12 @@ impl TimeoutPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamTimeoutError {
-    LocalDeadline,
-    FirstEventTimeout,
-    IdleTimeout,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamingReadState {
-    policy: TimeoutPolicy,
-    started_at: Instant,
-    output_emitted: bool,
-}
-
-impl StreamingReadState {
-    pub fn new(policy: TimeoutPolicy, started_at: Instant) -> HttpResult<Self> {
-        policy.validate()?;
-        Ok(Self {
-            policy,
-            started_at,
-            output_emitted: false,
-        })
-    }
-
-    pub fn observe_output(&mut self) {
-        self.output_emitted = true;
-    }
-
-    pub fn output_emitted(&self) -> bool {
-        self.output_emitted
-    }
-
-    pub fn read_timeout_at(&self, now: Instant) -> Result<Duration, StreamTimeoutError> {
-        if now < self.started_at {
-            return Err(StreamTimeoutError::LocalDeadline);
-        }
-        let limit = if self.output_emitted {
-            self.policy.stream_idle
-        } else {
-            self.policy.first_event
-        };
-        let _ = now.checked_duration_since(self.started_at);
-        Ok(limit)
-    }
-}
-
 #[derive(Clone, PartialEq, Eq)]
 pub struct RequestPlan {
     pub method: HttpMethod,
     pub route: RouteIdentity,
     pub headers: BTreeMap<String, String>,
     pub stream: bool,
-    pub redirect_policy: RedirectPolicy,
-    pub retry_policy: RetryPolicy,
     pub timeout_policy: TimeoutPolicy,
 }
 
@@ -383,21 +331,9 @@ impl fmt::Debug for RequestPlan {
             .field("route", &self.route)
             .field("header_names", &self.headers.keys().collect::<Vec<_>>())
             .field("stream", &self.stream)
-            .field("redirect_policy", &self.redirect_policy)
-            .field("retry_policy", &self.retry_policy)
             .field("timeout_policy", &self.timeout_policy)
             .finish()
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RedirectPolicy {
-    Disabled,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RetryPolicy {
-    Disabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -478,14 +414,8 @@ impl HttpClientPolicy {
             },
             headers: normalized_headers,
             stream,
-            redirect_policy: RedirectPolicy::Disabled,
-            retry_policy: RetryPolicy::Disabled,
             timeout_policy: self.timeout_policy,
         })
-    }
-
-    pub(crate) fn transport_proxy_for(&self, route: &RouteIdentity) -> HttpResult<Option<String>> {
-        Ok(route.transport_proxy_url())
     }
 }
 

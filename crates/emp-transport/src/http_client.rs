@@ -219,9 +219,7 @@ impl HttpClient {
         let plan = self
             .policy
             .plan(HttpMethod::Get, &policy_url, BTreeMap::new(), true)?;
-        self.policy
-            .transport_proxy_for(&plan.route)
-            .map_err(Into::into)
+        Ok(plan.route.transport_proxy_url())
     }
 
     pub async fn open(
@@ -366,7 +364,7 @@ impl HttpClient {
         for (host, address) in &self.config.dns_overrides {
             builder = builder.resolve(host, *address);
         }
-        if let Some(proxy_url) = self.policy.transport_proxy_for(&plan.route)? {
+        if let Some(proxy_url) = plan.route.transport_proxy_url() {
             let proxy = Proxy::all(proxy_url)
                 .map_err(|_| HttpTransportError::new(HttpTransportErrorKind::ClientBuild))?;
             builder = builder.proxy(proxy);

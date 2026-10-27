@@ -2,12 +2,8 @@
 
 use super::*;
 
-/// Normalize one complete model record exactly like Python `_normalize_model`.
-///
-/// The result always has the 26 configured output fields; unknown model fields
-/// are intentionally discarded. Capability-source normalization sees the
-/// union of raw top-level and nested capability keys, but uses the normalized
-/// record for effective capability values.
+/// Normalize a model and discard unknown configuration fields. Capability
+/// provenance uses raw top-level/nested keys with normalized values.
 pub fn normalize_model(raw: &Value) -> ConfigResult<Value> {
     let Value::Object(raw) = raw else {
         return Err(ConfigError::new("each model must be an object"));

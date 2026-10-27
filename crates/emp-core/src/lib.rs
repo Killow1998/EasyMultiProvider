@@ -1,5 +1,3 @@
-//! Shared foundation types for the Rust replacement of EasyMultiProvider.
-//!
 //! Immutable route identities and bounded provider/model snapshots shared by
 //! routing, protocol projection and catalog presentation.
 
@@ -20,7 +18,7 @@ pub use route::{
     resolved_upstream_model,
 };
 
-/// Route selector provenance retained from the Python resolver.
+/// How a route was selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteSource {

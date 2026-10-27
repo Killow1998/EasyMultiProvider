@@ -1,8 +1,7 @@
 //! Bounded transport primitives for EMP.
 //!
-//! This crate owns byte framing and, in later slices, socket I/O. Protocol
-//! projection remains in `emp-protocol`; this parser only turns SSE `data:`
-//! fields into opaque JSON objects while enforcing the wire-size contract.
+//! Owns HTTP/WebSocket I/O, content decoding and wire-size admission.
+//! Protocol projection remains in `emp-protocol`.
 
 use serde_json::{Map, Value};
 use std::fmt;
@@ -34,8 +33,7 @@ pub use http_client::{
 };
 pub use http_policy::{
     ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod, ProxyEnvironment,
-    ProxyOrigin, ProxyPolicy, ProxySnapshot, ProxySource, RedirectPolicy, RequestPlan, RetryPolicy,
-    StreamTimeoutError, StreamingReadState, TimeoutPolicy,
+    ProxyOrigin, ProxyPolicy, ProxySnapshot, ProxySource, RequestPlan, TimeoutPolicy,
 };
 pub use system_memory::system_memory_status;
 pub use websocket::{

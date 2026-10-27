@@ -1,10 +1,10 @@
-//! Python-compatible validation for subscription context-window preferences.
+//! Validation for subscription context-window preferences.
 
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// The Python caller raises `ValueError`; its `str` value is represented here.
+/// Validation failure with the legacy `ValueError` classification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubscriptionContextError(String);
 

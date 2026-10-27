@@ -1,4 +1,4 @@
-//! Bounded Chat Completions response projection for the Rust router.
+//! Request and response projection between Codex and external model protocols.
 //!
 //! The API intentionally keeps `serde_json::Value` as its wire type.  It
 //! preserves unknown upstream fields separately from the canonical Responses

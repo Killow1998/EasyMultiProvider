@@ -1,6 +1,6 @@
-//! Native history projection. Opaque native state and unknown fields survive;
-//! only complete foreign tool pairs, EMP summaries, and plaintext reasoning
-//! receive the same transformations as Python's `dialects.project_request`.
+//! Native history projection preserves opaque state and unknown fields.
+//! Only complete foreign tool pairs, EMP summaries and plaintext reasoning
+//! are adapted for the native upstream.
 
 use crate::portable_responses::{
     COMPACTION_PREFIX, COMPACTION_SUMMARY_PREFIX, PortableProjectionError, decode_compaction,
