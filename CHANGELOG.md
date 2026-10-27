@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.13.17 (2026-10-27)
+
+### 中文
+
+- 改善原生和导入订阅的连接恢复：临时连接故障后，完整历史重试可通过 HTTP/SSE 继续；冷却后自动恢复 WebSocket 和增量传输，无需重启 Codex。
+- 修复 WebSocket 连接到期后仍保留旧响应标识的问题；网络诊断增加发送和接收失败类型。
+- 退出 EMP 后，浏览器允许关闭的 WebUI 页面自动关闭；保留的页面显示「EMP 已退出」并停止发送请求。恢复原生仍保持 EMP 运行。
+- 同一浏览器的多个 WebUI 页面共享通知连接，保持退出通知和状态更新同步。
+- 统一正式页面与 Shadow 的账号及用量展示，清理重复渲染、无用兼容代码和过时注释。
+
+### English
+
+- Improve connection recovery for Native and imported subscriptions. After a temporary connection failure, full-history retries can continue over HTTP/SSE; WebSocket and incremental transport resume automatically after cooldown, without restarting Codex.
+- Discard expired WebSocket response IDs and include send/receive failure types in network diagnostics.
+- Close WebUI pages when the browser permits after Quit EMP. Retained pages show “EMP has exited” and stop sending requests. Restore Native keeps EMP running.
+- Share one notification connection across WebUI pages in the same browser, keeping exit notices and state updates synchronized.
+- Share account and usage presentation between shipped and Shadow pages, removing duplicate renderers, unused compatibility code and stale comments.
+
 ## 0.13.16 (2026-10-26)
 
 ### 中文
