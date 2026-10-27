@@ -31,11 +31,4 @@ impl NativeConnections {
         }
         cooldowns.insert(route, Instant::now() + Duration::from_secs(30));
     }
-
-    pub(crate) fn available(&self, route: &RouteKey) {
-        self.cooldowns
-            .lock()
-            .expect("native connection cooldowns")
-            .remove(route);
-    }
 }

@@ -127,13 +127,10 @@ impl NativeSession {
             plan_identity.clone(),
         );
         let mut connected_now = false;
+        let native_connections = &state.backend.transport.native_connections;
         if native_upstream.is_none()
             && !http_only_routes.contains(&route_key)
-            && state
-                .backend
-                .transport
-                .native_connections
-                .allowed(&route_key)
+            && native_connections.allowed(&route_key)
             && let Ok(selected_proxy) = &proxy
         {
             facts.connect_attempts += 1;
@@ -159,19 +156,15 @@ impl NativeSession {
                     connected_now = true;
                 }
                 Err(error) => {
+                    facts.transport_error = Some(error.to_string());
                     if error.is_upgrade_rejection() {
                         facts.handshake_status = Some(error.status());
                     }
-                    // No response.create frame has been sent. Match Python's
-                    // HTTP fallback and avoid repeating failed handshakes.
+                    // Only explicit protocol rejection lasts for this downstream connection.
                     if matches!(error.status(), 400 | 404 | 405 | 415 | 426 | 501) {
                         http_only_routes.insert(route_key.clone());
                     }
-                    state
-                        .backend
-                        .transport
-                        .native_connections
-                        .defer(route_key.clone());
+                    native_connections.defer(route_key.clone());
                 }
             }
         }

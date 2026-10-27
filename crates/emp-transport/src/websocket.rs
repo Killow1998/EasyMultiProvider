@@ -72,6 +72,7 @@ pub struct ClientWebSocketError {
     status: u16,
     message: &'static str,
     upgrade_rejection: bool,
+    io_kind: Option<std::io::ErrorKind>,
 }
 impl ClientWebSocketError {
     pub(crate) const fn new(status: u16, message: &'static str) -> Self {
@@ -79,6 +80,7 @@ impl ClientWebSocketError {
             status,
             message,
             upgrade_rejection: false,
+            io_kind: None,
         }
     }
     const fn upgrade_rejected(status: u16, message: &'static str) -> Self {
@@ -86,6 +88,7 @@ impl ClientWebSocketError {
             status,
             message,
             upgrade_rejection: true,
+            io_kind: None,
         }
     }
     pub const fn status(self) -> u16 {
@@ -97,7 +100,11 @@ impl ClientWebSocketError {
 }
 impl fmt::Display for ClientWebSocketError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
+        formatter.write_str(self.message)?;
+        if let Some(kind) = self.io_kind {
+            write!(formatter, " ({kind:?})")?;
+        }
+        Ok(())
     }
 }
 impl std::error::Error for ClientWebSocketError {}

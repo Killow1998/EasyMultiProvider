@@ -15,7 +15,7 @@ use plan::{MESSAGE_BUDGET, json_bytes};
 
 pub(super) enum PrefillError {
     Disconnected,
-    Transport,
+    Transport(std::io::Error),
     Rejected(Value),
     InvalidResponse,
 }
@@ -49,13 +49,15 @@ impl Prefill<'_> {
             }
             client
                 .send_json(&payload)
-                .map_err(|_| PrefillError::Transport)?;
+                .map_err(|error| PrefillError::Transport(std::io::Error::other(error)))?;
             websocket.observation.native_prefill_sent(bytes);
             loop {
                 let message = duplex
                     .next(client, websocket.inner, pending_request.is_none())
-                    .map_err(|_| PrefillError::Transport)?
-                    .ok_or(PrefillError::Transport)?;
+                    .map_err(PrefillError::Transport)?
+                    .ok_or_else(|| {
+                        PrefillError::Transport(std::io::ErrorKind::UnexpectedEof.into())
+                    })?;
                 let event = match message {
                     Message::Upstream(event) => event,
                     Message::DownstreamClosed => return Err(PrefillError::Disconnected),
@@ -64,9 +66,9 @@ impl Prefill<'_> {
                             .ok()
                             .is_some_and(|value| value["type"] == "response.interrupt")
                         {
-                            client
-                                .send_text(&text)
-                                .map_err(|_| PrefillError::Transport)?;
+                            client.send_text(&text).map_err(|error| {
+                                PrefillError::Transport(std::io::Error::other(error))
+                            })?;
                         } else {
                             *pending_request = Some(text);
                         }
@@ -121,6 +123,9 @@ impl PrefillError {
         websocket: &mut ObservedWebSocket<'_, '_>,
         usage: &mut RequestOutcome<'_>,
     ) {
+        if let Self::Transport(error) = &self {
+            websocket.observation.native_continuation().transport_error = Some(error.to_string());
+        }
         websocket.observation.native_continuation().reason = Some(match &self {
             Self::Rejected(event)
                 if event["error"]["code"] == "previous_response_not_found"
@@ -129,13 +134,13 @@ impl PrefillError {
                 ContinuationReason::UpstreamRecoveryRequired
             }
             Self::Rejected(_) => ContinuationReason::PrefillRejected,
-            Self::Transport => ContinuationReason::UpstreamDisconnected,
+            Self::Transport(_) => ContinuationReason::UpstreamDisconnected,
             _ => ContinuationReason::PrefillInvalidResponse,
         });
         let upstream_rejection = matches!(&self, Self::Rejected(_));
         let event = match self {
             Self::Rejected(event) => event,
-            Self::Transport => native_stream_error_value_for_route(
+            Self::Transport(_) => native_stream_error_value_for_route(
                 502,
                 FailureClass::Network,
                 Some("native_prefill_failed"),

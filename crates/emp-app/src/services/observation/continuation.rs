@@ -30,6 +30,7 @@ pub(crate) struct NativeContinuation {
     pub(crate) connection_reused: Option<bool>,
     pub(crate) handshake_status: Option<u16>,
     pub(crate) peer_close_code: Option<u16>,
+    pub(crate) transport_error: Option<String>,
     pub(crate) http_fallback: bool,
     pub(crate) prefill_requests: u32,
     pub(crate) prefill_application_bytes: u64,

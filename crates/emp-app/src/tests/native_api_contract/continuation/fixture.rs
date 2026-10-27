@@ -20,6 +20,10 @@ pub(super) struct Traffic {
 pub(super) enum Fault {
     None,
     DisconnectIncremental,
+    DisconnectFull,
+    DisconnectFullOnce,
+    ResetConnection,
+    ExpireIncremental,
     RejectIncremental,
     RejectPrefill,
     GeneratePrefill,
@@ -97,7 +101,12 @@ impl Upstream {
                         stats.http_requests += 1;
                         stats.application_bytes += bytes.len();
                         stats.generated_hashes.push(format!("{:x}", hash.finalize()));
-                        let result = json!({"id":"resp_http","object":"response","status":"completed","model":"gpt-fixture","output":[]});
+                        let output = if matches!(fault, Fault::DisconnectFull | Fault::DisconnectFullOnce) {
+                            json!([{"id":format!("msg_http_{}",stats.http_requests),"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OK","annotations":[]}]}])
+                        } else {
+                            json!([])
+                        };
+                        let result = json!({"id":format!("resp_http_{}",stats.http_requests),"object":"response","status":"completed","model":"gpt-fixture","output":output,"end_turn":true});
                         let result = serde_json::to_vec(&result).unwrap();
                         write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",result.len()).unwrap();
                         stream.write_all(&result).unwrap();
@@ -111,10 +120,15 @@ impl Upstream {
                         stats.ws_connections += 1;
                         stats.ws_connections
                     };
+                    if fault == Fault::ResetConnection {
+                        stream.shutdown(std::net::Shutdown::Both).unwrap();
+                        return;
+                    }
                     let mut ws = WebSocketConnection::new(&mut stream);
                     let mut hash = Sha256::new();
                     let mut last_id = String::new();
                     let mut sequence = 0;
+                    let mut context_bytes = 0;
                     while !stop.load(Ordering::Acquire) {
                         let text = match ws.poll_text_ready() {
                             Ok(WebSocketPoll::Text(text)) => text,
@@ -136,6 +150,10 @@ impl Upstream {
                         }
                         let body: Value = serde_json::from_str(&text).unwrap();
                         let warmup = body["generate"] == false;
+                        if !body["previous_response_id"].is_string() {
+                            context_bytes = 0;
+                        }
+                        context_bytes += text.len();
                         if !warmup
                             && (matches!(fault, Fault::RejectAllInputs | Fault::RejectOtherInput)
                                 || (matches!(fault, Fault::RejectInlineIds | Fault::RejectAfterCreated)
@@ -161,12 +179,18 @@ impl Upstream {
                             continue;
                         }
                         let fault_applies = match fault {
-                            Fault::DisconnectIncremental | Fault::RejectIncremental => body["previous_response_id"].is_string(),
+                            Fault::DisconnectFull | Fault::DisconnectFullOnce => !warmup && context_bytes > 512 * 1024,
+                            Fault::DisconnectIncremental | Fault::RejectIncremental | Fault::ExpireIncremental => body["previous_response_id"].is_string(),
                             Fault::RejectPrefill | Fault::GeneratePrefill | Fault::SilentPrefill => warmup,
-                            Fault::None | Fault::RejectInlineIds | Fault::RejectAllInputs | Fault::RejectOtherInput | Fault::RejectAfterCreated => false,
+                            Fault::None | Fault::ResetConnection | Fault::RejectInlineIds | Fault::RejectAllInputs | Fault::RejectOtherInput | Fault::RejectAfterCreated => false,
                         };
-                        if fault_applies && !fault_used.swap(true, Ordering::AcqRel) {
+                        if fault_applies && (fault == Fault::DisconnectFull || !fault_used.swap(true, Ordering::AcqRel)) {
                             match fault {
+                                Fault::DisconnectFull | Fault::DisconnectFullOnce => { ws.close(1011, "synthetic upstream transport failure"); break; }
+                                Fault::ExpireIncremental => {
+                                    ws.send_json(&json!({"type":"error","status":400,"error":{"code":"websocket_connection_limit_reached","message":"Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue."}})).unwrap();
+                                    continue;
+                                }
                                 Fault::DisconnectIncremental => { ws.close(1001, "synthetic disconnect"); break; }
                                 Fault::RejectIncremental => {
                                     ws.send_json(&json!({"type":"error","status":400,"error":{"code":"previous_response_not_found","message":"synthetic state loss"}})).unwrap();
@@ -216,7 +240,7 @@ impl Upstream {
                         last_id = format!("resp_{connection}_{sequence}");
                         ws.send_json(&json!({"type":"response.created","response":{"id":last_id,"status":"in_progress"}})).unwrap();
                         let mut output = Vec::new();
-                        if !warmup && fault == Fault::RejectInlineIds {
+                        if !warmup && matches!(fault, Fault::RejectInlineIds | Fault::DisconnectFullOnce) {
                             let item = json!({"id":format!("msg_{connection}_{sequence}"),"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OK","annotations":[]}]});
                             ws.send_json(&json!({"type":"response.output_item.added","output_index":0,"item":item})).unwrap();
                             ws.send_json(&json!({"type":"response.output_text.delta","item_id":item["id"],"output_index":0,"content_index":0,"delta":"OK"})).unwrap();

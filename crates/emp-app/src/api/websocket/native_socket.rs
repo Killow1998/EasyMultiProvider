@@ -46,6 +46,7 @@ impl NativeSession {
         websocket: &mut super::ObservedWebSocket<'_, '_>,
         downstream: Option<&std::net::TcpStream>,
     ) -> NativeTurnResult<'a> {
+        let native_connections = &state.backend.transport.native_connections;
         let Turn {
             route,
             config,
@@ -95,7 +96,6 @@ impl NativeSession {
             upstream: native_upstream,
             last_response_id: last_native_response_id,
             last_scope: last_native_scope,
-            http_only_routes,
             pending_request,
             fallback_active,
             ..
@@ -151,6 +151,9 @@ impl NativeSession {
                         return NativeTurnResult::Closed;
                     }
                     Err(error) => {
+                        if matches!(&error, prefill::PrefillError::Transport(_)) {
+                            native_connections.defer(route_key.clone());
+                        }
                         error.report(route, websocket, &mut usage);
                         *native_upstream = None;
                         *last_native_response_id = None;
@@ -161,7 +164,10 @@ impl NativeSession {
                 std::borrow::Cow::Borrowed(&plan.payload)
             };
             usage.dispatch();
-            if client.send_json(&payload).is_err() {
+            if let Err(error) = client.send_json(&payload) {
+                websocket.observation.native_continuation().transport_error =
+                    Some(error.to_string());
+                native_connections.defer(route_key.clone());
                 websocket.observation.native_continuation().traffic(
                     traffic_before,
                     client.traffic(),
@@ -191,9 +197,18 @@ impl NativeSession {
             let mut received_upstream_event = false;
             let mut delivered_output = false;
             let mut replay_allowed = true;
-            while let Ok(Some(message)) =
-                duplex.next(client, websocket.inner, pending_request.is_none())
-            {
+            let mut connection_expired = false;
+            loop {
+                let message = match duplex.next(client, websocket.inner, pending_request.is_none())
+                {
+                    Ok(Some(message)) => message,
+                    Ok(None) => break,
+                    Err(error) => {
+                        websocket.observation.native_continuation().transport_error =
+                            Some(error.to_string());
+                        break;
+                    }
+                };
                 websocket.observation.native_continuation().traffic(
                     traffic_before,
                     client.traffic(),
@@ -212,7 +227,9 @@ impl NativeSession {
                         {
                             // The active upstream owns response_id validation and
                             // interrupt acknowledgement. Preserve all control fields.
-                            if client.send_text(&text).is_err() {
+                            if let Err(error) = client.send_text(&text) {
+                                websocket.observation.native_continuation().transport_error =
+                                    Some(error.to_string());
                                 break;
                             }
                             state.backend.diagnostics.journal.event("info", "websocket_control", &serde_json::json!({
@@ -244,7 +261,9 @@ impl NativeSession {
                             retry: true,
                         });
                         usage.dispatch();
-                        if client.send_json(&retry_payload).is_err() {
+                        if let Err(error) = client.send_json(&retry_payload) {
+                            websocket.observation.native_continuation().transport_error =
+                                Some(error.to_string());
                             break;
                         }
                         continue;
@@ -255,6 +274,8 @@ impl NativeSession {
                     Some("response.metadata" | "codex.response.metadata" | "codex.rate_limits")
                 );
                 received_upstream_event = true;
+                connection_expired = event["error"]["code"] == "websocket_connection_limit_reached"
+                    || event["response"]["error"]["code"] == "websocket_connection_limit_reached";
                 if event["error"]["code"] == "previous_response_not_found"
                     || event["response"]["error"]["code"] == "previous_response_not_found"
                 {
@@ -310,12 +331,10 @@ impl NativeSession {
             );
             websocket.observation.native_continuation().peer_close_code = client.peer_close_code();
             if terminal {
-                state
-                    .backend
-                    .transport
-                    .native_connections
-                    .available(&route_key);
-                if resumable {
+                if connection_expired {
+                    *native_upstream = None;
+                    *last_native_response_id = None;
+                } else if resumable {
                     *last_native_response_id = completed_id;
                     *last_native_scope = request_scope.clone();
                 }
@@ -326,19 +345,23 @@ impl NativeSession {
                 && client.peer_close_code() == Some(1009)
                 && previous.is_none()
             {
-                // Python retries this proven pre-event message-size
-                // rejection through the full HTTP/zstd path. Restrict
-                // replay to a full request; incremental turns remain
-                // owned by the existing previous-response recovery path.
-                http_only_routes.insert(route_key.clone());
+                // A pre-event size rejection permits full HTTP/zstd replay.
+                // Incremental turns still require previous-response recovery.
+                native_connections.defer(route_key.clone());
                 *native_upstream = None;
                 *last_native_response_id = None;
                 fallback_usage = Some(Box::new(usage));
             } else {
+                let peer_close_code = client.peer_close_code();
                 *native_upstream = None;
                 *last_native_response_id = None;
                 if projected_error {
                     return NativeTurnResult::Finished;
+                }
+                websocket.observation.native_continuation().reason =
+                    Some(ContinuationReason::UpstreamDisconnected);
+                if previous.is_none() || !matches!(peer_close_code, Some(1000 | 1001)) {
+                    native_connections.defer(route_key.clone());
                 }
                 if previous.is_some() && !received_upstream_event {
                     let reason = ContinuationReason::UpstreamDisconnected;

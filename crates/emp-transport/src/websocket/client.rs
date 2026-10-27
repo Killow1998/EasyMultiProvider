@@ -296,7 +296,10 @@ impl ClientWebSocket {
         self.stream
             .write_all(&frame)
             .and_then(|_| self.stream.flush())
-            .map_err(|_| ClientWebSocketError::new(502, "native upstream websocket write failed"))
+            .map_err(|error| ClientWebSocketError {
+                io_kind: Some(error.kind()),
+                ..ClientWebSocketError::new(502, "native upstream websocket write failed")
+            })
     }
     pub fn send_json(&mut self, value: &Value) -> Result<(), ClientWebSocketError> {
         let payload = serde_json::to_string(value).map_err(|_| {
