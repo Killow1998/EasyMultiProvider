@@ -1,6 +1,6 @@
 // Owns account detail reads and alias interaction; routing and configuration stay outside.
 function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage, persistState,
-  uiIcon, subscriptionPlanLabel, resetCreditCount, renderInfo, confirmRemoval, notice,
+  uiIcon, renderInfo, confirmRemoval, notice,
   onRemoved, closeModal, syncSavedCatalog}) {
   let current = null;
   const removing = new Set();
@@ -67,15 +67,7 @@ function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage
   function reset() { for (const id of usage.keys()) discard(id); }
   async function openAccountDetails(id, navigation = {}) {
     const account = findAccount(id); if (!account) return;
-    const name = account.native ? 'Native' : account.name || account.id;
-    const mail = account.quota?.account_label || '';
-    const alias = account.native ? `<div class="account-alias-edit">${tr("common.native")}</div>` : `<div class="account-alias-edit"><input id="account_alias" value="${esc(name)}" aria-label="${esc(tr("services.name"))}"><button type="button" class="secondary" id="account_alias_save" data-ui-action="account-alias-save" data-id="${esc(id)}" title="${esc(tr("services.save_name"))}" aria-label="${esc(tr("services.save_name"))}">${uiIcon('save')}</button></div>`;
-    const remove = account.native ? '' : `<button type="button" class="danger" data-icon="trash" data-ui-action="account-remove" data-id="${esc(id)}">${tr("services.remove")}</button>`;
-    const credit = account.quota?.credits;
-    const monthly = credit?.individual_limit?.remaining_percent;
-    const reset = resetCreditCount(account) > 0 ? `<button type="button" class="secondary" data-ui-action="account-reset-credits" data-id="${esc(id)}">${uiIcon('reset')} ${tr("services.choose_reset")} · ${resetCreditCount(account)}</button>` : '';
-    const info = {alias,remove,monthly,credit,reset};
-    services.open(id, 'account', 'details', renderInfo ? renderInfo(account,info) : `<div class="account-info-grid"><div><span class="account-info-label">${tr("services.name")}</span>${alias}</div><div><span class="account-info-label">${tr("services.account")}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr("services.sign_in")}</span><span class="account-value">${account.native ? tr("services.local_codex_sign_in") : tr("services.imported_codex_sign_in")} · ${account.credential_set ? tr("services.saved") : tr("services.not_detected")}</span></div><div><span class="account-info-label">${tr("services.subscription")}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr("services.monthly_quota")} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr("services.spend_limit_reached")}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr("services.loading_usage")}</p></div>${reset}`, '', null, navigation);
+    services.open(id, 'account', 'details', renderInfo(account), '', null, navigation);
     current = {id, node:$('account_usage')};
     await showUsage();
   }

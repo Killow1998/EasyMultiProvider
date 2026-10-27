@@ -100,6 +100,8 @@ system tray (the menu bar on macOS). Left-click or right-click it for the same
 three actions: **Open WebUI**, **Restore Native / Enable EMP**, and **Quit EMP**.
 Closing the browser leaves EMP running. Restore Native keeps the tray available;
 Quit EMP waits for active requests, restores native settings, and exits.
+Open WebUI pages then close when the browser allows it; other pages show
+**EMP has exited** and stop sending requests.
 The menu follows the language selected in WebUI. Linux desktops need a
 StatusNotifier-compatible tray or panel.
 

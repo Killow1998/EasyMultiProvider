@@ -125,8 +125,7 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
   async function details(id, navigation = {}) {
     const provider = (getState().providers || []).find(item => item.id === id);
     if (!provider) return;
-    open(id, 'provider', 'details', `<div class="service-detail-actions"><button type="button" class="danger" data-icon="trash" data-ui-action="provider-remove" data-id="${esc(id)}">${tr("services.remove")}</button></div>
-      <div id="service_usage">${tr("services.loading_usage")}</div>`, '', null, navigation);
+    open(id, 'provider', 'details', `<div id="service_usage">${tr("services.loading_usage")}</div>`, '', null, navigation);
     const box = $('service_usage');
     const controller = new AbortController(); detailsController = controller;
     try {

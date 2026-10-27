@@ -125,7 +125,7 @@ test('account details retain shared reads without updating another service after
   const state={accounts:[{id:'first',name:'First'},{id:'second',name:'Second'}]};
   const services={open() { details.stop();nodes={account_usage:{innerHTML:''},account_alias:{value:'New alias'},modal_status:{textContent:''}}; },mount() {mounted++;}};
   details=feature('account-details.js','createAccountDetails')({...q,getState:() => state,$:id => nodes[id],tr,esc,services,
-    serviceUsage:{render:data => data.groups[0].model},persistState:() => save.promise,uiIcon:x => x,subscriptionPlanLabel:() => '',resetCreditCount:() => 0});
+    serviceUsage:{render:data => data.groups[0].model},persistState:() => save.promise,uiIcon:x => x,renderInfo:()=>''});
   const first=details.open('first'), second=details.open('second');
   const loading=nodes.account_usage.innerHTML;
   assert.equal(q.calls[0].options.signal.aborted,false);
@@ -141,7 +141,7 @@ test('account removal finishes before catalog sync and never closes a replacemen
   const q=queries(), catalog=deferred(), notices=[];
   const services={open(){details.stop();nodes={account_usage:{innerHTML:''}};}};
   details=feature('account-details.js','createAccountDetails')({...q,getState:()=>state,$:id=>nodes[id],tr,esc,services,
-    serviceUsage:{render:()=>''},uiIcon:()=>'',subscriptionPlanLabel:()=>'',resetCreditCount:()=>0,
+    serviceUsage:{render:()=>''},uiIcon:()=>'',renderInfo:()=>'',
     confirmRemoval:()=>true,notice:text=>notices.push(text),onRemoved:value=>{state=value;},
     closeModal(){closed++;details.stop();},syncSavedCatalog(){synced++;return catalog.promise;}});
   const opening=details.open('first');q.calls[0].resolve({});await opening;

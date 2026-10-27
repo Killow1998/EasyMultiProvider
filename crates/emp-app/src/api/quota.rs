@@ -64,13 +64,19 @@ pub(crate) fn serve_quota_events(
     {
         return;
     }
-    while !state.shutdown.load(Ordering::Acquire) {
+    loop {
         let Some(changes) = subscription.next(QUOTA_EVENT_KEEP_ALIVE) else {
             break;
         };
-        if state.shutdown.load(Ordering::Acquire)
-            || !state.sessions.contains(session.as_deref(), system_now())
-        {
+        if !state.sessions.contains(session.as_deref(), system_now()) {
+            break;
+        }
+        if changes.quit {
+            let _ = stream.write_all(b"event: emp-exiting\ndata: {}\n\n");
+            let _ = stream.flush();
+            break;
+        }
+        if state.shutdown.load(Ordering::Acquire) {
             break;
         }
         let mut frame = Vec::new();

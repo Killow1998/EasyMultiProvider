@@ -159,7 +159,7 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const management = createManagementClient({tr, fetch: (...args) => fetch(...args), storage:() => localStorage, window});
 const {request:api, fetch:managementFetch, establish:establishSession, errorText:upstreamErrorText} = management;
-const managementEvents = createManagementEvents({management,visible:()=>document.visibilityState !== 'hidden',onEvent:processManagementEvent,
+const managementEvents = createManagementEvents({management,visible:()=>!management.isStopped(),onEvent:processManagementEvent,
   onStart:()=>{updateActivityDots();rescheduleActivityExpiry();void accountDetails.refresh();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
 const contextHelp = createContextHelp({getState:() => state, tr});
@@ -214,17 +214,17 @@ const officialProviders = {
   zhipu: {id:'zhipu-glm', name:'Zhipu/GLM', base_url:'https://api.z.ai/api/paas/v4', protocol:'chat_completions', auth_mode:'api_key', hint:'GLM OpenAI-compatible API'}
 };
 
-const serviceUsage = createServiceUsage({renderLifetime:shadowServiceUsage,esc, tr, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), money:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN', {style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4}).format(value/1e9), dateTime:utcDateTimeText});
+const serviceUsage = createServiceUsage({renderLifetime:renderLifetimeUsage,esc, tr, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), money:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN', {style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4}).format(value/1e9), dateTime:utcDateTimeText});
 const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, getLanguage:() => language, persistState, openModal, serviceUsage, callReports, eventsConnected:() => managementEvents.connected(), periods:{periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg}});
 const {open:openUsage} = usageReport;
 const services = createServiceList({
   getState:() => state, $, esc, tr, presets:officialProviders, icon:serviceIconHtml,
   activity:activityIndicatorHtml, serviceIcon:(...args)=>serviceActivityIcon(...args), updateServiceErrors:()=>{presentationUpdateServiceRequestErrors();presentationUpdateServiceErrorLabels();}, accountSummary:accountSummaryHtml, quotaMeters:(...args)=>presentationQuotaMeters(...args),
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots:() => updateActivityDots(), openModal, api,
-  notice, usageSummary:serviceUsage, onMount:shadowDetailActions,settingsConflict:account=>subscriptionPreferenceConflicts(state,account)
+  notice, usageSummary:serviceUsage, onMount:mountServiceActions,settingsConflict:account=>subscriptionPreferenceConflicts(state,account)
 });
 const {render:renderServices, details:openProviderDetails} = services;
-const accountDetails = createAccountDetails({renderInfo:shadowAccountInfo,getState:() => state, $, tr, esc, api, services, serviceUsage, persistState, uiIcon, subscriptionPlanLabel, resetCreditCount,
+const accountDetails = createAccountDetails({renderInfo:renderAccountInfo,getState:() => state, $, tr, esc, api, services, serviceUsage, persistState, uiIcon,
   confirmRemoval:question=>confirm(question),notice,closeModal,syncSavedCatalog,onRemoved:value=>{state=value;fill();}});
 const {open:openAccountDetails, saveAlias:saveAccountAlias} = accountDetails;
 const {open:openServiceChooser} = createServiceChooser({tr, esc, presets:officialProviders, icon:serviceIconHtml, openModal, getState:() => state});
@@ -939,6 +939,8 @@ function quotaMetersHtml(account, busy = false, animate = false) {
 }
 function accountQuotaSignature(account) { return JSON.stringify(account?.quota || null); }
 function processManagementEvent(eventType, data) {
+  if (eventType === 'emp-exiting') { finishQuit(); return; }
+  if (document.visibilityState === 'hidden') return;
   if (eventType === 'quota-updated') requestQuotaSync();
   else if (eventType === 'usage-updated') {
     if (!statistics.refresh()) { void usageReport.refresh(); callReports.refresh(); }
@@ -1181,12 +1183,22 @@ function closeModal() { migration.stop(); servicePresentation.hide(); stopModalF
 
 const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,releaseHistoryText,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW),reload:()=>window.location.reload()});
 const {open:openUpdate,stop:stopUpdatePoll,request:requestUpdate,render:renderUpdate,hint:renderUpdateHint,checkHint:checkUpdateHint,openRelease:openLatestRelease,copyCommands:copyLinuxMigrationCommands}=updates;
-async function quitEmp() {
-  if (!confirm(tr("core.exit_emp_and_restore_native_codex"))) return;
-  try {
-    await api('/api/quit', {method:'POST', body:'{}'});
-    openModal(tr("core.emp_is_exiting"), `<p>${tr("core.native_configuration_restored_you_can_close_this_page")}</p>`, '', null);
-  } catch (error) { notice(error.message, true); }
+function finishQuit() {
+  if (management.isStopped()) return;
+  management.stop();
+  managementEvents.stop();
+  closeModal();
+  clearInterval(quotaStateTimer);
+  clearTimeout(activityExpiryTimer);
+  quotaStateTimer = null;
+  activityExpiryTimer = null;
+  quotaUpdatePending = false;
+  for (const element of document.body.children) {
+    element.inert = true;
+    element.hidden = true;
+  }
+  document.body.insertAdjacentHTML('beforeend', `<main id="emp_exited" role="status"><section><h1>${tr("core.emp_has_exited")}</h1><p>${tr("core.native_configuration_restored_you_can_close_this_page")}</p></section></main>`);
+  window.close();
 }
 
 function dynamicActionElement(target) {
@@ -1258,14 +1270,14 @@ document.addEventListener('click', handleDynamicUiClick);
 document.addEventListener('change', handleDynamicUiChange);
 document.addEventListener('keydown', handleModalKeydown);
 
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { managementEvents.start(); requestQuotaSync(); void checkUpdateHint(); } else managementEvents.stop(); });
+document.addEventListener('visibilitychange', () => { if (!management.isStopped() && document.visibilityState === 'visible') { managementEvents.start(); requestQuotaSync(); void checkUpdateHint(); } });
 if (window.addEventListener) {
-  window.addEventListener('focus', () => { if (management.isSignedIn()) void integrationUpdated(); });
+  window.addEventListener('focus', () => { if (!management.isStopped() && management.isSignedIn()) void integrationUpdated(); });
   window.addEventListener('storage', event => {
-    if (management.receiveStorageEvent(event) && document.visibilityState !== 'hidden') managementEvents.start();
+    if (!management.isStopped() && management.receiveStorageEvent(event) && document.visibilityState !== 'hidden') managementEvents.start();
   });
   window.addEventListener('pagehide', () => managementEvents.stop());
-  window.addEventListener('pageshow', () => managementEvents.start());
+  window.addEventListener('pageshow', () => { if (!management.isStopped()) managementEvents.start(); });
 }
 </script>
 <script src="/assets/presentation.js"></script>

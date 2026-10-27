@@ -67,6 +67,10 @@ pub(crate) fn prepare_quit(
         restore_gate.keep_closed();
         receipt.fact("service_shutdown", "ready_after_response");
         receipt.check("desktop_effect_verified", None);
+        state
+            .backend
+            .management_events
+            .publish(crate::services::management_events::Change::Quit);
         Ok(())
     })
 }

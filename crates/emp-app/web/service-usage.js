@@ -18,15 +18,7 @@ function createServiceUsage({esc, tr, number, money, dateTime, renderLifetime}) 
     return {models:[...models.values()], totals};
   }
   function render(data) {
-    if (renderLifetime) return renderLifetime(data,{aggregate,number,money,dateTime});
-    const {models, totals} = aggregate(data.groups);
-    const rows = models.sort((a, b) => a.model.localeCompare(b.model)).map(row =>
-      `<tr><td>${esc(row.model)}</td><td>${row.input_reports ? number(row.input_tokens) : '—'}</td><td>${row.output_reports ? number(row.output_tokens) : '—'}</td><td>${cost(row)}</td></tr>`).join('');
-    return `<h3>${tr("services.lifetime_usage")}</h3>
-      <div class="usage-totals"><div class="usage-total"><span>${tr("common.tokens")}</span><strong>${totals.input_reports || totals.output_reports ? number(totals.input_tokens + totals.output_tokens) : '—'}</strong></div><div class="usage-total"><span>${tr("services.api_equivalent_usd")}</span><strong>${cost(totals)}</strong></div></div>
-      <p class="muted">${number(totals.priced_requests)} / ${number(totals.requests)} ${tr("services.requests_priced")}${data.first_record_at ? ' · ' + tr("services.recorded_since") + esc(dateTime(data.first_record_at)) : ''}</p>
-      ${totals.priced_requests < totals.requests ? `<p class="muted">${tr("services.some_model_prices_are_unavailable_the_estimate_includes_known")}</p>` : ''}
-      <div class="usage-table"><table><thead><tr><th>${tr("reports.model")}</th><th>${tr("services.input")}</th><th>${tr("services.output")}</th><th>${tr("common.usd")}</th></tr></thead><tbody>${rows || `<tr><td colspan="4">${tr("services.no_usage_recorded")}</td></tr>`}</tbody></table></div>`;
+    return renderLifetime(data,{aggregate,number,money,dateTime});
   }
   function renderGroups(data, providers, describe) {
     const services = new Map((providers || []).map(provider => [provider.id, provider]));

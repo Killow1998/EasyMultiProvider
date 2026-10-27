@@ -1,6 +1,7 @@
 """Linux native tray acceptance on a private D-Bus, with disposable EMP state."""
 import argparse
 import contextlib
+from http.client import HTTPConnection
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import threading
 import urllib.request
 from unittest.mock import patch
@@ -185,7 +187,7 @@ def run_case(stack, binary, root, watcher, language, *, recovery=False, reset=Fa
     assert request(base + '/api/session', {}, {'X-EMP-Bootstrap': token})[0] == 401
     headers = {'X-EMP-Session': session['session']}
     browser = None
-    if language == 'zh-CN' and not detached:
+    if not detached:
         watcher.click(item, labels[0])
         wait_for(lambda: len(opened.read_text().splitlines()) == 3)
         # Snap's browser launcher needs the existing user bus. EMP and its
@@ -195,6 +197,8 @@ def run_case(stack, binary, root, watcher, language, *, recovery=False, reset=Fa
             browser = Browser(stack, root)
         browser.navigate(opened.read_text().splitlines()[-1])
         wait_for(lambda: browser.execute('return managementEvents.connected() && document.getElementById("integration").dataset.state === "native";'))
+        browser.execute('setLanguage(arguments[0]);', language)
+        wait_for(lambda: watcher.menu(item)[1][1]['label'] == labels[1])
         browser.execute('window.trayReviewMarker="preserved";openSettings();')
     watcher.click(item, labels[1])
     wait_for(lambda: watcher.menu(item)[1][1]['label'] == restore)
@@ -217,6 +221,35 @@ def run_case(stack, binary, root, watcher, language, *, recovery=False, reset=Fa
         browser.execute('managementEvents.start();')
         wait_for(lambda: browser.execute('return managementEvents.connected() && document.getElementById("integration").dataset.state === "emp_applied";'))
         assert browser.execute('return window.trayReviewMarker === "preserved";')
+        applied = native.read_text()
+        native.write_text(applied + '\nfixture_unfinished = [\n')
+        headers = {'X-EMP-Session':browser.execute('return localStorage.getItem("emp_management_session_v1");')}
+        rejected = request(base + '/api/quit', {}, headers)
+        assert rejected[0] == 409, rejected
+        assert request(base + '/healthz')[0] == 200
+        assert browser.execute('return !management.isStopped() && managementEvents.connected();'), 'Rejected Quit must keep the page alive'
+        native.write_text(applied)
+        parent = request(browser.base + '/window', method='GET')[1]['value']
+        # A normal tab with navigation history cannot be closed by page script.
+        browser.execute('history.pushState({},"","?quit-acceptance=retained");window.quitFetches=[];const fetchBefore=window.fetch;window.fetch=(...args)=>{window.quitFetches.push(String(args[0]));return fetchBefore(...args);};')
+        handles = [parent]
+        for index in range(4):
+            browser.execute('window.open(location.href,arguments[0]);', 'emp-script-opened-'+str(index))
+            updated = wait_for(lambda: request(browser.base + '/window/handles', method='GET')[1]['value'])
+            child = next(handle for handle in updated if handle not in handles)
+            request(browser.base + '/window', {'handle':child})
+            wait_for(lambda: browser.execute('return managementEvents.connected();'))
+            handles = updated
+        assert browser.execute('let parent=window;while(parent.opener)parent=parent.opener;return parent.document.visibilityState === "hidden";'), 'The retained page must receive Quit while hidden'
+        slots = []
+        for _ in range(4):
+            connection = HTTPConnection(base.removeprefix('http://'), timeout=5)
+            stack.callback(connection.close)
+            connection.request('GET', '/api/accounts/events', headers=headers)
+            response = connection.getresponse()
+            stack.callback(response.close)
+            slots.append(response.status)
+        assert slots == [200,200,200,503], f'Five pages must leave three of four server slots free: {slots}'
     if language == 'zh-CN':
         watcher.click(item, labels[2])
     else:
@@ -227,6 +260,16 @@ def run_case(stack, binary, root, watcher, language, *, recovery=False, reset=Fa
         poll.register(pidfd, select.POLLIN)
         assert poll.poll(25000), 'Quit must finish the detached service as well as the launcher'
     assert 'fixture-native' in native.read_text() and base not in native.read_text()
+    if browser:
+        wait_for(lambda: request(browser.base + '/window/handles', method='GET')[1]['value'] == [parent])
+        request(browser.base + '/window', {'handle':parent})
+        wait_for(lambda: browser.execute('return !!document.getElementById("emp_exited");'))
+        assert browser.execute('return !managementEvents.connected() && quotaStateTimer === null && activityExpiryTimer === null && !document.querySelectorAll("#emp_exited button,#emp_exited input").length;')
+        requests_after_quit = browser.execute('return window.quitFetches.length;')
+        browser.execute('window.dispatchEvent(new Event("focus"));window.dispatchEvent(new Event("pageshow"));document.dispatchEvent(new Event("visibilitychange"));')
+        time.sleep(1.2)
+        unexpected = browser.execute('return window.quitFetches.slice(arguments[0]);', requests_after_quit)
+        assert not unexpected, f'Exited pages must not resume API polling or SSE reconnects: {unexpected}'
     assert not watcher.call('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
         'NameHasOwner', '(s)', (item,))[0], 'Exit removes its tray registration'
 
@@ -249,6 +292,7 @@ def main():
             root.mkdir()
             run_case(stack, args.emp.resolve(), root, watcher, language)
             checks.append(language + ': three native menu items, menu-only activation, fresh single-use browser login, enable/restore, and clean exit')
+            checks.append(language + ': five pages share one event connection; rejected Quit retains them; successful Quit closes four script-opened tabs, stops the hidden normal tab and prevents later API requests')
             if language == 'zh-CN':
                 checks.append('Actual WebUI follows tray changes over SSE, focus recovery and reconnect without reloading the document or closing an open settings dialog')
         desktop = Path(directory) / 'desktop user $100%'

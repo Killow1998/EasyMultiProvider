@@ -12,38 +12,8 @@ function sessionFixture(url = 'http://localhost/?bootstrap=once', saved = '') {
   return {client, calls, replies, token:() => token};
 }
 const response = (status, body = {}) => new Response(JSON.stringify(body), {status, headers:{'Content-Type':'application/json'}});
-const serviceUsage = () => feature('service-usage.js', 'createServiceUsage')({esc, tr, number:String, money:value => 'USD ' + value, dateTime:String});
-
-test('Restore Native keeps the page usable and Quit EMP uses a separate action', async () => {
-  const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
-  const integration = html.slice(html.indexOf('function nativeHistoryMessage('), html.indexOf('let catalogSync ='));
-  const quit = html.slice(html.indexOf('async function quitEmp('), html.indexOf('function dynamicActionElement('));
-  for (const language of ['en', 'zh-CN']) {
-    const calls = [], notices = [], modals = [], nodes = new Map();
-    let mode = 'emp_applied';
-    const context = vm.createContext({language, integrationBusy:false, integrationInfo:{configuration:{state:mode}}, esc,
-      tr:uiTranslate(language),
-      $:id => { if(!nodes.has(id)) nodes.set(id,{textContent:''}); return nodes.get(id); },
-      renderIntegrationToggle(){}, renderIntegration:info => { mode=info.configuration.state; context.integrationInfo=info; },
-      api:async route => { calls.push(route); mode=route.endsWith('/enable') ? 'emp_applied' : 'native'; return {configuration:{state:mode},runtime:{}}; },
-      loadIntegration:async () => ({configuration:{state:mode},runtime:{}}),
-      openModal:(...args) => modals.push(args), closeModal(){},
-      notice:text => notices.push(text), confirm:() => true,
-    });
-    vm.runInContext(integration + quit, context);
-    context.confirmIntegrationAction('restore');
-    assert.match(modals.at(-1)[1], /stays running|继续运行/);
-    await modals.at(-1)[3]();
-    assert.deepEqual(calls, ['/api/integration/restore']);
-    assert.equal(mode,'native');
-    assert.match(notices.at(-1), /still running|继续运行/);
-    await context.submitIntegrationAction('enable');
-    assert.equal(mode,'emp_applied');
-    await context.quitEmp();
-    assert.deepEqual(calls, ['/api/integration/restore','/api/integration/enable','/api/quit']);
-    assert.match(modals.at(-1)[0], /exiting|正在退出/);
-  }
-});
+const serviceUsage = () => feature('service-usage.js', 'createServiceUsage')({esc, tr, number:String, money:value => 'USD ' + value, dateTime:String,
+  renderLifetime:feature('service-presentation.js','renderLifetimeUsage',{esc,tr})});
 
 test('service details isolate provider usage and discard results after navigation', async () => {
   let box, html;
@@ -71,22 +41,6 @@ test('service details isolate provider usage and discard results after navigatio
   pending[2].resolve({groups:[]});
   await current;
   assert.match(box.innerHTML, /No usage recorded/);
-});
-
-test('service summaries merge model usage across tiers and categories without dropping unknown or free usage', () => {
-  const html = serviceUsage().render({groups:[
-    {model:'same-model',category:'native',service_tier:'default',requests:1,input_reports:1,output_reports:1,input_tokens:10,output_tokens:2,priced_requests:1,cost_nanos:5},
-    {model:'same-model',category:'subscription',service_tier:'fast',requests:1,input_reports:1,output_reports:1,input_tokens:20,output_tokens:3,priced_requests:1,cost_nanos:7},
-    {model:'same-model',requests:1},
-    {model:'free-model',requests:1,input_reports:1,output_reports:1,input_tokens:4,output_tokens:0,priced_requests:1,cost_nanos:0},
-    {model:'<unknown>',requests:1},
-  ]});
-  assert.equal((html.match(/<td>same-model<\/td>/g) || []).length, 1);
-  assert.match(html, /<td>same-model<\/td><td>30<\/td><td>5<\/td><td>USD 12<\/td>/);
-  assert.match(html, /<td>free-model<\/td><td>4<\/td><td>0<\/td><td>USD 0<\/td>/);
-  assert.match(html, /<td>&lt;unknown&gt;<\/td><td>—<\/td><td>—<\/td><td>—<\/td>/);
-  assert.match(html, /<strong>39<\/strong>/);
-  assert.match(html, /3 \/ 5 requests priced/);
 });
 
 test('usage groups service types before models and preserves account/tier details and unknown service history', () => {
@@ -171,21 +125,17 @@ test('management login removes bootstrap secrets and distinguishes upstream reje
   assert.equal(f.calls[3].options.headers.get('X-EMP-Session'), 'renewed');
 });
 
-test('old bookmarks and Python cookie sessions retain their existing login path', async () => {
+test('old bookmarks and page reloads reuse the stored header session', async () => {
   const fallback = sessionFixture('http://localhost/?bootstrap=expired', 'still-valid');
   fallback.replies.push(response(401));
   await fallback.client.establish();
   assert.equal(fallback.client.isSignedIn(), true);
-  for (const url of ['http://localhost/', 'http://localhost/?bootstrap=old']) {
-    const f = sessionFixture(url, 'unrelated-header-token');
-    f.replies.push(response(404));
-    await f.client.establish();
-    assert.equal(f.calls[0].options.body, '{}');
-    f.replies.push(response(200));
-    await f.client.fetch('/api/config', {headers:{'X-EMP-Session':'caller-token'}});
-    assert.equal(f.calls[1].options.headers.has('X-EMP-Session'), false);
-    assert.equal(f.calls[1].options.credentials, 'same-origin');
-  }
+  const f = sessionFixture('http://localhost/', 'stored-session');
+  await f.client.establish();
+  f.replies.push(response(200));
+  await f.client.fetch('/api/config', {headers:{'X-EMP-Session':'caller-token'}});
+  assert.equal(f.calls[0].options.headers.get('X-EMP-Session'), 'stored-session');
+  assert.equal(f.calls[0].options.credentials, 'omit');
 });
 
 test('settings reuse on-demand recovery without a separate history control', () => {
@@ -423,7 +373,7 @@ test('the shipped page initializes its bindings and retains translated integrati
   const effects=pageEffectsGlobals();
   const context = vm.createContext({Headers, URL, Blob, console,...effects,
     fetch:() => pending.promise,
-    localStorage:{getItem:() => ''},
+    localStorage:{getItem:key => key === 'emp_management_session_v1' ? 'fixture-session' : ''},
     window:{...effects.windowEffects,location:{href:'http://localhost/'}, addEventListener() {}},
     document:{...effects.documentEffects,addEventListener() {}, visibilityState:'hidden', getElementById:node,
       querySelectorAll:selector => selector === '[data-i18n]' ? [...nodes.values()].filter(item => item.dataset.i18n) : []},
@@ -445,7 +395,7 @@ test('the shipped page initializes its bindings and retains translated integrati
 
 test('quota mode changes bars without changing recorded values', () => {
   const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
-  const storage = new Map();
+  const storage = new Map([['emp_management_session_v1','fixture-session']]);
   const effects=pageEffectsGlobals();
   const context = vm.createContext({Headers, URL, Blob, console,...effects,
     fetch:() => new Promise(() => {}),

@@ -321,6 +321,12 @@ is also exercised through a private pseudo-terminal: closing that launch
 terminal leaves the detached service available, and Quit ends the service.
 The normal desktop bus, live EMP and installed configuration are preserved.
 
+The Chinese/English exit cases open five WebUI pages and verify that Web Locks
+and BroadcastChannel share one SSE connection. A rejected Quit keeps the pages
+usable. A successful Quit closes script-opened tabs; a retained ordinary tab
+shows the exited state, stops its timers and sends no later API requests, even
+when hidden during shutdown. Restore Native leaves the service and UI usable.
+
 For frontend-only read-only inspection without a candidate backend, preview frontend changes against
 a running EMP without changing its configuration
 or interrupting requests. Python 3.10+ is sufficient; no packages are required.
@@ -485,9 +491,13 @@ and demonstration adapters; it no longer carries duplicate accepted UI assets.
 - `crates/emp-state/examples/shadow_migration_codec.rs`: read-only production codec
   and merge-rule reuse; no network, credential persistence or configuration writes.
 
-Account information and lifetime usage renderers are passed at page composition;
-the preview does not cut or replace component function bodies. Service navigation
-selects tabs by their explicit view identity. Migration previews merge against
+Account information and lifetime usage each have one renderer in
+`service-presentation.js`, injected at page composition for both shipped and
+Shadow pages. Controllers contain no fallback templates; service navigation owns
+the reset/removal buttons and selects tabs by explicit view identity.
+`e2e_account_usage.py` covers cache lifecycle and the
+shipped summaries' model aggregation, unknown/zero prices and EN/ZH rendering.
+Migration previews merge against
 the current shadow draft and use cached private account/provider identities for repeated
 imports, retaining prior edits and credentials. Export selections are grouped by
 their credential source before combining, so unrelated packages cannot contribute

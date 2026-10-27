@@ -3,16 +3,16 @@ function createManagementClient({tr, fetch, storage, window}) {
   const SESSION_STORAGE_KEY = 'emp_management_session_v1';
   let sessionToken = '';
   const SESSION_HEADER = 'X-EMP-Session';
-  let legacyCookieAuth = false;
+  let stopped = false;
   function readStoredSessionToken() { try { return storage().getItem(SESSION_STORAGE_KEY) || ''; } catch (_) { return ''; } }
   function saveSessionToken(token) { sessionToken = token; try { storage().setItem(SESSION_STORAGE_KEY, token); } catch (_) {} }
   function clearSessionToken() { sessionToken = ''; try { storage().removeItem(SESSION_STORAGE_KEY); } catch (_) {} }
   function managementFetch(path, options = {}) {
+    if (stopped) return Promise.reject(new Error(tr("core.emp_has_exited")));
     const headers = new Headers(options.headers || {});
-    if (legacyCookieAuth) headers.delete(SESSION_HEADER);
-    else if (sessionToken) headers.set(SESSION_HEADER, sessionToken);
+    if (sessionToken) headers.set(SESSION_HEADER, sessionToken);
     else headers.delete(SESSION_HEADER);
-    return fetch(path, {...options, headers, credentials:legacyCookieAuth ? 'same-origin' : 'omit', redirect:'error'});
+    return fetch(path, {...options, headers, credentials:'omit', redirect:'error'});
   }
   const SESSION_ERRORS = ['management session is required', 'proxy caller authentication is required'];
   const UPSTREAM_ERROR_GROUPS = [
@@ -69,17 +69,11 @@ function createManagementClient({tr, fetch, storage, window}) {
     if (bootstrapTokens.length === 1) {
       const response = await fetch('/api/session', {
         method:'POST',
-        // Same JSON shape as the probe below: cookie-session Python servers
-        // answer it with 404 instead of rejecting the body.
         headers:{'X-EMP-Bootstrap':bootstrapTokens[0],'Content-Type':'application/json'}, body:'{}',
         credentials:'same-origin',
         cache:'no-store',
         redirect:'error',
       });
-      if (response.status === 404) {
-        legacyCookieAuth = true;
-        return;
-      }
       let data = {};
       try { data = await response.json(); } catch (_) {}
       if (!response.ok) {
@@ -90,20 +84,9 @@ function createManagementClient({tr, fetch, storage, window}) {
         saveSessionToken(data.session);
       }
     } else {
-      // Probe even with a stored token: a token left by a header-session EMP on
-      // this origin must not hide a cookie-session server. The probe carries no
-      // bootstrap token and has no side effects.
       sessionToken = readStoredSessionToken();
-      const response = await fetch('/api/session', {
-        method:'POST', headers:{'Content-Type':'application/json'}, body:'{}',
-        credentials:'same-origin', cache:'no-store', redirect:'error',
-      });
-      if (response.status === 404) {
-        legacyCookieAuth = true;
-        return;
-      }
     }
-    if (!legacyCookieAuth && !sessionToken) throw new Error(tr("core.open_the_management_page_from_the_link_printed_by"));
+    if (!sessionToken) throw new Error(tr("core.open_the_management_page_from_the_link_printed_by"));
   }
   function receiveStorageEvent(event) {
     if (event.key !== SESSION_STORAGE_KEY) return false;
@@ -111,5 +94,5 @@ function createManagementClient({tr, fetch, storage, window}) {
     return Boolean(sessionToken);
   }
 
-  return {request:api, fetch:managementFetch, establish:establishSession, errorText:upstreamErrorText, clear:clearSessionToken, usesLegacyCookies:() => legacyCookieAuth, isSignedIn:() => Boolean(sessionToken || legacyCookieAuth), receiveStorageEvent};
+  return {request:api, fetch:managementFetch, establish:establishSession, errorText:upstreamErrorText, clear:clearSessionToken, stop:()=>{stopped=true;}, isStopped:()=>stopped, isSignedIn:() => Boolean(sessionToken), receiveStorageEvent};
 }

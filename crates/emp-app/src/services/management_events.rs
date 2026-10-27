@@ -11,6 +11,7 @@ pub(crate) enum Change {
     Activity,
     Usage,
     Integration,
+    Quit,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -19,6 +20,7 @@ struct Revisions {
     activity: u64,
     usage: u64,
     integration: u64,
+    quit: u64,
 }
 
 #[derive(Default)]
@@ -39,6 +41,7 @@ pub(crate) struct Changes {
     pub(crate) activity: bool,
     pub(crate) usage: bool,
     pub(crate) integration: bool,
+    pub(crate) quit: bool,
 }
 
 pub(crate) struct Subscription<'a> {
@@ -59,6 +62,7 @@ impl ManagementEvents {
                 Change::Activity => &mut state.revisions.activity,
                 Change::Usage => &mut state.revisions.usage,
                 Change::Integration => &mut state.revisions.integration,
+                Change::Quit => &mut state.revisions.quit,
             };
             *revision = revision.wrapping_add(1);
             self.wake.notify_all();
@@ -87,8 +91,9 @@ impl ManagementEvents {
 
 impl Subscription<'_> {
     /// The first call requests all snapshots. A timeout returns no changes;
-    /// closing the feed ends the subscription. Checking and waiting share the
-    /// publisher's lock, including changes arriving before this call.
+    /// closing the feed drains a pending Quit before ending the subscription.
+    /// Checking and waiting share the publisher's lock, including changes
+    /// arriving before this call.
     pub(crate) fn next(&mut self, timeout: Duration) -> Option<Changes> {
         let state = self.feed.state.lock().ok()?;
         let (state, _) = self
@@ -98,11 +103,13 @@ impl Subscription<'_> {
                 !state.closed && self.observed == Some(state.revisions)
             })
             .ok()?;
-        if state.closed {
+        let quit = self.observed.unwrap_or_default().quit != state.revisions.quit;
+        if state.closed && !quit {
             return None;
         }
         let current = state.revisions;
         let changes = Changes {
+            quit,
             quota: self.observed.is_none_or(|old| old.quota != current.quota),
             activity: self
                 .observed
@@ -135,7 +142,7 @@ mod tests {
             .map(|_| feed.subscribe().unwrap())
             .collect();
         assert!(feed.subscribe().is_none());
-        let subscription = &mut subscriptions[0];
+        let mut subscription = subscriptions.pop().unwrap();
         let first = subscription.next(Duration::ZERO).unwrap();
         assert!(first.quota && first.activity && first.usage && first.integration);
         let unchanged = subscription.next(Duration::ZERO).unwrap();
@@ -149,6 +156,10 @@ mod tests {
         assert!(changed.quota && changed.usage && !changed.activity && !changed.integration);
         subscriptions.pop();
         assert!(feed.subscribe().is_some());
+        feed.publish(Change::Quit);
+        feed.close();
+        assert!(subscription.next(Duration::ZERO).unwrap().quit);
+        assert!(subscription.next(Duration::ZERO).is_none());
     }
 
     #[test]

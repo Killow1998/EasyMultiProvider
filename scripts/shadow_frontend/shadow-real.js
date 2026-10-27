@@ -36,7 +36,6 @@ fill=function(){
 const realShadowRenderIntegration=renderIntegration;
 renderIntegration=function(...args){realShadowRenderIntegration(...args);$('integration_toggle').disabled=true;};
 confirmIntegrationAction=()=>{};
-quitEmp=()=>{};
 reportWebClientPhase=()=>{};
 document.addEventListener('click',event=>{
   const choice=event.target.closest('[data-shadow-demo]');
