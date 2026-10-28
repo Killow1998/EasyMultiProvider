@@ -52,8 +52,8 @@ def main():
                 assert response.headers.get_content_type() == 'image/gif'
                 expected = HERE.parents[1] / 'docs/assets/tutorials' / source.split('/tutorial-')[1]
                 assert response.read() == expected.read_bytes()
-        assert len(ids) == 10
-        checks.append('All ten selected tutorials serve the original local GIF bytes')
+        assert 'tunnel' in ids
+        checks.append('Every tutorial, including LAN transfer, serves the original local GIF bytes')
         browser.execute('closeModal();document.getElementById("tutorials_open").click();')
         assert browser.execute('return document.querySelector("[data-tutorial][aria-pressed=true]").dataset.tutorial;') == ids[-1]
         browser.execute('const last=document.querySelector("[data-tutorial][aria-pressed=true]");last.focus();last.dispatchEvent(new KeyboardEvent("keydown",{key:"Home",bubbles:true}));')

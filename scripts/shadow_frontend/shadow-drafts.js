@@ -97,8 +97,11 @@ window.fetch = async function(path, options = {}) {
     return shadowReply({...info,...release,state:difference>0?'available':'current',supported:false});
   }
   if (route === '/api/migration/export/confirm') return shadowReply({confirmation:'preview-only'});
-  if (['decode','preview','demo','export'].some(operation=>route==='/api/migration/'+operation))
+  if (['decode','preview','demo','export'].some(operation=>route==='/api/migration/'+operation)) {
+    if (['preview','demo'].some(operation=>route==='/api/migration/'+operation))
+      options={...options,body:JSON.stringify({...payload,current_config:shadowScrub(state)})};
     return shadowNativeFetch(path.replace('/api/migration/','/api/shadow/migration/'),options);
+  }
   if (route === '/api/migration/import') {
     const result=await shadowNativeFetch('/api/shadow/migration/preview',{...options,body:JSON.stringify({...payload,current_config:shadowScrub(state)})});
     if(!result.ok)return result;

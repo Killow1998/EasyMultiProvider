@@ -13,6 +13,7 @@ registerUiCopy({
   'tutorials.labels':['切换上下文显示','Toggle context labels'],
   'tutorials.export':['导出订阅与服务','Export subscriptions and services'],
   'tutorials.import':['导入订阅与服务','Import subscriptions and services'],
+  'tutorials.tunnel':['通过隧道迁移','Transfer over LAN'],
   'tutorials.loading':['正在加载演示…','Loading demonstration…'],
   'tutorials.failed':['演示加载失败，请重试。','Could not load the demonstration. Please retry.'],
   'tutorials.retry':['重新加载','Retry'],

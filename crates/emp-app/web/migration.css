@@ -17,15 +17,19 @@
 .modal:has(#shadow_migration) #modal_submit,#lan_share_block,#lan_receiver_confirm{animation:migration-reveal 250ms ease-out}
 @keyframes migration-reveal{from{opacity:0}to{opacity:1}}
 .migration-tunnel-intro{display:flex;align-items:center;gap:8px;margin:0 0 18px;color:var(--muted);font-size:12px}
-.migration-tunnel{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:start}
+.migration-tunnel,.tunnel-transfer{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:start}
 .migration-tunnel>section{display:block;min-width:0;margin:0;padding:0;border:0;border-radius:0;background:transparent}
 .migration-tunnel h3{font-size:14px;margin:0 0 14px}
 .migration-tunnel>.tunnel-receive{border-left:1px solid var(--border);padding-left:24px}
 .tunnel-receive>p.muted{font-size:12px;margin:0 0 16px;line-height:1.6}
 .migration-tunnel details>summary{cursor:pointer;font-size:12px;color:var(--text);margin-bottom:10px}
+.migration-tunnel .migration-services{height:192px}
 #lan_selected_count{margin-left:6px;font-size:11px}
 .migration-tunnel .migration-options{font-size:11px}
-.tunnel-create{display:flex;gap:10px;align-items:center;margin-top:16px}
+.tunnel-transfer{grid-column:1/-1;border-top:1px solid var(--border);padding-top:16px;min-height:152px}
+.tunnel-transfer>div{min-width:0}
+.tunnel-create{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.tunnel-create[hidden],.tunnel-meta[hidden]{display:none}
 .tunnel-create button,.tunnel-actions button{min-height:34px;margin:0}
 .tunnel-code{display:flex;gap:8px;align-items:start}
 .migration-tunnel textarea{font:13px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:0;resize:none;min-height:0;overflow-wrap:anywhere;word-break:break-all}
@@ -33,13 +37,14 @@
 .tunnel-code button{width:34px;height:34px;min-width:34px;padding:0;margin:0;display:inline-flex;align-items:center;justify-content:center}
 .tunnel-meta{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:11px;margin-top:8px}
 .tunnel-meta button{margin:0;font-size:12px}
-.tunnel-confirm{border-top:1px solid var(--border);padding-top:12px;margin-top:18px}
-.tunnel-confirm p{font-size:12px;line-height:1.6}
+.tunnel-confirm{padding-left:24px}
+.tunnel-confirm p{font-size:12px;line-height:1.6;margin:0 0 12px}
+.tunnel-confirm button{margin:0}
 .tunnel-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-#lan_send_status,#lan_receive_status{font-size:12px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}
+#lan_send_status,#lan_receive_status{font-size:12px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere;margin:10px 0 0}
 #lan_send_status:empty,#lan_receive_status:empty{display:none}
 @media(prefers-reduced-motion:reduce){#migration_chooser,.migration-panel,.modal:has(#shadow_migration) #modal_submit,#lan_share_block,#lan_receiver_confirm{animation:none}}
-@media(max-width:650px){.migration-tunnel{grid-template-columns:minmax(0,1fr)}.migration-tunnel>.tunnel-receive{border-left:0;border-top:1px solid var(--border);padding:20px 0 0}.tunnel-create{flex-wrap:wrap}}
+@media(max-width:650px){.migration-tunnel,.tunnel-transfer{grid-template-columns:minmax(0,1fr)}.migration-tunnel>.tunnel-receive{border-left:0;border-top:1px solid var(--border);padding:20px 0 0}.tunnel-create{flex-wrap:wrap}.tunnel-transfer{min-height:0}.tunnel-confirm{padding-left:0}}
 #shadow_migration .migration-options{display:flex;align-items:center;flex-wrap:wrap;gap:8px 20px;margin:12px 0}
 #shadow_migration .migration-options label{display:flex;align-items:center;gap:7px;margin:0}
 #shadow_migration input[type=checkbox]{width:14px;height:14px;margin:0;flex:none}
@@ -47,7 +52,8 @@
 .modal:has(#shadow_migration[aria-busy=true]) .modal-status{color:var(--muted)}
 .migration-choices,.migration-preview{min-width:0}
 .migration-choices>.toolbar{margin-bottom:10px}
-.migration-services{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.migration-services{border:1px solid var(--border);border-radius:6px}
+.migration-services,#migration_preview_rows{max-height:min(240px,30dvh);overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
 .migration-service{display:grid;grid-template-columns:16px minmax(0,1fr);gap:10px;align-items:start;padding:12px;margin:0;border:0;border-radius:0}
 .migration-service+.migration-service{border-top:1px solid var(--border)}
 .migration-preview{border-left:1px solid var(--border);padding-left:20px}

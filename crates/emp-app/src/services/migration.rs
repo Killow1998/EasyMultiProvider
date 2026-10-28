@@ -64,21 +64,15 @@ pub(crate) fn export(
                             "select at least one valid export category",
                         ));
                     };
-                    match ExportGroups::from_list(&values) {
-                        Ok(groups) => Some(groups),
-                        Err(error) => {
-                            return Err(MigrationError::invalid(error));
-                        }
-                    }
+                    Some(ExportGroups::from_list(&values).map_err(MigrationError::invalid)?)
                 }
                 None => None,
             };
-            let config = match state.backend.configuration.read() {
-                Ok(config) => config.clone(),
-                Err(_) => {
-                    return Err(MigrationError::Internal);
-                }
-            };
+            let config = state
+                .backend
+                .configuration
+                .snapshot()
+                .map_err(|_| MigrationError::Internal)?;
             if let Some(selections) = body.get("selections").and_then(Value::as_array) {
                 let account_ids: std::collections::BTreeSet<_> = selections
                     .iter()
@@ -90,7 +84,7 @@ pub(crate) fn export(
                     .filter(|s| s["kind"] == "provider")
                     .filter_map(|s| s["id"].as_str())
                     .collect();
-                let mut selected_config = config.clone();
+                let mut selected_config = config;
                 if let Some(accounts) = selected_config["accounts"].as_array_mut() {
                     accounts.retain(|a| account_ids.contains(a["id"].as_str().unwrap_or_default()));
                 }
@@ -137,20 +131,17 @@ pub(crate) fn export(
                     summary: serde_json::json!({"accounts":payload["accounts"].as_array().map_or(0,Vec::len),"providers":payload["config"]["providers"].as_array().map_or(0,Vec::len),"models":payload["config"]["models"].as_array().map_or(0,Vec::len),"native_login_included":summary.native_login_included}),
                 });
             }
-            let (bundle, summary) = match receipt.step("encrypt_bundle", || {
-                export_migration_bundle_with_summary(
-                    &config,
-                    password,
-                    &state.backend.configuration.vault,
-                    groups.as_ref(),
-                    Some(&state.backend.accounts.native_auth_path),
-                )
-            }) {
-                Ok(result) => result,
-                Err(error) => {
-                    return Err(MigrationError::invalid(error));
-                }
-            };
+            let (bundle, summary) = receipt
+                .step("encrypt_bundle", || {
+                    export_migration_bundle_with_summary(
+                        &config,
+                        password,
+                        &state.backend.configuration.vault,
+                        groups.as_ref(),
+                        Some(&state.backend.accounts.native_auth_path),
+                    )
+                })
+                .map_err(MigrationError::invalid)?;
             let summary = serde_json::json!({
                 "accounts":summary.accounts,
                 "providers":summary.providers,
@@ -186,42 +177,24 @@ pub(crate) fn import(
             else {
                 return Err(MigrationError::invalid("migration bundle is required"));
             };
-            let bundle = match STANDARD.decode(encoded) {
-                Ok(bundle) => bundle,
-                Err(_) => {
-                    return Err(MigrationError::invalid(
-                        "migration bundle is not valid base64",
-                    ));
-                }
-            };
+            let bundle = STANDARD
+                .decode(encoded)
+                .map_err(|_| MigrationError::invalid("migration bundle is not valid base64"))?;
             // Decrypting (scrypt) needs no configuration; keep it outside the locks.
-            let decrypted = match receipt.step("decrypt_bundle", || {
-                decrypt_migration_bundle(&bundle, password)
-            }) {
-                Ok(decrypted) => decrypted,
-                Err(error) => {
-                    return Err(MigrationError::invalid(error));
-                }
-            };
-            // Same-identity accounts in the bundle replace stored credentials; keep
-            // quota refreshes, rotated-credential flushes and other configuration
-            // writers out while that happens.
-            commit_import(state, decrypted, receipt)
+            let decrypted = receipt
+                .step("decrypt_bundle", || {
+                    decrypt_migration_bundle(&bundle, password)
+                })
+                .map_err(MigrationError::invalid)?;
+            // Account publication serializes credential replacement with refresh and config writes.
+            let summary = receipt.step("commit_bundle", || {
+                crate::services::accounts::import_account_bundle(state, decrypted)
+                    .ok_or(MigrationError::Internal)?
+                    .map_err(MigrationError::invalid)
+            })?;
+            finish_import(state, summary, receipt)
         },
     )
-}
-
-fn commit_import(
-    state: &ServerState,
-    decrypted: emp_state::migration::DecryptedMigration,
-    receipt: &mut OperationObservation,
-) -> Result<Value, MigrationError> {
-    let summary = receipt.step("commit_bundle", || {
-        crate::services::accounts::import_account_bundle(state, decrypted)
-            .ok_or(MigrationError::Internal)?
-            .map_err(MigrationError::invalid)
-    })?;
-    finish_import(state, summary, receipt)
 }
 
 fn finish_import(

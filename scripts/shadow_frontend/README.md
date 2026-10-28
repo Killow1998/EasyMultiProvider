@@ -99,12 +99,16 @@ Import and export share service/model selection. Back keeps form drafts and
 returns to the immediate parent. The tunnel displays sending and receiving
 together, with automatic network selection, a fixed five-minute code lifetime
 and no IP controls.
-Each view grows with its content; service lists are not capped to a few rows.
+Import, export and tunnel share bounded service lists without compressing rows;
+the import/export preview is bounded too. The tunnel places code and approval
+side by side below selection/reception. Cancellation and the code remain available
+during approval without adding another section. Reception enters
+the shared import preview; polling does not scroll or move focus.
 Run `e2e_login_destination.py --emp /path/to/candidate/EMP --output /tmp/emp-login`
 to verify both destinations from local-key and subscription states, cancellation,
 Native byte preservation, file/paste imports and the restart indication. Use the
 isolated helper setup in [the development SOP](../../docs/development-sop.md).
-The header's Tutorials entry uses the same ten GIFs as `docs/tutorials.md`, served
+The header's Tutorials entry uses the same eleven GIFs as `docs/tutorials.md`, served
 locally in both Shadow and the executable. Run `e2e_tutorials.py --emp /path/to/EMP
 --output /tmp/emp-tutorials` for selection, asset recovery, keyboard navigation,
 reduced-motion playback and migration visual evidence.
@@ -434,6 +438,9 @@ Export previews show the new computer's Native login plus the imported services;
 exporting creates an encrypted `.emp` download.
 
 Migration preview uses the existing Rust migration codec and identity merge rules.
+The Shadow fetch adapter adds the scrubbed browser draft to preview/demo requests.
+Preview requests carry the package token, selections and options;
+production previews read configuration from their backend.
 Build its read-only helper once (normal page navigation needs only Python):
 
 ```sh

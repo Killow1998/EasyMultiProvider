@@ -1,5 +1,5 @@
 use super::*;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::io::{Read, Write};

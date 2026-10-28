@@ -23,13 +23,24 @@ def main():
         root = Path(temp)
         source, target = root / 'source', root / 'target'
         source.mkdir(); target.mkdir()
-        base, _, _, headers, upstream = start_backend(stack, args.emp.resolve(), source)
+        provider_ids = ['demo'] + [f'demo-{i}' for i in range(1, 8)]
+        base, _, _, headers, upstream = start_backend(stack, args.emp.resolve(), source, {
+            'providers': [{'id': identifier, 'name': f'Fixture service {i+1}',
+                'base_url': 'http://127.0.0.1:9/v1', 'protocol': 'chat_completions',
+                'auth_mode': 'api_key', 'api_key': f'fixture-only-{i}'}
+                for i, identifier in enumerate(provider_ids)],
+            'models': [{'id': identifier+'/model', 'provider': identifier,
+                'upstream_id': 'upstream-model', 'enabled': True} for identifier in provider_ids],
+        })
         target_base, target_url, _, _, _ = start_backend(stack, args.emp.resolve(), target,
             {'codex_base_url': base + '/fixture-subscription'})
         headers['Origin'] = base
         status, confirmation = request(base + '/api/migration/export/confirm', {}, headers)
         assert status == 200
-        selection = [{'kind': 'provider', 'id': 'demo', 'name': 'Imported fixture', 'models': [{'id': 'demo/model', 'selected': True}]}]
+        selection = [{'kind': 'provider', 'id': identifier,
+            'name': 'Imported fixture' if i == 0 else f'Imported fixture {i+1}',
+            'models': [{'id': identifier+'/model', 'selected': True}]}
+            for i, identifier in enumerate(provider_ids)]
         status, exported = request(base + '/api/migration/export', {'confirmation': confirmation['confirmation'],
             'password': 'fixture-migration-password', 'selections': selection}, headers, timeout=90)
         assert status == 200
@@ -84,6 +95,28 @@ def main():
                 assert browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");')
                 assert (target / 'config.json').read_bytes() == before
         checks.append('Both languages/themes: chooser, forms and preview return to their immediate parent; import file/password, export password/options and tunnel code survive switching; root X closes without writes')
+        browser.execute('''window.migrationStatusFetch=window.fetch;
+          window.fixtureLanStatus={status:'idle'};window.lanStatusReads=0;
+          window.fetch=(path,options)=>{
+            if(String(path)==='/api/migration/lan/status'){
+              window.lanStatusReads++;
+              return Promise.resolve(new Response(JSON.stringify(window.fixtureLanStatus),{headers:{'Content-Type':'application/json'}}));
+            }
+            return window.migrationStatusFetch(path,options);
+          };''')
+        for terminal in ['idle', 'expired', 'failed', 'sent']:
+            browser.execute('window.fixtureLanStatus={status:arguments[0],code:"E"+"x".repeat(48),remaining_seconds:0};window.lanStatusReads=0;document.getElementById("shadow_migration_open").click();document.querySelector("[data-migration-mode=tunnel]").click();', terminal)
+            wait_for(lambda: browser.execute('return window.lanStatusReads;'))
+            assert browser.execute('return !document.getElementById("lan_send_status").textContent && !document.querySelector("[data-lan-create]").disabled;')
+            browser.escape(); browser.escape()
+        browser.execute('window.fixtureLanStatus={status:"waiting",code:"E"+"y".repeat(48),remaining_seconds:30};document.getElementById("shadow_migration_open").click();document.querySelector("[data-migration-mode=tunnel]").click();')
+        wait_for(lambda: browser.execute('return !document.getElementById("lan_share_block").hidden;'))
+        assert browser.execute('return document.getElementById("lan_share_code").value===window.fixtureLanStatus.code;')
+        browser.execute('window.fixtureLanStatus.status="expired";window.fixtureLanStatus.remaining_seconds=0;')
+        wait_for(lambda: browser.execute('return document.getElementById("lan_share_block").hidden && !!document.getElementById("lan_send_status").textContent && !document.querySelector("[data-lan-create]").disabled;'))
+        browser.escape(); browser.escape()
+        browser.execute('window.fetch=window.migrationStatusFetch;delete window.migrationStatusFetch;delete window.fixtureLanStatus;delete window.lanStatusReads;')
+        checks.append('Replayed LAN status responses: new dialogs ignore old terminal states; active codes recover and subsequent expiry remains visible')
         browser.execute('document.getElementById("shadow_migration_open").click();document.querySelector("[data-migration-mode=import]").click();')
         browser.execute(fill, exported['bundle'])
         server.preview_gate = threading.Event()
@@ -96,6 +129,22 @@ def main():
         wait_for(lambda: browser.execute('return !!document.querySelector("[data-migration-name]") && !document.getElementById("modal_submit").disabled;'), seconds=90)
         assert (target / 'config.json').read_bytes() == before
         checks.append('Back cancels pending preview; reopened encrypted package becomes importable without stale state or writes')
+        for width, height in [(1280, 900), (1280, 600), (560, 800)]:
+            request(browser.base + '/window/rect', {'width': width, 'height': height})
+            browser.execute('document.querySelector(".migration-services").scrollTop=10000;document.getElementById("migration_preview_rows").scrollTop=10000;')
+            status, element = request(browser.base + '/element', {'using': 'css selector', 'value': '[data-migration-select="7"]'})
+            assert status == 200, element
+            identifier = element['value']['element-6066-11e4-a52e-4f735466cecf']
+            for checked in [False, True]:
+                status, result = request(browser.base + '/element/' + identifier + '/click', {})
+                assert status == 200, result
+                wait_for(lambda: browser.execute('return !document.getElementById("modal_submit").disabled;'))
+                assert browser.execute('return document.querySelector("[data-migration-select=\\"7\\"]").checked;') == checked
+            status, screenshot = request(browser.base + '/screenshot')
+            assert status == 200
+            args.output.with_name(f'migration-many-services-{width}-{height}.png').write_bytes(base64.b64decode(screenshot['value']))
+        checks.append('Eight-service import: the last service remains selectable through actual pointer clicks at desktop, short and narrow sizes')
+        request(browser.base + '/window/rect', {'width': 1280, 'height': 900})
         # A response that never arrives must leave a usable retry, not a permanent wait.
         gate = threading.Event()
         stack.callback(gate.set)
@@ -144,6 +193,7 @@ def main():
         wait_for(lambda: browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");'))
         stored = json.loads((target / 'config.json').read_text())
         assert any(provider['name'] == 'Imported fixture' for provider in stored['providers'])
+        assert sum(provider['name'].startswith('Imported fixture') for provider in stored['providers']) == 8
         assert upstream.calls == 0
         checks.append('A delayed committed import locks selection and Back/Escape; completion closes the preview and preserves the saved service')
         # Same-account roles share one card, with explicit choices only for differing preferences.

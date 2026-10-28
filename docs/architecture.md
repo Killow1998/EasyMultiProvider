@@ -43,7 +43,14 @@ While Import commits, the browser locks selection, naming, options and Back/Esca
 Submission does not share the preview's cancellation signal: cancelling a preview
 cannot discard the result of a committed import. Successful submission reloads the
 configuration and closes only the same import view.
+File and LAN input share the preview cache's binary decode/validation boundary;
+LAN delivery passes the encrypted bytes directly, without a Base64/JSON roundtrip.
+The cache moves each decoded payload into storage after deriving the scrubbed
+response. The HTTP adapter authenticates the management session once and passes
+that identity through each operation.
 The Shadow bridge keeps its own read-only cache and never forwards a write.
+Its fetch adapter adds the scrubbed browser draft for preview/demo requests;
+formal requests use the backend configuration and carry no browser snapshot.
 
 The HTTP response owner now contains decoded reads, size/deadline enforcement and
 bounded cleanup. Requests negotiate gzip, Brotli, Zstandard and deflate; reqwest
@@ -195,6 +202,14 @@ request's terminal result. It updates auto-review eligibility through
 `ReviewState`, then submits content-free usage/diagnostic evidence. The
 observation reporter no longer decides routing cooldowns or owns their locks.
 Network evidence lives below the HTTP support-report adapter.
+
+[`request_facts`](../crates/emp-app/src/services/request_facts.rs) owns the pure
+request classification shared by accounting, memory routing and passive receipts.
+Accounting no longer imports parsing from either observation or routing policy.
+It classifies memory jobs once per outcome and moves the fact map into the event
+without cloning it. Request preparation validates the body object at entry;
+external presentation settings receive that object directly and take ownership
+of its reasoning fields instead of copying them.
 
 [`RequestObservation`](../crates/emp-app/src/services/observation/request.rs)
 separately owns a client request's passive receipt, from entry through the last
@@ -495,12 +510,11 @@ contracts remain distinct and are exercised at the actual server interface.
 Styles are embedded as a separate static asset in their original cascade order.
 All assets ship in the EMP executable, with no new framework, development server
 or frontend build pipeline. Existing page event handlers bind the features'
-public operations. Account, provider, quota and model rendering remain in the
-page and are future candidates for the same treatment; moving all functions to
-another large script would not improve that boundary.
+public operations. Shared dialogs, account presentation and migration controllers
+keep rendering and state ownership in their respective modules.
 
 Behavioral checks exercise login expiration versus upstream authentication
-errors, old bookmarks/cookie sessions, rejected settings, current activity
+errors, expired bookmarks, rejected settings, current activity
 snapshots, diagnostics close/cancel behavior and the shipped script order.
 The real server test also fetches the page's referenced assets before login.
 
@@ -517,6 +531,14 @@ outside the scrolling `.modal-body`. Migration, tutorials and service details
 only customize their dimensions; the native request-outcome dialog uses the same
 body rule. The shared body reserves a scrollbar gutter and spacing in the dialog's
 outer padding, so a scrolling thumb does not touch controls or table content.
+Migration bounds both the service selector and the resulting-service preview.
+Service rows retain their natural height instead of shrinking inside a fixed-height
+Flex column. The tunnel places selection/reception above a full-width transfer
+area, with the code on the left and sender approval on the right. The code and
+cancel action remain available during confirmation. Polling updates status without
+scrolling or moving focus. Reception enters the shared import preview; only its explicit
+confirmation writes configuration. State changes use the existing short opacity
+transition and respect reduced motion.
 Help bubbles state the behavior, triggering conditions and required action
 directly. Keep factual limits and measured-data boundaries explicit;
 avoid speculative explanations and repeated guarantee disclaimers. Maintain
@@ -716,7 +738,8 @@ preview and submission for both transports; there is no second frontend import p
 Back returns to the immediate parent and retains the form nodes, including file
 selection, passwords and tunnel code. Closing the root drops those drafts.
 Each working view takes its height from its content, bounded by the viewport.
-Service lists expand naturally; only the dialog body scrolls when space runs out.
+Service selectors and preview lists scroll within bounded regions. The dialog body
+handles remaining overflow in small windows; the title and import/export footer stay visible.
 Views with inline actions do not reserve an empty footer or status row.
 Reveals use 250 ms fades and respect reduced motion. Transfer polling does not
 collapse the service chooser. The tunnel

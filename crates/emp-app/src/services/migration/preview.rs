@@ -19,21 +19,42 @@ pub(crate) struct MigrationPreviews {
     packages: Mutex<VecDeque<Package>>,
 }
 impl MigrationPreviews {
-    fn store(&self, session: &str, payload: Value, demo: bool) -> Result<String, MigrationError> {
+    pub(super) fn decode(
+        &self,
+        session: &str,
+        bundle: &[u8],
+        password: &str,
+    ) -> Result<Value, MigrationError> {
+        let plain = emp_state::migration::decode_migration(password, bundle)
+            .map_err(MigrationError::invalid)?;
+        let payload: Value = serde_json::from_slice(&plain).map_err(MigrationError::invalid)?;
+        emp_state::migration::validate_migration_payload(&payload)
+            .map_err(MigrationError::invalid)?;
+        self.store(session, payload, false)
+    }
+    fn store(&self, session: &str, payload: Value, demo: bool) -> Result<Value, MigrationError> {
         let token = crate::util::random_hex(24).map_err(|_| MigrationError::Internal)?;
+        let response = json!({
+            "token": token,
+            "payload": scrub(&payload),
+            "credential_accounts": payload["accounts"].as_array().into_iter().flatten()
+                .map(|account| account["metadata"]["id"].clone()).collect::<Vec<_>>(),
+            "credential_providers": payload["provider_keys"].as_object().into_iter()
+                .flat_map(|providers| providers.keys()).collect::<Vec<_>>(),
+        });
         let mut packages = self.packages.lock().map_err(|_| MigrationError::Internal)?;
         packages.retain(|p| p.expires > Instant::now());
         while packages.len() >= 4 {
             packages.pop_front();
         }
         packages.push_back(Package {
-            token: token.clone(),
+            token,
             session: session.into(),
             expires: Instant::now() + Duration::from_secs(1800),
             payload,
             demo,
         });
-        Ok(token)
+        Ok(response)
     }
     fn get(&self, session: &str, token: &str) -> Result<(Value, bool), MigrationError> {
         let mut packages = self.packages.lock().map_err(|_| MigrationError::Internal)?;
@@ -84,26 +105,6 @@ fn scrub(value: &Value) -> Value {
 fn id(value: &Value) -> &str {
     value["id"].as_str().unwrap_or_default()
 }
-fn read_config(state: &ServerState) -> Result<Value, MigrationError> {
-    state
-        .backend
-        .configuration
-        .read()
-        .map(|config| config.clone())
-        .map_err(|_| MigrationError::Internal)
-}
-fn describe(payload: &Value, token: &str) -> Value {
-    json!({"token":token,"payload":scrub(payload),
-        "credential_accounts":payload["accounts"].as_array().into_iter().flatten().map(|a|a["metadata"]["id"].clone()).collect::<Vec<_>>(),
-        "credential_providers":payload["provider_keys"].as_object().into_iter().flat_map(|p|p.keys()).collect::<Vec<_>>()})
-}
-fn selections(body: &Value) -> Result<&[Value], MigrationError> {
-    body["selections"]
-        .as_array()
-        .map(Vec::as_slice)
-        .ok_or_else(|| MigrationError::invalid("Select services"))
-}
-
 pub(crate) fn preview_request(
     request_id: Option<&str>,
     state: &ServerState,
@@ -117,19 +118,18 @@ pub(crate) fn preview_request(
             let bundle = STANDARD
                 .decode(body["bundle"].as_str().unwrap_or_default())
                 .map_err(MigrationError::invalid)?;
-            let plain = emp_state::migration::decode_migration(
-                body["password"].as_str().unwrap_or_default(),
+            cache.decode(
+                session,
                 &bundle,
+                body["password"].as_str().unwrap_or_default(),
             )
-            .map_err(MigrationError::invalid)?;
-            let payload: Value = serde_json::from_slice(&plain).map_err(MigrationError::invalid)?;
-            emp_state::migration::validate_migration_payload(&payload)
-                .map_err(MigrationError::invalid)?;
-            let token = cache.store(session, payload.clone(), false)?;
-            Ok(describe(&payload, &token))
         }
         "demo" => {
-            let config = read_config(state)?;
+            let config = state
+                .backend
+                .configuration
+                .snapshot()
+                .map_err(|_| MigrationError::Internal)?;
             let account_id = config["accounts"]
                 .as_array()
                 .and_then(|v| v.first())
@@ -143,15 +143,17 @@ pub(crate) fn preview_request(
             let account = json!({"id":account_id,"prefix":account_id,"name":"Example subscription","hidden_models":[]});
             let provider = json!({"id":provider_id,"name":"Example subscription","base_url":"https://example.invalid/v1","protocol":"responses","auth_mode":"api_key"});
             let payload = json!({"schema":"easy-multi-provider-migration","version":1,"config":{"accounts":[account],"providers":[provider],"models":[{"id":format!("{provider_id}/sample-model"),"provider":provider_id,"upstream_id":"sample-model","display_name":"Example model","context_window":128000}]},"accounts":[{"metadata":account,"auth":{"tokens":{"account_id":"emp-demo-only","access_token":"emp-demo-only"}}}],"provider_keys":{provider_id:"emp-demo-only"}});
-            let token = cache.store(session, payload.clone(), true)?;
-            Ok(describe(&payload, &token))
+            cache.store(session, payload, true)
         }
         "preview" | "import" => {
             let token = body["token"].as_str().unwrap_or_default();
             let (source, demo) = cache.get(session, token)?;
+            let selections = body["selections"]
+                .as_array()
+                .ok_or_else(|| MigrationError::invalid("Select services"))?;
             let payload = emp_state::migration::select_migration_payload(
                 &source,
-                selections(body)?,
+                selections,
                 body["include_context"].as_bool().unwrap_or(true),
                 body["include_rename"].as_bool().unwrap_or(true),
             )
@@ -176,7 +178,13 @@ pub(crate) fn preview_request(
                 request_id,
                 "migration_preview",
                 |receipt| {
-                    let current = receipt.step("read_configuration", || read_config(state))?;
+                    let current = receipt.step("read_configuration", || {
+                        state
+                            .backend
+                            .configuration
+                            .snapshot()
+                            .map_err(|_| MigrationError::Internal)
+                    })?;
                     let resolution = receipt.step("resolve_preferences", || {
                         preferences::resolve(
                             state,

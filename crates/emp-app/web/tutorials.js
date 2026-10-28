@@ -2,7 +2,7 @@ function createTutorials({openModal, $, tr, esc}) {
   const groups = [
     ['gpt', [['native_context','00-native-context'], ['native_name','00-native-name'], ['remove_subscription','00-remove-subscription']]],
     ['external', [['add','01-add-service'], ['context','05-change-context'], ['rename','06-rename'], ['remove','04-remove-service']]],
-    ['shared', [['labels','07-context-label'], ['export','03-export-service'], ['import','02-import-service']]]
+    ['shared', [['labels','07-context-label'], ['export','03-export-service'], ['import','02-import-service'], ['tunnel','08-tunnel-migration']]]
   ];
   const entries = new Map(groups.flatMap(([, items]) => items));
   let selected = 'native_context';

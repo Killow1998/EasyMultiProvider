@@ -4,7 +4,6 @@ mod network;
 mod wire;
 use super::MigrationError;
 use crate::app::ServerState;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::net::{Ipv4Addr, TcpListener};
 use std::sync::{
@@ -52,13 +51,12 @@ pub(crate) fn execute(
         let nonce = wire::nonce(body["receiver"].as_str().unwrap_or_default())
             .map_err(MigrationError::invalid)?;
         return match wire::receive(&code, &nonce).map_err(MigrationError::invalid)? {
-            Some(bundle) => super::preview_request(
-                None,
-                state,
-                session,
-                "decode",
-                &json!({"bundle":STANDARD.encode(bundle),"password":code.password()}),
-            ),
+            Some(bundle) => {
+                state
+                    .backend
+                    .migration_previews
+                    .decode(session, &bundle, &code.password())
+            }
             None => Ok(json!({"status":"waiting"})),
         };
     }

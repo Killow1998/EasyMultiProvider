@@ -1,4 +1,4 @@
-// Migration selection belongs to this dialog; credentials remain in the local helper.
+// The dialog owns selection and cancellation; decrypted credentials stay server-side.
 function createMigration() {
   let view=null, previewTimer=null;
   const {services,selections,options,importedNameRows,warningHtml,previewRows,bodyHtml,mergeRules,preferenceRows}=createMigrationView(()=>state);
@@ -44,7 +44,7 @@ function createMigration() {
       const mode=event.target.closest('[data-migration-mode]')?.dataset.migrationMode;
       if(mode&&candidate.mode==='choose'){
         const saved=candidate.drafts.get(mode);
-        view=saved?.view||{mode,transport:mode==='tunnel'?'lan':undefined,rows:mode==='import'?[]:services(state),includeContext:true,includeRename:true,parent:{view:candidate,body:node}};
+        view=saved?.view||{mode,rows:mode==='import'?[]:services(state),includeContext:true,includeRename:true,parent:{view:candidate,body:node}};
         view.controller=new AbortController();view.busy=false;render(saved?.body);
         $('modal_back').focus({preventScroll:true});return;
       }
@@ -81,7 +81,7 @@ function createMigration() {
   }
   function openPreview(candidate,result,isDemo=false) {
     const config={...result.payload.config,model_previews:result.payload.model_previews};
-    view={mode:'import',transport:candidate.transport,rows:services(config,true,{accounts:result.credential_accounts,providers:result.credential_providers}),
+    view={mode:'import',rows:services(config,true,{accounts:result.credential_accounts,providers:result.credential_providers}),
       includeContext:candidate.includeContext,includeRename:candidate.includeRename,controller:new AbortController(),
       token:result.token,demo:isDemo,parent:{view:candidate,body:$('shadow_migration')}};
     render();schedulePreview(view);
@@ -99,7 +99,7 @@ function createMigration() {
       let timedOut=false;
       const deadline=setTimeout(()=>{timedOut=true;controller.abort();},30000);
       try{
-        const result=await api('/api/migration/preview',{method:'POST',body:JSON.stringify({token:candidate.token,current_config:migrationScrub(state),selections:selections(candidate),...options(candidate)}),signal:controller.signal});
+        const result=await api('/api/migration/preview',{method:'POST',body:JSON.stringify({token:candidate.token,selections:selections(candidate),...options(candidate)}),signal:controller.signal});
         if(!active(candidate)||controller.signal.aborted)return;
         candidate.importConfig=result.config;candidate.warnings=result.warnings || [];candidate.preferenceConflicts=result.preference_conflicts || [];candidate.previewReady=true;$('modal_status').textContent='';
         candidate.preferenceChoices=Object.fromEntries(candidate.preferenceConflicts.map(conflict=>[conflict.source_id,Object.fromEntries(Object.keys(conflict.fields).filter(kind=>candidate.preferenceChoices?.[conflict.source_id]?.[kind]).map(kind=>[kind,candidate.preferenceChoices[conflict.source_id][kind]]))]));
@@ -116,7 +116,7 @@ function createMigration() {
     const controller=candidate.controller;
     candidate.busy=true;updatePreview();
     try {
-      const result=await api('/api/migration/demo',{method:'POST',body:JSON.stringify({current_config:migrationScrub(state)}),signal:controller.signal});
+      const result=await api('/api/migration/demo',{method:'POST',body:'{}',signal:controller.signal});
       if(!active(candidate)||controller.signal.aborted)return;
       openPreview(candidate,result,true);
     } catch(error) {if(active(candidate)&&!controller.signal.aborted)$('modal_status').textContent=error.message;}
@@ -183,10 +183,4 @@ function createMigration() {
     closeModal();notice(tr("transfers.selected_services_exported"));
   }
   return {open(){if(window.EMP_PREVIEW && shadowServicesDemoActive){notice(tr("transfers.end_the_service_demo_to_migrate_data"));return;}stop();view={mode:'choose',drafts:new Map(),controller:new AbortController()};render();},stop};
-}
-
-function migrationScrub(value) {
-  if(Array.isArray(value))return value.map(migrationScrub);
-  if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).filter(([key])=>!['api_key','api_key_file','auth_file','auth','imported_auth','provider_keys','access_token','refresh_token','id_token','password','authorization','cookie'].includes(key.toLowerCase())).map(([key,item])=>[key,migrationScrub(item)]));
-  return value;
 }
