@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.13.18 (2026-10-28)
+
+### 中文
+
+- 适配 Codex 0.165：修复记忆提取未使用所选模型的问题，以及会话中切换推理强度后仍记录旧值的问题；日常维护范围调整为最近五个正式系列 0.161–0.165。
+- 正确保留上游「模型不存在」错误，提示重新选择模型，停止对此类错误进行无效重试和协议回退。
+- 调用明细分别显示所选与服务端回报的推理强度、请求与服务端回报的档位。性能统计按服务端档位分组；缺少回报的记录显示未确认，Ultra 与回报的 xhigh 分开记录。
+- 改善服务迁移布局：导入、导出和隧道列表独立滚动，避免服务文字与分隔线重叠、操作按钮被长列表挤走；隧道迁移代码与接收确认并排显示。
+- 修复尚未生成迁移代码时显示旧的过期提示；使用教程新增隧道迁移演示，覆盖发送、接收、确认和导入。
+- 精简请求解析、错误转换和迁移预览流程，移除重复数据转换、无效封装及过时注释，统一正式页面与 Shadow 的迁移职责。
+
+### English
+
+- Maintain Codex 0.165 compatibility: honor the selected memory extraction model and record the current reasoning effort after changes within a conversation. Routine maintenance now covers the five latest stable series, 0.161–0.165.
+- Preserve upstream model-not-found errors, prompt users to select another model, and stop ineffective retries and protocol fallback for these errors.
+- Show selected and upstream-reported reasoning effort, plus requested and upstream-reported service tier, separately in call details. Group performance by the reported tier; leave unreported tiers unconfirmed and distinguish Ultra from a reported xhigh effort.
+- Improve service migration layouts with independently scrolling Import, Export and Tunnel lists. Prevent row separators from overlapping text and long lists from pushing actions out of view; place tunnel codes and receiver confirmation side by side.
+- Stop showing an earlier transfer's expiry warning before a new code is generated. Add a tunnel migration tutorial covering sending, receiving, approval and import.
+- Simplify request parsing, error translation and migration previews. Remove duplicate data conversions, unused wrappers and stale comments, and clarify migration ownership between the shipped page and Shadow.
+
 ## 0.13.17 (2026-10-27)
 
 ### 中文
