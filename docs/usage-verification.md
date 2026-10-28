@@ -2,6 +2,20 @@
 
 ## Regressions
 
+`scripts/shadow_frontend/e2e_request_modes.py --emp /path/to/EMP --output /path/to/result.json`
+runs 77 synthetic requests through Native, imported subscriptions, external
+Responses and Chat Completions. It covers HTTP, SSE and Responses WebSocket,
+requested/confirmed tier mismatches, absent tier reports, metadata without usage,
+current-turn effort and Ultra versus reported `xhigh`. It checks persisted call
+details against model-group counts, verifies one upstream request per call, and
+opens the actual bilingual statistics UI. It uses disposable accounts and
+loopback endpoints, with no real provider calls.
+
+`crates/emp-state/tests/call_reports.rs` also verifies that confirmation survives
+reopening the ledger, while old unconfirmed speed labels change only in the read
+projection. Request observation and account-usage contracts cover the existing
+delivery and accounting behavior.
+
 `tests/test_usage_history.py` exercises repeated cumulative notifications,
 restart/append checkpoints, archive and fork copies, incomplete final lines,
 file replacement, history/live matching, cumulative fork baselines, unknown

@@ -224,6 +224,7 @@ pub(crate) fn external_compaction_response(
             }
             Err(SummaryExecutionError::Router(error))
                 if index + 1 < candidates.len()
+                    && error.failure_reason() != Some("model_not_found")
                     && protocol_fallback_allowed(error.status(), false, false) =>
             {
                 usage.retry(index, std::time::Duration::ZERO, &error, true);

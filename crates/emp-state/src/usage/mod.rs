@@ -84,10 +84,26 @@ pub fn reported_usage(event: &Value) -> serde_json::Map<String, Value> {
         .get("response")
         .filter(|value| value.is_object())
         .unwrap_or(event);
-    let Some(usage) = response.get("usage").filter(|value| value.is_object()) else {
-        return serde_json::Map::new();
-    };
     let mut result = serde_json::Map::new();
+    if let Some(tier) = response["service_tier"]
+        .as_str()
+        .filter(|value| !value.is_empty() && value.chars().count() <= 32)
+    {
+        result.insert("service_tier".into(), tier.into());
+        result.insert("reported_service_tier".into(), tier.into());
+        result.insert(
+            "speed_mode".into(),
+            match tier {
+                "default" | "standard" => "standard",
+                "fast" | "priority" | "ultrafast" => "fast",
+                other => other,
+            }
+            .into(),
+        );
+    }
+    let Some(usage) = response.get("usage").filter(|value| value.is_object()) else {
+        return result;
+    };
     if let Some(total) = token_count(usage.get("input_tokens")) {
         result.insert("input_tokens".into(), total.into());
         if let Some(cached) = token_count(usage["input_tokens_details"].get("cached_tokens"))
@@ -115,12 +131,6 @@ pub fn reported_usage(event: &Value) -> serde_json::Map<String, Value> {
         .filter(|value| !value.is_empty() && value.chars().count() <= 256)
     {
         result.insert("usage_response_id".into(), id.into());
-    }
-    if let Some(tier) = response["service_tier"]
-        .as_str()
-        .filter(|value| !value.is_empty() && value.chars().count() <= 32)
-    {
-        result.insert("service_tier".into(), tier.into());
     }
     result
 }

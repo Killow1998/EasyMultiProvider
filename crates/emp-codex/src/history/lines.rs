@@ -118,28 +118,24 @@ mod walker_boundary_tests {
     use super::*;
     use std::io::Write;
 
-    /// The walker's `end` is an absolute offset captured BEFORE the walk
-    /// starts. Records appended after the capture (a concurrent writer) must
-    /// never be observed, even when the handle's file grew behind the walk.
     #[test]
     fn walker_absolute_end_ignores_concurrent_append() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("rollout.jsonl");
-        std::fs::write(&path, "{\"ordinal\":1,\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"first\"}}\n").unwrap();
+        let prefix = "{\"ordinal\":1,\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"first\"}}\n";
+        let captured = "{\"ordinal\":2,\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"captured\"}}\n";
+        std::fs::write(&path, [prefix, captured].concat()).unwrap();
         let mut file = File::open(&path).unwrap();
         let captured_end = file.metadata().unwrap().len();
-        // Seek somewhere non-zero like the reverse probe does, then append.
-        file.seek(SeekFrom::Start(4)).unwrap();
+        file.seek(SeekFrom::Start(prefix.len() as u64)).unwrap();
         std::fs::OpenOptions::new()
             .append(true)
             .open(&path)
             .unwrap()
             .write_all(
-                b"{\"ordinal\":2,\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"APPENDED\"}}\n",
+                b"{\"ordinal\":3,\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"APPENDED\"}}\n",
             )
             .unwrap();
-        // Rewind to a non-zero start and walk to the frozen absolute end.
-        file.seek(SeekFrom::Start(0)).unwrap();
         let mut seen = Vec::new();
         walk_records(&mut file, captured_end, |record| {
             seen.push(serde_json::to_string(&record).unwrap());
@@ -147,6 +143,7 @@ mod walker_boundary_tests {
         })
         .unwrap();
         assert_eq!(seen.len(), 1, "walker must stop at the frozen end");
+        assert!(seen[0].contains("captured"), "{:?}", seen[0]);
         assert!(!seen[0].contains("APPENDED"), "{:?}", seen[0]);
     }
 }

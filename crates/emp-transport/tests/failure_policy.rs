@@ -12,6 +12,7 @@ fn statuses_and_proxy_evidence_keep_502_and_503_distinct() {
     let origin = http_failure(HttpFailureInput {
         status: 502,
         detail: "temporarily unavailable",
+        upstream_code: None,
         proxy_evidence: false,
         retry_after_seconds: None,
     });
@@ -22,6 +23,7 @@ fn statuses_and_proxy_evidence_keep_502_and_503_distinct() {
     let proxy = http_failure(HttpFailureInput {
         status: 502,
         detail: "gateway unavailable",
+        upstream_code: None,
         proxy_evidence: true,
         retry_after_seconds: None,
     });
@@ -71,6 +73,7 @@ fn external_retries_allow_bounded_rate_limit_pressure() {
     let rate_limit = http_failure(HttpFailureInput {
         status: 429,
         detail: "busy",
+        upstream_code: None,
         proxy_evidence: false,
         retry_after_seconds: Some(5),
     });
@@ -109,6 +112,7 @@ fn external_retries_allow_bounded_rate_limit_pressure() {
         ..HttpFailureInput {
             status: 429,
             detail: "busy",
+            upstream_code: None,
             proxy_evidence: false,
             retry_after_seconds: None,
         }
@@ -125,6 +129,7 @@ fn external_retries_allow_bounded_rate_limit_pressure() {
         ..HttpFailureInput {
             status: 429,
             detail: "busy",
+            upstream_code: None,
             proxy_evidence: false,
             retry_after_seconds: None,
         }
@@ -140,6 +145,7 @@ fn external_retries_allow_bounded_rate_limit_pressure() {
     let capacity = http_failure(HttpFailureInput {
         status: 429,
         detail: "upstream overloaded",
+        upstream_code: None,
         proxy_evidence: false,
         retry_after_seconds: None,
     });
@@ -149,6 +155,7 @@ fn external_retries_allow_bounded_rate_limit_pressure() {
     let quota = http_failure(HttpFailureInput {
         status: 429,
         detail: "insufficient credits",
+        upstream_code: None,
         proxy_evidence: false,
         retry_after_seconds: None,
     });

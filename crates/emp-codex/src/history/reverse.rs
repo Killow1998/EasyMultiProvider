@@ -64,19 +64,10 @@ fn first_line_boundary(file: &mut File, start: u64, end: u64) -> Result<u64, His
     }
 }
 
-/// Locate the newest replacement-history compaction by scanning backward.
-///
-/// Windows grow from the tail so large rollouts only parse a bounded suffix.
-/// The returned suffix starts at the first record boundary after the
-/// compaction record. `None` means reconstruction must replay the whole
-/// rollout.
-///
-/// Selection mirrors Codex: only the newest compaction can bound replay. An
-/// older compaction cannot replace the history or window state that a newer
-/// one may have changed, so the newest compaction record decides on its own
-/// whether the bounded replay applies. A paginated history accepts the newest
-/// compaction when it carries a replacement history and window number; other
-/// histories additionally require the newer resume metadata contract.
+/// Scan backward for the newest compaction, then return its following record
+/// boundary. `None` requires full replay; never substitute an older compaction.
+/// Paginated history needs replacement history and a window number; other
+/// history also needs resume metadata. Growing tail windows bound normal reads.
 pub(super) fn locate_latest_compaction(
     file: &mut File,
     captured_end: u64,

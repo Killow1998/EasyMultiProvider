@@ -1,7 +1,4 @@
-//! One-time, request-local preparation shared by portable Responses endpoints.
-//!
-//! Keep the request body, configuration and route paired so selection, context
-//! checks and forwarding observe the same decision without persisting markers.
+//! Freeze request, configuration and route before history replay or upstream I/O.
 
 use crate::app::ServerState;
 use crate::services::auto_review::resolve_auto_review_route;
@@ -14,16 +11,6 @@ enum SummaryPolicy {
     Auto,
     Show,
     Hide,
-}
-
-impl SummaryPolicy {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Show => "show",
-            Self::Hide => "hide",
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -48,10 +35,6 @@ pub(crate) struct PreparedRequest {
     pub(crate) body: Value,
 }
 
-/// Freeze routing and presentation together before any history replay or I/O.
-/// Compact and image tools resolve the requested account directly; auto-review
-/// fallback belongs only to Responses turns. Wire errors and WebSocket
-/// continuation state remain with their respective adapters.
 pub(crate) fn prepare_request(
     state: &ServerState,
     body: Value,
@@ -60,9 +43,8 @@ pub(crate) fn prepare_request(
     let config = state
         .backend
         .configuration
-        .read()
-        .map_err(|_| RequestPreparationError::ConfigurationUnavailable)?
-        .clone();
+        .snapshot()
+        .map_err(|_| RequestPreparationError::ConfigurationUnavailable)?;
     prepare_with_config(state, config, body, operation)
 }
 
@@ -70,10 +52,13 @@ pub(crate) fn prepare_request(
 pub(super) fn prepare_with_config(
     state: &ServerState,
     mut config: Value,
-    body: Value,
+    mut body: Value,
     operation: RequestOperation,
 ) -> Result<PreparedRequest, RequestPreparationError> {
-    let model = body
+    let request = body
+        .as_object_mut()
+        .ok_or(RequestPreparationError::ModelRequired)?;
+    let model = request
         .get("model")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
@@ -96,14 +81,14 @@ pub(super) fn prepare_with_config(
         RequestOperation::Responses => resolve_auto_review_route(state, &mut config, model),
         RequestOperation::Compact | RequestOperation::Images => None,
     };
-    let route = automatic
+    let mut route = automatic
         .unwrap_or_else(|| {
             resolve_route(&config, model, |config, slug, account| {
                 crate::services::catalog::subscription_model(state, config, slug, account)
             })
         })
         .map_err(RequestPreparationError::Route)?;
-    let (route, body) = prepare_external_request(&config, route, body)?;
+    prepare_external_request(&config, &mut route, request)?;
     Ok(PreparedRequest {
         config,
         route,
@@ -111,15 +96,13 @@ pub(super) fn prepare_with_config(
     })
 }
 
-/// Apply external output and reasoning-summary settings once to the owned body
-/// and its frozen route. Native routes keep both inputs untouched.
 fn prepare_external_request(
     config: &Value,
-    mut route: ResolvedRoute,
-    mut body: Value,
-) -> Result<(ResolvedRoute, Value), RequestPreparationError> {
+    route: &mut ResolvedRoute,
+    body: &mut Map<String, Value>,
+) -> Result<(), RequestPreparationError> {
     if route.dialect == Dialect::CodexNative {
-        return Ok((route, body));
+        return Ok(());
     }
 
     let model = route.model.value();
@@ -129,27 +112,36 @@ fn prepare_external_request(
         .filter(|value| *value > 0)
     {
         match body.get("max_output_tokens") {
-            None | Some(Value::Null) => body["max_output_tokens"] = limit.into(),
+            None | Some(Value::Null) => {
+                body.insert("max_output_tokens".into(), limit.into());
+            }
             Some(value) if value.as_u64().is_some_and(|value| value > limit) => {
-                body["max_output_tokens"] = limit.into()
+                body.insert("max_output_tokens".into(), limit.into());
             }
             _ => {}
         }
     }
-    let policy = summary_policy(config, &route, model);
+    let policy = summary_policy(config, route, model);
     let supported = model
         .get("supports_reasoning_summaries")
         .and_then(Value::as_bool)
         == Some(true);
     let responses_capable = route.protocol == Protocol::Responses
         || (route.protocol == Protocol::Auto
-            && emp_router::observed_protocol(&route) == Some(Protocol::Responses));
+            && emp_router::observed_protocol(route) == Some(Protocol::Responses));
     let preserve_summary = supported && responses_capable && policy != SummaryPolicy::Hide;
 
     let mut request_model = model.clone();
     request_model.insert(
         "_emp_reasoning_summary_policy".to_owned(),
-        Value::String(policy.as_str().to_owned()),
+        Value::String(
+            match policy {
+                SummaryPolicy::Auto => "auto",
+                SummaryPolicy::Show => "show",
+                SummaryPolicy::Hide => "hide",
+            }
+            .to_owned(),
+        ),
     );
     request_model.insert(
         "_emp_preserve_reasoning_summary".to_owned(),
@@ -162,24 +154,19 @@ fn prepare_external_request(
     route.model = OpaqueJson::new(request_model)
         .map_err(|_| RequestPreparationError::ModelSnapshotTooLarge)?;
 
-    if let Some(body) = body.as_object_mut() {
-        let mut reasoning = body
-            .get("reasoning")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        if !responses_capable || !supported || policy == SummaryPolicy::Hide {
-            reasoning.remove("summary");
-        } else if policy == SummaryPolicy::Show {
-            reasoning.insert("summary".to_owned(), Value::String("auto".to_owned()));
-        }
-        if reasoning.is_empty() {
-            body.remove("reasoning");
-        } else {
-            body.insert("reasoning".to_owned(), Value::Object(reasoning));
-        }
+    let mut reasoning = match body.remove("reasoning") {
+        Some(Value::Object(reasoning)) => reasoning,
+        _ => Map::new(),
+    };
+    if !responses_capable || !supported || policy == SummaryPolicy::Hide {
+        reasoning.remove("summary");
+    } else if policy == SummaryPolicy::Show {
+        reasoning.insert("summary".to_owned(), Value::String("auto".to_owned()));
     }
-    Ok((route, body))
+    if !reasoning.is_empty() {
+        body.insert("reasoning".to_owned(), Value::Object(reasoning));
+    }
+    Ok(())
 }
 
 fn summary_policy(

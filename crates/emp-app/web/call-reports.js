@@ -5,6 +5,15 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
   const number = value => n(value) === null ? '—' : value.toLocaleString();
   const seconds = value => n(value) === null ? '—' : (value / 1000).toFixed(2) + ' s';
   const tps = value => n(value) === null ? '—' : value.toFixed(1) + ' token/s';
+  const tier = value => {
+    if (['default','standard'].includes(value)) return tr('reports.tier_standard');
+    if (['priority','fast','ultrafast'].includes(value)) return tr('reports.tier_fast');
+    return value && value !== 'unknown' ? value : tr('reports.tier_unconfirmed');
+  };
+  const effort = value => {
+    if (['missing','null'].includes(value)) return tr('reports.not_specified');
+    return value && !['unknown','invalid_type'].includes(value) ? value : tr('reports.not_reported');
+  };
   const rate = (cached, input) => n(cached) !== null && n(input) > 0 && cached <= input ? (cached / input * 100).toFixed(1) + '%' : '—';
   const status = value => ({active:tr("reports.responding"),completed:tr("reports.completed_2"),failed:tr("reports.failed_2"),cancelled:tr("reports.cancelled"),interrupted:tr("reports.interrupted_2"),disconnected:tr("reports.disconnected_2"),recovery_required:tr("reports.history_resend_requested"),unknown:tr("reports.outcome_not_recorded")})[value] || '—';
   const evidence = value => ({same:tr("reports.names_match"),mapped:tr("reports.configured_mapping"),different:tr("reports.names_differ"),conflict:tr("reports.conflicting_declarations"),missing:tr("reports.not_reported")})[value] || tr("reports.not_reported");
@@ -28,7 +37,7 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
     const selected = row.selected_name || row.client_model || row.model_id || '—';
     const operation = ({image_generation:tr("reports.image_generation"),image_edit:tr("reports.image_edit"),agent_task_recovery:tr("reports.agent_task_recovery"),memory_extraction:tr('reports.memory_extraction'),memory_consolidation:tr('reports.memory_consolidation')})[row.route];
     const returned = row.response_model || (row.state === 'active' ? tr("reports.awaiting_response") : '—');
-    const models = [operation ? field(tr("reports.operation"),operation) : '',field(operation ? tr("reports.image_model") : tr("reports.selected_in_codex"), selected),field(tr("reports.sent_upstream"),row.upstream_model || '—'),field(tr("reports.reported_upstream"),returned)].join('');
+    const models = [operation ? field(tr("reports.operation"),operation) : '',field(operation ? tr("reports.image_model") : tr("reports.selected_in_codex"), selected),field(tr("reports.sent_upstream"),row.upstream_model || '—'),field(tr("reports.reported_upstream"),returned),field(tr('reports.requested_effort'),effort(row.requested_effort)),field(tr('reports.reported_effort'),effort(row.reported_effort)),field(tr('reports.requested_tier'),row.requested_service_tier === null ? tr('reports.not_specified') : row.requested_service_tier === undefined ? tr('reports.not_reported') : tier(row.requested_service_tier)),field(tr('reports.reported_tier'),tier(row.reported_service_tier))].join('');
     const inputs = n(row.input_tokens), cached = n(row.cached_input_tokens), written = n(row.cache_write_tokens);
     const uncached = inputs !== null && cached !== null && written !== null && cached + written <= inputs ? inputs - cached - written : null;
     const usage = [field(tr("reports.input_tokens"),number(inputs)),field(tr("reports.output_tokens"),number(row.output_tokens)),field(tr("reports.cache_read"),number(cached)),field(tr("reports.cache_write"),number(written)),field(tr("reports.uncached_input"),number(uncached)),field(tr("reports.reasoning_tokens"),number(row.reasoning_tokens)),field(tr("reports.input_cache_rate"),rate(cached,inputs)),field(tr("reports.output_cache_rate"),tr("reports.not_applicable")),field(tr("reports.api_estimate_usd"),n(row.pricing?.cost_nanos) === null ? '—' : (row.pricing.cost_nanos / 1e9).toFixed(6))].join('');
@@ -52,7 +61,7 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
   const performance = createPerformanceView({esc,tr,getLanguage,number,seconds,tps,rate,outcomes,bindOutcomes,definition});
   function summaryHtml(report) { return performance.html(report,current?.metric || 'calls'); }
   function modelHtml(report) {
-    const rows = (report.models || []).map(row => `<tr><td><code>${esc(row.model_id)}</code><small>${esc(row.account_id || row.provider_id)} · ${esc(row.upstream_model)} · ${esc(row.speed_mode)} · ${esc(row.requested_effort)}</small></td><td>${number(row.calls)}</td><td>${seconds(row.duration_ms)}</td><td>${seconds(row.ttft_ms)}</td><td>${tps(row.tokens_per_second)}</td></tr>`).join('');
+    const rows = (report.models || []).map(row => `<tr><td><code>${esc(row.model_id)}</code><small>${esc(row.account_id || row.provider_id)} · ${esc(row.upstream_model)} · ${esc(tier(row.speed_mode))} · ${esc(effort(row.requested_effort))}${row.reported_effort && row.reported_effort !== row.requested_effort ? ' → '+esc(effort(row.reported_effort)) : ''}</small></td><td>${number(row.calls)}</td><td>${seconds(row.duration_ms)}</td><td>${seconds(row.ttft_ms)}</td><td>${tps(row.tokens_per_second)}</td></tr>`).join('');
     return `<div class="usage-table"><table><thead><tr>${[['model',tr("reports.model_service")],['calls',tr("reports.calls")],['duration',tr("reports.mean_duration")],['ttft','TTFT'],['tps','TPS']].map(([key,label]) => '<th><button type="button" class="secondary" data-call-sort="'+key+'">'+label+(current.modelsSort === key ? (key === 'model' ? ' ↑' : ' ↓') : '')+'</button></th>').join('')}</tr></thead><tbody>${rows}</tbody></table></div><div class="call-pages"><button type="button" class="secondary" data-call-action="models-previous" ${report.models_offset ? '' : 'disabled'}>‹</button><span>${number(report.models_total)} ${tr("reports.groups")}</span><button type="button" class="secondary" data-call-action="models-next" ${report.models_offset + report.models_limit < report.models_total ? '' : 'disabled'}>›</button></div>`;
   }
   function matches(row, filters) {

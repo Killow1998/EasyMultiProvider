@@ -186,7 +186,7 @@ fn truthy(value: &Value) -> bool {
     }
 }
 
-fn error_detail(content_type: &str, raw: &[u8]) -> (String, String) {
+fn error_detail(content_type: &str, raw: &[u8]) -> (Option<String>, String) {
     let media = content_type
         .split(';')
         .next()
@@ -200,16 +200,13 @@ fn error_detail(content_type: &str, raw: &[u8]) -> (String, String) {
         || stripped.starts_with("<!doctype html")
     {
         return (
-            if media.is_empty() {
-                "text/html".to_owned()
-            } else {
-                media
-            },
+            None,
             "HTML error page omitted; the upstream gateway or WAF may have rejected the request"
                 .to_owned(),
         );
     }
     let mut detail = decoded.to_string();
+    let mut code = None;
     if (media.contains("json") || stripped.starts_with(['{', '[']))
         && let Ok(value) = serde_json::from_str::<Value>(&decoded)
     {
@@ -222,6 +219,10 @@ fn error_detail(content_type: &str, raw: &[u8]) -> (String, String) {
         } else {
             &value
         };
+        code = nested
+            .get("code")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let nested = if nested.is_object() {
             ["message", "type", "code"]
                 .iter()
@@ -245,14 +246,7 @@ fn error_detail(content_type: &str, raw: &[u8]) -> (String, String) {
             .to_owned()
             + "...";
     }
-    (
-        if media.is_empty() {
-            "unknown content type".to_owned()
-        } else {
-            media
-        },
-        detail,
-    )
+    (code, detail)
 }
 
 fn proxy_evidence(headers: &str, detail: &str) -> bool {
@@ -279,10 +273,11 @@ pub(super) fn upstream_http_error(
     retry: Option<u64>,
     mut selected: BTreeMap<String, String>,
 ) -> NativeHttpError {
-    let (_, detail) = error_detail(content_type, raw);
+    let (code, detail) = error_detail(content_type, raw);
     let failure = http_failure(HttpFailureInput {
         status,
         detail: &detail,
+        upstream_code: code.as_deref(),
         proxy_evidence: proxy_evidence(proxy_headers, &detail),
         retry_after_seconds: retry,
     });

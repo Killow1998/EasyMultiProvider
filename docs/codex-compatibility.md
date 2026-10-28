@@ -1,14 +1,138 @@
 # Codex maintenance window
 
-EMP follows the latest stable Codex minor series and its previous nine series.
+EMP follows the latest five stable Codex minor series: the latest stable series
+and its previous four series. This replaces the ten-series policy on 2026-10-28 UTC.
 Patch releases count within their series; alpha and beta releases do not move
 the window. The engine used by the CLI, App or IDE is the compatibility input,
 independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
+Older series leave routine maintenance; their dated acceptance records remain.
 
-## Current acceptance on 2026-10-26 UTC
+## Current target and acceptance (2026-10-28 UTC)
 
-The maintenance target is **0.155–0.164**, following the official stable
+The maintenance target is **0.161–0.165**, following the official stable
+[0.165.0 release](https://github.com/openai/codex/releases/tag/rust-v0.165.0)
+(2026-10-27 20:09:38 UTC). GitHub identifies it as the latest release with
+`prerelease=false`.
+
+| Target series | Existing evidence |
+| --- | --- |
+| 0.161–0.164 | Dated Linux engine acceptance below; App/IDE checks are listed separately with their exact engine versions. |
+| 0.165 | Official Linux 0.165.0 engine passed the local EMP 0.13.17 candidate contracts recorded below. |
+
+The release adds the built-in Vertex AI provider (`model_provider = "gcp"`),
+GPT-6.1 Terra, repository filtering and directory grouping for sessions,
+experimental attached thread forks, and default support for changing reasoning
+effort during a conversation on supported models. When memories are enabled,
+fresh profiles without a v1 workspace default to memory v2; existing workspaces
+and explicit version or transition opt-outs retain their selection. This does
+not enable memories in profiles where they are disabled.
+
+Targeted source review and the new engine run cover these boundaries:
+
+| Upstream change | Verified behavior and scope |
+| --- | --- |
+| [Startup approval reviewer defaults #56090](https://github.com/openai/codex/pull/56090) | The TUI's launch-default change belongs to Codex. EMP does not write approval or sandbox policy. Created-history acceptance preserves the exact configured `approval_policy = "never"` and `sandbox_mode = "read-only"` through shutdown and native restore. |
+| [Originator-scoped model catalogs #56284](https://github.com/openai/codex/pull/56284) and [model-owned history/context tools #56313](https://github.com/openai/codex/pull/56313) | Real-engine default-catalog refresh and both `codex_work_cca` / `chatgpt_cca` scoped-cache refresh pass. Scoped thread refresh does not update the default manager's cached `model/list`; the tests inspect the relevant cache. The catalog contract preserves sparse history, notes and context tool metadata, including explicit empty descriptions. |
+| [Fresh memory v2 #56211](https://github.com/openai/codex/pull/56211) | Four initial engine cases cover memory selection. Subsequent feature acceptance below completes extraction, consolidation and reading through Native, imported-subscription and external-model launchers; external-memory import also preserves v1/v2 selection and project scope. |
+| [Terminal model-not-found errors #56445](https://github.com/openai/codex/pull/56445) | Preserve `model_not_found` on HTTP 400/403/404 and streamed errors. Real-engine failures end as `modelNotFound` after one inference request. EMP's existing HTTP-error privacy boundary remains: provide a model-selection explanation without publishing raw provider error details. |
+| Mutable reasoning effort | Native and three external protocols pass HTTP/SSE and WebSocket turns, including unchanged effort, model switching and process resume. The ledger uses current turn metadata before historical overrides or the initial root effort. |
+| GPT-6.1 Terra | Native and imported catalogs preserve the pinned model's capabilities; all six advertised efforts complete. Ultra retains the requested label while sending the catalog's actual `xhigh` effort. |
+| Attached thread forks | Attachment, saved history, restart and bill attribution pass using the existing lineage bridge. No second attachment index was added. |
+| Vertex AI, repository filters and directory grouping | These remain Codex-owned provider/client features. EMP enable/restore preserves GCP selection, endpoint and auth command. Vertex is not introduced as an EMP service. |
+
+The [0.165 feature registry](https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/features/src/lib.rs)
+still marks async compaction `UnderDevelopment` and default-off. EMP's existing
+background-compaction Beta setting is unchanged. No user feature settings or
+installed EMP/Codex instances were changed.
+
+## Feature acceptance on 2026-10-28 UTC — Codex 0.165.0
+
+The subsequent run completed at **05:22:58–05:23:33 UTC**, using the same
+official 0.165.0 Linux engine and matching Code Mode host. EMP is the local
+0.13.17 candidate based on `632a32e`, with executable SHA-256
+`62e70ebe06b24f64ed6f14ef2ec90d1699d193d149e59e2130157f1c2a62adaf`.
+Its results are separate from the earlier core acceptance below. Eight groups
+pass, with **77 synthetic inference requests and zero real provider calls**.
+Disposable homes, random loopback upstreams and a dead outbound proxy isolate
+the fixture from installed accounts and services; no network namespace is used.
+
+| Feature | Observable result |
+| --- | --- |
+| Effort changes over HTTP/SSE and WebSocket | Native plus external Responses, Chat Completions and Anthropic Messages each complete `high → low → low → xhigh`, then `medium` after process restart and resume: 40 inference requests. The upstream sees the effective effort and completed ledger rows retain the current selection. WebSocket full-history handoffs complete without duplicate inference. |
+| Complete memory v2 pipeline | Native, imported-subscription and external-model launchers each complete extraction, consolidation, both background jobs and a later memory read: 21 inference requests. The configured extraction model is used; extraction retains the current imported account or uses Native for an external launcher. Global consolidation uses the configured model and Native account. V2 summaries are written without creating v1 memory files, and the fixture configuration remains unchanged. |
+| External memory import | Three real App Server import cases pass: fresh v2, existing v1 and explicit v2 with legacy memory present. Imported bytes and project scope survive, repeat detection excludes already imported entries, and legacy files remain unchanged. No inference request is needed. |
+| Attached forks | Attached and ordinary forks preserve parent history and attachment after process restart. Ordinary listing excludes the attached child; attachment-aware listing and resume retain it. Four inference requests reconcile to the existing parent-lineage bill. |
+| Terra catalog and effort | Native and imported catalogs preserve ten pinned capability fields, including the 500,000 context window, 872,000 maximum, default Low, Code Mode, Responses Lite and mutable effort. `low`, `medium`, `high`, `xhigh`, `max` and `ultra` each complete on both account paths: 12 inference requests. Ultra sends `xhigh` while its ledger label remains Ultra. This measures protocol behavior, not real model speed. |
+| GCP configuration ownership | The existing integration contract now also verifies that `model_provider = "gcp"`, its endpoint and auth command survive enable and restore. GCP inference/auth remains Codex-owned; no Vertex transport or credential service is added. |
+
+Two defects were reproduced before repair. Stage-one memory requests use
+`request_kind = "memory"`; ignoring that field bypassed the configured extraction
+route. Native incremental WebSocket turns can retain an initial High root while
+the current selection stays Low without another configuration-update item;
+reading only root/history incorrectly recorded High. EMP now recognizes the
+canonical memory marker and records current per-turn effort metadata, with
+historical/root fallback for older requests. The existing fixed logging
+vocabulary remains; no connection-state cache or extra runtime dependency was
+added.
+
+The reusable entry point is
+[codex_feature_acceptance](../scripts/codex_feature_acceptance/__main__.py):
+
+```sh
+python3 -B -m scripts.codex_feature_acceptance \
+  --codex /path/to/verified/codex --emp /path/to/candidate/EMP \
+  --root /path/to/disposable-home --output /path/to/synthetic-evidence \
+  --native-catalog /path/to/rust-v0.165.0/codex-rs/models-manager/models.json
+```
+
+Use `--suite effort`, `memory`, `imports`, `forks` or `catalog` for focused
+maintenance. The full app regression passes **369 tests**, with 30 opt-in tests
+excluded; integration passes **14 tests**. Strict workspace/all-target Clippy,
+formatting and diff checks pass. Small receipts retain timestamps and binary
+hashes; downloaded engines and disposable state are removed. Installed App/IDE
+and Windows/macOS results retain their own dated records below.
+
+## Acceptance on 2026-10-28 UTC — Codex 0.165.0
+
+The official Linux x86_64 musl engine and matching Code Mode host were checked
+against GitHub's SHA-256 digests before execution. The EMP candidate is based on
+`632a32e` with the local model-error fix; it is not the published v0.13.17 binary.
+All inference used synthetic credentials, isolated homes and random loopback
+endpoints. No real provider or subscription was called.
+
+| Contract | Result |
+| --- | --- |
+| Created history and native restore | 51 assertions passed: MCP before/after external compaction; parent, early/later forks and grandchild; selected-history migration; four native resumes; exact configuration/backup preservation and idempotent restore. |
+| Explicit installed-engine contracts | 10 tests passed: continuation and upload recovery, WebSocket recovery, images, default/scoped catalogs, localhost proxy bypass, steering/interruption, same-named tools and incremental tool/model switches. |
+| Code Mode collaboration | Nine cases passed: Responses, Chat Completions and Anthropic Messages, each with `off`, `on_demand` and `on`; enabled children complete and resume, disabled children remain blocked. |
+| Memory selection | Four real-engine cases passed: fresh v2, existing v1, explicit v2 and disabled memory. The selected marker reaches the upstream; the other version does not. |
+| Terminal errors with the real engine | Ten cases passed: HTTP 400/403/404 and statusless SSE `error` / `response.failed`, through Native and external Responses. Each ends with `modelNotFound` and exactly one inference request despite client retry limits of two. |
+| Public HTTP/WebSocket rejection contracts | 42 combinations passed: Native HTTP/SSE opening failures; external Responses, Chat Completions, Anthropic Messages and Auto with HTTP, SSE-opening and client WebSocket delivery. No inference retry or protocol fallback occurs after `model_not_found`; private upstream detail remains hidden. |
+| Transport, router, catalog and integration crates | 326 tests passed; two opt-in cases remain ignored. |
+| App regression and static checks | 369 tests passed; 30 opt-in cases are excluded from this default run, including the ten installed-engine cases passed separately above. Workspace/all-target Clippy with warnings denied, Rust formatting and diff checks passed. |
+
+The new boundary harness is [codex_0165_acceptance.py](../scripts/codex_0165_acceptance.py):
+
+```sh
+python3 -B -m scripts.codex_0165_acceptance \
+  --codex /path/to/verified/codex --emp /path/to/candidate/EMP \
+  --output /path/to/synthetic-evidence
+```
+
+The existing created-history and Code Mode harnesses remain the acceptance
+entry points for those behaviors. The Code Mode harness now sends the actual
+engine version when requesting the model catalog.
+
+These results are Linux fixture acceptance. Installed Windows/macOS packages and
+App/IDE engines retain their separately dated records. The 0.161–0.164 evidence
+below was produced with earlier EMP candidates; it was not rerun or relabeled as
+today's candidate. Downloaded engines and temporary homes are removed after the
+small result receipts are retained.
+
+## Acceptance on 2026-10-26 UTC
+
+The maintenance target at that checkpoint was **0.155–0.164**, following the official stable
 [0.164.0 release](https://github.com/openai/codex/releases/tag/rust-v0.164.0)
 (2026-10-23 04:48:10 UTC). Series 0.154 remains in the historical record below.
 
@@ -130,8 +254,8 @@ The upstream context-estimation fix does not change EMP's TPS or usage formulas.
 
 Official Linux [**0.166.0-alpha.2**](https://github.com/openai/codex/releases/tag/rust-v0.166.0-alpha.2)
 passed three targeted App Server checks through
-the current EMP candidate. This is prerelease evidence; the stable maintenance
-window remains **0.155–0.164**.
+the candidate at that checkpoint. This is prerelease evidence; the stable
+maintenance window at that checkpoint remained **0.155–0.164**.
 
 | Upstream change | Observed result and EMP boundary |
 | --- | --- |

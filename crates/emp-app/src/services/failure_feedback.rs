@@ -38,6 +38,9 @@ pub(crate) fn message(
         "No output was delivered; upstream execution and billing are unknown."
     };
     let action = match (class, reason) {
+        (_, Some("model_not_found")) => {
+            "Refresh this source's model list or choose an available model."
+        }
         (FailureClass::RateLimit, Some("quota_exhausted")) => {
             "Check this account's quota, wait for recovery, or manually choose another source. Recovery time is unknown unless the upstream provides it."
         }

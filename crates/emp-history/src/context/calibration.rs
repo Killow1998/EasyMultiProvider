@@ -130,13 +130,10 @@ pub fn status(provider: &Map<String, Value>, model: &Map<String, Value>, protoco
     result
 }
 
-/// Retain only numeric evidence, bound to the actual upstream deployment.
-///
-/// `estimate` is the input estimate and is what gets stored, matching the
-/// Python calibration contract. `output_reserve` is the request's output
-/// budget: a failure whose input plus output exceeds the known window says
-/// nothing about the input ceiling and is ignored, and one far below the
-/// window is only applied after a nearby explicit failure corroborates it.
+/// Store numeric input estimates bound to the upstream deployment. Ignore
+/// failures where input plus output reserve exceeds the known window: these
+/// cannot establish an input ceiling. Far-below-window failures require a
+/// corroborating nearby explicit failure.
 pub fn update(
     provider: &Map<String, Value>,
     model: &mut Map<String, Value>,

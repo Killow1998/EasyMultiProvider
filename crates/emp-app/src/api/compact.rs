@@ -53,7 +53,12 @@ pub(crate) fn compact_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
-    observation.body(body.get("reasoning"), body.get("stream"));
+    observation.body(
+        body.get("reasoning"),
+        body.get("input"),
+        body.get("client_metadata"),
+        body.get("stream"),
+    );
     observation.phase(Phase::ResolveRoute);
     let PreparedRequest {
         config,

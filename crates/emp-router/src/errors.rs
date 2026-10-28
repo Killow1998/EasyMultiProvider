@@ -2,6 +2,31 @@
 
 use super::*;
 
+pub(super) fn upstream_error(
+    status: u16,
+    raw: &[u8],
+    retry_after_seconds: Option<u64>,
+) -> RouterError {
+    let code = serde_json::from_slice::<Value>(raw)
+        .ok()
+        .and_then(|body| body.get("error")?.get("code")?.as_str().map(str::to_owned));
+    let failure = http_failure(HttpFailureInput {
+        status,
+        detail: &String::from_utf8_lossy(raw),
+        upstream_code: code.as_deref(),
+        proxy_evidence: false,
+        retry_after_seconds,
+    });
+    RouterError::new(
+        RouterErrorKind::Upstream,
+        failure.status,
+        failure.error_class,
+        failure.failure_reason,
+        failure.retry_after_seconds,
+        "upstream request failed",
+    )
+}
+
 impl From<ResponsesValidationError> for RouterError {
     fn from(error: ResponsesValidationError) -> Self {
         responses_validation_error(error)

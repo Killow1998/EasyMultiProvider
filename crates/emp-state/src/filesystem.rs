@@ -1,10 +1,7 @@
 //! Private master-key storage, encrypted vault files and bounded rollback.
 //!
-//! The on-disk format is the historical easy-multi-provider vault layout
-//! (`easy-multi-provider-v1` magic, Fernet tokens) that users already have on
-//! disk. Runtime
-//! composition constructs one VaultStore and passes it explicitly, avoiding
-//! process-global key-path state and environment races.
+//! Preserve the existing `easy-multi-provider-v1` magic and Fernet token format.
+//! Runtime passes one VaultStore explicitly; key paths are not process-global.
 
 use crate::{FernetKey, VaultError, decode_vault, encode_vault};
 use atomic_write_file::AtomicWriteFile;

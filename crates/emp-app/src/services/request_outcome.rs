@@ -1,6 +1,7 @@
 //! Upstream outcome/accounting for one routed operation. Each terminal outcome
 //! updates existing routing feedback, usage and activity exactly once. Downstream
 //! delivery belongs to the passive request receipt and cannot rewrite this result.
+use super::request_facts;
 use crate::app::ServerState;
 use emp_core::ResolvedRoute;
 use emp_state::usage::{account_owner, reported_usage};
@@ -10,11 +11,10 @@ use std::time::Instant;
 mod execution;
 mod performance;
 mod recording;
-mod shape;
 
 #[cfg(all(test, feature = "hotpath"))]
 pub(crate) fn profile_request_bytes(body: &Value) -> usize {
-    shape::request_bytes(body)
+    request_facts::request_bytes(body)
 }
 
 pub(crate) struct RequestOutcome<'a> {
@@ -40,13 +40,14 @@ impl<'a> RequestOutcome<'a> {
     ) -> Self {
         // Codex startup prewarm tokenizes its input but does not run inference.
         // Use the explicit wire flag, never output_tokens == 0 as a heuristic.
+        let memory_kind = request_facts::memory_kind(body, incoming);
         let operation = if operation == "responses" && body["generate"] == false {
             "prewarm"
         } else if operation == "responses" {
             incoming
                 .get("X-EMP-Probe")
                 .map(String::as_str)
-                .or_else(|| crate::services::memory_routing::kind(body, incoming))
+                .or(memory_kind)
                 .unwrap_or(operation)
         } else {
             operation
@@ -87,11 +88,13 @@ impl<'a> RequestOutcome<'a> {
             .unwrap_or_default();
         let mut event = json!({"route":operation,"usage_category":category,"usage_owner":owner,"upstream_model":route.upstream_model,"route_model":route.requested_model,"usage_turn":turn,"service_tier":body["service_tier"].as_str().filter(|s|!s.is_empty()).unwrap_or("default"),
             "provider_id":route.provider_id,"model_id":route.requested_model,"client_model":body["model"],"resolved_protocol":route.protocol,"dialect":route.dialect,"route_source":route.source,"endpoint_fingerprint":route.endpoint_fingerprint,"deployment_identity":route.deployment_identity,
-            "transport":if body["stream"]==true{"sse"}else{"http"},"protocol_decision":"explicit","fallback_reason":"none","model_trace_source":"emp_dispatch","request_bytes":shape::request_bytes(body),"performance_schema":5,"speed_mode":if matches!(body["service_tier"].as_str(),Some("fast"|"priority"|"ultrafast")){"fast"}else{"standard"}});
+            "transport":if body["stream"]==true{"sse"}else{"http"},"protocol_decision":"explicit","fallback_reason":"none","model_trace_source":"emp_dispatch","request_bytes":request_facts::request_bytes(body),"performance_schema":5,
+            "requested_service_tier":body["service_tier"].as_str().filter(|value|!value.is_empty() && value.chars().count()<=32),
+            "reported_service_tier":null,"reported_effort":null,"speed_mode":"unknown"});
         event
             .as_object_mut()
             .unwrap()
-            .extend(shape::facts(body, incoming).as_object().unwrap().clone());
+            .extend(request_facts::facts(body, incoming, memory_kind));
         if emp_state::diagnostics::MODEL_TEST_OPERATIONS.contains(&operation) {
             event["session_id"] = Value::Null;
             event["thread_id"] = Value::Null;
@@ -104,8 +107,10 @@ impl<'a> RequestOutcome<'a> {
         event["attempts"] = json!(0);
         event["retries"] = json!([]);
         event["attempt_routes"] = json!([]);
-        event["requested_effort"] = json!(crate::services::observation::request::reasoning_effort(
-            body.get("reasoning")
+        event["requested_effort"] = json!(request_facts::reasoning_effort(
+            body.get("reasoning"),
+            body.get("input"),
+            body.get("client_metadata")
         ));
         event["selected_name"] = route
             .model

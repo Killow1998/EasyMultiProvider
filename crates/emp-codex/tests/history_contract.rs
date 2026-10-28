@@ -10,7 +10,6 @@ use emp_codex::history::CodexHomeHistoryReader;
 use emp_history::{HistoryAnchor, HistoryReader, HistorySnapshot};
 use rusqlite::params;
 use serde_json::{Value, json};
-use std::io::Write;
 use tempfile::tempdir;
 
 const THREAD: &str = "01a00000-0000-7000-8000-000000000001";

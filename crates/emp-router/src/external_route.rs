@@ -53,21 +53,7 @@ impl<'a> ExternalRouter<'a> {
                 .read_prefix(MAX_UPSTREAM_ERROR_BYTES)
                 .await
                 .map_err(transport_error)?;
-            let detail = String::from_utf8_lossy(&raw);
-            let failure = http_failure(HttpFailureInput {
-                status,
-                detail: &detail,
-                proxy_evidence: false,
-                retry_after_seconds,
-            });
-            return Err(RouterError::new(
-                RouterErrorKind::Upstream,
-                failure.status,
-                failure.error_class,
-                failure.failure_reason,
-                failure.retry_after_seconds,
-                "upstream request failed",
-            ));
+            return Err(upstream_error(status, &raw, retry_after_seconds));
         }
         let raw = response
             .read_limited(MAX_UPSTREAM_BODY_BYTES)
@@ -241,21 +227,7 @@ impl<'a> ExternalRouter<'a> {
                 .read_prefix(MAX_UPSTREAM_ERROR_BYTES)
                 .await
                 .map_err(transport_error)?;
-            let detail = String::from_utf8_lossy(&raw);
-            let failure = http_failure(HttpFailureInput {
-                status,
-                detail: &detail,
-                proxy_evidence: false,
-                retry_after_seconds,
-            });
-            return Err(RouterError::new(
-                RouterErrorKind::Upstream,
-                failure.status,
-                failure.error_class,
-                failure.failure_reason,
-                failure.retry_after_seconds,
-                "upstream request failed",
-            ));
+            return Err(upstream_error(status, &raw, retry_after_seconds));
         }
         let raw = response
             .read_limited(MAX_ANTHROPIC_PASSTHROUGH_BYTES)
@@ -365,21 +337,7 @@ impl<'a> ExternalRouter<'a> {
                 .read_prefix(MAX_UPSTREAM_ERROR_BYTES)
                 .await
                 .map_err(transport_error)?;
-            let detail = String::from_utf8_lossy(&raw);
-            let failure = http_failure(HttpFailureInput {
-                status,
-                detail: &detail,
-                proxy_evidence: false,
-                retry_after_seconds,
-            });
-            return Err(RouterError::new(
-                RouterErrorKind::Upstream,
-                failure.status,
-                failure.error_class,
-                failure.failure_reason,
-                failure.retry_after_seconds,
-                "upstream request failed",
-            ));
+            return Err(upstream_error(status, &raw, retry_after_seconds));
         }
         let declared_sse = response
             .header("content-type")

@@ -1,5 +1,13 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  "reports.requested_effort": ["所选推理强度","Selected reasoning effort"],
+  "reports.reported_effort": ["服务端推理强度","Upstream reasoning effort"],
+  "reports.requested_tier": ["请求档位","Requested tier"],
+  "reports.reported_tier": ["服务端档位","Upstream tier"],
+  "reports.tier_standard": ["Standard（标准）","Standard"],
+  "reports.tier_fast": ["Fast（快速）","Fast"],
+  "reports.tier_unconfirmed": ["档位未确认","Tier unconfirmed"],
+  "reports.not_specified": ["未指定","Not specified"],
   "reports.probes": ["连接与模型探测","Connection and model checks"],
   "reports.probes_help": ["目录读取和模型测试请求单独展示，不计入对话成功率。读取目录不消耗模型 Tokens；模型测试的实际用量仍计入统计。","Catalog reads and model test requests are listed separately from conversation health. Catalog reads use no model tokens; actual model test usage remains included in usage totals."],
   "reports.no_probes": ["暂无探测记录。","No checks recorded yet."],

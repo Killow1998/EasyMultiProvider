@@ -12,7 +12,7 @@ pub(in crate::api::websocket) fn native_stream_error_value(
     response_id: &str,
 ) -> Value {
     let mut error = serde_json::json!({
-        "code":stream_error_code(error_class),
+        "code":stream_error_code(error_class, failure_reason),
         "message":format!("HTTP {status}: {}",public_failure_message(error_class,failure_reason,status)),
         "status":status,"error_class":error_class.as_str()
     });

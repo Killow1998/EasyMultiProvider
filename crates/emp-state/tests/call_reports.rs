@@ -24,6 +24,64 @@ fn filter() -> CallFilter {
 }
 
 #[test]
+fn reported_tiers_and_effort_survive_restart_without_relabeling_legacy_requests() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("usage.sqlite3");
+    let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+    let ledger = UsageLedger::new(path.clone(), Arc::clone(&prices));
+    for (id, response, expected) in [
+        ("standard", json!({"service_tier":"default"}), "standard"),
+        ("fast", json!({"service_tier":"priority"}), "fast"),
+        ("flex", json!({"service_tier":"flex"}), "flex"),
+        ("unconfirmed", json!({}), "unknown"),
+    ] {
+        let mut event = json!({"request_id":id,"route":"responses","model_id":"demo/model",
+            "requested_service_tier":"priority","reported_service_tier":null,"service_tier":"priority",
+            "requested_effort":"ultra","reported_effort":"xhigh","speed_mode":"unknown","success":true});
+        event
+            .as_object_mut()
+            .unwrap()
+            .extend(emp_state::usage::reported_usage(
+                &json!({"type":"response.completed","response":response}),
+            ));
+        assert_eq!(event["speed_mode"], expected);
+        ledger.record_call(&event, 10.0, 11.0).unwrap();
+    }
+    ledger
+        .record_call(
+            &json!({"request_id":"legacy","route":"responses","model_id":"demo/model",
+        "service_tier":"default","speed_mode":"fast","success":true}),
+            10.0,
+            11.0,
+        )
+        .unwrap();
+    drop(ledger);
+    let ledger = UsageLedger::new(path.clone(), prices);
+    let report = ledger.query_calls(&filter()).unwrap();
+    let records = report["records"].as_array().unwrap();
+    for row in records {
+        if row["request_id"] == "legacy" {
+            assert_eq!(row["speed_mode"], "unknown");
+            assert!(row["requested_service_tier"].is_null());
+        } else {
+            assert_eq!(row["requested_service_tier"], "priority");
+            assert_eq!(row["requested_effort"], "ultra");
+            assert_eq!(row["reported_effort"], "xhigh");
+        }
+    }
+    assert_eq!(report["models"].as_array().unwrap().len(), 5);
+    let connection = rusqlite::Connection::open(path).unwrap();
+    let saved: String = connection
+        .query_row(
+            "SELECT json_extract(facts,'$.speed_mode') FROM call_records WHERE request_id='legacy'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved, "fast");
+}
+
+#[test]
 fn legacy_ws_errors_and_recovery_are_not_client_interruptions() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("usage.sqlite3");

@@ -309,9 +309,12 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
         };
-        websocket
-            .observation
-            .body(request_body.get("reasoning"), request_body.get("stream"));
+        websocket.observation.body(
+            request_body.get("reasoning"),
+            request_body.get("input"),
+            request_body.get("client_metadata"),
+            request_body.get("stream"),
+        );
         if request_body
             .remove("type")
             .and_then(|value| value.as_str().map(str::to_owned))

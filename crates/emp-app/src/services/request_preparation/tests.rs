@@ -190,16 +190,20 @@ fn cases() -> Vec<Value> {
 #[test]
 fn external_request_preparation_applies_summary_policy_once_and_keeps_unknown_fields() {
     for fixture in cases() {
-        let route = resolved_route_from_parts(
+        let mut route = resolved_route_from_parts(
             fixture["route"].as_str().unwrap(),
             fixture["provider"].as_object().unwrap().clone(),
             fixture["model"].as_object().unwrap().clone(),
             RouteSource::ExplicitModel,
         )
         .unwrap();
-        let (route, body) =
-            prepare_external_request(&fixture["config"], route, fixture["body"].clone())
-                .expect("prepare request snapshot");
+        let mut body = fixture["body"].clone();
+        prepare_external_request(
+            &fixture["config"],
+            &mut route,
+            body.as_object_mut().unwrap(),
+        )
+        .expect("prepare request snapshot");
         let model = route.model.value();
         let name = fixture["name"].as_str().unwrap();
         let expected_preserve = matches!(

@@ -36,6 +36,7 @@ pub(crate) mod account_catalog;
 pub(crate) mod migration;
 pub(crate) mod network_evidence;
 pub(crate) mod observation;
+mod request_facts;
 pub(crate) mod request_outcome;
 pub(crate) mod request_preparation;
 pub(crate) mod shutdown;

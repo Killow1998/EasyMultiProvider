@@ -199,8 +199,8 @@ impl UpstreamFailure {
         }
     }
 
-    fn with_reason(mut self, reason: &str) -> Self {
-        self.failure_reason = Some(safe_token(reason));
+    fn with_reason(mut self, reason: &'static str) -> Self {
+        self.failure_reason = Some(reason.to_owned());
         self
     }
 }
@@ -281,6 +281,7 @@ fn http_failure_reason(status: u16, detail: &str) -> &'static str {
 pub struct HttpFailureInput<'a> {
     pub status: u16,
     pub detail: &'a str,
+    pub upstream_code: Option<&'a str>,
     pub proxy_evidence: bool,
     pub retry_after_seconds: Option<u64>,
 }
@@ -294,12 +295,22 @@ pub fn http_failure(input: HttpFailureInput<'_>) -> UpstreamFailure {
         )
         .with_reason("proxy_unavailable");
     }
+    let model_not_found =
+        matches!(input.status, 400 | 403 | 404) && input.upstream_code == Some("model_not_found");
     let mut failure = UpstreamFailure::new(
-        status_error_class(Some(input.status)),
+        if model_not_found {
+            FailureClass::ProtocolRejection
+        } else {
+            status_error_class(Some(input.status))
+        },
         input.status,
         FailurePhase::TerminalValidation,
     )
-    .with_reason(http_failure_reason(input.status, input.detail));
+    .with_reason(if model_not_found {
+        "model_not_found"
+    } else {
+        http_failure_reason(input.status, input.detail)
+    });
     if matches!(input.status, 429 | 503) {
         failure.retry_after_seconds = input.retry_after_seconds;
     }
@@ -327,10 +338,7 @@ pub fn retry_allowed(
         )
 }
 
-/// External requests retry twice before any output: 429 (never on `:free`
-/// routes; quota exhaustion stays terminal), 504, and 5xx-capacity. The
-/// caller supplies an exponential backoff base of 500 ms capped at 8 s with
-/// ±25% jitter when no `Retry-After` applies.
+/// At most two retries before output: 504, or non-free 429 capacity/rate limits.
 pub fn external_http_retry_allowed(
     failure: &UpstreamFailure,
     attempt: usize,
@@ -357,8 +365,7 @@ pub fn external_http_retry_allowed(
     retryable && failure.retry_after_seconds.unwrap_or(1) <= MAX_RETRY_AFTER_SECONDS
 }
 
-/// Exponential backoff with ±25% jitter for attempts without usable
-/// `Retry-After`: 500 ms, 1 s, 2 s — each capped at 8 s.
+/// Exponential backoff when Retry-After is absent, shortened by up to 25% jitter.
 pub fn external_backoff_delay(attempt: usize) -> Duration {
     const BASE_MS: u64 = 500;
     const CAP_MS: u64 = 8_000;
@@ -378,6 +385,9 @@ pub fn public_failure_message(
     failure_reason: Option<&str>,
     status: u16,
 ) -> String {
+    if failure_reason == Some("model_not_found") {
+        return "The upstream model was not found or is unavailable to this account.".to_owned();
+    }
     let reason = failure_reason.map(safe_token);
     match error_class {
         FailureClass::ProxyUnavailable => "Configured proxy is unavailable. Check that the proxy is running and its listening port matches your proxy settings.".to_owned(),

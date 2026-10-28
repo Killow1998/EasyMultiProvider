@@ -5,16 +5,24 @@ use super::*;
 #[test]
 #[ignore = "requires an explicitly selected Codex and isolated loopback access"]
 fn installed_codex_refreshes_online_catalog_without_process_restart() {
-    online_catalog(false);
+    online_catalog(false, "online_catalog_fixture");
 }
 
 #[test]
 #[ignore = "requires an explicitly selected Codex and isolated loopback access"]
 fn installed_codex_uses_localhost_with_a_localhost_only_proxy_exception() {
-    online_catalog(true);
+    online_catalog(true, "online_catalog_fixture");
 }
 
-fn online_catalog(localhost_only: bool) {
+#[test]
+#[ignore = "requires Codex 0.165 or later and isolated loopback access"]
+fn installed_codex_refreshes_originator_scoped_catalogs() {
+    for originator in ["codex_work_cca", "chatgpt_cca"] {
+        online_catalog(false, originator);
+    }
+}
+
+fn online_catalog(localhost_only: bool, originator: &str) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("codex");
@@ -90,7 +98,7 @@ fn online_catalog(localhost_only: bool) {
     } else {
         Codex::start(&home)
     };
-    let initialized = codex.rpc(1,"initialize",json!({"clientInfo":{"name":"online_catalog_fixture","version":"1"},"capabilities":{"experimentalApi":true}}));
+    let initialized = codex.rpc(1,"initialize",json!({"clientInfo":{"name":originator,"version":"1"},"capabilities":{"experimentalApi":true}}));
     assert!(initialized["userAgent"].as_str().unwrap().contains(version));
     codex.send(json!({"method":"initialized"}));
     let first = codex.rpc(2, "model/list", json!({"includeHidden":true}));
@@ -129,18 +137,28 @@ fn online_catalog(localhost_only: bool) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut rpc_id = 5;
     loop {
-        let models = codex.rpc(rpc_id, "model/list", json!({"includeHidden":true}));
-        if models["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|model| model["id"] == "demo/new-model")
-        {
+        let models = if originator == "online_catalog_fixture" {
+            codex.rpc(rpc_id, "model/list", json!({"includeHidden":true}))["data"].clone()
+        } else {
+            let cached = std::fs::read(home.join(format!("models_cache.{originator}.json")))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+            cached.unwrap_or_default()["models"].clone()
+        };
+        if models.as_array().is_some_and(|entries| {
+            entries.iter().any(|model| {
+                model[if originator == "online_catalog_fixture" {
+                    "id"
+                } else {
+                    "slug"
+                }] == "demo/new-model"
+            })
+        }) {
             break;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "running engine did not load new online model: {models}"
+            "running engine did not refresh catalog {originator}"
         );
         rpc_id += 1;
         thread::sleep(Duration::from_millis(100));

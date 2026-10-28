@@ -162,7 +162,11 @@ fn external_catalog_keeps_coding_template_without_native_entitlements() {
         "models":[{"id":"demo/model","provider":"demo","upstream_id":"model","context_window":256000,"reasoning_levels":[]}]
     });
     let native = json!({"models":[{
-        "slug":"native", "base_instructions":"coding", "model_messages":{"tools":"safe","unknown_future":"private"},
+        "slug":"native", "base_instructions":"coding", "model_messages":{"tools":{
+            "history":{"read_item":{"description":"catalog history","parameters":"{}"}},
+            "notes":{"read_file":{"description":"","parameters":"{}"}},
+            "context_management":{"new_context":{"description":"catalog context"}}
+        },"unknown_future":"private"},
         "available_access_programs":["native entitlement"],"supports_reasoning_summary_parameter":true,
         "multi_agent_version":"orchestrator", "truncation_policy":{"mode":"tokens","limit":12000}
     }]});
@@ -178,7 +182,10 @@ fn external_catalog_keeps_coding_template_without_native_entitlements() {
     assert_eq!(external["display_name"], "[ 243K]  demo/model");
     assert!(external.get("available_access_programs").is_none());
     assert_eq!(external["multi_agent_version"], Value::Null);
-    assert_eq!(external["model_messages"], json!({"tools":"safe"}));
+    assert_eq!(
+        external["model_messages"],
+        json!({"tools":native["models"][0]["model_messages"]["tools"]})
+    );
     assert_eq!(external["supported_reasoning_levels"], json!([]));
     assert_eq!(
         external["truncation_policy"],

@@ -75,7 +75,12 @@ pub(crate) fn responses_request(
         Ok(body) => body,
         Err(error) => return ResponsesRequestResult::Buffered(body_error_response(error)),
     };
-    observation.body(body.get("reasoning"), body.get("stream"));
+    observation.body(
+        body.get("reasoning"),
+        body.get("input"),
+        body.get("client_metadata"),
+        body.get("stream"),
+    );
     let incoming: BTreeMap<String, String> = request
         .headers
         .lines()

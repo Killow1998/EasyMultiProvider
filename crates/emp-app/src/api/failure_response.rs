@@ -176,7 +176,7 @@ pub(crate) fn pre_output_failure_response(event: &Value, route: &ResolvedRoute) 
     let code = error
         .get("code")
         .and_then(Value::as_str)
-        .unwrap_or_else(|| stream_error_code(error_class));
+        .unwrap_or_else(|| stream_error_code(error_class, failure_reason));
     let mut detail = serde_json::json!({
         "type": error_class_name,
         "code": code,
@@ -216,7 +216,7 @@ fn pre_output_router_error_response_with_route(
     let error_class = error.error_class();
     let mut detail = serde_json::json!({
         "type": error_class.as_str(),
-        "code": stream_error_code(error_class),
+        "code": stream_error_code(error_class, error.failure_reason()),
         "message": route.map_or_else(
             || public_failure_message(error_class, error.failure_reason(), error.status()),
             |route| routed_message(error, route, false),

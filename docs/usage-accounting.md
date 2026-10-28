@@ -13,6 +13,21 @@ Provider summaries include only that provider's records. Input, output and
 priced costs are summed; missing usage remains missing and known zero-cost
 usage remains zero. Use **Statistics** for date and category breakdowns.
 
+## Reasoning effort and speed tier
+
+Expand a record in **Statistics > Calls** to see the selected reasoning effort,
+upstream-reported effort, requested tier and upstream-reported tier separately.
+For example, an Ultra selection can report `xhigh`; a Fast request that reports
+Standard belongs to the Standard performance group. Model groups retain both
+effort values, so different reported efforts are not averaged together.
+
+The current turn's effort takes precedence over the initial request setting.
+Upstream effort is captured before protocol projection removes reasoning fields.
+Tier confirmation does not require token usage. An absent tier report displays
+**Tier unconfirmed**, including older records that lack confirmation provenance.
+Old receipts are not rewritten or assigned a tier using today's settings.
+API-equivalent pricing still uses its separate fallback policy described below.
+
 ## Session bills
 
 Choose **Statistics > Session bills** to search session names or IDs and sort by

@@ -9,6 +9,7 @@ pub struct ModelObservation {
     terminal: Option<String>,
     declarations: Vec<Value>,
     conflict: bool,
+    reported_effort: Option<String>,
     pub first_output: Option<Instant>,
     pub first_content: Option<Instant>,
     pub last_content: Option<Instant>,
@@ -88,6 +89,12 @@ impl ModelObservation {
             if let Some(model) = object["model"].as_str() {
                 self.observe_model(model, source, terminal);
             }
+            if let Some(effort) = object["reasoning"]["effort"]
+                .as_str()
+                .filter(|value| emp_state::model_values::is_concrete_reasoning_effort(value))
+            {
+                self.reported_effort = Some(effort.into());
+            }
         }
         if !live {
             return;
@@ -152,7 +159,7 @@ impl ModelObservation {
             .rev()
             .find(|value| value["model"].as_str() == self.model())
             .and_then(|value| value["source"].as_str());
-        json!({"response_model":self.model(),"response_model_source":source,"model_name_status":status,"model_declarations":self.declarations})
+        json!({"response_model":self.model(),"response_model_source":source,"model_name_status":status,"model_declarations":self.declarations,"reported_effort":self.reported_effort})
     }
 }
 

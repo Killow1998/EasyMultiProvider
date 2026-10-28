@@ -1,5 +1,6 @@
 //! Route existing Codex memory jobs; Codex still owns memory generation and files.
 use crate::app::ServerState;
+use crate::services::request_facts::memory_kind;
 use crate::services::request_preparation::{
     PreparedRequest, RequestOperation, RequestPreparationError, prepare_request,
     prepare_with_config,
@@ -28,48 +29,20 @@ impl MemoryStatus {
     }
 }
 
-pub(crate) fn kind(body: &Value, headers: &BTreeMap<String, String>) -> Option<&'static str> {
-    let header = |name: &str| {
-        headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
-    };
-    match header("x-openai-subagent") {
-        Some("memory_consolidation") => return Some("memory_consolidation"),
-        Some("memory" | "memory_extraction") => return Some("memory_extraction"),
-        _ => {}
-    }
-    let metadata = body["client_metadata"]["x-codex-turn-metadata"]
-        .as_str()
-        .or_else(|| header("x-codex-turn-metadata"))
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-        .unwrap_or_default();
-    match metadata["kind"]
-        .as_str()
-        .or_else(|| metadata["call_kind"].as_str())
-    {
-        Some("memory" | "memory_extraction") => Some("memory_extraction"),
-        Some("memory_consolidation") => Some("memory_consolidation"),
-        _ => None,
-    }
-}
-
 /// Both HTTP and WebSocket use this boundary so the selected account/model agree.
 pub(crate) fn prepare(
     state: &ServerState,
     mut body: Value,
     incoming: &BTreeMap<String, String>,
 ) -> Result<PreparedRequest, RequestPreparationError> {
-    let Some(kind) = kind(&body, incoming) else {
+    let Some(kind) = memory_kind(&body, incoming) else {
         return prepare_request(state, body, RequestOperation::Responses);
     };
     let config = state
         .backend
         .configuration
-        .read()
-        .map_err(|_| RequestPreparationError::ConfigurationUnavailable)?
-        .clone();
+        .snapshot()
+        .map_err(|_| RequestPreparationError::ConfigurationUnavailable)?;
     let field = if kind == "memory_extraction" {
         "memory_extraction_model"
     } else {

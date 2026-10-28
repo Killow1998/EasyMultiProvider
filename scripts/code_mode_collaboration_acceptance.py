@@ -169,7 +169,7 @@ def assert_plaintext(messages, mode):
             assert all(part['type'] == 'input_text' for part in item['content'])
 
 
-def case(binary, codex, root, output, protocol, mode):
+def case(binary, codex, root, output, protocol, mode, version):
     label = protocol+'-'+mode
     root.mkdir()
     evidence = output/label
@@ -194,7 +194,7 @@ def case(binary, codex, root, output, protocol, mode):
         emp_root = root/'emp'
         emp_root.mkdir()
         base,_,state,headers = start_backend(stack,binary,emp_root,fixture,proxies)
-        status,catalog = request(base+'/v1/models?client_version=0.164.0',headers=headers)
+        status,catalog = request(base+'/v1/models?client_version='+version,headers=headers)
         assert status == 200, catalog
         catalog['models'] = [entry for entry in catalog['models'] if entry['slug'] in (PARENT,CHILD)]
         assert len(catalog['models']) == 2, catalog
@@ -290,7 +290,7 @@ def main():
                 'cases':[]}
         for protocol in args.protocol or ['responses','chat_completions','anthropic_messages']:
             for mode in args.mode or ['on_demand','off','on']:
-                result=case(args.emp.resolve(),args.codex.resolve(),Path(temp)/(protocol+'-'+mode),args.output,protocol,mode)
+                result=case(args.emp.resolve(),args.codex.resolve(),Path(temp)/(protocol+'-'+mode),args.output,protocol,mode,report['codex_version'].split()[-1])
                 report['cases'].append(result)
                 (args.output/'result.json').write_text(json.dumps(report,indent=2))
                 print(json.dumps(result),flush=True)

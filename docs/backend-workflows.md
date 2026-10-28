@@ -24,6 +24,13 @@ Crate dependency directions are unchanged. No library depends on `emp-app`. The 
 consolidation is complete-operation ownership in the application, not merging
 independent protocol, persistence and transport implementations into one crate.
 
+Within `emp-app`, `services/request_facts.rs` owns pure request classification.
+Memory routing, accounting and passive receipts consume it independently;
+accounting does not ask logging or routing policy to interpret client metadata.
+Request preparation checks the body object once and passes a mutable JSON map
+to its external-settings transformation. Configuration uses the existing owned
+snapshot boundary. These helpers add no runtime state or recovery policy.
+
 ## Before / after
 
 These are responsibility diagrams, not a complete crate dependency graph.

@@ -1,6 +1,7 @@
 //! Passive request receipts. This owner knows diagnostics, not routing, retries,
 //! account state or usage accounting. A receipt ends at the downstream boundary;
 //! model outcomes keep their existing, separate upstream/accounting boundary.
+use crate::services::request_facts::reasoning_effort;
 use emp_core::ResolvedRoute;
 use emp_history::HistoryError;
 use emp_state::diagnostics::Diagnostics;
@@ -151,8 +152,14 @@ impl RequestObservation {
         self.phase_started = Instant::now();
     }
 
-    pub(crate) fn body(&mut self, reasoning: Option<&Value>, stream: Option<&Value>) {
-        self.fields["requested_effort"] = json!(reasoning_effort(reasoning));
+    pub(crate) fn body(
+        &mut self,
+        reasoning: Option<&Value>,
+        input: Option<&Value>,
+        metadata: Option<&Value>,
+        stream: Option<&Value>,
+    ) {
+        self.fields["requested_effort"] = json!(reasoning_effort(reasoning, input, metadata));
         if self.fields["transport"] == "http" && crate::util::python_truthy(stream) {
             self.fields["transport"] = json!("sse");
             self.fields["requested_transport"] = json!("sse");
@@ -351,31 +358,6 @@ impl Drop for RequestObservation {
     }
 }
 
-/// Fixed vocabulary only. Unknown user text and malformed values are never logged.
-pub(crate) fn reasoning_effort(reasoning: Option<&Value>) -> &'static str {
-    match reasoning {
-        None => "missing",
-        Some(Value::Null) => "null",
-        Some(Value::Object(reasoning)) => match reasoning.get("effort") {
-            None => "missing",
-            Some(Value::Null) => "null",
-            Some(Value::String(value)) => match value.as_str() {
-                "none" => "none",
-                "minimal" => "minimal",
-                "low" => "low",
-                "medium" => "medium",
-                "high" => "high",
-                "xhigh" => "xhigh",
-                "max" => "max",
-                "ultra" => "ultra",
-                _ => "unknown",
-            },
-            _ => "invalid_type",
-        },
-        _ => "invalid_type",
-    }
-}
-
 pub(crate) fn request_id(incoming: &BTreeMap<String, String>) -> Value {
     json!(
         incoming
@@ -538,25 +520,6 @@ mod tests {
                 done[0]["fields"]["downstream_terminal"],
                 if terminal { "incomplete" } else { "unknown" }
             );
-        }
-    }
-
-    #[test]
-    fn effort_is_a_fact_with_no_default_or_content_retention() {
-        for (body, expected) in [
-            (json!({}), "missing"),
-            (json!({"reasoning":null}), "null"),
-            (json!({"reasoning":{"effort":null}}), "null"),
-            (json!({"reasoning":{"effort":"none"}}), "none"),
-            (json!({"reasoning":{"effort":"low"}}), "low"),
-            (json!({"reasoning":{"effort":"medium"}}), "medium"),
-            (json!({"reasoning":{"effort":"private-effort"}}), "unknown"),
-            (
-                json!({"reasoning":{"effort":{"secret":"private-value"}}}),
-                "invalid_type",
-            ),
-        ] {
-            assert_eq!(reasoning_effort(body.get("reasoning")), expected);
         }
     }
 

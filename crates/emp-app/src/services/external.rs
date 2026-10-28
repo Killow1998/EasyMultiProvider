@@ -139,6 +139,7 @@ impl Execution<'_> {
                 let retry = retry_delay(&error, attempt, &candidate);
                 let fallback = retry.is_none()
                     && index + 1 < candidates.len()
+                    && error.failure_reason() != Some("model_not_found")
                     && emp_transport::protocol_fallback_allowed(error.status(), false, false);
                 if let Some(delay) = retry.or(fallback.then_some(Duration::ZERO)) {
                     outcome.retry(attempt, delay, &error, fallback);

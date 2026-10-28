@@ -315,10 +315,11 @@ Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/REA
 
 ## Codex compatibility
 
-The current source version is **v0.13.15**.
+The current source version is **v0.13.17**.
 
-Maintenance targets the latest stable Codex minor series and the previous nine;
-patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).
+Maintenance targets the latest five stable Codex minor series: the latest stable
+series and the previous four. Patch releases share a series; prereleases do not
+move the window. See the [maintenance target and dated acceptance results](docs/codex-compatibility.md).
 
 EMP supports Codex CLI, desktop App and IDE extension installations without a
 universal minimum engine version. Each operation depends on the interfaces that

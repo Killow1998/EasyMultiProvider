@@ -7,7 +7,10 @@ use emp_router::{RouterError, RouterErrorKind};
 use emp_transport::{FailureClass, public_failure_message};
 use serde_json::Value;
 
-pub(crate) fn stream_error_code(error_class: FailureClass) -> &'static str {
+pub(crate) fn stream_error_code(error_class: FailureClass, reason: Option<&str>) -> &'static str {
+    if reason == Some("model_not_found") {
+        return "model_not_found";
+    }
     match error_class {
         FailureClass::ContextLengthExceeded => "context_length_exceeded",
         FailureClass::PaymentRequired => "payment_required",
@@ -61,7 +64,7 @@ fn stream_failure_value_with_route(
 fn error_detail(error: &RouterError, route: Option<&ResolvedRoute>, output_started: bool) -> Value {
     let error_class = error.error_class();
     let mut detail = serde_json::json!({
-        "code": stream_error_code(error_class),
+        "code": stream_error_code(error_class, error.failure_reason()),
         "message": format!(
             "HTTP {}: {}",
             error.status(),

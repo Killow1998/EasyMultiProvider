@@ -113,12 +113,13 @@ impl UsageLedger {
             json_extract(facts,'$.upstream_model') AS upstream_model,
             json_extract(facts,'$.speed_mode') AS speed_mode,
             json_extract(facts,'$.requested_effort') AS requested_effort,
+            json_extract(facts,'$.reported_effort') AS reported_effort,
             COUNT(*) AS calls, SUM(state='completed') AS completed,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.duration_ms') END) AS duration_ms,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_ms,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tokens_per_second
             FROM {calls} WHERE {predicate}
-            GROUP BY provider_id,account_id,model_id,upstream_model,speed_mode,requested_effort");
+            GROUP BY provider_id,account_id,model_id,upstream_model,speed_mode,requested_effort,reported_effort");
         let models_total: i64 = connection.query_row(
             &format!("SELECT COUNT(*) FROM ({grouped})"),
             params_from_iter(&args),
@@ -131,7 +132,7 @@ impl UsageLedger {
         let models = rows(
             &connection,
             &format!(
-                "{grouped} ORDER BY {model_order},provider_id,account_id,model_id,upstream_model,speed_mode,requested_effort LIMIT 50 OFFSET ?"
+                "{grouped} ORDER BY {model_order},provider_id,account_id,model_id,upstream_model,speed_mode,requested_effort,reported_effort LIMIT 50 OFFSET ?"
             ),
             &model_args,
         )?;

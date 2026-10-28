@@ -323,8 +323,7 @@ pub(crate) fn read_json_body(
     let length = raw_length
         .parse::<u128>()
         .map_err(|_| BodyError::Invalid("invalid Content-Length".to_owned()))?;
-    // Python attaches a dynamic request budget only to model-generation paths.
-    // Management requests retain their fixed wire and decoded-body ceiling.
+    // Management keeps a fixed ceiling; generation also has model-specific budgets.
     let management = request.raw_path().starts_with("/api/");
     let limit = if management {
         5 * 1024 * 1024

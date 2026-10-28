@@ -275,17 +275,9 @@ pub(crate) fn flush_pending_rotations(state: &ServerState) -> usize {
     unsaved
 }
 
-/// Attach history recorded under an account's legacy local id key to the
-/// upstream identity of its current credentials. Before identity keys, EMP
-/// deleted an account's history with the account and recorded an import that
-/// duplicated another account under that account's key, so rows under an
-/// imported account's id were recorded from that entry's current
-/// credentials. Returns whether the rows now belong to an identity (or there
-/// were none to move).
-///
-/// `@native` rows are never adopted: they were recorded from whichever login
-/// Codex held at the time, and the current login cannot prove it recorded
-/// them, so they stay under their legacy key.
+/// Adopt an imported account's legacy ID-keyed rows into its credential identity.
+/// Those rows used that entry's credentials; success includes no rows to move.
+/// Never adopt `@native`: the current login cannot identify historical logins.
 pub(crate) fn adopt_legacy_quota_history(state: &ServerState, account_id: &str) -> bool {
     if account_id == "@native" {
         return false;
@@ -308,13 +300,9 @@ fn adopt_owned_legacy_quota_history(
     })
 }
 
-/// Settle an account id's legacy rows before the id is freed or reassigned
-/// to other credentials: adopt them into the current identity, or delete
-/// them as pre-identity EMP did, so a later account reusing the id cannot
-/// inherit them. Callers must not free or reassign the id on error, and run
-/// it under the configuration lock (`config` is the locked configuration)
-/// together with their final validation and commit, so a request rejected
-/// later cannot have settled the rows.
+/// Adopt or delete legacy rows before freeing/reassigning an account ID, so its
+/// next owner cannot inherit them. Run with final validation and commit under
+/// the configuration lock; on error, the caller must not reassign the ID.
 pub(crate) fn settle_legacy_quota_history(
     state: &ServerState,
     config: &Value,

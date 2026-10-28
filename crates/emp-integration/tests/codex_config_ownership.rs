@@ -1,6 +1,5 @@
-//! Codex config.toml ownership: enabling EMP writes the fields Codex reads,
-//! restore puts the user's original config back exactly, and a lease makes
-//! crash recovery possible.
+//! EMP owns only the leased config fields. Provider-specific settings survive
+//! enable, restore and crash recovery.
 
 use emp_integration::IntegrationManager;
 use std::fs;
@@ -18,11 +17,18 @@ fn manager(directory: &std::path::Path) -> IntegrationManager {
 fn enable_writes_managed_fields_and_restore_returns_the_original_config() {
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("config.toml");
-    fs::write(
-        &config,
-        "# header\ntitle = \"keep\"\nopenai_base_url = \"native\"\n[nested]\nkey = \"value\"\n",
-    )
-    .unwrap();
+    let original = r#"# header
+title = "keep"
+model_provider = "gcp"
+openai_base_url = "native"
+[nested]
+key = "value"
+[model_providers.gcp]
+base_url = "https://vertex.example.test/v1"
+[model_providers.gcp.auth]
+command = "fixture-token-command"
+"#;
+    fs::write(&config, original).unwrap();
 
     let manager = manager(directory.path());
     assert_eq!(manager.status().unwrap().state, "native");
@@ -40,7 +46,6 @@ fn enable_writes_managed_fields_and_restore_returns_the_original_config() {
         "unmanaged lines survive"
     );
     assert!(manager.status().unwrap().same_instance);
-
     let restored = manager.restore().unwrap();
     assert_eq!(restored.action, "restored");
     let config_text = fs::read_to_string(&config).unwrap();
@@ -48,6 +53,18 @@ fn enable_writes_managed_fields_and_restore_returns_the_original_config() {
     assert!(!config_text.contains("model_catalog_json"));
     assert!(config_text.contains("title = \"keep\""));
     assert!(config_text.contains("key = \"value\""));
+    for text in [&applied, &config_text] {
+        let parsed: toml_edit::DocumentMut = text.parse().unwrap();
+        assert_eq!(parsed["model_provider"].as_str(), Some("gcp"));
+        assert_eq!(
+            parsed["model_providers"]["gcp"]["base_url"].as_str(),
+            Some("https://vertex.example.test/v1")
+        );
+        assert_eq!(
+            parsed["model_providers"]["gcp"]["auth"]["command"].as_str(),
+            Some("fixture-token-command")
+        );
+    }
 }
 
 #[test]
