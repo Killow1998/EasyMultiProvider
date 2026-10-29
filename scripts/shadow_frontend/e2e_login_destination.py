@@ -20,7 +20,7 @@ def main():
     checks = []
     with tempfile.TemporaryDirectory(prefix='emp-login-destination-') as directory, contextlib.ExitStack() as stack:
         root = Path(directory)
-        bin_dir = root / 'bin'; bin_dir.mkdir()
+        bin_dir = root / 'bin'; bin_dir.mkdir(mode=0o700)
         shutil.copy(Path(__file__).with_name('fixtures') / 'device-codex.py', bin_dir / 'codex')
         (bin_dir / 'codex').chmod(0o700)
         control = bin_dir / 'login-control'
@@ -39,7 +39,7 @@ def main():
                     'models': [{'id': 'fixture/model', 'provider': 'fixture', 'upstream_id': 'fixture-model'}]},
                 {'CODEX_HOME': str(home),
                     'PATH': str(bin_dir)+':/usr/bin:/bin', 'HTTP_PROXY': 'http://127.0.0.1:9',
-                    'HTTPS_PROXY': 'http://127.0.0.1:9', 'ALL_PROXY': 'http://127.0.0.1:9', 'NO_PROXY': 'localhost,127.0.0.1'})
+                    'HTTPS_PROXY': 'http://127.0.0.1:9', 'ALL_PROXY': 'http://127.0.0.1:9', 'NO_PROXY': 'localhost,127.0.0.1'}, device_fixture=True)
 
             def call(path, body=None):
                 headers = {'X-EMP-Session': json.loads((state_dir / 'web-session.json').read_text())['token']}

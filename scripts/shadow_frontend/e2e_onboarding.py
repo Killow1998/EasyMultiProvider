@@ -25,7 +25,7 @@ def main():
     checks=[]
     with tempfile.TemporaryDirectory(prefix='emp-onboarding-') as directory,contextlib.ExitStack() as stack:
         root=Path(directory);a=root/'sender';b=root/'receiver';a.mkdir();b.mkdir()
-        bin_dir=root/'bin';bin_dir.mkdir()
+        bin_dir=root/'bin';bin_dir.mkdir(mode=0o700)
         shutil.copy(Path(__file__).with_name('fixtures')/'device-codex.py',bin_dir/'codex')
         (bin_dir/'codex').chmod(0o700);control=bin_dir/'login-control';control.write_text('pending')
         home=root/'native';home.mkdir()
@@ -39,7 +39,7 @@ def main():
             'models':[{'id':'demo/fixture','provider':'demo','upstream_id':'fixture','context_window':100000,'enabled':True}]}
         env={'CODEX_HOME':str(home),'PATH':str(bin_dir)+':/usr/bin:/bin',
             'HTTP_PROXY':'http://127.0.0.1:9','HTTPS_PROXY':'http://127.0.0.1:9','ALL_PROXY':'http://127.0.0.1:9','NO_PROXY':'localhost,127.0.0.1'}
-        base,url,state_dir,headers=start_backend(stack,args.emp.resolve(),a,fixture,env)
+        base,url,state_dir,headers=start_backend(stack,args.emp.resolve(),a,fixture,env,device_fixture=True)
         other,_,_,other_headers=start_backend(stack,args.emp.resolve(),b,{'auto_enable_on_start':False}, {'PATH':'/usr/bin:/bin',**{k:v for k,v in env.items() if 'PROXY' in k}})
         def call(path,body=None,peer=False,expected=200):
             target,auth=(other,other_headers) if peer else (base,{'X-EMP-Session':json.loads((state_dir/'web-session.json').read_text())['token']})

@@ -3,8 +3,11 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
+import shutil
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -41,17 +44,23 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def stop(process):
+def stop(process, process_group=False):
     if process.poll() is None:
-        process.terminate()
+        if process_group:
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
         try:
             process.wait(timeout=8)
         except subprocess.TimeoutExpired:
-            process.kill()
+            if process_group:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
             process.wait()
 
 
-def start_backend(stack, binary, root, configuration, env_overrides=None):
+def start_backend(stack, binary, root, configuration, env_overrides=None, *, device_fixture=False):
     config = root / 'config.json'
     config.write_text(json.dumps(configuration))
     env = {key: value for key, value in os.environ.items() if key not in {
@@ -61,11 +70,27 @@ def start_backend(stack, binary, root, configuration, env_overrides=None):
         env[key] = str(root / key.lower())
         Path(env[key]).mkdir()
     env.update(env_overrides or {})
+    command = []
+    if device_fixture:
+        env.pop('NVM_DIR', None)
+        if sys.platform == 'linux' and Path('/usr/lib/chatgpt/resources/codex').exists():
+            bwrap = shutil.which('bwrap')
+            if not bwrap:
+                raise RuntimeError('Device-login fixture requires bwrap to hide the installed ChatGPT runtime')
+            fixture_bin = env['PATH'].split(os.pathsep)[0]
+            env['PATH'] = '/fixture:/usr/bin:/bin'
+            command = [bwrap, '--ro-bind', '/usr', '/usr', '--ro-bind', '/bin', '/bin',
+                       '--ro-bind', '/lib', '/lib', '--ro-bind', '/lib64', '/lib64',
+                       '--ro-bind', '/etc', '/etc', '--ro-bind', '/home', '/home',
+                       '--dev', '/dev', '--proc', '/proc', '--bind', '/tmp', '/tmp',
+                       '--bind', str(root.parent), str(root.parent), '--ro-bind', fixture_bin,
+                       '/fixture', '--tmpfs', '/usr/lib/chatgpt', '--']
     log_path = root / 'backend.log'
     log = stack.enter_context(log_path.open('w'))
-    process = subprocess.Popen([str(binary), 'serve', '--config', str(config), '--port', '0'],
-                               env=env, cwd=root, stdout=log, stderr=log)
-    stack.callback(stop, process)
+    process = subprocess.Popen([*command, str(binary), 'serve', '--config', str(config), '--port', '0'],
+                               env=env, cwd=root, stdout=log, stderr=log,
+                               start_new_session=bool(command))
+    stack.callback(stop, process, bool(command))
     url = wait_for(lambda: re.search(r'Open in browser: (http://[^\s]+)', log_path.read_text(encoding='utf-8')))[1]
     base = url.split('/?')[0]
     state = root / 'state'

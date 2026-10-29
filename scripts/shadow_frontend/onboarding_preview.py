@@ -8,7 +8,7 @@ from local_backend import request, start_backend
 HERE=Path(__file__).resolve().parent
 
 def start(stack,binary,root,return_url):
-    bin_dir=root/'bin';bin_dir.mkdir()
+    bin_dir=root/'bin';bin_dir.mkdir(mode=0o700)
     shutil.copy(HERE/'fixtures/device-codex.py',bin_dir/'codex');(bin_dir/'codex').chmod(0o700)
     (bin_dir/'login-control').write_text('auto')
     endpoints=[]
@@ -20,7 +20,7 @@ def start(stack,binary,root,return_url):
         if name=='receiver':config={'auto_enable_on_start':False}
         base,_,_,headers=start_backend(stack,binary,directory,config,{
             'PATH':str(bin_dir)+':/usr/bin:/bin','HTTP_PROXY':'http://127.0.0.1:9',
-            'HTTPS_PROXY':'http://127.0.0.1:9','ALL_PROXY':'http://127.0.0.1:9','NO_PROXY':'localhost,127.0.0.1'})
+            'HTTPS_PROXY':'http://127.0.0.1:9','ALL_PROXY':'http://127.0.0.1:9','NO_PROXY':'localhost,127.0.0.1'},device_fixture=True)
         if name=='sender':
             status,_=request(base+'/api/integration/enable',{'confirm_reload':True},headers)
             if status!=200:raise ValueError('Isolated onboarding could not start')

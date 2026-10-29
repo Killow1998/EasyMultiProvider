@@ -34,6 +34,71 @@ pub(crate) fn execute(
         &state.backend.native_login
     };
     let mut login = session.0.lock().map_err(|_| "login_busy")?;
+    if !importing && operation == "use-local-key" {
+        if login.pending.is_some() {
+            return Err("login_busy");
+        }
+        let keep = match body["account_action"].as_str() {
+            Some("keep") => true,
+            Some("remove") => false,
+            _ => return Err("login_invalid_action"),
+        };
+        let manager = &state.backend.integration.manager;
+        let _operation = manager.operation_lock().map_err(|_| "login_busy")?;
+        let path = &state.backend.accounts.native_auth_path;
+        let auth = local_auth::read(path)
+            .map_err(|_| "login_auth_unreadable")?
+            .ok_or("login_auth_unreadable")?;
+        emp_state::validate_auth_json(&auth).map_err(|_| "login_auth_unreadable")?;
+        let active = manager.status().map_err(|_| "login_busy")?.relation == "applied";
+        if keep {
+            let config = state
+                .backend
+                .configuration
+                .read()
+                .map_err(|_| "login_storage_failed")?;
+            let existing = config["accounts"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find_map(|account| {
+                    let path = account["auth_file"].as_str()?;
+                    let old = state
+                        .backend
+                        .configuration
+                        .vault
+                        .read_encrypted_json(std::path::Path::new(path))
+                        .ok()?;
+                    emp_state::same_account_auth(&old, &auth).then(|| account.clone())
+                });
+            drop(config);
+            let mut imported = existing.unwrap_or_else(|| json!({"name":"Native"}));
+            imported["auth_json"] = auth.clone();
+            crate::services::accounts::import_account_state(None, state, &imported)
+                .map_err(|_| "login_import_failed")?;
+        }
+        if !local_auth::replace_with_local(path, &auth).map_err(|_| "login_storage_failed")? {
+            return Err("login_auth_changed");
+        }
+        if let Ok(mut quota) = state.backend.accounts.native_quota.lock() {
+            *quota = None;
+        }
+        let integration_updated = !active
+            || (manager.restore().is_ok_and(|result| result.ok())
+                && crate::services::integration::enable::apply(state)
+                    .is_ok_and(|result| result.ok()));
+        crate::services::runtime::mark_active_pending(
+            state,
+            "Codex login changed; restart Codex Runtime",
+        );
+        state
+            .backend
+            .management_events
+            .publish(crate::services::management_events::Change::Integration);
+        return Ok(
+            json!({"status":"completed", "restart_required":true, "integration_updated":integration_updated}),
+        );
+    }
     match operation {
         "start" if login.pending.is_none() => {
             let (expected, account_name) = if importing {
@@ -141,4 +206,92 @@ pub(crate) fn execute(
         },
         |pending| pending.helper.snapshot(),
     ))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::lifecycle::ServerHandle;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn local_key_round_trip_keeps_other_and_installs_device_login() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config.json");
+        std::fs::write(&config, b"{}").unwrap();
+        let home = root.path().join("codex");
+        std::fs::create_dir(&home).unwrap();
+        let auth_path = home.join("auth.json");
+        let original = json!({"tokens":{"account_id":"original","access_token":"fixture-token"}});
+        emp_state::atomic_write_private_state(&auth_path, &serde_json::to_vec(&original).unwrap())
+            .unwrap();
+        let helper = root.path().join("codex-fixture");
+        std::fs::write(
+            &helper,
+            include_bytes!("../../../../scripts/shadow_frontend/fixtures/device-codex.py"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(root.path().join("login-control"), "complete").unwrap();
+        let server = ServerHandle::start_with_config_options(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            &config,
+            helper.to_str().unwrap(),
+            auth_path.clone(),
+        )
+        .unwrap();
+        let result = execute(
+            &server.state,
+            "use-local-key",
+            &json!({"account_action":"keep"}),
+            false,
+        )
+        .unwrap();
+        assert_eq!(result["integration_updated"], true);
+        assert_eq!(local_auth::mode(&auth_path), "local_key");
+        let accounts = server.state.backend.configuration.read().unwrap()["accounts"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(accounts.len(), 1);
+        let retained = server
+            .state
+            .backend
+            .configuration
+            .vault
+            .read_encrypted_json(std::path::Path::new(
+                accounts[0]["auth_file"].as_str().unwrap(),
+            ))
+            .unwrap();
+        assert!(emp_state::same_account_auth(&retained, &original));
+        execute(&server.state, "start", &json!({}), false).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let status = execute(&server.state, "status", &json!({}), false).unwrap();
+            if status["status"] == "completed" {
+                assert_eq!(status["restart_required"], true);
+                break;
+            }
+            assert_ne!(status["status"], "failed", "{status}");
+            assert!(
+                Instant::now() < deadline,
+                "device login timed out: {status}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(local_auth::mode(&auth_path), "subscription");
+        assert_eq!(
+            local_auth::read(&auth_path).unwrap().unwrap()["tokens"]["account_id"],
+            "fixture-login"
+        );
+        assert_eq!(
+            server.state.backend.configuration.read().unwrap()["accounts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }

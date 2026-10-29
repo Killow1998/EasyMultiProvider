@@ -27,6 +27,7 @@ body[data-shadow-refinements] .presentation-service-error-bubble{border-radius:7
 
 /* Detail values share one line box, regardless of whether they contain inputs. */
 .shadow-compact-account>div>.account-value{display:flex;align-items:center;flex:1;font-size:13px}
+.shadow-compact-account .account-login-row{flex-wrap:wrap}
 .shadow-usage-summary{display:flex;align-items:center;gap:28px;margin:14px 0 18px}
 .shadow-usage-summary h3{margin:0;flex:none}
 .shadow-usage-summary .usage-totals{display:flex;align-items:center;justify-content:space-between;flex:1;margin:0;gap:24px}

@@ -3,6 +3,20 @@ function createNativeLogin({onImported}) {
   let timer=null, view=null;
   function stop() {clearTimeout(timer);view=null;}
   function active(owner) {return view===owner && owner.node.isConnected;}
+  function openLocalKey({back=()=>openAccountDetails('@native')}={}) {
+    stop();
+    openModal(tr('login.switch_local_key'),`<div id="native_local_key"><p>${tr('login.switch_explain')}</p><div class="choice-grid" role="radiogroup" aria-label="${esc(tr('login.switch_local_key'))}"><label class="choice native-key-choice"><input type="radio" name="native_key_action" value="keep" checked><span><strong>${tr('login.switch_keep')}</strong><small>${tr('login.switch_keep_help')}</small></span></label><label class="choice native-key-choice"><input type="radio" name="native_key_action" value="remove"><span><strong>${tr('login.switch_remove')}</strong><small>${tr('login.switch_remove_help')}</small></span></label></div><div class="native-key-actions"><button type="button" data-native-key-switch>${tr('login.switch_local_key')}</button></div></div>`,'',null,null,{back});
+    const owner=$('native_local_key'), button=owner.querySelector('[data-native-key-switch]');
+    button.onclick=async()=>{
+      button.disabled=true;
+      try {
+        const result=await api('/api/native/login/use-local-key',{method:'POST',body:JSON.stringify({account_action:owner.querySelector('[name=native_key_action]:checked').value})});
+        state=await api('/api/config');fill();closeModal();notice(tr(result.integration_updated?'login.switch_done':'login.switch_integration_failed'),!result.integration_updated);
+      } catch(error) {
+        if(owner.isConnected){const key='login.'+(error.payload?.error?.code||error.message);$('modal_status').textContent=tr(key)===key?error.message:tr(key);button.disabled=false;}
+      }
+    };
+  }
   function open({importing=false,back=openServiceChooser}={}) {
     const mode=state.native_account?.auth_mode || 'missing';
     const nativeLabel=mode==='local_key'?'replace_local_key':mode==='api_key'?'replace_api_key':mode==='missing'?'use_native':'replace_native';
@@ -64,5 +78,5 @@ function createNativeLogin({onImported}) {
       }
     } catch(error){if(active(owner)&&owner.request===request){const key='login.'+(error.payload?.error?.code||error.message);$('modal_status').textContent=tr(key)===key?error.message:tr(key);button.disabled=false;destination.disabled=false;if(remove)remove.disabled=false;}}
   }
-  return {open,stop};
+  return {open,openLocalKey,stop};
 }

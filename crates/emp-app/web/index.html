@@ -1220,6 +1220,7 @@ function runDynamicUiAction(element) {
     case 'ultra-settings': ultraSettings.open({back:openSettings}); return true;
     case 'native-login': nativeLogin.open(); return true;
     case 'account-details': if(id==='@native'&&state.native_account?.auth_mode&&state.native_account.auth_mode!=='subscription')nativeLogin.open();else openAccountDetails(id); return true;
+    case 'native-use-local-key': nativeLogin.openLocalKey({back:modalReturn()}); return true;
     case 'account-alias-save': saveAccountAlias(element); return true;
     case 'account-remove': removeAccount(id, element); return true;
     case 'account-edit': editAccount(id); return true;

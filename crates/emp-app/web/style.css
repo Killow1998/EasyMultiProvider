@@ -450,4 +450,8 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .update-notes-content{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;font-size:13px;line-height:1.6;scrollbar-color:var(--border-strong) var(--panel)}
 #native_login .form-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
 #native_login .device-code{font-family:monospace;font-size:18px;letter-spacing:0}
+#native_local_key .native-key-choice{display:flex;align-items:flex-start;gap:10px;margin:0;cursor:pointer}
+#native_local_key .native-key-choice:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+#native_local_key input{width:auto;margin:2px 0 0;padding:0;accent-color:var(--accent)}
+#native_local_key .native-key-actions{display:flex;justify-content:flex-end;margin-top:16px}
 #native_login_progress a{color:var(--accent)}
