@@ -44,9 +44,9 @@ function createTutorials({openModal, $, tr, esc}) {
       action.textContent = tr('tutorials.play'); action.hidden = false;
     } else play();
   }
-  function open() {
+  function open(navigation = {}) {
     const list = groups.map(([group, items]) => `<div class="tutorial-group"><h3>${esc(tr(`tutorials.${group}`))}</h3>${items.map(([id]) => `<button type="button" data-tutorial="${id}" aria-controls="tutorial_demo" aria-pressed="false">${esc(tr(`tutorials.${id}`))}</button>`).join('')}</div>`).join('');
-    openModal(tr('tutorials.title'), `<div id="tutorials"><nav id="tutorial_list" aria-label="${esc(tr('tutorials.title'))}">${list}</nav><div id="tutorial_demo"><div class="tutorial-heading"><h3 id="tutorial_title"></h3><a id="tutorial_full_size" target="_blank" rel="noopener">${esc(tr('tutorials.full_size'))}</a></div><div id="tutorial_media" aria-busy="true"></div></div></div>`, '', null);
+    openModal(tr('tutorials.title'), `<div id="tutorials"><nav id="tutorial_list" aria-label="${esc(tr('tutorials.title'))}">${list}</nav><div id="tutorial_demo"><div class="tutorial-heading"><h3 id="tutorial_title"></h3><a id="tutorial_full_size" target="_blank" rel="noopener">${esc(tr('tutorials.full_size'))}</a></div><div id="tutorial_media" aria-busy="true"></div></div></div>`, '', null, null, navigation);
     $('tutorial_list').onclick = event => {
       const button = event.target.closest('[data-tutorial]');
       if (button) select(button.dataset.tutorial);

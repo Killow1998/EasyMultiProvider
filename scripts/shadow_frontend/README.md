@@ -49,9 +49,8 @@ python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --dem
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
 review entry. Update `reviewRows` in `preview-review.js` for every review round;
 follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
-The current review includes **Help and dialog controls**, **Ultra actual reasoning
-effort**, **Routing settings**, **Codex sign-in and import**, **Data migration**,
-**Tutorials**, and **Notifications and inbox**.
+The current review covers the refreshed **Tutorials** and **Native-to-EMP-key**
+account switch. Earlier entries remain available as demos where applicable.
 Ultra uses the production dialog with live catalog capabilities and a browser-local
 preference draft. When
 the source backend predates this capability projection, the read-only bridge reads

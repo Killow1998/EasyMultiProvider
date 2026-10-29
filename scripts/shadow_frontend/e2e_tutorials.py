@@ -62,12 +62,27 @@ def main():
         assert all(path.read_bytes() == content for path, content in before)
         checks.append('Viewing tutorials does not change stored configuration')
 
-        for lang, width, height, theme in [('zh-CN',1440,1000,'light'),('en',1280,900,'dark'),('zh-CN',560,800,'light')]:
+        for lang, width, height, theme in [('zh-CN',1440,1000,'light'),('en',1280,900,'dark'),('zh-CN',1280,600,'light'),('zh-CN',560,800,'light')]:
             request(browser.base+'/window/rect', {'width':width,'height':height})
             browser.execute('closeModal();setLanguage(arguments[0]);setTheme(arguments[1]);tutorials.open();', lang, theme)
             wait_for(lambda: browser.execute('return document.querySelector("#tutorial_media img")?.naturalWidth>0;'))
             time.sleep(.6)
+            layout = browser.execute('const body=document.getElementById("modal_body"),media=document.getElementById("tutorial_media"),list=document.getElementById("tutorial_list");return {body:body.getBoundingClientRect().bottom,media:media.getBoundingClientRect().bottom,scroll:body.scrollHeight-body.clientHeight,listOverflow:list.scrollHeight-list.clientHeight};')
+            assert layout['media'] <= layout['body'] + 1 and layout['scroll'] <= 1, (width, height, layout)
+            if height == 600:
+                assert layout['listOverflow'] > 0, layout
             screenshot(browser, args.output/f'tutorials-{lang}-{width}.png')
+        checks.append('Tutorial image and captions fit the dialog; the directory scrolls on short screens')
+
+        original_window = request(browser.base+'/window')[1]['value']
+        browser.execute('document.getElementById("tutorial_full_size").click();')
+        handles = wait_for(lambda: request(browser.base+'/window/handles')[1]['value'] if len(request(browser.base+'/window/handles')[1]['value']) > 1 else None)
+        target = next(handle for handle in handles if handle != original_window)
+        request(browser.base+'/window', {'handle':target})
+        assert browser.execute('return location.pathname.endsWith(".gif");')
+        request(browser.base+'/window', method='DELETE')
+        request(browser.base+'/window', {'handle':original_window})
+        checks.append('The larger view opens the selected tutorial in a new window')
 
         # Lists with the same size as the reported migration screenshot, without real credentials.
         browser.execute('closeModal();state.providers=Array.from({length:8},(_,i)=>({...state.providers[0],id:`sample-${i}`,name:`Sample service ${i+1}`}));state.models=[];')

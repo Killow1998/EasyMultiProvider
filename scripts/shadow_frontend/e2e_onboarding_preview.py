@@ -21,9 +21,9 @@ def main():
             (args.output/name).write_bytes(base64.b64decode(image['value']))
         browser.navigate(args.url)
         assert browser.execute('return window.EMP_REAL_SHADOW===true;')
-        assert browser.execute('return reviewRows;')==['ultra','onboarding','lan']
+        assert browser.execute('return reviewRows;')==['tutorials','native_local_key']
         shot('shadow-review.png')
-        browser.execute('document.querySelector("[data-shadow-demo=onboarding]").click();')
+        browser.execute('window.EMP_REVIEW_ACTION("onboarding");')
         def ready():
             error=browser.execute('return document.getElementById("modal_status")?.textContent;')
             assert not error,error
@@ -90,7 +90,7 @@ def main():
         wait_for(lambda:browser.execute('return state.providers.some(provider=>provider.name==="Example API");'))
         browser.navigate(args.url)
         assert browser.execute('return window.EMP_REAL_SHADOW===true;')
-    result={'checks':['Three current-review entries on real-data Shadow','Default selection creates a transfer with local-key authentication without exporting the managed key','Separate production UI and backend simulate device login','Sender approval and receiver preview/import work through browser controls','Stop and resume receiving; Back retains received preview without reusing the code','Bilingual tunnel screenshots at desktop and narrow widths','Return to real-data Shadow'],'real_model_calls':0}
+    result={'checks':['Current review entries and separate onboarding demo','Default selection creates a transfer with local-key authentication without exporting the managed key','Separate production UI and backend simulate device login','Sender approval and receiver preview/import work through browser controls','Stop and resume receiving; Back retains received preview without reusing the code','Bilingual tunnel screenshots at desktop and narrow widths','Return to real-data Shadow'],'real_model_calls':0}
     (args.output/'shadow-result.json').write_text(json.dumps(result,indent=2)+'\n')
     print(json.dumps(result))
 

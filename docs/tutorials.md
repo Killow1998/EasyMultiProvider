@@ -3,9 +3,10 @@
 [English README](../README.md) · [中文 README](../README.zh-CN.md)
 
 These eleven GIFs are also available offline from **Tutorials** in the WebUI header:
-choose an operation on the left and watch it on the right.
+choose an operation on the left and watch it on the right. Open the larger view
+in a new window when you want to see the details.
 
-也可在 WebUI 顶栏打开 **使用教程**：左侧选择操作，右侧观看演示，十一支 GIF 均可离线观看。
+也可在 WebUI 顶栏打开 **使用教程**：左侧选择操作，右侧观看演示；需要看清细节时，可在新窗口打开大图。十一支 GIF 均可离线观看。
 
 Expand a task to view its GIF. Each recording uses the actual EMP interface with
 sample data, a Chinese UI, and Chinese and English captions.
@@ -170,12 +171,14 @@ then select **Import**.
 <summary>11. Transfer over LAN / 通过隧道迁移</summary>
 
 Connect both computers to the same LAN and open **Service migration → Tunnel**.
+The demonstration shows the sender and receiver side by side.
 On the sender, select services, create a code and copy it to the receiver. Codes
 expire after five minutes. On the receiver, paste the code and choose **Receive
 and preview**. Approve the receiving computer on the sender, then review and
 confirm the import on the receiver.
 
-两台电脑连接同一局域网，打开 **服务迁移 → 隧道**。发送端选择服务，生成并复制代码；
+演示将发送端和接收端并排显示。两台电脑连接同一局域网，打开 **服务迁移 → 隧道**。
+发送端选择服务，生成并复制代码；
 代码五分钟内有效。接收端粘贴代码，点击 **接收并预览**。发送端确认接收方并 **允许发送**，
 接收端核对预览后点击 **导入**，此时才会写入配置。
 

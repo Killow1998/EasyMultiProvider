@@ -33,7 +33,7 @@ def main():
             wait_for(lambda: json.loads((target / 'config.json').read_text())['language'] == lang)
             before = (target / 'config.json').read_bytes()
             assert browser.execute('return document.getElementById("shadow_review_button").textContent===arguments[0] && document.getElementById("modal_title").textContent===arguments[0] && !document.getElementById("shadow_routing_button");', '本次改动' if lang == 'zh-CN' else 'This update')
-            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['lifecycle']
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['tutorials', 'native_local_key']
             assert browser.execute('return !document.getElementById("modal_body").textContent.includes("v0.13.1");')
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             _, png = request(browser.base + '/screenshot')
@@ -55,7 +55,7 @@ def main():
             browser.execute('document.getElementById("modal_provider_key").value="fixture-draft";document.querySelector(".provider-connection-details").open=true;')
             assert browser.execute('return document.getElementById("modal_provider_key").value==="fixture-draft" && document.documentElement.scrollWidth<=innerWidth;')
             browser.execute('document.getElementById("modal_back").click();')
-            assert browser.execute('return !!document.querySelector("#modal_body [data-shadow-demo=lifecycle]");')
+            assert browser.execute('return !!document.querySelector("#modal_body [data-shadow-demo=native_local_key]");')
             browser.execute('window.EMP_REVIEW_ACTION("migration");')
             wait_for(lambda: browser.execute('return document.getElementById("shadow_migration_file")?.files.length===1;'))
             gate = threading.Event()
@@ -74,7 +74,7 @@ def main():
             wait_for(lambda: browser.execute('return !!document.querySelector("[data-migration-preference-source]") && document.getElementById("modal_status").textContent==="";'))
             browser.execute('closeModal();document.getElementById("shadow_demo_button").click();')
             assert browser.execute('return !document.querySelector("#modal_body [data-shadow-demo=routing]") && !!document.querySelector("#modal_body [data-shadow-demo=recovery]");')
-            browser.execute('document.querySelector("#modal_body [data-shadow-demo=lifecycle]").click();')
+            browser.execute('window.EMP_REVIEW_ACTION("lifecycle");')
             assert browser.execute('return document.getElementById("modal_body").textContent.includes(arguments[0]);', '继续运行' if lang == 'zh-CN' else 'stays running')
             browser.execute('document.getElementById("modal_submit").click();')
             wait_for(lambda: browser.execute('return document.getElementById("integration").dataset.state==="native";'))

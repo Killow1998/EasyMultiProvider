@@ -1,11 +1,12 @@
 // Replace this list for each review round; shipped demos belong in Demos below.
 // Production controllers own their dialogs and text.
-const reviewRows=['settings','ultra','routing','onboarding','lan','tutorials','notifications'];
+const reviewRows=['tutorials','native_local_key'];
 const realShadow=window.EMP_REAL_SHADOW===true;
 const syntheticScenarios=['onboarding','lan','migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical'];
 const previewScenarios={
   review:{title:['本次改动','This update'],detail:['查看当前待检阅的修改','Review the current changes'],open:openReview},
-  tutorials:{title:['使用教程','Tutorials'],detail:['顶栏入口；左侧选择操作，右侧观看已有的十支教学 GIF。','Header entry with a task list on the left and ten existing GIF demonstrations on the right.'],open:()=>tutorials.open()},
+  tutorials:{title:['使用教程','Tutorials'],detail:['更新教学动图与弹窗布局，隧道迁移同时展示发送端和接收端。','Updated tutorial animations and layout, including a side-by-side tunnel transfer.'],open:()=>tutorials.open({back:openReview})},
+  native_local_key:{title:['Native 切换为 EMP Key','Switch Native to EMP key'],detail:['在账号信息中查看切换入口及两种账号处理方式。','Review the account-details entry and both ways to handle the subscription.'],open:()=>openAccountDetails(state.native_account.id,{back:openReview})},
   notifications:{title:['通知与信箱','Notifications and inbox'],detail:['顶部浮层与倒计时条；右下角信箱保留此浏览器最近 50 条通知，刷新后仍可查看。','Top notification with a countdown bar; the bottom-right inbox keeps the last 50 messages in this browser across reloads.'],open:()=>{closeModal();$('notification_mailbox').click();}},
   onboarding:{title:['Codex 登录与导入','Codex sign-in and import'],detail:['添加订阅只有装置码登录与 auth.json 两个入口；本地 Key 与原生登录仍在服务列表中。使用独立合成账号验收。','Add subscriptions through device-code sign-in or auth.json. Local key and native sign-in remain in the service list. Uses separate synthetic accounts.'],open:()=>openServiceChooser()},
   lan:{title:['数据迁移','Data migration'],detail:['导入、导出、隧道三个入口；窗口随内容展开，服务列表不再限制为三行，返回保留已填内容。','Three entries: Import, Export and Tunnel. Content determines dialog height; service lists expand fully and Back keeps your entries.'],open:()=>migration.open()},

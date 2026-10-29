@@ -18,5 +18,5 @@ registerUiCopy({
   'tutorials.failed':['演示加载失败，请重试。','Could not load the demonstration. Please retry.'],
   'tutorials.retry':['重新加载','Retry'],
   'tutorials.play':['播放演示','Play demonstration'],
-  'tutorials.full_size':['查看原尺寸','View full size']
+  'tutorials.full_size':['在新窗口查看大图','Open larger view in new window']
 });
