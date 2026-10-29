@@ -94,6 +94,20 @@ to implement. File length is a navigation signal, not a measure of module depth.
 No library crate depends on `emp-app`. The principal layering leaks are inside
 the application, where most modules can access the complete `ServerState`.
 
+Transport memory admission accepts the macOS VM statistics prefix through
+`inactive_count`, the last field used by the probe. The required word count is
+derived from that field's ABI offset; it is independent of newer, unused fields
+in libc's structure. A failed API call or a truncated required prefix remains an
+unavailable measurement. Expansion then returns `memory_unavailable` with HTTP
+503 (WebSocket 1013), and unknown memory values remain JSON `null`. A measured
+zero is `memory_limit` with an available-byte value of zero. Allocation failures
+remain `memory_limit` even if the diagnostic probe is unavailable. The existing
+headroom and reservation rules apply to every accepted measurement.
+
+Native package checks exercise both statistics revisions and a 137,177,159-byte
+HTTP request through EMP to a loopback fake upstream. This explicit large-body
+smoke requires 1,664 MiB available and is excluded from ordinary test runs.
+
 ## Findings
 
 ### 1. Request preparation and external attempts have explicit owners

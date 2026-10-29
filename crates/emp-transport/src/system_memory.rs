@@ -31,7 +31,8 @@ pub fn system_memory_status() -> Option<MemoryStatus> {
 #[cfg(target_os = "macos")]
 pub fn system_memory_status() -> Option<MemoryStatus> {
     let total = mac_total_physical_bytes()?;
-    let mut statistics = std::mem::MaybeUninit::<libc::vm_statistics64>::zeroed();
+    // SAFETY: this statistics structure contains only integer counters.
+    let mut statistics: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
     let mut count = libc::HOST_VM_INFO64_COUNT;
     // SAFETY: the host API writes `count` integer words into the correctly sized
     // vm_statistics64 buffer, and the host/flavor/count match Apple's ABI.
@@ -40,22 +41,35 @@ pub fn system_memory_status() -> Option<MemoryStatus> {
         libc::host_statistics64(
             libc::mach_host_self(),
             libc::HOST_VM_INFO64,
-            statistics.as_mut_ptr().cast(),
+            (&mut statistics as *mut libc::vm_statistics64).cast(),
             &mut count,
         )
     };
-    if result != libc::KERN_SUCCESS || count < libc::HOST_VM_INFO64_COUNT {
+    // SAFETY: vm_page_size is an OS-provided scalar initialized by libSystem.
+    let page_size = unsafe { libc::vm_page_size } as u64;
+    mac_status_from_statistics(total, &statistics, result, count, page_size)
+}
+
+#[cfg(target_os = "macos")]
+fn mac_status_from_statistics(
+    total: u64,
+    statistics: &libc::vm_statistics64,
+    result: libc::kern_return_t,
+    count: libc::mach_msg_type_number_t,
+    page_size: u64,
+) -> Option<MemoryStatus> {
+    // Older kernels return a shorter revision. Only require the fields we read.
+    const REQUIRED_WORDS: usize = (std::mem::offset_of!(libc::vm_statistics64, inactive_count)
+        + std::mem::size_of::<libc::natural_t>())
+    .div_ceil(std::mem::size_of::<libc::integer_t>());
+    if result != libc::KERN_SUCCESS || (count as usize) < REQUIRED_WORDS {
         return None;
     }
-    // SAFETY: host_statistics64 succeeded and returned the complete structure.
-    let statistics = unsafe { statistics.assume_init() };
     // libc models Apple's packed structure. Read fields unaligned to avoid
     // creating references to packed members.
     let free_pages = unsafe { std::ptr::addr_of!(statistics.free_count).read_unaligned() } as u64;
     let inactive_pages =
         unsafe { std::ptr::addr_of!(statistics.inactive_count).read_unaligned() } as u64;
-    // SAFETY: vm_page_size is an OS-provided scalar initialized by libSystem.
-    let page_size = unsafe { libc::vm_page_size } as u64;
     let available = bytes_from_pages(free_pages, inactive_pages, page_size)?;
     status_from_bytes(total, available)
 }
@@ -134,6 +148,77 @@ fn parse_linux_meminfo(contents: &str) -> Option<MemoryStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_revision_prefix_preserves_memory_admission() {
+        use crate::{RequestCapacityReason, RequestLimits, RequestLimitsConfig, TransportKind};
+        // SAFETY: vm_statistics64 contains only integer counters.
+        let mut statistics: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+        statistics.free_count = 512 * 1024;
+        statistics.inactive_count = 1024 * 1024;
+        let total = 16 * 1024 * 1024 * 1024;
+        for count in [3, 38, libc::HOST_VM_INFO64_COUNT] {
+            let memory =
+                mac_status_from_statistics(total, &statistics, libc::KERN_SUCCESS, count, 4096)
+                    .unwrap();
+            assert_eq!(memory.available, 6 * 1024 * 1024 * 1024);
+            let limits = RequestLimits::new(
+                RequestLimitsConfig::default(),
+                move || Some(memory),
+                || 0,
+                "mac-revision",
+            )
+            .unwrap();
+            let mut request = limits.request(TransportKind::Http);
+            request
+                .ensure(137_177_159)
+                .expect("issue #66 request fits measured memory");
+            assert_eq!(request.limit(), 144 * 1024 * 1024);
+            assert_eq!(
+                limits.snapshot().unwrap().notices[0].required_memory_bytes,
+                1664 * 1024 * 1024
+            );
+            drop(request);
+            assert_eq!(limits.snapshot().unwrap().reserved_bytes, 0);
+        }
+        for (result, count) in [
+            (libc::KERN_SUCCESS, 0),
+            (libc::KERN_SUCCESS, 2),
+            (libc::KERN_FAILURE, 38),
+        ] {
+            assert!(mac_status_from_statistics(total, &statistics, result, count, 4096).is_none());
+        }
+        statistics.free_count = 0;
+        statistics.inactive_count = 0;
+        let memory =
+            mac_status_from_statistics(total, &statistics, libc::KERN_SUCCESS, 38, 4096).unwrap();
+        let limits = RequestLimits::new(
+            RequestLimitsConfig::default(),
+            move || Some(memory),
+            || 0,
+            "mac-pressure",
+        )
+        .unwrap();
+        let error = limits
+            .request(TransportKind::Http)
+            .ensure(137_177_159)
+            .unwrap_err();
+        assert_eq!(error.reason, RequestCapacityReason::MemoryLimit);
+        assert_eq!(error.available_bytes, Some(0));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_native_memory_probe_returns_a_valid_measurement() {
+        let memory = system_memory_status().expect("macOS kernel statistics must be readable");
+        assert_eq!(
+            memory.total,
+            Some(mac_total_physical_bytes().unwrap() as usize)
+        );
+        assert!(memory.available <= memory.total.unwrap());
+        eprintln!("native macOS memory: {memory:?}");
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

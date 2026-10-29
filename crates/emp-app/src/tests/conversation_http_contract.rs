@@ -2,6 +2,46 @@
 use super::*;
 
 #[test]
+#[ignore = "native memory smoke: requires at least 1664 MiB available"]
+fn native_memory_large_http_body_reaches_upstream() {
+    let upstream = OneShotUpstream::start(json!({
+        "id": "capacity-fixture", "model": "upstream-model", "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "capacity admitted"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+    }));
+    let (_directory, server) = configured_server(&upstream.base_url());
+    let mut body = br#"{"model":"demo/model","input":"capacity fixture","stream":false}"#.to_vec();
+    // Valid trailing JSON whitespace exercises the reported wire size without a large model prompt.
+    body.resize(137_177_159, b' ');
+    let mut connection =
+        open_post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
+    let response = complete_response(&mut connection);
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.contains("capacity admitted"), "{response}");
+    let (path, _, forwarded) = upstream.observed();
+    assert_eq!(path, "/v1/chat/completions");
+    assert!(forwarded.to_string().contains("capacity fixture"));
+    assert!(forwarded.to_string().len() < 4096);
+    let limits = Arc::clone(&server.state.backend.transport.request_limits);
+    drop(connection);
+    drop(server);
+    let snapshot = limits.snapshot().unwrap();
+    assert_eq!(snapshot.reserved_bytes, 0);
+    let growth = snapshot
+        .notices
+        .iter()
+        .find(|notice| notice.requested_bytes == body.len())
+        .unwrap();
+    assert_eq!(growth.kind, "expanded");
+    assert_eq!(growth.required_memory_bytes, 1664 * 1024 * 1024);
+    assert!(growth.available_bytes.unwrap() >= growth.required_memory_bytes);
+    eprintln!(
+        "137177159-byte HTTP request reached the fake upstream; memory: {:?}; reservation released",
+        growth.available_bytes
+    );
+}
+
+#[test]
 fn complete_chat_request_crosses_the_real_server_boundary() {
     let upstream = OneShotUpstream::start(json!({
         "id": "chat_upstream", "model": "upstream-model",
