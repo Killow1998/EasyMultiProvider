@@ -99,6 +99,11 @@ fn rejected_commands_do_not_claim_side_effects_or_expose_input() {
             400,
         ),
         (
+            "/api/accounts/import",
+            br#"{"auth_json":"private-credential","name":"private-account"}"#.as_slice(),
+            400,
+        ),
+        (
             "/api/providers/discover",
             br#"{"provider":"private-provider"}"#.as_slice(),
             400,
@@ -140,7 +145,19 @@ fn rejected_commands_do_not_claim_side_effects_or_expose_input() {
             assert!(stages.is_empty());
         }
     }
-    let text = serde_json::to_string(&journal(root.path())).unwrap();
+    let records = journal(root.path());
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| {
+                record["event"] == "operation_finished"
+                    && record["fields"]["operation"] == "account_import"
+                    && record["fields"]["outcome"] == "failed"
+            })
+            .count(),
+        2
+    );
+    let text = serde_json::to_string(&records).unwrap();
     for private in ["private-credential", "private-account", "private-provider"] {
         assert!(!text.contains(private), "journal disclosed {private}");
     }

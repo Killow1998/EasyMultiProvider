@@ -108,18 +108,18 @@ pub(crate) fn import_account_state(
     state: &ServerState,
     body: &Value,
 ) -> Result<Value, String> {
-    let ResolvedImport {
-        metadata,
-        auth,
-        account_id,
-        identity_only,
-    } = resolve(state, body)?;
-    let account_id = account_id.as_str();
     crate::services::observation::operation::observe(
         &state.backend.diagnostics,
         request_id,
         "account_import",
         |receipt| {
+            let ResolvedImport {
+                metadata,
+                auth,
+                account_id,
+                identity_only,
+            } = resolve(state, body)?;
+            let account_id = account_id.as_str();
             // Serialize credential writes with quota refresh and token rotation.
             receipt.subject(account_id);
             let refresh_lock = quota_refresh_lock(state, account_id)
