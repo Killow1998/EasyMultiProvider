@@ -57,20 +57,12 @@ pub(crate) fn execute(
                 .configuration
                 .read()
                 .map_err(|_| "login_storage_failed")?;
-            let existing = config["accounts"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find_map(|account| {
-                    let path = account["auth_file"].as_str()?;
-                    let old = state
-                        .backend
-                        .configuration
-                        .vault
-                        .read_encrypted_json(std::path::Path::new(path))
-                        .ok()?;
-                    emp_state::same_account_auth(&old, &auth).then(|| account.clone())
-                });
+            let existing = crate::services::accounts::matching_account(
+                &config,
+                &state.backend.configuration.vault,
+                &auth,
+            )
+            .cloned();
             drop(config);
             let mut imported = existing.unwrap_or_else(|| json!({"name":"Native"}));
             imported["auth_json"] = auth.clone();
@@ -87,14 +79,7 @@ pub(crate) fn execute(
             || (manager.restore().is_ok_and(|result| result.ok())
                 && crate::services::integration::enable::apply(state)
                     .is_ok_and(|result| result.ok()));
-        crate::services::runtime::mark_active_pending(
-            state,
-            "Codex login changed; restart Codex Runtime",
-        );
-        state
-            .backend
-            .management_events
-            .publish(crate::services::management_events::Change::Integration);
+        native_login_changed(state);
         return Ok(
             json!({"status":"completed", "restart_required":true, "integration_updated":integration_updated}),
         );
@@ -179,14 +164,7 @@ pub(crate) fn execute(
                 {
                     let _ = crate::services::integration::enable::apply(state);
                 }
-                crate::services::runtime::mark_active_pending(
-                    state,
-                    "Codex login changed; restart Codex Runtime",
-                );
-                state
-                    .backend
-                    .management_events
-                    .publish(crate::services::management_events::Change::Integration);
+                native_login_changed(state);
                 Ok(())
             });
             login.pending = None;
@@ -206,6 +184,17 @@ pub(crate) fn execute(
         },
         |pending| pending.helper.snapshot(),
     ))
+}
+
+fn native_login_changed(state: &ServerState) {
+    crate::services::runtime::mark_active_pending(
+        state,
+        "Codex login changed; restart Codex Runtime",
+    );
+    state
+        .backend
+        .management_events
+        .publish(crate::services::management_events::Change::Integration);
 }
 
 #[cfg(all(test, unix))]

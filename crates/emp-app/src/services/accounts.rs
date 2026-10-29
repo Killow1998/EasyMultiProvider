@@ -8,15 +8,13 @@ use crate::http::auth::MAX_NATIVE_AUTH_BYTES;
 use emp_codex::account_auth_headers;
 use emp_codex::quota::QuotaError;
 mod delete;
-mod import_identity;
+mod import;
 pub(crate) use delete::delete_account_state;
-use emp_state::FileTransaction;
 use emp_state::VaultStore;
 use emp_state::duplicate_account_status;
-use emp_state::normalize_account;
-use emp_state::normalize_configuration;
 use emp_state::public_configuration_with_file_status;
 use emp_state::validate_auth_json;
+pub(crate) use import::{import_account_state, matching_account};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -35,12 +33,8 @@ pub(crate) fn account_catalog_headers(
 }
 
 pub(crate) fn regular_file(path: &Path) -> bool {
-    fs_metadata(path)
-        .is_some_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
-}
-
-fn fs_metadata(path: &Path) -> Option<std::fs::Metadata> {
-    std::fs::symlink_metadata(path).ok()
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
 }
 
 pub(crate) fn native_account_snapshot(state: &ServerState, config: &Value) -> Value {
@@ -129,187 +123,6 @@ pub(crate) fn native_subscription_headers(path: &Path) -> Option<BTreeMap<String
         .and_then(|auth| account_auth_headers(&auth))
 }
 
-pub(crate) fn import_account_state(
-    request_id: Option<&str>,
-    state: &ServerState,
-    body: &Value,
-) -> Result<Value, String> {
-    let identity_only = body.get("id").is_none();
-    let resolved = import_identity::resolve(state, body)?;
-    let body = &resolved;
-    crate::services::observation::operation::observe(
-        &state.backend.diagnostics,
-        request_id,
-        "account_import",
-        |receipt| {
-            let metadata = body
-                .as_object()
-                .ok_or_else(|| "account import body must be an object".to_owned())?;
-            let auth = metadata
-                .get("auth_json")
-                .ok_or_else(|| "auth_json must be a JSON object".to_owned())?;
-            let auth = validate_auth_json(auth).map_err(|error| error.to_string())?;
-            let account_id = metadata
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "account.id must be a safe single path segment".to_owned())?;
-            // Quota refresh and rotated-credential flushes save credentials under
-            // this lock; replacing them outside it could let an older rotated copy
-            // overwrite the imported credential.
-            receipt.subject(account_id);
-            let refresh_lock = quota_refresh_lock(state, account_id)
-                .ok_or_else(|| "internal server error".to_owned())?;
-            let _refresh_guard = refresh_lock
-                .lock()
-                .map_err(|_| "internal server error".to_owned())?;
-            let configured = |config: &Value| {
-                config
-                    .get("accounts")
-                    .and_then(Value::as_array)
-                    .is_some_and(|accounts| {
-                        accounts
-                            .iter()
-                            .any(|item| item.get("id").and_then(Value::as_str) == Some(account_id))
-                    })
-            };
-            // Validates the import against `current` and builds the configuration to
-            // store.
-            let prepare = |current: &Value| -> Result<(PathBuf, Value), String> {
-                if identity_only
-                    && let Some(existing) = current["accounts"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .find(|record| record["id"] == account_id)
-                {
-                    let same = existing["auth_file"]
-                        .as_str()
-                        .and_then(|path| {
-                            state
-                                .backend
-                                .configuration
-                                .vault
-                                .read_encrypted_json(Path::new(path))
-                                .ok()
-                        })
-                        .is_some_and(|old| emp_state::same_account_auth(&old, &auth));
-                    if !same {
-                        return Err(
-                            "account identity changed during import; please import again".into(),
-                        );
-                    }
-                }
-                let auth_path = emp_state::account_auth_path(
-                    current,
-                    account_id,
-                    &state.backend.configuration.config_path,
-                )
-                .map_err(|error| error.to_string())?;
-                let raw = serde_json::json!({
-                    "id":metadata.get("id").cloned().unwrap_or(Value::Null),
-                    "name":metadata.get("name").cloned().unwrap_or_else(|| Value::String(account_id.to_owned())),
-                    "prefix":metadata.get("prefix").cloned().unwrap_or(Value::Null),
-                    "auth_file":auth_path.to_string_lossy(),
-                    "credential_status":"unknown",
-                    "enabled":metadata.get("enabled").cloned().unwrap_or(Value::Bool(true)),
-                    "hidden_models":metadata.get("hidden_models").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
-                    "model_context_windows":metadata.get("model_context_windows").cloned().unwrap_or_else(|| Value::Object(serde_json::Map::new())),
-                });
-                let account = normalize_account(&raw).map_err(|error| error.to_string())?;
-                let prefix = account
-                    .get("prefix")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let existing = current
-                    .get("accounts")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                if existing.iter().any(|item| {
-                    item.get("id").and_then(Value::as_str) != Some(account_id)
-                        && item.get("prefix").and_then(Value::as_str) == Some(prefix)
-                }) {
-                    return Err(format!("account prefix is already in use: {prefix}"));
-                }
-                let mut accounts = existing
-                    .into_iter()
-                    .filter(|item| item.get("id").and_then(Value::as_str) != Some(account_id))
-                    .collect::<Vec<_>>();
-                accounts.push(account);
-                let mut updated = current.clone();
-                updated["accounts"] = Value::Array(accounts);
-                let updated =
-                    normalize_configuration(Some(&updated)).map_err(|error| error.to_string())?;
-                Ok((auth_path, updated))
-            };
-            // Held from reading the configuration to storing the result, like every
-            // other configuration writer, so a concurrent writer's change is never
-            // overwritten with this older copy. Validation, settling legacy history
-            // and the commit all happen under it, so a request rejected by
-            // validation never settles history.
-            let mut config = state
-                .backend
-                .configuration
-                .edit()
-                .map_err(|_| "internal server error".to_owned())?;
-            let (auth_path, updated) = prepare(&config)?;
-            if configured(&config) {
-                // The id is about to name new credentials: its legacy rows must be
-                // attributed with the credentials that recorded them, or dropped.
-                receipt
-                    .step("settle_history", || {
-                        crate::services::quota::settle_legacy_quota_history(
-                            state, &config, account_id,
-                        )
-                    })
-                    .map_err(|_| {
-                        "quota history is unavailable; the account was not replaced".to_owned()
-                    })?;
-            }
-            receipt.step("commit_account_and_configuration", || {
-                let config_toml = auth_path
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .join("config.toml");
-                let mut transaction = FileTransaction::new();
-                transaction
-                    .remember(&auth_path)
-                    .map_err(|error| error.to_string())?;
-                transaction
-                    .remember(&config_toml)
-                    .map_err(|error| error.to_string())?;
-                state
-                    .backend
-                    .configuration
-                    .vault
-                    .write_encrypted_json(&auth_path, &auth)
-                    .map_err(|error| error.to_string())?;
-                emp_state::atomic_write_private_state(
-                    &config_toml,
-                    b"cli_auth_credentials_store = \"file\"\n",
-                )
-                .map_err(|error| error.to_string())?;
-                config
-                    .commit_files(&updated, transaction)
-                    .map_err(|error| error.to_string())
-            })?;
-            receipt.check("account_and_configuration_committed", Some(true));
-            forget_pending_rotation(state, &auth_path);
-            if let Ok(mut cancellations) = state.backend.accounts.quota_refresh_cancellations.lock()
-            {
-                cancellations.insert(account_id.to_owned(), Arc::new(AtomicBool::new(false)));
-            }
-            state.catalog_refresh.account_changed(account_id);
-            drop(config);
-            notify_quota_update(state, account_id, None);
-            receipt.step("read_account_result", || {
-                account_public_snapshot(state, account_id)
-                    .ok_or_else(|| "account import failed".to_owned())
-            })
-        },
-    )
-}
-
 /// Import an already decrypted bundle under the account and configuration
 /// ownership rules. HTTP callers do not acquire locks or publish snapshots.
 pub(crate) fn import_account_bundle(
@@ -321,13 +134,8 @@ pub(crate) fn import_account_bundle(
     replacing_account_credentials(state, |config| config.import_migration(decrypted))
 }
 
-/// Run `replace`, which may rewrite configured accounts' stored credentials
-/// (migration import), under every configured account's refresh lock and
-/// the configuration lock. `replace` edits the configuration in place, so
-/// nothing another writer stored meanwhile is lost, and no account it sees
-/// is unlocked. Rotated credentials whose stored file it rewrote are
-/// dropped: the replacement is the user's explicit choice, and a flush must
-/// not overwrite it later.
+/// Hold account refresh locks before the configuration lock, then discard
+/// pending rotations for credentials replaced by migration.
 pub(super) fn replacing_account_credentials<T>(
     state: &ServerState,
     replace: impl FnOnce(&mut super::configuration::ConfigurationEdit<'_>) -> T,

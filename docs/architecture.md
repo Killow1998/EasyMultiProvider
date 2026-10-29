@@ -728,6 +728,14 @@ device-code job is pending; cancel it before changing destination. The auth.json
 form always imports as Other. Both import paths refresh the shared catalog.
 EMP does not stop an active runtime.
 
+Native-to-local-key conversion uses the same account matching as subscription
+import. Keeping an existing Other account retains its name and model settings;
+removing Native does not remove Other accounts. `services/accounts/import.rs`
+resolves each import into validated credentials, an account ID and metadata,
+then owns the refresh lock and configuration/file transaction. Storage does not
+repeat credential validation. Native sign-in changes share the runtime restart
+notification without changing integration or quota-update ordering.
+
 LAN migration is a transport for the existing encrypted `.emp` package and
 session-bound import preview. Its entry reuses the Add Service choice cards for
 Import, Export and Tunnel. Import opens a package before using the same service

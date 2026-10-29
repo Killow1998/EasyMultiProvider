@@ -26,6 +26,8 @@ def main():
             original = {'tokens': {'access_token': 'fixture-native-token', 'account_id': 'fixture-native'}}
             (home / 'auth.json').write_text(json.dumps(original))
             fixture = {'auto_enable_on_start': False,
+                       'native_hidden_models': ['fixture-hidden'],
+                       'native_model_context_windows': {'fixture-native': 64000},
                        'providers': [{'id': 'fixture', 'name': 'Fixture API', 'protocol': 'responses',
                            'base_url': 'http://127.0.0.1:9/v1', 'auth_mode': 'api_key', 'api_key': 'fixture'}],
                        'models': [{'id': 'fixture/model', 'provider': 'fixture', 'upstream_id': 'fixture'}]}
@@ -42,7 +44,9 @@ def main():
 
             if scenario != 'keep-new':
                 other = original if scenario == 'keep-existing' else {'tokens': {'access_token': 'other-token', 'account_id': 'other'}}
-                call('/api/accounts/import', {'name': 'Existing Other', 'auth_json': other})
+                account = call('/api/accounts/import', {'name': 'Existing Other', 'auth_json': other})['account']
+                call('/api/accounts/import', {**account, 'auth_json': other, 'hidden_models': ['other-hidden'],
+                     'model_context_windows': {'other-model': 96000}, 'enabled': False})
             before = call('/api/config')['accounts']
             call('/api/integration/enable', {'confirm_reload': True})
             browser.navigate(url)
@@ -79,7 +83,11 @@ def main():
             after = call('/api/config')['accounts']
             assert len(after) == (1 if scenario == 'keep-new' else len(before)), (scenario, before, after)
             if before:
-                assert after[0]['id'] == before[0]['id'] and after[0]['name'] == 'Existing Other'
+                for field in ('id', 'name', 'prefix', 'enabled', 'hidden_models', 'model_context_windows'):
+                    assert after[0][field] == before[0][field], (scenario, field)
+            else:
+                assert after[0]['hidden_models'] == fixture['native_hidden_models']
+                assert after[0]['model_context_windows'] == fixture['native_model_context_windows']
             assert call('/api/integration')['configuration']['state'] == 'emp_applied'
             wait_for(lambda: browser.execute('return !!window.fixtureSwitchResult;'))
             result = browser.execute('return window.fixtureSwitchResult;')
