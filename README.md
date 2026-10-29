@@ -66,6 +66,10 @@ subscription** with an official OpenAI device code. Successful sign-in replaces
 the local key; restart Codex Runtime afterward. Removing the key restores the
 native connection while EMP keeps running.
 
+To switch an existing Native subscription to a local key, open **Native → Account
+info → Switch to EMP local key**. Keep the subscription as an Other account or
+remove the current Native sign-in, then restart Codex Runtime.
+
 If saved settings or their encryption key cannot be opened, EMP shows a recovery
 page with **Clear old settings and set up again** and **Quit EMP**.
 Clearing requires confirmation and creates new settings and a new master key;

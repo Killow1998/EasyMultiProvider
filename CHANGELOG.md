@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.19 (2026-10-29)
+
+### 中文
+
+- 支持将 Native 订阅切换为 EMP 本地 Key，可选择保留为 Other 账号或移除当前登录；保留已有 Other 账号的名称和模型设置，完成后提示重启 Codex Runtime。
+- 更新全部 11 项使用教程。隧道迁移在同一画面展示发送端和接收端；教程弹窗缩放动图，左侧目录独立滚动，并可在新窗口查看大图。
+- 精简账号导入与登录流程：统一账号识别，凭据在导入入口校验后直接用于保存，移除重复封装和说明，独立管理导入事务。
+
+### English
+
+- Switch a Native subscription to an EMP local key, either keeping the subscription as an Other account or removing the current login. Preserve an existing Other account's name and model settings, and prompt for a Codex Runtime restart.
+- Refresh all 11 tutorials. Show tunnel sending and receiving side by side; fit animations within the tutorial dialog, scroll the directory separately, and open a larger view in a new window.
+- Simplify account import and sign-in: share account matching, validate credentials once at the import boundary, remove redundant wrappers and comments, and keep the import transaction in one module.
+
 ## 0.13.18 (2026-10-28)
 
 ### 中文
