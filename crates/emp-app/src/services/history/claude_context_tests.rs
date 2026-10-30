@@ -51,7 +51,7 @@ fn oversized_claude_history_can_reach_compaction_before_cli_input_validation() {
     let assessment = assess_destination_context(&candidate, &body)
         .unwrap_or_else(|_| panic!("oversized history must be assessed before it is sent to CLI"));
     assert!(assessment.blocked());
-    assert_eq!(assessment.input_estimate, None);
+    assert!(assessment.input_estimate.unwrap() > assessment.safe_input_limit.unwrap());
     assert_eq!(assessment.output_reserve, Some(4096));
     assert_eq!(assessment.safe_input_limit, Some(995648));
 
@@ -61,7 +61,6 @@ fn oversized_claude_history_can_reach_compaction_before_cli_input_validation() {
         candidate.model.value(),
         assessment.safe_input_limit.unwrap(),
         |summary| {
-            // Each real summary inference still has to pass the bounded CLI projection.
             crate::services::claude_cli::context_estimation_payload(summary)
                 .expect("summary fits the CLI adapter budget");
             summaries += 1;
@@ -107,19 +106,6 @@ fn oversized_active_input_and_fixed_instructions_are_not_silently_discarded() {
             |_| panic!("fixed instructions and the active turn cannot be summarized away"),
         );
         assert_eq!(result, Err("compaction_unit_too_large"));
-    }
-}
-
-#[test]
-fn oversized_claude_input_without_a_context_budget_keeps_its_local_limit_error() {
-    let body = json!({"input":"x".repeat(11 * 1024 * 1024)});
-    for context_window in [0, 256] {
-        assert!(matches!(
-            assess_destination_context(&route(context_window), &body),
-            Err(DestinationPrepareError::ClaudeCli(
-                crate::services::claude_cli::ClaudeCliError::Failure("claude_cli_input_too_large")
-            ))
-        ));
     }
 }
 

@@ -12,7 +12,7 @@ use std::net::{TcpListener, TcpStream};
 
 use std::time::{Duration, Instant};
 
-const MAX_REQUEST_BYTES: usize = 12 * 1024 * 1024;
+const MAX_REQUEST_BYTES: usize = emp_transport::MAX_EXPANDED_REQUEST_BYTES;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const IO_DEADLINE: Duration = Duration::from_secs(10);
 

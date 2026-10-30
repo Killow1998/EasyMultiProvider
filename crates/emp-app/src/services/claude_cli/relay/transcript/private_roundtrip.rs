@@ -19,11 +19,11 @@ fn private_cpa_transcript_roundtrip() {
     );
     let mut input = Vec::new();
     std::io::stdin()
-        .take(12 * 1024 * 1024 + 1)
+        .take(emp_transport::MAX_EXPANDED_REQUEST_BYTES as u64 + 1)
         .read_to_end(&mut input)
         .unwrap();
     assert!(
-        input.len() <= 12 * 1024 * 1024,
+        input.len() <= emp_transport::MAX_EXPANDED_REQUEST_BYTES,
         "private input exceeds bound"
     );
     let body: Value = serde_json::from_slice(&input).expect("valid private input required");
@@ -102,7 +102,7 @@ fn private_cpa_transcript_roundtrip() {
                     stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").unwrap(); continue;
                 }
                 let length: usize = head.header("content-length").ok_or("length required")?.parse().map_err(|_| "length invalid")?;
-                if length > 12 * 1024 * 1024 || raw.body_prefix.len() > length { return Err("wire bound"); }
+                if length > emp_transport::MAX_EXPANDED_REQUEST_BYTES || raw.body_prefix.len() > length { return Err("wire bound"); }
                 let mut bytes = raw.body_prefix;
                 let remaining = length - bytes.len();
                 (&mut stream).take(remaining as u64).read_to_end(&mut bytes).map_err(|_| "wire read failed")?;

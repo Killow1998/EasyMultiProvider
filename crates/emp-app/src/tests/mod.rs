@@ -372,10 +372,7 @@ fn receive_upstream_request_from_head(
                 .get("content-encoding")
                 .map(String::as_str)
                 .unwrap_or(""),
-            // Claude CPA source images retain original bytes rather than
-            // relying on the CLI's smaller lossy encoding. This is the fake
-            // upstream's capture bound, not a production limit or oracle.
-            12 * 1024 * 1024,
+            emp_transport::MAX_EXPANDED_REQUEST_BYTES,
             None,
         )
         .expect("decode upstream request");

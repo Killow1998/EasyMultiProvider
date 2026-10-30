@@ -182,11 +182,24 @@ fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static st
         Some(Value::Array(_) | Value::Object(_))
     ) {
         let stdin = projection::transcript(&transcript)?;
+        // Claude CLI caps plain stdin at 10 MiB; JSONL has no such text cap.
+        let (payload, input_format) = if stdin.len() > 10 * 1024 * 1024 {
+            let content = std::str::from_utf8(&stdin).expect("serialized transcript");
+            (
+                serde_json::to_vec(
+                    &json!({"type":"user","message":{"role":"user","content":content}}),
+                )
+                .expect("JSONL input"),
+                InputFormat::StreamJson,
+            )
+        } else {
+            (stdin.clone(), InputFormat::Text)
+        };
         return Ok(PreparedInput {
             system_prompt,
             expected_user_content: ExpectedUserContent::Text(stdin.clone()),
-            stdin,
-            input_format: InputFormat::Text,
+            stdin: payload,
+            input_format,
         });
     }
     let input = transcript.get("input");
