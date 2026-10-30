@@ -153,7 +153,7 @@ fn relay_rejects_unknown_or_malformed_cli_cache_markers() {
 
 #[test]
 fn relay_accepts_only_the_exact_single_transcript_and_structured_carrier() {
-    let transcript = br#"{"model":"m","input":"hello","stream":false}"#;
+    let transcript = r#"{"model":"m","input":"hello","stream":false}"#;
     let body = serde_json::json!({
         "stream":true,
         "messages":[{"role":"user","content":[{"type":"text","text":"{\"model\":\"m\",\"input\":\"hello\",\"stream\":false}"}]}],
@@ -161,14 +161,14 @@ fn relay_accepts_only_the_exact_single_transcript_and_structured_carrier() {
     });
     assert!(messages_match(
         &body,
-        &ExpectedUserContent::Text(transcript.to_vec())
+        &ExpectedUserContent::Text(transcript.to_owned())
     ));
     assert!(has_only_structured_output_carrier(&body));
     let mut changed = body.clone();
     changed["messages"][0]["content"][0]["text"] = "different".into();
     assert!(!messages_match(
         &changed,
-        &ExpectedUserContent::Text(transcript.to_vec())
+        &ExpectedUserContent::Text(transcript.to_owned())
     ));
     changed = body.clone();
     changed["tools"]
@@ -189,7 +189,7 @@ fn cli_date_reminder_is_preserved_without_weakening_transcript_matching() {
         let image = serde_json::json!({"type":"image","source":{"type":"url","url":"https://images.invalid/fixture.png"}});
         for content in [vec![text.clone()], vec![text.clone(), image]] {
             let expected = if content.len() == 1 {
-                ExpectedUserContent::Text(b"exact transcript".to_vec())
+                ExpectedUserContent::Text("exact transcript".to_owned())
             } else {
                 ExpectedUserContent::Blocks(content.clone())
             };
@@ -229,7 +229,7 @@ fn cli_date_reminder_is_preserved_without_weakening_transcript_matching() {
 
 #[test]
 fn transcript_validation_distinguishes_system_shape_from_content_mismatch() {
-    let expected = ExpectedUserContent::Text(b"synthetic transcript".to_vec());
+    let expected = ExpectedUserContent::Text("synthetic transcript".to_owned());
     let valid = serde_json::json!({
         "stream":true,
         "messages":[{"role":"system","content":"date reminder"},
@@ -436,7 +436,7 @@ fn normalize_cli_system_messages_preserves_the_request_effort_duplicate() {
 
 #[test]
 fn empty_cli_system_content_is_allowed_only_for_matching_effort_metadata() {
-    let expected = ExpectedUserContent::Text(b"exact transcript".to_vec());
+    let expected = ExpectedUserContent::Text("exact transcript".to_owned());
     let mut body = serde_json::json!({
         "stream":true,
         "output_config":{"effort":"low"},

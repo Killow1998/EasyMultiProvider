@@ -707,7 +707,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "emp-app"
-version = "0.13.19"
+version = "0.13.20"
 dependencies = [
  "base64 0.22.1",
  "emp-codex",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "emp-codex"
-version = "0.13.19"
+version = "0.13.20"
 dependencies = [
  "base64 0.22.1",
  "emp-history",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "emp-core"
-version = "0.13.19"
+version = "0.13.20"
 dependencies = [
  "serde",
  "serde_json",
@@ -777,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "emp-history"
-version = "0.13.19"
+version = "0.13.20"
 dependencies = [
  "base64 0.22.1",
  "emp-core",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "emp-integration"
-version = "0.13.19"
+version = "0.13.20"
 dependencies = [
  "emp-state",
  "getrandom 0.2.17",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "emp-protocol"
-version = "0.13.19"
+version = "0.13.20"
 dependencies = [
  "base64 0.22.1",
  "regex",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "emp-router"
-version = "0.13.19"
+version = "0.13.20"
 dependencies = [
  "emp-core",
  "emp-protocol",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "emp-state"
-version = "0.13.19"
+version = "0.13.20"
 dependencies = [
  "atomic-write-file",
  "base64 0.22.1",
@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "emp-transport"
-version = "0.13.19"
+version = "0.13.20"
 dependencies = [
  "base64 0.22.1",
  "brotli",
@@ -3400,7 +3400,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.13.19"
+version = "0.13.20"
 dependencies = [
  "emp-state",
  "flate2",

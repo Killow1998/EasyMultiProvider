@@ -68,7 +68,7 @@ fn messages_match(body: &Value, expected: &ExpectedUserContent) -> bool {
                     .filter(|_| parts[0].get("type").and_then(Value::as_str) == Some("text")),
                 _ => None,
             };
-            text.is_some_and(|text| text.as_bytes() == transcript)
+            text == Some(transcript.as_str())
         }
         ExpectedUserContent::Blocks(expected) => {
             let Some(content) = message.get("content").and_then(Value::as_array) else {

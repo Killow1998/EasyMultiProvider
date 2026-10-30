@@ -61,7 +61,10 @@ fn text_input_keeps_the_existing_text_carrier() {
     let body = json!({"model":"m","input":"hello","stream":true});
     let prepared = prepare(&body).expect("text input");
     assert!(matches!(prepared.input_format, InputFormat::Text));
-    assert_eq!(prepared.stdin, projection::transcript(&body).unwrap());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&prepared.stdin).unwrap(),
+        json!({"model":"m","input":"hello","stream":false})
+    );
     assert!(matches!(
         prepared.expected_user_content,
         ExpectedUserContent::Text(_)

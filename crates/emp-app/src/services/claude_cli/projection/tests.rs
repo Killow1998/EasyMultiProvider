@@ -18,8 +18,7 @@ fn removes_only_responses_reasoning_items_and_preserves_user_fields() {
         ],
         "tools":[{"type":"function","name":"schema","parameters":{"properties":{"reasoning":{"type":"string"},"encrypted_content":{"type":"string"}}}}]
     });
-    let encoded = transcript(&source).expect("transcript");
-    let value: Value = serde_json::from_slice(&encoded).expect("JSON");
+    let value = normalized_transcript(&source);
     assert_eq!(value["reasoning"]["effort"], "high");
     assert_eq!(value["reasoning"]["encrypted_content"], "ordinary setting");
     assert_eq!(value["input"].as_array().unwrap().len(), 3);
@@ -52,7 +51,10 @@ fn rejects_typed_multimodal_input_but_keeps_schema_and_tool_result_json() {
         ]}],
         "tools":[{"type":"function","name":"file","parameters":{"properties":{"image":{"type":"string"},"audio":{"type":"string"}}}}]
     });
-    assert_eq!(transcript(&unsupported), Err("unsupported_input_modality"));
+    assert_eq!(
+        text_transcript(&unsupported),
+        Err("unsupported_input_modality")
+    );
 
     let text_only = json!({
         "input":[
@@ -61,8 +63,8 @@ fn rejects_typed_multimodal_input_but_keeps_schema_and_tool_result_json() {
         ],
         "tools":[{"type":"function","name":"schema","parameters":{"properties":{"input_file":{"type":"string"}}}}]
     });
-    let encoded = transcript(&text_only).expect("ordinary JSON is preserved");
-    let projected: Value = serde_json::from_slice(&encoded).expect("JSON transcript");
+    let encoded = text_transcript(&text_only).expect("ordinary JSON is preserved");
+    let projected: Value = serde_json::from_str(&encoded).expect("JSON transcript");
     assert_eq!(projected["input"][0]["output"]["type"], "input_image");
     assert_eq!(
         projected["tools"][0]["parameters"]["properties"]["input_file"]["type"],
@@ -75,7 +77,7 @@ fn rejects_typed_multimodal_input_but_keeps_schema_and_tool_result_json() {
         ]}]
     });
     assert_eq!(
-        transcript(&role_only_message),
+        text_transcript(&role_only_message),
         Err("unsupported_input_modality")
     );
 
@@ -85,7 +87,7 @@ fn rejects_typed_multimodal_input_but_keeps_schema_and_tool_result_json() {
         ]}]
     });
     assert_eq!(
-        transcript(&tool_output_content),
+        text_transcript(&tool_output_content),
         Err("unsupported_input_modality")
     );
 }

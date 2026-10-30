@@ -166,6 +166,24 @@ def main():
             assert browser.execute('return document.querySelector("#account_usage footer").textContent.includes("3 / 5") && document.querySelectorAll("#modal_backdrop [data-ui-action=account-remove]").length===1;')
         count(12)
         checks.append('Shipped EN/ZH summaries merge repeated models across tiers, preserve missing versus zero prices and escaped names, reuse cached totals and expose one removal action')
+        browser.execute('closeModal();state.native_account={id:"@native",native:true,auth_mode:"subscription",credential_set:true,quota:{rate_limits:{primary:{used_percent:24,window_minutes:300},secondary:{used_percent:90,window_minutes:10080}}}};quotaDisplay.set("remaining");renderServices();')
+        browser.execute('openSettings();document.querySelector("[data-presentation-style=bar]").click();closeModal();')
+        meter = '[data-service="account:@native"]'
+        assert browser.execute('return document.querySelector(arguments[0]+" [aria-valuenow]").getAttribute("aria-valuenow");', meter) == '76'
+        browser.execute('openSettings();document.querySelector("[data-ui-action=quota-display][data-mode=used]").click();closeModal();')
+        assert browser.execute('return localStorage.getItem("emp.quotaDisplay");') == 'used'
+        assert browser.execute('return document.querySelector(arguments[0]+" [aria-valuenow]").getAttribute("aria-valuenow");', meter) == '24'
+        assert browser.execute('return !!document.querySelector(arguments[0]+" .quota-meter.is-low") && state.native_account.quota.rate_limits.primary.used_percent===24;', meter)
+        for language, label in [('en','EMP models loaded'),('zh-CN','EMP 模型已加载')]:
+            browser.execute('setLanguage(arguments[0]);renderIntegration({configuration:{state:"emp_applied"},runtime:{state:"catalog_loaded"},codex_compatibility:{installed:"0.166.0"}});applyTranslations();', language)
+            assert browser.execute('return document.getElementById("integration_badge").textContent;') == label
+            assert browser.execute('return document.getElementById("codex_version").textContent;') == 'Codex 0.166.0'
+        browser.execute('state.native_account.quota=null;state.native_account.quota_pending=true;renderServices();')
+        assert browser.execute('return document.querySelectorAll(arguments[0]+" [aria-valuenow]").length;', meter) == 0
+        browser.execute('state.native_account.quota_pending=false;state.native_account.quota={rate_limits:{primary:{usedPercent:60,windowDurationMins:10080,resetsAt:2000000000}}};renderServices();')
+        assert browser.execute('return [...document.querySelectorAll(arguments[0]+" [aria-valuenow]")].map(node=>node.getAttribute("aria-valuenow"));', meter) == ['60']
+        assert browser.execute('return document.querySelectorAll(arguments[0]+" [data-reset-countdown]").length;', meter) == 1
+        checks.append('Display settings change visible quota without mutating usage; pending and weekly-only quotas stay distinct, and EN/ZH refresh retains the integration status')
         errors = [line for line in browser.diagnostics().splitlines() if 'chrome://browser/' not in line]
         assert not errors, errors
         assert upstream.calls == 0

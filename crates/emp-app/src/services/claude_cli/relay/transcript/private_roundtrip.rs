@@ -43,7 +43,7 @@ fn private_cpa_transcript_roundtrip() {
         effort: Some("medium"),
         output_limit: None,
         prompt_file: &prompt,
-        schema: &projection::proposal_schema().unwrap(),
+        schema: &projection::proposal_schema().to_string(),
         input_format: prepared.input_format,
         mode: process::InvocationMode::CpaRelay {
             port,

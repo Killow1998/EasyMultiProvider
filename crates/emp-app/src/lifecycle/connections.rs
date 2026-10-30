@@ -1,7 +1,7 @@
 //! Accept and admit HTTP connections; request handling owns the admitted work.
 
 use crate::app::ServerState;
-use crate::http::routes::handle_connection;
+use crate::http::connection::handle_connection;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

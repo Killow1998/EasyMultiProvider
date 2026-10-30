@@ -1,5 +1,5 @@
 // Run with: node --test crates/emp-app/tests/web_features_contract.cjs
-const {assert, fs, path, vm, web, tr, translate:uiTranslate, esc, deferred, feature} = require('./web_fixture.cjs');
+const {assert, tr, translate:uiTranslate, esc, deferred, feature} = require('./web_fixture.cjs');
 const {test} = require('node:test');
 function sessionFixture(url = 'http://localhost/?bootstrap=once', saved = '') {
   let token = saved;
@@ -136,22 +136,6 @@ test('old bookmarks and page reloads reuse the stored header session', async () 
   await f.client.fetch('/api/config', {headers:{'X-EMP-Session':'caller-token'}});
   assert.equal(f.calls[0].options.headers.get('X-EMP-Session'), 'stored-session');
   assert.equal(f.calls[0].options.credentials, 'omit');
-});
-
-test('settings reuse on-demand recovery without a separate history control', () => {
-  for (const language of ['en', 'zh-CN']) {
-    let html;
-    const settings = feature('settings.js', 'createSettings')({
-      getState:() => ({accounts:[]}), cloneState:() => ({}), persistState() {},
-      openModal:(_title, body) => { html = body; }, $:()=>({querySelector:()=>({})}), esc, t:x => x,
-      tr:uiTranslate(language), quotaDisplay:{mode:() => 'remaining'},
-      help:message => `<button>${esc(message)}</button>`,
-      contextHelp:feature('context-help.js','createContextHelp')({getState:() => ({}),tr:uiTranslate(language)}),
-    });
-    settings.open();
-    assert.doesNotMatch(html, /data-id="encrypted_history_recovery"/);
-    assert.match(html, /data-id="external_collaboration" data-mode="on_demand"/);
-  }
 });
 
 for (const [key, initial] of [['auto_enable_on_start', true], ['external_collaboration', 'off']]) {
@@ -349,83 +333,6 @@ test('closing diagnostics discards in-flight reports without a polling timer', a
 });
 
 // Native browser effects are accepted in E2E; this VM checks page binding order.
-function pageEffectsGlobals() {
-  const element=()=>({dataset:{},style:{setProperty(){},removeProperty(){}},hidden:true,
-    setAttribute(){},append(){},replaceChildren(){},addEventListener(){},matches(){return false;},classList:{toggle(){},contains(){return false;}}});
-  return {matchMedia:()=>({matches:true,addEventListener(){}}),
-    MutationObserver:class{observe(){}},IntersectionObserver:class{observe(){}},
-    ResizeObserver:class{observe(){} disconnect(){}},
-    performance:{now:()=>0},requestAnimationFrame:()=>0,cancelAnimationFrame(){},
-    setInterval:()=>0,clearInterval(){},setTimeout:()=>0,clearTimeout(){},
-    Event:class{}, documentEffects:{hidden:true,documentElement:element(),body:{...element(),append(){}},createElement:element,
-      querySelector:element,querySelectorAll:()=>[],getElementById:element},windowEffects:{dispatchEvent(){}}};
-}
-
-test('the shipped page initializes its bindings and retains translated integration status on refresh', () => {
-  const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
-  const pending = deferred();
-  const nodes = new Map();
-  const node = id => {
-    if (!nodes.has(id)) nodes.set(id, {textContent:'', dataset:{}, addEventListener(){}, matches(){return false;}, childElementCount:1, parentElement:{classList:{contains:()=>true}}, classList:{toggle() {}}});
-    return nodes.get(id);
-  };
-  if (html.match(/<span id="integration_badge"[^>]*>/)?.[0].includes('data-i18n="loading"')) node('integration_badge').dataset.i18n = 'loading';
-  const effects=pageEffectsGlobals();
-  const context = vm.createContext({Headers, URL, Blob, console,...effects,
-    fetch:() => pending.promise,
-    localStorage:{getItem:key => key === 'emp_management_session_v1' ? 'fixture-session' : ''},
-    window:{...effects.windowEffects,location:{href:'http://localhost/'}, addEventListener() {}},
-    document:{...effects.documentEffects,addEventListener() {}, visibilityState:'hidden', getElementById:node,
-      querySelectorAll:selector => selector === '[data-i18n]' ? [...nodes.values()].filter(item => item.dataset.i18n) : []},
-  });
-  for (const script of html.matchAll(/<script(?: src="([^"]+)")?>([\s\S]*?)<\/script>/g)) {
-    const filename = script[1] ? path.basename(script[1]) : 'page.js';
-    const source = script[1] ? fs.readFileSync(path.join(web, filename), 'utf8') : script[2];
-    vm.runInContext(source, context, {filename});
-  }
-  assert.equal(vm.runInContext('typeof openSettings + ":" + typeof openDiagnostics + ":" + typeof callReports.openActivity', context), 'function:function:function');
-  vm.runInContext("renderIntegration({configuration:{state:'emp_applied'},runtime:{state:'catalog_loaded'},codex_compatibility:{installed:'0.162.0'}}); applyTranslations();", context);
-  assert.equal(node('integration_badge').textContent, 'EMP 模型已加载');
-  vm.runInContext("setLanguage('en'); applyTranslations();", context);
-  assert.equal(node('integration_badge').textContent, 'EMP models loaded');
-  assert.equal(node('codex_version').textContent, 'Codex 0.162.0');
-  vm.runInContext("setLanguage('zh-CN'); applyTranslations();", context);
-  assert.equal(node('integration_badge').textContent, 'EMP 模型已加载');
-});
-
-test('quota mode changes bars without changing recorded values', () => {
-  const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
-  const storage = new Map([['emp_management_session_v1','fixture-session']]);
-  const effects=pageEffectsGlobals();
-  const context = vm.createContext({Headers, URL, Blob, console,...effects,
-    fetch:() => new Promise(() => {}),
-    localStorage:{getItem:key => storage.get(key), setItem:(key, value) => storage.set(key,value)},
-    window:{...effects.windowEffects,location:{href:'http://localhost/'}, addEventListener() {}},
-    document:{...effects.documentEffects,addEventListener() {}, visibilityState:'hidden'},
-  });
-  for (const script of html.matchAll(/<script(?: src="([^"]+)")?>([\s\S]*?)<\/script>/g)) {
-    vm.runInContext(script[1] ? fs.readFileSync(path.join(web, path.basename(script[1])), 'utf8') : script[2], context);
-  }
-  const run = source => vm.runInContext(source, context);
-  run(`language='en'; globalThis.account={quota:{rate_limits:{primary:{used_percent:24,window_minutes:300},secondary:{used_percent:90,window_minutes:10080}}}}`);
-  assert.match(run('quotaMetersHtml(account)'), /aria-valuenow="76"/);
-  assert.match(run('quotaMetersHtml(account)'), /5h · Remaining/);
-  run("quotaDisplay.set('used')");
-  assert.equal(storage.get('emp.quotaDisplay'), 'used');
-  assert.match(run('quotaMetersHtml(account)'), /aria-valuenow="24"/);
-  assert.match(run('quotaMetersHtml(account)'), /5h · Used/);
-  assert.match(run('quotaMetersHtml(account)'), /quota-meter is-low/); // 90% used stays red.
-  assert.equal(run('account.quota.rate_limits.primary.used_percent'), 24);
-  assert.doesNotMatch(run('quotaMetersHtml({quota_pending:true})'), /aria-valuenow|233%|100%/);
-  const weeklyOnly = run('quotaMetersHtml({quota:{rate_limits:{primary:{usedPercent:60,windowDurationMins:10080,resetsAt:2000000000}}}})');
-  assert.match(weeklyOnly, /233%/);
-  assert.match(weeklyOnly, /class="quota-reset">1m111s<\/span>/);
-  assert.doesNotMatch(weeklyOnly, /aria-valuenow="233"/);
-  assert.equal((weeklyOnly.match(/data-reset-countdown=/g) || []).length, 1);
-
-});
-
-
 test('usage services display account labels and distinguish unlinked history without exposing fingerprints', () => {
   const usage = feature('usage-data.js', 'createUsageData')({tr, esc, number:String});
   const amount = {model:'model',requests:1,priced_requests:0,input_tokens:10,output_tokens:2,cached_input_tokens:0,cost_nanos:0};
