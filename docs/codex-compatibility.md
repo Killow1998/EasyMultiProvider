@@ -8,6 +8,231 @@ independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 Older series leave routine maintenance; their dated acceptance records remain.
 
+## Automatic effort candidate (2026-10-29 UTC)
+
+The unreleased candidate adds optional per-inference effort selection within one
+user task. It defaults off. Real Codex **0.165.0** with a simulated upstream
+passed Native/imported-subscription × SSE/WebSocket: four cases, 24 total main
+and classifier requests. Each case executes real shell tools and transitions
+Low → Xhigh → Low after a failure and successful repair. Separate contracts
+cover full/delta/replayed history, retry reuse, disabled/unsupported requests,
+invalid-classification fallback and parent-linked usage. The entry point is
+`python3 -m scripts.codex_feature_acceptance --suite adaptive` with the existing
+`--codex`, `--emp`, `--root` and `--output` arguments.
+
+A live pilot used one Native subscription, GPT-6-Astra and a GPT-6-Luna Low
+classifier on six deterministically sampled
+[HumanEval+ Mini v0.1.10](https://github.com/evalplus/humanevalplus_release/releases/tag/v0.1.10)
+tasks (seed 20261029). Each run submits Python to a network-isolated test tool,
+then continues in the same task. The selected tasks contain 81 test cases per
+arm. These are small function tasks, not repository-scale debugging.
+
+| Run | Passed tasks | Mean task time | Total input tokens | Total output tokens |
+| --- | ---: | ---: | ---: | ---: |
+| Fixed Low | 6/6 | 7.25 s | 4,253 | 617 |
+| Fixed Xhigh | 6/6 | 6.97 s | 4,324 | 689 |
+| Initial automatic pilot | 6/6 | 13.22 s | 7,959 | 1,281 |
+| Automatic with constrained JSON, later follow-up | 6/6 | 12.29 s | 8,311 | 866 |
+
+The first three arms were interleaved by task. The final row reran only the
+automatic arm later the same day after replacing plain-text classification with
+a constrained enum. All 12 follow-up decisions selected Low without fallback;
+the initial pilot had one invalid selection and retained Xhigh. Token totals
+include classification; all calls reported usage. Times include classification,
+main inference and local tool execution. Total tokens do not imply equal cost
+across the main and classifier models.
+
+This pilot shows classification overhead outweighing any saving on these small
+tasks. It does not establish a quality or speed benefit on difficult coding work.
+Keep the option off by default. The opt-in live harness is
+[`scripts/adaptive_effort_benchmark.py`](../scripts/adaptive_effort_benchmark.py);
+run `python3 -m scripts.adaptive_effort_benchmark --help` for its inputs.
+The `--allow-live-calls` flag acknowledges subscription usage. Frontend acceptance
+covers Chinese/English at 420/1280 widths, persistence, disabling and call details.
+The candidate has not been published or deployed to the running EMP instance.
+
+### Repository-task pilot (2026-10-29 UTC)
+
+A separate live comparison used the same Native account and GPT-6-Astra, with
+fixed Low, fixed Xhigh, or per-inference GPT-6-Luna Low classification capped at
+Xhigh. All reported execution tiers were `default`. Three selected
+[SWE-bench Lite](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite)
+SymPy cases required inspecting and editing the base repository through shell
+tools. Models received the original issue and base source, without the official
+solution or test patch. Their workspaces had no network access.
+
+| Case and behavior | Fixed Low: seconds / tool calls | Fixed Xhigh: seconds / tool calls | Automatic: seconds / tool calls |
+| --- | ---: | ---: | ---: |
+| 17630: multiplying blocks containing ZeroMatrix loses matrix shape | 71.2 / 8 | 112.9 / 10 | 105.8 / 7 |
+| 21379: substitution involving Piecewise raises PolynomialError | 48.8 / 4 | 128.7 / 8 | 73.6 / 5 |
+| 21627: checking a cosh expression's zero assumption recurses | 82.1 / 8 | 125.7 / 7 | 87.4 / 6 |
+| Mean time / total tool calls | 67.4 / 20 | 122.4 / 25 | 88.9 / 18 |
+
+Each arm passed all three cases and their 140 listed FAIL_TO_PASS/PASS_TO_PASS
+checks. Before model testing, the unmodified repositories failed 2, 1 and 1
+checks respectively; the official fixes passed all checks. A separate final
+grader restored the scoring test files and applied the official test patch.
+Candidate diffs changed production source only. This targeted runner is not the
+official SWE-bench Docker harness, and these three cases are all from one project.
+
+The initial nine runs rotated mode order by case. Case 17630's Xhigh run hit an
+incompatible legacy pytest entrypoint. Its entire three-mode block was repeated
+later with the same explicit instruction to use the validated `run_tests` tool;
+the table uses that complete follow-up block. The initial results remain recorded
+separately. Each retained cell contains one run. Time includes classification,
+main inference and tools, and excludes setup and the independent final grade.
+
+| Retained three-case arm | Input tokens | Output tokens | EMP API-equivalent estimate |
+| --- | ---: | ---: | ---: |
+| Fixed Low | 117,097 | 2,562 | USD 1.2426 |
+| Fixed Xhigh | 320,121 | 6,206 | USD 3.5115 |
+| Automatic, including classification | 171,490 | 3,608 | USD 1.4837 |
+
+Automatic selection chose Medium 12 times and High 9 times, with no fallback.
+Its 21 classifier calls consumed 38,024 tokens and 58.486 seconds, averaging
+2.785 seconds per inference. Selected effort is recorded separately from the
+upstream response's root effort, which remained Xhigh while configuration
+updates changed the requested effort in history. No generated patch failed the
+grading tool before passing; bug reproductions and shell exits are recorded
+separately and are not counted as failed repair cycles.
+
+On these tasks, automatic mode took 27.4% less time than fixed Xhigh but 31.9%
+more than fixed Low. It used fewer tool calls, but classification added waiting.
+The pilot demonstrates per-inference selection, not a success-rate advantage
+over Low or a general coding-performance ranking. Keep the feature off by
+default. All 12 runs, including the excluded initial block, consumed 904,535
+input and 16,978 output tokens; the EMP API-equivalent estimate is USD 9.0483,
+not a cash charge to the subscription. No product code or live EMP setting was
+changed for this stage.
+
+## DeepSWE repository comparison (2026-10-29, 12:55–15:07 UTC)
+
+This later experiment uses two tasks from
+[DeepSWE](https://github.com/datacurve-ai/deep-swe/tree/0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea),
+each repeated three times per mode: **18 completed tasks**. It is separate from
+the earlier HumanEval and SymPy pilots above. The main model is GPT-6-Astra on
+one Native account; automatic mode uses GPT-6-Luna Low, with an Xhigh ceiling
+and Xhigh as the configured fallback. Normal execution receipts report the
+`default` tier. Mode order rotates across repetitions.
+
+The tasks are `csstree-shorthand-expansion-compression` (implement CSS shorthand
+expansion and compression, including layered backgrounds and custom syntax) and
+`anko-typed-variable-bindings` (extend parsing, scopes and assignment-time type
+checks). Their base commits are respectively
+`88e3d965c0b1628642a30a841745b410d6835052` and
+`3f269a72ff69398b1250c584171f32d12c0d8085`.
+
+All modes use one custom Responses HTTP/SSE shell harness through an isolated
+EMP candidate. This is not an official leaderboard run or a timing measurement
+of the full Codex CLI harness. Workspaces have no network; Node 20.20.2 and Go
+1.26.10 are pinned. Models see the original task and base repository, with
+visible tests and their own added tests. The unmodified official verifier runs
+afterward against a fresh base plus the generated patch; hidden tests and the
+reference solution are never supplied to the model. Both pristine baselines
+fail every new check while preserving old checks; both reference patches pass
+everything. The frozen manifest and EMP binary remain unchanged throughout.
+
+| Task | Mode | Fully passing tasks | New checks passed in repeats 1 / 2 / 3 | Mean task seconds | Mean seconds including final grading | Tool calls in repeats 1 / 2 / 3 |
+| --- | --- | ---: | --- | ---: | ---: | --- |
+| CSSTree, 79 new checks | Low | 0/3 | 74 / 73 / 74 | 127.9 | 134.2 | 7 / 6 / 8 |
+| CSSTree, 79 new checks | Xhigh | 3/3 | 79 / 79 / 79 | 907.4 | 913.3 | 23 / 23 / 21 |
+| CSSTree, 79 new checks | Luna automatic | 0/3 | 74 / 74 / 74 | 350.2 | 355.3 | 17 / 18 / 14 |
+| Anko, 9 new test groups | Low | 0/3 | 5 / 5 / 5 | 111.0 | 123.2 | 9 / 9 / 8 |
+| Anko, 9 new test groups | Xhigh | 2/3 | 5 / 9 / 9 | 754.2 | 767.2 | 28 / 21 / 22 |
+| Anko, 9 new test groups | Luna automatic | 0/3 | 5 / 5 / 5 | 196.8 | 209.4 | 9 / 10 / 13 |
+
+Task time includes classification, inference and tool execution, excluding
+dependency preparation and final hidden grading. The same 60-tool and
+90-minute task limits apply to every mode; all completed tasks end naturally.
+Every attempt preserves all **16,715 CSSTree** or **94 Anko** old checks.
+Generated patches change implementation, related tests and documentation, with
+no dependency or verifier edits. Tool failures include exploratory command and
+environment failures; they are not interchangeable with implementation defects.
+
+The failed checks concentrate on specific contracts:
+
+- CSSTree Low and automatic miss the canonical `background-size` initial string
+  `auto auto`, producing the CSS-equivalent `auto`; five assertions cover this
+  same difference and its round trips. Low repeat 2 also emits `list-style`
+  components in a different order from the required canonical order.
+- Anko failures return a non-nil value alongside a correct type-mismatch error.
+  Four new groups enforce nil on these error paths. This is not a failure to
+  reject the invalid assignment. Xhigh repeats 2 and 3 meet this contract.
+
+Across the six completed automatic tasks, 87 classifications choose Medium 51
+times, High 25 and Low 8. The other three decisions fall back to Xhigh: two
+timeouts and one invalid selection. There is no deliberate Xhigh selection.
+These classifications add **219.440 seconds and 165,630 known tokens**, about
+**13.4%** of automatic task time. Automatic averages **273.5 seconds**, versus
+**119.5 Low** and **830.8 Xhigh**: 2.29 times Low and 32.9% of Xhigh, with full
+success **0/6, 0/6 and 5/6**, respectively for automatic, Low and Xhigh.
+
+| Completed-task mode | Known input + output tokens | EMP API-equivalent estimate |
+| --- | ---: | ---: |
+| Low | 418,428 | USD 4.8561 |
+| Xhigh | 4,942,501 | USD 46.1198 |
+| Automatic, including classification | 1,274,501 | USD 11.3474 |
+
+One Anko automatic attempt ends with upstream `server_is_overloaded` after
+227.393 seconds and 11 tool calls. Its trace, patch and partial grade are retained;
+only this interrupted trial is rerun from a pristine base. It is excluded from
+the completed-task quality/time table and adds 108,454 known tokens and USD
+1.0044 to the expenditure record. Across all 19 attempts, known usage is
+**6,579,197 input + 164,687 output tokens**, including 973,824 cached input and
+38,982 reasoning tokens within those respective totals; the known API-equivalent
+estimate is **USD 63.3276**, not a subscription cash bill. Three timeout/overload
+receipts lack complete usage and are not treated as zero. Early local catalog
+preparation failures are recorded separately; one initial error receipt was
+unavailable and is not assigned invented usage.
+
+Keep automatic effort **default off**. Per-inference switching works, but this
+classifier has not preserved Xhigh's completion quality or beaten Low's speed
+on these two tasks. A faster classifier alone addresses only its measured wait;
+the selection policy needs evaluation on separate tasks before a quality/speed
+benefit is claimed. No product code, publication or live runtime changed during
+this comparison.
+
+## Later Auto policy experiments (2026-10-29 UTC)
+
+Subsequent public-repository experiments compare Luna Low, Terra Low, Sol Low
+and Jev classification with contemporary fixed controls. Category-based routing
+does not consistently preserve completion quality. On Tengo, fixed Low passes
+both repeats in 130/122 seconds; Jev takes 386/514 seconds with the same checks
+passing. Full-history and cache-key probes do not establish a consistent
+classifier benefit. These results remain separate from the earlier studies.
+
+A later selective rule keeps Xhigh unless Jev proposes Low with a routine score
+of at least 0.80. The threshold is fixed once, not calibrated accuracy. Four
+complete development pairs on CSSTree and Anko, run at **21:18–21:51 UTC**, give:
+
+| Metric across the four matched pairs | Fixed Xhigh | Selective Jev |
+| --- | ---: | ---: |
+| Tasks passing all new and original checks | 4/4 | 4/4 |
+| Task time, including classification | 2,364.165 s | 2,246.958 s |
+| Native input plus output tokens | 2,741,580 | 2,690,237 |
+| Total tokens including classification | 2,741,580 | 3,052,729 |
+| Native API-equivalent estimate | USD 26.636168 | USD 25.486074 |
+| Additional Jev API-reported charge | — | USD 0.015110466 |
+
+One scheduled CSS pair has a retained main-model 503 interruption. It is excluded
+from this complete-pair comparison, not erased from expenditure or attempt
+records. Its preregistered replacement runs two workers; scheduled pairs run
+four. Quality failures are never excluded or selectively rerun.
+
+These observations give 5.0% less time and 4.3% less Native API-equivalent cost,
+with 11.3% more total tokens. Native estimates are not subscription cash bills;
+cache reuse and stochastic trajectories also differ between arms. Most accepted
+Low decisions occur during verification or completion. The two development tasks
+do not establish general quality or savings, so keep Auto **default off** and
+retain this rule in the experiment only. No hidden final auditor, discarded-output
+retry or production routing change was added.
+
+The marginal/selective receipt audit verifies 389 successful Native responses:
+Standard execution tier, recorded usage and metadata matching selected effort.
+The simplified shell-tool benchmark remains distinct from official CLI engine
+acceptance. Source hashes, individual grades, failures and known/unknown costs
+are retained in the dated local maintenance evidence.
+
 ## Current target and acceptance (2026-10-28 UTC)
 
 The maintenance target is **0.161–0.165**, following the official stable

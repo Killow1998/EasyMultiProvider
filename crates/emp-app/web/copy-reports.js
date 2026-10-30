@@ -1,6 +1,12 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
   "reports.requested_effort": ["所选推理强度","Selected reasoning effort"],
+  "reports.configured_effort": ["原设推理强度","Configured reasoning effort"],
+  "reports.effort_classifier": ["分类模型","Classifier"],
+  "reports.effort_classifier_time": ["选档耗时","Effort selection time"],
+  "reports.effort_selection": ["选档方式","Effort selection"],
+  "reports.effort_selected": ["自动选择","Automatic"],
+  "reports.effort_kept": ["分类失败，保留原设置","Classification failed; configured effort retained"],
   "reports.reported_effort": ["服务端推理强度","Upstream reasoning effort"],
   "reports.requested_tier": ["请求档位","Requested tier"],
   "reports.reported_tier": ["服务端档位","Upstream tier"],
@@ -107,6 +113,7 @@ registerUiCopy({
   "reports.unlinked": ["未关联","Unlinked"],
   "reports.image_generation": ["生图","Image generation"],
   "reports.agent_task_recovery": ["子代理任务恢复","Subagent task recovery"],
+  "reports.effort_classification": ["推理强度分类","Effort classification"],
   "reports.image_edit": ["改图","Image edit"],
   "reports.awaiting_response": ["等待返回","Awaiting response"],
   "reports.operation": ["调用类型","Operation"],

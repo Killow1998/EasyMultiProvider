@@ -1,6 +1,6 @@
 // Replace this list for each review round; shipped demos belong in Demos below.
 // Production controllers own their dialogs and text.
-const reviewRows=['tutorials','native_local_key'];
+const reviewRows=['routing'];
 const realShadow=window.EMP_REAL_SHADOW===true;
 const syntheticScenarios=['onboarding','lan','migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical'];
 const previewScenarios={
@@ -18,7 +18,7 @@ const previewScenarios={
   collaboration:{title:['子代理与订阅性能对比','Subagent and subscription comparisons'],detail:['模式建议、速度与耗时对比，以及匿名的导入订阅／原生直连实测。','Mode recommendations, speed/time comparisons and anonymous imported/native direct measurements.'],open:()=>openCollaborationDemo()},
   metrics:{title:['调用结果与性能统计','Call outcomes and performance'],detail:['合成示例：重试完成、上游等待建议和输出中断；保留速度与工具耗时示例。','Synthetic examples: successful retries, upstream wait advice and interrupted output, alongside speed and tool timing.'],open:()=>statistics.open()},
   context:{title:['上下文与压缩说明','Context and compaction'],detail:['在现有模型设置的问号中查看有效窗口、自动压缩阈值和调整方式。','Use the existing model settings help to inspect usable context, compaction triggers and adjustments.'],open:()=>editAccount(state.native_account.id,{back:openReview})},
-  routing:{title:['路由设置','Routing settings'],detail:['自动审查、图片及记忆路由；记忆提取、记忆整理可分别选择 GPT 模型。','Auto Review, image and memory routing; choose GPT models independently for memory extraction and consolidation.'],open:()=>realShadow?routingSettings.open({back:openSettings}):openRoutingDemo()},
+  routing:{title:['自动推理强度','Automatic reasoning effort'],detail:['默认关闭；选择分类模型和自动强度上限，在同一任务的推理步骤之间自动升降档位。','Off by default. Choose a classifier and effort ceiling to adjust effort between inference steps within one task.'],open:()=>realShadow?routingSettings.open({back:openReview}):openRoutingDemo()},
   tray:{title:['macOS 菜单栏图标','macOS menu-bar icon'],detail:['纯色透明图标，预览浅色和深色背景；实际菜单交互仍由系统提供。','A transparent monochrome icon on light and dark backgrounds; the OS provides the actual menu interaction.'],open:openTrayPreview},
   recovery:{title:['key 异常恢复','Key recovery'],detail:['实际恢复页，模拟清除重建和退出','Actual recovery page with simulated reset and exit'],open:()=>location.assign('/recovery')},
   lifecycle:{title:['恢复原生 / 退出','Restore Native / Quit'],detail:['合成示例：区分已确认待转换与未检查的历史。恢复时共用目录索引，系统菜单显示操作进度；恢复与退出仍为两个操作。','Synthetic example: distinguish confirmed pending conversions from unchecked history. Restore shares one directory inventory; the tray shows action progress. Restore and Quit remain separate.'],open:()=>openLifecycleDemo()},

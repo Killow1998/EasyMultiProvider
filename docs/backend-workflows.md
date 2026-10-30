@@ -31,6 +31,33 @@ Request preparation checks the body object once and passes a mutable JSON map
 to its external-settings transformation. Configuration uses the existing owned
 snapshot boundary. These helpers add no runtime state or recovery policy.
 
+## Automatic reasoning effort
+
+Development only, on `dev/adaptive-reasoning-effort`. This candidate is excluded
+from patch releases. Live experiments are paused until Xian explicitly resumes
+them with a new quota budget; offline fixture checks remain available.
+
+`services/adaptive_effort.rs` owns this optional pre-inference operation after
+route preparation for HTTP and WebSocket. It keeps the resolved main model and
+account, calls the selected GPT classifier at Low on that account, then appends
+Codex `configuration_update` items. Root effort and the existing history prefix
+remain unchanged. The model catalog must advertise effort-update support.
+
+The classifier uses the latest task, assistant progress and recent tool results.
+Its JSON schema limits output to the main model's supported efforts below the
+configured ceiling. A single five-second attempt falls back to the caller's
+effort. Bounded history state restores prior decisions during incremental/full
+replay and reuses the same decision for an identical retry. Classification usage
+and latency pass through the existing accounting path. Subagents, Ultra, review,
+memory and external-model requests keep their own settings; the option defaults
+off. No additional proxy process or transport is introduced.
+
+The design follows the per-inference classification and stable-prefix approach
+in [reasoning-router](https://github.com/robertn702/reasoning-router/tree/29a4e4254ccddd5897c0f1d2facffe724388b828),
+implemented in EMP's Rust pipeline with both HTTP and WebSocket acceptance.
+See the [dated evaluation](codex-compatibility.md#automatic-effort-candidate-2026-10-29-utc)
+before treating automatic selection as a performance improvement.
+
 ## Before / after
 
 These are responsibility diagrams, not a complete crate dependency graph.

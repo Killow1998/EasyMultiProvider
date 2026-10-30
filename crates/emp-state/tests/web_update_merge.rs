@@ -81,6 +81,26 @@ const MASK: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2
 const AT: &str = "2026-08-22T00:00:00+00:00";
 
 #[test]
+fn unrelated_saves_keep_adaptive_effort_and_explicit_disable_is_preserved() {
+    let current = normalize_configuration(Some(&json!({"adaptive_effort":{
+        "enabled":true,"classifier_model":"gpt-6-luna","max_effort":"high"
+    }})))
+    .unwrap();
+    let saved = merge_web_update_with_time(&current, &json!({"models":[]}), AT).unwrap();
+    assert_eq!(saved["adaptive_effort"], current["adaptive_effort"]);
+    let disabled = merge_web_update_with_time(
+        &saved,
+        &json!({"adaptive_effort":{
+            "enabled":false,"classifier_model":"gpt-6-luna","max_effort":"high"
+        }}),
+        AT,
+    )
+    .unwrap();
+    assert_eq!(disabled["adaptive_effort"]["enabled"], false);
+    assert_eq!(disabled["adaptive_effort"]["max_effort"], "high");
+}
+
+#[test]
 fn older_clients_preserve_ultra_overrides_but_an_explicit_reset_removes_them() {
     let current =
         normalize_configuration(Some(&json!({"ultra_reasoning_efforts":{"gpt-test":"low"}})))

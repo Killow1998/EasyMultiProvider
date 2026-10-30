@@ -88,7 +88,7 @@ pub(crate) fn responses_request(
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
         .collect();
-    let incoming = observation.headers(incoming);
+    let mut incoming = observation.headers(incoming);
     observation.phase(Phase::ResolveRoute);
     let PreparedRequest {
         config,
@@ -194,6 +194,13 @@ pub(crate) fn responses_request(
         }
     };
     observation.phase(Phase::Execute);
+    crate::services::adaptive_effort::prepare(
+        state,
+        &config,
+        &route,
+        body.as_object_mut().expect("prepared request"),
+        &mut incoming,
+    );
     if route.dialect != emp_core::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
         let started = std::time::Instant::now();
         let mut usage = crate::services::request_outcome::RequestOutcome::new(

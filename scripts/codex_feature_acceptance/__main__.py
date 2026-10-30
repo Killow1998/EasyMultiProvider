@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from . import catalog, effort, forks, imports, memory
+from . import adaptive, catalog, effort, forks, imports, memory
 
 
 def main():
@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--native-catalog', type=Path)
-    parser.add_argument('--suite', choices=['all', 'effort', 'memory', 'imports', 'forks', 'catalog'], default='all')
+    parser.add_argument('--suite', choices=['all', 'effort', 'adaptive', 'memory', 'imports', 'forks', 'catalog'], default='all')
     args = parser.parse_args()
     if args.suite in ('all', 'catalog') and args.native_catalog is None:
         parser.error('--native-catalog must be the pinned official models-manager/models.json')
@@ -33,6 +33,8 @@ def main():
                                for path in (args.codex, args.emp)}}
     cases = [('effort-sse', effort.run, {'transport':'sse'}),
              ('effort-websocket', effort.run, {'transport':'websocket'}),
+             *[(f'adaptive-{transport}-{source}', adaptive.run, {'transport':transport,'source':source})
+               for transport in ('sse','websocket') for source in ('native','imported')],
              *[('memory-'+source, memory.run, {'source':source}) for source in ('native', 'external', 'imported')],
              ('imports', imports.run, {}), ('forks', forks.run, {}),
              ('catalog', catalog.run, {'catalog':args.native_catalog})]

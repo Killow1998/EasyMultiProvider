@@ -92,6 +92,7 @@ pub(crate) struct BackendState {
 }
 
 pub(crate) struct TransportState {
+    pub(crate) adaptive_effort: crate::services::adaptive_effort::State,
     pub(crate) collaboration: crate::services::collaboration::CollaborationState,
     pub(crate) client: HttpClient,
     pub(crate) support_network: crate::services::network_evidence::NetworkSnapshot,
@@ -177,6 +178,7 @@ impl BackendState {
             diagnostics,
             configuration: ConfigurationState::new(config, config_path.to_path_buf(), vault),
             transport: TransportState {
+                adaptive_effort: Default::default(),
                 collaboration: Default::default(),
                 client,
                 support_network,

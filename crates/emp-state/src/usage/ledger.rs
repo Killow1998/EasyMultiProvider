@@ -231,7 +231,12 @@ impl UsageLedger {
         let operation = event["route"].as_str().unwrap_or("");
         if !(matches!(
             operation,
-            "responses" | "compact" | "image_generation" | "image_edit" | "agent_task_recovery"
+            "responses"
+                | "compact"
+                | "image_generation"
+                | "image_edit"
+                | "agent_task_recovery"
+                | "effort_classification"
         ) || crate::diagnostics::MODEL_TEST_OPERATIONS.contains(&operation))
             || !event["usage_category"]
                 .as_str()

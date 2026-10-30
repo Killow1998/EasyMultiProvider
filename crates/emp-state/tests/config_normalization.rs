@@ -57,6 +57,7 @@ fn configuration_normalization_matches_frozen_fixture() {
             "memory_extraction_model",
             "background_compaction",
             "ultra_reasoning_efforts",
+            "adaptive_effort",
         ] {
             python_compatible.as_object_mut().unwrap().remove(key);
         }

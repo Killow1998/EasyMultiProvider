@@ -28,6 +28,15 @@ Tier confirmation does not require token usage. An absent tier report displays
 Old receipts are not rewritten or assigned a tier using today's settings.
 API-equivalent pricing still uses its separate fallback policy described below.
 
+With **Automatic reasoning effort** enabled, call details retain the caller's
+configured effort separately from EMP's selected effort, classifier model,
+classification time and fallback reason. The selected effort remains distinct
+from an upstream-reported effort. Classifier requests have their own
+`effort_classification` usage records linked to the same conversation; their
+tokens are included in the bill. Main-request latency includes time spent
+waiting for classification. Reusing a cached decision adds no new classifier
+request or classification wait.
+
 ## Session bills
 
 Choose **Statistics > Session bills** to search session names or IDs and sort by

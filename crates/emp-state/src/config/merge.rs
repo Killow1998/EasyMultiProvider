@@ -251,6 +251,7 @@ fn merge_web_update_at_time(
         "auto_review_fallback",
         "external_collaboration",
         "image_routing",
+        "adaptive_effort",
         "memory_model",
         "memory_extraction_model",
         "background_compaction",

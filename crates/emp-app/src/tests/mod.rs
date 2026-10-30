@@ -56,6 +56,7 @@ use tempfile::TempDir;
 
 mod activity_contract;
 mod activity_websocket_contract;
+mod adaptive_effort_contract;
 mod auto_review_contract;
 mod cancellation_contract;
 mod catalog_api_contract;

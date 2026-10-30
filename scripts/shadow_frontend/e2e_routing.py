@@ -66,6 +66,19 @@ def main():
             assert browser.execute('return document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode;', collaboration) == enabled
         checks.append('Cross-service subagents defaults off despite a configured API provider; enabling/disabling persists and survives reopening Settings')
         browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
+        assert browser.execute('return document.getElementById("routing_adaptive_effort").getAttribute("aria-checked")==="false" && document.getElementById("routing_effort_classifier").disabled;')
+        browser.execute('document.getElementById("routing_adaptive_effort").click();')
+        change(browser, 'routing_effort_classifier', 'gpt-6.1-sol')
+        change(browser, 'routing_effort_max', 'high')
+        save(browser, 'follow')
+        assert json.loads((root / 'config.json').read_text())['adaptive_effort'] == {
+            'enabled':True, 'classifier_model':'gpt-6.1-sol', 'max_effort':'high'}
+        browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
+        assert browser.execute('return document.getElementById("routing_adaptive_effort").getAttribute("aria-checked")==="true" && document.getElementById("routing_effort_max").value==="high";')
+        browser.execute('document.getElementById("routing_adaptive_effort").click();')
+        save(browser, 'follow')
+        browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
+        checks.append('Automatic effort defaults off; classifier and ceiling save, reopen and disable without model calls')
         assert browser.execute('return document.getElementById("routing_image_mode").value==="follow" && document.getElementById("routing_image_account_row").hidden;')
         assert browser.execute('return [...document.querySelectorAll("#routing_image_account option")].some(option=>option.textContent==="Image fixture <safe>") && !document.querySelector("#routing_image_account safe");')
         browser.execute('document.getElementById("routing_review").click();')
@@ -113,8 +126,8 @@ def main():
                 browser.execute('document.querySelector("[data-shadow-help-template=collaboration-comparison]").focus();')
                 wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden;'))
                 assert browser.execute('return [...document.querySelectorAll("#shadow_feedback .collaboration-modes dt")].map(node=>node.textContent);') == (['关闭','按需恢复','打开'] if language == 'zh-CN' else ['Off','On-demand recovery','On'])
-                assert browser.execute('const descriptions=[...document.querySelectorAll("#shadow_feedback .collaboration-modes dd")];return descriptions.every(node=>node.textContent.length>20) && descriptions[1].textContent.includes("GPT-6 Luna") && descriptions[2].textContent.includes(arguments[0]);', '即使没有调用外部子代理' if language == 'zh-CN' else 'even when no external subagent')
-                assert browser.execute('const bubble=document.getElementById("shadow_feedback");return bubble.querySelector(".collaboration-takeaway").textContent.includes(arguments[0]) && !bubble.querySelector("details").open && !bubble.textContent.includes("Terra");', '“打开”会让多数 GPT 变慢' if language == 'zh-CN' else 'On slows most GPT models')
+                assert browser.execute('const descriptions=[...document.querySelectorAll("#shadow_feedback .collaboration-modes dd")];return descriptions.every(node=>node.textContent.length>20) && descriptions[1].textContent.includes("GPT-6 Luna") && descriptions[2].textContent.includes("0.164");')
+                assert browser.execute('const bubble=document.getElementById("shadow_feedback");return bubble.querySelector(".collaboration-takeaway").textContent.includes("0.164") && !bubble.querySelector("details").open && !bubble.textContent.includes("Terra");')
                 status, png = request(browser.base + '/screenshot')
                 assert status == 200
                 args.output.with_name('collaboration-summary-' + language + '-' + str(width) + '.png').write_bytes(base64.b64decode(png['value']))
@@ -152,6 +165,9 @@ def main():
                 change(browser, 'routing_image_mode', 'account')
                 assert browser.execute('return document.getElementById("modal_title").textContent===arguments[0] && !document.getElementById("routing_image_account_row").hidden;', '路由设置' if language == 'zh-CN' else 'Routing settings')
                 assert browser.execute('const body=document.getElementById("modal_body"),bounds=body.getBoundingClientRect();return body.scrollWidth<=body.clientWidth+1 && [...document.querySelectorAll(".routing-settings select,.routing-settings label,#routing_review")].every(node=>{const box=node.getBoundingClientRect();return box.left>=bounds.left && box.right<=bounds.right+1;});')
+                browser.execute('document.getElementById("routing_effort_max").scrollIntoView({block:"end"});')
+                _, png = request(browser.base + '/screenshot')
+                args.output.with_name('adaptive-effort-' + language + '-' + str(width) + '.png').write_bytes(base64.b64decode(png['value']))
                 if width == 1280:
                     status, png = request(browser.base + '/screenshot')
                     assert status == 200
@@ -163,6 +179,15 @@ def main():
             assert browser.execute('const container=document.createElement("div");container.innerHTML=callReports.recordHtml({request_id:"fixture",route:arguments[0],model_id:"gpt-image-2",state:"completed"});return container.querySelector("summary").textContent.includes(arguments[1]) && container.textContent.includes("Image model");', route, label)
         assert upstream.calls == 0
         checks.append('Image generation/edit labels appear in collapsed and expanded call records; no real model requests')
+        for fallback in [None, 'classifier_timeout']:
+            assert browser.execute('''
+              const node=document.createElement('div');
+              node.innerHTML=callReports.recordHtml({request_id:'auto',route:'responses',model_id:'gpt-6-astra',state:'completed',
+                configured_effort:'xhigh',requested_effort:'low',adaptive_effort:{classifier_model:'gpt-6-luna',classifier_ms:2000,fallback:arguments[0]}});
+              return node.textContent.includes('Configured reasoning effort') && node.textContent.includes('gpt-6-luna') &&
+                node.textContent.includes('2.00 s') && node.textContent.includes(arguments[0]?'configured effort retained':'Automatic');
+            ''', fallback)
+        checks.append('Call details distinguish configured/selected effort, classifier time and fallback')
         session = browser.execute('return localStorage.getItem("emp_management_session_v1");')
         shadow, _ = preview(stack, base, '', session)
         browser.navigate(shadow + '/?routing=1')

@@ -135,6 +135,7 @@ class Fixture:
         native = ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-luna', 'gpt-6.1-terra']
         native_path = root/'native.json'
         self.native_catalog = native_catalog or {'models':[{'slug':name, 'supported_in_api':True,
+            'supports_reasoning_effort_updates':True,
             'context_window':100000, 'shell_type':'shell_command', 'base_instructions':'Synthetic acceptance fixture.',
             'default_reasoning_level':'high', 'supported_reasoning_levels':[
                 {'effort':effort, 'description':effort} for effort in ('low', 'medium', 'high', 'xhigh')]}

@@ -43,6 +43,8 @@ fn facts(event: &Value) -> Value {
         "selected_name",
         "provider_name",
         "requested_effort",
+        "configured_effort",
+        "adaptive_effort",
         "reported_effort",
         "requested_service_tier",
         "reported_service_tier",
@@ -86,6 +88,7 @@ fn facts(event: &Value) -> Value {
                     value.clone()
                 }
                 Value::Number(_) | Value::Bool(_) | Value::Null => value.clone(),
+                Value::Object(_) if field == "adaptive_effort" => value.clone(),
                 Value::Array(items)
                     if matches!(field, "model_declarations" | "retries" | "attempt_routes") =>
                 {

@@ -33,6 +33,7 @@ pub(crate) mod updates;
 pub(crate) mod usage;
 
 pub(crate) mod account_catalog;
+pub(crate) mod adaptive_effort;
 pub(crate) mod migration;
 pub(crate) mod network_evidence;
 pub(crate) mod observation;

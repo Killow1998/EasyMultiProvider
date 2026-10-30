@@ -109,6 +109,7 @@ impl RequestObservation {
         incoming.retain(|name, _| {
             !name.eq_ignore_ascii_case("x-emp-request-id")
                 && !name.eq_ignore_ascii_case("x-emp-probe")
+                && !name.eq_ignore_ascii_case(crate::services::adaptive_effort::DECISION_HEADER)
         });
         if let Some(id) = self.fields["request_id"].as_str() {
             incoming.insert("X-EMP-Request-ID".into(), id.into());

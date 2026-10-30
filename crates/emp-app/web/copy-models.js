@@ -1,5 +1,11 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  "models.adaptive_effort": ["自动推理强度","Automatic reasoning effort"],
+  "models.adaptive_effort_hint": ["保持当前模型，按任务中的每个推理步骤选择强度。","Keep the current model and select effort for each inference step."],
+  "models.adaptive_effort_help": ["默认关闭。开启后，分类模型根据当前任务和工具结果，为下一次推理选择强度；同一任务内可以升档、降档。使用 Codex 的配置更新机制保留缓存前缀。分类使用当前订阅账号，会增加用量和等待时间，单次最多等待 5 秒；失败时使用原请求强度。仅对目录声明支持动态强度的标准 GPT 主会话生效，不改变 Ultra、子代理、审查或记忆任务。关闭后恢复手动选择。","Off by default. The classifier uses the task and tool results to select effort for the next inference, increasing or decreasing it within one task. Codex configuration updates preserve the cache prefix. Classification uses the current subscription, adds usage and latency, and waits at most 5 seconds. Failure retains the requested effort. Applies to standard GPT main conversations whose catalog supports effort updates; Ultra, subagents, review and memory tasks retain their settings. Turn off to select effort manually."],
+  "models.effort_classifier": ["分类模型 · 使用当前账号","Classifier · current account"],
+  "models.effort_ceiling": ["自动选择上限","Maximum automatic effort"],
+  "models.effort_classifier_unavailable": ["请选择可用的 GPT 分类模型。","Choose an available GPT classifier."],
   "models.maximum_output": ["最大输出 Tokens","Maximum output tokens"],
   "models.output_default": ["留空不额外限制","Leave blank for no additional limit"],
   "models.maximum_output_help": ["限制单次回复的输出长度，并为上下文预算预留输出空间。请求自身设置了更小的上限时，使用较小值。留空取消此上限。","Limit the output of each reply and reserve room in the context budget. A smaller limit in the request takes precedence. Leave blank to remove this limit."],

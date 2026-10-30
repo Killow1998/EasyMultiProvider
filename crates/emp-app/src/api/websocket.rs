@@ -399,7 +399,7 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
         };
-        let request_headers = websocket.observation.headers(incoming.clone());
+        let mut request_headers = websocket.observation.headers(incoming.clone());
         websocket.observation.phase(Phase::PrepareHistory);
         let request_scope =
             match emp_history::request_history_anchor(&request_body, &request_headers) {
@@ -528,6 +528,13 @@ pub(crate) fn serve_responses_websocket(
             }
         };
         websocket.observation.phase(Phase::Execute);
+        crate::services::adaptive_effort::prepare(
+            state,
+            &config,
+            &route,
+            &mut request_body,
+            &mut request_headers,
+        );
         let mut turn = Turn {
             config,
             route,

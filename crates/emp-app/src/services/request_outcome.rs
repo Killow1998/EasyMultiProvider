@@ -112,6 +112,12 @@ impl<'a> RequestOutcome<'a> {
             body.get("input"),
             body.get("client_metadata")
         ));
+        if let Some(decision) = incoming.get(crate::services::adaptive_effort::DECISION_HEADER) {
+            let decision: Value = serde_json::from_str(decision).expect("internal effort decision");
+            event["configured_effort"] = decision["configured_effort"].clone();
+            event["requested_effort"] = decision["effort"].clone();
+            event["adaptive_effort"] = decision;
+        }
         event["selected_name"] = route
             .model
             .value()
@@ -145,13 +151,16 @@ impl<'a> RequestOutcome<'a> {
             "provider_id":record["provider_id"], "model_id":record["model_id"], "route":operation,
         }));
         let identity = crate::services::activity::ActivityIdentity::from_route(route);
+        let classification_ms = event["adaptive_effort"]["classifier_ms"]
+            .as_u64()
+            .unwrap_or(0);
         let result = Self {
             collaboration_route: (operation == "responses"
                 && route.dialect == emp_core::Dialect::CodexNative)
                 .then(|| route.requested_model.clone()),
             state,
             identity,
-            started: Instant::now(),
+            started: Instant::now() - std::time::Duration::from_millis(classification_ms),
             first_token: None,
             finalized: false,
             event,

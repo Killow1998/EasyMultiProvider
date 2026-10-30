@@ -72,6 +72,7 @@ impl From<FilesystemError> for ConfigError {
 
 pub type ConfigResult<T> = Result<T, ConfigError>;
 
+pub mod adaptive_effort;
 mod image_routing;
 mod presentation;
 pub use presentation::{
@@ -138,6 +139,7 @@ fn default_configuration() -> Value {
         "auto_review_fallback": true,
         "external_collaboration": "off",
         "image_routing": {"mode":"follow", "account_id":""},
+        "adaptive_effort": adaptive_effort::AdaptiveEffort::default(),
         "memory_model": "",
         "memory_extraction_model": "",
         "background_compaction": null,
@@ -615,6 +617,7 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "catalog_family_presentations": catalog_family_presentations,
         "subscription_search": subscription_search,
         "image_routing": image_routing,
+        "adaptive_effort": adaptive_effort::normalize(raw.get("adaptive_effort"))?,
         "memory_model": memory_model,
         "memory_extraction_model": memory_extraction_model,
         "background_compaction": background_compaction,
