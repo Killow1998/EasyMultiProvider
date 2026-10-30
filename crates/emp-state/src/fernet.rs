@@ -82,8 +82,19 @@ impl Fernet {
     /// Decrypt without a TTL, matching Python's `Fernet.decrypt(token)` call.
     pub fn decrypt(&self, token: &[u8]) -> Result<Zeroizing<Vec<u8>>, FernetError> {
         let token = std::str::from_utf8(token).map_err(|_| FernetError::DecryptFailed)?;
+        let header = URL_SAFE
+            .decode(token.get(..12).ok_or(FernetError::DecryptFailed)?)
+            .map_err(|_| FernetError::DecryptFailed)?;
+        let timestamp = u64::from_be_bytes(
+            header
+                .get(1..9)
+                .and_then(|bytes| bytes.try_into().ok())
+                .ok_or(FernetError::DecryptFailed)?,
+        );
+        // fernet-rs applies a 60s future-clock check even without a TTL. Evaluate
+        // at the token's time; the library still verifies its HMAC and padding.
         self.token
-            .decrypt(token)
+            .decrypt_at_time(token, None, timestamp.saturating_sub(60))
             .map(Zeroizing::new)
             .map_err(|_| FernetError::DecryptFailed)
     }
@@ -107,6 +118,30 @@ impl std::error::Error for FernetError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_ttl_accepts_a_sender_ahead_of_the_receiver_and_rejects_tampering() {
+        let key = FernetKey::generate();
+        let sender = FernetToken::new(key.encoded()).unwrap();
+        let token = sender.encrypt_at_time(b"migration payload", 4_102_444_800);
+        assert!(sender.decrypt(&token).is_err());
+        assert_eq!(
+            &*Fernet::new(&key).decrypt(token.as_bytes()).unwrap(),
+            b"migration payload"
+        );
+        assert!(
+            Fernet::new(&FernetKey::generate())
+                .decrypt(token.as_bytes())
+                .is_err()
+        );
+        let mut bytes = URL_SAFE.decode(&token).unwrap();
+        bytes[8] ^= 1;
+        assert!(
+            Fernet::new(&key)
+                .decrypt(URL_SAFE.encode(bytes).as_bytes())
+                .is_err()
+        );
+    }
 
     #[test]
     fn invalid_key_and_debug_output_never_disclose_secret_material() {
