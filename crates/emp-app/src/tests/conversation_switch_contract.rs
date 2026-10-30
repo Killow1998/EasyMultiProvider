@@ -3,9 +3,6 @@ use crate::lifecycle::ServerHandle;
 use serde_json::{Value, json};
 use std::net::{IpAddr, Ipv4Addr};
 
-// The Python oracle used to compute the expected upstream `input` array. The
-// Rust projection is now asserted directly: visible items pass through in
-// order, hidden reasoning never crosses the destination dialect boundary.
 fn expected_projected_input() -> Value {
     json!([
         {"type":"message","role":"user","content":[{"type":"input_text","text":"route-visible-user"}]},

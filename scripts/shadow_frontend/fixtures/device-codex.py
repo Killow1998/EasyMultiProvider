@@ -38,6 +38,8 @@ for line in sys.stdin:
     if method == 'account/login/start':
         result = {'type':'chatgptDeviceCode','loginId':'fixture-login',
             'verificationUrl':'https://auth.openai.com/codex/device','userCode':'ABCD-EFGH'}
+        if request['params']['type']=='chatgpt':
+            result={'type':'chatgpt','loginId':'fixture-login','authUrl':'https://auth.openai.com/oauth/authorize?fixture=1'}
         emit({'id':request['id'],'result':result})
         threading.Thread(target=complete,daemon=True).start()
         continue

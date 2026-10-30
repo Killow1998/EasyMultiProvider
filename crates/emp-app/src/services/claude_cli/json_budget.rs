@@ -38,3 +38,16 @@ impl Write for JsonByteBudget {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoded_bytes_include_escaping_and_accumulate_across_blocks() {
+        let mut budget = JsonByteBudget::new(8);
+        budget.charge("\"").unwrap(); // Four JSON bytes, including the quotes.
+        budget.charge("\"").unwrap();
+        assert!(budget.charge("").is_err());
+    }
+}

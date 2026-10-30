@@ -166,7 +166,7 @@ fn execute_complete_with_cli(
         .and_then(Value::as_u64)
         .filter(|value| *value > 0)
         .or_else(|| configured_limit(&candidate, "output_limit"));
-    let schema = projection::proposal_schema().map_err(ClaudeCliError::Failure)?;
+    let schema = projection::proposal_schema().to_string();
 
     let temp =
         TempDir::new().map_err(|_| ClaudeCliError::Failure("claude_cli_temp_unavailable"))?;

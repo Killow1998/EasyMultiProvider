@@ -5,7 +5,6 @@ use crate::http::auth::session_header_value;
 use emp_transport::ContentDecodeError;
 use emp_transport::MEMORY_RESERVATION_FACTOR;
 use emp_transport::MIN_MEMORY_HEADROOM_BYTES;
-use emp_transport::MemoryStatus;
 use emp_transport::REQUEST_GROWTH_QUANTUM;
 use emp_transport::RequestCapacityError;
 use emp_transport::RequestCapacityReason;
@@ -251,21 +250,16 @@ fn body_size_error(limit: usize, decoded: bool) -> BodyError {
         limit,
         decoded,
         reason: emp_transport::RequestCapacityReason::HardLimit,
-        available_bytes: 0,
+        available_bytes: None,
         required_memory_bytes: 0,
-        memory_total_bytes: 0,
-        memory_used_bytes: 0,
+        memory_total_bytes: None,
+        memory_used_bytes: None,
         memory_used_percent: None,
     })
 }
 
 fn allocation_capacity_error(limit: usize) -> BodyError {
-    let memory =
-        emp_transport::system_memory_status().unwrap_or_else(|| MemoryStatus::available(0));
-    let total = memory.total.unwrap_or(0);
-    let used = memory
-        .used
-        .unwrap_or_else(|| total.saturating_sub(memory.available));
+    let memory = emp_transport::system_memory_status();
     let reserved_limit = limit
         .div_ceil(REQUEST_GROWTH_QUANTUM)
         .saturating_mul(REQUEST_GROWTH_QUANTUM);
@@ -273,13 +267,15 @@ fn allocation_capacity_error(limit: usize) -> BodyError {
         limit: reserved_limit,
         decoded: false,
         reason: RequestCapacityReason::MemoryLimit,
-        available_bytes: memory.available,
+        available_bytes: memory.map(|memory| memory.available),
         required_memory_bytes: reserved_limit
             .saturating_mul(MEMORY_RESERVATION_FACTOR)
             .saturating_add(MIN_MEMORY_HEADROOM_BYTES),
-        memory_total_bytes: total,
-        memory_used_bytes: used,
-        memory_used_percent: memory.used_percent.filter(|value| value.is_finite()),
+        memory_total_bytes: memory.and_then(|memory| memory.total),
+        memory_used_bytes: memory.and_then(|memory| memory.used),
+        memory_used_percent: memory
+            .and_then(|memory| memory.used_percent)
+            .filter(|value| value.is_finite()),
     })
 }
 

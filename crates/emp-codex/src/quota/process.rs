@@ -3,8 +3,8 @@
 use super::*;
 
 mod child;
-pub(super) mod device_login;
 mod pipe;
+pub(super) mod subscription_login;
 use child::QuotaChild;
 use pipe::CancellablePipe;
 

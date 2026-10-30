@@ -2,6 +2,7 @@
 import argparse
 import base64
 import contextlib
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ def main():
     parser.add_argument('--codex',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)
+    started_at=datetime.now(timezone.utc).isoformat()
     checks=[]
     with tempfile.TemporaryDirectory(prefix='emp-onboarding-') as directory,contextlib.ExitStack() as stack:
         root=Path(directory);a=root/'sender';b=root/'receiver';a.mkdir();b.mkdir()
@@ -49,18 +51,37 @@ def main():
         def login(operation):return call('/api/native/login/'+operation,{})
         assert not (home/'auth.json').exists()
         call('/api/integration/enable',{'confirm_reload':True})
-        auth=(home/'auth.json').read_bytes();key=json.loads(auth)['OPENAI_API_KEY'];assert key.startswith('emp-local-')
+        auth=(home/'auth.json').read_bytes();local_auth=json.loads(auth);key=local_auth['OPENAI_API_KEY'];assert key.startswith('emp-local-')
+        assert local_auth['auth_mode']=='apikey'
+        assert call('/api/gateway')['api_key']==key
         assert call('/api/config')['native_account']['auth_mode']=='local_key'
+        legacy_auth=dict(local_auth);legacy_auth.pop('auth_mode')
+        (home/'auth.json').write_text(json.dumps(legacy_auth))
+        call('/api/integration/enable',{'confirm_reload':True})
+        assert json.loads((home/'auth.json').read_bytes())==local_auth
         client_env={k:v for k,v in os.environ.items() if not any(word in k.upper() for word in ['TOKEN','KEY','SECRET','AUTH']) and not k.startswith(('CODEX_','OPENAI_','ANTHROPIC_','EASY_MULTI_PROVIDER'))}
         client_env.update(env,HOME=str(home),XDG_CONFIG_HOME=str(home),DBUS_SESSION_BUS_ADDRESS='unix:path=/tmp/emp-fixture-no-keyring')
+        codex_version=subprocess.run([str(args.codex.resolve()),'--version'],cwd=home,env=client_env,text=True,capture_output=True,check=True).stdout.strip()
         result=subprocess.run([str(args.codex.resolve()),'exec','--skip-git-repo-check','Say fixture complete. Do not call tools.'],cwd=home,env=client_env,text=True,capture_output=True,timeout=70)
         assert result.returncode==0 and 'fixture complete' in result.stdout,result.stderr[-3000:]
         assert request(base+'/v1/responses',{'model':'demo/fixture','input':'hello'},{'Authorization':'Bearer wrong'})[0]==401
-        checks.append('Installed Codex starts signed out through the managed local key and completes an external Responses turn')
+        checks.append('Installed Codex starts signed out through a new or upgraded managed local key and completes an external Responses turn')
         browser=Browser(stack,root);browser.navigate(url)
         def screenshot(name):
             status,image=request(browser.base+'/screenshot');assert status==200
             (args.output/name).write_bytes(base64.b64decode(image['value']))
+        for language in ['zh-CN','en']:
+            browser.execute('setLanguage(arguments[0]);settings.open();document.querySelector("[data-gateway-open]").click();',language)
+            wait_for(lambda:browser.execute('return !!document.getElementById("gateway_key");'))
+            assert browser.execute('return document.getElementById("gateway_key").value===arguments[0];',key)
+            assert browser.execute('return document.getElementById("gateway_key").type;')=='password'
+            screenshot(f'gateway-{language}.png')
+            browser.execute('Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:async value=>{window.fixtureCopied=value;}}});document.querySelector("[data-gateway-copy]").click();')
+            wait_for(lambda:browser.execute('return window.fixtureCopied===arguments[0];',key))
+            browser.execute('document.getElementById("modal_back").click();')
+            assert browser.execute('return !!document.querySelector("[data-gateway-open]");')
+            browser.execute('closeModal();')
+        checks.append('Bilingual gateway settings mask and copy the stable key and return to the parent settings')
         browser.execute('nativeLogin.open();')
         wait_for(lambda:browser.execute('return !!document.getElementById("native_login");'))
         browser.execute('window.fixtureConfirm=window.confirm;window.confirm=()=>true;document.querySelector("[data-native-key-remove]").click();window.confirm=window.fixtureConfirm;')
@@ -91,6 +112,7 @@ def main():
         completed=wait_for(lambda:(v if (v:=login('status'))['status'] in ('completed','failed') else None))
         assert completed['status']=='completed',completed
         saved=(home/'auth.json').read_bytes();assert json.loads(saved)['tokens']['access_token']=='fixture-access'
+        assert call('/api/gateway')['api_key']==key
         call('/api/integration/restore',{'confirm_reload':True})
         assert (home/'auth.json').read_bytes()==saved
         checks.append('Device code, duplicate start, cancellation, successful replacement and restore preserve the correct authentication')
@@ -138,6 +160,34 @@ def main():
         assert len(call('/api/config')['accounts'])==2
         assert (home/'auth.json').read_bytes()==changed
         checks.append('auth.json file and paste share one form, preserve the entered name and deduplicate the same subscription')
+        # The three Native sign-in paths operate only on the disposable auth file.
+        control.write_text('pending')
+        request(browser.base+'/window/rect',{'width':1280,'height':900})
+        browser.execute('closeModal();setLanguage("zh-CN");nativeLogin.manage();document.querySelector("[data-native-method=subscription]").click();')
+        wait_for(lambda:browser.execute('return !document.querySelector("[data-native-login-start]").disabled;'))
+        browser.execute('document.getElementById("native_login_method").value="browser";document.querySelector("[data-native-login-start]").click();')
+        wait_for(lambda:browser.execute('return !!document.querySelector("#native_login_progress a[href*=authorize]");'))
+        assert not browser.execute('return !!document.querySelector(".device-code");')
+        assert login('status')['method']=='browser'
+        screenshot('login-browser.png')
+        control.write_text('complete')
+        wait_for(lambda:login('status')['status']=='completed')
+        wait_for(lambda:browser.execute('return state.native_account.auth_mode==="subscription";'))
+        for language in ['zh-CN','en']:
+            browser.execute('closeModal();setLanguage(arguments[0]);nativeLogin.manage();',language)
+            assert browser.execute('return document.querySelectorAll("[data-native-method]").length;')==3
+            screenshot(f'login-methods-{language}.png')
+            browser.execute('document.querySelector("[data-native-method=api_key]").click();document.getElementById("native_api_key").value="sk-user-fixture";document.getElementById("modal_submit").click();')
+            wait_for(lambda:browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");'))
+            assert json.loads((home/'auth.json').read_bytes())=={'auth_mode':'apikey','OPENAI_API_KEY':'sk-user-fixture'}
+            assert call('/api/config')['native_account']['auth_mode']=='api_key'
+            assert browser.execute('return document.querySelector("[data-service=\\"account:@native\\"]").textContent.includes("OpenAI API Key");')
+            assert call('/api/gateway')['api_key']==key
+        browser.execute('nativeLogin.manage();document.querySelector("[data-native-method=other]").click();document.getElementById("modal_submit").click();')
+        wait_for(lambda:browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");'))
+        assert json.loads((home/'auth.json').read_bytes())['tokens']['account_id']=='fixture-login'
+        assert len(call('/api/config')['accounts'])==2
+        checks.append('Native sign-in offers device or browser subscription login, own API key and existing Other; real logins remain intact and the gateway key stays stable')
         selected=[{'kind':'provider','id':'demo','model_ids':['demo/fixture']}]
         for requested in [1,15,None]:
             authorization=call('/api/migration/export/confirm',{})
@@ -178,7 +228,7 @@ def main():
             browser.execute('document.querySelector("[data-lan-cancel]").click();')
             wait_for(lambda:browser.execute('return document.getElementById("lan_share_block").hidden;'))
         checks.append('Bilingual production migration controls and sign-in fit a narrow viewport')
-    report={'real_model_calls':0,'checks':checks}
+    report={'started_at':started_at,'codex_version':codex_version,'real_model_calls':0,'checks':checks}
     (args.output/'result.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))
 
 if __name__=='__main__':main()

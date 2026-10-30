@@ -76,11 +76,11 @@ while waiting. Capacity exhaustion returns 503 with
 Existing children are not stopped to admit new work. Spawn errors, failure,
 timeout and cancellation all release the reservation through the same owner.
 
-Claude Code routes also have an EMP-owned **10 MiB** prepared-input budget
-(system instructions plus stdin) and a **12 MiB** local relay request budget.
-These are adapter memory/encoding boundaries, not Claude model context windows
-or limits reported by Claude Code itself. A small incoming request can exceed
-the prepared-input budget after EMP reconstructs its full visible history.
+Claude Code routes use EMP's shared **1 GiB ceiling** for prepared input
+(system instructions plus stdin) and local relay requests. The previous
+adapter-specific 10 MiB and 12 MiB limits are removed. Reconstructed history no
+longer fails merely because it exceeds those smaller adapter limits. This byte
+ceiling is separate from the model's configured context and output budgets.
 
 CPA relay image slots do not reduce this allowance's accounting: original
 image blocks plus system instructions must fit before slots are serialized.
@@ -93,19 +93,14 @@ Provider image-limit rejections retain their upstream HTTP status, including
 400 and 413, through the normal error path. EMP does not substitute a smaller
 image or classify a provider rejection as a local transcript mismatch.
 
-Reaching the prepared-input budget during context assessment must not prevent
-history compaction. With a configured context/output budget, EMP treats that
-bounded estimate as unavailable and lets the normal history compactor prepare
-bounded summary requests. It then reassesses the compacted destination input.
-The execution limit remains enforced for every summary and final inference;
-history is not silently truncated, and the active turn and tool pairs retain
-their existing protection.
+The normal history compactor runs when the configured model context/output
+budget requires it, then reassesses the compacted input. The shared byte ceiling
+still applies to summary and final inference. History is not silently truncated;
+the active turn and tool pairs retain their existing protection.
 
-If no usable context budget is configured, or fixed instructions or an atomic
-active input cannot fit, EMP still rejects the request. Adapter size rejections
-identify EMP as the error origin and explain that no upstream request was sent.
-Opening a new chat may reduce history, but restarting or retrying the same
-oversized input does not change these limits.
+Requests exceeding the shared byte ceiling are rejected before inference.
+Provider image and context limits remain the provider's own limits; increasing
+EMP's adapter allowance does not increase the model's context window.
 
 ## Failure status classification
 

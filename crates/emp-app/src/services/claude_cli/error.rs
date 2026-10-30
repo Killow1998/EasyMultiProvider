@@ -100,7 +100,7 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
         "claude_cli_input_too_large" => (
             413,
             "claude_cli_input_too_large",
-            "EMP's Claude Code adapter input exceeds its 10 MiB prepared-input limit; configure the model's context and output budget for history compaction, or reduce fixed instructions, attachments, or the active turn",
+            "Prepared Claude Code input exceeds EMP's shared request size limit; configure the model's context and output budget for history compaction, or reduce fixed instructions, attachments, or the active turn",
         ),
         "unsupported_provider_protocol" => (
             501,

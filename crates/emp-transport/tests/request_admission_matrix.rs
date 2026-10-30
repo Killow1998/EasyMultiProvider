@@ -40,7 +40,7 @@ fn admission_tracks_two_transports_and_the_snapshot_reports_pressure() {
         memory.limit, 128,
         "the blocked target is the quantized size"
     );
-    assert_eq!(memory.available_bytes, 2_048);
+    assert_eq!(memory.available_bytes, Some(2_048));
     assert_eq!(memory.required_memory_bytes, 128 * 8 + 192 * 8);
     assert_eq!(memory.http_status(), 503);
 
@@ -52,7 +52,7 @@ fn admission_tracks_two_transports_and_the_snapshot_reports_pressure() {
     let hard = third.ensure(257).expect_err("beyond the hard maximum");
     assert_eq!(hard.reason, emp_transport::RequestCapacityReason::HardLimit);
     assert_eq!(hard.limit, 256, "hard limit reports the configured maximum");
-    assert_eq!(hard.available_bytes, 0);
+    assert_eq!(hard.available_bytes, None);
     assert_eq!(hard.required_memory_bytes, 0);
     let snapshot = limits.snapshot().expect("admission snapshot");
     assert_eq!(

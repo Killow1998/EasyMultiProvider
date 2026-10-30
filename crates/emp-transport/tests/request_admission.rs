@@ -97,9 +97,35 @@ fn missing_memory_information_fails_closed_without_reserving() {
     .unwrap();
     let mut budget = limits.request(TransportKind::Http);
     let error = budget.ensure(65).expect_err("missing memory data");
-    assert_eq!(error.reason, RequestCapacityReason::MemoryLimit);
+    assert_eq!(error.reason, RequestCapacityReason::MemoryUnavailable);
+    assert_eq!(error.http_status(), 503);
+    assert_eq!(error.websocket_close_code(), 1013);
+    assert!(error.to_string().contains("could not read system memory"));
+    assert!(!error.to_string().contains("0.0 MiB"));
+    let error = serde_json::to_value(&error).unwrap();
+    for field in [
+        "available_bytes",
+        "memory_total_bytes",
+        "memory_used_bytes",
+        "memory_used_percent",
+    ] {
+        assert!(error[field].is_null(), "{field}");
+    }
     assert_eq!(budget.limit(), 64);
-    assert_eq!(limits.snapshot().unwrap().reserved_bytes, 0);
+    let snapshot = limits.snapshot().unwrap();
+    assert_eq!(snapshot.reserved_bytes, 0);
+    assert_eq!(snapshot.notices[0].reason, "memory_unavailable");
+    assert_eq!(snapshot.notices[0].available_bytes, None);
+
+    let zero_limits = self::limits(0);
+    let error = zero_limits
+        .request(TransportKind::Http)
+        .ensure(65)
+        .unwrap_err();
+    assert_eq!(error.reason, RequestCapacityReason::MemoryLimit);
+    assert_eq!(error.available_bytes, Some(0));
+    assert!(error.to_string().contains("0.0 MiB available"));
+    assert_eq!(zero_limits.snapshot().unwrap().reserved_bytes, 0);
 }
 
 #[test]

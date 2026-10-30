@@ -4,7 +4,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::app::ServerState;
-use crate::http::auth::MAX_NATIVE_AUTH_BYTES;
 use emp_codex::account_auth_headers;
 use emp_codex::quota::QuotaError;
 mod delete;
@@ -107,14 +106,7 @@ pub(crate) fn account_public_snapshot(state: &ServerState, account_id: &str) -> 
 }
 
 pub(crate) fn native_auth_document(path: &Path) -> Option<Value> {
-    let metadata = std::fs::symlink_metadata(path).ok()?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() > MAX_NATIVE_AUTH_BYTES as u64
-    {
-        return None;
-    }
-    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    emp_integration::local_auth::read(path).ok().flatten()
 }
 
 pub(crate) fn native_subscription_headers(path: &Path) -> Option<BTreeMap<String, String>> {

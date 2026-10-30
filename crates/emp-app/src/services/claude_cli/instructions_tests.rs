@@ -1,4 +1,4 @@
-use super::{media, projection};
+use super::media;
 use serde_json::{Value, json};
 
 #[test]
@@ -87,7 +87,7 @@ fn images_keep_their_association_after_instruction_extraction() {
 }
 
 #[test]
-fn invalid_or_oversized_instructions_cannot_escape_input_validation() {
+fn instructions_reject_invalid_content_and_accept_inputs_above_the_old_adapter_limit() {
     for content in [
         json!(12),
         json!([{"type":"input_image","image_url":"https://images.invalid/a.png"}]),
@@ -98,9 +98,11 @@ fn invalid_or_oversized_instructions_cannot_escape_input_validation() {
             Some("claude_cli_invalid_transcript")
         );
     }
-    let body = json!({"instructions":"x".repeat(projection::MAX_TRANSCRIPT_BYTES / 2), "input":"y".repeat(projection::MAX_TRANSCRIPT_BYTES / 2)});
-    assert_eq!(
-        media::prepare(&body).err(),
-        Some("claude_cli_input_too_large")
-    );
+    let body = json!({"instructions":"system rule", "input":"y".repeat(11 * 1024 * 1024)});
+    let prepared = media::prepare(&body).unwrap();
+    assert!(prepared.system_prompt.len() + prepared.stdin.len() > 10 * 1024 * 1024);
+    let event: Value = serde_json::from_slice(&prepared.stdin).unwrap();
+    let transcript: Value =
+        serde_json::from_str(event["message"]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(transcript["input"], body["input"]);
 }

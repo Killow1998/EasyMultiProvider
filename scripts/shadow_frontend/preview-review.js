@@ -1,15 +1,16 @@
 // Replace this list for each review round; shipped demos belong in Demos below.
 // Production controllers own their dialogs and text.
-const reviewRows=['tutorials','native_local_key'];
+const reviewRows=['gateway','onboarding','lan'];
 const realShadow=window.EMP_REAL_SHADOW===true;
-const syntheticScenarios=['onboarding','lan','migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical'];
+const syntheticScenarios=['gateway','onboarding','lan','migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical'];
 const previewScenarios={
+  gateway:{title:['网关连接','Gateway connection'],detail:['查看网关地址和独立访问 Key；Jev 通过专用 Decisions 接口调用。使用隔离测试实例。','Review the gateway address and its access key. Jev uses the dedicated Decisions endpoint. Uses an isolated test instance.'],open:()=>{settings.open();document.querySelector('[data-gateway-open]').click();}},
   review:{title:['本次改动','This update'],detail:['查看当前待检阅的修改','Review the current changes'],open:openReview},
   tutorials:{title:['使用教程','Tutorials'],detail:['更新教学动图与弹窗布局，隧道迁移同时展示发送端和接收端。','Updated tutorial animations and layout, including a side-by-side tunnel transfer.'],open:()=>tutorials.open({back:openReview})},
   native_local_key:{title:['Native 切换为 EMP Key','Switch Native to EMP key'],detail:['在账号信息中查看切换入口及两种账号处理方式。','Review the account-details entry and both ways to handle the subscription.'],open:()=>openAccountDetails(state.native_account.id,{back:openReview})},
   notifications:{title:['通知与信箱','Notifications and inbox'],detail:['顶部浮层与倒计时条；右下角信箱保留此浏览器最近 50 条通知，刷新后仍可查看。','Top notification with a countdown bar; the bottom-right inbox keeps the last 50 messages in this browser across reloads.'],open:()=>{closeModal();$('notification_mailbox').click();}},
-  onboarding:{title:['Codex 登录与导入','Codex sign-in and import'],detail:['添加订阅只有装置码登录与 auth.json 两个入口；本地 Key 与原生登录仍在服务列表中。使用独立合成账号验收。','Add subscriptions through device-code sign-in or auth.json. Local key and native sign-in remain in the service list. Uses separate synthetic accounts.'],open:()=>openServiceChooser()},
-  lan:{title:['数据迁移','Data migration'],detail:['导入、导出、隧道三个入口；窗口随内容展开，服务列表不再限制为三行，返回保留已填内容。','Three entries: Import, Export and Tunnel. Content determines dialog height; service lists expand fully and Back keeps your entries.'],open:()=>migration.open()},
+  onboarding:{title:['Codex 登录方式','Codex sign-in methods'],detail:['订阅登录、自有 OpenAI API Key、已有 Other 订阅三个入口。没有登录时使用 EMP Local Key。使用独立合成账号验收。','Subscription sign-in, your own OpenAI API key, or an existing Other subscription. EMP Local Key is used when signed out. Uses separate synthetic accounts.'],open:()=>nativeLogin.manage()},
+  lan:{title:['隧道迁移修复','Tunnel migration fix'],detail:['修复两端时钟不同导致的解密失败，迁移代码仍固定五分钟有效。','Fixes decryption failures caused by clock differences. Migration codes still expire after five minutes.'],open:()=>migration.open()},
   settings:{title:['说明与弹窗操作','Help and dialog controls'],detail:['问号说明直接交代条件和操作；滚动内容时，标题、返回、关闭与保存按钮保持可见。','Help states conditions and actions directly. Titles, Back, Close and Save stay visible while the content scrolls.'],open:()=>openSettings()},
   ultra:{title:['Ultra 实际推理强度','Ultra actual reasoning effort'],detail:['模型按上游原名显示；Native 与导入订阅共用推理强度，保存后重启 Codex Runtime。','Models use their upstream names. Native and imported subscriptions share the effort setting; restart Codex Runtime after saving.'],open:()=>ultraSettings.open({back:openReview})},
   bills:{title:['会话账单归属','Conversation billing'],detail:['合成示例：自动审查、子代理与 Sidechat 合并到主会话；展开可查看模型及任务用量，归属不明的用量保留在总计中。','Synthetic examples: Auto Review, subagents and Sidechat belong to the main conversation. Expand model and task usage; unassigned usage remains in totals.'],open:()=>{statistics.open();document.querySelector('[data-stats-view="sessions"]').click();}},

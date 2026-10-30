@@ -1,6 +1,6 @@
 //! Native credential selection; imported-account rotation stays in the quota owner.
 use super::*;
-use crate::services::accounts::native_subscription_headers;
+use crate::services::accounts::native_auth_document;
 use crate::services::quota::refresh_account_serialized;
 use emp_codex::account_auth_headers;
 use emp_router::native_request::{NativeAuth, request_headers};
@@ -69,15 +69,29 @@ pub(crate) fn resolve_headers(
         selected = Some(account_headers(state, account)?);
         NativeAuth::Account(selected.as_ref().expect("account headers"))
     } else if provider.get("implicit_native") == Some(&Value::Bool(true)) {
-        if emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path)
-            == "local_key"
+        let document = native_auth_document(&state.backend.accounts.native_auth_path);
+        if document
+            .as_ref()
+            .is_some_and(emp_integration::local_auth::is_local)
         {
             return Err(NativeHttpError::router(
                 503,
                 "Sign in to a Codex subscription or select an external service model",
             ));
         }
-        selected = native_subscription_headers(&state.backend.accounts.native_auth_path);
+        selected = document.and_then(|auth| {
+            emp_state::validate_auth_json(&auth)
+                .ok()
+                .and_then(|auth| account_auth_headers(&auth))
+                .or_else(|| {
+                    auth["OPENAI_API_KEY"]
+                        .as_str()
+                        .filter(|key| !key.is_empty())
+                        .map(|key| {
+                            BTreeMap::from([("Authorization".to_owned(), format!("Bearer {key}"))])
+                        })
+                })
+        });
         NativeAuth::Implicit(selected.as_ref())
     } else {
         NativeAuth::Forward

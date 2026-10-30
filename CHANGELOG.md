@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+## 0.13.20 (2026-10-30)
+
+### 中文
+
+- 修复 EMP 本地 Key 的认证文件格式，并修正旧版占位文件。没有订阅和 OpenAI API Key 时可直接启动 Codex；保留已有真实登录。
+- 原生登录支持官方设备码、浏览器登录、自己的 OpenAI API Key，以及切换到已导入的 Other 订阅；正确显示 API Key 登录状态，切换后提示重启 Codex Runtime。
+- 新增独立、稳定的 EMP 网关 Key，可在设置中复制 API 地址与凭证。更换 Native 登录后，API 客户端和端口转发继续使用原网关 Key。
+- 新增 Jev Decisions 转发接口，使用已配置服务的凭据，保留上游状态与限流信息；Jev 不出现在 Codex 模型选择器中。
+- 修复两台电脑时钟不一致时隧道迁移预览失败的问题，保留五分钟有效期、发送端确认与一次性导入。
+- 移除 Claude CPA 适配器独立的 10 MiB 限制，统一使用请求大小上限，保留原始图片和工具历史；大段文字使用 CLI 结构化输入，长历史仍按模型上下文压缩。
+- 修复 macOS 内存统计被误判为零、导致大请求返回 503 的问题。
+- 精简请求分派和认证文件读取，减少 Claude CPA 大段历史的重复复制；将整页模拟 DOM 的测试改用真实浏览器验证。
+
+### English
+
+- Fix the EMP local-key authentication format and upgrade older managed placeholders. Start Codex without a subscription or OpenAI API key while preserving existing real sign-ins.
+- Support official device-code or browser subscription sign-in, your own OpenAI API key, and an imported Other subscription. Show API-key status correctly and prompt for a Codex Runtime restart after switching.
+- Add a stable EMP Gateway Key and copyable API address in settings. API clients and port forwards keep their gateway credential when Native sign-in changes.
+- Add a Jev Decisions endpoint using configured service credentials. Preserve upstream status and rate-limit information; keep Jev out of the Codex model picker.
+- Fix tunnel migration previews when the sending and receiving computers have different clocks. Retain five-minute expiry, sender approval, and one-time import.
+- Remove the Claude CPA adapter's separate 10 MiB cap and use the shared request-size limit. Preserve original images and tool history, send large text through the CLI's structured input, and compact history according to model context.
+- Fix valid macOS memory statistics being treated as zero, which blocked large requests with HTTP 503.
+- Simplify request dispatch and authentication-file reads, reduce repeated copies of large Claude CPA histories, and replace whole-page DOM mocks with real-browser checks.
+
 ## 0.13.19 (2026-10-29)
 
 ### 中文

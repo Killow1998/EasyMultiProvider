@@ -44,30 +44,16 @@ impl MemoryStatus {
         }
     }
 
-    fn sanitized(self) -> ObservedMemory {
-        let total = self.total.unwrap_or(0);
-        let used = self
+    fn sanitized(mut self) -> Self {
+        self.used = self
             .used
-            .unwrap_or_else(|| total.saturating_sub(self.available));
-        let used_percent = self
+            .or_else(|| self.total.map(|total| total.saturating_sub(self.available)));
+        self.used_percent = self
             .used_percent
             .filter(|value| value.is_finite())
             .map(|value| (value.clamp(0.0, 100.0) * 10.0).round() / 10.0);
-        ObservedMemory {
-            available: self.available,
-            total,
-            used,
-            used_percent,
-        }
+        self
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ObservedMemory {
-    available: usize,
-    total: usize,
-    used: usize,
-    used_percent: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +99,7 @@ impl std::error::Error for RequestLimitsError {}
 pub enum RequestCapacityReason {
     HardLimit,
     MemoryLimit,
+    MemoryUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -120,10 +107,10 @@ pub struct RequestCapacityError {
     pub limit: usize,
     pub decoded: bool,
     pub reason: RequestCapacityReason,
-    pub available_bytes: usize,
+    pub available_bytes: Option<usize>,
     pub required_memory_bytes: usize,
-    pub memory_total_bytes: usize,
-    pub memory_used_bytes: usize,
+    pub memory_total_bytes: Option<usize>,
+    pub memory_used_bytes: Option<usize>,
     pub memory_used_percent: Option<f64>,
 }
 
@@ -131,14 +118,14 @@ impl RequestCapacityError {
     pub const fn http_status(&self) -> u16 {
         match self.reason {
             RequestCapacityReason::HardLimit => 413,
-            RequestCapacityReason::MemoryLimit => 503,
+            RequestCapacityReason::MemoryLimit | RequestCapacityReason::MemoryUnavailable => 503,
         }
     }
 
     pub const fn websocket_close_code(&self) -> u16 {
         match self.reason {
             RequestCapacityReason::HardLimit => 1009,
-            RequestCapacityReason::MemoryLimit => 1013,
+            RequestCapacityReason::MemoryLimit | RequestCapacityReason::MemoryUnavailable => 1013,
         }
     }
 }
@@ -148,6 +135,7 @@ impl RequestCapacityReason {
         match self {
             Self::HardLimit => "hard_limit",
             Self::MemoryLimit => "memory_limit",
+            Self::MemoryUnavailable => "memory_unavailable",
         }
     }
 }
@@ -168,15 +156,30 @@ impl fmt::Display for RequestCapacityError {
                 if let Some(used) = self.memory_used_percent {
                     write!(formatter, "{used:.1}% used, ")?;
                 }
+                if let (Some(used), Some(total)) = (self.memory_used_bytes, self.memory_total_bytes) {
+                    write!(
+                        formatter,
+                        "{:.1} of {:.1} MiB used; ",
+                        used as f64 / (1024.0 * 1024.0),
+                        total as f64 / (1024.0 * 1024.0)
+                    )?;
+                }
+                if let Some(available) = self.available_bytes {
+                    write!(
+                        formatter,
+                        "{:.1} MiB available; ",
+                        available as f64 / (1024.0 * 1024.0)
+                    )?;
+                }
                 write!(
                     formatter,
-                    "{:.1} of {:.1} MiB used; {:.1} MiB available; {:.1} MiB required including safety headroom). Free memory and retry.",
-                    self.memory_used_bytes as f64 / (1024.0 * 1024.0),
-                    self.memory_total_bytes as f64 / (1024.0 * 1024.0),
-                    self.available_bytes as f64 / (1024.0 * 1024.0),
+                    "{:.1} MiB required including safety headroom). Free memory and retry.",
                     self.required_memory_bytes as f64 / (1024.0 * 1024.0)
                 )
             }
+            RequestCapacityReason::MemoryUnavailable => formatter.write_str(
+                "EMP could not read system memory. Request expansion was blocked because available memory is unknown. Retry after memory measurement is available.",
+            ),
         }
     }
 }
@@ -195,9 +198,9 @@ pub struct RequestLimitNotice {
     pub limit_bytes: usize,
     pub reservation_bytes: usize,
     pub required_memory_bytes: usize,
-    pub available_bytes: usize,
-    pub memory_total_bytes: usize,
-    pub memory_used_bytes: usize,
+    pub available_bytes: Option<usize>,
+    pub memory_total_bytes: Option<usize>,
+    pub memory_used_bytes: Option<usize>,
     pub memory_used_percent: Option<f64>,
     pub reason: &'static str,
 }
@@ -290,11 +293,9 @@ impl RequestLimits {
             .max(self.config.baseline)
             .min(self.config.maximum);
         let memory = if hard_limit {
-            MemoryStatus::available(0).sanitized()
+            None
         } else {
-            (self.memory_status)()
-                .unwrap_or_else(|| MemoryStatus::available(0))
-                .sanitized()
+            (self.memory_status)().map(MemoryStatus::sanitized)
         };
         let needed = if hard_limit {
             0
@@ -305,11 +306,11 @@ impl RequestLimits {
             limit: target,
             decoded: false,
             reason: RequestCapacityReason::MemoryLimit,
-            available_bytes: 0,
+            available_bytes: memory.map(|memory| memory.available),
             required_memory_bytes: usize::MAX,
-            memory_total_bytes: 0,
-            memory_used_bytes: 0,
-            memory_used_percent: None,
+            memory_total_bytes: memory.and_then(|memory| memory.total),
+            memory_used_bytes: memory.and_then(|memory| memory.used),
+            memory_used_percent: memory.and_then(|memory| memory.used_percent),
         })?;
         let other_reserved = state.reserved.saturating_sub(budget.reserved);
         let required = if hard_limit {
@@ -322,10 +323,14 @@ impl RequestLimits {
         };
         let reason = if hard_limit {
             Some(RequestCapacityReason::HardLimit)
-        } else if required > memory.available {
-            Some(RequestCapacityReason::MemoryLimit)
         } else {
-            None
+            match memory {
+                None => Some(RequestCapacityReason::MemoryUnavailable),
+                Some(memory) if required > memory.available => {
+                    Some(RequestCapacityReason::MemoryLimit)
+                }
+                Some(_) => None,
+            }
         };
         if reason.is_none() {
             state.reserved = other_reserved + needed;
@@ -356,10 +361,10 @@ impl RequestLimits {
             },
             reservation_bytes: needed,
             required_memory_bytes: required,
-            available_bytes: memory.available,
-            memory_total_bytes: memory.total,
-            memory_used_bytes: memory.used,
-            memory_used_percent: memory.used_percent,
+            available_bytes: memory.map(|memory| memory.available),
+            memory_total_bytes: memory.and_then(|memory| memory.total),
+            memory_used_bytes: memory.and_then(|memory| memory.used),
+            memory_used_percent: memory.and_then(|memory| memory.used_percent),
             reason: reason.map_or("", RequestCapacityReason::as_str),
         };
         if state.notices.len() == NOTICE_LIMIT {
@@ -375,11 +380,11 @@ impl RequestLimits {
                 },
                 decoded: false,
                 reason,
-                available_bytes: memory.available,
+                available_bytes: memory.map(|memory| memory.available),
                 required_memory_bytes: required,
-                memory_total_bytes: memory.total,
-                memory_used_bytes: memory.used,
-                memory_used_percent: memory.used_percent,
+                memory_total_bytes: memory.and_then(|memory| memory.total),
+                memory_used_bytes: memory.and_then(|memory| memory.used),
+                memory_used_percent: memory.and_then(|memory| memory.used_percent),
             });
         }
         Ok(())

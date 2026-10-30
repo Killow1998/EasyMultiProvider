@@ -146,6 +146,7 @@ fn capacity_response(error: &RequestCapacityError) -> Vec<u8> {
     };
     let mut detail = serde_json::json!({
         "code": code,
+        "reason": error.reason,
         "message": error.to_string(),
         "limit_bytes": error.limit,
     });
@@ -194,5 +195,49 @@ pub(crate) fn body_error_response(error: BodyError) -> Vec<u8> {
             (error.http_status() == 413).then_some("request_too_large"),
             &[],
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use emp_transport::{MemoryStatus, RequestLimits, RequestLimitsConfig, TransportKind};
+
+    #[test]
+    fn capacity_errors_distinguish_unknown_from_zero_memory() {
+        for memory in [None, Some(MemoryStatus::available(0))] {
+            let limits = RequestLimits::new(
+                RequestLimitsConfig {
+                    baseline: 64,
+                    maximum: 256,
+                    growth_quantum: 64,
+                    memory_headroom: 0,
+                },
+                move || memory,
+                || 0,
+                "capacity-wire",
+            )
+            .unwrap();
+            let error = limits.request(TransportKind::Http).ensure(65).unwrap_err();
+            let wire = String::from_utf8(body_error_response(BodyError::Capacity(error))).unwrap();
+            assert!(wire.starts_with("HTTP/1.1 503 Service Unavailable"));
+            let (_, body) = wire.split_once("\r\n\r\n").unwrap();
+            let error = serde_json::from_str::<Value>(body).unwrap()["error"].clone();
+            assert_eq!(error["code"], "request_capacity_unavailable");
+            assert_eq!(
+                error["reason"],
+                if memory.is_some() {
+                    "memory_limit"
+                } else {
+                    "memory_unavailable"
+                }
+            );
+            assert_eq!(
+                error["memory"]["available_bytes"],
+                serde_json::json!(memory.map(|value| value.available))
+            );
+            assert!(error["memory"]["total_bytes"].is_null());
+            assert!(error["memory"]["used_bytes"].is_null());
+        }
     }
 }

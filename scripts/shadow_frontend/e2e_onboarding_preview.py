@@ -21,13 +21,13 @@ def main():
             (args.output/name).write_bytes(base64.b64decode(image['value']))
         browser.navigate(args.url)
         assert browser.execute('return window.EMP_REAL_SHADOW===true;')
-        assert browser.execute('return reviewRows;')==['tutorials','native_local_key']
+        assert browser.execute('return reviewRows;')==['gateway','onboarding','lan']
         shot('shadow-review.png')
         browser.execute('window.EMP_REVIEW_ACTION("onboarding");')
         def ready():
             error=browser.execute('return document.getElementById("modal_status")?.textContent;')
             assert not error,error
-            return browser.execute('return !!document.querySelector("[data-ui-action=account-import-device]");')
+            return browser.execute('return !!document.querySelector("[data-native-method=subscription]");')
         try:wait_for(ready,seconds=50)
         except Exception:
             print(browser.diagnostics())

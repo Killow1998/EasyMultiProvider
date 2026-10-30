@@ -169,7 +169,7 @@ impl Drop for SummaryUpstream {
 
 #[test]
 #[ignore = "requires an installed trusted Claude Code CLI on PATH"]
-fn installed_cli_compacts_history_above_the_adapter_limit_before_inference() {
+fn installed_cli_compacts_history_above_the_model_context_before_inference() {
     assert!(emp_codex::installed_cli::resolve_claude_cli().is_some());
     let upstream = SummaryUpstream::start();
     let (_directory, server) = claude_summary_server_with_context(&upstream.base_url(), 1_000_000);
@@ -194,19 +194,20 @@ fn installed_cli_compacts_history_above_the_adapter_limit_before_inference() {
     }))
     .unwrap();
     assert!(body.len() > 10 * 1024 * 1024);
-    // Content-Length measures the compressed transport, not the decoded history
-    // to which the Claude adapter's prepared-input limit applies.
+    // Decode the entire history before applying the model's context budget.
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(&body).unwrap();
     let compressed = encoder.finish().unwrap();
     assert!(compressed.len() < 64 * 1024);
     let started = Instant::now();
-    let response = post(
-        &server,
-        "/v1/responses",
-        &compressed,
-        &[&session_header(&server), "Content-Encoding: gzip"],
-    );
+    let mut stream = TcpStream::connect(server.local_addr()).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .unwrap();
+    write!(stream, "POST /v1/responses HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n{}\r\nConnection: close\r\n\r\n", server.local_addr(), compressed.len(), session_header(&server)).unwrap();
+    stream.write_all(&compressed).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
     assert!(started.elapsed() < Duration::from_secs(60));
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     let result: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
@@ -247,6 +248,50 @@ fn installed_cli_compacts_history_above_the_adapter_limit_before_inference() {
     server
         .shutdown()
         .expect("shutdown large-history Claude test server");
+}
+
+#[test]
+#[ignore = "requires an installed trusted Claude Code CLI on PATH"]
+fn installed_cli_preserves_media_above_ten_mib_without_forcing_compaction() {
+    assert!(emp_codex::installed_cli::resolve_claude_cli().is_some());
+    let upstream = SummaryUpstream::start();
+    let (_directory, server) = claude_server(&upstream.base_url());
+    let mut image = super::media::synthetic_png(32, 32, false);
+    image.resize(10 * 1024 * 1024, 0);
+    let image_url = format!("data:image/png;base64,{}", STANDARD.encode(&image));
+    let input = json!([
+        {"role":"user","content":[{"type":"input_image","image_url":image_url}]},
+        {"type":"function_call","name":"read","call_id":"large-call","arguments":"{}"},
+        {"type":"function_call_output","call_id":"large-call","output":"complete result"},
+        {"role":"user","content":"active destination request"}
+    ]);
+    let body = serde_json::to_vec(&json!({
+        "model":"demo/model","stream":false,"input":input,
+        "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]
+    }))
+    .unwrap();
+    let response = post(&server, "/v1/responses", &body, &[&session_header(&server)]);
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let requests = upstream.requests_through_final();
+    assert_eq!(requests.len(), 1);
+    assert!(serde_json::to_vec(&requests[0].body).unwrap().len() > 12 * 1024 * 1024);
+    let blocks = requests[0].body["messages"][0]["content"]
+        .as_array()
+        .unwrap();
+    let native_image = blocks
+        .iter()
+        .find(|block| block["type"] == "image")
+        .unwrap();
+    assert!(native_image["source"]["data"] == STANDARD.encode(&image));
+    let history = blocks
+        .iter()
+        .filter_map(|block| block["text"].as_str())
+        .filter_map(|text| serde_json::from_str::<Value>(text).ok())
+        .collect::<Vec<_>>();
+    assert_eq!(history[2]["item"], input[1]);
+    assert_eq!(history[3]["item"], input[2]);
+    assert_eq!(history[4]["item"], input[3]);
+    server.shutdown().unwrap();
 }
 
 #[test]

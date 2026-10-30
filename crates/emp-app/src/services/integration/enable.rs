@@ -66,7 +66,7 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
         }
     }
     let auth_path = &state.backend.accounts.native_auth_path;
-    let created = emp_integration::local_auth::ensure(auth_path)
+    let created = emp_integration::local_auth::ensure(auth_path, &state.backend.gateway_key)
         .map_err(|_| EnableError::Unavailable(409))?;
     let result = manager
         .enable_with_sideband(

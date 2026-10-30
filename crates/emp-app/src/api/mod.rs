@@ -1,6 +1,7 @@
 pub(crate) mod accounts;
 pub(crate) mod catalog;
 pub(crate) mod compact;
+pub(crate) mod decisions;
 pub(crate) mod images;
 pub(crate) mod inspection;
 pub(crate) mod integration;

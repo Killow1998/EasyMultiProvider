@@ -296,14 +296,26 @@ pub(crate) fn valid_caller_authorization(value: Option<&str>, auth_path: &Path) 
 }
 
 pub(crate) fn proxy_allowed(request: Request<'_>, state: &ServerState, now: f64) -> bool {
-    if !same_origin(request, state.port) {
-        return false;
-    }
     if request.header_count("Authorization") > 1 {
         return false;
     }
+    let gateway = request
+        .header("Authorization")
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|value| {
+            constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes())
+        });
+    // Forwarded API clients have their own Host/port. Browser management remains
+    // origin-scoped and never accepts this credential in place of its session.
+    if gateway && request.header("Origin").is_none() {
+        return true;
+    }
+    if !same_origin(request, state.port) {
+        return false;
+    }
     let supplied_session = request.session_token();
-    state.sessions.contains(supplied_session.as_deref(), now)
+    gateway
+        || state.sessions.contains(supplied_session.as_deref(), now)
         || valid_caller_authorization(
             request.header("Authorization"),
             &state.backend.accounts.native_auth_path,

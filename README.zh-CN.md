@@ -55,10 +55,13 @@ EMP 在本机运行，主要解决两件事：
 使用 Mercury 3 时，点击 **添加服务 → Inception / Mercury**，填写 Inception API Key，
 再到 **模型设置 → 更新模型列表**，选择 `mercury-3`。
 
-没有 Codex 订阅也可使用外部模型。添加外部服务并启用 EMP 后，若 Codex 尚未登录，
-EMP 会自动建立仅用于本机连接的 Key。点击服务列表的 **EMP 本地 Key**，可取消
-此连接，或选择 **登录订阅账号**，在 OpenAI 登录页输入装置码。登录成功后再替换
-本地 Key，随后重启 Codex Runtime。取消 Key 会恢复原生连接，EMP 继续运行。
+没有 Codex 订阅和 OpenAI API Key 也可使用外部模型。若 Codex 尚未登录，EMP 会
+自动建立 **EMP 本地 Key**；已有订阅或 API Key 登录会保留。点击 **切换登录方式**，
+可通过官方设备码或浏览器登录订阅、填写自己的 OpenAI API Key，或使用已导入的
+Other 订阅。切换后请重启 Codex Runtime。取消本地 Key 会恢复原生连接，EMP 继续运行。
+
+API 客户端和端口转发使用独立的 **EMP 网关 Key**，在 **设置 → 通用服务设置 → 网关连接**
+中复制。更换 Native 登录后，网关 Key 保持有效。[网关接口与 Jev](docs/gateway.md)。
 
 已有 Native 订阅时，可在 **Native → 账号信息 → 切换为 EMP 本地 Key** 中，选择
 保留为 Other 账号或移除当前 Native 登录，完成后重启 Codex Runtime。

@@ -56,11 +56,14 @@ fn journal(path: &Path) -> PathBuf {
 
 /// Create only when signed out. The journal is also the fully written private
 /// staging file; hard-linking it publishes without overwriting a concurrent login.
-pub fn ensure(path: &Path) -> Result<bool, IntegrationError> {
-    if read(path)?.is_some() {
+pub fn ensure(path: &Path, key: &str) -> Result<bool, IntegrationError> {
+    if let Some(auth) = read(path)? {
+        if is_local(&auth) && auth["auth_mode"] != "apikey" {
+            return replace_with_local(path, &auth, auth["OPENAI_API_KEY"].as_str().unwrap());
+        }
         return Ok(false);
     }
-    let auth = new_local()?;
+    let auth = new_local(key);
     let saved = journal(path);
     emp_state::atomic_write_private_state(&saved, &serde_json::to_vec(&auth).unwrap())
         .map_err(|_| IntegrationError("Local key cannot be saved"))?;
@@ -71,26 +74,20 @@ pub fn ensure(path: &Path) -> Result<bool, IntegrationError> {
     }
 }
 
-fn new_local() -> Result<Value, IntegrationError> {
-    let mut random = [0_u8; 32];
-    getrandom::getrandom(&mut random)
-        .map_err(|_| IntegrationError("Local key generation failed"))?;
-    let key = format!(
-        "emp-local-{}",
-        random
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    );
-    Ok(json!({"OPENAI_API_KEY":key, "emp_local_connection":true}))
+fn new_local(key: &str) -> Value {
+    json!({"auth_mode":"apikey", "OPENAI_API_KEY":key, "emp_local_connection":true})
 }
 
 /// Replace the explicitly selected login with an EMP-owned local credential.
-pub fn replace_with_local(path: &Path, expected: &Value) -> Result<bool, IntegrationError> {
+pub fn replace_with_local(
+    path: &Path,
+    expected: &Value,
+    key: &str,
+) -> Result<bool, IntegrationError> {
     if read(path)?.as_ref() != Some(expected) {
         return Ok(false);
     }
-    let auth = new_local()?;
+    let auth = new_local(key);
     let saved = journal(path);
     emp_state::atomic_write_private_state(&saved, &serde_json::to_vec(&auth).unwrap())
         .map_err(|_| IntegrationError("Local key cannot be saved"))?;
@@ -114,18 +111,16 @@ pub fn restore(path: &Path) -> Result<(), IntegrationError> {
 
 /// The pending login captured its original authentication before starting.
 /// Refuse to overwrite any intervening edit or login, and retain no old secrets.
-pub fn install_subscription(
+pub fn install(
     path: &Path,
     expected: &Option<Value>,
     auth: &Value,
 ) -> Result<bool, IntegrationError> {
-    let validated = emp_state::validate_auth_json(auth)
-        .map_err(|_| IntegrationError("Subscription login returned invalid credentials"))?;
     if &read(path)? != expected {
         return Ok(false);
     }
-    emp_state::filesystem::atomic_write_config(path, &serde_json::to_vec(&validated).unwrap())
-        .map_err(|_| IntegrationError("Subscription login cannot be saved"))?;
+    emp_state::atomic_write_private_state(path, &serde_json::to_vec(auth).unwrap())
+        .map_err(|_| IntegrationError("Codex login cannot be saved"))?;
     restore(path)?;
     Ok(true)
 }
@@ -133,14 +128,22 @@ pub fn install_subscription(
 #[cfg(test)]
 mod tests {
     use super::*;
+    const KEY: &str = "emp-local-fixture";
 
     #[test]
     fn local_key_is_stable_and_restore_returns_to_signed_out() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("auth.json");
-        assert!(ensure(&path).unwrap());
+        assert!(ensure(&path, KEY).unwrap());
         let first = read(&path).unwrap();
-        assert!(!ensure(&path).unwrap());
+        assert_eq!(first.as_ref().unwrap()["auth_mode"], "apikey");
+        assert!(!ensure(&path, KEY).unwrap());
+        assert_eq!(read(&path).unwrap(), first);
+        let mut legacy = first.clone().unwrap();
+        legacy.as_object_mut().unwrap().remove("auth_mode");
+        emp_state::atomic_write_private_state(&path, &serde_json::to_vec(&legacy).unwrap())
+            .unwrap();
+        assert!(ensure(&path, "emp-local-another-key").unwrap());
         assert_eq!(read(&path).unwrap(), first);
         assert_eq!(mode(&path), "local_key");
         restore(&path).unwrap();
@@ -151,10 +154,10 @@ mod tests {
     fn existing_or_replaced_authentication_is_never_removed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("auth.json");
-        ensure(&path).unwrap();
+        ensure(&path, KEY).unwrap();
         let original = br#"{"OPENAI_API_KEY":"user-key"}"#;
         emp_state::filesystem::atomic_write_config(&path, original).unwrap();
-        assert!(!ensure(&path).unwrap());
+        assert!(!ensure(&path, KEY).unwrap());
         restore(&path).unwrap();
         assert_eq!(fs::read(&path).unwrap(), original);
     }
@@ -164,7 +167,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("auth.json");
         fs::write(&path, b"partial").unwrap();
-        assert!(ensure(&path).is_err());
+        assert!(ensure(&path, KEY).is_err());
         assert_eq!(fs::read(path).unwrap(), b"partial");
     }
 
@@ -175,9 +178,9 @@ mod tests {
         let original = json!({"tokens":{"account_id":"fixture","access_token":"token"}});
         emp_state::atomic_write_private_state(&path, &serde_json::to_vec(&original).unwrap())
             .unwrap();
-        assert!(!replace_with_local(&path, &json!({"other":true})).unwrap());
+        assert!(!replace_with_local(&path, &json!({"other":true}), KEY).unwrap());
         assert_eq!(read(&path).unwrap(), Some(original.clone()));
-        assert!(replace_with_local(&path, &original).unwrap());
+        assert!(replace_with_local(&path, &original, KEY).unwrap());
         assert_eq!(mode(&path), "local_key");
         restore(&path).unwrap();
         assert_eq!(mode(&path), "missing");

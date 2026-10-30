@@ -42,7 +42,7 @@ const CONTEXT_HEADERS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Project Python's native allowlist and preserve resolved credential precedence.
+/// Forward allowed native headers while preserving resolved credential precedence.
 pub fn request_headers(
     auth: NativeAuth<'_>,
     incoming: &BTreeMap<String, String>,

@@ -68,6 +68,7 @@ mod collaboration_contract;
 mod config_api_contract;
 mod conversation_http_contract;
 mod conversation_switch_contract;
+mod gateway_contract;
 mod history_diagnostic_contract;
 mod integration_sideband_contract;
 mod internal_events_contract;
@@ -372,10 +373,7 @@ fn receive_upstream_request_from_head(
                 .get("content-encoding")
                 .map(String::as_str)
                 .unwrap_or(""),
-            // Claude CPA source images retain original bytes rather than
-            // relying on the CLI's smaller lossy encoding. This is the fake
-            // upstream's capture bound, not a production limit or oracle.
-            12 * 1024 * 1024,
+            emp_transport::MAX_EXPANDED_REQUEST_BYTES,
             None,
         )
         .expect("decode upstream request");

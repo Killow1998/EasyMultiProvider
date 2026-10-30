@@ -38,18 +38,22 @@ fn only_cpa_relay_uses_image_slots_not_local_login_or_context_assessment() {
 }
 
 #[test]
-fn relay_slots_do_not_bypass_original_media_and_system_byte_budget() {
+fn large_original_media_and_instructions_are_kept_above_the_old_adapter_limit() {
     let mut bytes = STANDARD.decode(TINY_PNG).unwrap();
-    // The same original-byte budget applies even when CLI slots are tiny.
     bytes.resize(4 * 1024 * 1024, 0);
     let body = json!({"instructions":"x".repeat(6 * 1024 * 1024),"input":[
         {"role":"user","content":[{"type":"input_image","image_url":format!("data:image/png;base64,{}",STANDARD.encode(bytes))}]}
     ]});
-    assert_eq!(prepare(&body).err(), Some("claude_cli_input_too_large"));
-    assert_eq!(
-        prepare_relay(&body).err(),
-        Some("claude_cli_input_too_large")
-    );
+    let direct = prepare(&body).unwrap();
+    let relay = prepare_relay(&body).unwrap();
+    assert!(direct.stdin.len() + direct.system_prompt.len() > 10 * 1024 * 1024);
+    assert!(relay.stdin.len() < direct.stdin.len());
+    let (ExpectedUserContent::Blocks(relay_original), ExpectedUserContent::Blocks(direct_original)) =
+        (relay.expected_user_content, direct.expected_user_content)
+    else {
+        panic!("original image blocks are required");
+    };
+    assert_eq!(relay_original, direct_original);
 }
 
 #[test]
@@ -57,7 +61,10 @@ fn text_input_keeps_the_existing_text_carrier() {
     let body = json!({"model":"m","input":"hello","stream":true});
     let prepared = prepare(&body).expect("text input");
     assert!(matches!(prepared.input_format, InputFormat::Text));
-    assert_eq!(prepared.stdin, projection::transcript(&body).unwrap());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&prepared.stdin).unwrap(),
+        json!({"model":"m","input":"hello","stream":false})
+    );
     assert!(matches!(
         prepared.expected_user_content,
         ExpectedUserContent::Text(_)

@@ -18,7 +18,7 @@ pub(super) struct PreparedInput {
 }
 
 pub(super) enum ExpectedUserContent {
-    Text(Vec<u8>),
+    Text(String),
     Blocks(Vec<Value>),
 }
 
@@ -181,12 +181,24 @@ fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static st
         transcript.get("input"),
         Some(Value::Array(_) | Value::Object(_))
     ) {
-        let stdin = projection::transcript(&transcript)?;
+        let stdin = projection::text_transcript(&transcript)?;
+        // Claude CLI caps plain stdin at 10 MiB; JSONL has no such text cap.
+        let (payload, input_format) = if stdin.len() > 10 * 1024 * 1024 {
+            (
+                serde_json::to_vec(
+                    &json!({"type":"user","message":{"role":"user","content":stdin}}),
+                )
+                .expect("JSONL input"),
+                InputFormat::StreamJson,
+            )
+        } else {
+            (stdin.as_bytes().to_vec(), InputFormat::Text)
+        };
         return Ok(PreparedInput {
             system_prompt,
-            expected_user_content: ExpectedUserContent::Text(stdin.clone()),
-            stdin,
-            input_format: InputFormat::Text,
+            expected_user_content: ExpectedUserContent::Text(stdin),
+            stdin: payload,
+            input_format,
         });
     }
     let input = transcript.get("input");
@@ -311,14 +323,10 @@ fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static st
 pub(super) fn context_payload(body: &Value) -> Result<Value, &'static str> {
     let prepared = prepare(body)?;
     let content = match prepared.expected_user_content {
-        ExpectedUserContent::Text(bytes) => {
-            Value::String(String::from_utf8(bytes).map_err(|_| "claude_cli_invalid_transcript")?)
-        }
+        ExpectedUserContent::Text(text) => Value::String(text),
         ExpectedUserContent::Blocks(blocks) => Value::Array(blocks),
     };
-    let schema_json = projection::proposal_schema()?;
-    let schema: Value =
-        serde_json::from_str(&schema_json).map_err(|_| "claude_cli_invalid_schema")?;
+    let schema = projection::proposal_schema();
     Ok(json!({
         "system":prepared.system_prompt,
         "messages":[{"role":"user","content":content}],

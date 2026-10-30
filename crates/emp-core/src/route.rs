@@ -397,7 +397,13 @@ where
             ("name".to_owned(), Value::String("Native Codex".to_owned())),
             (
                 "base_url".to_owned(),
-                Value::String(codex_base_url(config).to_owned()),
+                Value::String(
+                    config
+                        .get("_native_base_url")
+                        .and_then(Value::as_str)
+                        .unwrap_or_else(|| codex_base_url(config))
+                        .to_owned(),
+                ),
             ),
             ("protocol".to_owned(), Value::String("responses".to_owned())),
             ("auth_mode".to_owned(), Value::String("forward".to_owned())),

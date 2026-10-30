@@ -77,6 +77,12 @@ jobs:
           cargo +1.93.1 test --locked -p emp-transport --test http_client
           tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name
 
+      - name: Verify native memory statistics and request admission
+        run: cargo +1.93.1 test --locked -p emp-transport --lib system_memory -- --nocapture
+
+      - name: Verify large HTTP request admission against the native memory probe
+        run: cargo +1.93.1 test --locked -p emp-app --lib native_memory_large_http_body -- --ignored --nocapture
+
       - name: Verify native background update and rollback
         run: cargo +1.93.1 xtask package-smoke
 
