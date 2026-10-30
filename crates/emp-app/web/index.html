@@ -167,7 +167,7 @@ const routingSettings = createRoutingSettings({getState:() => state, cloneState,
 const ultraSettings = createUltraSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
 const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
 const tutorials = createTutorials({openModal, $, tr, esc});
-const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, help:shadowHelp, contextHelp, presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
+const settings = createSettings({api, notice, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, help:shadowHelp, contextHelp, presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
 const {open:openSettings, toggle:toggleSetting} = settings;
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});
@@ -1218,8 +1218,8 @@ function runDynamicUiAction(element) {
     case 'setting-toggle': toggleSetting(element); return true;
     case 'routing-settings': routingSettings.open({back:openSettings}); return true;
     case 'ultra-settings': ultraSettings.open({back:openSettings}); return true;
-    case 'native-login': nativeLogin.open(); return true;
-    case 'account-details': if(id==='@native'&&state.native_account?.auth_mode&&state.native_account.auth_mode!=='subscription')nativeLogin.open();else openAccountDetails(id); return true;
+    case 'native-login': nativeLogin.manage(); return true;
+    case 'account-details': if(id==='@native'&&state.native_account?.auth_mode&&state.native_account.auth_mode!=='subscription')nativeLogin.manage();else openAccountDetails(id); return true;
     case 'native-use-local-key': nativeLogin.openLocalKey({back:modalReturn()}); return true;
     case 'account-alias-save': saveAccountAlias(element); return true;
     case 'account-remove': removeAccount(id, element); return true;

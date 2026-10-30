@@ -1,16 +1,22 @@
-//! Official device-code RPC in an isolated credential home. No model requests.
+//! Official subscription login in an isolated credential home. No model requests.
 use super::*;
 use std::sync::{Arc, Mutex};
 
-pub struct DeviceLogin {
+#[derive(Clone, Copy)]
+pub enum LoginMethod {
+    DeviceCode,
+    Browser,
+}
+
+pub struct SubscriptionLogin {
     cancelled: Arc<AtomicBool>,
     public: Arc<Mutex<Value>>,
     result: Arc<Mutex<Option<Result<Value, &'static str>>>>,
     worker: Option<JoinHandle<()>>,
 }
 
-impl DeviceLogin {
-    pub fn start(binary: &str) -> Result<Self, QuotaError> {
+impl SubscriptionLogin {
+    pub fn start(binary: &str, method: LoginMethod) -> Result<Self, QuotaError> {
         let binary = TrustedBinary::resolve(binary)?;
         let cancelled = Arc::new(AtomicBool::new(false));
         let public = Arc::new(Mutex::new(json!({"status":"starting"})));
@@ -19,7 +25,7 @@ impl DeviceLogin {
         let snapshot = public.clone();
         let completed = result.clone();
         let worker = thread::spawn(move || {
-            let outcome = run(&binary, &cancel, &snapshot);
+            let outcome = run(&binary, method, &cancel, &snapshot);
             *completed.lock().unwrap() = Some(outcome);
         });
         Ok(Self {
@@ -38,7 +44,7 @@ impl DeviceLogin {
     }
 }
 
-impl Drop for DeviceLogin {
+impl Drop for SubscriptionLogin {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
@@ -49,6 +55,7 @@ impl Drop for DeviceLogin {
 
 fn run(
     binary: &TrustedBinary,
+    method: LoginMethod,
     cancel: &AtomicBool,
     public: &Mutex<Value>,
 ) -> Result<Value, &'static str> {
@@ -76,7 +83,7 @@ fn run(
     .map_err(|_| "login_protocol_error")?;
     let mut stdin = child.process.stdin.take().ok_or("login_protocol_error")?;
     let (receiver, reader) = stdout_reader(stdout);
-    let result = conversation(&mut stdin, &receiver, cancel, public);
+    let result = conversation(&mut stdin, &receiver, method, cancel, public);
     stop.store(true, Ordering::Release);
     drop(stdin);
     drop(child);
@@ -104,6 +111,7 @@ fn send(stdin: &mut impl Write, message: Value) -> Result<(), &'static str> {
 fn conversation(
     stdin: &mut impl Write,
     receiver: &Receiver<ProcessLine>,
+    method: LoginMethod,
     cancel: &AtomicBool,
     public: &Mutex<Value>,
 ) -> Result<(), &'static str> {
@@ -133,24 +141,16 @@ fn conversation(
             send(stdin, json!({"method":"initialized"}))?;
             send(
                 stdin,
-                json!({"id":2,"method":"account/login/start","params":{"type":"chatgptDeviceCode"}}),
+                json!({"id":2,"method":"account/login/start","params":{"type":match method { LoginMethod::DeviceCode => "chatgptDeviceCode", LoginMethod::Browser => "chatgpt" }}}),
             )?;
         } else if value["id"] == 2 {
             if value.get("error").is_some() {
-                return Err("login_device_unavailable");
+                return Err(match method {
+                    LoginMethod::DeviceCode => "login_device_unavailable",
+                    LoginMethod::Browser => "login_browser_unavailable",
+                });
             }
             let response = &value["result"];
-            let url = response["verificationUrl"]
-                .as_str()
-                .ok_or("login_protocol_error")?;
-            // Only the official origin may be offered as a sign-in destination.
-            if url != "https://auth.openai.com/codex/device" {
-                return Err("login_protocol_error");
-            }
-            let code = response["userCode"]
-                .as_str()
-                .filter(|code| !code.is_empty() && code.len() <= 64)
-                .ok_or("login_protocol_error")?;
             login_id = Some(
                 response["loginId"]
                     .as_str()
@@ -158,7 +158,37 @@ fn conversation(
                     .to_owned(),
             );
             deadline = Instant::now() + Duration::from_secs(15 * 60);
-            *public.lock().unwrap() = json!({"status":"pending","verification_url":url,"user_code":code,"expires_at":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()+900});
+            let mut instructions = match method {
+                LoginMethod::DeviceCode => {
+                    let url = response["verificationUrl"]
+                        .as_str()
+                        .ok_or("login_protocol_error")?;
+                    if url != "https://auth.openai.com/codex/device" {
+                        return Err("login_protocol_error");
+                    }
+                    let code = response["userCode"]
+                        .as_str()
+                        .filter(|code| !code.is_empty() && code.len() <= 64)
+                        .ok_or("login_protocol_error")?;
+                    json!({"method":"device","verification_url":url,"user_code":code})
+                }
+                LoginMethod::Browser => {
+                    let url = response["authUrl"].as_str().ok_or("login_protocol_error")?;
+                    if !url.starts_with("https://auth.openai.com/") {
+                        return Err("login_protocol_error");
+                    }
+                    json!({"method":"browser","verification_url":url})
+                }
+            };
+            instructions["status"] = json!("pending");
+            instructions["expires_at"] = json!(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    + 900
+            );
+            *public.lock().unwrap() = instructions;
         } else if value["method"] == "account/login/completed"
             && login_id
                 .as_deref()

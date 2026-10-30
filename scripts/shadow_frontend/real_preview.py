@@ -43,7 +43,7 @@ def serve(handler, args):
         demo_lock = threading.Lock()
         def open_demo(scenario=''):
             with demo_lock:
-                kind='onboarding' if scenario in {'onboarding','lan'} else 'general'
+                kind='onboarding' if scenario in {'gateway','onboarding','lan'} else 'general'
                 if kind not in demo_urls:
                     from preview import fixture, preview, seed_session_bills
                     with contextlib.ExitStack() as pending:

@@ -106,6 +106,18 @@ pub(crate) fn handle_connection(
         match Some(request) {
             Some(request)
                 if request.method == RequestMethod::Post
+                    && request.raw_path() == "/v1/decisions" =>
+            {
+                Some(crate::api::decisions::request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
                     && (request.raw_path().starts_with("/api/native/login/")
                         || request.raw_path().starts_with("/api/accounts/login/")) =>
             {
@@ -431,7 +443,7 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
     if request.method == RequestMethod::Get
         && (path == "/v1/models" || path.starts_with("/v1/models/"))
     {
-        if !same_origin {
+        if !same_origin && !crate::http::auth::proxy_allowed(request, state, now) {
             return cross_origin_response("cross-origin model catalog request rejected");
         }
         return catalog::models_request(request, state);
@@ -468,6 +480,15 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         }
         let supplied_session = request.session_token();
         if state.sessions.contains(supplied_session.as_deref(), now) {
+            if request.method == RequestMethod::Get && path == "/api/gateway" {
+                return response(
+                    "HTTP/1.1 200 OK",
+                    "application/json",
+                    &serde_json::to_vec(&serde_json::json!({"api_key":state.backend.gateway_key}))
+                        .expect("gateway JSON"),
+                    &[("Cache-Control", "no-store")],
+                );
+            }
             if request.method == RequestMethod::Get && path == "/api/support-report" {
                 return crate::api::support_report::read(state);
             }

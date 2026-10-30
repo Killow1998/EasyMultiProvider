@@ -1,5 +1,13 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  "core.gateway_connection": ["网关连接","Gateway connection"],
+  "core.gateway_base_url": ["API 地址","API base URL"],
+  "core.gateway_key": ["EMP 网关 Key","EMP Gateway Key"],
+  "core.gateway_hint": ["此 Key 用于调用 EMP，与 Native 订阅登录分开保存。更换订阅后，此 Key 保持不变。","This key authenticates EMP requests and is stored separately from Native sign-in. It remains unchanged when you switch subscriptions."],
+  "core.gateway_copy_key": ["复制 Key","Copy key"],
+  "core.gateway_key_copied": ["EMP 网关 Key 已复制。","EMP Gateway Key copied."],
+  "core.gateway_forwarding_hint": ["其他设备使用端口转发后的 API 地址，并将此 Key 填入 API Key。","On another device, use the forwarded API address and enter this key as the API key."],
+  "core.gateway_jev_hint": ["Jev 通过 /v1/decisions 接口调用，不显示在 Codex 模型选择器中。","Call Jev through /v1/decisions. It does not appear in the Codex model picker."],
   "plan.free": ["Free","Free"],
   "plan.go": ["Go","Go"],
   "plan.plus": ["Plus","Plus"],

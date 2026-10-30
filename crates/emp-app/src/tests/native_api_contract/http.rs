@@ -270,7 +270,18 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
         &cookie,
     ];
     let forward = post(&server, "/v1/responses", &body("upstream"), &context);
-    let account = post(&server, "/v1/responses", &body("demo/upstream"), &context);
+    let gateway = format!("Authorization: Bearer {}", server.state.backend.gateway_key);
+    let account = post(
+        &server,
+        "/v1/responses",
+        &body("demo/upstream"),
+        &[
+            &gateway,
+            "Host: localhost:14200",
+            "thread-id: thread-fixture",
+            "x-openai-subagent: subagent-fixture",
+        ],
+    );
 
     for wire in [&forward, &account] {
         let (head, returned) = response_parts(wire);
@@ -336,6 +347,103 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
             .contains("selected@fixture.invalid")
     );
     server.shutdown().expect("shutdown Rust EMP");
+}
+
+#[test]
+fn gateway_requests_use_native_api_keys_and_subscription_credentials_separately() {
+    let upstream = NativeUpstream::start(2);
+    let root = tempfile::tempdir().unwrap();
+    let catalog = root.path().join("models_cache.json");
+    std::fs::write(
+        &catalog,
+        br#"{"models":[{"slug":"upstream","supported_in_api":true}]}"#,
+    )
+    .unwrap();
+    let config_path = root.path().join("config.json");
+    let config = json!({"codex_base_url":upstream.base_url(),"native_catalog_path":catalog});
+    std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let auth_path = root.path().join("auth.json");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "missing-test-codex",
+        auth_path.clone(),
+    )
+    .unwrap();
+    let gateway = format!("Authorization: Bearer {}", server.state.backend.gateway_key);
+    let body = json!({"model":"upstream","input":"fixture","stream":false});
+    for (auth, expected, account) in [
+        (
+            json!({"auth_mode":"apikey","OPENAI_API_KEY":"sk-native-fixture"}),
+            "Bearer sk-native-fixture",
+            None,
+        ),
+        (
+            json!({"tokens":{"access_token":"subscription-fixture","account_id":"native-owner"}}),
+            "Bearer subscription-fixture",
+            Some("native-owner"),
+        ),
+    ] {
+        emp_state::atomic_write_private_state(&auth_path, &serde_json::to_vec(&auth).unwrap())
+            .unwrap();
+        server
+            .state
+            .backend
+            .configuration
+            .test_config()
+            .lock()
+            .unwrap()["codex_base_url"] = json!("https://chatgpt.com/backend-api/codex");
+        let route = crate::services::request_preparation::prepare_request(
+            &server.state,
+            body.clone(),
+            crate::services::request_preparation::RequestOperation::Responses,
+        )
+        .unwrap()
+        .route;
+        assert_eq!(
+            route.provider.value()["base_url"],
+            if account.is_some() {
+                "https://chatgpt.com/backend-api/codex"
+            } else {
+                "https://api.openai.com/v1"
+            }
+        );
+        server
+            .state
+            .backend
+            .configuration
+            .test_config()
+            .lock()
+            .unwrap()["codex_base_url"] = json!(upstream.base_url());
+        let response = post(
+            &server,
+            "/v1/responses",
+            &serde_json::to_vec(&body).unwrap(),
+            &[
+                &gateway,
+                "Host: localhost:14200",
+                "chatgpt-account-id: ignored-caller",
+            ],
+        );
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let observed = upstream.next();
+        assert_eq!(observed.headers["authorization"], expected);
+        assert_eq!(
+            observed
+                .headers
+                .get("chatgpt-account-id")
+                .map(String::as_str),
+            account
+        );
+        assert!(
+            !observed
+                .headers
+                .values()
+                .any(|value| value.contains(&server.state.backend.gateway_key))
+        );
+    }
+    server.shutdown().unwrap();
 }
 
 #[cfg(unix)]

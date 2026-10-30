@@ -1,21 +1,23 @@
-//! Isolated device-code jobs share the official helper. Imported subscriptions
+//! Isolated subscription jobs share the official helper. Imported subscriptions
 //! use the existing account transaction; native replacement checks ownership.
 use crate::app::ServerState;
-use emp_codex::quota::DeviceLogin;
+use emp_codex::quota::{LoginMethod, SubscriptionLogin};
 use emp_integration::local_auth;
 use serde_json::{Value, json};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+mod credentials;
+
 #[derive(Default)]
-pub(crate) struct DeviceLoginSession(Mutex<LoginState>);
+pub(crate) struct LoginSession(Mutex<LoginState>);
 #[derive(Default)]
 struct LoginState {
     pending: Option<Pending>,
     outcome: Value,
 }
 struct Pending {
-    helper: DeviceLogin,
+    helper: SubscriptionLogin,
     _engine: Option<crate::services::runtime::HelperBinary>,
     expected: Option<Value>,
     account_name: Option<String>,
@@ -34,6 +36,14 @@ pub(crate) fn execute(
         &state.backend.native_login
     };
     let mut login = session.0.lock().map_err(|_| "login_busy")?;
+    if !importing && matches!(operation, "use-api-key" | "use-account") {
+        if login.pending.is_some() {
+            return Err("login_busy");
+        }
+        let result = credentials::switch(state, operation, body)?;
+        login.outcome = Value::Null;
+        return Ok(result);
+    }
     if !importing && operation == "use-local-key" {
         if login.pending.is_some() {
             return Err("login_busy");
@@ -49,9 +59,9 @@ pub(crate) fn execute(
         let auth = local_auth::read(path)
             .map_err(|_| "login_auth_unreadable")?
             .ok_or("login_auth_unreadable")?;
-        emp_state::validate_auth_json(&auth).map_err(|_| "login_auth_unreadable")?;
         let active = manager.status().map_err(|_| "login_busy")?.relation == "applied";
         if keep {
+            emp_state::validate_auth_json(&auth).map_err(|_| "login_credentials_invalid")?;
             let config = state
                 .backend
                 .configuration
@@ -69,7 +79,9 @@ pub(crate) fn execute(
             crate::services::accounts::import_account_state(None, state, &imported)
                 .map_err(|_| "login_import_failed")?;
         }
-        if !local_auth::replace_with_local(path, &auth).map_err(|_| "login_storage_failed")? {
+        if !local_auth::replace_with_local(path, &auth, &state.backend.gateway_key)
+            .map_err(|_| "login_storage_failed")?
+        {
             return Err("login_auth_changed");
         }
         if let Ok(mut quota) = state.backend.accounts.native_quota.lock() {
@@ -80,12 +92,18 @@ pub(crate) fn execute(
                 && crate::services::integration::enable::apply(state)
                     .is_ok_and(|result| result.ok()));
         native_login_changed(state);
+        login.outcome = Value::Null;
         return Ok(
             json!({"status":"completed", "restart_required":true, "integration_updated":integration_updated}),
         );
     }
     match operation {
         "start" if login.pending.is_none() => {
+            let method = match body["method"].as_str() {
+                None | Some("device") => LoginMethod::DeviceCode,
+                Some("browser") => LoginMethod::Browser,
+                _ => return Err("login_invalid_method"),
+            };
             let (expected, account_name) = if importing {
                 let name = body["name"]
                     .as_str()
@@ -104,7 +122,8 @@ pub(crate) fn execute(
             let selector = engine
                 .as_deref()
                 .unwrap_or(&state.backend.accounts.codex_binary);
-            let helper = DeviceLogin::start(selector).map_err(|_| "login_engine_unavailable")?;
+            let helper = SubscriptionLogin::start(selector, method)
+                .map_err(|_| "login_engine_unavailable")?;
             login.pending = Some(Pending {
                 helper,
                 _engine: engine,
@@ -139,37 +158,13 @@ pub(crate) fn execute(
                         &json!({"name":name,"auth_json":auth}),
                     )
                     .map_err(|_| "login_import_failed")?;
-                    return Ok(());
+                    return Ok(json!({"status":"completed","restart_required":false}));
                 }
-                let manager = &state.backend.integration.manager;
-                let _operation = manager.operation_lock().map_err(|_| "login_busy")?;
-                if state.shutdown.load(std::sync::atomic::Ordering::Acquire) {
-                    return Err("login_cancelled");
-                }
-                let installed = local_auth::install_subscription(
-                    &state.backend.accounts.native_auth_path,
-                    &pending.expected,
-                    &auth,
-                )
-                .map_err(|_| "login_storage_failed")?;
-                if !installed {
-                    return Err("login_auth_changed");
-                }
-                if let Ok(mut quota) = state.backend.accounts.native_quota.lock() {
-                    *quota = None;
-                }
-                if manager
-                    .status()
-                    .is_ok_and(|status| status.relation == "applied")
-                {
-                    let _ = crate::services::integration::enable::apply(state);
-                }
-                native_login_changed(state);
-                Ok(())
+                credentials::install(state, &pending.expected, &auth)
             });
             login.pending = None;
             login.outcome = match result {
-                Ok(()) => json!({"status":"completed","restart_required":!importing}),
+                Ok(value) => value,
                 Err(code) => json!({"status":"failed","code":code}),
             };
         }

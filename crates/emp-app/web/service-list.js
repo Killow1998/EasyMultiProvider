@@ -22,8 +22,8 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
   function accountRow(account) {
     if(account.native && ['local_key','missing','api_key','unavailable'].includes(account.auth_mode)) {
       const label=account.auth_mode==='local_key'?tr('login.local_key'):'Native';
-      const summary=`<button type="button" class="account-summary service-summary" data-ui-action="native-login" data-id="@native" aria-haspopup="dialog" title="${esc(tr('login.mode_'+account.auth_mode))}"><span class="account-segment account-name"><span>${esc(label)}</span></span><span class="account-segment service-type">${tr(account.auth_mode==='local_key'?'login.local_connection':'login.connection')}</span></button>`;
-      return `<article class="entity-card service-card service-account" data-service="account:@native"><div class="service-main">${serviceIcon('account','@native',label,'codex',false)}<div class="service-identity">${summary}</div></div><div class="service-actions">${action('native-login','@native',tr('login.sign_in'),'')}</div></article>`;
+      const summary=`<button type="button" class="account-summary service-summary" data-ui-action="native-login" data-id="@native" aria-haspopup="dialog" title="${esc(tr('login.mode_'+account.auth_mode))}"><span class="account-segment account-name"><span>${esc(label)}</span></span><span class="account-segment service-type">${tr(account.auth_mode==='local_key'?'login.local_connection':account.auth_mode==='api_key'?'login.api_key':'login.connection')}</span></button>`;
+      return `<article class="entity-card service-card service-account" data-service="account:@native"><div class="service-main">${serviceIcon('account','@native',label,'codex',false)}<div class="service-identity">${summary}</div></div><div class="service-actions">${action('native-login','@native',tr('login.change_method'),'')}</div></article>`;
     }
     const busy = refreshingAccounts.has(account.id), duplicate = account.duplicate && account.duplicate_of === '当前 Codex 登录';
     const label = account.native ? 'Native' : account.name || account.id;
@@ -31,7 +31,8 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     const duplicateText = account.duplicate ? (duplicate ? tr("services.models_managed_by_native") : tr("services.duplicate_account") + ' · ' + account.duplicate_of) : '';
     const detail = [duplicateText,settingsConflict(account)?tr("services.review_model_visibility_and_context_settings"):''].filter(Boolean).map(esc).join(' · ');
     const actions = action('account-refresh', account.id, busy ? tr("services.refreshing") : tr("refresh"), 'refresh', busy || !account.credential_set)
-      + action('account-quota-history', account.id, tr("services.trend"), 'chart');
+      + action('account-quota-history', account.id, tr("services.trend"), 'chart')
+      + (account.native ? action('native-login',account.id,tr('login.change_method'),'') : '');
     return `<article class="entity-card service-card service-account${duplicate ? ' account-duplicate' : ''}" data-service="account:${esc(account.id)}">
       <div class="service-main">${serviceIcon('account', account.native ? '@native' : account.id, label, 'codex', false, refreshErrors[account.id] ? {title:tr("services.quota_refresh_failed"),message:refreshErrors[account.id]} : status ? {title:tr("services.sign_in_needs_attention"),message:status} : null)}<div class="service-identity">${accountSummary(account, account.quota?.account_label || label)}${detail ? `<small class="service-note">${detail}</small>` : ''}</div></div>
       <div class="service-actions">${actions}</div>

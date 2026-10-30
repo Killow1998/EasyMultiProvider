@@ -74,6 +74,7 @@ impl ServerState {
 }
 
 pub(crate) struct BackendState {
+    pub(crate) gateway_key: String,
     pub(crate) configuration: ConfigurationState,
     pub(crate) transport: TransportState,
     pub(crate) accounts: AccountState,
@@ -86,8 +87,8 @@ pub(crate) struct BackendState {
     pub(crate) usage: crate::services::usage::UsageState,
     pub(crate) diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
     pub(crate) migration_previews: crate::services::migration::MigrationPreviews,
-    pub(crate) native_login: crate::services::native_login::DeviceLoginSession,
-    pub(crate) account_login: crate::services::native_login::DeviceLoginSession,
+    pub(crate) native_login: crate::services::native_login::LoginSession,
+    pub(crate) account_login: crate::services::native_login::LoginSession,
     pub(crate) lan_migration: crate::services::migration::lan::LanMigration,
 }
 
@@ -170,6 +171,7 @@ impl BackendState {
         let management_events =
             Arc::new(crate::services::management_events::ManagementEvents::default());
         Ok(Self {
+            gateway_key: emp_state::gateway_key::load_or_create(&state_root.join("gateway-key"))?,
             usage: crate::services::usage::UsageState::new(
                 &state_root,
                 Arc::clone(&management_events),

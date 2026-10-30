@@ -59,12 +59,17 @@ setting on the same port and preserves the original settings for restoration.
 No special launch command is needed. An already-open Codex client may need a
 normal restart after its current work finishes to load changed settings.
 
-You can use external models without a Codex subscription. Add an external service
-and enable EMP; if Codex is signed out, EMP creates a key for the local connection.
-Open **EMP local key** in the service list to remove it or **Sign in to a
-subscription** with an official OpenAI device code. Successful sign-in replaces
-the local key; restart Codex Runtime afterward. Removing the key restores the
-native connection while EMP keeps running.
+You can use external models without a Codex subscription or OpenAI API key.
+If Codex is signed out, EMP creates an **EMP local key** for that connection.
+Existing subscription and API-key sign-ins are kept. Open **Change sign-in method**
+to sign in to a subscription with an official device code or browser, enter your
+own OpenAI API key, or use an existing Other subscription. Restart Codex Runtime
+after switching. Removing the local key restores the native connection while
+EMP keeps running.
+
+For API clients and port forwarding, open **Settings → General service settings → Gateway
+connection** to copy the separate, stable **EMP Gateway Key**. Changing Native
+sign-in keeps this key valid. [Gateway API and Jev](docs/gateway.md).
 
 To switch an existing Native subscription to a local key, open **Native → Account
 info → Switch to EMP local key**. Keep the subscription as an Other account or

@@ -65,6 +65,16 @@ pub(super) fn prepare_with_config(
         .ok_or(RequestPreparationError::ModelRequired)?;
     hydrate_provider_keys(&mut config, &state.backend.configuration.vault);
     if let Some(config) = config.as_object_mut() {
+        if emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path) == "api_key"
+        {
+            let endpoint = config
+                .get("codex_base_url")
+                .and_then(Value::as_str)
+                .filter(|url| url.trim_end_matches('/') != "https://chatgpt.com/backend-api/codex")
+                .unwrap_or("https://api.openai.com/v1")
+                .to_owned();
+            config.insert("_native_base_url".to_owned(), Value::String(endpoint));
+        }
         config.insert(
             "_native_auth_path".to_owned(),
             Value::String(
