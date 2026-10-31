@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.13.22 (2026-10-31)
+
+### 中文
+
+- 合并 Chat、Anthropic 和 Responses 的工具目录遍历，保留命名空间、增量工具和名称冲突规则，减少工具定义的重复复制。
+- 流式与非流式请求复用同一协议投影，统一应用模型、推理强度和工具配置。
+- 减少响应转换时整段输出的重复复制；保留回答、图片、工具调用关系与用量统计。
+- 精简无效错误处理、失效分支与迁移期注释，按职责拆分 Chat 工具投影。
+
+### English
+
+- Share tool-catalog traversal across Chat, Anthropic and Responses, retaining namespaces, incremental tools and collision rules while avoiding duplicate tool-definition copies.
+- Use one request projection for streamed and complete responses, applying the same model, reasoning-effort and tool settings.
+- Avoid repeated copies of complete response output while retaining answers, images, tool-call relationships and usage.
+- Remove impossible error paths, obsolete branches and migration-era comments, and separate Chat tool projection by responsibility.
+
 ## 0.13.21 (2026-10-31)
 
 ### 中文

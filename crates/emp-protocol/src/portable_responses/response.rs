@@ -48,7 +48,7 @@ pub(super) fn custom_tool_input(value: Option<&Value>) -> String {
     if let Some(value) = value.as_str() {
         value.to_owned()
     } else {
-        serde_json::to_string(&value).unwrap_or_default()
+        value.to_string()
     }
 }
 
@@ -127,33 +127,31 @@ pub fn project_response(
     for field in PLAINTEXT_REASONING_FIELDS {
         projected.remove(*field);
     }
-    let raw_output = projected.get("output").cloned();
-    if !matches!(raw_output, None | Some(Value::Null | Value::Array(_))) {
-        return Err(error(0, "output", "invalid_response_output"));
-    }
-    let mut output = Vec::new();
-    for (index, raw) in raw_output
-        .as_ref()
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .enumerate()
-    {
-        let Some(item) = raw.as_object() else {
+    let raw_output = match projected.remove("output") {
+        None => return Ok(Value::Object(projected)),
+        Some(Value::Null) => {
+            projected.insert("output".to_owned(), Value::Null);
+            return Ok(Value::Object(projected));
+        }
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err(error(0, "output", "invalid_response_output")),
+    };
+    let mut output = Vec::with_capacity(raw_output.len());
+    for (index, raw) in raw_output.into_iter().enumerate() {
+        let Value::Object(mut clean) = raw else {
             return Err(error(index, "output", "invalid_response_output"));
         };
-        if item.get("type").and_then(Value::as_str) == Some("reasoning") {
+        if clean.get("type").and_then(Value::as_str) == Some("reasoning") {
             if let Some(clean) =
-                project_reasoning_item(item, preserve_reasoning_summary, preserve_reasoning_state)
+                project_reasoning_item(&clean, preserve_reasoning_summary, preserve_reasoning_state)
             {
                 output.push(clean);
             }
             continue;
         }
-        if item.get("type").and_then(Value::as_str) == Some("compaction") {
+        if clean.get("type").and_then(Value::as_str) == Some("compaction") {
             return Err(error(index, "compaction", "external_compaction"));
         }
-        let mut clean = item.clone();
         for field in PLAINTEXT_REASONING_FIELDS {
             clean.remove(*field);
         }
@@ -188,8 +186,6 @@ pub fn project_response(
         }
         output.push(Value::Object(clean));
     }
-    if matches!(raw_output, Some(Value::Array(_))) {
-        projected.insert("output".to_owned(), Value::Array(output));
-    }
+    projected.insert("output".to_owned(), Value::Array(output));
     Ok(Value::Object(projected))
 }

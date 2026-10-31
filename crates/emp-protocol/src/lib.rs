@@ -75,6 +75,7 @@ fn request_error(message: &'static str) -> ProtocolError {
 }
 
 mod chat_request;
+mod tool_definitions;
 pub use chat_request::responses_to_chat;
 pub mod anthropic_projection;
 pub mod collaboration;

@@ -1,4 +1,4 @@
-//! Projection for external Responses providers.
+//! Portable history and output policy for external model protocols.
 //!
 //! External gateways receive a complete, stateless history. Plaintext
 //! reasoning is never returned to Codex, while explicitly enabled opaque state
@@ -117,10 +117,7 @@ fn python_string(value: Option<&Value>, fallback: &str) -> String {
         None | Some(Value::Null) => fallback.to_owned(),
         Some(Value::String(value)) => value.clone(),
         Some(Value::Bool(value)) => if *value { "True" } else { "False" }.to_owned(),
-        Some(Value::Number(value)) => value.to_string(),
-        Some(v @ (Value::Array(_) | Value::Object(_))) => {
-            serde_json::to_string(v).unwrap_or_else(|_| fallback.into())
-        }
+        Some(value) => value.to_string(),
     }
 }
 

@@ -1,5 +1,5 @@
 //! Responses request controls and Anthropic request assembly.
-use super::input::{messages, request_text};
+use super::input::{instruction_text, messages};
 use super::tools::{tool_choice, tools};
 use super::{AnthropicError, python_truthy, request_error};
 use serde_json::{Map, Value};
@@ -72,7 +72,8 @@ pub fn responses_to_anthropic(body: &Value, upstream_model: &str) -> Result<Valu
     };
     let mut system = Vec::new();
     if let Some(instructions) = body.get("instructions") {
-        system.push(serde_json::json!({"type":"text", "text":request_text(Some(instructions), "instructions")?}));
+        system
+            .push(serde_json::json!({"type":"text", "text":instruction_text(Some(instructions))?}));
     }
     let messages = messages(body, &mut system)?;
     let mut payload = serde_json::json!({

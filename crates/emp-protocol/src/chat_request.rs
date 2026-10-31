@@ -1,18 +1,17 @@
 //! Responses request projection onto the OpenAI Chat Completions dialect.
 
 use super::{ProtocolError, request_error};
+use crate::tool_definitions::custom_tool_arguments;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE;
 use serde_json::{Map, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+
+mod tools;
+use tools::{tool_choice, tools};
 
 const COMPACTION_PREFIX: &str = "emp1:";
 const COMPACTION_SUMMARY_PREFIX: &str = "Another language model started this task and produced a continuation summary. Use it to continue without repeating completed work:";
-const CUSTOM_TOOL_PARAMETERS: &str = r#"{"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}"#;
-
-fn object(value: &Value) -> Option<&Map<String, Value>> {
-    value.as_object()
-}
 
 fn required_string<'a>(
     value: Option<&'a Value>,
@@ -73,18 +72,15 @@ pub(crate) fn input_audio(part: &Map<String, Value>) -> Option<Value> {
 }
 
 fn chat_content(value: Option<&Value>) -> Result<Value, ProtocolError> {
-    match value {
+    let parts = match value {
         Some(Value::String(value)) => return Ok(Value::String(value.clone())),
-        Some(Value::Array(_)) => {}
+        Some(Value::Array(parts)) => parts,
         _ => {
             return Err(request_error(
                 "request projection failed: invalid message content",
             ));
         }
-    }
-    let parts = value
-        .and_then(Value::as_array)
-        .expect("array checked above");
+    };
     let mut projected = Vec::with_capacity(parts.len());
     let mut has_nontext = false;
     for part in parts {
@@ -92,7 +88,7 @@ fn chat_content(value: Option<&Value>) -> Result<Value, ProtocolError> {
             projected.push(serde_json::json!({"type": "text", "text": text}));
             continue;
         }
-        let Some(part) = object(part) else {
+        let Some(part) = part.as_object() else {
             return Err(request_error(
                 "request projection failed: invalid message content",
             ));
@@ -170,7 +166,7 @@ fn agent_message_text(item: &Map<String, Value>) -> Result<String, ProtocolError
         .ok_or_else(|| request_error("request projection failed: invalid agent message content"))?;
     let mut text = Vec::with_capacity(parts.len());
     for part in parts {
-        let Some(part) = object(part) else {
+        let Some(part) = part.as_object() else {
             return Err(request_error(
                 "request projection failed: invalid agent message content",
             ));
@@ -210,17 +206,6 @@ fn request_tool_arguments(value: Option<&Value>) -> Result<String, ProtocolError
         ));
     }
     Ok(value.to_owned())
-}
-
-fn custom_tool_arguments(value: Option<&Value>) -> Result<String, ProtocolError> {
-    let input = match value {
-        Some(Value::String(value)) => value.clone(),
-        Some(value) => serde_json::to_string(value)
-            .map_err(|_| request_error("request projection failed: invalid custom tool input"))?,
-        None => String::new(),
-    };
-    serde_json::to_string(&serde_json::json!({"input": input}))
-        .map_err(|_| request_error("request projection failed: invalid custom tool input"))
 }
 
 fn flush_calls(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
@@ -306,7 +291,7 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
     let mut call_ids = BTreeSet::new();
     let mut output_ids = BTreeSet::new();
     for raw in source {
-        let Some(item) = object(raw) else {
+        let Some(item) = raw.as_object() else {
             return Err(request_error(
                 "request projection failed: invalid input item",
             ));
@@ -369,7 +354,7 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
                     "request projection failed: invalid tool name",
                 )?;
                 let arguments = if item_type == "custom_tool_call" {
-                    custom_tool_arguments(item.get("input"))?
+                    custom_tool_arguments(item.get("input")).to_string()
                 } else {
                     let default_arguments = Value::String("{}".to_owned());
                     request_tool_arguments(item.get("arguments").or(Some(&default_arguments)))?
@@ -439,138 +424,6 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
     Ok(messages)
 }
 
-#[derive(Clone)]
-struct RawTool {
-    value: Map<String, Value>,
-    namespace: Vec<String>,
-}
-
-fn visit_tools(
-    value: Option<&Value>,
-    namespace: &[String],
-    result: &mut Vec<RawTool>,
-) -> Result<(), ProtocolError> {
-    let Some(Value::Array(items)) = value else {
-        return Ok(());
-    };
-    for item in items {
-        let Some(item) = object(item) else {
-            continue;
-        };
-        if item.get("type").and_then(Value::as_str) == Some("namespace") {
-            let name = required_string(
-                item.get("name"),
-                "request projection failed: invalid tool namespace",
-            )?;
-            let mut child = namespace.to_vec();
-            child.push(name.to_owned());
-            visit_tools(item.get("tools"), &child, result)?;
-        } else {
-            result.push(RawTool {
-                value: item.clone(),
-                namespace: namespace.to_vec(),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn raw_tools(body: &Map<String, Value>) -> Result<Vec<RawTool>, ProtocolError> {
-    let mut result = Vec::new();
-    visit_tools(body.get("tools"), &[], &mut result)?;
-    let source = body.get("input");
-    match source {
-        Some(Value::Object(item)) => {
-            if item.get("type").and_then(Value::as_str) == Some("additional_tools") {
-                visit_tools(item.get("tools"), &[], &mut result)?;
-            }
-        }
-        Some(Value::Array(items)) => {
-            for item in items.iter().filter_map(Value::as_object) {
-                if item.get("type").and_then(Value::as_str) == Some("additional_tools") {
-                    visit_tools(item.get("tools"), &[], &mut result)?;
-                }
-            }
-        }
-        _ => {}
-    }
-    Ok(result)
-}
-
-fn python_description(value: Option<&Value>) -> String {
-    match value {
-        None | Some(Value::Null) | Some(Value::Bool(false)) => String::new(),
-        Some(Value::String(value)) => value.clone(),
-        Some(Value::Bool(true)) => "True".to_owned(),
-        Some(value) => value.to_string(),
-    }
-}
-
-fn tools(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
-    let raw = raw_tools(body)?;
-    let custom_parameters: Value =
-        serde_json::from_str(CUSTOM_TOOL_PARAMETERS).expect("static custom tool schema");
-    let mut seen: BTreeMap<String, (Vec<String>, String, Value)> = BTreeMap::new();
-    let mut result = Vec::new();
-    for item in raw {
-        let tool_type = item
-            .value
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        if !matches!(tool_type, "function" | "custom") {
-            return Err(request_error(
-                "request projection failed: unsupported tool definition",
-            ));
-        }
-        let function = item
-            .value
-            .get("function")
-            .and_then(Value::as_object)
-            .unwrap_or(&item.value);
-        let name = required_string(
-            function.get("name"),
-            "request projection failed: invalid tool definition",
-        )?;
-        let parameters = if tool_type == "custom" {
-            custom_parameters.clone()
-        } else {
-            function
-                .get("parameters")
-                .cloned()
-                .unwrap_or_else(|| Value::Object(Map::new()))
-        };
-        if !parameters.is_object() {
-            return Err(request_error(
-                "request projection failed: invalid tool definition",
-            ));
-        }
-        let identity = (
-            item.namespace,
-            tool_type.to_owned(),
-            Value::Object(function.clone()),
-        );
-        if let Some(previous) = seen.get(name) {
-            if previous != &identity {
-                return Err(request_error(
-                    "request projection failed: tool name collision",
-                ));
-            }
-            continue;
-        }
-        seen.insert(name.to_owned(), identity);
-        result.push(serde_json::json!({
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": python_description(function.get("description")),
-                "parameters": parameters,
-            }
-        }));
-    }
-    Ok(result)
-}
-
 fn python_truthy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null | Value::Bool(false)) => false,
@@ -582,39 +435,18 @@ fn python_truthy(value: Option<&Value>) -> bool {
     }
 }
 
-fn tool_choice(value: &Value) -> Result<Value, ProtocolError> {
-    if let Some(value @ ("auto" | "none" | "required")) = value.as_str() {
-        return Ok(Value::String(value.to_owned()));
-    }
-    if let Some(value) = object(value)
-        && matches!(
-            value.get("type").and_then(Value::as_str),
-            Some("function" | "custom")
-        )
-        && let Some(name) = value
-            .get("name")
-            .and_then(Value::as_str)
-            .filter(|name| !name.is_empty())
-    {
-        return Ok(serde_json::json!({
-            "type": "function", "function": {"name": name}
-        }));
-    }
-    Err(request_error(
-        "request projection failed: unsupported tool choice",
-    ))
-}
-
 fn response_format(body: &Map<String, Value>) -> Result<Option<Value>, ProtocolError> {
     let Some(text) = body.get("text") else {
         return Ok(None);
     };
-    let text = object(text)
+    let text = text
+        .as_object()
         .ok_or_else(|| request_error("request projection failed: invalid text controls"))?;
     let Some(format) = text.get("format") else {
         return Ok(None);
     };
-    let format = object(format)
+    let format = format
+        .as_object()
         .filter(|format| format.get("type").and_then(Value::as_str) == Some("json_schema"))
         .ok_or_else(|| {
             request_error("request projection failed: unsupported structured output format")
@@ -651,7 +483,8 @@ fn response_format(body: &Map<String, Value>) -> Result<Option<Value>, ProtocolE
 /// Translate a canonical Responses request into Chat Completions without
 /// dropping visible history, images, collaboration messages or tool pairing.
 pub fn responses_to_chat(body: &Value, upstream_model: &str) -> Result<Value, ProtocolError> {
-    let body = object(body)
+    let body = body
+        .as_object()
         .ok_or_else(|| request_error("request projection failed: body must be an object"))?;
     let mut payload = serde_json::json!({
         "model": upstream_model,

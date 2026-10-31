@@ -1,4 +1,4 @@
-//! Exact, bounded configuration helpers shared with the Python implementation.
+//! Configuration normalization and persisted state transitions.
 //!
 //! Pure account, provider, model and top-level configuration normalization is
 //! implemented here. Filesystem canonicalization, import merging and persistence
@@ -28,7 +28,7 @@ const REASONING_SUMMARIES: [&str; 3] = ["auto", "show", "hide"];
 /// atomically either, so loading refuses them before reading into memory.
 const MAX_CONFIG_FILE_BYTES: usize = crate::filesystem::MAX_TRANSACTION_FILE_BYTES;
 const MASKED_API_KEY: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}";
-/// A stable Python-visible configuration failure without private input data.
+/// A configuration failure without private input data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
     message: String,

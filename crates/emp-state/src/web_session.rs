@@ -1,4 +1,4 @@
-//! Persistent browser-management sessions compatible with the Python backend.
+//! Persistent browser-management sessions.
 
 use crate::filesystem::{FilesystemError, atomic_write_config};
 use base64::Engine as _;
@@ -89,11 +89,8 @@ pub fn web_session_path(config_path: &Path) -> Result<PathBuf, WebSessionError> 
     Ok(parent.join("state").join("web-session.json"))
 }
 
-/// Read a still-valid Python/Rust session or atomically rotate it.
-///
-/// A saved session is accepted only within the same 30-day window as the
-/// Python implementation. Invalid JSON and stale state rotate safely; other
-/// filesystem read failures remain visible to the caller.
+/// Reuse a valid 30-day session or atomically replace expired or invalid data.
+/// Other filesystem read failures remain visible to the caller.
 pub fn load_or_create_web_session(path: &Path, now: f64) -> Result<WebSession, WebSessionError> {
     if !now.is_finite() {
         return Err(WebSessionError::ClockInvalid);

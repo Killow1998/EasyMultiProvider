@@ -1,8 +1,4 @@
-//! Exact, bounded Codex account metadata normalization.
-//!
-//! This slice intentionally follows the Python implementation rather than
-//! inventing a new serialized schema. Unknown fields are discarded and quota
-//! values are passed through as opaque JSON objects.
+//! Codex account normalization discards unknown metadata and retains opaque quota objects.
 
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,7 +13,7 @@ const MAX_MODEL_ID_BYTES: usize = 256;
 const MAX_AUTH_BYTES: usize = 1024 * 1024;
 const CREDENTIAL_STATUSES: [&str; 3] = ["unknown", "valid", "invalid"];
 
-/// A stable Python-visible account failure without credential material.
+/// An account failure without credential material.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountError {
     message: String,

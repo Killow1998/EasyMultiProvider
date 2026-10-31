@@ -24,16 +24,7 @@ impl<'a> ExternalRouter<'a> {
         let endpoint = endpoint(provider, route.protocol)?;
         let headers = upstream_headers(provider, route.protocol, incoming)?;
         let payload = project_prepared_external_payload(route, body)?;
-        let encoded = request_encoding::encode_projected_request(&payload).map_err(|_| {
-            RouterError::new(
-                RouterErrorKind::InvalidRequest,
-                422,
-                FailureClass::RouterError,
-                Some("request_serialization".to_owned()),
-                None,
-                "request serialization failed",
-            )
-        })?;
+        let encoded = request_encoding::encode_projected_request(&payload);
         drop(payload);
         let response = self
             .client
@@ -116,6 +107,7 @@ impl<'a> ExternalRouter<'a> {
                 == Some(true),
         )
         .map_err(portable_response_error)?;
+        // Custom-call projection changes the required fields of the output item.
         if route.protocol == Protocol::Responses {
             validate_responses_body(&projected, true).map_err(responses_validation_error)?;
         }
@@ -207,16 +199,7 @@ impl<'a> ExternalRouter<'a> {
             return Err(invalid_request("Anthropic upstream model is required"));
         }
         upstream_body["model"] = Value::String(model.to_owned());
-        let encoded = request_encoding::encode_projected_request(&upstream_body).map_err(|_| {
-            RouterError::new(
-                RouterErrorKind::InvalidRequest,
-                422,
-                FailureClass::RouterError,
-                Some("request_serialization".to_owned()),
-                None,
-                "request serialization failed",
-            )
-        })?;
+        let encoded = request_encoding::encode_projected_request(&upstream_body);
         let response = self
             .client
             .open(HttpMethod::Post, &target, headers, Some(encoded), true)
@@ -262,7 +245,8 @@ impl<'a> ExternalRouter<'a> {
         let endpoint = endpoint(provider, route.protocol)?;
         let mut headers = upstream_headers(provider, route.protocol, incoming)?;
         headers.insert("Accept".to_owned(), "text/event-stream".to_owned());
-        let portable_body = body_with_supported_effort(route, body);
+        let mut payload = project_prepared_external_payload(route, body)?;
+        payload["stream"] = Value::Bool(true);
         let canonical_custom_names = custom_tool_names(body);
         let custom_name_refs = canonical_custom_names
             .iter()
@@ -282,53 +266,27 @@ impl<'a> ExternalRouter<'a> {
         } else {
             Default::default()
         };
-        let (payload, projection) = match route.protocol {
+        let projection = match route.protocol {
             Protocol::Auto => return Err(unresolved_protocol()),
             Protocol::ChatCompletions => {
-                let mut payload = responses_to_chat(portable_body.as_ref(), &route.upstream_model)
-                    .map_err(protocol_error)?;
-                payload["stream"] = Value::Bool(true);
                 payload["stream_options"] = serde_json::json!({"include_usage": true});
                 let stream = ChatStream::new(&route.requested_model, ids.chat()?)
                     .with_custom_names(&custom_name_refs);
-                (payload, StreamProjection::Chat(stream))
+                StreamProjection::Chat(stream)
             }
             Protocol::AnthropicMessages => {
-                let mut payload =
-                    responses_to_anthropic(portable_body.as_ref(), &route.upstream_model)
-                        .map_err(anthropic_error)?;
-                payload["stream"] = Value::Bool(true);
                 let stream = AnthropicStream::new(
                     &route.requested_model,
                     ids.anthropic(),
                     &custom_name_refs,
                 );
-                (payload, StreamProjection::Anthropic(stream))
+                StreamProjection::Anthropic(stream)
             }
-            Protocol::Responses => {
-                let mut payload =
-                    project_portable_request(provider, portable_body.as_ref(), preserve_state)
-                        .map_err(portable_request_error)?;
-                payload["model"] = Value::String(route.upstream_model.clone());
-                payload["stream"] = Value::Bool(true);
-                (
-                    payload,
-                    StreamProjection::Responses {
-                        saw_terminal: false,
-                    },
-                )
-            }
+            Protocol::Responses => StreamProjection::Responses {
+                saw_terminal: false,
+            },
         };
-        let encoded = request_encoding::encode_projected_request(&payload).map_err(|_| {
-            RouterError::new(
-                RouterErrorKind::InvalidRequest,
-                422,
-                FailureClass::RouterError,
-                Some("request_serialization".to_owned()),
-                None,
-                "request serialization failed",
-            )
-        })?;
+        let encoded = request_encoding::encode_projected_request(&payload);
         drop(payload);
         let response = self
             .client

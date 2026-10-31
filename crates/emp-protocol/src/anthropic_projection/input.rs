@@ -1,32 +1,16 @@
 //! Anthropic message content, image data and paired tool history.
-use super::tools::{custom_tool_arguments, request_tool_arguments};
+use super::tools::request_tool_arguments;
 use super::{
     ANTHROPIC_IMAGE_MEDIA_TYPES, AnthropicError, COMPACTION_PREFIX, COMPACTION_SUMMARY_PREFIX,
     OMITTED_INPUT_TYPES, TEXT_PART_TYPES, history_error, request_error, required_string,
 };
+use crate::tool_definitions::custom_tool_arguments;
 use base64::Engine as _;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-pub(super) fn request_text(value: Option<&Value>, field: &str) -> Result<String, AnthropicError> {
-    let invalid = move || {
-        request_error(match field {
-            "instructions" => "request projection failed: invalid instructions",
-            "tool output" => "request projection failed: invalid tool output",
-            "standalone tool output" => "request projection failed: invalid standalone tool output",
-            _ => "request projection failed: invalid message content",
-        })
-    };
-    let unsupported = move || {
-        request_error(match field {
-            "instructions" => "request projection failed: unsupported instructions",
-            "tool output" => "request projection failed: unsupported tool output",
-            "standalone tool output" => {
-                "request projection failed: unsupported standalone tool output"
-            }
-            _ => "request projection failed: unsupported message content",
-        })
-    };
+pub(super) fn instruction_text(value: Option<&Value>) -> Result<String, AnthropicError> {
+    let invalid = || request_error("request projection failed: invalid instructions");
     match value {
         Some(Value::String(text)) => Ok(text.clone()),
         Some(Value::Array(parts)) => {
@@ -42,7 +26,11 @@ pub(super) fn request_text(value: Option<&Value>, field: &str) -> Result<String,
                             .ok_or_else(invalid)?;
                         result.push_str(text);
                     }
-                    _ => return Err(unsupported()),
+                    _ => {
+                        return Err(request_error(
+                            "request projection failed: unsupported instructions",
+                        ));
+                    }
                 }
             }
             Ok(result)
@@ -328,7 +316,7 @@ pub(super) fn messages(
                 flush(&mut result, &mut pending_calls, &mut pending_results);
                 let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
                 if matches!(role, "system" | "developer") {
-                    let text = request_text(item.get("content"), "instructions")?;
+                    let text = instruction_text(item.get("content"))?;
                     system.push(serde_json::json!({"type":"text", "text":text}));
                     continue;
                 }
@@ -356,7 +344,7 @@ pub(super) fn messages(
                     result.push(serde_json::json!({"role": "user", "content": std::mem::take(&mut pending_results)}));
                 }
                 let arguments = if item_type == "custom_tool_call" {
-                    custom_tool_arguments(item.get("input"))?
+                    custom_tool_arguments(item.get("input"))
                 } else {
                     let default_arguments = Value::String("{}".to_owned());
                     request_tool_arguments(item.get("arguments").or(Some(&default_arguments)))?

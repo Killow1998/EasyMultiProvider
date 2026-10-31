@@ -91,16 +91,11 @@ pub fn project_request(
             Value::String(instructions.join("\n\n")),
         );
     }
-    let tools = raw_tools(body, !in_place_tools)?;
+    let tools = portable_tools(raw_tools(body, !in_place_tools)?)?;
     if tools.is_empty() {
         projected.remove("tools");
     } else {
-        let tools = portable_tools(tools)?;
-        if tools.is_empty() {
-            projected.remove("tools");
-        } else {
-            projected.insert("tools".to_owned(), Value::Array(tools));
-        }
+        projected.insert("tools".to_owned(), Value::Array(tools));
     }
     if projected
         .get("tool_choice")

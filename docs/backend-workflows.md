@@ -31,6 +31,15 @@ Request preparation checks the body object once and passes a mutable JSON map
 to its external-settings transformation. Configuration uses the existing owned
 snapshot boundary. These helpers add no runtime state or recovery policy.
 
+External Chat, Anthropic and Responses projectors share borrowed tool-definition
+traversal in `emp-protocol/src/tool_definitions.rs`. Each protocol retains its
+schema, argument and error rules; Chat tool schemas and choices live in
+`chat_request/tools.rs`. Streaming and complete dispatch use the same prepared
+request projection, with stream flags and stream state remaining in the caller.
+Response projection moves the already-owned output items instead of cloning
+the entire output twice more. Input validation and the final custom-call shape
+check remain at their protocol boundaries.
+
 ## Before / after
 
 These are responsibility diagrams, not a complete crate dependency graph.
