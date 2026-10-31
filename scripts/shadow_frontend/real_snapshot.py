@@ -1,5 +1,6 @@
 """Run candidate accounting against read-only copies of existing local records."""
 import contextlib
+import http.client
 import json
 from pathlib import Path
 import sqlite3
@@ -128,6 +129,17 @@ class AccountingSnapshot:
     def read(self, path):
         with self.lock:
             return request(self.current[1] + path, headers=self.current[2], timeout=30)
+
+    @contextlib.contextmanager
+    def stream(self, path):
+        with self.lock:
+            destination = urlsplit(self.current[1])
+            connection = http.client.HTTPConnection(destination.hostname, destination.port, timeout=30)
+            try:
+                connection.request('GET', path, headers={**self.current[2], 'Accept':'text/event-stream'})
+                yield connection.getresponse()
+            finally:
+                connection.close()
 
     def usage(self, path, source_read):
         query = parse_qs(urlsplit(path).query, keep_blank_values=True)

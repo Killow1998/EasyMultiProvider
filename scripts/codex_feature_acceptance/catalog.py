@@ -10,7 +10,7 @@ def run(codex, emp, root, evidence, catalog):
     expected = next(model for model in official['models'] if model['slug'] == 'gpt-6.1-terra')
     with Fixture(codex, emp, root, evidence, native_catalog=official) as fixture:
         fixture.import_account()
-        status, merged = request(fixture.base+'/v1/models?client_version=0.165.0', headers=fixture.headers)
+        status, merged = request(fixture.base+'/v1/models?client_version='+fixture.codex_version, headers=fixture.headers)
         assert status == 200, merged
         fields = ['context_window', 'max_context_window', 'default_reasoning_level',
                   'supported_reasoning_levels', 'multi_agent_reasoning_effort', 'tool_mode',
@@ -35,7 +35,7 @@ def run(codex, emp, root, evidence, catalog):
         status, ledger = request(fixture.base+'/api/calls', headers=fixture.headers)
         levels = [level['effort'] for level in expected['supported_reasoning_levels']]
         assert status == 200 and [row['requested_effort'] for row in reversed(ledger['records'])] == levels*2, ledger
-        result = {'passed':True, 'source_ref':'rust-v0.165.0', 'model':'gpt-6.1-terra',
+        result = {'passed':True, 'source_ref':'rust-v'+fixture.codex_version, 'model':'gpt-6.1-terra',
                   'metadata':{key:expected.get(key) for key in fields}, 'accounts':['native', 'imported'],
                   'requests':len(fixture.upstream.requests), 'real_provider_calls':0}
         (evidence/'result.json').write_text(json.dumps(result, indent=2))

@@ -6,7 +6,7 @@ function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage
   const removing = new Set();
   const usage = new Map(), maxAge = 60_000;
   let revision = 0;
-  // Leaving a tab detaches its view, not the account's shared read.
+  // Closing details detaches the view, not the account's shared read.
   function stop() { current = null; }
   function findAccount(id) { return [getState().native_account, ...(getState().accounts || [])].filter(Boolean).find(account => account.id === id); }
   const identity = account => JSON.stringify([account?.auth_mode, account?.credential_set, account?.credential_status, account?.quota?.account_label]);

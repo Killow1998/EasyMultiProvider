@@ -21,7 +21,10 @@ def main():
             {'slug':'unrelated','display_name':'Unrelated','context_window':1000,'max_context_window':1000,'visibility':'list','base_instructions':'fixture'}]}))
         fixture_accounts=[{'id':'sync-one','prefix':'sync-one','name':'One','auth_file':'','hidden_models':['unrelated'],'model_context_windows':{'unrelated':123}},
             {'id':'sync-two','prefix':'sync-two','name':'Two','auth_file':'','hidden_models':[]}]
-        base,url,_,headers,upstream=start_backend(stack,args.emp.resolve(),source,{'native_catalog_path':str(catalog),'accounts':fixture_accounts})
+        native=source/'native-codex';native.mkdir()
+        (native/'auth.json').write_text(json.dumps({'tokens':{'access_token':'native-fixture','account_id':'native-owner'}}))
+        (native/'config.toml').write_text('openai_base_url = "http://127.0.0.1:9/backend-api/codex"\n')
+        base,url,_,headers,upstream=start_backend(stack,args.emp.resolve(),source,{'auto_enable_on_start':False,'native_catalog_path':str(catalog),'accounts':fixture_accounts,'codex_base_url':'http://127.0.0.1:9/backend-api/codex'},{'CODEX_HOME':str(native),'PATH':'/usr/bin:/bin'})
         target_base,target_url,_,target_headers,_=start_backend(stack,args.emp.resolve(),target)
         headers['Origin']=base;target_headers['Origin']=target_base
         upstream.failed=False;upstream.calls=0
@@ -37,9 +40,9 @@ def main():
         for language in ['zh-CN','en']:
             for theme in ['light','dark']:
                 browser.execute('setLanguage(arguments[0]);setTheme(arguments[1]);openAccountDetails(state.native_account.id);',language,theme)
-                assert browser.execute('return !!document.querySelector(".shadow-compact-account") && !!document.querySelector(".shadow-reset-action svg rect");')
-                browser.execute('document.querySelector("#service_detail_nav [data-ui-action=account-edit]").click();')
-                assert browser.execute('return document.querySelector("#service_detail_nav [data-ui-action=account-edit]").getAttribute("aria-selected")==="true";')
+                assert browser.execute('return !!document.querySelector(".service-detail-actions [data-ui-action=account-reset-credits] svg") && !document.querySelector(".service-detail-tabs") && !document.querySelector("[data-ui-action=account-remove]");')
+                browser.execute('closeModal();document.querySelector("[data-ui-action=account-edit][data-id=\\"@native\\"]").click();')
+                wait_for(lambda:browser.execute('return !!document.getElementById("subscription_model_list");'))
                 browser.execute('closeModal();openServiceChooser();')
                 assert browser.execute('return document.getElementById("modal_back").hidden;')
                 browser.execute('document.querySelector("[data-ui-action=service-custom-api]").click();')

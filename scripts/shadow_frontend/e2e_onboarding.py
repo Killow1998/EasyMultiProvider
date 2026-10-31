@@ -71,7 +71,7 @@ def main():
             status,image=request(browser.base+'/screenshot');assert status==200
             (args.output/name).write_bytes(base64.b64decode(image['value']))
         for language in ['zh-CN','en']:
-            browser.execute('setLanguage(arguments[0]);settings.open();document.querySelector("[data-gateway-open]").click();',language)
+            browser.execute('setLanguage(arguments[0]);settings.open();document.querySelector("[data-settings-category=general]").click();document.querySelector("[data-gateway-open]").click();',language)
             wait_for(lambda:browser.execute('return !!document.getElementById("gateway_key");'))
             assert browser.execute('return document.getElementById("gateway_key").value===arguments[0];',key)
             assert browser.execute('return document.getElementById("gateway_key").type;')=='password'
@@ -165,7 +165,7 @@ def main():
         request(browser.base+'/window/rect',{'width':1280,'height':900})
         browser.execute('closeModal();setLanguage("zh-CN");nativeLogin.manage();document.querySelector("[data-native-method=subscription]").click();')
         wait_for(lambda:browser.execute('return !document.querySelector("[data-native-login-start]").disabled;'))
-        browser.execute('document.getElementById("native_login_method").value="browser";document.querySelector("[data-native-login-start]").click();')
+        browser.execute('document.querySelector("[name=native_login_method][value=browser]").click();document.querySelector("[data-native-login-start]").click();')
         wait_for(lambda:browser.execute('return !!document.querySelector("#native_login_progress a[href*=authorize]");'))
         assert not browser.execute('return !!document.querySelector(".device-code");')
         assert login('status')['method']=='browser'
@@ -174,8 +174,8 @@ def main():
         wait_for(lambda:login('status')['status']=='completed')
         wait_for(lambda:browser.execute('return state.native_account.auth_mode==="subscription";'))
         for language in ['zh-CN','en']:
-            browser.execute('closeModal();setLanguage(arguments[0]);nativeLogin.manage();',language)
-            assert browser.execute('return document.querySelectorAll("[data-native-method]").length;')==3
+            browser.execute('closeModal();setLanguage(arguments[0]);document.querySelector(`[data-service="account:@native"] .service-actions [data-ui-action=native-login]`).click();',language)
+            assert browser.execute('return document.querySelectorAll("[data-native-method]").length;')==4
             screenshot(f'login-methods-{language}.png')
             browser.execute('document.querySelector("[data-native-method=api_key]").click();document.getElementById("native_api_key").value="sk-user-fixture";document.getElementById("modal_submit").click();')
             wait_for(lambda:browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");'))
@@ -183,11 +183,14 @@ def main():
             assert call('/api/config')['native_account']['auth_mode']=='api_key'
             assert browser.execute('return document.querySelector("[data-service=\\"account:@native\\"]").textContent.includes("OpenAI API Key");')
             assert call('/api/gateway')['api_key']==key
+        browser.execute('nativeLogin.manage();document.querySelector("[data-native-method=local_key]").click();document.querySelector("[data-native-key-switch]").click();')
+        wait_for(lambda:browser.execute('return state.native_account.auth_mode==="local_key";'))
+        assert call('/api/gateway')['api_key']==key
         browser.execute('nativeLogin.manage();document.querySelector("[data-native-method=other]").click();document.getElementById("modal_submit").click();')
         wait_for(lambda:browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");'))
         assert json.loads((home/'auth.json').read_bytes())['tokens']['account_id']=='fixture-login'
         assert len(call('/api/config')['accounts'])==2
-        checks.append('Native sign-in offers device or browser subscription login, own API key and existing Other; real logins remain intact and the gateway key stays stable')
+        checks.append('Sign-in cards support device/browser subscription login, own API key, existing Other and local key; gateway key stays stable across switches')
         selected=[{'kind':'provider','id':'demo','model_ids':['demo/fixture']}]
         for requested in [1,15,None]:
             authorization=call('/api/migration/export/confirm',{})

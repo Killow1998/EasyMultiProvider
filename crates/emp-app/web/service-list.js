@@ -1,7 +1,7 @@
 // A view of existing accounts/providers; storage and route identities stay with their owners.
 function createServiceList({getState, $, esc, tr, presets, icon, activity, accountSummary, quotaMeters,
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
-  usageSummary, notice, settingsConflict = () => false, serviceIcon = (kind,id,label,brand,cpa) => activity(kind,id,label)+icon(brand,cpa), updateServiceErrors = () => {}, onMount = () => {}}) {
+  usageSummary, notice, balances, settingsConflict = () => false, serviceIcon = (kind,id,label,brand,cpa) => activity(kind,id,label)+icon(brand,cpa), updateServiceErrors = () => {}, onMount = () => {}}) {
   const refreshing = new Set(), errors = new Map();
   let detailsController = null;
   function stop() { detailsController?.abort(); detailsController = null; }
@@ -17,22 +17,25 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     return provider.auth_mode === 'claude_login' ? 'Native' : 'CPA';
   }
   function action(name, id, label, glyph, disabled = false, extra = '') {
-    return `<button type="button" class="secondary" ${glyph ? `data-icon="${glyph}"` : ''} data-ui-action="${name}" data-id="${esc(id)}" ${disabled ? 'disabled' : ''} ${extra}>${label}</button>`;
+    const description = label ? `aria-label="${esc(label)}" title="${esc(label)}"` : '';
+    return `<button type="button" class="secondary" ${glyph ? `data-icon="${glyph}"` : ''} data-ui-action="${name}" data-id="${esc(id)}" ${disabled ? 'disabled' : ''} ${description} ${extra}>${glyph ? '' : label}</button>`;
   }
   function accountRow(account) {
+    const loginAction = account.native ? action('native-login',account.id,'','user',false,`aria-haspopup="dialog" aria-label="${esc(tr('login.change_method'))}" title="${esc(tr('login.change_method'))}"`) : '';
     if(account.native && ['local_key','missing','api_key','unavailable'].includes(account.auth_mode)) {
       const label=account.auth_mode==='local_key'?tr('login.local_key'):'Native';
-      const summary=`<button type="button" class="account-summary service-summary" data-ui-action="native-login" data-id="@native" aria-haspopup="dialog" title="${esc(tr('login.mode_'+account.auth_mode))}"><span class="account-segment account-name"><span>${esc(label)}</span></span><span class="account-segment service-type">${tr(account.auth_mode==='local_key'?'login.local_connection':account.auth_mode==='api_key'?'login.api_key':'login.connection')}</span></button>`;
-      return `<article class="entity-card service-card service-account" data-service="account:@native"><div class="service-main">${serviceIcon('account','@native',label,'codex',false)}<div class="service-identity">${summary}</div></div><div class="service-actions">${action('native-login','@native',tr('login.change_method'),'')}</div></article>`;
+      const summary=`<button type="button" class="account-summary service-summary" data-ui-action="account-details" data-id="@native" aria-haspopup="dialog" title="${esc(tr('login.mode_'+account.auth_mode))}"><span class="account-segment account-name"><span>${esc(label)}</span></span><span class="account-segment service-type">${tr(account.auth_mode==='local_key'?'login.local_connection':account.auth_mode==='api_key'?'login.api_key':'login.connection')}</span></button>`;
+      return `<article class="entity-card service-card service-account" data-service="account:@native"><div class="service-main">${serviceIcon('account','@native',label,'codex',false)}<div class="service-identity">${summary}</div></div><div class="service-actions">${loginAction}</div></article>`;
     }
     const busy = refreshingAccounts.has(account.id), duplicate = account.duplicate && account.duplicate_of === '当前 Codex 登录';
     const label = account.native ? 'Native' : account.name || account.id;
     const status = !account.credential_set ? tr("services.not_signed_in") : account.credential_status === 'invalid' ? tr("services.sign_in_expired") : '';
     const duplicateText = account.duplicate ? (duplicate ? tr("services.models_managed_by_native") : tr("services.duplicate_account") + ' · ' + account.duplicate_of) : '';
     const detail = [duplicateText,settingsConflict(account)?tr("services.review_model_visibility_and_context_settings"):''].filter(Boolean).map(esc).join(' · ');
-    const actions = action('account-refresh', account.id, busy ? tr("services.refreshing") : tr("refresh"), 'refresh', busy || !account.credential_set)
+    const actions = loginAction
+      + action('account-refresh', account.id, busy ? tr("services.refreshing") : tr("refresh"), 'refresh', busy || !account.credential_set)
       + action('account-quota-history', account.id, tr("services.trend"), 'chart')
-      + (account.native ? action('native-login',account.id,tr('login.change_method'),'') : '');
+      + action('account-edit', account.id, tr("models.manage_models"), 'settings', duplicate);
     return `<article class="entity-card service-card service-account${duplicate ? ' account-duplicate' : ''}" data-service="account:${esc(account.id)}">
       <div class="service-main">${serviceIcon('account', account.native ? '@native' : account.id, label, 'codex', false, refreshErrors[account.id] ? {title:tr("services.quota_refresh_failed"),message:refreshErrors[account.id]} : status ? {title:tr("services.sign_in_needs_attention"),message:status} : null)}<div class="service-identity">${accountSummary(account, account.quota?.account_label || label)}${detail ? `<small class="service-note">${detail}</small>` : ''}</div></div>
       <div class="service-actions">${actions}</div>
@@ -46,57 +49,28 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     const brand = providerBrand(provider);
     const defaults = [provider.id, brand, presets[brand]?.name, ...(local ? ['Claude Code','Claude Subscription'] : cpa ? ['Claude CPA','Claude Code CPA'] : [])];
     const alias = brand === 'custom' || !defaults.some(name => name && name.toLowerCase() === label.toLowerCase()) ? label : '';
-    const summary = `<button type="button" class="account-summary service-summary" data-ui-action="provider-details" data-id="${esc(provider.id)}" aria-haspopup="dialog" aria-label="${esc(label + ' · ' + providerType(provider) + ' · Model: ' + models.length)}" title="${esc(label)}">${alias ? `<span class="account-segment account-name"><span>${esc(alias)}</span></span>` : ''}<span class="account-segment ${alias ? 'service-type' : 'account-name'}">${providerType(provider)}</span><span class="account-segment service-model-count">Model: ${models.length}</span></button>`;
+    const summary = `<button type="button" class="account-summary service-summary" data-ui-action="provider-details" data-id="${esc(provider.id)}" aria-haspopup="dialog" aria-label="${esc(label + ' · ' + providerType(provider) + ' · Model: ' + models.length)}" title="${esc(label)}">${alias ? `<span class="account-segment account-name"><span>${esc(alias)}</span></span>` : ''}<span class="account-segment ${alias ? 'service-type' : 'account-name'}">${providerType(provider)}</span><span class="account-segment service-model-count">Model: ${models.length}</span>${balances.segment(provider.id)}</button>`;
     const modelActions = action('provider-model-settings', provider.id, tr("models.manage_models"), 'settings');
-    const actions = local ? modelActions
-      + action('provider-quota-refresh', provider.id, refreshing.has(provider.id) ? tr("services.refreshing") : tr("refresh"), 'refresh', refreshing.has(provider.id))
+    const actions = local ? action('provider-quota-refresh', provider.id, refreshing.has(provider.id) ? tr("services.refreshing") : tr("refresh"), 'refresh', refreshing.has(provider.id))
       + action('provider-quota-history', provider.id, tr("services.trend"), 'chart')
-      : modelActions;
+      + modelActions
+      : (balances.canRefresh(provider.id)?action('provider-balance-refresh',provider.id,tr('services.refresh_balance'),'refresh',balances.busy.has(provider.id)):'') + modelActions;
     return `<article class="entity-card service-card" data-service="provider:${esc(provider.id)}">
       <div class="service-main">${serviceIcon('provider', provider.id, label, brand, cpa, errors.has(provider.id) ? {title:tr("services.quota_refresh_failed"),message:errors.get(provider.id)} : null)}<div class="service-identity">${summary}</div></div>
-      <div class="service-actions${local ? ' service-actions-with-quota' : ''}">${actions}</div>
+      <div class="service-actions">${actions}</div>
       ${local ? `<div class="service-quota" title="${esc(getState().claude_quota?.observed_at ? tr("services.updated") + new Date(getState().claude_quota.observed_at * 1000).toLocaleString() : tr("services.quota_updates_after_model_use"))}">${quotaMeters({quota:getState().claude_quota, quota_pending:true}, refreshing.has(provider.id))}</div>` : ''}
     </article>`;
   }
-  function tabs(id, kind, active = 'details', disabled = false) {
-    const views = kind === 'account'
-      ? [['details', 'account-details', tr("services.account_details")], ['edit', 'account-edit', tr("services.model_settings")]]
-      : [['details', 'provider-details', tr("usage")], ['edit', 'provider-edit', tr("services.connection_settings")]];
-    return `<div class="service-detail-tabs" role="tablist" aria-label="${tr("services.service_settings")}">${views.map(([view, action, label]) => `<button id="service-tab-${view}" type="button" class="secondary" role="tab" data-service-view="${view}" data-ui-action="${action}" data-id="${esc(id)}" aria-selected="${view === active}" aria-controls="modal_body" tabindex="${view === active ? 0 : -1}" ${view === 'edit' && disabled ? 'disabled' : ''}>${label}</button>`).join('')}</div>`;
-  }
   function mount(context) {
-    const nav = $('service_detail_nav'), body = $('modal_body');
-    if (!nav || !body) return;
+    const body = $('modal_body');
     body.closest('.modal').classList.toggle('service-detail-modal', Boolean(context));
-    nav.hidden = !context;
-    if (!context) { nav.innerHTML = ''; delete nav.dataset.service; nav.onkeydown = null; body.removeAttribute('role'); body.removeAttribute('aria-labelledby'); return; }
-    const state = getState(), {id, kind, active} = context;
+    if (!context) return;
+    const state = getState(), {id, kind} = context;
     const record = kind === 'account' ? [state.native_account, ...(state.accounts || [])].find(item => item?.id === id)
       : (state.providers || []).find(item => item.id === id);
     if (!record) return;
     $('modal_title').textContent = record.native ? 'Native' : record.name || id;
-    const key = kind + ':' + id;
-    if (nav.dataset.service !== key) {
-      nav.dataset.service = key;
-      nav.innerHTML = tabs(id, kind, active, record.duplicate && record.duplicate_of === '当前 Codex 登录');
-    }
-    for (const button of nav.querySelectorAll('[role="tab"]')) {
-      const selected = button.dataset.serviceView === active;
-      button.setAttribute('aria-selected', String(selected));
-      button.tabIndex = selected ? 0 : -1;
-    }
-    nav.onkeydown = event => {
-      const buttons = [...nav.querySelectorAll('[role="tab"]')].filter(button => !button.disabled);
-      const index = buttons.indexOf(event.target);
-      if (index < 0 || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
-      event.preventDefault();
-      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
-        : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
-      buttons[next].focus(); buttons[next].click();
-    };
     onMount(id,kind,record);
-    body.setAttribute('role', 'tabpanel');
-    body.setAttribute('aria-labelledby', 'service-tab-' + active);
   }
   function open(id, kind, active, body, label, submit, navigation = {}) {
     openModal('', body, label, submit, {id, kind, active}, navigation);
@@ -126,7 +100,7 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
   async function details(id, navigation = {}) {
     const provider = (getState().providers || []).find(item => item.id === id);
     if (!provider) return;
-    open(id, 'provider', 'details', `<div id="service_usage">${tr("services.loading_usage")}</div>`, '', null, navigation);
+    open(id, 'provider', 'details', `<div class="service-detail-actions"></div>${balances.details(id)}<div id="service_usage">${tr("services.loading_usage")}</div>`, '', null, navigation);
     const box = $('service_usage');
     const controller = new AbortController(); detailsController = controller;
     try {
@@ -158,5 +132,5 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
       return false;
     } finally { refreshing.delete(id); render(); }
   }
-  return {render, details, refresh, tabs, open, mount, stop, accounts:visibleAccounts};
+  return {render, details, refresh, open, mount, stop, accounts:visibleAccounts};
 }

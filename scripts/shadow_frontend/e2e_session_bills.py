@@ -52,7 +52,7 @@ def rollout(home, session, turns):
         records.append({'type':'turn_context','payload':{'model':model,'turn_id':turn}})
         for key,value in counts.items():
             cumulative[key]=cumulative.get(key,0)+value
-        records.append({'type':'event_msg','timestamp':datetime.fromtimestamp(time.time()-30+index,timezone.utc).isoformat(),
+        records.append({'type':'event_msg','timestamp':datetime.fromtimestamp(time.time()-30-len(turns)+index,timezone.utc).isoformat(),
             'payload':{'type':'token_count','info':{'last_token_usage':counts,'total_token_usage':dict(cumulative)}}})
     path.write_text(''.join(json.dumps(record)+'\n' for record in records))
     return path
@@ -183,7 +183,7 @@ def main():
             _,png=request(browser.base+'/screenshot')
             args.output.with_name(args.output.stem+'-components-'+language+'.png').write_bytes(base64.b64decode(png['value']))
             viewports.append(browser.execute('return {language:arguments[0],width:innerWidth,height:innerHeight};',language))
-            for term,expected in [('Unknown price','—'),('Zero price','US$0.0000')]:
+            for term,expected in [('Unknown price','—'),('Zero price','US$0')]:
                 browser.execute('const input=document.querySelector("[data-bill-search]");input.value=arguments[0];input.dispatchEvent(new Event("input",{bubbles:true}));',term)
                 wait_for(lambda: browser.execute('return document.querySelectorAll("[data-session-bill]").length===1 && document.querySelector("[data-session-bill]").textContent.includes(arguments[0]);',term))
                 assert browser.execute('return document.querySelector("[data-session-bill] summary").textContent.includes(arguments[0]);',expected)
@@ -213,6 +213,105 @@ def main():
         checks.append('Closing statistics cancels an in-flight model breakdown; a late result cannot reopen or replace another view')
         check_bill_lifecycle(browser)
         checks.append('Queued native toggle events from replaced rows cannot claim or cancel the current bill details during refresh or remount')
+        large_session='c9356918-3354-42b1-8c7c-88409572fdb1'
+        with sqlite3.connect(home/'state_5.sqlite') as database:
+            database.execute('INSERT INTO threads(id,title) VALUES (?,?)',(large_session,'Compact usage'))
+        large_turns=[(f'compact-{index}','demo/model',{'input_tokens':10000000 if index<123 else 4567890,
+            'output_tokens':2345678 if index==123 else 0,'cached_input_tokens':0}) for index in range(124)]
+        rollout(home,large_session,large_turns+[('compact-small','demo/zero-model',{'input_tokens':12345,'output_tokens':6789,'cached_input_tokens':0})])
+        scan(base,headers)
+        end=time.time()+300
+        for span,bucket,count in [(3600,600,6),(86400,3600,24),(604800,86400,7),(2592000,86400,30)]:
+            period=urlencode({'start':end-span,'end':end})
+            usage=request(base+'/api/usage?series=true&'+period,headers=headers)[1]
+            calls=request(base+'/api/calls?'+period,headers=headers)[1]
+            assert usage['totals']['input_tokens']>1e9,usage['totals']
+            assert usage['bucket']==calls['bucket']==bucket,(usage,calls)
+            assert (usage['end']-usage['start'])/bucket==count
+            for field in ['requests','input_tokens','output_tokens','cost_nanos']:
+                assert sum(row[field] for row in usage['periods'])==usage['totals'][field]
+            assert sum(row['calls'] for row in calls['periods'])==calls['summary']['calls']
+            assert all(0<=round((row['start']-usage['start'])/bucket)<count for row in usage['periods']+calls['periods'])
+        checks.append('Usage and call charts share six ten-minute, 24 hourly, seven daily and 30 daily buckets; regrouping preserves recorded totals')
+        browser.navigate(frontend)
+        for language in ['zh-CN','en']:
+            browser.execute('setLanguage(arguments[0]);statistics.open();',language)
+            wait_for(lambda:browser.execute('return document.querySelectorAll(".presentation-stat strong").length>0;'))
+            wait_for(lambda:browser.execute('return [...document.querySelectorAll(".presentation-stat")].some(node=>node.querySelector(".presentation-stat-label")?.textContent==="Token" && node.querySelector("strong").textContent.split(" ")[0].endsWith("b"));'))
+            assert browser.execute('const node=[...document.querySelectorAll(".presentation-stat")].find(node=>node.querySelector(".presentation-stat-label")?.textContent==="Token").querySelector("strong");return Number(node.title.replaceAll(",",""))>1e9 && !/[kmb]/.test(node.title);')
+            assert browser.execute('const node=[...document.querySelectorAll(".presentation-stat")].find(node=>node.querySelector(".presentation-stat-label")?.textContent===tr("reports.api_estimate_usd")).querySelector("strong");return /^US\\$[0-9.]+m$/.test(node.textContent.split(" ")[0]) && node.title.startsWith("US$1,");')
+            if language=='zh-CN':
+                _,png=request(browser.base+'/screenshot')
+                args.output.with_name(args.output.stem+'-compact.png').write_bytes(base64.b64decode(png['value']))
+            for preset,interval in [('1h','10 '+browser.execute('return tr("reports.min");')),('1d','1 '+browser.execute('return tr("reports.h");')),('7d','1 '+browser.execute('return tr("reports.day");')),('30d','1 '+browser.execute('return tr("reports.day");'))]:
+                browser.execute('selectPeriodPreset("presentation_stats",arguments[0]);',preset)
+                wait_for(lambda:browser.execute('return !document.querySelector("#presentation_stats [data-report-action=refresh]").disabled && document.querySelector(".presentation-chart-heading p")?.textContent.startsWith(tr("reports.per")+" "+arguments[0]+" ·");',interval))
+            browser.execute('document.querySelector("[data-stats-view=sessions]").click();')
+            wait_for(lambda:browser.execute('return document.querySelector("[data-bill-search]");'))
+            browser.execute('const input=document.querySelector("[data-bill-search]");input.value=arguments[0];input.dispatchEvent(new Event("input",{bubbles:true}));',large_session)
+            wait_for(lambda:browser.execute('return document.querySelectorAll("[data-session-bill]").length===1;'))
+            browser.execute('document.querySelector("[data-session-bill]").open=true;')
+            wait_for(lambda:browser.execute('return document.querySelector("[data-bill-models]")?.textContent.includes("1.23b");'))
+            assert browser.execute('const spans=[...document.querySelectorAll("[data-bill-models] span[title]")];return [["1.23b","1,234,567,890"],["2.35m","2,345,678"],["12.35k","12,345"]].every(([text,title])=>spans.some(node=>node.textContent===text && node.title===title));')
+            browser.execute('closeModal();')
+        checks.append('Chinese and English statistics and session bills display lowercase k/m/b with full exact token and USD hover values')
+        browser.execute('''
+          window.statsFetch=window.fetch;window.statsHeld={};
+          window.fetch=function(path,options){
+            const kind=String(path).match(/^\\/api\\/(calls|usage)\\?/);
+            if(!kind)return statsFetch(path,options);
+            return statsFetch(path,options).then(async response=>{
+              const text=await response.text();
+              if(kind[1]==='usage')return new Promise(resolve=>{statsHeld.usage=()=>resolve(new Response(text,{status:response.status,headers:response.headers}));});
+              const separator=String.fromCharCode(10,10),frames=text.trimEnd().split(separator).map(frame=>frame+separator),encoder=new TextEncoder();
+              return new Response(new ReadableStream({start(controller){
+                let next=0;
+                statsHeld.calls=stage=>{
+                  if(stage==='fail'){controller.error(new Error('fixture read failed'));return;}
+                  const end=stage==='first'?1:stage==='half'?Math.floor(frames.length/2):frames.length;
+                  while(next<end){
+                    const bytes=encoder.encode(frames[next++]);
+                    for(let offset=0;offset<bytes.length;offset+=11)controller.enqueue(bytes.slice(offset,offset+11));
+                  }
+                  if(stage==='all')controller.close();
+                };
+                statsHeld.calls('first');
+              }}),{status:response.status,headers:response.headers});
+            });
+          };
+        ''')
+        for language,usage_first in [('zh-CN',True),('en',False)]:
+            browser.execute('setLanguage(arguments[0]);statsHeld={};statistics.open();',language)
+            wait_for(lambda:browser.execute('return !!(statsHeld.calls && statsHeld.usage);'))
+            wait_for(lambda:browser.execute('return document.querySelector("#presentation_stats progress")?.value===0;'))
+            if usage_first:
+                browser.execute('statsHeld.usage();')
+                time.sleep(.1)
+                assert browser.execute('return document.querySelector("#presentation_stats progress").value===0;')
+            browser.execute('statsHeld.calls("half");')
+            wait_for(lambda:browser.execute('const bar=document.querySelector("#presentation_stats progress");return bar?.value>0 && bar.value<bar.max;'))
+            assert browser.execute('const bar=document.querySelector("#presentation_stats progress");return document.querySelector("#presentation_stats [data-report-status]").textContent===Math.floor(bar.value/bar.max*100)+"%";')
+            _,png=request(browser.base+'/screenshot')
+            args.output.with_name(args.output.stem+'-progress-'+language+'.png').write_bytes(base64.b64decode(png['value']))
+            browser.execute('statsHeld.calls("all");')
+            if not usage_first:
+                wait_for(lambda:browser.execute('const bar=document.querySelector("#presentation_stats progress");return bar?.value===bar?.max;'))
+                assert browser.execute('return document.querySelector("#presentation_stats").getAttribute("aria-busy")==="true";')
+                browser.execute('statsHeld.usage();')
+            wait_for(lambda:browser.execute('return document.querySelector("#presentation_stats").getAttribute("aria-busy")==="false";'))
+            assert browser.execute('return !document.querySelector("#presentation_stats progress");')
+            browser.execute('closeModal();')
+        browser.execute('statsHeld={};statistics.open();')
+        wait_for(lambda:browser.execute('return !!(statsHeld.calls && statsHeld.usage);'))
+        browser.execute('statsHeld.calls("fail");')
+        wait_for(lambda:browser.execute('return document.querySelector("#presentation_stats").getAttribute("aria-busy")==="false";'))
+        error_status=browser.execute('return document.querySelector("#presentation_stats [data-report-status]").textContent;')
+        assert error_status
+        browser.execute('statsHeld.usage();')
+        time.sleep(.2)
+        assert browser.execute('return !document.querySelector("#presentation_stats progress") && document.querySelector("#presentation_stats [data-report-status]").textContent===arguments[0];',error_status)
+        browser.execute('window.fetch=statsFetch;closeModal();')
+        checks.append('Statistics show only real row-processing percentages, decode fragmented streams, wait for both reports, and preserve errors against late responses')
         assert BillUpstream.calls==5 and upstream.calls==0
     receipt={'passed':True,'checks':checks,'viewports':viewports,'real_model_calls':0,
         'fixture_model_calls':5,'production_state_used':False}

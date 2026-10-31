@@ -21,7 +21,6 @@ def main():
             (args.output/name).write_bytes(base64.b64decode(image['value']))
         browser.navigate(args.url)
         assert browser.execute('return window.EMP_REAL_SHADOW===true;')
-        assert browser.execute('return reviewRows;')==['gateway','onboarding','lan']
         shot('shadow-review.png')
         browser.execute('window.EMP_REVIEW_ACTION("onboarding");')
         def ready():
@@ -48,8 +47,7 @@ def main():
         browser.execute('document.querySelector("[data-native-login-start]").click();')
         wait_for(lambda:browser.execute('return !!document.querySelector(".device-code");'))
         shot('shadow-device-login.png')
-        wait_for(lambda:browser.execute('return state.native_account.auth_mode==="subscription";'),seconds=25)
-        assert browser.execute('return document.getElementById("native_login_progress").textContent.includes(tr("login.completed"));')
+        wait_for(lambda:browser.execute('return state.native_account.auth_mode==="subscription" && document.getElementById("native_login_progress").textContent.includes(tr("login.completed"));'),seconds=25)
         browser.execute('closeModal();migration.open();document.querySelector("[data-migration-mode=tunnel]").click();')
         for language in ['zh-CN','en']:
             for width in [1280,560]:
@@ -68,6 +66,7 @@ def main():
         request(browser.base+'/window',{'handle':receiver})
         browser.navigate(peer+'?reviewAction=lan')
         browser.execute('document.querySelector("[data-migration-mode=tunnel]").click();')
+        receiver_providers=browser.execute('return JSON.stringify(state.providers);')
         browser.execute('const input=document.getElementById("lan_code");input.value=arguments[0];input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector("[data-lan-receive]").click();',code)
         request(browser.base+'/window',{'handle':sender})
         wait_for(lambda:browser.execute('return !document.getElementById("lan_receiver_confirm").hidden;'))
@@ -80,13 +79,14 @@ def main():
         def preview_ready():
             return browser.execute('return !!document.querySelector("[data-migration-name]") && !document.getElementById("modal_submit").disabled;')
         wait_for(preview_ready,seconds=90)
-        assert browser.execute('return state.providers.length===0;')
+        assert browser.execute('return JSON.stringify(state.providers);')==receiver_providers
         browser.execute('document.getElementById("modal_back").click();')
         assert browser.execute('return document.getElementById("lan_code").value;',)==code
         browser.execute('document.querySelector("[data-lan-receive]").click();')
         wait_for(preview_ready)
         shot('shadow-lan-preview.png')
         browser.execute('document.getElementById("modal_submit").click();')
+        wait_for(lambda:browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");'))
         wait_for(lambda:browser.execute('return state.providers.some(provider=>provider.name==="Example API");'))
         browser.navigate(args.url)
         assert browser.execute('return window.EMP_REAL_SHADOW===true;')

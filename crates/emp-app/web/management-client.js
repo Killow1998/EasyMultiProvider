@@ -37,10 +37,34 @@ function createManagementClient({tr, fetch, storage, window}) {
     const group = UPSTREAM_ERROR_GROUPS.find(([types]) => types.includes(detail.type));
     return group ? tr(group[1]) : error?.message || fallback;
   }
-  async function api(path, options = {}) {
+  async function api(path, {onProgress, ...options} = {}) {
     const headers = new Headers(options.headers || {});
     if (!headers.has('Content-Type')) headers.set('Content-Type','application/json');
+    if (onProgress) headers.set('Accept','text/event-stream');
     const response = await managementFetch(path, {...options, headers});
+    if (response.ok && onProgress && response.headers.get('Content-Type')?.startsWith('text/event-stream')) {
+      const reader=response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer='';
+      try {
+        while (true) {
+          const {done,value}=await reader.read();
+          if (done) break;
+          buffer=(buffer+value).replaceAll('\r\n','\n');
+          let boundary;
+          while ((boundary=buffer.indexOf('\n\n'))>=0) {
+            const lines=buffer.slice(0,boundary).split('\n');
+            buffer=buffer.slice(boundary+2);
+            const type=lines.find(line=>line.startsWith('event:'))?.slice(6).trim();
+            if (!type) continue;
+            const data=JSON.parse(lines.filter(line=>line.startsWith('data:')).map(line=>line.slice(5)).join('\n'));
+            if (type==='progress') onProgress(data);
+            if (type==='result') return data;
+            if (type==='error') throw new Error(data.error.message);
+          }
+        }
+        throw new Error(tr("core.the_server_returned_an_invalid_response"));
+      } finally { await reader.cancel(); }
+    }
     const text = await response.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {error:{message:text || tr("core.the_server_returned_an_invalid_response")}}; }

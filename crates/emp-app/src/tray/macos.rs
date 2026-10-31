@@ -32,3 +32,17 @@ impl Events {
         });
     }
 }
+
+pub(super) fn set_application_icon(png: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    use objc2::AnyThread;
+    use objc2_app_kit::NSImage;
+    use objc2_foundation::NSData;
+    let main = MainThreadMarker::new().ok_or("application icon requires the main thread")?;
+    let image = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(png))
+        .ok_or("application icon could not be decoded")?;
+    // SAFETY: AppKit is used on its launch thread and owns a retained image.
+    unsafe {
+        NSApplication::sharedApplication(main).setApplicationIconImage(Some(&image));
+    }
+    Ok(())
+}

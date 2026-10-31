@@ -104,9 +104,11 @@ pub fn build_catalog(
     let mut external: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     let empty = json!({});
     for (index, model) in array(config.get("models")).iter().enumerate() {
+        let upstream = text(model, "upstream_id").trim_start_matches('~');
+        let jev = upstream.strip_prefix("typesafe/").unwrap_or(upstream);
         if model.get("enabled") == Some(&Value::Bool(false))
             || existing.contains(text(model, "id"))
-            || text(model, "upstream_id").starts_with("typesafe/jev-")
+            || (jev.starts_with("jev-") && jev != "jev-router")
         {
             continue;
         }

@@ -362,6 +362,7 @@ def run_created_flow(args: argparse.Namespace, address_space_limit_bytes: int) -
             fail("fixture integration lease was not created")
 
         paths = {key: find_rollout(codex_home, thread_id) for key, thread_id in ids.items()}
+        dynamic_tools_supported = tuple(map(int, report["codex_version"].split()[1].split('.')[:2])) >= (0, 166)
         for key, path in paths.items():
             append_items(
                 path,
@@ -374,6 +375,13 @@ def run_created_flow(args: argparse.Namespace, address_space_limit_bytes: int) -
                     }
                 ],
             )
+            if dynamic_tools_supported:
+                tools = [] if key == "early_child" else [{
+                    "type":"function", "name":"fixture_lookup_"+key,
+                    "description":"Synthetic history-restore lookup",
+                    "inputSchema":{"type":"object","properties":{}}
+                }]
+                append_items(path, [{"thread_id":ids[key], "tools":tools}], kind="dynamic_tools_updated")
         original_files = {
             thread_id: FileSnapshot.capture(paths[key]) for key, thread_id in ids.items()
         }
@@ -471,6 +479,7 @@ def run_created_flow(args: argparse.Namespace, address_space_limit_bytes: int) -
             fail("fixture failed to distinguish native and EMP settings")
 
         provider.reject_emp1 = True
+        resume_request_start = len(provider.requests)
         resume_outcomes: dict[str, str] = {}
         resume_thread_ids: dict[str, str] = {}
         with AppServer(
@@ -478,6 +487,7 @@ def run_created_flow(args: argparse.Namespace, address_space_limit_bytes: int) -
             env,
             root / "app-server-native-resume.stderr.log",
             address_space_limit_bytes,
+            extra_args=("--config", f'model_providers.{EMP_MODEL_PROVIDER}.base_url={json.dumps(provider.base_url)}'),
         ) as server:
             for key, thread_id in ids.items():
                 resumed = server.rpc(
@@ -485,7 +495,7 @@ def run_created_flow(args: argparse.Namespace, address_space_limit_bytes: int) -
                     {
                         "threadId": thread_id,
                         "model": MODEL,
-                        "modelProvider": "native_fake",
+                        "modelProvider": EMP_MODEL_PROVIDER,
                         "excludeTurns": True,
                     },
                 )
@@ -509,6 +519,12 @@ def run_created_flow(args: argparse.Namespace, address_space_limit_bytes: int) -
         checkpoint_provider_observations(report, provider, mcp_log)
         requests = report["requests"]
         report["assertions"] = created_assertions(report, ids, requests, report["mcp_calls"])
+        if dynamic_tools_supported:
+            for key in ids:
+                probes = [record for record in requests[resume_request_start:] if record["prompt"] == key]
+                expected = [] if key == "early_child" else ["fixture_lookup_"+key]
+                report["assertions"]["dynamic_tools_restored_"+key] = bool(probes) and all(
+                    record["dynamic_fixture_tools"] == expected for record in probes)
     except Exception as exc:
         report["error"] = str(exc)
     finally:

@@ -74,6 +74,7 @@ impl<'a> ExternalRouter<'a> {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
+        observation.observe(&upstream, false);
         let projected = match route.protocol {
             Protocol::Auto => return Err(unresolved_protocol()),
             Protocol::ChatCompletions => response_from_chat(
@@ -93,26 +94,31 @@ impl<'a> ExternalRouter<'a> {
             .map_err(anthropic_error)?,
             Protocol::Responses => {
                 validate_responses_body(&upstream, true).map_err(responses_validation_error)?;
-                let names = portable_custom_tool_names(body).map_err(portable_request_error)?;
-                let model = route.model.value();
-                let projected = project_portable_response(
-                    &upstream,
-                    &names,
-                    model
-                        .get("_emp_preserve_reasoning_summary")
-                        .and_then(Value::as_bool)
-                        == Some(true),
-                    model
-                        .get("_emp_preserve_reasoning_state")
-                        .and_then(Value::as_bool)
-                        == Some(true),
-                )
-                .map_err(portable_response_error)?;
-                validate_responses_body(&projected, true).map_err(responses_validation_error)?;
-                projected
+                upstream
             }
         };
-        observation.observe(&upstream, false);
+        let names = if route.protocol == Protocol::Responses {
+            portable_custom_tool_names(body).map_err(portable_request_error)?
+        } else {
+            Default::default()
+        };
+        let model = route.model.value();
+        let projected = project_portable_response(
+            &projected,
+            &names,
+            model
+                .get("_emp_preserve_reasoning_summary")
+                .and_then(Value::as_bool)
+                == Some(true),
+            model
+                .get("_emp_preserve_reasoning_state")
+                .and_then(Value::as_bool)
+                == Some(true),
+        )
+        .map_err(portable_response_error)?;
+        if route.protocol == Protocol::Responses {
+            validate_responses_body(&projected, true).map_err(responses_validation_error)?;
+        }
         Ok(CompleteResponse {
             observation,
             status,
@@ -262,6 +268,20 @@ impl<'a> ExternalRouter<'a> {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
+        let model = route.model.value();
+        let preserve_summary = model
+            .get("_emp_preserve_reasoning_summary")
+            .and_then(Value::as_bool)
+            == Some(true);
+        let preserve_state = model
+            .get("_emp_preserve_reasoning_state")
+            .and_then(Value::as_bool)
+            == Some(true);
+        let names = if route.protocol == Protocol::Responses {
+            portable_custom_tool_names(body).map_err(portable_request_error)?
+        } else {
+            Default::default()
+        };
         let (payload, projection) = match route.protocol {
             Protocol::Auto => return Err(unresolved_protocol()),
             Protocol::ChatCompletions => {
@@ -286,29 +306,14 @@ impl<'a> ExternalRouter<'a> {
                 (payload, StreamProjection::Anthropic(stream))
             }
             Protocol::Responses => {
-                let model = route.model.value();
-                let preserve_summary = model
-                    .get("_emp_preserve_reasoning_summary")
-                    .and_then(Value::as_bool)
-                    == Some(true);
-                let preserve_state = model
-                    .get("_emp_preserve_reasoning_state")
-                    .and_then(Value::as_bool)
-                    == Some(true);
                 let mut payload =
                     project_portable_request(provider, portable_body.as_ref(), preserve_state)
                         .map_err(portable_request_error)?;
                 payload["model"] = Value::String(route.upstream_model.clone());
                 payload["stream"] = Value::Bool(true);
-                let names = portable_custom_tool_names(body).map_err(portable_request_error)?;
                 (
                     payload,
                     StreamProjection::Responses {
-                        projector: PortableStreamProjector::new(
-                            names,
-                            preserve_summary,
-                            preserve_state,
-                        ),
                         saw_terminal: false,
                     },
                 )
@@ -365,6 +370,7 @@ impl<'a> ExternalRouter<'a> {
             response: Some(response),
             parser: Some(SseJsonParser::new()),
             projection,
+            output: PortableStreamProjector::new(names, preserve_summary, preserve_state),
             tools,
             pending: VecDeque::new(),
             generated: None,

@@ -9,7 +9,9 @@ function createReportQuery({api, onState, onResult}) {
     onState(true, '');
     let error = '';
     try {
-      const result = await api(path, {...options, signal:controller.signal});
+      const result = await api(path, {...options, signal:controller.signal}, progress=>{
+        if (selected === revision && controller) onState(true, '', progress);
+      });
       if (selected === revision) onResult(result);
     } catch (failure) {
       if (selected === revision && failure.name !== 'AbortError') error = failure.message;
@@ -21,10 +23,19 @@ function createReportQuery({api, onState, onResult}) {
   return {run, cancel};
 }
 
-function setReportState(root, loading, error, tr) {
+function setReportState(root, loading, error, tr, progress) {
   root.setAttribute('aria-busy', String(loading));
   const status = root.querySelector('[data-report-status]');
-  status.textContent = loading ? tr("reports.loading") : error;
+  const label=progress ? tr("reports.query_progress",{
+    percent:progress.total ? Math.floor(progress.completed/progress.total*100) : 100,
+  }) : tr("reports.loading");
+  status.textContent = loading ? label : error;
+  if (loading && progress) {
+    const bar=document.createElement('progress');
+    bar.max=progress.total || 1; bar.value=progress.total ? progress.completed : 1;
+    bar.setAttribute('aria-label',label);
+    status.append(bar);
+  }
   status.dataset.loading = String(loading);
   for (const button of root.querySelectorAll('[data-report-action]')) {
     button.disabled = loading;

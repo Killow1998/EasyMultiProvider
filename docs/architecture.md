@@ -465,8 +465,9 @@ save lifecycle behind `open`/`refresh`/`stop`. It reads configuration and langua
 through getters and receives period controls explicitly. DOM actions stay inside
 the report root instead of adding page-level usage handlers.
 `account-details.js` owns account usage reads and alias interaction. It retains
-compact lifetime aggregates per account in page memory for one minute. Tab changes
-detach the view while an in-flight read completes for that account; reopening
+compact lifetime aggregates per account in page memory for one minute. Closing
+details or opening model settings detaches the view while an in-flight read
+completes for that account; reopening
 renders cached aggregates immediately. Usage events invalidate freshness and
 refresh only the visible account, coalescing events during a read into a follow-up.
 Expired data stays visible during refresh; failures preserve it with an error,
@@ -497,8 +498,13 @@ the outcome finalizer only coordinates accounting, publication and completion.
 See [performance metric fields](diagnostic-journal-spec.md) for the wire contract.
 
 Dialog navigation passes an explicit `back` callback to the shared modal shell.
-The parent supplies a `reopen` callback for child transitions; service tabs carry
-their service identity and selected tab. Root dialogs hide Back, while X clears
+The shell invokes navigation callbacks without forwarding the DOM click event.
+The parent supplies a `reopen` callback for child transitions; service views carry
+their service identity and view type. Service names open information, while the
+row's gear opens model settings. Information and settings have separate entries
+instead of tabs. Account information omits sign-in origin and puts reset/removal
+beside the account identity; provider information retains a connection-settings
+icon. Root dialogs hide Back, while X clears
 navigation and closes the dialog. Replacing a view runs its existing feature
 cleanup. Model editing uses this shell instead of separate shadow header buttons,
 retaining its manager search on return. The call-outcome dialog remains an overlay:
@@ -534,13 +540,18 @@ The real server test also fetches the page's referenced assets before login.
 
 #### Frontend development and acceptance
 
-Settings uses four flat, labelled groups: display preferences; general startup
-and cross-service collaboration; external-model web search; and native-service
-compaction/routing. Grouping changes navigation only. Existing controllers keep
-their persistence and validation ownership; display choices remain browser-local,
-and Auto Review, image and memory routes retain one shared child dialog.
+Settings opens three category cards. General contains display preferences,
+startup and gateway connection. External services contains cross-service
+collaboration, web search and decision models. Native services contains background
+compaction, Ultra effort and routing. Child dialogs return to their owning category.
+Existing controllers keep persistence and validation ownership; display choices
+remain browser-local, and Auto Review, image and memory routes share one child dialog.
+Service-row actions use labelled, tooltip-equipped icons in the order sign-in,
+refresh, trends and model settings; sign-in is Native-only. The shared right edge
+aligns the same actions across services. Sign-in methods reuse the existing choice
+cards, including device/browser login and Other/Native destinations.
 
-The shared dialog shell keeps its title, navigation, service tabs and footer
+The shared dialog shell keeps its title, navigation and footer
 outside the scrolling `.modal-body`. Migration, tutorials and service details
 only customize their dimensions; the native request-outcome dialog uses the same
 body rule. The shared body reserves a scrollbar gutter and spacing in the dialog's
@@ -562,9 +573,11 @@ Keep Shadow navigation stable across review rounds:
 
 - Use **This update** for the current review and **Demos** for established examples.
   Do not append a new top-level button for each feature or change.
-- Replace `reviewRows` in `scripts/shadow_frontend/preview-review.js` for each round.
-  Describe the current candidate and link each item to its actual interface;
-  remove superseded review labels and version/count claims from the active list.
+- Keep `reviewRows` in `scripts/shadow_frontend/preview-review.js` cumulative
+  relative to the last published release, named by `reviewBaseline` in the dialog.
+  Development tasks do not reset the review list. After release, advance the
+  baseline and remove released entries together. Link UI changes to their actual
+  interfaces; summarize backend maintenance directly.
 - Keep released features available through Demos or their normal product entry.
   A new preview scenario belongs in those menus, not another toolbar button.
 - Update both Simplified Chinese and English, the preview README, and affected

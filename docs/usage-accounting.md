@@ -13,6 +13,23 @@ Provider summaries include only that provider's records. Input, output and
 priced costs are summed; missing usage remains missing and known zero-cost
 usage remains zero. Use **Statistics** for date and category breakdowns.
 
+## Official provider balances
+
+The service summary's Credits position also displays official API balances.
+DeepSeek returns its account balance in the reported CNY or USD currencies;
+Moonshot uses CNY on its China endpoint and USD on its international endpoint.
+OpenRouter's ordinary API key reports its remaining key budget, not account
+funds. A missing budget is not a zero balance. OpenAI and other official services
+without an ordinary-key balance endpoint link to their official billing console.
+EMP does not request an organization Admin key or use private dashboard APIs.
+
+Balance queries run separately from inference. Configuration reads use the
+in-memory snapshot; opening the WebUI refreshes observations older than one
+minute. The service refresh button explicitly refreshes its balance. Query
+failures retain an error state rather than turning into a measured zero.
+Changing a provider endpoint or credential selects a different cache entry.
+Self-hosted endpoints do not receive speculative balance requests.
+
 ## Reasoning effort and speed tier
 
 Expand a record in **Statistics > Calls** to see the selected reasoning effort,
@@ -47,8 +64,21 @@ live and historical observations before aggregation. Cache
 reads/writes and reasoning remain subsets of input/output, not extra tokens to
 add to the total.
 
+Token and USD displays use lowercase **k/m/b** for thousands, millions and
+billions; hover to see the full recorded value. This affects presentation only.
+Statistics use six ten-minute buckets for 1h, 24 hourly buckets for 1d, seven
+daily buckets for 7d and 30 daily buckets for 30d. Usage and performance charts
+read the same bucket width from the ledger; regrouping does not change recorded
+totals.
+
+Statistics stream actual row-processing progress through the selected call
+records and their aggregates. Only a percentage and progress bar appear beside
+Query/Refresh; changing filters or closing the window cancels the older stream.
+Call reports reuse parsed facts and model aggregates within each query; record
+pricing is looked up after pagination.
+
 Amounts are API-equivalent estimates, not subscription charges or invoices.
-No known price displays **—**; a known zero rate displays **US$0.0000**. An asterisk
+No known price displays **—**; a known zero rate displays **US$0**. An asterisk
 marks a known subtotal when prices or usage fields are missing. Missing output
 or cache data is not replaced with a measured zero. The existing ledger may
 store a zero placeholder for an unknown price; bills check its pricing issue as

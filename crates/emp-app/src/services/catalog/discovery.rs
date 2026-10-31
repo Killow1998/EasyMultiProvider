@@ -12,6 +12,43 @@ pub(crate) enum DiscoveryError {
     LocalCli(&'static str),
 }
 
+pub(crate) fn decisions(state: &ServerState, body: &Value) -> Result<Value, DiscoveryError> {
+    let Some(id) = body["provider"].as_str().filter(|id| !id.is_empty()) else {
+        return Err(DiscoveryError::Invalid("provider is required".into()));
+    };
+    let Some(protocol) = body["protocol"]
+        .as_str()
+        .filter(|protocol| matches!(*protocol, "openai" | "openrouter" | "systemone"))
+    else {
+        return Err(DiscoveryError::Invalid(
+            "decision API type is invalid".into(),
+        ));
+    };
+    let provider = configured_provider(state, id)?;
+    if provider["auth_mode"] != "api_key" || provider["execution_backend"] == "claude_cli" {
+        return Err(DiscoveryError::Invalid("choose an HTTP API service".into()));
+    }
+    let Some(key) = provider["api_key"].as_str().filter(|key| !key.is_empty()) else {
+        return Err(DiscoveryError::Invalid(
+            "provider API key is not configured".into(),
+        ));
+    };
+    let models = state
+        .backend
+        .transport
+        .runtime
+        .block_on(emp_router::discovery::discover_decision_models(
+            &state.backend.transport.client,
+            provider["base_url"]
+                .as_str()
+                .expect("normalized provider URL"),
+            key,
+            protocol,
+        ))
+        .map_err(DiscoveryError::Upstream)?;
+    Ok(json!({"models":models}))
+}
+
 impl From<ChangeError> for DiscoveryError {
     fn from(error: ChangeError) -> Self {
         match error {

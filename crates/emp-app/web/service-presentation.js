@@ -4,41 +4,48 @@ function shadowHelp(message, label = '?', tone = 'info') {
 }
 function shadowCompactNumber(value, usd = false) {
   const n = Number(value), absolute = Math.abs(n);
-  const unit = absolute >= 1e9 ? [1e9,'B'] : absolute >= 1e6 ? [1e6,'M'] : absolute >= 1e3 ? [1e3,'K'] : [1,''];
-  return (usd ? 'US$' : '') + (n/unit[0]).toLocaleString('en-US',{maximumFractionDigits:2}) + unit[1];
+  const unit = absolute >= 1e9 ? [1e9,'b'] : absolute >= 1e6 ? [1e6,'m'] : absolute >= 1e3 ? [1e3,'k'] : [1,''];
+  return (usd ? 'US$' : '') + (n/unit[0]).toLocaleString('en-US',{maximumFractionDigits:usd && absolute<1 ? 9 : 2}) + unit[1];
+}
+function compactUsage(value, usd = false, hint = '') {
+  if (value === null || value === undefined) return {text:'—',title:'',html:'—'};
+  const text = shadowCompactNumber(value,usd);
+  const title = (usd ? 'US$' : '') + value.toLocaleString('en-US',{maximumFractionDigits:9});
+  return {text,title,html:`<span title="${esc(hint ? title+'\n'+hint : title)}">${text}</span>`};
 }
 function renderAccountInfo(account) {
   const name = account.native ? 'Native' : account.name || account.id;
   const alias = account.native ? `<div class="account-alias-edit">${tr("common.native")}</div>` : `<div class="account-alias-edit"><input id="account_alias" value="${esc(name)}" aria-label="${esc(tr("services.name"))}"><button type="button" class="secondary" id="account_alias_save" data-ui-action="account-alias-save" data-id="${esc(account.id)}" title="${esc(tr("services.save_name"))}" aria-label="${esc(tr("services.save_name"))}">${uiIcon('save')}</button></div>`;
   const credit = account.quota?.credits, monthly = credit?.individual_limit?.remaining_percent;
-  const mail = account.quota?.account_label || tr("services.account_unavailable");
+  const mail = account.quota?.account_label || tr(account.auth_mode==='api_key'?'login.api_key':account.auth_mode==='local_key'?'login.local_key':'services.account_unavailable');
   const plan = subscriptionPlanLabel(account.quota?.plan_type);
-  return `<div class="account-info-grid shadow-compact-account"><div><span class="account-info-label">${tr("services.name")}</span>${alias}</div><div><span class="account-info-label">${tr("services.account")}</span><div class="account-value-row"><span class="account-value">${esc(mail)}${plan ? ' · '+esc(plan) : ''}</span></div></div><div><span class="account-info-label">${tr("services.sign_in")}</span><div class="account-value-row account-login-row"><span class="account-value">${account.native ? tr("services.local_sign_in") : tr("services.imported")}${!account.credential_set ? ' · '+tr("services.not_signed_in") : ''}</span>${account.native && account.auth_mode==='subscription' ? `<button type="button" class="secondary" data-ui-action="native-use-local-key">${tr('login.switch_local_key')}</button>` : ''}</div></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr("services.monthly_quota")} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr("services.spend_limit_reached")}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr("services.loading_usage")}</p></div>`;
+  return `<div class="account-info-grid shadow-compact-account"><div><span class="account-info-label">${tr("services.name")}</span>${alias}</div><div><span class="account-info-label">${tr("services.account")}</span><div class="account-value-row"><span class="account-value">${esc(mail)}${plan ? ' · '+esc(plan) : ''}</span></div></div><div class="service-detail-actions"></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr("services.monthly_quota")} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr("services.spend_limit_reached")}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr("services.loading_usage")}</p></div>`;
 }
-function renderLifetimeUsage(data, {aggregate, number, money, dateTime}) {
+function renderLifetimeUsage(data, {aggregate, number, dateTime}) {
   const {models, totals} = aggregate(data.groups);
   const total = totals.input_tokens+totals.output_tokens;
-  const usd = totals.cost_nanos/1e9;
-  const rows = models.sort((a,b)=>a.model.localeCompare(b.model)).map(row=>`<tr><td>${esc(row.model)}</td><td>${row.input_reports ? number(row.input_tokens) : '—'}</td><td>${row.output_reports ? number(row.output_tokens) : '—'}</td><td>${row.priced_requests ? money(row.cost_nanos) : '—'}</td></tr>`).join('');
-  return `<div class="shadow-usage-summary"><h3>${tr("services.lifetime_usage")}</h3><div class="usage-totals"><div class="usage-total"><span>${tr("common.tokens")}</span><strong tabindex="0" data-shadow-help="${esc(number(total))}">${totals.input_reports || totals.output_reports ? shadowCompactNumber(total) : '—'}</strong></div><div class="usage-total"><span>${tr("reports.api_estimate_usd")}</span><strong tabindex="0" data-shadow-help="${esc(money(totals.cost_nanos))}">${totals.priced_requests ? shadowCompactNumber(usd,true) : '—'}</strong></div></div></div><div class="usage-table"><table><thead><tr><th>${tr("reports.model")}</th><th>${tr("services.input")}</th><th>${tr("services.output")}</th><th>${tr("common.usd")}</th></tr></thead><tbody>${rows || `<tr><td colspan="4">${tr("services.no_usage_recorded")}</td></tr>`}</tbody></table></div><footer class="shadow-account-footnotes"><p>${number(totals.priced_requests)} / ${number(totals.requests)} ${tr("services.requests_priced")}${data.first_record_at ? ' · '+tr("services.recorded_since")+esc(dateTime(data.first_record_at)) : ''}</p>${totals.priced_requests < totals.requests ? `<p>${tr("services.some_model_prices_are_unavailable_the_estimate_includes_known")}</p>` : ''}</footer>`;
+  const rows = models.sort((a,b)=>a.model.localeCompare(b.model)).map(row=>`<tr><td>${esc(row.model)}</td><td>${row.input_reports ? compactUsage(row.input_tokens).html : '—'}</td><td>${row.output_reports ? compactUsage(row.output_tokens).html : '—'}</td><td>${row.priced_requests ? compactUsage(row.cost_nanos/1e9,true).html : '—'}</td></tr>`).join('');
+  return `<div class="shadow-usage-summary"><h3>${tr("services.lifetime_usage")}</h3><div class="usage-totals"><div class="usage-total"><span>${tr("common.tokens")}</span><strong>${totals.input_reports || totals.output_reports ? compactUsage(total).html : '—'}</strong></div><div class="usage-total"><span>${tr("reports.api_estimate_usd")}</span><strong>${totals.priced_requests ? compactUsage(totals.cost_nanos/1e9,true).html : '—'}</strong></div></div></div><div class="usage-table"><table><thead><tr><th>${tr("reports.model")}</th><th>${tr("services.input")}</th><th>${tr("services.output")}</th><th>${tr("common.usd")}</th></tr></thead><tbody>${rows || `<tr><td colspan="4">${tr("services.no_usage_recorded")}</td></tr>`}</tbody></table></div><footer class="shadow-account-footnotes"><p>${number(totals.priced_requests)} / ${number(totals.requests)} ${tr("services.requests_priced")}${data.first_record_at ? ' · '+tr("services.recorded_since")+esc(dateTime(data.first_record_at)) : ''}</p>${totals.priced_requests < totals.requests ? `<p>${tr("services.some_model_prices_are_unavailable_the_estimate_includes_known")}</p>` : ''}</footer>`;
 }
 function mountServiceActions(id, kind, account) {
-  const nav = $('service_detail_nav');
-  if (!nav) return;
-  nav.querySelector('.shadow-detail-actions')?.remove();
-  const actions=document.createElement('div');actions.className='shadow-detail-actions';
-  if(kind==='account'){
+  const actions = $('modal_body').querySelector('.service-detail-actions');
+  if (!actions) return;
+  actions.replaceChildren();
+  if(kind==='account' && (!account.native || account.auth_mode==='subscription')){
     const button=document.createElement('button');button.type='button';button.className='secondary shadow-reset-action';
     button.dataset.uiAction='account-reset-credits';button.dataset.id=id;
     button.innerHTML=uiIcon('reset')+' '+tr("services.reset")+' · '+resetCreditCount(account);
     actions.append(button);
   }
   if(!account.native){
+    if(kind==='provider'){
+      const edit=document.createElement('button');edit.type='button';edit.className='secondary';
+      edit.dataset.uiAction='provider-edit';edit.dataset.id=id;edit.dataset.icon='settings';
+      edit.ariaLabel=edit.title=tr('services.connection_settings');actions.append(edit);
+    }
     const button=document.createElement('button');button.type='button';button.className='danger';button.dataset.uiAction=kind==='account'?'account-remove':'provider-remove';button.dataset.id=id;
     button.dataset.icon='trash';button.textContent=tr("services.remove");actions.append(button);
   }
-  nav.querySelector('.service-detail-tabs').after(actions);
-
 }
 function installServicePresentation() {
   document.body.dataset.shadowRefinements='true';

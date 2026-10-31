@@ -45,6 +45,17 @@ pub use session_scope::{SessionMetadata, SessionScope};
 pub const RESOLVED_USAGE: &str = include_str!("../../../../contracts/usage-owners.sql");
 
 type Result<T> = std::result::Result<T, UsageError>;
+
+fn chart_bucket(span: f64) -> f64 {
+    if span <= 3600.0 {
+        600.0
+    } else if span <= 86400.0 {
+        3600.0
+    } else {
+        86400.0
+    }
+}
+
 pub struct UsageLedger {
     path: PathBuf,
     pub prices: Arc<PriceCatalog>,

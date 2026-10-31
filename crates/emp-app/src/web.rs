@@ -62,6 +62,13 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/subscription-settings.js" => include_bytes!("../web/subscription-settings.js"),
         "/assets/model-manager.js" => include_bytes!("../web/model-manager.js"),
         "/assets/service-list.js" => include_bytes!("../web/service-list.js"),
+        "/assets/app-icon.js" => include_bytes!("../web/app-icon.js"),
+        "/assets/app-icon.css" => include_bytes!("../web/app-icon.css"),
+        "/assets/emp-icon.png" => crate::services::app_icon::DEFAULT_PNG,
+        "/assets/emp-icon-mono.svg" => {
+            include_bytes!("../../../assets/branding/native/easy-multi-provider-tray.svg")
+        }
+        "/assets/provider-balances.js" => include_bytes!("../web/provider-balances.js"),
         "/assets/service-usage.js" => include_bytes!("../web/service-usage.js"),
         "/assets/service-connections.js" => include_bytes!("../web/service-connections.js"),
         "/assets/service-chooser.js" => include_bytes!("../web/service-chooser.js"),
@@ -83,6 +90,7 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/quota-history.js" => include_bytes!("../web/quota-history.js"),
         "/assets/quota-display.js" => include_bytes!("../web/quota-display.js"),
         "/assets/settings.js" => include_bytes!("../web/settings.js"),
+        "/assets/decision-settings.js" => include_bytes!("../web/decision-settings.js"),
         "/assets/collaboration-comparison.js" => {
             include_bytes!("../web/collaboration-comparison.js")
         }
@@ -112,6 +120,10 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "HTTP/1.1 200 OK",
         if path.ends_with(".css") {
             "text/css; charset=utf-8"
+        } else if path.ends_with(".png") {
+            "image/png"
+        } else if path.ends_with(".svg") {
+            "image/svg+xml"
         } else if path.ends_with(".gif") {
             "image/gif"
         } else {

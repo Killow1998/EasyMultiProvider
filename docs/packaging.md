@@ -50,6 +50,16 @@ StatusNotifier/D-Bus support without a GTK runtime dependency. macOS sets
 launcher, keeping AppKit on the original thread. The existing bundle paths and
 updater arguments are preserved.
 
+Runtime icon selection is stored as device-local `state/appearance.json`,
+separately from provider configuration and migration bundles. The browser
+rasterizes selected presets or square SVG inputs; EMP validates PNG dimensions
+and generates the tray image and Windows PNG-backed ICO. Windows updates only
+shortcuts targeting the current executable, using a hidden PowerShell process.
+Linux updates the installed EMP desktop entries and their desktop copies;
+macOS updates the application bundle icon and the running AppKit/Dock image.
+macOS monochrome tray selections remain native template images.
+Old generated icon files are removed after a successful launcher update.
+
 `cargo xtask package-smoke` hands a synthetic installation to the packaged
 `--emp-apply-update` worker twice: once to replace it and once with a broken
 candidate that must roll back. On macOS it installs from the real `.dmg`. On

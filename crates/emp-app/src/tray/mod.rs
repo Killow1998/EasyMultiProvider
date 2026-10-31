@@ -178,6 +178,7 @@ pub(crate) fn wait(state: Arc<ServerState>) -> bool {
             return false;
         }
     };
+    let mut icon_revision = u64::MAX;
     let (updates, received) = mpsc::sync_channel(8);
     let worker_state = Arc::clone(&state);
     let worker = match std::thread::Builder::new()
@@ -204,6 +205,13 @@ pub(crate) fn wait(state: Arc<ServerState>) -> bool {
     let mut current = initial;
     while !state.shutdown.load(Ordering::Acquire) {
         tray.pump();
+        let revision = state.backend.app_icon.revision.load(Ordering::Acquire);
+        if revision != icon_revision {
+            if let Err(error) = tray.set_icon(&state.backend.app_icon.snapshot()) {
+                eprintln!("EMP application icon could not be updated: {error}");
+            }
+            icon_revision = revision;
+        }
         let mut next = current;
         while let Ok(update) = received.try_recv() {
             next = update;

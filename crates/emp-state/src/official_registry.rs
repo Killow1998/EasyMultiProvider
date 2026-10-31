@@ -106,10 +106,18 @@ fn identify_provider_in_registry(
 }
 
 pub fn enrich_discovered_models(provider: &Map<String, Value>, models: Vec<Value>) -> Vec<Value> {
+    enrich_models(provider, models, false)
+}
+
+/// Refresh known modalities without resetting saved limits or reasoning settings.
+pub fn enrich_saved_models(provider: &Map<String, Value>, models: Vec<Value>) -> Vec<Value> {
+    enrich_models(provider, models, true)
+}
+
+fn enrich_models(provider: &Map<String, Value>, models: Vec<Value>, saved: bool) -> Vec<Value> {
     let registry = registry();
-    // Claude is an explicit connection type, not a guess based on an arbitrary
-    // proxy URL. Only published model capabilities fill missing values here;
-    // the CPA's advertised restrictions and user overrides remain authoritative.
+    // Relays inherit published modalities, not the publisher's deployment limits.
+    // Claude CLI has its own published reasoning defaults.
     let claude_cli =
         provider.get("execution_backend").and_then(Value::as_str) == Some("claude_cli");
     let provider_key = if claude_cli {
@@ -117,9 +125,18 @@ pub fn enrich_discovered_models(provider: &Map<String, Value>, models: Vec<Value
     } else {
         identify_provider_in_registry(provider, &registry)
     };
-    let Some(provider_key) = provider_key else {
-        return models;
-    };
+    let match_any_publisher =
+        provider_key.is_none() || provider_key.as_deref() == Some("openrouter");
+    let model_aliases = registry
+        .get("providers")
+        .and_then(Value::as_array)
+        .and_then(|providers| {
+            providers
+                .iter()
+                .find(|record| record.get("key").and_then(Value::as_str) == provider_key.as_deref())
+        })
+        .and_then(|record| record.get("model_aliases"));
+    let modalities_only = match_any_publisher || (saved && !claude_cli);
     let observed_at = registry
         .get("reviewed_at")
         .and_then(Value::as_str)
@@ -149,13 +166,19 @@ pub fn enrich_discovered_models(provider: &Map<String, Value>, models: Vec<Value
             else {
                 return Value::Object(model);
             };
+            let registry_id = model_aliases
+                .and_then(|aliases| aliases.get(model_id))
+                .and_then(Value::as_str)
+                .unwrap_or(model_id);
             let Some(official) = registry_models
                 .iter()
                 .filter_map(Value::as_object)
                 .filter(|entry| {
-                    entry.get("provider_key").and_then(Value::as_str) == Some(provider_key.as_str())
+                    match_any_publisher
+                        || entry.get("provider_key").and_then(Value::as_str)
+                            == provider_key.as_deref()
                 })
-                .find(|entry| model_matches(entry, model_id))
+                .find(|entry| model_matches(entry, registry_id))
             else {
                 return Value::Object(model);
             };
@@ -170,6 +193,9 @@ pub fn enrich_discovered_models(provider: &Map<String, Value>, models: Vec<Value
                 provenance["observed_at"] = reviewed_at.clone();
             }
             for field in TOP_LEVEL_FIELDS {
+                if modalities_only && !matches!(field, "input_modalities" | "output_modalities") {
+                    continue;
+                }
                 if claude_cli
                     && !matches!(
                         field,
@@ -194,7 +220,7 @@ pub fn enrich_discovered_models(provider: &Map<String, Value>, models: Vec<Value
             }
 
             for (registry_field, target, nested) in PROJECTED_FIELDS {
-                if claude_cli {
+                if claude_cli || modalities_only {
                     continue;
                 }
                 let official_value = official.get(registry_field).unwrap_or(&Value::Null);
@@ -250,6 +276,12 @@ pub fn claude_cli_default_effort(model_id: &str) -> Option<String> {
 }
 
 fn model_matches(model: &Map<String, Value>, candidate: &str) -> bool {
+    let original = candidate;
+    let candidate = model
+        .get("provider_key")
+        .and_then(Value::as_str)
+        .and_then(|key| candidate.strip_prefix(key)?.strip_prefix('/'))
+        .unwrap_or(candidate);
     model.get("model_id").and_then(Value::as_str) == Some(candidate)
         || model
             .get("aliases")
@@ -257,7 +289,7 @@ fn model_matches(model: &Map<String, Value>, candidate: &str) -> bool {
             .is_some_and(|aliases| {
                 aliases
                     .iter()
-                    .any(|alias| alias.as_str() == Some(candidate))
+                    .any(|alias| matches!(alias.as_str(), Some(value) if value == candidate || value == original))
             })
 }
 

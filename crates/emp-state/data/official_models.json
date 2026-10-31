@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-08-22",
+  "reviewed_at": "2026-10-30",
   "providers": [
     {
       "key": "openai",
@@ -185,9 +185,11 @@
         "https://platform.kimi.ai/docs/api/list-models",
         "https://platform.kimi.ai/docs/api/chat",
         "https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart",
-        "https://platform.kimi.ai/docs/api/models-overview"
+        "https://platform.kimi.ai/docs/api/models-overview",
+        "https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart",
+        "https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart"
       ],
-      "reviewed_at": "2026-08-22",
+      "reviewed_at": "2026-10-30",
       "notes": "OpenAI-compatible API at api.moonshot.ai. List Models returns supports_image_in, supports_video_in, supports_reasoning fields. kimi-k2 series discontinued May 25, 2026; use kimi-k2.6+. thinking param {type: enabled|disabled}. kimi-k3 uses reasoning_effort field."
     },
     {
@@ -219,8 +221,12 @@
         "https://api-docs.deepseek.com/guides/anthropic_api/",
         "https://api-docs.deepseek.com/updates/"
       ],
-      "reviewed_at": "2026-08-22",
-      "notes": "OpenAI-compatible Chat Completions API + Anthropic-compatible API. Thinking mode controlled via thinking param (enabled/disabled). reasoning_effort: high, max (low/medium mapped to high, xhigh mapped to max). deepseek-chat and deepseek-reasoner deprecated 2026-07-24, mapped to v4-flash non-thinking/thinking modes."
+      "reviewed_at": "2026-10-30",
+      "notes": "OpenAI-compatible Chat Completions API + Anthropic-compatible API. Thinking mode controlled via thinking param (enabled/disabled). reasoning_effort: high, max (low/medium mapped to high, xhigh mapped to max). deepseek-chat and deepseek-reasoner deprecated 2026-07-24, mapped to v4-flash non-thinking/thinking modes. The current official deepseek-flash route supports vision. Retired deepseek-v4-flash and deepseek-v4-flash-vision-exp IDs now route to it; this endpoint-specific redirect does not apply to aggregators retaining the original weights.",
+      "model_aliases": {
+        "deepseek-v4-flash": "deepseek-flash",
+        "deepseek-v4-flash-vision-exp": "deepseek-flash"
+      }
     },
     {
       "key": "zhipu_glm",
@@ -275,7 +281,7 @@
       "provider_key": "openai",
       "model_id": "gpt-6-astra",
       "display_name": "GPT-6 Astra",
-      "reviewed_at": "2026-09-04",
+      "reviewed_at": "2026-10-30",
       "context_window": 1050000,
       "max_input_tokens": 922000,
       "max_output_tokens": 128000,
@@ -304,10 +310,22 @@
         "responses",
         "chat_completions"
       ],
-      "aliases": [],
+      "aliases": [
+        "openai/gpt-6-astra"
+      ],
       "sources_by_field": {
         "all": [
           "https://developers.openai.com/api/docs/models/gpt-6-astra"
+        ],
+        "input_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-6-astra.md"
+        ],
+        "output_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-6-astra.md"
+        ],
+        "aliases": [
+          "https://developers.openai.com/api/docs/models/gpt-6-astra.md",
+          "https://openrouter.ai/api/v1/models"
         ]
       }
     },
@@ -345,13 +363,18 @@
         "chat_completions"
       ],
       "aliases": [
-        "gpt-5.6"
+        "gpt-5.6",
+        "openai/gpt-5.6-sol"
       ],
       "sources_by_field": {
         "all": [
           "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "openai",
@@ -386,12 +409,18 @@
         "responses",
         "chat_completions"
       ],
-      "aliases": [],
+      "aliases": [
+        "openai/gpt-5.6-luna"
+      ],
       "sources_by_field": {
         "all": [
           "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "openai",
@@ -426,13 +455,18 @@
         "chat_completions"
       ],
       "aliases": [
-        "gpt-5.5-2026-04-23"
+        "gpt-5.5-2026-04-23",
+        "openai/gpt-5.5"
       ],
       "sources_by_field": {
         "all": [
           "https://developers.openai.com/api/docs/models/gpt-5.5"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "openai",
@@ -467,19 +501,24 @@
         "chat_completions"
       ],
       "aliases": [
-        "gpt-5.4-2026-03-05"
+        "gpt-5.4-2026-03-05",
+        "openai/gpt-5.4"
       ],
       "sources_by_field": {
         "all": [
           "https://developers.openai.com/api/docs/models/gpt-5.4"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "anthropic",
       "model_id": "claude-fable-5",
       "display_name": "Claude Fable 5",
-      "reviewed_at": "2026-10-16",
+      "reviewed_at": "2026-10-30",
       "claude_cli_default_effort": "high",
       "context_window": 1000000,
       "max_input_tokens": null,
@@ -492,7 +531,13 @@
         "text"
       ],
       "supports_reasoning": true,
-      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "reasoning_control": "effort",
       "tool_calling": true,
       "parallel_tool_calling": null,
@@ -502,10 +547,15 @@
       "protocols": [
         "anthropic_messages"
       ],
-      "aliases": [],
+      "aliases": [
+        "anthropic/claude-fable-5"
+      ],
       "sources_by_field": {
         "all": [
           "https://platform.claude.com/docs/en/about-claude/models/overview"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
       }
     },
@@ -513,7 +563,7 @@
       "provider_key": "anthropic",
       "model_id": "claude-opus-5",
       "display_name": "Claude Opus 5",
-      "reviewed_at": "2026-10-16",
+      "reviewed_at": "2026-10-30",
       "claude_cli_default_effort": "high",
       "context_window": 1000000,
       "max_input_tokens": null,
@@ -526,7 +576,13 @@
         "text"
       ],
       "supports_reasoning": true,
-      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "reasoning_control": "effort",
       "tool_calling": true,
       "parallel_tool_calling": null,
@@ -536,10 +592,15 @@
       "protocols": [
         "anthropic_messages"
       ],
-      "aliases": [],
+      "aliases": [
+        "anthropic/claude-opus-5"
+      ],
       "sources_by_field": {
         "all": [
           "https://platform.claude.com/docs/en/about-claude/models/overview"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
       }
     },
@@ -547,7 +608,7 @@
       "provider_key": "anthropic",
       "model_id": "claude-sonnet-5",
       "display_name": "Claude Sonnet 5",
-      "reviewed_at": "2026-10-16",
+      "reviewed_at": "2026-10-30",
       "claude_cli_default_effort": "high",
       "context_window": 1000000,
       "max_input_tokens": null,
@@ -560,7 +621,13 @@
         "text"
       ],
       "supports_reasoning": true,
-      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "reasoning_control": "effort",
       "tool_calling": true,
       "parallel_tool_calling": null,
@@ -570,10 +637,163 @@
       "protocols": [
         "anthropic_messages"
       ],
-      "aliases": [],
+      "aliases": [
+        "anthropic/claude-sonnet-5"
+      ],
       "sources_by_field": {
         "all": [
           "https://platform.claude.com/docs/en/about-claude/models/overview"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-3-5-haiku-20241022",
+      "aliases": ["claude-3-5-haiku-latest"],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "sources_by_field": {
+        "all": ["https://platform.claude.com/docs/en/release-notes/api"]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-3-5-sonnet-20240620",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://www.anthropic.com/news/claude-3-5-sonnet"
+        ]
+      },
+      "aliases": []
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-3-5-sonnet-20241022",
+      "aliases": ["claude-3-5-sonnet-latest"],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "sources_by_field": {
+        "all": ["https://www.anthropic.com/news/3-5-models-and-computer-use"]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-3-7-sonnet-20250219",
+      "aliases": ["claude-3-7-sonnet-latest"],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "sources_by_field": {
+        "all": ["https://www.anthropic.com/claude-3-7-sonnet-system-card"]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-sonnet-4-20250514",
+      "aliases": ["claude-sonnet-4-0", "claude-sonnet-4"],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "sources_by_field": {
+        "all": ["https://www.anthropic.com/claude-4-system-card"]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-opus-4-20250514",
+      "aliases": ["claude-opus-4-0", "claude-opus-4"],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "sources_by_field": {
+        "all": ["https://www.anthropic.com/claude-4-system-card"]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-opus-4-1-20250805",
+      "aliases": [
+        "claude-opus-4-1",
+        "anthropic/claude-opus-4.1"
+      ],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/build-with-claude/vision",
+          "https://platform.claude.com/docs/en/release-notes/api"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-sonnet-4-5-20250929",
+      "aliases": [
+        "claude-sonnet-4-5",
+        "anthropic/claude-sonnet-4.5"
+      ],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/build-with-claude/vision",
+          "https://platform.claude.com/docs/en/release-notes/api"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-opus-4-5-20251101",
+      "aliases": [
+        "claude-opus-4-5",
+        "anthropic/claude-opus-4.5"
+      ],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/models/opus-4-5/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/vision"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
       }
     },
@@ -603,13 +823,18 @@
         "anthropic_messages"
       ],
       "aliases": [
-        "claude-haiku-4-5"
+        "claude-haiku-4-5",
+        "anthropic/claude-haiku-4.5"
       ],
       "sources_by_field": {
         "all": [
           "https://platform.claude.com/docs/en/about-claude/models/overview"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "xai",
@@ -642,14 +867,20 @@
         "responses",
         "chat_completions"
       ],
-      "aliases": [],
+      "aliases": [
+        "x-ai/grok-4.6"
+      ],
       "sources_by_field": {
         "all": [
           "https://docs.x.ai/developers/grok-4-6",
           "https://docs.x.ai/developers/models/grok-4.6",
           "https://docs.x.ai/developers/model-capabilities/text/reasoning"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "xai",
@@ -658,8 +889,13 @@
       "context_window": 500000,
       "max_input_tokens": null,
       "max_output_tokens": null,
-      "input_modalities": null,
-      "output_modalities": null,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": null,
       "reasoning_levels": null,
       "reasoning_control": null,
@@ -669,7 +905,11 @@
       "streaming": true,
       "web_search": null,
       "protocols": null,
-      "aliases": [],
+      "aliases": [
+        "grok-4.5-latest",
+        "grok-build-latest",
+        "x-ai/grok-4.5"
+      ],
       "sources_by_field": {
         "context_window": [
           "https://docs.x.ai/developers/pricing"
@@ -679,8 +919,19 @@
         ],
         "streaming": [
           "https://docs.x.ai/developers/pricing"
+        ],
+        "input_modalities": [
+          "https://docs.x.ai/developers/models/grok-4.5"
+        ],
+        "output_modalities": [
+          "https://docs.x.ai/developers/models/grok-4.5"
+        ],
+        "aliases": [
+          "https://docs.x.ai/developers/models/grok-4.5",
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "xai",
@@ -706,7 +957,8 @@
       "aliases": [
         "grok-code-fast-1",
         "grok-code-fast",
-        "grok-code-fast-1-0825"
+        "grok-code-fast-1-0825",
+        "x-ai/grok-build-0.1"
       ],
       "sources_by_field": {
         "context_window": [
@@ -717,8 +969,12 @@
         ],
         "all": [
           "https://docs.x.ai/developers/models/grok-build-0.1"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "moonshot",
@@ -727,8 +983,14 @@
       "context_window": 1048576,
       "max_input_tokens": null,
       "max_output_tokens": null,
-      "input_modalities": null,
-      "output_modalities": null,
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": true,
       "reasoning_levels": [
         "low",
@@ -742,7 +1004,9 @@
       "streaming": null,
       "web_search": null,
       "protocols": null,
-      "aliases": [],
+      "aliases": [
+        "moonshotai/kimi-k3"
+      ],
       "sources_by_field": {
         "context_window": [
           "https://platform.kimi.ai/docs/pricing/chat"
@@ -758,8 +1022,18 @@
         ],
         "reasoning_control": [
           "https://platform.kimi.ai/docs/api/chat"
+        ],
+        "input_modalities": [
+          "https://platform.kimi.ai/docs/guide/kimi-k3-quickstart"
+        ],
+        "output_modalities": [
+          "https://platform.kimi.ai/docs/guide/kimi-k3-quickstart"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "moonshot",
@@ -783,7 +1057,9 @@
       "streaming": null,
       "web_search": null,
       "protocols": null,
-      "aliases": [],
+      "aliases": [
+        "moonshotai/kimi-k2.6"
+      ],
       "sources_by_field": {
         "context_window": [
           "https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart",
@@ -796,8 +1072,12 @@
           "https://platform.kimi.ai/docs/models",
           "https://platform.kimi.ai/docs/api/list-models",
           "https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "moonshot",
@@ -806,8 +1086,14 @@
       "context_window": 262144,
       "max_input_tokens": null,
       "max_output_tokens": null,
-      "input_modalities": null,
-      "output_modalities": null,
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": null,
       "reasoning_levels": null,
       "reasoning_control": null,
@@ -817,15 +1103,27 @@
       "streaming": null,
       "web_search": null,
       "protocols": null,
-      "aliases": [],
+      "aliases": [
+        "moonshotai/kimi-k2.7-code"
+      ],
       "sources_by_field": {
         "context_window": [
           "https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart"
         ],
         "reasoning": [
           "https://platform.kimi.ai/docs/api/chat"
+        ],
+        "input_modalities": [
+          "https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart"
+        ],
+        "output_modalities": [
+          "https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "deepseek",
@@ -855,14 +1153,20 @@
         "chat_completions",
         "anthropic_messages"
       ],
-      "aliases": [],
+      "aliases": [
+        "deepseek/deepseek-v4-pro"
+      ],
       "sources_by_field": {
         "all": [
           "https://api-docs.deepseek.com/quick_start/pricing/",
           "https://api-docs.deepseek.com/api/create-chat-completion",
           "https://api-docs.deepseek.com/updates/"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "deepseek",
@@ -894,15 +1198,21 @@
       ],
       "aliases": [
         "deepseek-chat",
-        "deepseek-reasoner"
+        "deepseek-reasoner",
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-chat"
       ],
       "sources_by_field": {
         "all": [
           "https://api-docs.deepseek.com/quick_start/pricing/",
           "https://api-docs.deepseek.com/api/create-chat-completion",
           "https://api-docs.deepseek.com/updates/"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "zhipu_glm",
@@ -911,8 +1221,12 @@
       "context_window": 200000,
       "max_input_tokens": null,
       "max_output_tokens": 131072,
-      "input_modalities": null,
-      "output_modalities": null,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": true,
       "reasoning_levels": null,
       "reasoning_control": "thinking param {type: enabled|disabled}",
@@ -922,7 +1236,9 @@
       "streaming": null,
       "web_search": null,
       "protocols": null,
-      "aliases": [],
+      "aliases": [
+        "z-ai/glm-5.1"
+      ],
       "sources_by_field": {
         "context_window": [
           "https://docs.z.ai/guides/overview/overview"
@@ -938,8 +1254,18 @@
         ],
         "reasoning_control": [
           "https://docs.z.ai/guides/llm/glm-5.1"
+        ],
+        "input_modalities": [
+          "https://docs.z.ai/guides/llm/glm-5.1.md"
+        ],
+        "output_modalities": [
+          "https://docs.z.ai/guides/llm/glm-5.1.md"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "zhipu_glm",
@@ -948,8 +1274,12 @@
       "context_window": 200000,
       "max_input_tokens": null,
       "max_output_tokens": 131072,
-      "input_modalities": null,
-      "output_modalities": null,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": null,
       "reasoning_levels": null,
       "reasoning_control": null,
@@ -959,15 +1289,27 @@
       "streaming": null,
       "web_search": null,
       "protocols": null,
-      "aliases": [],
+      "aliases": [
+        "z-ai/glm-4.7"
+      ],
       "sources_by_field": {
         "context_window": [
           "https://docs.z.ai/guides/overview/overview"
         ],
         "max_output_tokens": [
           "https://docs.z.ai/guides/overview/concept-param"
+        ],
+        "input_modalities": [
+          "https://docs.z.ai/guides/llm/glm-4.7.md"
+        ],
+        "output_modalities": [
+          "https://docs.z.ai/guides/llm/glm-4.7.md"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "zhipu_glm",
@@ -976,8 +1318,12 @@
       "context_window": 200000,
       "max_input_tokens": null,
       "max_output_tokens": 131072,
-      "input_modalities": null,
-      "output_modalities": null,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": null,
       "reasoning_levels": null,
       "reasoning_control": null,
@@ -987,15 +1333,27 @@
       "streaming": null,
       "web_search": null,
       "protocols": null,
-      "aliases": [],
+      "aliases": [
+        "z-ai/glm-4.6"
+      ],
       "sources_by_field": {
         "context_window": [
           "https://docs.z.ai/guides/llm/glm-4.6"
         ],
         "max_output_tokens": [
           "https://docs.z.ai/guides/overview/concept-param"
+        ],
+        "input_modalities": [
+          "https://docs.z.ai/guides/llm/glm-4.6.md"
+        ],
+        "output_modalities": [
+          "https://docs.z.ai/guides/llm/glm-4.6.md"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "google_gemini",
@@ -1027,7 +1385,9 @@
       "protocols": [
         "chat_completions"
       ],
-      "aliases": [],
+      "aliases": [
+        "google/gemini-3.7-flash"
+      ],
       "sources_by_field": {
         "all": [
           "https://ai.google.dev/gemini-api/docs/models"
@@ -1037,8 +1397,12 @@
         ],
         "protocols": [
           "https://ai.google.dev/gemini-api/docs/openai"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "google_gemini",
@@ -1070,7 +1434,9 @@
       "protocols": [
         "chat_completions"
       ],
-      "aliases": [],
+      "aliases": [
+        "google/gemini-3.6-flash"
+      ],
       "sources_by_field": {
         "all": [
           "https://ai.google.dev/gemini-api/docs/models"
@@ -1080,8 +1446,12 @@
         ],
         "protocols": [
           "https://ai.google.dev/gemini-api/docs/openai"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "google_gemini",
@@ -1110,7 +1480,9 @@
       "protocols": [
         "chat_completions"
       ],
-      "aliases": [],
+      "aliases": [
+        "google/gemini-2.5-flash"
+      ],
       "sources_by_field": {
         "all": [
           "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash"
@@ -1123,8 +1495,12 @@
         ],
         "input_modalities": [
           "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "google_gemini",
@@ -1153,7 +1529,9 @@
       "protocols": [
         "chat_completions"
       ],
-      "aliases": [],
+      "aliases": [
+        "google/gemini-2.5-pro"
+      ],
       "sources_by_field": {
         "all": [
           "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro"
@@ -1166,8 +1544,12 @@
         ],
         "input_modalities": [
           "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "meta",
@@ -1190,7 +1572,9 @@
       "streaming": null,
       "web_search": null,
       "protocols": null,
-      "aliases": [],
+      "aliases": [
+        "meta-llama/llama-4-scout"
+      ],
       "sources_by_field": {
         "context_window": [
           "https://github.com/meta-llama/llama-models",
@@ -1199,8 +1583,12 @@
         "input_modalities": [
           "https://github.com/meta-llama/llama-models",
           "https://ai.meta.com/llama/get-started/"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "meta",
@@ -1223,7 +1611,9 @@
       "streaming": null,
       "web_search": null,
       "protocols": null,
-      "aliases": [],
+      "aliases": [
+        "meta-llama/llama-4-maverick"
+      ],
       "sources_by_field": {
         "context_window": [
           "https://github.com/meta-llama/llama-models",
@@ -1232,17 +1622,26 @@
         "input_modalities": [
           "https://github.com/meta-llama/llama-models",
           "https://ai.meta.com/llama/get-started/"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
-      }
+      },
+      "reviewed_at": "2026-10-30"
     },
     {
       "provider_key": "anthropic",
       "model_id": "claude-opus-4-6",
       "display_name": "Claude Opus 4.6",
-      "reviewed_at": "2026-10-16",
+      "reviewed_at": "2026-10-30",
       "claude_cli_default_effort": "high",
-      "input_modalities": ["text", "image"],
-      "output_modalities": ["text"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": true,
       "reasoning_levels": [
         "low",
@@ -1251,7 +1650,9 @@
         "max"
       ],
       "reasoning_control": "effort",
-      "aliases": [],
+      "aliases": [
+        "anthropic/claude-opus-4.6"
+      ],
       "sources_by_field": {
         "supports_reasoning": [
           "https://code.claude.com/docs/en/model-config#adjust-effort-level"
@@ -1262,6 +1663,15 @@
         ],
         "reasoning_control": [
           "https://platform.claude.com/docs/en/build-with-claude/effort"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ],
+        "input_modalities": [
+          "https://platform.claude.com/docs/en/models/opus-4-6/overview"
+        ],
+        "output_modalities": [
+          "https://platform.claude.com/docs/en/models/opus-4-6/overview"
         ]
       }
     },
@@ -1269,10 +1679,15 @@
       "provider_key": "anthropic",
       "model_id": "claude-sonnet-4-6",
       "display_name": "Claude Sonnet 4.6",
-      "reviewed_at": "2026-10-16",
+      "reviewed_at": "2026-10-30",
       "claude_cli_default_effort": "high",
-      "input_modalities": ["text", "image"],
-      "output_modalities": ["text"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": true,
       "reasoning_levels": [
         "low",
@@ -1281,7 +1696,9 @@
         "max"
       ],
       "reasoning_control": "effort",
-      "aliases": [],
+      "aliases": [
+        "anthropic/claude-sonnet-4.6"
+      ],
       "sources_by_field": {
         "supports_reasoning": [
           "https://code.claude.com/docs/en/model-config#adjust-effort-level"
@@ -1292,6 +1709,15 @@
         ],
         "reasoning_control": [
           "https://platform.claude.com/docs/en/build-with-claude/effort"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ],
+        "input_modalities": [
+          "https://platform.claude.com/docs/en/models/sonnet-4-6/overview"
+        ],
+        "output_modalities": [
+          "https://platform.claude.com/docs/en/models/sonnet-4-6/overview"
         ]
       }
     },
@@ -1299,9 +1725,11 @@
       "provider_key": "anthropic",
       "model_id": "claude-opus-5-5",
       "display_name": "Claude Opus 5.5",
-      "reviewed_at": "2026-10-16",
+      "reviewed_at": "2026-10-30",
       "claude_cli_default_effort": "medium",
-      "output_modalities": ["text"],
+      "output_modalities": [
+        "text"
+      ],
       "input_modalities": [
         "text",
         "image"
@@ -1315,13 +1743,18 @@
         "max"
       ],
       "reasoning_control": "effort",
-      "aliases": [],
+      "aliases": [
+        "anthropic/claude-opus-5.5"
+      ],
       "sources_by_field": {
         "input_modalities": [
           "https://platform.claude.com/docs/en/models/overview"
         ],
         "reasoning_levels": [
           "https://platform.claude.com/docs/en/build-with-claude/effort"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
       }
     },
@@ -1329,9 +1762,11 @@
       "provider_key": "anthropic",
       "model_id": "claude-sonnet-5-5",
       "display_name": "Claude Sonnet 5.5",
-      "reviewed_at": "2026-10-16",
+      "reviewed_at": "2026-10-30",
       "claude_cli_default_effort": "medium",
-      "output_modalities": ["text"],
+      "output_modalities": [
+        "text"
+      ],
       "input_modalities": [
         "text",
         "image"
@@ -1345,13 +1780,18 @@
         "max"
       ],
       "reasoning_control": "effort",
-      "aliases": [],
+      "aliases": [
+        "anthropic/claude-sonnet-5.5"
+      ],
       "sources_by_field": {
         "input_modalities": [
           "https://platform.claude.com/docs/en/models/overview"
         ],
         "reasoning_levels": [
           "https://platform.claude.com/docs/en/build-with-claude/effort"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
         ]
       }
     },
@@ -1359,99 +1799,1108 @@
       "provider_key": "anthropic",
       "model_id": "claude-haiku-5-5",
       "display_name": "Claude Haiku 5.5",
-      "reviewed_at": "2026-10-16",
-      "input_modalities": ["text", "image"],
-      "output_modalities": ["text"],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": true,
-      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "reasoning_control": "effort",
       "claude_cli_default_effort": "medium",
-      "aliases": [],
-      "sources_by_field": {"all": [
-        "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
-        "https://platform.claude.com/docs/en/build-with-claude/effort",
-        "https://code.claude.com/docs/en/model-config#adjust-effort-level"
-      ]}
+      "aliases": [
+        "anthropic/claude-haiku-5.5"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ]
+      }
     },
     {
       "provider_key": "anthropic",
       "model_id": "claude-fable-5-1",
       "display_name": "Claude Fable 5.1",
-      "reviewed_at": "2026-10-16",
-      "input_modalities": ["text", "image"],
-      "output_modalities": ["text"],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": true,
-      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "reasoning_control": "effort",
       "claude_cli_default_effort": "high",
-      "aliases": [],
-      "sources_by_field": {"all": [
-        "https://platform.claude.com/docs/en/models/fable-5-1/overview",
-        "https://platform.claude.com/docs/en/build-with-claude/effort",
-        "https://code.claude.com/docs/en/model-config#adjust-effort-level"
-      ]}
+      "aliases": [
+        "anthropic/claude-fable-5.1"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ]
+      }
     },
     {
       "provider_key": "anthropic",
       "model_id": "claude-opus-4-8",
       "display_name": "Claude Opus 4.8",
-      "reviewed_at": "2026-10-16",
-      "input_modalities": ["text", "image"],
-      "output_modalities": ["text"],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": true,
-      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "reasoning_control": "effort",
       "claude_cli_default_effort": "high",
-      "aliases": [],
-      "sources_by_field": {"all": [
-        "https://platform.claude.com/docs/en/models/opus-4-8/overview",
-        "https://platform.claude.com/docs/en/build-with-claude/effort",
-        "https://code.claude.com/docs/en/model-config#adjust-effort-level"
-      ]}
+      "aliases": [
+        "anthropic/claude-opus-4.8"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/models/opus-4-8/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ]
+      }
     },
     {
       "provider_key": "anthropic",
       "model_id": "claude-opus-4-7",
       "display_name": "Claude Opus 4.7",
-      "reviewed_at": "2026-10-16",
-      "input_modalities": ["text", "image"],
-      "output_modalities": ["text"],
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": true,
-      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "reasoning_control": "effort",
       "claude_cli_default_effort": "xhigh",
-      "aliases": [],
-      "sources_by_field": {"all": [
-        "https://platform.claude.com/docs/en/models/opus-4-7/overview",
-        "https://platform.claude.com/docs/en/build-with-claude/effort",
-        "https://code.claude.com/docs/en/model-config#adjust-effort-level"
-      ]}
+      "aliases": [
+        "anthropic/claude-opus-4.7"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/models/opus-4-7/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ]
+      }
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-6.1-sol",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "sources_by_field": {
+        "input_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-6.1-sol.md"
+        ],
+        "output_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-6.1-sol.md"
+        ],
+        "aliases": [
+          "https://developers.openai.com/api/docs/models/gpt-6.1-sol.md",
+          "https://openrouter.ai/api/v1/models"
+        ]
+      },
+      "output_modalities": [
+        "text"
+      ],
+      "aliases": [
+        "openai/gpt-6.1-sol"
+      ]
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-6.1-terra",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "sources_by_field": {
+        "input_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md"
+        ],
+        "output_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md"
+        ],
+        "aliases": [
+          "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md",
+          "https://openrouter.ai/api/v1/models"
+        ]
+      },
+      "output_modalities": [
+        "text"
+      ],
+      "aliases": [
+        "openai/gpt-6.1-terra"
+      ]
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-6-sol",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "sources_by_field": {
+        "input_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-6-sol.md"
+        ],
+        "output_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-6-sol.md"
+        ],
+        "aliases": [
+          "https://developers.openai.com/api/docs/models/gpt-6-sol.md",
+          "https://openrouter.ai/api/v1/models"
+        ]
+      },
+      "output_modalities": [
+        "text"
+      ],
+      "aliases": [
+        "openai/gpt-6-sol"
+      ]
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-6-luna",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "sources_by_field": {
+        "input_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-6-luna.md"
+        ],
+        "output_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-6-luna.md"
+        ],
+        "aliases": [
+          "https://developers.openai.com/api/docs/models/gpt-6-luna.md",
+          "https://openrouter.ai/api/v1/models"
+        ]
+      },
+      "output_modalities": [
+        "text"
+      ],
+      "aliases": [
+        "openai/gpt-6-luna"
+      ]
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.6-terra",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "sources_by_field": {
+        "input_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-5.6-terra.md"
+        ],
+        "output_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-5.6-terra.md"
+        ],
+        "aliases": [
+          "https://developers.openai.com/api/docs/models/gpt-5.6-terra.md",
+          "https://openrouter.ai/api/v1/models"
+        ]
+      },
+      "output_modalities": [
+        "text"
+      ],
+      "aliases": [
+        "openai/gpt-5.6-terra"
+      ]
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-daybreak-blue-latest",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "sources_by_field": {
+        "input_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-daybreak-blue-latest.md"
+        ],
+        "output_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-daybreak-blue-latest.md"
+        ]
+      },
+      "output_modalities": [
+        "text"
+      ],
+      "aliases": []
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-daybreak-red-latest",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "sources_by_field": {
+        "input_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-daybreak-red-latest.md"
+        ],
+        "output_modalities": [
+          "https://developers.openai.com/api/docs/models/gpt-daybreak-red-latest.md"
+        ]
+      },
+      "output_modalities": [
+        "text"
+      ],
+      "aliases": []
     },
     {
       "provider_key": "inception",
       "model_id": "mercury-3",
       "display_name": "Mercury 3",
-      "reviewed_at": "2026-10-21",
+      "reviewed_at": "2026-10-30",
       "context_window": 1000000,
       "max_output_tokens": 131072,
-      "input_modalities": ["text"],
-      "output_modalities": ["text"],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": true,
-      "reasoning_levels": ["instant", "low", "medium", "high"],
+      "reasoning_levels": [
+        "instant",
+        "low",
+        "medium",
+        "high"
+      ],
       "reasoning_control": "reasoning_effort",
       "tool_calling": true,
       "parallel_tool_calling": true,
       "structured_output": true,
       "streaming": true,
-      "protocols": ["chat_completions"],
+      "protocols": [
+        "chat_completions"
+      ],
+      "aliases": [
+        "inception/mercury-3"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://docs.inceptionlabs.ai/get-started/models",
+          "https://docs.inceptionlabs.ai/capabilities/reasoning-efforts",
+          "https://docs.inceptionlabs.ai/capabilities/tool-use",
+          "https://docs.inceptionlabs.ai/capabilities/streaming",
+          "https://docs.inceptionlabs.ai/capabilities/structured-outputs"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ]
+      }
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5-chat-latest",
+      "display_name": "GPT-5 Chat",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
       "aliases": [],
-      "sources_by_field": {"all": [
-        "https://docs.inceptionlabs.ai/get-started/models",
-        "https://docs.inceptionlabs.ai/capabilities/reasoning-efforts",
-        "https://docs.inceptionlabs.ai/capabilities/tool-use",
-        "https://docs.inceptionlabs.ai/capabilities/streaming",
-        "https://docs.inceptionlabs.ai/capabilities/structured-outputs"
-      ]}
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5-chat-latest.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5-chat-latest.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5-chat-latest.md"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5-codex",
+      "display_name": "GPT-5-Codex",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5-codex.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5-codex.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5-codex.md"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5-mini",
+      "display_name": "GPT-5 Mini",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5-mini-2025-08-07", "openai/gpt-5-mini"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5-mini.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5-mini.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5-mini.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5-nano",
+      "display_name": "GPT-5 nano",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5-nano-2025-08-07", "openai/gpt-5-nano"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5-nano.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5-nano.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5-nano.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5-pro",
+      "display_name": "GPT-5 Pro",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5-pro-2025-10-06", "openai/gpt-5-pro"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5-pro.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5-pro.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5-pro.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.1-chat-latest",
+      "display_name": "GPT-5.1 Chat",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.1-chat-latest.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.1-chat-latest.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.1-chat-latest.md"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.1-codex-max",
+      "display_name": "GPT-5.1-Codex-Max",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["openai/gpt-5.1-codex-max"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.1-codex-max.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.1-codex-max.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.1-codex-max.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.1-codex-mini",
+      "display_name": "GPT-5.1-Codex Mini",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["openai/gpt-5.1-codex-mini"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.1-codex",
+      "display_name": "GPT-5.1-Codex",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["openai/gpt-5.1-codex"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.1-codex.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.1-codex.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.1-codex.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.1",
+      "display_name": "GPT-5.1",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5.1-2025-11-13", "openai/gpt-5.1"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.1.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.1.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.1.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.2-chat-latest",
+      "display_name": "GPT-5.2 Chat",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.2-chat-latest.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.2-chat-latest.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.2-chat-latest.md"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.2-codex",
+      "display_name": "GPT-5.2-Codex",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["openai/gpt-5.2-codex"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.2-codex.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.2-codex.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.2-codex.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.2-pro",
+      "display_name": "GPT-5.2 Pro",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5.2-pro-2025-12-11", "openai/gpt-5.2-pro"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.2-pro.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.2-pro.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.2-pro.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.2",
+      "display_name": "GPT-5.2",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5.2-2025-12-11", "openai/gpt-5.2"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.2.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.2.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.2.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.3-chat-latest",
+      "display_name": "GPT-5.3 Chat",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.3-chat-latest.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.3-chat-latest.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.3-chat-latest.md"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.3-codex",
+      "display_name": "GPT-5.3-Codex",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["openai/gpt-5.3-codex"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.3-codex.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.3-codex.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.3-codex.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.4-mini",
+      "display_name": "GPT-5.4 Mini",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5.4-mini-2026-03-17", "openai/gpt-5.4-mini"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.4-mini.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.4-mini.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.4-mini.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.4-nano",
+      "display_name": "GPT-5.4 nano",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5.4-nano-2026-03-17", "openai/gpt-5.4-nano"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.4-nano.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.4-nano.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.4-nano.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.4-pro",
+      "display_name": "GPT-5.4 Pro",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5.4-pro-2026-03-05", "openai/gpt-5.4-pro"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.4-pro.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.4-pro.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.4-pro.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.5-pro",
+      "display_name": "GPT-5.5 Pro",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5.5-pro-2026-04-23", "openai/gpt-5.5-pro"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.5-pro.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.5-pro.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.5-pro.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.6-cyber",
+      "display_name": "GPT-5.6 Cyber",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.6-cyber.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.6-cyber.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.6-cyber.md"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5",
+      "display_name": "GPT-5",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["gpt-5-2025-08-07", "openai/gpt-5"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-5.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-5.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-oss-120b",
+      "display_name": "gpt-oss-120b",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["openai/gpt-oss-120b"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-oss-120b.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-oss-120b.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-oss-120b.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-oss-20b",
+      "display_name": "gpt-oss-20b",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["openai/gpt-oss-20b"],
+      "sources_by_field": {"input_modalities": ["https://developers.openai.com/api/docs/models/gpt-oss-20b.md"], "output_modalities": ["https://developers.openai.com/api/docs/models/gpt-oss-20b.md"], "aliases": ["https://developers.openai.com/api/docs/models/gpt-oss-20b.md", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-4-argon",
+      "display_name": "gemini-4-argon",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemini-4-argon"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-4-argon"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-4-argon"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-3.8-flash",
+      "display_name": "gemini-3.8-flash",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemini-3.8-flash"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-3.5-flash",
+      "display_name": "gemini-3.5-flash",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemini-3.5-flash"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-3.5-flash-lite",
+      "display_name": "gemini-3.5-flash-lite",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemini-3.5-flash-lite"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-3.1-flash-lite",
+      "display_name": "gemini-3.1-flash-lite",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemini-3.1-flash-lite"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-3.1-pro-preview",
+      "display_name": "gemini-3.1-pro-preview",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemini-3.1-pro-preview"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-3.1-pro-preview-customtools",
+      "display_name": "gemini-3.1-pro-preview-customtools",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemini-3.1-pro-preview-customtools"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-3-flash-preview",
+      "display_name": "gemini-3-flash-preview",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemini-3-flash-preview"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-2.5-flash-lite",
+      "display_name": "gemini-2.5-flash-lite",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemini-2.5-flash-lite"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "xai",
+      "model_id": "grok-4.7",
+      "display_name": "grok-4.7",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["x-ai/grok-4.7"],
+      "sources_by_field": {"input_modalities": ["https://docs.x.ai/developers/models/grok-4.7"], "output_modalities": ["https://docs.x.ai/developers/models/grok-4.7"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "xai",
+      "model_id": "grok-4.3",
+      "display_name": "grok-4.3",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["grok-4.3-latest", "x-ai/grok-4.3"],
+      "sources_by_field": {"input_modalities": ["https://docs.x.ai/developers/models/grok-4.3"], "output_modalities": ["https://docs.x.ai/developers/models/grok-4.3"], "aliases": ["https://docs.x.ai/developers/models/grok-4.3", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "xai",
+      "model_id": "grok-4.20-0309-reasoning",
+      "display_name": "grok-4.20-0309-reasoning",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["grok-4.20-reasoning-latest", "grok-4.20", "grok-4.20-reasoning", "grok-4.20-0309", "grok-4.20-beta-0309-reasoning", "grok-4.20-beta", "grok-4.20-beta-0309", "grok-4.20-beta-latest", "grok-4.20-beta-latest-reasoning", "grok-4.20-beta-reasoning", "grok-4.20-experimental-beta-0304-reasoning", "grok-4.20-experimental-beta-0304", "grok-4.20-experimental-beta-reasoning-latest", "grok-4.20-experimental-beta-latest", "grok-4.20-reasoning-gv2", "x-ai/grok-4.20"],
+      "sources_by_field": {"input_modalities": ["https://docs.x.ai/developers/models/grok-4.20-0309-reasoning"], "output_modalities": ["https://docs.x.ai/developers/models/grok-4.20-0309-reasoning"], "aliases": ["https://docs.x.ai/developers/models/grok-4.20-0309-reasoning", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "xai",
+      "model_id": "grok-4.20-0309-non-reasoning",
+      "display_name": "grok-4.20-0309-non-reasoning",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["grok-4.20-non-reasoning", "grok-4.20-non-reasoning-latest", "grok-4.20-beta-non-reasoning", "grok-4.20-beta-latest-non-reasoning", "grok-4.20-experimental-beta-0304-non-reasoning", "grok-4.20-experimental-beta-non-reasoning-latest", "grok-4.20-beta-0309-non-reasoning", "grok-4.20-non-reasoning-gv2"],
+      "sources_by_field": {"input_modalities": ["https://docs.x.ai/developers/models/grok-4.20-0309-non-reasoning"], "output_modalities": ["https://docs.x.ai/developers/models/grok-4.20-0309-non-reasoning"], "aliases": ["https://docs.x.ai/developers/models/grok-4.20-0309-non-reasoning"]}
+    },
+    {
+      "provider_key": "xai",
+      "model_id": "grok-4.20-multi-agent-0309",
+      "display_name": "grok-4.20-multi-agent-0309",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["grok-4.20-multi-agent", "grok-4.20-multi-agent-latest", "grok-4.20-multi-agent-beta-latest", "grok-4.20-multi-agent-experimental-beta-0304", "grok-4.20-multi-agent-experimental-beta-latest", "grok-4.20-multi-agent-beta-0309", "x-ai/grok-4.20-multi-agent"],
+      "sources_by_field": {"input_modalities": ["https://docs.x.ai/developers/models/grok-4.20-multi-agent-0309"], "output_modalities": ["https://docs.x.ai/developers/models/grok-4.20-multi-agent-0309"], "aliases": ["https://docs.x.ai/developers/models/grok-4.20-multi-agent-0309", "https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "moonshot",
+      "model_id": "kimi-k3.1-pro",
+      "display_name": "kimi-k3.1-pro",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video"],
+      "output_modalities": ["text"],
+      "aliases": ["moonshotai/kimi-k3.1-pro"],
+      "sources_by_field": {"input_modalities": ["https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart"], "output_modalities": ["https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "moonshot",
+      "model_id": "kimi-k3.1-pro-highspeed",
+      "display_name": "kimi-k3.1-pro-highspeed",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart"], "output_modalities": ["https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart"]}
+    },
+    {
+      "provider_key": "moonshot",
+      "model_id": "kimi-k2.7-code-highspeed",
+      "display_name": "kimi-k2.7-code-highspeed",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart"], "output_modalities": ["https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-5.3",
+      "display_name": "glm-5.3",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-5.3"],
+      "sources_by_field": {"input_modalities": ["https://docs.z.ai/guides/llm/glm-5.3.md"], "output_modalities": ["https://docs.z.ai/guides/llm/glm-5.3.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-5.2",
+      "display_name": "glm-5.2",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-5.2"],
+      "sources_by_field": {"input_modalities": ["https://docs.z.ai/guides/llm/glm-5.2.md"], "output_modalities": ["https://docs.z.ai/guides/llm/glm-5.2.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-5",
+      "display_name": "glm-5",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-5"],
+      "sources_by_field": {"input_modalities": ["https://docs.z.ai/guides/llm/glm-5.md"], "output_modalities": ["https://docs.z.ai/guides/llm/glm-5.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-5-turbo",
+      "display_name": "glm-5-turbo",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-5-turbo"],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/text/glm-5-turbo.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/text/glm-5-turbo.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.7-flash",
+      "display_name": "glm-4.7-flash",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-4.7-flash"],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/free/glm-4.7-flash.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/free/glm-4.7-flash.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.7-flashx",
+      "display_name": "glm-4.7-flashx",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://docs.z.ai/guides/llm/glm-4.7.md"], "output_modalities": ["https://docs.z.ai/guides/llm/glm-4.7.md"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.5",
+      "display_name": "glm-4.5",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-4.5"],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/text/glm-4.5.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/text/glm-4.5.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.5-air",
+      "display_name": "glm-4.5-air",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-4.5-air"],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/text/glm-4.5.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/text/glm-4.5.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.5-airx",
+      "display_name": "glm-4.5-airx",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/text/glm-4.5.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/text/glm-4.5.md"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.5-x",
+      "display_name": "glm-4.5-x",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/text/glm-4.5.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/text/glm-4.5.md"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.5-flash",
+      "display_name": "glm-4.5-flash",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/free/glm-4.5-flash.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/free/glm-4.5-flash.md"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-5.3-flash",
+      "display_name": "glm-5.3-flash",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-5.3-flash"],
+      "sources_by_field": {"input_modalities": ["https://docs.z.ai/guides/vlm/glm-5.3-flash.md"], "output_modalities": ["https://docs.z.ai/guides/vlm/glm-5.3-flash.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-5.3-flashx",
+      "display_name": "glm-5.3-flashx",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-5.3-flashx"],
+      "sources_by_field": {"input_modalities": ["https://docs.z.ai/guides/vlm/glm-5.3-flash.md"], "output_modalities": ["https://docs.z.ai/guides/vlm/glm-5.3-flash.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-5.3-flashx-legal",
+      "display_name": "glm-5.3-flashx-legal",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://docs.z.ai/guides/vlm/glm-5.3-flash.md"], "output_modalities": ["https://docs.z.ai/guides/vlm/glm-5.3-flash.md"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-5v-turbo",
+      "display_name": "glm-5v-turbo",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-5v-turbo"],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5v-turbo.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5v-turbo.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.6v",
+      "display_name": "glm-4.6v",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-4.6v"],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/vlm/glm-4.6v.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/vlm/glm-4.6v.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.6v-flashx",
+      "display_name": "glm-4.6v-flashx",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/vlm/glm-4.6v.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/vlm/glm-4.6v.md"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.6v-flash",
+      "display_name": "glm-4.6v-flash",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://docs.bigmodel.cn/cn/guide/models/free/glm-4.6v-flash.md"], "output_modalities": ["https://docs.bigmodel.cn/cn/guide/models/free/glm-4.6v-flash.md"]}
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.5v",
+      "display_name": "glm-4.5v",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": ["z-ai/glm-4.5v"],
+      "sources_by_field": {"input_modalities": ["https://docs.z.ai/guides/vlm/glm-4.5v.md"], "output_modalities": ["https://docs.z.ai/guides/vlm/glm-4.5v.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "deepseek",
+      "model_id": "deepseek-flash",
+      "display_name": "deepseek-flash",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "aliases": [
+        "deepseek-v4.1-flash",
+        "deepseek-v4.1-flash-1017",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek/deepseek-v4.1-flash-1017",
+        "deepseek/deepseek-v4.1-flash",
+        "deepseek/deepseek-v4-flash-vision-exp"
+      ],
+      "sources_by_field": {
+        "input_modalities": [
+          "https://api-docs.deepseek.com/quick_start/pricing/"
+        ],
+        "output_modalities": [
+          "https://api-docs.deepseek.com/quick_start/pricing/"
+        ],
+        "aliases": [
+          "https://openrouter.ai/api/v1/models"
+        ]
+      }
+    },
+    {
+      "provider_key": "inception",
+      "model_id": "mercury-2.5",
+      "display_name": "mercury-2.5",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["inception/mercury-2.5"],
+      "sources_by_field": {"input_modalities": ["https://docs.inceptionlabs.ai/get-started/models.md"], "output_modalities": ["https://docs.inceptionlabs.ai/get-started/models.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "inception",
+      "model_id": "mercury-2",
+      "display_name": "mercury-2",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": ["inception/mercury-2"],
+      "sources_by_field": {"input_modalities": ["https://docs.inceptionlabs.ai/get-started/models.md"], "output_modalities": ["https://docs.inceptionlabs.ai/get-started/models.md"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemma-4-26b-a4b-it",
+      "display_name": "gemma-4-26b-a4b-it",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemma-4-26b-a4b-it"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_4"], "output_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_4"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemma-4-31b-it",
+      "display_name": "gemma-4-31b-it",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "video"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemma-4-31b-it"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_4"], "output_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_4"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemma-4-E2B-it",
+      "display_name": "gemma-4-E2B-it",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemma-4-E2B-it"],
+      "sources_by_field": {"input_modalities": ["https://huggingface.co/google/gemma-4-E2B-it/raw/main/README.md"], "output_modalities": ["https://huggingface.co/google/gemma-4-E2B-it/raw/main/README.md"], "aliases": ["https://huggingface.co/google/gemma-4-E2B-it/raw/main/README.md"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemma-4-E4B-it",
+      "display_name": "gemma-4-E4B-it",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemma-4-E4B-it"],
+      "sources_by_field": {"input_modalities": ["https://huggingface.co/google/gemma-4-E4B-it/raw/main/README.md"], "output_modalities": ["https://huggingface.co/google/gemma-4-E4B-it/raw/main/README.md"], "aliases": ["https://huggingface.co/google/gemma-4-E4B-it/raw/main/README.md"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemma-4-12B-it",
+      "display_name": "gemma-4-12B-it",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image", "audio", "video"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemma-4-12B-it"],
+      "sources_by_field": {"input_modalities": ["https://huggingface.co/google/gemma-4-12B-it/raw/main/README.md"], "output_modalities": ["https://huggingface.co/google/gemma-4-12B-it/raw/main/README.md"], "aliases": ["https://huggingface.co/google/gemma-4-12B-it/raw/main/README.md"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemma-3-1b-it",
+      "display_name": "gemma-3-1b-it",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_3"], "output_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_3"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemma-3-4b-it",
+      "display_name": "gemma-3-4b-it",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemma-3-4b-it"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_3"], "output_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_3"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemma-3-12b-it",
+      "display_name": "gemma-3-12b-it",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemma-3-12b-it"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_3"], "output_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_3"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemma-3-27b-it",
+      "display_name": "gemma-3-27b-it",
+      "reviewed_at": "2026-10-30",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "aliases": ["google/gemma-3-27b-it"],
+      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_3"], "output_modalities": ["https://ai.google.dev/gemma/docs/core/model_card_3"], "aliases": ["https://openrouter.ai/api/v1/models"]}
     }
   ]
 }

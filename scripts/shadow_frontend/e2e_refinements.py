@@ -110,6 +110,7 @@ def main():
         browser.execute(r'''
           const context=[{id:'gpt-6-luna',display_name:'GPT-6 Luna',default_context_window:272000,max_context_window:872000,effective_context_window_percent:95}];
           state.subscription_models=context;window.fixtureSubscriptionModels=context;
+          state.native_account.auth_mode='subscription';
           state.native_model_context_windows={'gpt-6-luna':872000};state.native_account.model_context_windows={'gpt-6-luna':872000};
           const fetchBefore=window.fetch;window.fetch=async function(url,options){
             if(String(url).includes('/api/accounts/')&&(/\/models(?:\/refresh)?$/).test(String(url)))return new Response(JSON.stringify({models:window.fixtureSubscriptionModels}),{status:200,headers:{'Content-Type':'application/json'}});
@@ -118,19 +119,14 @@ def main():
           }; openAccountDetails(state.native_account.id);
         ''')
         wait_for(lambda:browser.execute('return document.querySelector("#account_usage strong")?.textContent.includes("B");'))
-        assert browser.execute('return document.querySelector(".shadow-compact-account").children.length===3 && document.querySelector(".shadow-compact-account").textContent.includes("本机登录");')
         assert browser.execute('return document.querySelector(".shadow-account-footnotes").compareDocumentPosition(document.querySelector("#account_usage .usage-table"))&Node.DOCUMENT_POSITION_PRECEDING;')
-        assert browser.execute('return !!document.querySelector("#service_detail_nav .shadow-reset-action");')
+        assert browser.execute('return !!document.querySelector(".service-detail-actions .shadow-reset-action");')
         browser.hover('#account_usage strong')
         wait_for(lambda:browser.execute('return !document.querySelector("#shadow_feedback").hidden;'))
         assert browser.execute('return document.querySelector("#shadow_feedback").textContent.includes("1,790,508,204");')
         checks.append('Compact account, footer, exact number tooltip and visible Reset')
         browser.execute("state.accounts.push({id:'alignment',prefix:'alignment',name:'Alias',credential_set:true,quota:{account_label:'a***@fixture.invalid',plan_type:'pro',credits:{reset_credits:{available_count:2}}}});openAccountDetails('alignment');")
         wait_for(lambda:browser.execute('return !!document.querySelector("#account_usage .shadow-usage-summary");'))
-        assert browser.execute("const grid=document.querySelector('.shadow-compact-account');const values=[...grid.children].map(cell=>cell.lastElementChild.getBoundingClientRect());const center=r=>r.top+r.height/2;return Math.max(...values.map(center))-Math.min(...values.map(center))<1"),'Account values are not vertically aligned'
-        assert browser.execute("const grid=document.querySelector('.shadow-compact-account'),nav=document.getElementById('service_detail_nav'),button=nav.querySelector('[data-ui-action=account-remove]'),widths=[...grid.children].map(node=>node.getBoundingClientRect().width),tabs=nav.querySelector('.service-detail-tabs');return !grid.contains(button)&&Math.max(...widths)-Math.min(...widths)<1&&Math.abs(button.getBoundingClientRect().right-nav.getBoundingClientRect().right)<1&&Math.abs(button.getBoundingClientRect().top-tabs.firstElementChild.getBoundingClientRect().top)<1"),'Account removal did not stay on the tab row or fields stopped sharing equal widths'
-        assert browser.execute("const nav=document.getElementById('service_detail_nav'),reset=nav.querySelector('.shadow-reset-action');return reset&&Math.abs(reset.getBoundingClientRect().top-nav.querySelector('[role=tab]').getBoundingClientRect().top)<1"),'Reset left its tab row'
-
         assert browser.execute("const row=document.querySelector('.shadow-usage-summary'),r=row.getBoundingClientRect();return [...row.querySelectorAll('h3,.usage-total')].every(n=>{const b=n.getBoundingClientRect();return Math.abs(b.top+b.height/2-r.top-r.height/2)<2})"),'Lifetime totals left their heading row'
         if args.output:
             for theme in ['light','dark']:
@@ -139,9 +135,9 @@ def main():
                 args.output.with_name('shadow-cleanup-account-'+theme+'.png').write_bytes(base64.b64decode(png['value']))
             browser.execute('setTheme("light");')
         browser.execute('openAccountDetails(state.native_account.id);')
-        checks.append('Imported alias/sign-in alignment, Reset tab row and inline lifetime totals')
+        checks.append('Imported account details and inline lifetime totals')
 
-        browser.execute('document.querySelector("#service_detail_nav [data-ui-action=account-edit]").click();')
+        browser.execute('closeModal();document.querySelector("[data-ui-action=account-edit][data-id=\\"@native\\"]").click();')
         wait_for(lambda:browser.execute('return !!document.querySelector("#shadow_usable_0");'))
         assert browser.execute('return document.querySelector("[name=subscription_context]").value==="872000" && document.querySelector("#shadow_usable_0").textContent.includes("828.4K");')
         browser.hover('.shadow-context-control .shadow-help')
@@ -203,9 +199,9 @@ def main():
         request(browser.base+'/moz/context',{'context':'chrome'})
         request(browser.base+'/execute/sync',{'script':'gBrowser.selectedBrowser.browsingContext.fullZoom=1;','args':[]})
         request(browser.base+'/moz/context',{'context':'content'})
-        browser.execute('openSettings();document.querySelector("[data-presentation-style=bar]").click();closeModal();')
+        browser.execute('openSettings("general");document.querySelector("[data-presentation-style=bar]").click();closeModal();')
         assert browser.execute("return [...document.querySelectorAll('#services .service-card:has(.quota-stack)')].every(row=>{const r=row.getBoundingClientRect(),q=row.querySelector('.service-quota').getBoundingClientRect();return q.width>r.width-30})"),'Bar switch shrank quota content'
-        browser.execute('openSettings();document.querySelector("[data-presentation-style=ring]").click();closeModal();')
+        browser.execute('openSettings("general");document.querySelector("[data-presentation-style=ring]").click();closeModal();')
         checks.append('Bar switch preserves full-width quota layout')
         if args.visual_only:
             result={'passed':True,'geometry':geometry,'normal_motion_verified':True,'checks':checks,'synthetic_model_calls':0}

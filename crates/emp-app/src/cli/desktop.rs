@@ -53,7 +53,7 @@ fn windows_rundll32() -> String {
 }
 
 #[cfg(windows)]
-fn windows_system_directory() -> std::path::PathBuf {
+pub(crate) fn windows_system_directory() -> std::path::PathBuf {
     use std::os::windows::ffi::OsStringExt;
     #[link(name = "kernel32")]
     unsafe extern "system" {

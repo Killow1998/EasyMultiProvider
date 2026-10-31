@@ -18,12 +18,13 @@ class AppServer:
         env: dict[str, str],
         log_path: Path,
         address_space_limit_bytes: int = 1536 * 1024 * 1024,
+        extra_args: tuple[str, ...] = (),
     ) -> None:
         self.log_stream = log_path.open("wb")
         try:
             self.process = subprocess.Popen(
                 bounded_argv(
-                    [str(codex_bin), "--disable", "plugins", "app-server", "--stdio"],
+                    [str(codex_bin), *extra_args, "--disable", "plugins", "app-server", "--stdio"],
                     address_space_limit_bytes,
                 ),
                 stdin=subprocess.PIPE,

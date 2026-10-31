@@ -1,11 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
-  <title>EMP menu bar template</title>
-  <g fill="none" stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M14 7v4l4 6M24 6v10M34 7v4l-4 6"/>
-    <circle cx="14" cy="5.5" r="1.6"/><circle cx="24" cy="4.5" r="1.6"/><circle cx="34" cy="5.5" r="1.6"/>
-    <circle cx="24" cy="25" r="13.4"/>
-    <path d="M18 31c3.5 4.5 8.5 4.5 12 0M24 38.5v5M21 42l3 3 3-3"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 1024 1024">
+  <title>EMP monochrome icon</title>
+  <defs>
+    <mask id="details" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <g fill="#000" stroke="#000" stroke-width="22" stroke-linejoin="round">
+        <path d="M254 425 C311 402 409 402 480 428 L463 535 C455 586 415 615 357 607 C302 600 270 569 262 517 Z"/>
+        <path d="M770 425 C713 402 615 402 544 428 L561 535 C569 586 609 615 667 607 C722 600 754 569 762 517 Z"/>
+      </g>
+      <g fill="none" stroke="#000" stroke-linecap="round">
+        <path d="M478 452 C492 438 532 438 546 452" stroke-width="28"/>
+        <path d="M384 664 C425 718 474 740 512 740 C550 740 599 718 640 664" stroke-width="30"/>
+      </g>
+    </mask>
+  </defs>
+  <g fill="#000" mask="url(#details)">
+    <g fill="none" stroke="#000" stroke-width="24" stroke-linecap="round">
+      <path d="M304 218 C304 304 364 332 392 438 M512 184 L512 438 M720 218 C720 304 660 332 632 438"/>
+      <path d="M512 832 L512 864 M258 452 L218 432 M766 452 L806 432"/>
+    </g>
+    <circle cx="304" cy="205" r="37"/>
+    <circle cx="512" cy="171" r="37"/>
+    <circle cx="720" cy="205" r="37"/>
+    <circle cx="512" cy="884" r="37"/>
+    <circle cx="512" cy="536" r="301"/>
   </g>
-  <path d="M11 20c4-1.6 8-1.5 12 .1l-1 5c-.6 3-3 4.2-5.9 3.6-3-.6-4.5-2.2-4.8-4.6zm26 0c-4-1.6-8-1.5-12 .1l1 5c.6 3 3 4.2 5.9 3.6 3-.6 4.5-2.2 4.8-4.6z" fill="#000"/>
-  <path d="M22 21.5h4M11 21l-2-1M37 21l2-1" fill="none" stroke="#000" stroke-width="1.8" stroke-linecap="round"/>
 </svg>

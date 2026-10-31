@@ -227,8 +227,9 @@ fn split_wire(wire: String) -> Vec<Value> {
 
 fn stream_fixtures() -> Value {
     let chat = [
-        json!({"id":"chat_upstream","choices":[{"index":0,"delta":{"reasoning_content":"think "},"finish_reason":null}]}),
+        json!({"id":"chat_upstream","choices":[{"index":0,"delta":{"reasoning_content":"private chain"},"finish_reason":null}]}),
         json!({"id":"chat_upstream","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":null}]}),
+        json!({"id":"chat_upstream","choices":[{"index":0,"delta":{"reasoning_content":"private late chain"},"finish_reason":null}]}),
         json!({"id":"chat_upstream","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}),
     ]
     .into_iter()
@@ -237,9 +238,12 @@ fn stream_fixtures() -> Value {
         + "data: [DONE]\n\n";
     let anthropic = [
         json!({"type":"message_start","message":{"usage":{"input_tokens":3}}}),
-        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
-        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"answer"}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"private chain"}}),
         json!({"type":"content_block_stop","index":0}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"answer"}}),
+        json!({"type":"content_block_stop","index":1}),
         json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}),
         json!({"type":"message_stop"}),
     ]
@@ -249,7 +253,7 @@ fn stream_fixtures() -> Value {
         + "data: [DONE]\n\n";
     let chat_ordinary = serde_json::to_string(&json!({
         "id":"chat_ordinary","object":"chat.completion","model":"ordinary",
-        "choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],
+        "choices":[{"index":0,"message":{"role":"assistant","reasoning_content":"private chain","content":"answer"},"finish_reason":"stop"}],
         "usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
     }))
     .expect("ordinary Chat JSON");
@@ -408,9 +412,11 @@ async fn every_stream_protocol_ends_with_one_completed_response() {
             "response.completed",
             "the projected stream always terminates with a completed event"
         );
+        assert!(!bodies.iter().any(|body| {
+            let wire = body.to_string();
+            wire.contains("private chain") || wire.contains("private late chain")
+        }));
     }
-    // Provider reasoning is visible as reasoning events but never echoed into
-    // the answer text: the answer text only carries the content deltas.
     for bodies in [&chat, &anthropic] {
         assert!(
             bodies

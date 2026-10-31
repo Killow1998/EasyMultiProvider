@@ -8,9 +8,12 @@
 .service-identity .account-summary{max-width:100%;vertical-align:middle;margin:0}
 .service-identity .account-name{max-width:180px}
 .service-type{color:var(--muted)}
+.service-balance{font-variant-numeric:tabular-nums;white-space:nowrap}
+.provider-balance-details{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px;padding:12px;border:1px solid var(--border);border-radius:7px}
+.provider-balance-details small{display:block;margin-top:4px}
 .service-note{display:block;font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .service-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-wrap:nowrap}
-.service-actions button{height:32px;min-height:32px;margin:0;padding:0 8px;min-width:74px;white-space:nowrap;font-size:12px}
+.service-actions button{height:32px;min-height:32px;width:32px;min-width:32px;margin:0;padding:0;justify-content:center}
 .service-quota{grid-column:1/-1;min-width:0}
 .service-quota .quota-stack{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 12px;max-width:none;min-width:0}
 .service-quota .quota-meter{min-height:48px;grid-template-rows:subgrid;grid-row:span 3}
@@ -28,12 +31,9 @@
 .model-card .entity-card-subtitle.model-details-inline{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;white-space:normal;overflow:visible;line-height:1.45}
 .model-details-inline code{overflow-wrap:anywhere}
 .model-details-inline .model-capabilities{font-size:12px;color:var(--muted)}
-.service-detail-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
-.service-detail-tabs button{margin:0}
-.service-detail-tabs button[aria-selected="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--text)}
 @container services (max-width:660px){.service-card{grid-template-columns:minmax(0,1fr)}.service-actions{justify-self:end}.service-quota{grid-column:1}}
 @container services (max-width:800px){html[lang="en"] .service-card{grid-template-columns:minmax(0,1fr)}html[lang="en"] .service-actions{justify-self:end}}
-@container services (max-width:420px){.service-card{padding:10px}.service-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}.service-actions button{min-width:0;padding:0 5px}.service-main{gap:8px}.service-identity .account-name{max-width:130px}}
+@container services (max-width:420px){.service-card{padding:10px}.service-main{gap:8px}.service-identity .account-name{max-width:130px}}
 @media(max-width:480px){.service-choice-group .choice-grid{grid-template-columns:minmax(0,1fr)}}
 
 .service-model-count{font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted)}
@@ -43,12 +43,8 @@
 .service-quota .quota-pending{max-width:none}
 .service-quota .quota-pending .quota-battery-fill{width:0;min-width:0;animation:none}
 
-@container services (max-width:560px){.service-actions-with-quota{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}.service-actions-with-quota button{min-width:0}}
-
 .usage-service-group{margin:18px 0}.usage-service-group>h3{margin:0 0 8px}.usage-models{min-width:600px}.usage-model-columns{display:grid;grid-template-columns:minmax(180px,1.5fr) repeat(3,minmax(90px,1fr)) 70px;gap:12px;align-items:start;padding:9px 8px;font-variant-numeric:tabular-nums}.usage-model-columns>span:not(:first-child){text-align:right;overflow-wrap:anywhere}.usage-model-heading{color:var(--muted);font-size:12px;border-bottom:1px solid var(--border)}.usage-model{border-bottom:1px solid var(--border);font-size:12px}.usage-model>summary{cursor:pointer;list-style:none}.usage-model>summary::-webkit-details-marker{display:none}.usage-model-name{display:flex;gap:7px;overflow-wrap:anywhere;font-weight:600}.usage-model-name::before{content:"›";flex:none;display:inline-block;transition:transform .15s}.usage-model[open] .usage-model-name::before{transform:rotate(90deg)}.usage-model-columns small{display:block;color:var(--muted);font-size:11px}.usage-model>.usage-table{padding:0 8px 8px}.usage-model>summary:hover{background:var(--panel-soft)}.usage-model>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
 .modal.service-detail-modal,.modal.service-detail-modal:has(#subscription_model_list){width:min(760px,100%);height:min(680px,100%);max-height:100%}
-.service-detail-modal #service_detail_nav{border-bottom:1px solid var(--border);margin-bottom:14px}
-.service-detail-modal .service-detail-tabs{margin:0;padding-bottom:10px}
 .service-detail-modal #modal_body{flex:1}
 .service-detail-modal .modal-actions{min-height:34px}

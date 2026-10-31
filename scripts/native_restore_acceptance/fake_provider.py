@@ -173,11 +173,14 @@ class FakeResponsesProvider:
         opaque_items: list[dict[str, Any]] = []
         emp1_compaction_ids: list[str] = []
         item_types: list[str] = []
+        dynamic_fixture_tools: set[str] = set()
         summary_seen = SUMMARY in serialized
 
         def walk(value: Any) -> None:
             if isinstance(value, dict):
                 kind = value.get("type")
+                if kind == "function" and str(value.get("name", "")).startswith("fixture_lookup_"):
+                    dynamic_fixture_tools.add(value["name"])
                 if isinstance(kind, str) and kind in {
                     "compaction",
                     "message",
@@ -277,6 +280,7 @@ class FakeResponsesProvider:
             ],
             "local_marker_projection": FakeResponsesProvider.local_marker_projection(serialized),
             "item_types": sorted(set(item_types)),
+            "dynamic_fixture_tools": sorted(dynamic_fixture_tools),
             "function_calls": sorted(calls, key=lambda item: str(item.get("item_id"))),
             "function_outputs": sorted(outputs, key=lambda item: str(item.get("item_id"))),
         }

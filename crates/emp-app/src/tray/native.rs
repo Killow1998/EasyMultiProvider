@@ -91,6 +91,25 @@ impl Tray {
         self.snapshot = snapshot;
     }
 
+    pub(super) fn set_icon(
+        &mut self,
+        image: &crate::services::app_icon::Image,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let icon = Icon::from_rgba(image.tray_rgba(), icon::SIZE, icon::SIZE)?;
+        #[cfg(windows)]
+        self.icon.set_icon(Some(icon))?;
+        #[cfg(target_os = "macos")]
+        {
+            if image.templated() {
+                self.icon.set_icon_templated(Some(icon))?;
+            } else {
+                self.icon.set_icon(Some(icon))?;
+            }
+            events::set_application_icon(&image.png)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn pump(&mut self) {
         self.events.pump();
         while let Ok(event) = MenuEvent::receiver().try_recv() {

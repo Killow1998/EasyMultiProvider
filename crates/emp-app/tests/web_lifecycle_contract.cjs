@@ -202,7 +202,7 @@ test('quota trend owns filters, display projection, failures and cancelled windo
   trend=feature('quota-history.js','createQuotaHistory',{
     createReportQuery:feature('report-query.js','createReportQuery'),setInterval:fn=>{timers.add(fn);return fn;},clearInterval:fn=>timers.delete(fn),
   })({...q,$:get,tr,esc,quotaDisplay:display,periods,afterRead:()=>{after++;},compactWindowText:String,localTimeText:String,utcOffsetLabel:()=> 'UTC',subscriptionPlanKey:()=>'',subscriptionPlanLabel:String,subscriptionPlanColor:()=>'',
-    openModal(){trend.stop();nodes=Object.fromEntries(['modal_status','modal_body','quota_history_content','quota_history_controls','quota_history_plan','quota_history_legend','quota_history_plot','quota_history_range','quota_history_back','quota_history_loading'].map(id=>[id,{innerHTML:'',textContent:'',querySelector:selector=>get(selector.slice(1)),querySelectorAll:()=>[]}]));}});
+    openModal(){trend.stop();nodes=Object.fromEntries(['modal_status','modal_body','quota_history','quota_history_content','quota_history_controls','quota_history_plan','quota_history_legend','quota_history_plot','quota_history_range','quota_history_back','quota_history_loading'].map(id=>[id,{innerHTML:'',textContent:'',querySelector:selector=>get(selector.slice(1)),querySelectorAll:()=>[]}]));}});
   const samples=[{observed_at:100,remaining_percent:76},{observed_at:200,remaining_percent:60}];
   const payload={start_at:100,end_at:500,series:[{window_minutes:300,points:samples}],failures:[{start_at:220,end_at:450,diagnostics:{code:'quota_transport_error'}}]};
   trend.open('first'); assert.equal(trend.busy(),true); assert.equal(timers.size,1);
@@ -218,7 +218,7 @@ test('quota trend owns filters, display projection, failures and cancelled windo
   const chart=nodes.quota_history_plot.innerHTML;
   trend.refresh();q.calls[2].reject(new Error('offline'));await tick();
   assert.equal(nodes.quota_history_plot.innerHTML,chart);assert.equal(nodes.modal_status.textContent,'offline');
-  nodes.quota_history_content.onclick({target:{closest:()=>({dataset:{start:'100',end:'200'},id:''})}});
+  nodes.quota_history.onclick({target:{closest:()=>({dataset:{start:'100',end:'200'},id:''})}});
   assert.match(q.calls[3].path,/start=100&end=200/);
   trend.stop();assert.equal(q.calls[3].options.signal.aborted,true);assert.equal(timers.size,0);
   nodes.modal_status.textContent='other window';q.calls[3].resolve(payload);await tick();

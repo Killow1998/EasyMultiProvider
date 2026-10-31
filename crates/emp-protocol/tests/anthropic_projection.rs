@@ -8,6 +8,61 @@ fn ids() -> AnthropicIds {
 }
 
 #[test]
+fn tool_results_preserve_images_inside_paired_anthropic_blocks() {
+    for kind in ["function_call", "custom_tool_call"] {
+        let output_kind = format!("{kind}_output");
+        let body = json!({"input":[
+            {"type":kind,"call_id":"capture","name":"view","arguments":"{}","input":"{}"},
+            {"type":output_kind,"call_id":"capture","output":[
+                {"type":"input_text","text":"before"},
+                {"type":"input_image","image_url":"https://example.invalid/tool.png"},
+                {"type":"input_text","text":"after"}
+            ]}
+        ]});
+        let original = body.clone();
+        let projected = responses_to_anthropic(&body, "upstream").unwrap();
+        assert_eq!(body, original);
+        assert_eq!(projected["messages"][0]["content"][0]["id"], "capture");
+        let result = &projected["messages"][1]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["tool_use_id"], "capture");
+        assert_eq!(result["content"][0]["text"], "before");
+        assert_eq!(
+            result["content"][1],
+            json!({"type":"image","source":{"type":"url","url":"https://example.invalid/tool.png"}})
+        );
+        assert_eq!(result["content"][2]["text"], "after");
+    }
+}
+
+#[test]
+fn standalone_tool_images_keep_their_source_and_label() {
+    let projected = responses_to_anthropic(
+        &json!({"input":[
+            {"type":"function_call_output","name":"view","namespace":"tools","output":[
+                {"type":"input_text","text":"image result"},
+                {"type":"input_image","image_url":"https://example.invalid/tool.png"}
+            ]}
+        ]}),
+        "upstream",
+    )
+    .unwrap();
+    let message = &projected["messages"][0];
+    assert_eq!(message["role"], "user");
+    assert!(
+        message["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("tools/view")
+    );
+    assert_eq!(message["content"][1]["text"], "image result");
+    assert_eq!(
+        message["content"][2]["source"]["url"],
+        "https://example.invalid/tool.png"
+    );
+}
+
+#[test]
 fn request_projection_preserves_messages_tools_images_and_controls() {
     let body = json!({
         "instructions": [{"type": "input_text", "text": "Be concise."}],

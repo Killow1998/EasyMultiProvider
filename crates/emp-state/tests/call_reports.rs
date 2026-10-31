@@ -24,6 +24,68 @@ fn filter() -> CallFilter {
 }
 
 #[test]
+fn report_progress_counts_filtered_work_and_stops_when_the_reader_leaves() {
+    let root = tempfile::tempdir().unwrap();
+    let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+    let ledger = UsageLedger::new(root.path().join("usage.sqlite3"), prices);
+    for index in 0..6 {
+        ledger
+            .record_call(
+                &json!({"request_id":format!("request-{index}"),
+            "route":"responses", "model_id":if index % 2 == 0 { "selected" } else { "other" },
+            "success":true}),
+                10.0,
+                11.0,
+            )
+            .unwrap();
+    }
+    let mut selected = filter();
+    selected.model = Some("selected".into());
+    selected.offset = 1;
+    selected.limit = 1;
+    let expected = ledger.query_calls(&selected).unwrap();
+    let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = Arc::clone(&updates);
+    let actual = ledger
+        .query_calls_with_progress(&selected, move |completed, total| {
+            sink.lock().unwrap().push((completed, total));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(actual["total"], 3);
+    assert_eq!(actual["records"].as_array().unwrap().len(), 1);
+    let updates = updates.lock().unwrap();
+    assert_eq!(updates.first(), Some(&(0, 12)));
+    assert_eq!(updates.last(), Some(&(12, 12)));
+    assert!(
+        updates
+            .windows(2)
+            .all(|pair| pair[0].0 < pair[1].0 && pair[0].1 == pair[1].1)
+    );
+    assert!(
+        ledger
+            .query_calls_with_progress(&selected, |completed, _| {
+                if completed > 0 {
+                    Err(std::io::ErrorKind::BrokenPipe.into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err()
+    );
+    assert_eq!(ledger.query_calls(&selected).unwrap(), expected);
+    selected.model = Some("missing".into());
+    let empty = ledger
+        .query_calls_with_progress(&selected, |completed, total| {
+            assert_eq!((completed, total), (0, 0));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(empty["total"], 0);
+}
+
+#[test]
 fn reported_tiers_and_effort_survive_restart_without_relabeling_legacy_requests() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("usage.sqlite3");
@@ -258,7 +320,7 @@ fn durable_reports_share_accounting_and_keep_delivery_distinct() {
     assert_eq!(report["summary"]["ttft_ms"], 200.0);
     assert_eq!(report["summary"]["tps_samples"], 2);
     assert_eq!(report["models"][0]["tokens_per_second"], 10.0);
-    assert_eq!(report["periods"][0]["tokens_per_second"], 10.0);
+    assert_eq!(report["periods"][0]["tokens_per_second"], 20.0);
     assert_eq!(report["models_total"], 2);
     assert_eq!(report["records"][0]["state"], "cancelled");
     assert_eq!(report["records"][0]["error_origin"], "client");

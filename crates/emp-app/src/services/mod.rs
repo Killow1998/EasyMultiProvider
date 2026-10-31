@@ -1,5 +1,6 @@
 pub(crate) mod accounts;
 pub(crate) mod activity;
+pub(crate) mod app_icon;
 pub(crate) mod auto_review;
 pub(crate) mod catalog;
 pub(crate) mod claude_cli;
@@ -16,6 +17,7 @@ pub(crate) mod management_events;
 pub(crate) mod memory_routing;
 pub(crate) mod native;
 pub(crate) mod native_login;
+pub(crate) mod provider_balance;
 pub(crate) mod providers;
 pub(crate) mod quota;
 pub(crate) mod runtime;

@@ -133,6 +133,58 @@ fn anthropic_pages() -> Vec<Value> {
 }
 
 #[test]
+fn generic_modality_declarations_survive_different_catalog_formats() {
+    let models = project_generic_models(
+        json!({"data":[
+            {"id":"top-level", "input_modalities":["text","image"], "output_modalities":["text"],
+                "architecture":{"input_modalities":["text"]}},
+            {"id":"camel-case", "inputModalities":["TEXT","IMAGE"], "outputModalities":["TEXT"]},
+            {"id":"architecture", "input_modalities":null,
+                "architecture":{"input_modalities":["text"]}},
+            {"id":"undeclared"},
+            {"id":"vision-flags", "supports_image_in":true, "supports_video_in":true},
+            {"id":"text-flags", "supports_image_in":false, "supports_video_in":false},
+            {"id":"invalid-flags", "supports_image_in":"true", "supports_video_in":null},
+            {"id":"explicit-list", "input_modalities":["text"], "supports_image_in":true},
+            {"id":"null-list", "input_modalities":null, "supports_image_in":true}
+        ]})
+        .as_object()
+        .unwrap(),
+    )
+    .unwrap();
+    for model in &models[..2] {
+        assert_eq!(model["input_modalities"], json!(["text", "image"]));
+        assert_eq!(model["output_modalities"], json!(["text"]));
+        assert_eq!(
+            model["capability_sources"]["input_modalities"]["source"],
+            "advertised"
+        );
+    }
+    assert_eq!(models[2]["input_modalities"], json!(["text"]));
+    assert_eq!(
+        models[2]["capability_sources"]["input_modalities"]["source"],
+        "advertised"
+    );
+    assert_eq!(
+        models[3]["capability_sources"]["input_modalities"]["source"],
+        "unknown"
+    );
+    for (index, modalities, source) in [
+        (4, json!(["text", "image", "video"]), "advertised"),
+        (5, json!(["text"]), "advertised"),
+        (6, json!(["text"]), "unknown"),
+        (7, json!(["text"]), "advertised"),
+        (8, json!(["text", "image"]), "advertised"),
+    ] {
+        assert_eq!(models[index]["input_modalities"], modalities);
+        assert_eq!(
+            models[index]["capability_sources"]["input_modalities"]["source"],
+            source
+        );
+    }
+}
+
+#[test]
 fn generic_projection_drops_invalid_entries_and_normalizes_levels() {
     let models = project_generic_models(generic_fixture().as_object().expect("fixture object"))
         .expect("generic projection");

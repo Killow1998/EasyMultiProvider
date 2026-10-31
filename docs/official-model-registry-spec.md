@@ -21,7 +21,7 @@ OpenRouter is an API Provider but does not become the publisher of every model
 it routes. A self-hosted deployment is neither assumed to match the publisher's
 official limits nor enriched from a family-name guess.
 
-The initial registry covers current notable models from OpenAI, Google Gemini,
+The registry covers notable models from OpenAI, Google Gemini and Gemma,
 Anthropic, xAI, Meta, Moonshot AI, DeepSeek, Zhipu AI, and Inception. OpenRouter contributes
 its official Provider contract, while its live `/models` response remains the
 source for its changing model catalog.
@@ -55,6 +55,7 @@ Provider records contain:
 - exact official API roots and model-list endpoint when public;
 - authentication mode;
 - supported EMP wire protocols and preferred protocol;
+- endpoint-specific model redirects when the official API documents them;
 - source URLs and last review date.
 
 Model records contain only fields confirmed for an exact model ID:
@@ -73,12 +74,35 @@ independent from image-input support.
 
 ## Discovery merge
 
-Official endpoints are identified by exact registered API roots, not by model
-name. Live `/models` fields are normalized first, then missing/unknown fields
-are filled from an exact registry model ID. OpenRouter live metadata includes
-architecture input/output modalities and supported parameters. Anthropic uses
-its documented Models API. Providers without a rich model endpoint receive
-only exact registry fallback facts.
+Official endpoints are identified by exact registered API roots. Live `/models`
+fields are normalized first, including top-level snake-case/camel-case and
+OpenRouter architecture input/output modalities. Moonshot's boolean
+`supports_image_in` and `supports_video_in` fields also declare input modalities:
+two false values explicitly mean text-only. An explicit modality list takes
+precedence over these flags; non-boolean flags do not declare support.
+Anthropic uses its documented
+Models API, including `capabilities.image_input.supported`.
+
+Missing/unknown fields on an official endpoint are filled from its exact registry
+model ID. Relays and aggregators also inherit published input/output modalities
+for exact IDs and documented aliases, including publisher-qualified IDs such as
+`anthropic/claude-opus-5-5`. This does not identify a relay as the official API or
+copy the publisher's context, output, protocol or reasoning limits onto it.
+Arbitrary deployment names and family-name matches remain unknown. Explicit
+advertised, manual or observed restrictions always win.
+
+Documented API redirects apply only to that API's exact registered roots. For
+example, DeepSeek's official `deepseek-v4-flash` route now serves the vision-capable
+`deepseek-flash` model. OpenRouter retains the original text-only V4 Flash weights.
+Provider `model_aliases` resolves the official redirect before enrichment while
+preserving the requested upstream ID. Published model aliases remain independent
+from these endpoint redirects.
+
+Saved HTTP models and cached discovery previews receive the same modality
+backfill when read after an upgrade. Saved limits and reasoning settings remain
+unchanged. Loading a cached preview does not refetch upstream, rewrite its file
+or change its discovery timestamp. The existing Claude CLI reasoning-default
+merge remains specific to that execution backend.
 
 The registry never causes EMP to call a generation endpoint, spend model quota,
 or send user content. Updating the bundled registry is a maintainer/release
@@ -100,16 +124,75 @@ in use. Normal installations need no override.
 
 ## Acceptance
 
-- Unknown/custom deployments remain conservative and receive no publisher-name
+- Unrecognized deployment aliases remain conservative and receive no family-name
   inference.
 - Live advertised values beat bundled values.
-- Bundled values fill only missing/unknown fields for exact official routes and
-  exact model IDs.
+- Bundled deployment limits fill missing/unknown fields only for exact official
+  routes and model IDs; published modalities also fill exact IDs on relays.
 - Manual and observed values survive discovery refreshes.
 - Text, image, audio, video, file/PDF and output modalities remain distinct.
 - Provider protocols and model capabilities remain separate.
 - Every bundled non-null capability has a primary official source.
 - Package builds include the registry without local configuration or secrets.
+
+On 2026-10-30, the bundled data adds seven exact GPT IDs from the stable Codex
+0.166 catalog and nine legacy Claude IDs from primary model documentation and
+API release notes. Older Claude Haiku 3.5 image support follows the later API
+release note, rather than its initially text-only launch announcement. The app
+contract exercises discovery, cached selection, published modalities and process
+restart. Separate contracts retain explicit text-only restrictions and saved
+limits, and upgrade old model-list caches without a network request.
+
+The subsequent 2026-10-30 public-source audit adds **72** more canonical records,
+taking that 51-record candidate to **123** records: **101 image-capable** and
+**22 text-only**, with no undeclared input modalities. The six previously unknown
+records are resolved: Grok 4.5, Kimi K3 and K2.7 Code support images; GLM 5.1,
+4.7 and 4.6 are text-only. The inventory covers these publishers:
+
+| Publisher | Canonical records |
+|---|---:|
+| OpenAI | 36 |
+| Anthropic | 21 |
+| Google Gemini / Gemma | 22 |
+| xAI | 8 |
+| Moonshot / Kimi | 6 |
+| DeepSeek | 3 |
+| GLM | 22 |
+| Meta | 2 |
+| Inception | 3 |
+
+Current principal chat, coding and vision families are checked against primary
+directories: [OpenAI](https://developers.openai.com/api/docs/models),
+[Claude](https://platform.claude.com/docs/en/models/overview),
+[Gemini](https://ai.google.dev/gemini-api/docs/models),
+[Gemma](https://ai.google.dev/gemma/docs/core),
+[xAI](https://docs.x.ai/developers/pricing),
+[Kimi](https://platform.kimi.ai/docs/models),
+[DeepSeek](https://api-docs.deepseek.com/quick_start/pricing/),
+[GLM](https://docs.z.ai/guides/overview/overview),
+[Meta](https://github.com/meta-llama/llama-models), and
+[Inception](https://docs.inceptionlabs.ai/get-started/models).
+The additions include Gemini 4 Argon / 3.8 Flash, all five documented Gemma 4
+instruction-model sizes, Grok 4.7, Kimi K3.1 Pro / Highspeed, GLM 5.3 / Flash /
+FlashX, and DeepSeek Flash. They also recognize older GPT/Codex and GLM IDs that
+can still appear in imported services. Recognizing a retired ID describes its
+documented capabilities; it does not make a retired API callable.
+
+OpenRouter's public snapshot contained **456** IDs, all with input-modality
+metadata. Discovery consumes these live fields directly. Published names such as
+`google/gemini-4-argon`, `moonshotai/kimi-k3.1-pro`, `z-ai/glm-5.3-flash` and
+`anthropic/claude-opus-5.5` also resolve when a relay omits capabilities. Custom
+deployment aliases still use the service declaration or the user's override.
+Image generation, speech, embedding, editing and decision endpoints retain their
+existing protocol ownership; this audit adds capability data for chat/code
+imports. Every added record carries primary field sources.
+
+The application contract follows 12 representative entries through discovery,
+cached selection, restart, public configuration and Codex catalog publication.
+It retains video/audio/file metadata in EMP while projecting only text/image to
+Codex. A registry-wide contract exercises every canonical ID and published alias;
+separate checks cover endpoint redirects, explicit restrictions and saved limits.
+All requests use synthetic loopback services, with no real model generation.
 
 On 2026-10-21, Mercury 3 passed isolated browser/backend acceptance: the actual
 service chooser saved its preset and masked key, model discovery filled the

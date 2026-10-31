@@ -99,7 +99,7 @@ impl UsageLedger {
         now: f64,
     ) -> Result<Value> {
         let (selection, args) = selection(filter, scope.is_some())?;
-        let bucket = ((filter.end - filter.start) / 48.0).max(60.0);
+        let bucket = chart_bucket(filter.end - filter.start);
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let connection = self.connect()?;
         let source = sessions::scoped_source(&connection, scope)?;

@@ -74,3 +74,73 @@ fn numeric_reasoning_effort_is_rejected_instead_of_silently_dropped() {
     assert_eq!(error.kind(), ProtocolErrorKind::InvalidRequest);
     assert!(error.to_string().contains("numeric reasoning effort"));
 }
+
+#[test]
+fn multimodal_tool_results_keep_pairing_and_content_order() {
+    for kind in ["function_call", "custom_tool_call"] {
+        let output_kind = format!("{kind}_output");
+        let body = json!({"input": [
+            {"type":kind,"call_id":"first","name":"view","arguments":"{}","input":"{}"},
+            {"type":kind,"call_id":"second","name":"read","arguments":"{}","input":"{}"},
+            {"type":output_kind,"call_id":"first","output":[
+                {"type":"input_text","text":"before"},
+                {"type":"input_image","image_url":"https://example.invalid/tool.png","detail":"high"},
+                {"type":"input_text","text":"after"}
+            ]},
+            {"type":"reasoning","encrypted_content":"not forwarded"},
+            {"type":output_kind,"call_id":"second","output":"second result"},
+            {"role":"assistant","content":"answer"}
+        ]});
+        let original = body.clone();
+        let projected = responses_to_chat(&body, "upstream").unwrap();
+        assert_eq!(body, original);
+        let messages = projected["messages"].as_array().unwrap();
+        assert_eq!(
+            messages
+                .iter()
+                .map(|m| m["role"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["assistant", "tool", "tool", "user", "assistant"]
+        );
+        assert_eq!(messages[1]["tool_call_id"], "first");
+        assert_eq!(messages[2]["tool_call_id"], "second");
+        let parts = &messages[3]["content"];
+        assert!(parts[0]["text"].as_str().unwrap().contains("first"));
+        assert_eq!(parts[1]["text"], "before");
+        assert_eq!(
+            parts[2],
+            json!({"type":"image_url","image_url":{"url":"https://example.invalid/tool.png","detail":"high"}})
+        );
+        assert_eq!(parts[3]["text"], "after");
+        assert!(parts[4]["text"].as_str().unwrap().contains("second"));
+        assert_eq!(parts[5]["text"], "second result");
+        assert_eq!(messages[4]["content"], "answer");
+    }
+}
+
+#[test]
+fn standalone_tool_images_remain_visible_without_an_orphaned_tool_message() {
+    let projected = responses_to_chat(
+        &json!({"input":[
+            {"type":"function_call_output","name":"view","namespace":"tools","output":[
+                {"type":"input_text","text":"image result"},
+                {"type":"input_image","image_url":"https://example.invalid/tool.png"}
+            ]}
+        ]}),
+        "upstream",
+    )
+    .unwrap();
+    let message = &projected["messages"][0];
+    assert_eq!(message["role"], "user");
+    assert!(
+        message["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("tools/view")
+    );
+    assert_eq!(message["content"][1]["text"], "image result");
+    assert_eq!(
+        message["content"][2]["image_url"]["url"],
+        "https://example.invalid/tool.png"
+    );
+}

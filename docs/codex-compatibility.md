@@ -8,17 +8,73 @@ independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 Older series leave routine maintenance; their dated acceptance records remain.
 
-## Current target and acceptance (2026-10-28 UTC)
+## Current target and acceptance (2026-10-31 UTC)
 
-The maintenance target is **0.161–0.165**, following the official stable
-[0.165.0 release](https://github.com/openai/codex/releases/tag/rust-v0.165.0)
-(2026-10-27 20:09:38 UTC). GitHub identifies it as the latest release with
+The maintenance target is **0.162–0.166**, following the official stable
+[0.166.0 release](https://github.com/openai/codex/releases/tag/rust-v0.166.0)
+(2026-10-29 19:47:53 UTC). GitHub identifies it as the latest release with
 `prerelease=false`.
 
 | Target series | Existing evidence |
 | --- | --- |
-| 0.161–0.164 | Dated Linux engine acceptance below; App/IDE checks are listed separately with their exact engine versions. |
+| 0.162–0.164 | Dated Linux engine acceptance below; App/IDE checks are listed separately with their exact engine versions. |
 | 0.165 | Official Linux 0.165.0 engine passed the local EMP 0.13.17 candidate contracts recorded below. |
+| 0.166 | Official Linux 0.166.0 engine passed the local EMP 0.13.20 maintenance candidate contracts recorded below. |
+
+## Feature ownership and acceptance — Codex 0.166.0
+
+The 0.13.21 release additionally fixes mixed text/image tool-result projection
+for external Chat and Anthropic models and applies the existing raw-reasoning
+output policy to every external Responses delivery. The 2026-10-31 regression
+and real-Gemma receipts are recorded in [the switch failure record](claude-switch-failures.md#external-tool-images-and-raw-reasoning-2026-10-31-utc).
+The dated engine runs below remain the evidence of their original candidates.
+
+The 2026-10-30 UTC review compares the exact stable 0.165.0 and 0.166.0 tags.
+EMP keeps the current feature boundary; client-owned changes remain in Codex.
+
+| Upstream change | EMP maintenance and observable result |
+| --- | --- |
+| [Dynamic tool replacement #57553](https://github.com/openai/codex/pull/57553) | History repair now retains `dynamic_tools_updated` records instead of rejecting the rollout as unsupported. Existing compaction metadata remains intact. Four restored threads retain their own latest tool catalogs, including an empty catalog and a grandchild's independent tools. |
+| [Reasoning usage on resume/fork #57839](https://github.com/openai/codex/pull/57839) | Preserve the optional `last_usage_includes_reasoning` field in token-count history. The repair contract checks its exact value; Codex owns the accounting change that prevents premature compaction. |
+| [Memory consolidation service tier #57568](https://github.com/openai/codex/pull/57568) | Verify `[memories].consolidation_service_tier` independently of the main turn: omitted/default, Flex and Fast reach the upstream as default, `flex` and `priority`. Main-turn Fast remains independent. Native, imported and external launchers all complete extraction, consolidation and a later memory read. No new EMP setting is required. |
+| Model catalogs and GPT-6.1 Terra | Default and originator-scoped installed-engine catalog checks pass. Native and imported Terra catalogs retain the pinned capabilities and all six efforts. Known model modalities also reach imported external catalogs; see the [registry merge contract](official-model-registry-spec.md#discovery-merge). |
+| App Server item timestamps, native USD and negotiated Zstd | Three real-engine turns and process resume preserve flat items with lifecycle timestamps. Absent/null, zero and positive native USD remain distinct from estimated usage and do not add or reprice EMP ledger rows. Three compression negotiation states verify text fallback, persistent binary streams and fresh reconnect codecs. This is App Server transport, separate from Responses WebSocket. |
+| TUI transcript selection, asynchronous question/reply Markdown, `queue --resume`, `doctor --network-only` and safety explanations | Codex-owned client features. EMP forwards the existing model requests; it does not duplicate the UI or command implementation. |
+| Approval/permission resume and fork behavior | The restored fixture retains exact `approval_policy = "never"` and `sandbox_mode = "read-only"` settings. EMP does not write new permission defaults. |
+| Composer image recovery, macOS standalone cleanup, descendant unarchive and App Server lifecycle fixes | Codex-owned storage/process behavior. Existing EMP image and history boundaries remain; these upstream fixes do not require another EMP session or process manager. |
+
+The final feature run completed at **07:46:26–07:46:58 UTC**. The installed
+official Codex 0.166.0 executable has SHA-256
+`b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8`.
+The local EMP 0.13.20 candidate, based on `c641b8b`, has SHA-256
+`2495bd85ebaf5a247333212a7173a059bf65f82117ae701ff5f4e3af4ebb9031`.
+It is separate from the published 0.13.20 executable.
+
+| Contract | Result on 2026-10-30 UTC |
+| --- | --- |
+| Complete feature acceptance | Eight groups, 77 synthetic inference requests: 40 HTTP/SSE and WebSocket effort requests, 21 memory requests, four fork requests and 12 Terra requests; external memory import requires no inference. |
+| Created history and native restore | 55 assertions pass on the final candidate, including MCP before/after compaction, four native resumes, per-thread dynamic tools, unchanged original configuration/backups and idempotent restore. The published 0.13.20 baseline reproduces `unsupported_rollout_record` on the new tool records before repair. |
+| Capability discovery and persistence | 35 app catalog tests pass, including discovery → selection → published catalog → restart and offline upgrade of old HTTP/Claude CLI model-list caches. The focused discovery, registry and state contracts pass 33 tests. Live/manual/observed restrictions and saved context/output/effort settings survive. |
+| Installed-engine catalogs and transport | Seven explicit real-engine contracts pass: default/scoped catalogs, localhost proxy bypass, steering, interruption and incremental tool/model changes. |
+| Code Mode and terminal errors | Nine collaboration cases pass across three protocols and three modes. Four memory-selection cases and ten terminal model-not-found cases pass with one inference per case. |
+| App Server protocol | Timestamp/USD checks and three Zstd negotiation states pass. |
+| Static checks | Workspace/all-target Clippy with warnings denied, Rust formatting and diff checks pass. |
+
+The last three protocol groups above used the earlier candidate SHA-256
+`a6a9fe51cd991f875143061b55c51cd0332247f4cf9f6e9b0f454ab196ce484a`,
+before the final legacy-Claude registry additions. The final 77-request run,
+55-assertion history run and catalog tests use the final registry. These runs use
+synthetic credentials, disposable homes and loopback upstreams, with **zero real
+provider calls**. Installed services and account files remain unchanged. The
+0.162–0.165 records below retain their original dates, engine versions and EMP
+candidates; they are not relabeled as tests of this candidate.
+
+The stable feature registry still marks async compaction and skill-catalog deltas
+as `UnderDevelopment` and default-off. EMP's background-compaction Beta remains
+unchanged. App/IDE and non-Linux installed-package evidence retain their own
+dated records below.
+
+## Feature ownership on 2026-10-28 UTC — Codex 0.165.0
 
 The release adds the built-in Vertex AI provider (`model_provider = "gcp"`),
 GPT-6.1 Terra, repository filtering and directory grouping for sessions,

@@ -1,7 +1,41 @@
 # Claude switch failure boundaries
 
-Three observed failure classes on EMP 0.13.8 have different boundaries. Repairing
-one does not imply the others are fixed.
+Failure records below distinguish request conversion, response conversion and
+runtime lifecycle problems.
+
+## External tool images and raw reasoning (2026-10-31 UTC)
+
+A macOS report on EMP 0.13.20 returned `unsupported tool output` when switching
+from a GPT subscription to a Chat service. The existing tool-result text
+conversion rejected image parts before calling the provider. This boundary is
+independent of the model's image capability.
+
+Chat tool messages carry text. EMP now sends the complete mixed text/image
+result in a user message after the associated tool replies; call IDs stay paired
+and result order is retained. Anthropic tool results retain images directly in
+their content blocks. Standalone tool images remain user-visible attachments.
+
+Chat reasoning fields were correctly separated from answer text by the protocol
+decoder but bypassed the output policy used by external Responses services.
+All external protocols now pass through that policy once at the router output.
+Raw reasoning is omitted from streamed events and completed responses, while
+answer text, tool calls and reasoning-token usage remain. Anthropic complete
+responses omit thinking blocks, matching the existing streaming behavior.
+
+Verification used isolated loopback upstreams and the configured Gemma service:
+
+- Chat and Anthropic image projection: 13 tests passed, including parallel tool
+  pairing, standalone images, text/image order and unchanged source input.
+- Complete and streaming router contracts: eight tests passed, including late
+  reasoning fragments, JSON replies, tool restoration and native Messages passthrough.
+- A real Gemma tool-image request through the candidate returned `红色`.
+  Upstream produced 122 reasoning characters; the client received no raw
+  reasoning events. All 26 reasoning tokens remained in usage.
+- A real non-streamed request returned `17`; all 128 reasoning tokens remained
+  in usage and no reasoning item was returned to the client.
+
+These calls used public synthetic prompts and an image drawn for the test.
+The reported private conversation and the installed macOS service were unchanged.
 
 ## Fresh chats: the process remains alive without its TCP listener
 

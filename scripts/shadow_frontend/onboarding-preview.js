@@ -24,4 +24,4 @@ document.addEventListener('click',event=>{
   if(event.target.closest('a[href^="https://auth.openai.com/"]')){event.preventDefault();notice(tr('这是合成登录；无需真实登录，稍候会模拟成功。','This is a synthetic sign-in. No real sign-in is needed; completion is simulated shortly.'));}
 },true);
 const fixtureFill=fill;let fixtureStartup=true;
-fill=function(){fixtureFill();describeFixture();if(fixtureStartup&&state){fixtureStartup=false;const action=new URLSearchParams(location.search).get('reviewAction');if(action==='onboarding')nativeLogin.manage();if(action==='lan')migration.open();if(action==='gateway'){settings.open();document.querySelector('[data-gateway-open]').click();}}};
+fill=function(){fixtureFill();describeFixture();if(fixtureStartup&&state){fixtureStartup=false;const action=new URLSearchParams(location.search).get('reviewAction');if(action==='onboarding')nativeLogin.manage();if(action==='lan')migration.open();if(action==='gateway'){settings.open('external');document.querySelector('[data-decision-open]').click();}}};

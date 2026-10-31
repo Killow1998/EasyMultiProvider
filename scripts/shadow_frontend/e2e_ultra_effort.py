@@ -63,7 +63,7 @@ def main():
         browser = Browser(stack,root)
         browser.navigate(url)
         def open_settings():
-            browser.execute('closeModal();openSettings();document.querySelector("[data-ui-action=ultra-settings]").click();')
+            browser.execute('closeModal();openSettings();document.querySelector("[data-settings-category=native]").click();document.querySelector("[data-ui-action=ultra-settings]").click();')
         def save(value):
             browser.execute('document.querySelector("[data-ultra-family]").value=arguments[0];document.getElementById("modal_submit").click();',value)
             wait_for(lambda: browser.execute('return !document.getElementById("ultra_settings");'))

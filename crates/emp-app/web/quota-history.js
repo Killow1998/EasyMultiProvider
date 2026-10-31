@@ -151,7 +151,7 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
   function renderQuotaHistory(payload) {
     quotaHistoryPayload = payload;
     const content = $('quota_history_content'); if (!content) return; const allSeries = (payload.series || []).filter(item => Array.isArray(item.points) && item.points.length);
-    if (!content.querySelector('#quota_history_plot')) content.innerHTML = `<div id="quota_history_controls" class="quota-chart-toolbar"></div><div class="quota-history-navigation"><button id="quota_history_back" class="secondary" type="button">${tr("services.back")}</button><span id="quota_history_range"></span><span id="quota_history_loading" class="muted" role="status" hidden>${tr("services.updating")}</span></div><div id="quota_history_plan"></div><div id="quota_history_legend" class="quota-legend"></div><div id="quota_history_plot" class="quota-chart"></div>`;
+    if (!content.querySelector('#quota_history_plot')) content.innerHTML = `<div class="quota-history-navigation"><button id="quota_history_back" class="secondary" type="button">${tr("services.back")}</button><span id="quota_history_range"></span><span id="quota_history_loading" class="muted" role="status" hidden>${tr("services.updating")}</span></div><div id="quota_history_plan"></div><div id="quota_history_legend" class="quota-legend"></div><div id="quota_history_plot" class="quota-chart"></div>`;
     const period = periodPickers.quota_history;
     const view = {start:Number(payload.start_at) || period?.start || 0, end:Number(payload.end_at) || period?.end || 0};
     const groups = [...new Set(allSeries.map(item => item.limit_id || 'codex'))];
@@ -162,14 +162,14 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
     if (!windows.includes(activeQuotaWindow)) activeQuotaWindow = windows[0];
     const series = groupSeries.filter(item => windowKey(item) === activeQuotaWindow);
     const tabs = groups.length > 1 ? `<div class="quota-ranges quota-groups" aria-label="${esc(tr("services.quota_group"))}">${groups.map(id => `<button type="button" class="secondary" data-limit-id="${esc(id)}">${esc(quotaLimitLabel(id))}</button>`).join('')}</div>` : '';
-    const windowTabs = windows.length > 1 ? `<div class="quota-ranges quota-windows" aria-label="${esc(tr("services.quota_window"))}">${windows.map(key => `<button type="button" class="secondary" data-window="${esc(key)}">${esc(compactWindowText(key))}</button>`).join('')}</div>` : '';
+    const windowTabs = windows.length > 1 ? `<div class="quota-ranges quota-windows" role="group" aria-label="${esc(tr("services.quota_window"))}">${windows.map(key => `<button type="button" class="secondary" data-window="${esc(key)}">${esc(compactWindowText(key))}</button>`).join('')}</div>` : '';
     const planTimeline = view.end > view.start ? quotaPlanTimeline(payload.plans || [],view) : '';
     const legend = `<span>${quotaDisplay.label(tr)}</span>` + series.map((item,index) => { const samples = item.points.filter(point => quotaValidPoint(point) && point.observed_at >= view.start && point.observed_at <= view.end); const last = samples.length ? samples.reduce((latest, point) => Number(point.observed_at) > Number(latest.observed_at) ? point : latest) : null; const color = quotaSeriesColor(item,index); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(compactWindowText(item.window_minutes))}<strong>${last ? esc(quotaDisplay.value(last.remaining_percent)) + '%' : tr("services.no_data")}</strong></span>`; }).join('');
     const chart = view.end > view.start ? quotaChartSvg(series, view, quotaGapLimit(payload)) : '';
     const plot = chart ? `${chart}<div class="quota-chart-tooltip" role="status" hidden></div>` : `<div class="quota-empty">${quotaHistoryLoading ? tr("services.loading_records") : esc(quotaGapReason(view))}</div>`;
     for (const [id, markup] of [['quota_history_controls',tabs+windowTabs],['quota_history_plan',planTimeline],['quota_history_legend',legend],['quota_history_plot',plot]]) { const node = $(id); if (node.quotaMarkup !== markup) { node.innerHTML = markup; node.quotaMarkup = markup; } }
     content.querySelectorAll('.quota-hover-target').forEach(target => { target.onpointermove = quotaChartHover; target.onpointerleave = quotaChartLeave; });
-    content.querySelectorAll('[data-limit-id], [data-window]').forEach(button => { const selected = button.dataset.limitId ? button.dataset.limitId === activeQuotaLimit : button.dataset.window === activeQuotaWindow; button.classList.toggle('active',selected); button.setAttribute('aria-pressed',String(selected)); });
+    $('quota_history_controls').querySelectorAll('[data-limit-id], [data-window]').forEach(button => { const selected = button.dataset.limitId ? button.dataset.limitId === activeQuotaLimit : button.dataset.window === activeQuotaWindow; button.classList.toggle('active',selected); button.setAttribute('aria-pressed',String(selected)); });
     $('quota_history_range').textContent = view.end > view.start ? quotaTimeRangeText(view.start,view.end) : '';
     $('quota_history_back').hidden = !quotaHistoryZoom.length;
     $('quota_history_loading').hidden = !quotaHistoryLoading || !quotaHistoryLoadingVisible;
@@ -198,10 +198,10 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
   }
   function openQuotaHistory(accountId, kind = 'accounts') {
     stop();
-    openModal(tr("services.subscription_quota_trend"), `${periodPickerHtml('quota_history', ['1h','1d','7d'])}<div id="quota_history_content"></div>`, '', null);
+    openModal(tr("services.subscription_quota_trend"), `<div id="quota_history"><div class="quota-history-toolbar"><div id="quota_history_controls" class="quota-chart-toolbar"></div>${periodPickerHtml('quota_history', ['1h','1d','7d','15d'])}</div><div id="quota_history_content"></div></div>`, '', null);
     activeQuotaServiceKind = kind; activeQuotaAccountId = accountId;
     activeQuotaLimit = 'codex'; activeQuotaWindow = ''; quotaHistoryZoom = [];
-    const root = $('quota_history_content');
+    const root = $('quota_history');
     query = createReportQuery({api,onResult:renderQuotaHistory,onState:(loading,error) => {
       quotaHistoryLoading = loading;
       $('modal_status').textContent = error;

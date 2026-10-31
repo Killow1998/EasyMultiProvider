@@ -57,7 +57,7 @@ def main():
                 browser.execute('''closeModal();if(arguments[0]==='local_key')nativeLogin.open();
                     else {openServiceChooser();document.querySelector('[data-ui-action=account-import-device]').click();}''', mode)
                 wait_for(lambda:browser.execute('return !document.getElementById("device_login_target").disabled;'))
-                browser.execute('''const select=document.getElementById('device_login_target');select.value=arguments[0];select.dispatchEvent(new Event('change',{bubbles:true}));''', destination)
+                browser.execute('document.querySelector(`[name=device_login_target][value="${arguments[0]}"]`).click();', destination)
                 wait_for(lambda:browser.execute('return !document.querySelector("[data-native-login-start]").disabled;'))
                 assert browser.execute('''const remove=document.querySelector('[data-native-key-remove]');
                     return !remove || remove.hidden===(arguments[0]==='other');''', destination)

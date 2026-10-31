@@ -72,12 +72,8 @@ pub(super) fn load(state: &ServerState, provider: &Value) -> Option<SavedModels>
     }
     // An application upgrade must also update previews from older discovery
     // caches, without refetching upstream or discarding advertised restrictions.
-    if provider["execution_backend"] == "claude_cli" {
-        saved.models = emp_state::official_registry::enrich_discovered_models(
-            provider.as_object()?,
-            saved.models,
-        );
-    }
+    saved.models =
+        emp_state::official_registry::enrich_saved_models(provider.as_object()?, saved.models);
     Some(saved)
 }
 
@@ -108,51 +104,61 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
-    fn cached_claude_list_gains_new_capabilities_without_refetch_or_disk_rewrite() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path();
-        let config_path = root.join("config.json");
-        std::fs::write(
-            &config_path,
-            serde_json::to_vec(&json!({
+    fn cached_model_lists_gain_capabilities_without_refetch_or_disk_rewrite() {
+        for claude_cli in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let config_path = root.join("config.json");
+            let mut raw = json!({
                 "native_catalog_path":root.join("codex/models_cache.json"),
-                "providers":[{"id":"claude","base_url":"https://example.invalid",
-                    "protocol":"anthropic_messages","execution_backend":"claude_cli",
+                "providers":[{"id":"service","base_url":"https://example.invalid",
+                    "protocol":if claude_cli {"anthropic_messages"} else {"responses"},
                     "api_key":"fixture-secret"}]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let server = ServerHandle::start_with_config_options(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            0,
-            &config_path,
-            "codex",
-            root.join("codex/auth.json"),
-        )
-        .unwrap();
-        let config = server.state.backend.configuration.read().unwrap().clone();
-        let provider = provider(&server.state, &config, "claude").unwrap();
-        let old_models = vec![
-            json!({"upstream_id":"claude-haiku-5-5"}),
-            json!({"upstream_id":"claude-opus-4-8","reasoning_levels":["low"],
+            });
+            if claude_cli {
+                raw["providers"][0]["execution_backend"] = json!("claude_cli");
+            }
+            std::fs::write(&config_path, serde_json::to_vec(&raw).unwrap()).unwrap();
+            let server = ServerHandle::start_with_config_options(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                0,
+                &config_path,
+                "codex",
+                root.join("codex/auth.json"),
+            )
+            .unwrap();
+            let config = server.state.backend.configuration.read().unwrap().clone();
+            let provider = provider(&server.state, &config, "service").unwrap();
+            let old_models = vec![
+                json!({"upstream_id":if claude_cli {"claude-haiku-5-5"} else {"gpt-6.1-sol"}}),
+                json!({"upstream_id":"claude-opus-4-8","reasoning_levels":["low"],
                 "capability_sources":{"reasoning_levels":{"source":"advertised"}}}),
-        ];
-        let written = save(&server.state, &provider, old_models).unwrap();
-        let file_path = path(&server.state, &provider);
-        let before = std::fs::read(&file_path).unwrap();
-        let loaded = load(&server.state, &provider).unwrap();
-        assert_eq!(
-            loaded.models[0]["reasoning_levels"],
-            json!(["low", "medium", "high", "xhigh", "max"])
-        );
-        assert_eq!(
-            loaded.models[0]["input_modalities"],
-            json!(["text", "image"])
-        );
-        assert_eq!(loaded.models[1]["reasoning_levels"], json!(["low"]));
-        assert_eq!(loaded.updated_at, written.updated_at);
-        assert_eq!(std::fs::read(&file_path).unwrap(), before);
-        server.shutdown().unwrap();
+                json!({"upstream_id":"claude-3-5-haiku-20241022"}),
+            ];
+            let written = save(&server.state, &provider, old_models).unwrap();
+            let file_path = path(&server.state, &provider);
+            let before = std::fs::read(&file_path).unwrap();
+            let loaded = load(&server.state, &provider).unwrap();
+            if claude_cli {
+                assert_eq!(
+                    loaded.models[0]["reasoning_levels"],
+                    json!(["low", "medium", "high", "xhigh", "max"])
+                );
+            } else {
+                assert!(loaded.models[0]["reasoning_levels"].is_null());
+            }
+            assert_eq!(
+                loaded.models[0]["input_modalities"],
+                json!(["text", "image"])
+            );
+            assert_eq!(loaded.models[1]["reasoning_levels"], json!(["low"]));
+            assert_eq!(
+                loaded.models[2]["input_modalities"],
+                json!(["text", "image"])
+            );
+            assert_eq!(loaded.updated_at, written.updated_at);
+            assert_eq!(std::fs::read(&file_path).unwrap(), before);
+            server.shutdown().unwrap();
+        }
     }
 }

@@ -12,36 +12,6 @@ function sessionFixture(url = 'http://localhost/?bootstrap=once', saved = '') {
   return {client, calls, replies, token:() => token};
 }
 const response = (status, body = {}) => new Response(JSON.stringify(body), {status, headers:{'Content-Type':'application/json'}});
-const serviceUsage = () => feature('service-usage.js', 'createServiceUsage')({esc, tr, number:String, money:value => 'USD ' + value, dateTime:String,
-  renderLifetime:feature('service-presentation.js','renderLifetimeUsage',{esc,tr})});
-
-test('service details isolate provider usage and discard results after navigation', async () => {
-  let box, html;
-  const pending = [], calls = [];
-  const state = {providers:[{id:'first', name:'<img src=x>', base_url:'https://user:secret@example.invalid/v1?key=secret', protocol:'responses'}, {id:'second', name:'Second'}]};
-  const service = feature('service-list.js', 'createServiceList')({
-    getState:() => state, $:() => box, tr, esc, presets:{}, icon:() => '',
-    usageSummary:serviceUsage(), openModal(_title, body) { service.stop(); html = body; box = {innerHTML:''}; },
-    api:async (path, options) => { calls.push(path); const value = deferred(); pending.push({...value,signal:options.signal}); return value.promise; },
-  });
-  const first = service.details('first');
-  assert.doesNotMatch(html, /<img|Base URL|Authentication|Connection settings/);
-  assert.doesNotMatch(html, /user:secret|key=secret/);
-  assert.match(calls[0], /category=external/);
-  pending[0].resolve({groups:[{category:'external',owner:'first',model:'own-model'}, {category:'external',owner:'second',model:'other-model'}]});
-  await first;
-  assert.match(box.innerHTML, /own-model/);
-  assert.doesNotMatch(box.innerHTML, /other-model/);
-  const stale = service.details('first');
-  const current = service.details('second');
-  assert.equal(pending[1].signal.aborted,true);
-  pending[1].reject(new Error('old request failed'));
-  await stale;
-  assert.equal(box.innerHTML, '');
-  pending[2].resolve({groups:[]});
-  await current;
-  assert.match(box.innerHTML, /No usage recorded/);
-});
 
 test('usage groups service types before models and preserves account/tier details and unknown service history', () => {
   const row = (category, owner, input, extra = {}) => ({category, owner, model:'same-model',service_tier:'default',requests:1,input_reports:1,input_tokens:input,output_reports:1,output_tokens:2,priced_requests:1,cost_nanos:0,...extra});
@@ -55,7 +25,9 @@ test('usage groups service types before models and preserves account/tier detail
     row('unknown','history:legacy',0,{model:'<legacy>',input_reports:0,output_reports:0,priced_requests:0}),
   ]};
   const original = JSON.stringify(data);
-  const html = serviceUsage().renderGroups(data, [
+  const usage = feature('service-usage.js', 'createServiceUsage')({esc, tr, number:String, money:value => 'USD ' + value, dateTime:String,
+    renderLifetime:feature('service-presentation.js','renderLifetimeUsage',{esc,tr})});
+  const html = usage.renderGroups(data, [
     {id:'local',execution_backend:'claude_cli',auth_mode:'claude_login'},
     {id:'cpa',execution_backend:'claude_cli'},
     {id:'api'},
@@ -66,39 +38,15 @@ test('usage groups service types before models and preserves account/tier detail
   assert.match(sections[0][2], /account:first/);
   assert.match(sections[0][2], /account:second/);
   assert.match(sections[0][2], /fast/);
-  assert.match(sections[0][2], /<span>30<small>/);
-  assert.match(sections[1][2], /<span>70<small>/);
-  assert.match(sections[2][2], /<span>50<small>/);
+  assert.match(sections[0][2], /title="30">30<\/span>/);
+  assert.match(sections[1][2], /title="70">70<\/span>/);
+  assert.match(sections[2][2], /title="50">50<\/span>/);
   assert.doesNotMatch(sections[2][2], /removed|account:first/);
   assert.match(sections[3][2], /removed/);
   assert.match(sections[3][2], /&lt;legacy&gt;/);
   assert.match(sections[3][2], /<span>—<small>/);
-  assert.match(sections[2][2], /<span>USD 0<\/span>/);
+  assert.match(sections[2][2], /title="US\$0">US\$0<\/span>/);
   assert.equal(JSON.stringify(data), original, 'presentation never changes stored categories or rows');
-});
-
-test('service badges own settings navigation while list actions retain refresh, trend and model settings', () => {
-  const box = {innerHTML:'',contains:() => false};
-  const state = {native_account:{id:'@native',native:true,credential_set:true},providers:[{id:'local',execution_backend:'claude_cli',auth_mode:'claude_login'},{id:'api'}]};
-  const service = feature('service-list.js', 'createServiceList', {document:{activeElement:null}})({
-    getState:() => state, $:() => box, tr, esc, presets:{}, icon:() => '',activity:() => '',
-    accountSummary:() => '<button data-ui-action="account-details"></button>',quotaMeters:() => '',
-    refreshingAccounts:new Set(),refreshErrors:{},quotaAnimationAccounts:new Set(),updateActivityDots:() => {},
-  });
-  service.render();
-  assert.doesNotMatch(box.innerHTML, /data-ui-action="(?:account|provider)-edit"/);
-  for (const action of ['account-details','provider-details','account-refresh','account-quota-history','provider-model-settings','provider-quota-refresh','provider-quota-history']) assert.match(box.innerHTML, new RegExp('data-ui-action="'+action+'"'));
-  assert.match(service.tabs('@native','account'), /data-ui-action="account-edit"/);
-  assert.match(service.tabs('api','provider','edit'), /data-ui-action="provider-edit"[^>]*aria-selected="true"/);
-  assert.match(service.tabs('duplicate','account','details',true), /data-ui-action="account-edit"[^>]*disabled/);
-  state.accounts=[{id:'same-native',duplicate:true,duplicate_of:'当前 Codex 登录'}, {id:'independent',duplicate:false}, {id:'unverified'}];
-  service.render();
-  assert.doesNotMatch(box.innerHTML,/data-service="account:same-native"/);
-  assert.match(box.innerHTML,/data-service="account:@native"/);
-  assert.match(box.innerHTML,/data-service="account:independent"/);
-  assert.match(box.innerHTML,/data-service="account:unverified"/);
-  state.native_account.credential_set=false;service.render();
-  assert.match(box.innerHTML,/data-service="account:same-native"/,'stored account remains available after native sign-out');
 });
 
 test('management login removes bootstrap secrets and distinguishes upstream rejection from expired sessions', async () => {
@@ -137,31 +85,6 @@ test('old bookmarks and page reloads reuse the stored header session', async () 
   assert.equal(f.calls[0].options.headers.get('X-EMP-Session'), 'stored-session');
   assert.equal(f.calls[0].options.credentials, 'omit');
 });
-
-for (const [key, initial] of [['auto_enable_on_start', true], ['external_collaboration', 'off']]) {
-test(`settings preserve state and disabled controls after a failed ${key} save`, async () => {
-  const state = {[key]:initial, accounts:[]};
-  const button = {dataset:{id:key,mode:'on_demand'}, disabled:false, isConnected:true, value:String(initial), getAttribute() { return this.value; }, setAttribute(_key, value) { this.value = value; }};
-  const unavailable = {disabled:true};
-  const status = {textContent:''}, pending = deferred();
-  let candidate;
-  const settings = feature('settings.js', 'createSettings')({
-    getState:() => state, cloneState:() => structuredClone(state), tr, t:x => x, esc, openModal() {},
-    $:id => id === 'modal_body' ? {querySelectorAll:() => [button, unavailable]} : status,
-    persistState:(_message, value) => { candidate = value; return pending.promise; },
-  });
-  const saving = settings.toggle(button);
-  assert.equal(button.disabled, true);
-  assert.equal(candidate[key], key === 'external_collaboration' ? 'on_demand' : !initial);
-  assert.equal(state[key], initial);
-  pending.reject(new Error('save failed'));
-  await saving;
-  assert.equal(button.value, String(initial));
-  assert.equal(button.disabled, false);
-  assert.equal(unavailable.disabled, true);
-  assert.equal(status.textContent, 'save failed');
-});
-}
 
 test('common call details escape model/session names and keep missing metrics empty', () => {
   const reports = feature('call-reports.js','createCallReports')({tr,esc,getLanguage:() => 'en'});

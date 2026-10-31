@@ -71,6 +71,33 @@ credential identity and externally updated Codex catalogs; replacing reads with
 a stale snapshot is not an acceptable speed improvement. Preserve byte-level
 wire contracts when changing serialization and count semantics.
 
+## Call report reads (2026-10-31)
+
+A fixed local ledger snapshot contained 30,257 calls in the selected 30-day
+window. Both variants used the same unoptimized `dev` build profile and query
+parameters through the Shadow accounting endpoint. Builds and other tests were
+finished before timing three requests for each variant.
+
+| Variant | Request times (seconds) | Median (seconds) |
+| --- | --- | ---: |
+| Normalize filtered calls once | 6.85, 6.37, 7.47 | 6.85 |
+| Reuse parsed facts and model groups; price after paging | 5.59, 4.44, 4.35 | 4.44 |
+
+The median fell 35%. Every complete JSON report matched, including summaries,
+model groups, buckets, ordering and record prices. Parsed facts and aggregates
+live in connection-local temporary tables; the persisted ledger is unchanged.
+
+[Statistics](usage-accounting.md#session-bills) stream actual row-processing
+progress, showing only a percentage and progress bar beside Query/Refresh.
+Browser E2E exercises fragmented progress frames, both report completion orders
+and a failed read followed by a late successful response. It confirms that
+failure ends progress and the late response cannot replace the error.
+On 2026-10-31, a fixed 30,622-record snapshot also produced identical complete
+JSON reports before and after adding progress streaming. Progress counts actual
+row visits during materialization and aggregation, not elapsed time.
+Management events call the current page handler. Actual source SSE events verify
+that Shadow's fixed snapshot does not cancel or restart its statistics reads.
+
 ## Complete-response event synthesis (2026-10-07)
 
 The opt-in example measures complete JSON responses converted into Responses

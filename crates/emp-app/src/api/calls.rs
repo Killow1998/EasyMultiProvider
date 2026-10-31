@@ -1,17 +1,84 @@
 //! One authenticated report interface for call details and measured performance.
 use crate::app::ServerState;
+use crate::http::auth::same_origin;
 use crate::http::request::{Request, query_values};
-use crate::http::response::{json_error_response, response, status_text};
-use emp_state::usage::ledger::CallFilter;
-use serde_json::json;
+use crate::http::response::{
+    cross_origin_response, json_error_response, response, status_text, unauthorized_response,
+};
+use crate::services::events::sse_frame;
+use emp_state::usage::ledger::{CallFilter, UsageError};
+use serde_json::{Value, json};
+use std::io::Write;
+use std::net::TcpStream;
 
 pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
+    let Some(filter) = call_filter(request) else {
+        return invalid();
+    };
+    match query(state, &filter, |_, _| Ok(())) {
+        Ok(report) => response(
+            "HTTP/1.1 200 OK",
+            "application/json",
+            &serde_json::to_vec(&report).expect("call report"),
+            &[],
+        ),
+        Err(_) => json_error_response(
+            503,
+            status_text(503),
+            "Call history is unavailable",
+            None,
+            &[],
+        ),
+    }
+}
+
+pub(crate) fn stream(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    state: &ServerState,
+    now: f64,
+) -> std::io::Result<()> {
+    if !same_origin(request, state.port) {
+        return stream.write_all(&cross_origin_response("management session is required"));
+    }
+    if !state
+        .sessions
+        .contains(request.session_token().as_deref(), now)
+    {
+        return stream.write_all(&unauthorized_response());
+    }
+    let Some(filter) = call_filter(request) else {
+        return stream.write_all(&invalid());
+    };
+    let progress_stream = stream.try_clone()?;
+    crate::api::streaming::write_stream_head(stream)?;
+    stream.flush()?;
+    let report = query(state, &filter, move |completed, total| {
+        let mut writer = &progress_stream;
+        writer.write_all(&sse_frame(
+            "progress",
+            &json!({"completed":completed,"total":total}),
+        )?)?;
+        writer.flush()
+    });
+    let frame = match report {
+        Ok(report) => sse_frame("result", &report)?,
+        Err(_) => sse_frame(
+            "error",
+            &json!({"error":{"message":"Call history is unavailable"}}),
+        )?,
+    };
+    stream.write_all(&frame)?;
+    stream.flush()
+}
+
+fn call_filter(request: Request<'_>) -> Option<CallFilter> {
     let now = crate::util::system_now();
     let value = |name: &str| query_values(request.target, name).first().cloned();
     let number =
         |name: &str, default: f64| value(name).map_or(Ok(default), |raw| raw.parse::<f64>());
     let (Ok(start), Ok(end)) = (number("start", now - 86400.0), number("end", now)) else {
-        return invalid();
+        return None;
     };
     let integer =
         |name: &str, default: usize| value(name).map_or(Ok(default), |raw| raw.parse::<usize>());
@@ -20,7 +87,7 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
         integer("limit", 50),
         integer("models_offset", 0),
     ) else {
-        return invalid();
+        return None;
     };
     let filter = CallFilter {
         start,
@@ -47,17 +114,21 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
         || !emp_state::usage::ledger::UsageLedger::valid_period(start, end, "all")
         || !(1..=100).contains(&limit)
     {
-        return invalid();
+        return None;
     }
-    let Ok(mut report) = state.backend.usage.ledger.query_calls(&filter) else {
-        return json_error_response(
-            503,
-            status_text(503),
-            "Call history is unavailable",
-            None,
-            &[],
-        );
-    };
+    Some(filter)
+}
+
+fn query(
+    state: &ServerState,
+    filter: &CallFilter,
+    progress: impl Fn(i64, i64) -> std::io::Result<()> + Send + 'static,
+) -> Result<Value, UsageError> {
+    let mut report = state
+        .backend
+        .usage
+        .ledger
+        .query_calls_with_progress(filter, progress)?;
     let ids = report["records"]
         .as_array()
         .into_iter()
@@ -100,12 +171,7 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
         );
         row["turn_tool_ms"] = json!(tool_timings.get(&key));
     }
-    response(
-        "HTTP/1.1 200 OK",
-        "application/json",
-        &serde_json::to_vec(&report).expect("call report"),
-        &[],
-    )
+    Ok(report)
 }
 fn invalid() -> Vec<u8> {
     json_error_response(400, status_text(400), "Invalid call filter", None, &[])

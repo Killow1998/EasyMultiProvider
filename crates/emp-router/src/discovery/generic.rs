@@ -87,8 +87,27 @@ pub fn project_generic_models(value: &Map<String, Value>) -> Result<Vec<Value>, 
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        let raw_input = architecture.get("input_modalities");
-        let raw_output = architecture.get("output_modalities");
+        let mut flag_modalities = vec![json!("text")];
+        let mut has_modality_flags = false;
+        for (field, modality) in [
+            ("supports_image_in", "image"),
+            ("supports_video_in", "video"),
+        ] {
+            if let Some(supported) = item.get(field).and_then(Value::as_bool) {
+                has_modality_flags = true;
+                if supported {
+                    flag_modalities.push(json!(modality));
+                }
+            }
+        }
+        let flag_modalities = has_modality_flags.then_some(Value::Array(flag_modalities));
+        let raw_input = non_null(item.get("input_modalities"))
+            .or_else(|| non_null(item.get("inputModalities")))
+            .or_else(|| non_null(architecture.get("input_modalities")))
+            .or(flag_modalities.as_ref());
+        let raw_output = non_null(item.get("output_modalities"))
+            .or_else(|| non_null(item.get("outputModalities")))
+            .or_else(|| architecture.get("output_modalities"));
         let raw_image_detail = item
             .get("supports_image_detail_original")
             .or_else(|| architecture.get("supports_image_detail_original"));

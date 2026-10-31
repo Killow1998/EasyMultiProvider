@@ -1,5 +1,6 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  "reports.query_progress": ["{percent}%","{percent}%"],
   "reports.requested_effort": ["所选推理强度","Selected reasoning effort"],
   "reports.reported_effort": ["服务端推理强度","Upstream reasoning effort"],
   "reports.requested_tier": ["请求档位","Requested tier"],

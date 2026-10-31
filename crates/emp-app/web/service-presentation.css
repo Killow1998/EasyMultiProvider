@@ -9,7 +9,7 @@ body[data-shadow-refinements] .presentation-service-icon[data-activity-state=act
 :root[data-theme=dark] body[data-shadow-refinements] .presentation-service-icon{--halo-color:color-mix(in srgb,var(--brand-color) 65%,white)}
 :root[data-theme=dark] body[data-shadow-refinements] .presentation-service-icon[data-brand=codex]{--halo-color:#a6acff}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]) body[data-shadow-refinements] .presentation-service-icon{--halo-color:color-mix(in srgb,var(--brand-color) 65%,white)}:root:not([data-theme=light]) body[data-shadow-refinements] .presentation-service-icon[data-brand=codex]{--halo-color:#a6acff}}
-body[data-shadow-refinements] .account-info-grid.shadow-compact-account{grid-template-columns:repeat(3,minmax(0,1fr));min-width:0;gap:12px;margin-bottom:18px}
+body[data-shadow-refinements] .account-info-grid.shadow-compact-account{grid-template-columns:repeat(2,minmax(0,1fr)) max-content;min-width:0;gap:12px;margin-bottom:18px}
 .shadow-account-footnotes{font-size:11px;line-height:1.6;color:var(--muted);margin-top:16px;border-top:1px solid var(--border);padding-top:10px}
 .shadow-account-footnotes p{margin:3px 0}
 body[data-shadow-refinements] .shadow-context-row,body[data-shadow-refinements] .subscription-list-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,.7fr) 32px;gap:12px;align-items:center}
@@ -27,7 +27,6 @@ body[data-shadow-refinements] .presentation-service-error-bubble{border-radius:7
 
 /* Detail values share one line box, regardless of whether they contain inputs. */
 .shadow-compact-account>div>.account-value{display:flex;align-items:center;flex:1;font-size:13px}
-.shadow-compact-account .account-login-row{flex-wrap:wrap}
 .shadow-usage-summary{display:flex;align-items:center;gap:28px;margin:14px 0 18px}
 .shadow-usage-summary h3{margin:0;flex:none}
 .shadow-usage-summary .usage-totals{display:flex;align-items:center;justify-content:space-between;flex:1;margin:0;gap:24px}
@@ -55,10 +54,7 @@ body[data-shadow-refinements] .modal .model-selection{max-height:none;overflow:v
 .shadow-model-action[aria-pressed=true]{color:var(--accent)}
 
 
-body[data-shadow-refinements] #service_detail_nav{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
-body[data-shadow-refinements] #service_detail_nav[hidden]{display:none}
-.shadow-detail-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
-
-body[data-shadow-refinements] #service_detail_nav{padding-bottom:10px}
-body[data-shadow-refinements] #service_detail_nav .service-detail-tabs{padding-bottom:0;margin:0}
-.shadow-detail-actions button{margin:0}
+.service-detail-actions{display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:8px;align-self:end;margin-bottom:14px}
+.service-detail-actions:empty{display:none}
+.shadow-compact-account .service-detail-actions{flex-direction:row;min-height:40px;margin:0}
+.service-detail-actions button{margin:0}

@@ -5,15 +5,35 @@ use super::*;
 impl ExternalStream {
     pub async fn next_event(&mut self) -> Result<Option<StreamResponseEvent>, RouterError> {
         while let Some(event) = self.next_projected_event().await? {
+            let Some(projected) = self
+                .output
+                .project(&event.body)
+                .map_err(portable_response_error)?
+            else {
+                continue;
+            };
+            if matches!(self.projection, StreamProjection::Responses { .. })
+                && matches!(
+                    projected["type"].as_str(),
+                    Some("response.completed" | "response.incomplete")
+                )
+                && let Some(response) = projected
+                    .get("response")
+                    .filter(|value| value.get("output").is_some())
+            {
+                validate_responses_body(response, true).map_err(responses_validation_error)?;
+            }
+            let event = projected
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or(&event.event)
+                .to_owned();
             if let Some(body) = self
                 .tools
-                .restore_event(event.body)
+                .restore_event(projected)
                 .map_err(tool_response_error)?
             {
-                return Ok(Some(StreamResponseEvent {
-                    event: event.event,
-                    body,
-                }));
+                return Ok(Some(StreamResponseEvent { event, body }));
             }
         }
         Ok(None)
@@ -168,35 +188,18 @@ impl ExternalStream {
                         .map(StreamResponseEvent::from),
                 );
             }
-            StreamProjection::Responses {
-                projector,
-                saw_terminal,
-            } => {
-                let Some(projected) = projector.project(&value).map_err(portable_response_error)?
-                else {
-                    return Ok(());
-                };
-                let event = projected
+            StreamProjection::Responses { saw_terminal } => {
+                let event = value
                     .get("type")
                     .and_then(Value::as_str)
                     .unwrap_or("message")
                     .to_owned();
-                if matches!(event.as_str(), "response.completed" | "response.incomplete") {
-                    if let Some(response) = projected
-                        .get("response")
-                        .filter(|response| response.get("output").is_some())
-                    {
-                        validate_responses_body(response, true)
-                            .map_err(responses_validation_error)?;
-                    }
-                    *saw_terminal = true;
-                } else if matches!(event.as_str(), "response.failed" | "error") {
-                    *saw_terminal = true;
-                }
-                self.pending.push_back(StreamResponseEvent {
-                    event,
-                    body: projected,
-                });
+                *saw_terminal |= matches!(
+                    event.as_str(),
+                    "response.completed" | "response.incomplete" | "response.failed" | "error"
+                );
+                self.pending
+                    .push_back(StreamResponseEvent { event, body: value });
             }
         }
         if self.pending.back().is_some_and(|event| {

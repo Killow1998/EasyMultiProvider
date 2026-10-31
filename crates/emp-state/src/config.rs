@@ -505,10 +505,11 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
     let mut models = Vec::new();
     for model in python_iterable(raw.get("models"))? {
         let mut model = normalize_model(&model)?;
-        if let Some(provider) = providers.iter().find(|provider| {
-            provider["id"] == model["provider"] && provider["execution_backend"] == "claude_cli"
-        }) {
-            model = crate::official_registry::enrich_discovered_models(
+        if let Some(provider) = providers
+            .iter()
+            .find(|provider| provider["id"] == model["provider"])
+        {
+            model = crate::official_registry::enrich_saved_models(
                 provider.as_object().expect("normalized provider"),
                 vec![model],
             )
@@ -622,6 +623,13 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "codex_runtime_sources": codex_runtime_sources,
         "pricing_aliases": pricing_aliases,
     });
+    if raw.contains_key("decision_provider") {
+        normalized["decision_provider"] = Value::String(string_value(
+            raw.get("decision_provider"),
+            "decision_provider",
+            false,
+        )?);
+    }
     let language = match raw.get("language") {
         None => "zh-CN",
         Some(Value::String(language)) => language.as_str(),

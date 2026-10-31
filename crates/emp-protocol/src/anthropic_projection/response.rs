@@ -197,6 +197,7 @@ pub fn response_from_anthropic(
                     }));
                 }
             }
+            Some("thinking" | "redacted_thinking") => {}
             _ => {
                 return Err(upstream_error(
                     "Anthropic upstream returned unsupported content",

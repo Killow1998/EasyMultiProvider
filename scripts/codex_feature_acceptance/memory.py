@@ -32,10 +32,17 @@ def run(codex, emp, root, evidence, source='native'):
             rows = db.execute('SELECT id, source, memory_mode, updated_at FROM threads').fetchall()
             print(json.dumps({'seed_threads':rows}), flush=True)
             db.execute('UPDATE threads SET updated_at=? WHERE id=?', (int(time.time())-86400, thread))
-        config = fixture.config.replace('memories=false', 'memories=true')
+        config = 'service_tier="fast"\n'+fixture.config.replace('memories=false', 'memories=true')
         config += ('[memories]\ngenerate_memories=true\nmin_rollout_idle_hours=0\n'
                    'max_rollouts_per_startup=1\nmin_rate_limit_remaining_percent=0\n'
                    'extract_model="gpt-6.1-sol"\nconsolidation_model="gpt-6.1-sol"\n')
+        memory_tier = {'native':None, 'imported':'flex', 'external':'fast'}[source]
+        if memory_tier:
+            config += 'consolidation_service_tier='+json.dumps(memory_tier)+'\n'
+        expected_tier = {'native':'default', 'imported':'flex', 'external':'priority'}[source]
+        native_model = next(entry for entry in fixture.catalog['models'] if entry['slug'] == 'gpt-6.1-sol')
+        native_model['service_tiers'] = [{'id':'priority', 'name':'Fast', 'description':'Synthetic fast tier.'}]
+        (fixture.home/'models.json').write_text(json.dumps(fixture.catalog))
         (fixture.home/'config.toml').write_text(config)
         memory_root = fixture.home/'memories_v2'
         summary = ('v1\n\n## User Profile\n\nSynthetic fixture.\n\n## User preferences\n\n'
@@ -47,12 +54,15 @@ def run(codex, emp, root, evidence, source='native'):
             nonlocal wrote
             body = record['body']
             if 'MEMORY_STARTUP_TRIGGER' in json.dumps(body) and 'rollout_summary' not in body.get('text', {}).get('format', {}).get('schema', {}).get('properties', {}):
+                if source == 'native':
+                    assert body.get('service_tier') == 'priority', ('main tier', body.get('service_tier'))
                 return message('Memory startup trigger complete.')
             schema = body.get('text', {}).get('format', {}).get('schema', {})
             if 'rollout_summary' in schema.get('properties', {}):
                 assert 'raw_memory' not in schema['properties'], 'v1 extraction contract used'
                 return message(json.dumps({'rollout_summary':'Fixture preference: use focused acceptance tests.',
                                            'rollout_slug':'focused-acceptance'}))
+            assert body.get('service_tier', 'default') == expected_tier, ('consolidation tier', body.get('service_tier'), expected_tier)
             if not wrote:
                 declarations = body.get('tools', []) + [tool for item in body.get('input', [])
                     if isinstance(item, dict) and item.get('type') == 'additional_tools' for tool in item['tools']]
@@ -70,7 +80,7 @@ def run(codex, emp, root, evidence, source='native'):
         client = fixture.client()
         environment = fixture.executor(client)
         client.rpc('thread/resume', {'threadId':launcher})
-        turn(client, launcher, 'MEMORY_STARTUP_TRIGGER: reply once.', environments=[environment])
+        turn(client, launcher, 'MEMORY_STARTUP_TRIGGER: reply once.', environments=[environment], serviceTier='fast')
         deadline = time.monotonic()+30
         state = {}
         while time.monotonic() < deadline:
@@ -104,6 +114,7 @@ def run(codex, emp, root, evidence, source='native'):
         assert all(row['account_id'] == '@native' for row in consolidation), ledger
         assert (fixture.home/'config.toml').read_text() == config
         result = {'passed':True, 'source':source, 'seed_thread':thread, 'memory_root':'memories_v2',
+                  'consolidation_service_tier':expected_tier,
                   'state':state, 'ledger':ledger, 'requests':len(fixture.upstream.requests)}
         (evidence/'result.json').write_text(json.dumps(result, indent=2))
         print(json.dumps({'passed':True, 'requests':result['requests'], 'memory_tables':list(state)}), flush=True)

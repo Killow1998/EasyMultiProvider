@@ -147,6 +147,19 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     if raw.contains_key("execution_backend") {
         normalized["execution_backend"] = Value::String(execution_backend.to_owned());
     }
+    if let Some(api) = raw.get("decision_api") {
+        let api = api
+            .as_object()
+            .ok_or_else(|| ConfigError::new("provider.decision_api must be an object"))?;
+        let protocol = string_value(api.get("protocol"), "provider.decision_api.protocol", true)?;
+        if !["openai", "openrouter", "systemone"].contains(&protocol.as_str()) {
+            return Err(ConfigError::new(
+                "provider.decision_api.protocol must be openai, openrouter or systemone",
+            ));
+        }
+        let model = string_value(api.get("model"), "provider.decision_api.model", true)?;
+        normalized["decision_api"] = serde_json::json!({"protocol":protocol, "model":model});
+    }
     Ok(normalized)
 }
 

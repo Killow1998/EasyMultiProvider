@@ -1,4 +1,4 @@
-//! Jev uses OpenRouter Decisions, independently of the chat model catalog.
+//! Forward native decision payloads using service credentials and instance authentication.
 
 use crate::app::ServerState;
 use crate::http::{
@@ -26,40 +26,38 @@ pub(crate) fn request(
             &[],
         );
     }
-    let Some(provider_id) = request
-        .header("X-EMP-Provider")
-        .filter(|value| !value.is_empty() && request.header_count("X-EMP-Provider") == 1)
-    else {
+    if request.header_count("X-EMP-Provider") > 1 || request.header("X-EMP-Provider") == Some("") {
         return json_error_response(
             400,
             status_text(400),
-            "X-EMP-Provider must name one configured OpenRouter service",
-            None,
-            &[],
-        );
-    };
-    let body = match read_json_body(stream, request, prefix, state) {
-        Ok(body) => body,
-        Err(error) => return body_error_response(error),
-    };
-    if !body["model"]
-        .as_str()
-        .is_some_and(|model| model.starts_with("typesafe/jev-"))
-    {
-        return json_error_response(
-            400,
-            status_text(400),
-            "Decisions requires a typesafe/jev model",
+            "X-EMP-Provider must name one configured API service",
             None,
             &[],
         );
     }
+    let mut body = match read_json_body(stream, request, prefix, state) {
+        Ok(body) => body,
+        Err(error) => return body_error_response(error),
+    };
     let (endpoint, key) = {
         let Ok(config) = state.backend.configuration.read() else {
             return json_error_response(
                 500,
                 status_text(500),
                 "configuration is unavailable",
+                None,
+                &[],
+            );
+        };
+        let Some(provider_id) = request
+            .header("X-EMP-Provider")
+            .or_else(|| config["decision_provider"].as_str())
+            .filter(|id| !id.is_empty())
+        else {
+            return json_error_response(
+                400,
+                status_text(400),
+                "Choose a decision service in Settings or send X-EMP-Provider",
                 None,
                 &[],
             );
@@ -73,45 +71,91 @@ pub(crate) fn request(
             return json_error_response(
                 404,
                 status_text(404),
-                "OpenRouter service is not enabled",
+                "Decision service is not enabled",
                 None,
                 &[],
             );
         };
+        if provider["auth_mode"] != "api_key" || provider["execution_backend"] == "claude_cli" {
+            return json_error_response(
+                400,
+                status_text(400),
+                "Decisions requires an API key service",
+                None,
+                &[],
+            );
+        }
+        if body.get("model").is_none() {
+            body["model"] = provider["decision_api"]["model"].clone();
+        }
+        if body["model"]
+            .as_str()
+            .is_none_or(|model| model.trim().is_empty())
+        {
+            return json_error_response(
+                400,
+                status_text(400),
+                "A decision model is required in the request or Settings",
+                None,
+                &[],
+            );
+        }
         let base = provider["base_url"]
             .as_str()
             .unwrap_or_default()
             .trim_end_matches('/');
-        let endpoint =
-            match Url::parse(&format!("{base}/")).and_then(|url| url.join("../alpha/decisions")) {
-                Ok(url) => url.to_string(),
-                Err(_) => {
-                    return json_error_response(
-                        400,
-                        status_text(400),
-                        "OpenRouter service URL is invalid",
-                        None,
-                        &[],
-                    );
-                }
-            };
+        let endpoint = match Url::parse(&format!("{base}/")).and_then(|url| {
+            let api =
+                provider["decision_api"]["protocol"]
+                    .as_str()
+                    .unwrap_or(match url.host_str() {
+                        Some("api.openai.com") => "openai",
+                        Some("api.typesafe.ai") => "systemone",
+                        _ => "openrouter",
+                    });
+            url.join(match api {
+                "openai" => "decisions",
+                "systemone" => "systemone",
+                "openrouter" => "../alpha/decisions",
+                _ => unreachable!("normalized decision API"),
+            })
+        }) {
+            Ok(url) => url.to_string(),
+            Err(_) => {
+                return json_error_response(
+                    400,
+                    status_text(400),
+                    "Decision service URL is invalid",
+                    None,
+                    &[],
+                );
+            }
+        };
         let key = emp_state::provider_api_key(provider, &state.backend.configuration.vault);
         if key.is_empty() {
             return json_error_response(
                 503,
                 status_text(503),
-                "OpenRouter service API key is unavailable",
+                "Decision service API key is unavailable",
                 None,
                 &[],
             );
         }
         (endpoint, key)
     };
-    let headers = BTreeMap::from([
+    let mut headers = BTreeMap::from([
         ("Authorization".to_owned(), format!("Bearer {key}")),
         ("Content-Type".to_owned(), "application/json".to_owned()),
         ("Accept".to_owned(), "application/json".to_owned()),
     ]);
+    for name in [
+        "TypeSafe-Danger-Zone-Long-Context",
+        "TypeSafe-Danger-Zone-Images",
+    ] {
+        if let Some(value) = request.header(name) {
+            headers.insert(name.to_owned(), value.to_owned());
+        }
+    }
     let transport = &state.backend.transport;
     let upstream = match transport.runtime.block_on(transport.client.open(
         HttpMethod::Post,
@@ -125,7 +169,7 @@ pub(crate) fn request(
             return json_error_response(
                 503,
                 status_text(503),
-                "Cannot connect to OpenRouter Decisions",
+                "Cannot connect to the decision service",
                 Some("network_error"),
                 &[],
             );

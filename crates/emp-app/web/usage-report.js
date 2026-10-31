@@ -118,7 +118,7 @@ function createUsageReport({api, $, tr, esc, getState, getLanguage, persistState
   function renderUsage() {
     const box = $('usage_result'); if (!box || !usagePayload) return;
     const data = usagePayload, totals = data.totals, periods = usagePeriods();
-    const cost = row => row.priced_requests ? usageMoney(row.cost_nanos) : '—';
+    const cost = row => row.priced_requests ? compactUsage(row.cost_nanos/1e9,true).html : '—';
     const price = data.pricing, missing = totals.requests - totals.priced_requests;
     const max = Math.max(1,...periods.map(row=>row.input_tokens+row.output_tokens));
     const width = 720, plot = 628, range = data.end-data.start;
@@ -126,14 +126,14 @@ function createUsageReport({api, $, tr, esc, getState, getLanguage, persistState
       const x = 70 + (Math.max(data.start,row.start)-data.start)/range*plot;
       const w = Math.max(1,(Math.min(data.end,row.end)-Math.max(data.start,row.start))/range*plot-2);
       const tokens = row.input_tokens+row.output_tokens, h = tokens/max*130;
-      const label = new Date(row.start*1000).toLocaleString() + ' · ' + usageNumber(tokens) + ' tokens · ' + cost(row);
+      const label = new Date(row.start*1000).toLocaleString() + ' · ' + usageNumber(tokens) + ' tokens · ' + (row.priced_requests ? usageMoney(row.cost_nanos) : '—');
       return `<rect x="${x}" y="${150-h}" width="${w}" height="${Math.max(1,h)}" rx="2" tabindex="0" role="button" aria-label="${esc(label)}" data-usage-action="zoom" data-start="${Number(row.start)}" data-end="${Number(row.end)}"><title>${esc(label)}</title></rect>`;
     }).join('');
     const groups = serviceUsage.renderGroups(data, getState()?.providers, row => usageRowSource(row) + ' · ' + usageOwner(row));
     const history = data.history || {}, historical = data.sources?.find(row => row.origin === 'history')?.requests || 0;
     box.innerHTML = `<p class="usage-notice">${history.running || history.queued ? tr("reports.scanning_history_in_the_background") : history.last_scan_at ? tr("reports.history_scanned") + usageNumber(history.files) + tr("reports.files") : tr("reports.waiting_for_history_scan")}${history.errors ? ' · ' + tr("reports.some_files_could_not_be_read") : ''}</p>
-      <div class="usage-totals"><div class="usage-total"><span>${tr("common.tokens")}</span><strong>${totals.input_reports || totals.output_reports ? usageNumber(totals.input_tokens+totals.output_tokens) : '—'}</strong><span>${usageNumber(totals.reported_requests)} / ${usageNumber(totals.requests)} ${tr("reports.requests_reported_usage")}</span></div><div class="usage-total"><span>${tr("services.api_equivalent_usd")}</span><strong>${cost(totals)}</strong><span>${usageNumber(totals.priced_requests)} / ${usageNumber(totals.requests)} ${tr("services.requests_priced")}</span></div></div>
-      ${totals.requests ? `<svg class="usage-chart" viewBox="0 0 ${width} 190" aria-label="${tr("reports.token_usage_select_a_bar_to_zoom")}"><path d="M70 20V150H698" fill="none" stroke="var(--border)"/><text x="60" y="28" text-anchor="end">${new Intl.NumberFormat('en',{notation:'compact'}).format(max)}</text><text x="60" y="153" text-anchor="end">0</text>${bars}${timeAxisSvg(data.start, data.end, time => 70 + (time-data.start)/range*plot, 170, 70, 698)}</svg>${groups}` : `<p>${tr("reports.no_usage_recorded_in_this_period")}</p>`}
+      <div class="usage-totals"><div class="usage-total"><span>${tr("common.tokens")}</span><strong>${totals.input_reports || totals.output_reports ? compactUsage(totals.input_tokens+totals.output_tokens).html : '—'}</strong><span>${usageNumber(totals.reported_requests)} / ${usageNumber(totals.requests)} ${tr("reports.requests_reported_usage")}</span></div><div class="usage-total"><span>${tr("services.api_equivalent_usd")}</span><strong>${cost(totals)}</strong><span>${usageNumber(totals.priced_requests)} / ${usageNumber(totals.requests)} ${tr("services.requests_priced")}</span></div></div>
+      ${totals.requests ? `<svg class="usage-chart" viewBox="0 0 ${width} 190" aria-label="${tr("reports.token_usage_select_a_bar_to_zoom")}"><path d="M70 20V150H698" fill="none" stroke="var(--border)"/><text x="60" y="28" text-anchor="end">${shadowCompactNumber(max)}</text><text x="60" y="153" text-anchor="end">0</text>${bars}${timeAxisSvg(data.start, data.end, time => 70 + (time-data.start)/range*plot, 170, 70, 698)}</svg>${groups}` : `<p>${tr("reports.no_usage_recorded_in_this_period")}</p>`}
       ${historical ? `<p class="usage-notice">${usageNumber(historical)} ${tr("reports.records_from_local_history_estimated_at_available_scan_time")}</p>` : ''}
       ${data.unmatched_overlap || (historical && data.uncorrelated_realtime) ? `<p class="usage-notice usage-warning">${tr("reports.some_history_and_live_usage_cannot_be_reconciled_missing")}</p>` : ''}
       ${data.issues?.some(row => ['inconsistent_usage','aggregate_usage'].includes(row.price_issue)) ? `<p class="usage-notice usage-warning">${tr("reports.some_old_usage_fields_disagree_or_contain_only_cumulative")}</p>` : ''}

@@ -28,7 +28,7 @@ def main():
     version = subprocess.check_output([str(args.codex), '--version'], text=True,
               env={'PATH':os.environ['PATH'], 'HOME':str(version_home), 'CODEX_HOME':str(version_home)}).strip()
     report = {'started_at':datetime.now(timezone.utc).isoformat(), 'codex_version':version,
-              'source_ref':'rust-v0.165.0', 'real_provider_calls':0, 'cases':[], 'inference_requests':0,
+              'source_ref':'rust-v'+version.split()[-1], 'real_provider_calls':0, 'cases':[], 'inference_requests':0,
               'binary_sha256':{str(path):hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()
                                for path in (args.codex, args.emp)}}
     cases = [('effort-sse', effort.run, {'transport':'sse'}),

@@ -180,10 +180,7 @@ impl From<StreamEvent> for StreamResponseEvent {
 enum StreamProjection {
     Chat(ChatStream),
     Anthropic(AnthropicStream),
-    Responses {
-        projector: PortableStreamProjector,
-        saw_terminal: bool,
-    },
+    Responses { saw_terminal: bool },
 }
 
 #[derive(Debug)]
@@ -193,6 +190,7 @@ pub struct ExternalStream {
     response: Option<HttpResponse>,
     parser: Option<SseJsonParser>,
     projection: StreamProjection,
+    output: PortableStreamProjector,
     tools: ExternalTools,
     pending: VecDeque<StreamResponseEvent>,
     generated: Option<ResponseEvents>,

@@ -31,6 +31,20 @@ impl Tray {
         self.0.update(move |tray| tray.snapshot = snapshot);
     }
 
+    pub(super) fn set_icon(
+        &mut self,
+        image: &crate::services::app_icon::Image,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let rgba = image.tray_rgba();
+        self.0.update(move |tray| {
+            tray.icon.data = rgba
+                .chunks_exact(4)
+                .flat_map(|p| [p[3], p[0], p[1], p[2]])
+                .collect();
+        });
+        Ok(())
+    }
+
     pub(super) fn pump(&mut self) {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }

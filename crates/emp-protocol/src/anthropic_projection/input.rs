@@ -51,7 +51,21 @@ pub(super) fn request_text(value: Option<&Value>, field: &str) -> Result<String,
     }
 }
 
-fn standalone_tool_output(item: &Map<String, Value>) -> Result<Option<String>, AnthropicError> {
+fn tool_result_content(value: Option<&Value>) -> Result<Value, AnthropicError> {
+    let parts = anthropic_content(value)?;
+    if parts.iter().all(|part| part["type"] == "text") {
+        Ok(Value::String(
+            parts
+                .iter()
+                .map(|part| part["text"].as_str().expect("validated text block"))
+                .collect(),
+        ))
+    } else {
+        Ok(Value::Array(parts))
+    }
+}
+
+fn standalone_tool_output(item: &Map<String, Value>) -> Result<Option<Vec<Value>>, AnthropicError> {
     if item.get("type").and_then(Value::as_str) != Some("function_call_output")
         || item.get("call_id").is_some_and(|value| !value.is_null())
     {
@@ -71,18 +85,24 @@ fn standalone_tool_output(item: &Map<String, Value>) -> Result<Option<String>, A
         }
     };
     let empty = Value::String(String::new());
-    let output = request_text(
-        item.get("output").or(Some(&empty)),
-        "standalone tool output",
-    )?;
+    let output = item.get("output").unwrap_or(&empty);
     let label = if namespace.is_empty() {
         name.to_owned()
     } else {
         format!("{namespace}/{name}")
     };
-    Ok(Some(format!(
-        "Standalone tool output from {label}:\n{output}"
-    )))
+    let header = format!("Standalone tool output from {label}:\n");
+    let content = match tool_result_content(Some(output))? {
+        Value::String(text) => {
+            vec![serde_json::json!({"type": "text", "text": format!("{header}{text}")})]
+        }
+        Value::Array(mut parts) => {
+            parts.insert(0, serde_json::json!({"type": "text", "text": header}));
+            parts
+        }
+        _ => unreachable!("tool content is text or content parts"),
+    };
+    Ok(Some(content))
 }
 
 fn decode_compaction(item: &Map<String, Value>) -> Option<String> {
@@ -368,7 +388,7 @@ pub(super) fn messages(
                     if !pending_results.is_empty() {
                         result.push(serde_json::json!({"role": "user", "content": std::mem::take(&mut pending_results)}));
                     }
-                    result.push(serde_json::json!({"role": "user", "content": [{"type": "text", "text": standalone}]}));
+                    result.push(serde_json::json!({"role": "user", "content": standalone}));
                     continue;
                 }
                 let call_id = required_string(
@@ -381,9 +401,11 @@ pub(super) fn messages(
                     ));
                 }
                 let empty_output = Value::String(String::new());
+                let output = item.get("output").unwrap_or(&empty_output);
+                let content = tool_result_content(Some(output))?;
                 pending_results.push(serde_json::json!({
                     "type": "tool_result", "tool_use_id": call_id,
-                    "content": request_text(item.get("output").or(Some(&empty_output)), "tool output")?
+                    "content": content,
                 }));
             }
             kind if OMITTED_INPUT_TYPES.contains(&kind) => {}

@@ -139,6 +139,8 @@ def main():
         emp_root, home = root/'emp', root/'codex'
         emp_root.mkdir()
         home.mkdir()
+        version = subprocess.check_output([str(codex),'--version'], text=True,
+            env={'PATH':os.environ['PATH'],'HOME':str(home),'CODEX_HOME':str(home)}).strip()
         (emp_root/'state').mkdir()
         (emp_root/'state/api_prices.json').write_text(json.dumps({'fetched_at':time.time(),
             'prices':{'upstream-fixture':{'input_cost_per_token':'0.001','output_cost_per_token':'0.002'}}}))
@@ -151,7 +153,7 @@ def main():
             'models':[{'id':'fixture/model','provider':'fixture','upstream_id':'upstream-fixture','enabled':True}]}
         base,_,_,headers = start_backend(stack,binary,emp_root,fixture,{'CODEX_HOME':str(home),**proxies})
         headers['Origin'] = base
-        status,catalog = request(base+'/v1/models?client_version=0.166.0-alpha.2',headers=headers)
+        status,catalog = request(base+'/v1/models?client_version='+version.split()[-1],headers=headers)
         assert status == 200
         catalog['models'] = [entry for entry in catalog['models'] if entry['slug'] == 'fixture/model']
         assert len(catalog['models']) == 1
@@ -210,7 +212,7 @@ def main():
         compression = [compression_case(codex,env,args.output,enabled,requested)
                        for enabled,requested in [(False,True),(True,False),(True,True)]]
         checks.append('Unacknowledged/legacy connections stay text; negotiated zstd uses binary frames, persistent stream history and fresh reconnect codecs')
-        result = {'codex_version':subprocess.check_output([str(codex),'--version'],env=env,text=True).strip(),
+        result = {'codex_version':version,
                   'codex_sha256':sha256_file(codex),'emp_sha256':sha256_file(binary),'checks':checks,
                   'completed_turns':len(upstream.inputs),'native_usd_cases':usd_cases,'emp_usage_totals':after,
                   'compression':compression,'backend_paths':sorted(set(upstream.paths)),

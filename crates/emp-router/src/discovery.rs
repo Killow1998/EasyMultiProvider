@@ -19,11 +19,13 @@ use super::{RouterError, RouterErrorKind};
 use crate::official_registry::enrich_discovered_models;
 
 mod anthropic;
+mod decisions;
 mod gemini;
 mod generic;
 mod metadata;
 
 pub use anthropic::{discover_anthropic_models, project_anthropic_models};
+pub use decisions::discover_decision_models;
 pub use gemini::{discover_gemini_models, project_gemini_models};
 pub use generic::{discover_generic_models, project_generic_models};
 pub use metadata::model_metadata;

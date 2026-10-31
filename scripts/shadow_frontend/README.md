@@ -30,6 +30,25 @@ Real snapshots and acceptance share the disposable EMP launcher in
 Only the synthetic fixture adds a fake upstream and example configuration;
 real snapshot refreshes launch only the candidate backend.
 
+The appearance and provider-balance reviews use the same release baseline as
+the other unreleased changes listed below.
+Icon changes in Shadow stay in the browser draft and do not edit OS shortcuts.
+Balance examples open in the separate synthetic preview and are labeled as
+synthetic data. Actual provider queries are not replaced by example amounts.
+
+Run the focused workflow acceptance against a candidate executable:
+
+```sh
+python3 -B scripts/shadow_frontend/e2e_appearance_balances.py \
+  --emp /absolute/path/to/EMP --output /tmp/emp-appearance-balances
+```
+
+It exercises real icon save/load and isolated Linux launchers, browser SVG
+import and color restoration, zero balances and key-budget presentation,
+official billing links, language changes and narrow-screen layout. Balance
+HTTP adapters have separate loopback-only Rust tests. No real provider key is
+used. Windows shortcuts and macOS Finder/Dock require native platform checks.
+
 The banner shows the accounting snapshot time. The existing statistics Refresh
 button creates a new snapshot and reloads the candidate results. Failure leaves
 the previous snapshot available and reports the error; it never substitutes
@@ -47,11 +66,17 @@ python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --dem
 ```
 
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
-review entry. Update `reviewRows` in `preview-review.js` for every review round;
-follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
-The current review covers **Gateway connection**, **Native sign-in methods**, and
-the **tunnel migration clock fix**, using isolated synthetic accounts. Earlier
-entries remain available as demos where applicable.
+review entry. Its baseline is the published **v0.13.20**, displayed in the dialog.
+Keep `reviewRows` in `preview-review.js` cumulative across development tasks;
+reset the list and advance `reviewBaseline` together after the next release.
+Follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
+The current review covers **service actions and sign-in methods**, **settings
+categories**, **decision-model settings**, **quota trends**, **model capabilities**,
+**Codex 0.166 maintenance**, **provider balances**, and **application icons**.
+Model-data and engine-maintenance entries summarize backend changes; the others
+open their interfaces. Settings and quota
+trends use the real-data read-only page. Sign-in and decision-model actions open
+isolated synthetic accounts. Earlier entries remain available as demos where applicable.
 Ultra uses the production dialog with live catalog capabilities and a browser-local
 preference draft. When
 the source backend predates this capability projection, the read-only bridge reads
@@ -63,10 +88,13 @@ Saving or resetting one selection leaves the other unchanged. Existing combined
 overrides are retained for both stages when first upgraded; active EMP overrides
 do not replace the displayed original values. Candidate snapshots copy these
 public preferences only.
-Settings
-groups display preferences, general service controls, external-service search,
-and native-service compaction/routing in four flat sections. Background compaction
-remains available in the native-service section and uses its existing controller.
+Settings opens three category cards: General (display, startup and gateway),
+External services (collaboration, search and decision models), and Native services
+(background compaction, Ultra and routing). Back returns to the immediate parent
+category. The service-row action group uses compact tooltip icons; the Native
+sign-in icon comes immediately before refresh, trends and model settings.
+The sign-in cards also offer switching to an EMP local key, preserving the existing
+keep-as-Other/remove choice for subscriptions.
 Auto Review, Sidechat and nested subagents belong to their main conversation,
 with model and task breakdowns. Examples retain missing-price/usage cases and
 unassigned usage. Previously shipped
@@ -140,6 +168,10 @@ python3 scripts/shadow_frontend/e2e_real_shadow.py \
   --emp /path/to/candidate/EMP --output /tmp/emp-real-shadow.json
 ```
 
+Usage and call statistics both run on the same candidate snapshot, including
+their time buckets. Live source usage events do not reload this fixed snapshot;
+the statistics Refresh button captures new source data. Live source diagnostic
+reads remain separate.
 It checks raw missing/auxiliary metadata, candidate attribution, unassigned usage,
 refreshing the source snapshot, unchanged source settings/auth/metadata, rejected
 production writes, and opt-in demo navigation in both directions.
@@ -500,8 +532,10 @@ and demonstration adapters; it no longer carries duplicate accepted UI assets.
 
 Account information and lifetime usage each have one renderer in
 `service-presentation.js`, injected at page composition for both shipped and
-Shadow pages. Controllers contain no fallback templates; service navigation owns
-the reset/removal buttons and selects tabs by explicit view identity.
+Shadow pages. Controllers contain no fallback templates. Service names open
+information and gears open model settings, without tabs between them. The account
+information row places reset/removal beside the name and account; sign-in origin
+is omitted. Provider information retains an icon for connection settings.
 `e2e_account_usage.py` covers cache lifecycle and the
 shipped summaries' model aggregation, unknown/zero prices and EN/ZH rendering.
 Migration previews merge against

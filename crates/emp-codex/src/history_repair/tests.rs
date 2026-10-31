@@ -551,6 +551,48 @@ fn assert_retained_tail(records: &[Value], checkpoint: &Value) {
 }
 
 #[test]
+fn native_restore_retains_dynamic_tool_updates_and_reasoning_usage() {
+    let fixture = fixture(false, false, false);
+    let mut original = fs::read(&fixture.parent_path).unwrap();
+    let tools = json!({"thread_id":PARENT_ID,"tools":[{
+        "type":"function","name":"fixture_lookup","description":"Synthetic lookup",
+        "inputSchema":{"type":"object","properties":{}}
+    }]});
+    append_record(
+        &mut original,
+        18,
+        record("dynamic_tools_updated", tools.clone()),
+    );
+    let usage = json!({"type":"token_count","info":{
+        "total_token_usage":{"input_tokens":100,"output_tokens":20,"reasoning_output_tokens":10,"total_tokens":120},
+        "last_token_usage":{"input_tokens":100,"output_tokens":20,"reasoning_output_tokens":10,"total_tokens":120},
+        "last_usage_includes_reasoning":true,"model_context_window":8192
+    }});
+    append_record(&mut original, 19, record("event_msg", usage.clone()));
+    fs::write(&fixture.parent_path, &original).unwrap();
+
+    let (_lock, report) = repair_before_native_restore(&fixture.home).unwrap();
+    assert_eq!(report.threads_repaired, 1);
+    assert_eq!(report.checkpoints_converted, 1);
+    let repaired = decoded(&fixture.parent_path);
+    assert!(repaired.starts_with(&original));
+    let migrated = records(&repaired);
+    let checkpoint = migrated
+        .iter()
+        .rposition(|item| item["type"] == "compacted")
+        .unwrap();
+    let tail = &migrated[checkpoint + 1..];
+    assert!(
+        tail.iter()
+            .any(|item| item["type"] == "dynamic_tools_updated" && item["payload"] == tools)
+    );
+    assert!(
+        tail.iter()
+            .any(|item| item["type"] == "event_msg" && item["payload"] == usage)
+    );
+}
+
+#[test]
 fn repairs_zstd_parent_and_depth_two_paginated_descendants_without_losing_history() {
     let fixture = fixture(true, true, false);
     let (grandchild_path, grandchild_original) = add_grandchild(&fixture);

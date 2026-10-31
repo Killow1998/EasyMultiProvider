@@ -1,9 +1,9 @@
 // Service-owned lifetime summaries and service-type/model usage breakdowns.
-function createServiceUsage({esc, tr, number, money, dateTime, renderLifetime}) {
+function createServiceUsage({esc, tr, number, dateTime, renderLifetime}) {
   const fields = ['requests', 'priced_requests', 'input_reports', 'output_reports',
     'input_tokens', 'output_tokens', 'cost_nanos', 'cache_reports', 'cached_input_tokens',
     'cache_write_tokens', 'reasoning_reports', 'reasoning_tokens'];
-  const cost = row => row.priced_requests ? money(row.cost_nanos) : '—';
+  const cost = row => row.priced_requests ? compactUsage(row.cost_nanos/1e9,true).html : '—';
   function aggregate(groups) {
     const models = new Map(), totals = Object.fromEntries(fields.map(key => [key, 0]));
     for (const row of groups || []) {
@@ -18,7 +18,7 @@ function createServiceUsage({esc, tr, number, money, dateTime, renderLifetime}) 
     return {models:[...models.values()], totals};
   }
   function render(data) {
-    return renderLifetime(data,{aggregate,number,money,dateTime});
+    return renderLifetime(data,{aggregate,number,dateTime});
   }
   function renderGroups(data, providers, describe) {
     const services = new Map((providers || []).map(provider => [provider.id, provider]));
@@ -34,8 +34,8 @@ function createServiceUsage({esc, tr, number, money, dateTime, renderLifetime}) 
         : row.category === 'external' && provider ? (provider.execution_backend === 'claude_cli' ? 'claude' : 'api') : 'other';
       types.find(group => group.id === type).rows.push(row);
     }
-    const input = row => `${row.input_reports ? number(row.input_tokens) : '—'}<small>${tr("services.cached")}${row.cache_reports ? number(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr("services.write")+number(row.cache_write_tokens) : ''}</small>`;
-    const output = row => `${row.output_reports ? number(row.output_tokens) : '—'}<small>${tr("services.reasoning")}${row.reasoning_reports ? number(row.reasoning_tokens) : '—'}</small>`;
+    const input = row => `${row.input_reports ? compactUsage(row.input_tokens).html : '—'}<small>${tr("services.cached")}${row.cache_reports ? compactUsage(row.cached_input_tokens).html : '—'}${row.cache_write_tokens ? ' · '+tr("services.write")+compactUsage(row.cache_write_tokens).html : ''}</small>`;
+    const output = row => `${row.output_reports ? compactUsage(row.output_tokens).html : '—'}<small>${tr("services.reasoning")}${row.reasoning_reports ? compactUsage(row.reasoning_tokens).html : '—'}</small>`;
     return types.filter(group => group.rows.length).map(group => {
       const {models} = aggregate(group.rows);
       const rows = models.sort((a,b) => (b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)||a.model.localeCompare(b.model)).map(model => {

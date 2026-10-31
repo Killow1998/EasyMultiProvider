@@ -37,6 +37,10 @@ const realShadowRenderIntegration=renderIntegration;
 renderIntegration=function(...args){realShadowRenderIntegration(...args);$('integration_toggle').disabled=true;};
 confirmIntegrationAction=()=>{};
 reportWebClientPhase=()=>{};
+const realShadowManagementEvent=processManagementEvent;
+processManagementEvent=function(type,data){
+  if(type!=='usage-updated')realShadowManagementEvent(type,data);
+};
 document.addEventListener('click',event=>{
   const choice=event.target.closest('[data-shadow-demo]');
   if(choice)window.EMP_REVIEW_ACTION(choice.dataset.shadowDemo);

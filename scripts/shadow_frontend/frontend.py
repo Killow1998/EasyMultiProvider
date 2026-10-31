@@ -9,7 +9,9 @@ PREVIEW_ASSETS = {'shadow-ui.js', 'shadow-drafts.js', 'shadow-service-demo.js'}
 def frontend(name, bootstrap, real_context=None):
     if name in PREVIEW_ASSETS:
         return (HERE / name).read_bytes()
-    if name.endswith(('.png', '.wav', '.gif')):
+    if name.endswith(('.png', '.svg', '.wav', '.gif')):
+        if name in {'app-icon.png','app-icon-source.png'}:
+            name = 'emp-icon.png'
         asset = asset_file(WEB, name)
         if asset is None:
             raise FileNotFoundError(name)
@@ -39,6 +41,4 @@ def frontend(name, bootstrap, real_context=None):
       delete window.EMP_SHADOW_BOOTSTRAP;
       return;
     }''')
-    if name == 'service-list.js':
-        text = text.replace('tr("services.model_settings")', "tr('模型管理','Manage models')")
     return text.encode('utf-8')

@@ -90,13 +90,9 @@ pub(crate) fn handle_connection(
     } else {
         let now = system_now();
         match (request.method, path) {
-            (RequestMethod::Post, "/v1/decisions") => Some(crate::api::decisions::request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                now,
-            )),
+            (RequestMethod::Post, "/v1/decisions" | "/v1/systemone") => Some(
+                crate::api::decisions::request(&mut stream, request, raw.body_prefix, state, now),
+            ),
             (RequestMethod::Post, path)
                 if path.starts_with("/api/native/login/")
                     || path.starts_with("/api/accounts/login/") =>
@@ -251,6 +247,7 @@ pub(crate) fn handle_connection(
                 | "/api/catalog/refresh"
                 | "/api/catalog/context-preference"
                 | "/api/models/metadata"
+                | "/api/decisions/models"
                 | "/api/config"
                 | "/api/language",
             ) => Some(catalog::management_request(
@@ -281,6 +278,12 @@ pub(crate) fn handle_connection(
                     ResponsesRequestResult::Streamed => None,
                 }
             }
+            (RequestMethod::Get, "/api/calls")
+                if request.header("Accept") == Some("text/event-stream") =>
+            {
+                let _ = crate::api::calls::stream(&mut stream, request, state, now);
+                None
+            }
             (RequestMethod::Get, "/api/accounts/events") => {
                 serve_quota_events(&mut stream, request, state, now);
                 None
@@ -297,6 +300,24 @@ pub(crate) fn handle_connection(
                     now,
                 ))
             }
+            (RequestMethod::Post, path)
+                if path.starts_with("/api/providers/") && path.ends_with("/balance") =>
+            {
+                Some(crate::api::provider_balance::refresh(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    now,
+                ))
+            }
+            (RequestMethod::Post, "/api/app-icon") => Some(crate::api::app_icon::save(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                now,
+            )),
             (RequestMethod::Post, path)
                 if path.starts_with("/api/providers/") && path.ends_with("/quota") =>
             {

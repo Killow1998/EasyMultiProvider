@@ -1,13 +1,20 @@
 """Separate production UI instances with synthetic auth and loopback-only migration."""
 import json
 import shutil
+import threading
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from candidate_web import candidate_frontend
+from decision_fixture import DecisionUpstream
 from local_backend import request, start_backend
 
 HERE=Path(__file__).resolve().parent
 
 def start(stack,binary,root,return_url):
+    upstream=ThreadingHTTPServer(('127.0.0.1',0),DecisionUpstream)
+    stack.callback(upstream.server_close)
+    threading.Thread(target=upstream.serve_forever,daemon=True).start()
+    stack.callback(upstream.shutdown)
     bin_dir=root/'bin';bin_dir.mkdir(mode=0o700)
     shutil.copy(HERE/'fixtures/device-codex.py',bin_dir/'codex');(bin_dir/'codex').chmod(0o700)
     (bin_dir/'login-control').write_text('auto')
@@ -15,7 +22,7 @@ def start(stack,binary,root,return_url):
     for name in ['sender','receiver']:
         directory=root/name;directory.mkdir()
         config={'auto_enable_on_start':False,'providers':[{'id':'example','name':'Example API',
-            'base_url':'http://127.0.0.1:9/v1','protocol':'responses','auth_mode':'api_key','api_key':'example-only'}],
+            'base_url':f'http://127.0.0.1:{upstream.server_port}/v1','protocol':'responses','auth_mode':'api_key','api_key':'example-only'}],
             'models':[{'id':'example/model','provider':'example','upstream_id':'example-model','context_window':100000}]}
         if name=='receiver':config={'auto_enable_on_start':False}
         base,_,_,headers=start_backend(stack,binary,directory,config,{

@@ -2,13 +2,13 @@
 function createUsageValues({tr,esc,number}) {
   const count=(row,field,coverage,html=true)=>{
     if (!row[coverage]) return '—';
-    const value=number(row[field]);
-    if (row[coverage]>=row.requests) return value;
-    const help=coverage.startsWith('cache') ? tr('reports.bill_partial_cache') : tr('reports.bill_missing_usage',{count:number(row.requests-row[coverage])});
-    return html ? `<span title="${esc(help)}">${value} *</span>` : `${value} *`;
+    const partial=row[coverage]<row.requests;
+    const help=!partial ? '' : coverage.startsWith('cache') ? tr('reports.bill_partial_cache') : tr('reports.bill_missing_usage',{count:number(row.requests-row[coverage])});
+    const value=compactUsage(row[field],false,help);
+    return (html ? value.html : value.text)+(partial?' *':'');
   };
-  const tokens=row=>row.input_reports || row.output_reports ? number(row.input_tokens+row.output_tokens)+(row.reported_requests<row.requests?' *':'') : '—';
-  const usd=row=>row.priced_requests && row.requests>(row.unpriced_requests || 0) ? 'US$'+(row.cost_nanos/1e9).toFixed(4)+(row.unpriced_requests?' *':'') : '—';
+  const tokens=(row,html=true)=>row.input_reports || row.output_reports ? compactUsage(row.input_tokens+row.output_tokens)[html?'html':'text']+(row.reported_requests<row.requests?' *':'') : '—';
+  const usd=(row,html=true)=>row.priced_requests && row.requests>(row.unpriced_requests || 0) ? compactUsage(row.cost_nanos/1e9,true)[html?'html':'text']+(row.unpriced_requests?' *':'') : '—';
   return {count,tokens,usd};
 }
 

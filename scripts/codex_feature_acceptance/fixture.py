@@ -116,6 +116,8 @@ class Fixture:
         self.stack = contextlib.ExitStack()
         self.home = root/'codex'
         self.home.mkdir(parents=True)
+        self.codex_version = subprocess.check_output([str(codex), '--version'], text=True,
+            env={'PATH':os.environ['PATH'], 'HOME':str(self.home), 'CODEX_HOME':str(self.home)}).strip().split()[-1]
         self.evidence.mkdir(parents=True, exist_ok=True)
         self.upstream = ThreadingHTTPServer(('127.0.0.1', 0), Upstream)
         self.upstream.daemon_threads = True
@@ -157,7 +159,7 @@ class Fixture:
         backend.mkdir()
         self.base, _, _, self.headers = start_backend(self.stack, emp, backend, config,
                                       {**LOOPBACK_ENV, 'CODEX_HOME':str(self.home)})
-        status, self.catalog = request(self.base+'/v1/models?client_version=0.165.0', headers=self.headers)
+        status, self.catalog = request(self.base+'/v1/models?client_version='+self.codex_version, headers=self.headers)
         assert status == 200, self.catalog
         template = next(entry for entry in self.catalog['models'] if entry['slug'] == 'responses/probe')
         external = [entry for entry in self.catalog['models'] if '/' in entry['slug']]

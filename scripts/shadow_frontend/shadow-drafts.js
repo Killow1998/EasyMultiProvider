@@ -107,6 +107,17 @@ window.fetch = async function(path, options = {}) {
     if(!result.ok)return result;
     const preview=await result.json();shadowSave({...state,...preview.config});return shadowReply({status:'ok'});
   }
+  if (route === '/api/app-icon') {
+    const png=payload.png?'data:image/png;base64,'+payload.png:'/assets/emp-icon.png';
+    const app_icon={preset:payload.preset,monochrome:payload.monochrome,version:'preview-'+crypto.randomUUID(),image_url:png,source_url:payload.original_png?'data:image/png;base64,'+payload.original_png:png};
+    shadowSave({...state,app_icon});
+    return shadowReply({app_icon,preview:true,launcher_updated:false});
+  }
+  const balance = route.match(/^\/api\/providers\/([^/]+)\/balance$/);
+  if (balance && state.provider_balances?.[decodeURIComponent(balance[1])]?.preview) {
+    const entry=state.provider_balances[decodeURIComponent(balance[1])];
+    return shadowReply({identity:entry.identity,observation:entry.observation});
+  }
   if (route === '/api/config') {
     for (const provider of payload.providers || []) if (provider.api_key) provider.api_key_set = true;
     const live = await shadowRead('/api/config',options);

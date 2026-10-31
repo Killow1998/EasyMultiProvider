@@ -1,4 +1,5 @@
 pub(crate) mod accounts;
+pub(crate) mod app_icon;
 pub(crate) mod catalog;
 pub(crate) mod compact;
 pub(crate) mod decisions;
@@ -8,6 +9,7 @@ pub(crate) mod integration;
 pub(crate) mod lifecycle;
 pub(crate) mod migration;
 pub(crate) mod native_login;
+pub(crate) mod provider_balance;
 pub(crate) mod provider_quota;
 pub(crate) mod quota;
 pub(crate) mod realtime;

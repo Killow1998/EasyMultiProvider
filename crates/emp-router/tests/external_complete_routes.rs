@@ -177,7 +177,7 @@ fn serve(
                 "choices": [{
                     "index": 0,
                     "message": {
-                        "role": "assistant", "reasoning_content": "think",
+                        "role": "assistant", "reasoning_content": "private chain",
                         "content": "answer",
                         "tool_calls": [{
                             "id": "call_chat", "type": "function",
@@ -195,6 +195,7 @@ fn serve(
             json!({
                 "id": "anthropic_upstream", "type": "message", "model": "upstream",
                 "content": [
+                    {"type": "thinking", "thinking": "private chain", "signature": "signature"},
                     {"type": "text", "text": "answer"},
                     {"type": "tool_use", "id": "call_anthropic", "name": "lookup", "input": {"q": "x"}}
                 ],
@@ -377,11 +378,10 @@ async fn each_protocol_reaches_its_own_endpoint_with_its_own_credentials() {
         assert_eq!(result.content_type, "application/json");
         assert_eq!(result.body["output_text"], "answer");
         assert_eq!(terminal(&result.body)["success"], true);
+        assert!(!result.body.to_string().contains("private chain"));
     }
-    // Tool calls and reasoning stay out of the answer text but remain visible
-    // as output items: reasoning, message, function_call.
-    assert_eq!(chat.body["output"].as_array().unwrap().len(), 3);
-    assert_eq!(chat.body["output"][2]["type"], "function_call");
+    assert_eq!(chat.body["output"].as_array().unwrap().len(), 2);
+    assert_eq!(chat.body["output"][1]["type"], "function_call");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -481,6 +481,7 @@ async fn anthropic_passthrough_preserves_cli_body_and_raw_response() {
     let expected_response = json!({
         "id":"anthropic_upstream", "type":"message", "model":"upstream",
         "content":[
+            {"type":"thinking","thinking":"private chain","signature":"signature"},
             {"type":"text","text":"answer"},
             {"type":"tool_use","id":"call_anthropic","name":"lookup","input":{"q":"x"}}
         ],

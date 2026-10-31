@@ -1,0 +1,14 @@
+.app-icon-heading{display:flex;align-items:center;gap:16px;margin-bottom:20px}
+.app-icon-heading img{object-fit:contain;flex:none}
+.app-icon-heading p{margin:6px 0 0;max-width:46ch}
+.app-icon-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:10px}
+.app-icon-grid .app-icon-choice{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:94px;height:auto;margin:0;padding:12px 8px;white-space:normal;line-height:1.35}
+.app-icon-choice img{object-fit:contain}
+.app-icon-choice[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--panel))}
+.app-icon-upload{display:grid;place-items:center;width:36px;height:36px;font-size:28px;color:var(--muted)}
+.app-icon-options{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:20px}
+.app-icon-neutral{filter:none}
+#app_icon_preview[data-monochrome="true"]{filter:brightness(0)}
+html[data-theme="dark"] .app-icon-neutral{filter:invert(1)}
+html[data-theme="dark"] #app_icon_preview[data-monochrome="true"]{filter:brightness(0) invert(1)}
+@media(prefers-color-scheme:dark){html:not([data-theme="light"]) .app-icon-neutral{filter:invert(1)}html:not([data-theme="light"]) #app_icon_preview[data-monochrome="true"]{filter:brightness(0) invert(1)}}

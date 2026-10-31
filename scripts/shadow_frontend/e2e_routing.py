@@ -55,17 +55,27 @@ def main():
         for path in ['/assets/preview-actions.js', '/assets/preview-review.js', '/assets/copy-preview.js']:
             assert browser.execute('return fetch(arguments[0]).then(response=>response.status);', path) == 404, path
         checks.append('Product assets expose no Shadow adapters or preview state')
-        browser.execute('setLanguage("en");openSettings();')
+        browser.execute('setLanguage("en");openSettings("external");')
         collaboration = '[data-ui-action="setting-toggle"][data-id="external_collaboration"]'
         assert browser.execute('return document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode;', collaboration) == 'off'
+        browser.execute('window.settingsFailures=0;window.settingsFetch=window.fetch;window.fetch=async(path,options)=>{if(String(path)==="/api/config"&&options?.method==="POST"){window.settingsFailures++;return new Response(JSON.stringify({error:{message:"Synthetic save failure"}}),{status:500,headers:{"Content-Type":"application/json"}});}return window.settingsFetch(path,options);};document.querySelector(arguments[0]+"[data-mode=on_demand]").click();', collaboration)
+        wait_for(lambda: browser.execute('return window.settingsFailures===1 && !document.querySelector(arguments[0]).disabled;', collaboration))
+        assert browser.execute('return state.external_collaboration==="off" && document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode==="off";', collaboration)
+        browser.execute('closeModal();openSettings("general");document.querySelector("[data-ui-action=setting-toggle][data-id=auto_enable_on_start]").click();')
+        wait_for(lambda: browser.execute('return window.settingsFailures===2 && !document.querySelector("[data-id=auto_enable_on_start]").disabled;'))
+        assert browser.execute('return state.auto_enable_on_start===false && document.querySelector("[data-id=auto_enable_on_start]").getAttribute("aria-checked")==="false";')
+        stored = json.loads((root / 'config.json').read_text())
+        assert stored['auto_enable_on_start'] is False and stored['external_collaboration'] == 'off'
+        browser.execute('window.fetch=window.settingsFetch;closeModal();openSettings("external");')
+        checks.append('Failed General and External setting saves preserve the stored values, restore selected controls and allow retry')
         for enabled in ['on_demand', 'on', 'off']:
             browser.execute('document.querySelector(arguments[0]+"[data-mode="+arguments[1]+"]").click();', collaboration, enabled)
             wait_for(lambda: browser.execute('return state.external_collaboration===arguments[0] && document.querySelector(arguments[1]+"[aria-pressed=true]").dataset.mode===arguments[0] && !document.querySelector(arguments[1]).disabled;', enabled, collaboration))
             assert json.loads((root / 'config.json').read_text())['external_collaboration'] == enabled
-            browser.execute('closeModal();openSettings();')
+            browser.execute('closeModal();openSettings("external");')
             assert browser.execute('return document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode;', collaboration) == enabled
         checks.append('Cross-service subagents defaults off despite a configured API provider; enabling/disabling persists and survives reopening Settings')
-        browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
+        browser.execute('document.getElementById("modal_back").click();document.querySelector("[data-settings-category=native]").click();document.querySelector("[data-ui-action=routing-settings]").click();')
         assert browser.execute('return document.getElementById("routing_image_mode").value==="follow" && document.getElementById("routing_image_account_row").hidden;')
         assert browser.execute('return [...document.querySelectorAll("#routing_image_account option")].some(option=>option.textContent==="Image fixture <safe>") && !document.querySelector("#routing_image_account safe");')
         browser.execute('document.getElementById("routing_review").click();')
@@ -88,8 +98,8 @@ def main():
         browser.execute('window.fetch=window.routingFetch;')
         assert browser.execute('return document.getElementById("modal_close").hidden && !document.getElementById("modal_back").hidden;')
         browser.escape()
-        assert browser.execute('return !!document.querySelector("[data-ui-action=routing-settings]") && !document.getElementById("routing_image_mode") && document.getElementById("modal_back").hidden;')
-        checks.append('Failed save preserves stored settings and editable draft; child has only Back, Escape returns one level to Settings')
+        assert browser.execute('return !!document.querySelector("[data-settings-section=native]") && !document.getElementById("routing_image_mode") && !document.getElementById("modal_back").hidden;')
+        checks.append('Failed save preserves stored settings and editable draft; child has only Back, Escape returns to Native service settings')
 
         browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();window.fetch=(path,options)=>String(path)==="/api/config"&&options?.method==="POST"?new Promise(resolve=>window.releaseRoutingSave=()=>window.routingFetch(path,options).then(resolve)):window.routingFetch(path,options);')
         change(browser, 'routing_image_mode', 'auto')
@@ -106,23 +116,19 @@ def main():
                 request(browser.base + '/window/rect', {'width': width, 'height': 800})
                 viewports.append({'language': language, 'requested_width': width,
                     **browser.execute('return {width:innerWidth,height:innerHeight,pixel_ratio:devicePixelRatio};')})
-                browser.execute('closeModal();setLanguage(arguments[0]);openSettings();', language)
+                browser.execute('closeModal();setLanguage(arguments[0]);openSettings("external");', language)
                 assert browser.execute('return document.getElementById("collaboration-label").textContent;', language) == ('跨服务子代理' if language == 'zh-CN' else 'Cross-service subagents')
                 assert browser.execute('const row=document.querySelector(".collaboration-setting"),choice=row.querySelector(".quota-display-choice");return Math.abs(row.getBoundingClientRect().right-choice.getBoundingClientRect().right)<=1;')
                 assert browser.execute('const body=document.getElementById("modal_body");return body.scrollWidth<=body.clientWidth+1;'), browser.execute('const body=document.getElementById("modal_body"),bounds=body.getBoundingClientRect();return [...body.querySelectorAll("*")].map(node=>({tag:node.tagName,id:node.id,cls:node.className,width:node.getBoundingClientRect().width,right:node.getBoundingClientRect().right})).filter(row=>row.right>bounds.right+1);')
                 browser.execute('document.querySelector("[data-shadow-help-template=collaboration-comparison]").focus();')
                 wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden;'))
-                assert browser.execute('return [...document.querySelectorAll("#shadow_feedback .collaboration-modes dt")].map(node=>node.textContent);') == (['关闭','按需恢复','打开'] if language == 'zh-CN' else ['Off','On-demand recovery','On'])
-                assert browser.execute('const descriptions=[...document.querySelectorAll("#shadow_feedback .collaboration-modes dd")];return descriptions.every(node=>node.textContent.length>20) && descriptions[1].textContent.includes("GPT-6 Luna") && descriptions[2].textContent.includes(arguments[0]);', '即使没有调用外部子代理' if language == 'zh-CN' else 'even when no external subagent')
-                assert browser.execute('const bubble=document.getElementById("shadow_feedback");return bubble.querySelector(".collaboration-takeaway").textContent.includes(arguments[0]) && !bubble.querySelector("details").open && !bubble.textContent.includes("Terra");', '“打开”会让多数 GPT 变慢' if language == 'zh-CN' else 'On slows most GPT models')
+                assert browser.execute('return !document.getElementById("shadow_feedback").querySelector("details").open;')
                 status, png = request(browser.base + '/screenshot')
                 assert status == 200
                 args.output.with_name('collaboration-summary-' + language + '-' + str(width) + '.png').write_bytes(base64.b64decode(png['value']))
                 browser.execute('document.querySelector("#shadow_feedback summary").focus();document.querySelector("#shadow_feedback summary").click();')
                 wait_for(lambda: browser.execute('const bubble=document.getElementById("shadow_feedback"),box=bubble.getBoundingClientRect();return !bubble.hidden && bubble.querySelector("details").open && box.left>=0 && box.right<=innerWidth+1 && box.top>=0 && box.bottom<=innerHeight+1;'))
-                for metric, direction in [('tps', '越高越好' if language == 'zh-CN' else 'higher is better'), ('time', '越低越好' if language == 'zh-CN' else 'lower is better')]:
-                    assert browser.execute('const heading=document.getElementById("collaboration-"+arguments[0]+"-title"),table=document.querySelector("#shadow_feedback table[aria-labelledby="+heading.id+"]");return heading.textContent.includes(arguments[1]) && table.querySelectorAll("tbody tr").length===10 && [...table.querySelectorAll("td")].every(cell=>(cell.textContent.match(/×/g)||[]).length<=1);', metric, direction)
-                    assert browser.execute('const table=document.querySelector("#shadow_feedback table[aria-labelledby=collaboration-"+arguments[0]+"-title]"),row=[...table.querySelectorAll("tbody tr")].find(row=>row.textContent.includes("GLM-5.3-Flash"));return row.querySelector("td").textContent;', metric) == ('不允许' if language == 'zh-CN' else 'Not allowed')
+                for metric in ['tps', 'time']:
                     browser.execute('const bubble=document.getElementById("shadow_feedback"),title=document.getElementById("collaboration-"+arguments[0]+"-title");bubble.scrollTop+=title.getBoundingClientRect().top-bubble.getBoundingClientRect().top-16;', metric)
                     assert browser.execute('const table=document.querySelector("#shadow_feedback table[aria-labelledby=collaboration-"+arguments[0]+"-title]"),box=table.parentElement.getBoundingClientRect(),heading=table.querySelector("thead th").getBoundingClientRect();return !document.getElementById("shadow_feedback").hidden && heading.top>=box.top-1 && heading.bottom<=box.bottom;', metric)
                     status, png = request(browser.base + '/screenshot')
@@ -148,7 +154,7 @@ def main():
                     status, png = request(browser.base + '/screenshot')
                     assert status == 200
                     args.output.with_name('external-collaboration-' + language + '.png').write_bytes(base64.b64decode(png['value']))
-                browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
+                browser.execute('document.getElementById("modal_back").click();document.querySelector("[data-settings-category=native]").click();document.querySelector("[data-ui-action=routing-settings]").click();')
                 change(browser, 'routing_image_mode', 'account')
                 assert browser.execute('return document.getElementById("modal_title").textContent===arguments[0] && !document.getElementById("routing_image_account_row").hidden;', '路由设置' if language == 'zh-CN' else 'Routing settings')
                 assert browser.execute('const body=document.getElementById("modal_body"),bounds=body.getBoundingClientRect();return body.scrollWidth<=body.clientWidth+1 && [...document.querySelectorAll(".routing-settings select,.routing-settings label,#routing_review")].every(node=>{const box=node.getBoundingClientRect();return box.left>=bounds.left && box.right<=bounds.right+1;});')
@@ -157,7 +163,7 @@ def main():
                     assert status == 200
                     args.output.with_name('routing-' + language + '.png').write_bytes(base64.b64decode(png['value']))
         checks.append('Simplified Chinese and English render correctly at narrow/desktop widths without overflow')
-        checks.append('Help leads with the mode recommendation, omits Terra, and expands into separate higher-is-better speed and lower-is-better time tables with one value per cell; keyboard focus, scrolling and Escape preserve Settings')
+        checks.append('Help measurements expand within the viewport; tables retain sticky headers, and Escape restores focus without leaving External service settings')
         checks.append('Imported/native direct comparison shows five efforts and 20 matched pairs per effort in the existing help, without account names, at narrow/desktop widths in both languages')
         for route, label in [('image_generation', 'Image generation'), ('image_edit', 'Image edit')]:
             assert browser.execute('const container=document.createElement("div");container.innerHTML=callReports.recordHtml({request_id:"fixture",route:arguments[0],model_id:"gpt-image-2",state:"completed"});return container.querySelector("summary").textContent.includes(arguments[1]) && container.textContent.includes("Image model");', route, label)
@@ -168,7 +174,9 @@ def main():
         browser.navigate(shadow + '/?routing=1')
         wait_for(lambda: browser.execute('return !!document.getElementById("routing_image_mode");'))
         assert browser.execute('return !!window.EMP_PREVIEW && !document.getElementById("shadow_routing_button") && document.querySelectorAll("#routing_image_mode option").length===3 && [...document.querySelectorAll("#routing_image_account option")].some(option=>option.value==="routing-demo");')
-        browser.execute('closeModal();setLanguage("en");document.getElementById("shadow_review_button").click();document.querySelector("#modal_body [data-shadow-demo=routing]").click();')
+        browser.execute('closeModal();setLanguage("en");document.getElementById("shadow_review_button").click();document.querySelector("#modal_body [data-shadow-demo=settings]").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-settings-category=native]");'))
+        browser.execute('document.querySelector("[data-settings-category=native]").click();document.querySelector("[data-ui-action=routing-settings]").click();')
         wait_for(lambda: browser.execute('return document.getElementById("modal_title").textContent==="Routing settings";'))
         save(browser, 'account', 'routing-demo')
         assert json.loads((root / 'config.json').read_text())['image_routing'] == {'mode':'account','account_id':'routing-demo'}

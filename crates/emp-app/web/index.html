@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EMP</title>
+<link id="app_favicon" rel="icon" type="image/png" href="/assets/app-icon.png">
+<link rel="stylesheet" href="/assets/app-icon.css">
 <link rel="stylesheet" href="/assets/style.css">
 <link rel="stylesheet" href="/assets/service-list.css">
 <link rel="stylesheet" href="/assets/tutorials.css">
@@ -101,7 +103,6 @@
 <div id="modal_backdrop" class="modal-backdrop hidden">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal_title">
     <div class="modal-header"><h2 id="modal_title"></h2><div class="modal-navigation"><button id="modal_back" type="button" class="secondary modal-back" data-icon="restore" hidden></button><button id="modal_close" type="button" class="modal-close" data-i18n-aria-label="core.close" onclick="closeModal()">&times;</button></div></div>
-    <div id="service_detail_nav" hidden></div>
     <div id="modal_body" class="modal-body"></div>
     <div id="modal_status" class="modal-status" role="alert" aria-live="polite"></div>
     <div class="modal-actions"><button id="modal_submit" data-icon="check"></button></div>
@@ -114,7 +115,8 @@
 <script src="/assets/copy-notifications.js"></script><script src="/assets/notifications.js"></script>
 <script src="/assets/copy-models.js"></script><script src="/assets/copy-reports.js"></script><script src="/assets/copy-transfers.js"></script>
 <script src="/assets/service-icons.js"></script><script src="/assets/brand-colors.js"></script>
-<script src="/assets/service-list.js"></script>
+<script src="/assets/app-icon.js"></script>
+<script src="/assets/provider-balances.js"></script><script src="/assets/service-list.js"></script>
 <script src="/assets/service-usage.js"></script>
 <script src="/assets/release-notes.js"></script><script src="/assets/updates.js"></script><script src="/assets/model-editor.js"></script>
 
@@ -124,7 +126,7 @@
 <script src="/assets/management-client.js"></script>
 <script src="/assets/management-events.js"></script>
 <script src="/assets/quota-display.js"></script>
-<script src="/assets/context-help.js"></script><script src="/assets/settings.js"></script>
+<script src="/assets/context-help.js"></script><script src="/assets/decision-settings.js"></script><script src="/assets/settings.js"></script>
 <script src="/assets/collaboration-comparison.js"></script>
 <script src="/assets/routing-settings.js"></script>
 <script src="/assets/ultra-settings.js"></script>
@@ -159,7 +161,7 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const management = createManagementClient({tr, fetch: (...args) => fetch(...args), storage:() => localStorage, window});
 const {request:api, fetch:managementFetch, establish:establishSession, errorText:upstreamErrorText} = management;
-const managementEvents = createManagementEvents({management,visible:()=>!management.isStopped(),onEvent:processManagementEvent,
+const managementEvents = createManagementEvents({management,visible:()=>!management.isStopped(),onEvent:(type,data)=>processManagementEvent(type,data),
   onStart:()=>{updateActivityDots();rescheduleActivityExpiry();void accountDetails.refresh();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
 const contextHelp = createContextHelp({getState:() => state, tr});
@@ -167,7 +169,7 @@ const routingSettings = createRoutingSettings({getState:() => state, cloneState,
 const ultraSettings = createUltraSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
 const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
 const tutorials = createTutorials({openModal, $, tr, esc});
-const settings = createSettings({api, notice, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, help:shadowHelp, contextHelp, presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
+const settings = createSettings({api, notice, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, help:shadowHelp, contextHelp, openAppIcon:back=>appIcon.open(back), presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
 const {open:openSettings, toggle:toggleSetting} = settings;
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});
@@ -214,14 +216,16 @@ const officialProviders = {
   zhipu: {id:'zhipu-glm', name:'Zhipu/GLM', base_url:'https://api.z.ai/api/paas/v4', protocol:'chat_completions', auth_mode:'api_key', hint:'GLM OpenAI-compatible API'}
 };
 
-const serviceUsage = createServiceUsage({renderLifetime:renderLifetimeUsage,esc, tr, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), money:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN', {style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4}).format(value/1e9), dateTime:utcDateTimeText});
+const serviceUsage = createServiceUsage({renderLifetime:renderLifetimeUsage,esc, tr, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), dateTime:utcDateTimeText});
 const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, getLanguage:() => language, persistState, openModal, serviceUsage, callReports, eventsConnected:() => managementEvents.connected(), periods:{periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg}});
 const {open:openUsage} = usageReport;
+const appIcon=createAppIcon({getState:()=>state,api,openModal,$,esc,tr,notice,presets:officialProviders});
+const providerBalances = createProviderBalances({getState:()=>state,api,esc,tr,notice,render:()=>renderServices()});
 const services = createServiceList({
   getState:() => state, $, esc, tr, presets:officialProviders, icon:serviceIconHtml,
   activity:activityIndicatorHtml, serviceIcon:(...args)=>serviceActivityIcon(...args), updateServiceErrors:()=>{presentationUpdateServiceRequestErrors();presentationUpdateServiceErrorLabels();}, accountSummary:accountSummaryHtml, quotaMeters:(...args)=>presentationQuotaMeters(...args),
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots:() => updateActivityDots(), openModal, api,
-  notice, usageSummary:serviceUsage, onMount:mountServiceActions,settingsConflict:account=>subscriptionPreferenceConflicts(state,account)
+  notice, balances:providerBalances, usageSummary:serviceUsage, onMount:mountServiceActions,settingsConflict:account=>subscriptionPreferenceConflicts(state,account)
 });
 const {render:renderServices, details:openProviderDetails} = services;
 const accountDetails = createAccountDetails({renderInfo:renderAccountInfo,getState:() => state, $, tr, esc, api, services, serviceUsage, persistState, uiIcon,
@@ -461,6 +465,8 @@ function openCatalogDisplayEditor(family) {
 }
 
 function fill() {
+  appIcon.apply();
+  providerBalances.sync();
   drawLogo(); enhanceLogo($('emp_logo')); presentationSyncMotion(); applyTranslations(); if (updates.info()) renderUpdateHint(updates.info()); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderCatalogDisplay(); renderServices();  updateActivityDots();
 }
 async function load() {
@@ -1091,10 +1097,12 @@ async function refreshAllAccounts() {
   const accounts = services.accounts().filter(account=>account.credential_set);
   // Local Claude providers share the same OS login, so query that subscription once.
   const claude = (state.providers || []).find(p => p.execution_backend === 'claude_cli' && p.auth_mode === 'claude_login');
-  if (!accounts.length && !claude) return notice(tr("core.no_refreshable_services"), true);
+  const balances=(state.providers || []).filter(provider=>providerBalances.canRefresh(provider.id));
+  if (!accounts.length && !claude && !balances.length) return notice(tr("core.no_refreshable_services"), true);
   const button = $('refresh_all'); button.disabled = true;
   try {
     const jobs = accounts.map(a => refreshAccount(a.id, false));
+    jobs.push(...balances.map(provider=>providerBalances.refresh(provider.id,false)));
     if (claude) jobs.push(services.refresh(claude.id, false));
     const results = await Promise.all(jobs), failed = results.filter(success => !success).length;
     notice(failed ? tr("core.refresh_complete_succeeded_failed", {count:results.length - failed, failed:failed}) : tr("core.all_service_quotas_refreshed"), Boolean(failed));
@@ -1156,7 +1164,7 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
   modalNavigation = {back, reopen:navigation.reopen, service:serviceContext};
   if (serviceContext) modalNavigation.reopen = () => restoreServiceModal(serviceContext, {back});
   const backButton = $('modal_back');
-  backButton.hidden = !back; backButton.onclick = back || null;
+  backButton.hidden = !back; backButton.onclick = back ? () => back() : null;
   backButton.title = backButton.ariaLabel = tr("reports.back_to_previous_dialog");
   const closeButton = $('modal_close');
   closeButton.hidden = Boolean(back);
@@ -1216,11 +1224,10 @@ function runDynamicUiAction(element) {
       $('modal_body').querySelectorAll('[data-ui-action="quota-display"]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.mode === quotaDisplay.mode())));
       return true;
     case 'setting-toggle': toggleSetting(element); return true;
-    case 'routing-settings': routingSettings.open({back:openSettings}); return true;
-    case 'ultra-settings': ultraSettings.open({back:openSettings}); return true;
+    case 'routing-settings': routingSettings.open({back:modalReturn()}); return true;
+    case 'ultra-settings': ultraSettings.open({back:modalReturn()}); return true;
     case 'native-login': nativeLogin.manage(); return true;
     case 'account-details': if(id==='@native'&&state.native_account?.auth_mode&&state.native_account.auth_mode!=='subscription')nativeLogin.manage();else openAccountDetails(id); return true;
-    case 'native-use-local-key': nativeLogin.openLocalKey({back:modalReturn()}); return true;
     case 'account-alias-save': saveAccountAlias(element); return true;
     case 'account-remove': removeAccount(id, element); return true;
     case 'account-edit': editAccount(id); return true;
@@ -1232,10 +1239,11 @@ function runDynamicUiAction(element) {
     case 'period-refresh': refreshPeriod(id); return true;
     case 'period-edit': editPeriod(id); return true;
     case 'provider-quota-refresh': services.refresh(id); return true;
+    case 'provider-balance-refresh': providerBalances.refresh(id); return true;
     case 'provider-quota-history': openQuotaHistory(id, 'providers'); return true;
     case 'provider-model-settings': providerModelSettings.open(id); return true;
     case 'provider-add-model': openManualModelModal('', id, {back:modalReturn()}); return true;
-    case 'provider-edit': editProvider(id); return true;
+    case 'provider-edit': editProvider(id,{back:modalReturn()}); return true;
     case 'provider-details': openProviderDetails(id); return true;
     case 'account-import-device': nativeLogin.open({importing:true,back:modalReturn()}); return true;
     case 'account-import-auth': codexAccountImport.open(); return true;

@@ -63,7 +63,9 @@ pub(crate) fn management_request(
         );
     }
     let metadata = request.raw_path() == "/api/models/metadata";
-    let result = if metadata {
+    let result = if request.raw_path() == "/api/decisions/models" {
+        crate::services::catalog::discovery::decisions(state, &body)
+    } else if metadata {
         crate::services::catalog::discovery::metadata(request.observation_id, state, &body)
     } else {
         crate::services::catalog::discovery::discover(request.observation_id, state, &body)
@@ -180,7 +182,12 @@ pub(crate) fn read_management_request(request: Request<'_>, state: &ServerState)
     };
     if request.raw_path() == "/api/config" {
         return match crate::services::catalog::public_configuration(state, &config) {
-            Ok(public) => json_response(&public),
+            Ok(mut public) => {
+                public["provider_balances"] =
+                    crate::services::provider_balance::snapshot(state, &config);
+                public["app_icon"] = state.backend.app_icon.snapshot().metadata();
+                json_response(&public)
+            }
             Err(_) => internal_error(),
         };
     }

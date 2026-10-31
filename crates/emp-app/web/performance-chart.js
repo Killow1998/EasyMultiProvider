@@ -2,11 +2,11 @@
 function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
   const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
   const label = metric => metric === 'tokens' ? 'Token' : metric === 'cost_nanos' ? tr("reports.api_estimate_usd") : metric === 'calls' ? tr("reports.calls_3") : metric === 'ttft_ms' ? 'TTFT' : 'TPS';
-  const format = (value, metric) => !valid(value) ? '—' : metric === 'cost_nanos' ? 'US$'+(value/1e9).toFixed(4) : metric === 'tokens' ? number(value) : metric === 'calls' ? number(value) : metric === 'ttft_ms' ? seconds(value) : tps(value);
+  const format = (value, metric) => !valid(value) ? '—' : metric === 'cost_nanos' ? compactUsage(value/1e9,true).title : metric === 'tokens' ? number(value) : metric === 'calls' ? number(value) : metric === 'ttft_ms' ? seconds(value) : tps(value);
   const date = value => new Date(value*1000).toLocaleString(getLanguage() === 'en' ? 'en-US' : 'zh-CN', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
   function buckets(report) {
-    const span = Math.max(1,report.end-report.start), step = Math.max(60,span/48);
-    const count = Math.max(Math.ceil(span/step), ...(report.periods || []).map(row => Math.round((row.start-report.start)/step)+1));
+    const span = report.end-report.start, step = report.bucket;
+    const count = Math.ceil(span/step);
     const rows = Array.from({length:count}, (_,i) => ({start:report.start+i*step,calls:0,tokens:0,cost_nanos:0,ttft_ms:null,tokens_per_second:null,ttft_samples:0,tps_samples:0}));
     for (const row of report.periods || []) {
       const i = Math.round((row.start-report.start)/step);
@@ -32,7 +32,7 @@ function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
   }
   function html(report, metric) {
     const {step} = buckets(report);
-    const interval = step >= 3600 ? `${+(step/3600).toFixed(1)} ${tr("reports.h")}` : `${+(step/60).toFixed(1)} ${tr("reports.min")}`;
+    const interval = step >= 86400 ? `${+(step/86400).toFixed(1)} ${tr("reports.day")}` : step >= 3600 ? `${+(step/3600).toFixed(1)} ${tr("reports.h")}` : `${+(step/60).toFixed(1)} ${tr("reports.min")}`;
     const buttons = [['calls',tr("reports.calls_3")],['tokens_per_second','TPS'],['ttft_ms','TTFT']].map(([key,title]) => `<button type="button" class="secondary${metric === key ? ' active' : ''}" aria-pressed="${metric === key}" data-call-metric="${key}">${title}</button>`).join('');
     return `<div class="presentation-performance-chart"><div class="presentation-chart-heading"><div><h3>${tr("reports.call_activity")}</h3><p>${tr("reports.per")} ${esc(interval)} · ${esc(date(report.start))} — ${esc(date(report.end))}</p></div><div class="report-tabs" role="group" aria-label="${tr("reports.metric")}">${buttons}</div></div><div class="presentation-chart-canvas" tabindex="0" role="group" aria-label="${esc(label(metric))} · ${tr("reports.use_left_and_right_arrows_to_inspect_data")}"><svg class="presentation-time-chart" role="img" aria-label="${esc(label(metric))}"></svg><div class="presentation-chart-tooltip" hidden role="status" aria-live="polite"></div></div></div>`;
   }
@@ -72,8 +72,8 @@ function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
       width = nextWidth; svg.setAttribute('viewBox',`0 0 ${width} 224`);
       const axis = Array.from({length:5}, (_,i) => {
         const value = ceiling*i/4, position = y(value);
-        const text = metric === 'cost_nanos' ? '$'+(value/1e9).toLocaleString(undefined,{maximumFractionDigits:3}) : metric === 'ttft_ms' ? `${+(value/1000).toFixed(2)}s` : new Intl.NumberFormat(getLanguage() === 'en' ? 'en-US' : 'zh-CN',{notation:'compact',maximumFractionDigits:1}).format(value);
-        return `<line class="presentation-chart-grid" x1="${left}" x2="${width-14}" y1="${position}" y2="${position}"/><text x="${left-8}" y="${position+4}" text-anchor="end">${esc(text)}</text>`;
+        const text = metric === 'cost_nanos' ? compactUsage(value/1e9,true).text : metric === 'ttft_ms' ? `${+(value/1000).toFixed(2)}s` : shadowCompactNumber(value);
+        return `<line class="presentation-chart-grid" x1="${left}" x2="${width-14}" y1="${position}" y2="${position}"/><text x="${left-8}" y="${position+4}" text-anchor="end">${esc(text)}<title>${esc(format(value,metric))}</title></text>`;
       }).join('');
       const ticks = timeAxisTicks(report.start,report.end,Math.max(2,Math.floor(plotWidth()/105))).map(tick => {
         const position = left+(tick.at-report.start)/(report.end-report.start || 1)*plotWidth();

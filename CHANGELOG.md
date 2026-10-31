@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## 0.13.21 (2026-10-31)
+
+### 中文
+
+- 修复切换外部模型时，工具结果含图片导致的 `unsupported tool output` 错误；保留图片、文字顺序和工具调用关系。
+- 统一外部模型的响应过滤，防止 Chat 接口的原始思考内容外显；保留最终回答、工具调用和推理用量统计。
+- 简化服务操作与账号信息页：登录切换、刷新、趋势和模型设置使用统一图标；重置与移除放在账号行右侧。
+- 额度趋势增加近 15 天，日期范围与额度窗口并排显示。
+- 设置按通用、外部服务、原生服务分组；新增决策模型配置，支持选择服务、接口与模型。
+- 模型能力资料扩展至 123 条，补齐图像能力并更新旧缓存；保留用户已配置的上下文、输出限制和推理强度。
+- 跟进 Codex 0.166 的工具历史、记忆与用量协议，维护范围更新为最近五个正式系列 0.162–0.166。
+- 为 DeepSeek、Moonshot 与 OpenRouter 提供余额或 Key 预算显示，为其他官方服务提供账单入口；补齐 Mercury 图标。
+- 支持切换浏览器、系统匣和应用图标：默认 😎，可选服务商图标、彩色／单色或自定义正方形 SVG。
+- 统计使用 k/m/b 缩写，悬停显示完整数字；调整时间分段，加速查询，并在查询／刷新旁显示实际处理百分比。
+- 精简重复状态与失效的界面模拟测试，补充真实浏览器的保存失败、重试和导航验证。
+
+### English
+
+- Fix `unsupported tool output` when switching to an external model with images in tool results. Preserve media order and tool-call relationships.
+- Apply one output policy to external protocols so raw Chat reasoning does not reach clients. Preserve answers, tool calls and reasoning usage.
+- Simplify service actions and account details with consistent icons. Place reset and remove actions beside the account.
+- Add Last 15 days to quota trends and place date ranges beside quota windows.
+- Group settings into General, External services and Native services. Add decision-model settings for selecting a service, API and model.
+- Expand capability records to 123 models, fill image capabilities and update older caches while retaining saved context, output and reasoning settings.
+- Maintain Codex 0.166 tool history, memory and usage protocols. Track the latest five stable series, 0.162–0.166.
+- Show balances or key budgets for DeepSeek, Moonshot and OpenRouter, link other official billing pages, and add the Mercury icon.
+- Customize browser, tray and application icons with the default 😎, service icons, color or monochrome, or a square SVG.
+- Format statistics with k/m/b abbreviations and exact values on hover. Improve time buckets and query speed, with actual processing percentages beside Query/Refresh.
+- Remove duplicate state and obsolete simulated UI tests. Verify save failures, retries and navigation in a real browser.
+
 ## 0.13.20 (2026-10-30)
 
 ### 中文

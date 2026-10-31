@@ -15,6 +15,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from frontend import frontend
+from candidate_web import forward_stream
 from shadow_migration import MigrationPreview
 from migration_selection import PreviewError
 from shadow_release_notes import ReleaseNotes
@@ -96,14 +97,17 @@ class ShadowHandler(BaseHTTPRequestHandler):
         snapshot = getattr(self.server, 'snapshot', None)
         if path == '/api/shadow/status' and snapshot:
             return self.send(200, snapshot.status())
-        if path == '/api/usage' and snapshot:
+        if path in {'/api/usage','/api/calls'} and snapshot:
             try:
+                if path == '/api/calls' and self.headers.get('Accept') == 'text/event-stream':
+                    with snapshot.stream(self.path) as upstream:
+                        return forward_stream(self, upstream)
                 def source_read(target):
                     from local_backend import request
                     token = json.loads(self.server.state_dir.joinpath('web-session.json').read_text())['token']
                     origin = f'http://127.0.0.1:{self.server.backend_port}'
                     return request(origin+target,headers={'X-EMP-Session':token,'Origin':origin},timeout=30)
-                status, payload = snapshot.usage(self.path, source_read)
+                status, payload = snapshot.usage(self.path, source_read) if path == '/api/usage' else snapshot.read(self.path)
                 return self.send(status, payload)
             except (OSError, ValueError, http.client.HTTPException):
                 return self.error(503, '无法读取候选版账单快照 / Candidate accounting snapshot is unavailable')
@@ -157,16 +161,7 @@ class ShadowHandler(BaseHTTPRequestHandler):
                         if key in candidate:
                             body[key] = candidate[key]
                 return self.send(upstream.status, body, upstream.getheader('Content-Type', 'application/json'))
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/event-stream')
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('X-Content-Type-Options', 'nosniff')
-            self.send_header('Connection', 'close')
-            self.end_headers()
-            self.close_connection = True
-            while line := upstream.readline():
-                self.wfile.write(line)
-                self.wfile.flush()
+            return forward_stream(self, upstream)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except (OSError, ValueError, KeyError, http.client.HTTPException):

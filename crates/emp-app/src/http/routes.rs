@@ -28,6 +28,24 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
     let path = request.raw_path();
     let same_origin = same_origin(request, state.port);
     if request.method == RequestMethod::Get
+        && matches!(path, "/assets/app-icon.png" | "/assets/app-icon-source.png")
+    {
+        if !same_origin {
+            return cross_origin_response("cross-origin Web UI request rejected");
+        }
+        let icon = state.backend.app_icon.snapshot();
+        return response(
+            "HTTP/1.1 200 OK",
+            "image/png",
+            if path.ends_with("-source.png") {
+                &icon.source_png
+            } else {
+                &icon.png
+            },
+            &[("Cache-Control", "no-cache")],
+        );
+    }
+    if request.method == RequestMethod::Get
         && let Some(bytes) = crate::web::asset_response(path)
     {
         return if same_origin {

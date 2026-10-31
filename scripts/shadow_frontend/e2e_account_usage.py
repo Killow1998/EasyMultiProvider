@@ -48,8 +48,7 @@ def main():
         ''')
 
         def click(selector):
-            element = browser.execute('return document.querySelector(arguments[0]);', selector)
-            assert element, selector
+            element = wait_for(lambda: browser.execute('return document.querySelector(arguments[0]);', selector))
             status, result = request(browser.base + '/element/' + element['element-6066-11e4-a52e-4f735466cecf'] + '/click', {})
             assert status == 200, result
 
@@ -62,21 +61,25 @@ def main():
 
         click('[data-ui-action=account-details][data-id=first]')
         count(1)
-        click('#service_detail_nav [data-ui-action=account-edit]')
+        click('#modal_close')
+        click('[data-ui-action=account-edit][data-id=first]')
         wait_for(lambda: browser.execute('return !!document.getElementById("subscription_model_list");'))
-        click('#service_detail_nav [data-ui-action=account-details]')
+        click('#modal_close')
+        click('[data-ui-action=account-details][data-id=first]')
         count(1)
         assert not browser.execute('return fixtureReads[0].signal.aborted;')
         browser.execute('releaseUsage(0,123);')
         tokens(123)
-        click('#service_detail_nav [data-ui-action=account-edit]')
-        click('#service_detail_nav [data-ui-action=account-details]')
+        click('#modal_close')
+        click('[data-ui-action=account-edit][data-id=first]')
+        click('#modal_close')
+        click('[data-ui-action=account-details][data-id=first]')
         tokens(123)
         click('#modal_close')
         click('[data-ui-action=account-details][data-id=first]')
         tokens(123)
         count(1)
-        checks.append('Tab return shares a pending read; completed usage survives model tabs and closing/reopening')
+        checks.append('Details share a pending read and retain completed usage across model settings and reopening')
 
         browser.execute('processManagementEvent("usage-updated", "{}");')
         count(2)
@@ -162,15 +165,15 @@ def main():
             browser.execute('setLanguage(arguments[0]);closeModal();void openAccountDetails("summary");', language)
             rows = browser.execute('return [...document.querySelectorAll("#account_usage tbody tr")].map(row=>[...row.cells].map((cell,index)=>index===3?cell.textContent.replace(/[^0-9.\u2014-]/g,""):cell.textContent));')
             assert len(rows) == 3, rows
-            assert {row[0]:row[1:] for row in rows} == {'same-model':['30','5','12.00'],'free-model':['4','0','0.00'],'<unknown>':['—','—','—']}, rows
+            assert {row[0]:row[1:] for row in rows} == {'same-model':['30','5','12'],'free-model':['4','0','0'],'<unknown>':['—','—','—']}, rows
             assert browser.execute('return document.querySelector("#account_usage footer").textContent.includes("3 / 5") && document.querySelectorAll("#modal_backdrop [data-ui-action=account-remove]").length===1;')
         count(12)
         checks.append('Shipped EN/ZH summaries merge repeated models across tiers, preserve missing versus zero prices and escaped names, reuse cached totals and expose one removal action')
         browser.execute('closeModal();state.native_account={id:"@native",native:true,auth_mode:"subscription",credential_set:true,quota:{rate_limits:{primary:{used_percent:24,window_minutes:300},secondary:{used_percent:90,window_minutes:10080}}}};quotaDisplay.set("remaining");renderServices();')
-        browser.execute('openSettings();document.querySelector("[data-presentation-style=bar]").click();closeModal();')
+        browser.execute('openSettings("general");document.querySelector("[data-presentation-style=bar]").click();closeModal();')
         meter = '[data-service="account:@native"]'
         assert browser.execute('return document.querySelector(arguments[0]+" [aria-valuenow]").getAttribute("aria-valuenow");', meter) == '76'
-        browser.execute('openSettings();document.querySelector("[data-ui-action=quota-display][data-mode=used]").click();closeModal();')
+        browser.execute('openSettings("general");document.querySelector("[data-ui-action=quota-display][data-mode=used]").click();closeModal();')
         assert browser.execute('return localStorage.getItem("emp.quotaDisplay");') == 'used'
         assert browser.execute('return document.querySelector(arguments[0]+" [aria-valuenow]").getAttribute("aria-valuenow");', meter) == '24'
         assert browser.execute('return !!document.querySelector(arguments[0]+" .quota-meter.is-low") && state.native_account.quota.rate_limits.primary.used_percent===24;', meter)

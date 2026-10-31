@@ -451,7 +451,7 @@
       }
     },
     {
-      "name": "vision-claim-can-return-to-unknown",
+      "name": "clearing-vision-claim-restores-published-capabilities",
       "current": {
         "providers": [
           {
@@ -526,9 +526,9 @@
           "text"
         ],
         "/models/0/capability_sources/input_modalities": {
-          "source": "unknown",
-          "confidence": 0.0,
-          "observed_at": null
+          "source": "official",
+          "confidence": 0.95,
+          "observed_at": "2026-10-30"
         }
       }
     },

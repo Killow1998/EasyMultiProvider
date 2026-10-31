@@ -133,6 +133,9 @@ fn strip_terminal_path<'a>(path: &'a str, suffix: &str) -> Option<&'a str> {
 
 fn normalize_provider_path(path: &str) -> String {
     let mut path = path.trim_end_matches('/').to_owned();
+    if let Some(root) = strip_terminal_path(&path, "/alpha/decisions") {
+        return format!("{root}/v1");
+    }
     for suffix in [
         "/responses/compact",
         "/chat/completions",
@@ -140,6 +143,8 @@ fn normalize_provider_path(path: &str) -> String {
         "/responses",
         "/messages",
         "/models",
+        "/decisions",
+        "/systemone",
     ] {
         if let Some(root) = strip_terminal_path(&path, suffix) {
             path.truncate(root.len());

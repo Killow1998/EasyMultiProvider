@@ -618,6 +618,166 @@ fn management_body_limits_reject_oversized_plain_and_gzip_bodies() {
 }
 
 #[test]
+fn discovered_image_capabilities_survive_selection_publication_and_restart() {
+    let upstream = CatalogUpstream::start_with_payload(
+        200,
+        json!({"data":[
+            {"id":"vision", "supports_image_in":true, "supports_video_in":true},
+            {"id":"text-flags", "supports_image_in":false, "supports_video_in":false},
+            {"id":"gpt-5.6-sol", "input_modalities":["text"]},
+            {"id":"gpt-6.1-terra"},
+            {"id":"glm-5.3-flash"},
+            {"id":"glm-5.3"},
+            {"id":"kimi-k3.1-pro"},
+            {"id":"deepseek-flash"},
+            {"id":"deepseek-v4-flash"},
+            {"id":"google/gemini-4-argon"},
+            {"id":"anthropic/claude-opus-5.5"},
+            {"id":"x-ai/grok-4.7"}
+        ]}),
+    );
+    let (directory, server) = catalog_server(&upstream);
+    let root = canonical_root(&directory);
+    let cookie = session_header(&server);
+    let preview = parsed_body(&post(
+        &server,
+        "/api/providers/discover",
+        br#"{"provider":"demo"}"#,
+        &[&cookie],
+    ));
+    let expected = [
+        (
+            "vision",
+            json!(["text", "image", "video"]),
+            "advertised",
+            json!(["text", "image"]),
+        ),
+        ("text-flags", json!(["text"]), "advertised", json!(["text"])),
+        (
+            "gpt-5.6-sol",
+            json!(["text"]),
+            "advertised",
+            json!(["text"]),
+        ),
+        (
+            "gpt-6.1-terra",
+            json!(["text", "image"]),
+            "official",
+            json!(["text", "image"]),
+        ),
+        (
+            "glm-5.3-flash",
+            json!(["text", "image", "video", "file"]),
+            "official",
+            json!(["text", "image"]),
+        ),
+        ("glm-5.3", json!(["text"]), "official", json!(["text"])),
+        (
+            "kimi-k3.1-pro",
+            json!(["text", "image", "video"]),
+            "official",
+            json!(["text", "image"]),
+        ),
+        (
+            "deepseek-flash",
+            json!(["text", "image"]),
+            "official",
+            json!(["text", "image"]),
+        ),
+        (
+            "deepseek-v4-flash",
+            json!(["text"]),
+            "official",
+            json!(["text"]),
+        ),
+        (
+            "google/gemini-4-argon",
+            json!(["text", "image", "audio", "video", "file"]),
+            "official",
+            json!(["text", "image"]),
+        ),
+        (
+            "anthropic/claude-opus-5.5",
+            json!(["text", "image"]),
+            "official",
+            json!(["text", "image"]),
+        ),
+        (
+            "x-ai/grok-4.7",
+            json!(["text", "image"]),
+            "official",
+            json!(["text", "image"]),
+        ),
+    ];
+    for (id, modalities, source, _) in &expected {
+        let model = preview["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["upstream_id"] == *id)
+            .unwrap();
+        assert_eq!(model["input_modalities"], *modalities);
+        assert_eq!(
+            model["capability_sources"]["input_modalities"]["source"],
+            *source
+        );
+    }
+    upstream.observed();
+    let selection = json!({
+        "provider":"demo",
+        "selected":expected.iter().map(|entry| entry.0).collect::<Vec<_>>(),
+        "cached":true
+    });
+    let selected = post(
+        &server,
+        "/api/providers/discover",
+        &serde_json::to_vec(&selection).unwrap(),
+        &[&cookie],
+    );
+    assert!(selected.starts_with("HTTP/1.1 200"), "{selected}");
+    server.shutdown().unwrap();
+    let restarted = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &root.join("config.json"),
+        "codex",
+        root.join("codex/auth.json"),
+    )
+    .unwrap();
+    let public = parsed_body(&request(&restarted, "/api/config", &[&cookie]));
+    let catalog = parsed_body(&request(
+        &restarted,
+        "/v1/models?client_version=0.166.0",
+        &[],
+    ));
+    for (id, modalities, source, codex_modalities) in &expected {
+        let model = public["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["upstream_id"] == *id)
+            .unwrap();
+        assert_eq!(model["input_modalities"], *modalities);
+        assert_eq!(
+            model["capability_sources"]["input_modalities"]["source"],
+            *source
+        );
+        let published = catalog["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["slug"] == format!("demo/{id}"))
+            .unwrap();
+        assert_eq!(published["input_modalities"], *codex_modalities);
+    }
+    assert!(
+        upstream.requests.try_recv().is_err(),
+        "cache selection/restart must stay offline"
+    );
+    restarted.shutdown().unwrap();
+}
+
+#[test]
 fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
     let upstream = CatalogUpstream::start(200);
     drop(TcpStream::connect(upstream.address).expect("empty discovery connection"));

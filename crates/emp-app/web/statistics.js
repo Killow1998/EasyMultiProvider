@@ -44,8 +44,8 @@ function createStatistics({api,$,tr,esc,getState,getLanguage,openModal,callRepor
       return;
     }
     const u=report.usage.totals;
-    const estimated=usage.usd(u);
-    const summary=facts.facts(report.calls)+facts.stat('Token',usage.tokens(u),`${usage.count(u,'input_tokens','input_reports',false)} ${tr("reports.in")} · ${usage.count(u,'output_tokens','output_reports',false)} ${tr("reports.out")}`)+facts.stat(tr("reports.api_estimate_usd"),estimated,`${number(u.priced_requests)} / ${number(u.requests)} ${tr("reports.priced_records")}`);
+    const estimated=usage.usd(u,false);
+    const summary=facts.facts(report.calls)+facts.stat('Token',usage.tokens(u,false),`${usage.count(u,'input_tokens','input_reports',false)} ${tr("reports.in")} · ${usage.count(u,'output_tokens','output_reports',false)} ${tr("reports.out")}`,{exact:compactUsage(u.input_reports || u.output_reports ? u.input_tokens+u.output_tokens : null).title})+facts.stat(tr("reports.api_estimate_usd"),estimated,`${number(u.priced_requests)} / ${number(u.requests)} ${tr("reports.priced_records")}`,{exact:u.priced_requests?compactUsage(u.cost_nanos/1e9,true).title:''});
     const isUsage=['tokens','cost_nanos'].includes(metric), selected=isUsage ? usage.chart(report.usage,metric,grouping) : report.calls;
     const metricButtons=[['tokens','Token'],['cost_nanos','USD'],['calls',tr("reports.calls_3")],['tokens_per_second','TPS'],['ttft_ms','TTFT']].map(([id,label])=>`<button type="button" class="secondary${id===metric ? ' active' : ''}" data-stats-metric="${id}" aria-pressed="${id===metric}">${label}</button>`).join('');
     content.innerHTML=`<div class="presentation-stat-grid">${summary}</div><div class="presentation-stats-chart-tools"><div class="report-tabs" role="group" aria-label="${tr("reports.metric")}">${metricButtons}</div>${isUsage ? `<label>${tr("reports.color_by")}<select data-stats-group>${options([['none',tr("reports.none")],['services',tr("services_title")],['models',tr("models_routes")]])}</select></label>` : ''}</div>${chart.html(selected,metric)}`;
@@ -73,8 +73,19 @@ function createStatistics({api,$,tr,esc,getState,getLanguage,openModal,callRepor
   function open() {
     openModal(tr("statistics"),`<div id="presentation_stats">${periodPickerHtml('presentation_stats',['1h','1d','7d','30d'])}${filterHtml()}<div class="report-tabs" role="group" aria-label="${tr("reports.view")}">${[['overview',tr("reports.overview")],['services',tr("services_title")],['models',tr("models_routes")],['sessions',tr("reports.sessions")],['calls',tr("reports.calls")]].map(([id,label])=>`<button type="button" class="secondary" data-stats-view="${id}" aria-pressed="false">${label}</button>`).join('')}</div><p class="report-status" data-report-status role="status" aria-live="polite"></p><div data-stats-content></div><details class="diagnostics-details"><summary>${tr("reports.system_diagnostics")}</summary><div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics();loadSupportReport()">${tr("refresh")}</button><button type="button" class="secondary" data-icon="download" onclick="downloadSupportReport()">${tr("reports.download_redacted_report")}</button></div><div id="support_report"></div><div id="diagnostics_summary"></div><div id="health_summary"></div><div id="diagnostics_records"></div></details></div>`,'',null);
     root=$('presentation_stats'); filters={}; view='overview'; metric='tokens'; grouping='none';
+    root.querySelector('.period-custom').append(root.querySelector('[data-report-status]'));
     const selectedRoot=root;
-    query=createReportQuery({api:async(params,options)=>{const [calls,usage]=await Promise.all([api('/api/calls?'+params,options),api('/api/usage?series=true&'+params,options)]);return {calls,usage};},onState:(loading,error)=>setReportState(selectedRoot,loading,error,tr),onResult:result=>{report=result;render();}});
+    query=createReportQuery({
+      api:async(params,options,progress)=>{
+        const [usage,calls]=await Promise.all([
+          api('/api/usage?series=true&'+params,options),
+          api('/api/calls?'+params,{...options,onProgress:progress}),
+        ]);
+        return {calls,usage};
+      },
+      onState:(loading,error,progress)=>setReportState(selectedRoot,loading,error,tr,progress),
+      onResult:result=>{report=result;render();},
+    });
     root.onchange=event=>{
       if (event.target.hasAttribute('data-stats-group')) { grouping=event.target.value;render();return; }
       const field=event.target.dataset.statsFilter; if (!field) return;

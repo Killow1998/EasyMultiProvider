@@ -1,8 +1,8 @@
 // Shared period controls and time axis, so every time-based panel reads the same way.
 function periodLocalInput(date) { return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0,16); }
-const PERIOD_SECONDS = {'1h':3600, '1d':86400, '7d':7*86400, '30d':30*86400};
+const PERIOD_SECONDS = {'1h':3600, '1d':86400, '7d':7*86400, '15d':15*86400, '30d':30*86400};
 const periodPickers = {};
-function periodPresetLabel(preset) { return ({'1h':tr("core.last_hour"),'1d':tr("core.last_day"),'7d':tr("core.last_7_days"),'30d':tr("core.last_30_days"),all:tr("core.all_history")})[preset] || preset; }
+function periodPresetLabel(preset) { return ({'1h':tr("core.last_hour"),'1d':tr("core.last_day"),'7d':tr("core.last_7_days"),'15d':tr("core.last_15_days"),'30d':tr("core.last_30_days"),all:tr("core.all_history")})[preset] || preset; }
 function periodPickerHtml(id, presets) {
   const presetButtons = presets.map(preset => `<button type="button" class="secondary" data-ui-action="period-preset" data-id="${esc(id)}" data-preset="${esc(preset)}">${esc(periodPresetLabel(preset))}</button>`).join('');
   return `<div class="period-picker"><div class="period-presets" role="group" aria-label="${esc(tr("core.period"))}">${presetButtons}</div><div class="period-custom"><label>${tr("core.from")}<input type="datetime-local" id="${esc(id)}_start" data-ui-action="period-edit" data-id="${esc(id)}"></label><span class="period-sep">—</span><label>${tr("core.until")}<input type="datetime-local" id="${esc(id)}_end" data-ui-action="period-edit" data-id="${esc(id)}"></label><button type="button" class="secondary" data-ui-action="period-apply" data-id="${esc(id)}">${tr("core.apply")}</button><button type="button" class="secondary" data-report-action="refresh" data-icon="refresh" data-ui-action="period-refresh" data-id="${esc(id)}">${t('refresh')}</button></div></div>`;

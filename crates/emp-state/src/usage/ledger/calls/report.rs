@@ -20,13 +20,21 @@ pub struct CallFilter {
 
 impl UsageLedger {
     pub fn query_calls(&self, filter: &CallFilter) -> Result<Value> {
+        self.query_calls_with_progress(filter, |_, _| Ok(()))
+    }
+
+    pub fn query_calls_with_progress(
+        &self,
+        filter: &CallFilter,
+        progress: impl Fn(i64, i64) -> std::io::Result<()> + Send + 'static,
+    ) -> Result<Value> {
         if !Self::valid_period(filter.start, filter.end, "all")
             || filter.limit == 0
             || filter.limit > 100
         {
             return Err(UsageError);
         }
-        let mut conditions = vec!["started_at >= ?".to_owned(), "started_at <= ?".to_owned()];
+        let mut conditions = vec!["started_at >= ?".to_owned(), "started_at < ?".to_owned()];
         let mut args = vec![SqlValue::Real(filter.start), SqlValue::Real(filter.end)];
         if filter.request.is_none() {
             for operation in crate::diagnostics::MODEL_TEST_OPERATIONS {
@@ -73,7 +81,33 @@ impl UsageLedger {
             params_from_iter(&args),
             |row| row.get(0),
         )?;
-        let mut summary = rows(&connection, &format!("SELECT COUNT(*) AS calls,
+        // Materialization, summary, model groups and periods each visit every selected row.
+        let total = count * 4;
+        let batch = (total / 100).max(1);
+        progress(0, total)?;
+        let completed = std::cell::Cell::new(0);
+        connection.create_scalar_function(
+            "report_record",
+            0,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+            move |_| {
+                let current = completed.get() + 1;
+                completed.set(current);
+                if current % batch == 0 || current == total {
+                    progress(current, total)
+                        .map_err(|error| rusqlite::Error::UserFunctionError(Box::new(error)))?;
+                }
+                Ok(1_i64)
+            },
+        )?;
+        connection.execute(
+            &format!("CREATE TEMP TABLE report_calls AS SELECT
+                request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,
+                jsonb(facts) AS facts,delivery,state,report_record() AS read_progress FROM {calls} WHERE {predicate}"),
+            params_from_iter(&args),
+        )?;
+        let calls = "report_calls AS call_records";
+        let mut summary = rows(&connection, &format!("SELECT COUNT(report_record()) AS calls,
             SUM(json_extract(facts,'$.input_tokens')) AS input_tokens,
             SUM(json_extract(facts,'$.output_tokens')) AS output_tokens,
             SUM(CASE WHEN json_type(facts,'$.cached_input_tokens')='integer' AND json_extract(facts,'$.input_tokens') >= json_extract(facts,'$.cached_input_tokens') THEN json_extract(facts,'$.cached_input_tokens') END) AS cached_input_tokens,
@@ -114,31 +148,31 @@ impl UsageLedger {
             json_extract(facts,'$.speed_mode') AS speed_mode,
             json_extract(facts,'$.requested_effort') AS requested_effort,
             json_extract(facts,'$.reported_effort') AS reported_effort,
-            COUNT(*) AS calls, SUM(state='completed') AS completed,
+            COUNT(report_record()) AS calls, SUM(state='completed') AS completed,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.duration_ms') END) AS duration_ms,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_ms,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tokens_per_second
             FROM {calls} WHERE {predicate}
             GROUP BY provider_id,account_id,model_id,upstream_model,speed_mode,requested_effort,reported_effort");
-        let models_total: i64 = connection.query_row(
-            &format!("SELECT COUNT(*) FROM ({grouped})"),
+        connection.execute(
+            &format!("CREATE TEMP TABLE report_models AS {grouped}"),
             params_from_iter(&args),
-            |row| row.get(0),
         )?;
-        let mut model_args = args.clone();
-        model_args.push(SqlValue::Integer(
+        let models_total: i64 =
+            connection.query_row("SELECT COUNT(*) FROM report_models", [], |row| row.get(0))?;
+        let model_args = [SqlValue::Integer(
             filter.models_offset.min(i64::MAX as usize) as i64,
-        ));
+        )];
         let models = rows(
             &connection,
             &format!(
-                "{grouped} ORDER BY {model_order},provider_id,account_id,model_id,upstream_model,speed_mode,requested_effort,reported_effort LIMIT 50 OFFSET ?"
+                "SELECT * FROM report_models ORDER BY {model_order},provider_id,account_id,model_id,upstream_model,speed_mode,requested_effort,reported_effort LIMIT 50 OFFSET ?"
             ),
             &model_args,
         )?;
-        let bucket = ((filter.end - filter.start) / 48.0).max(60.0);
+        let bucket = chart_bucket(filter.end - filter.start);
         let periods = rows(&connection, &format!("SELECT CAST((started_at-{})/{bucket} AS INTEGER)*{bucket}+{} AS start,
-            COUNT(*) AS calls, AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_ms,
+            COUNT(report_record()) AS calls, AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_ms,
             COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_samples,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tokens_per_second,
             COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tps_samples
@@ -147,11 +181,12 @@ impl UsageLedger {
             SqlValue::Integer(filter.limit as i64),
             SqlValue::Integer(filter.offset.min(i64::MAX as usize) as i64),
         ]);
-        let mut statement = connection.prepare(&format!("SELECT facts,delivery,
+        let mut statement = connection.prepare(&format!("SELECT json(facts),delivery,
             (SELECT json_object('cost_nanos',cost_nanos,'price_issue',price_issue,'price_key',price_key)
              FROM accounted_usage WHERE id=json_extract(call_records.facts,'$.usage_event_id') LIMIT 1), state
-            FROM {calls} WHERE {predicate}
-            ORDER BY started_at DESC,request_id DESC,operation LIMIT ? OFFSET ?"))?;
+            FROM (SELECT * FROM {calls} WHERE {predicate}
+                ORDER BY started_at DESC,request_id DESC,operation LIMIT ? OFFSET ?) AS call_records
+            ORDER BY started_at DESC,request_id DESC,operation"))?;
         let records = statement
             .query_map(params_from_iter(&args), |row| {
                 Ok((
@@ -187,7 +222,7 @@ impl UsageLedger {
         Ok(
             json!({"records":records,"total":count,"offset":filter.offset,"limit":filter.limit,
             "summary":summary.first(),"models":models,"periods":periods,"models_total":models_total,"models_offset":filter.models_offset,"models_limit":50,
-            "start":filter.start,"end":filter.end,"metric_schema":5}),
+            "start":filter.start,"end":filter.end,"bucket":bucket,"metric_schema":5}),
         )
     }
 }

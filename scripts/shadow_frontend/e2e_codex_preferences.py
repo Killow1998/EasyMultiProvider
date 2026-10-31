@@ -51,7 +51,7 @@ def main():
         post('/api/integration/enable')
         browser = Browser(stack,root)
         browser.navigate(url)
-        browser.execute('setLanguage("en");openSettings();')
+        browser.execute('setLanguage("en");openSettings("native");')
         toggle = '[data-ui-action=setting-toggle][data-id=background_compaction]'
         assert browser.execute('return document.querySelector(arguments[0]).getAttribute("aria-checked");',toggle) == 'false'
         browser.execute('document.querySelector(arguments[0]).click();',toggle)
@@ -71,21 +71,22 @@ def main():
                 viewports.append({'language':language,'requested_width':width,
                     **browser.execute('return {width:innerWidth,height:innerHeight,pixel_ratio:devicePixelRatio};')})
                 browser.execute('closeModal();setLanguage(arguments[0]);openSettings();',language)
-                labels = ['显示','通用服务设置','外部服务设置','原生服务设置'] if language == 'zh-CN' else ['Display','General service settings','External service settings','Native service settings']
-                assert browser.execute('return [...document.querySelectorAll("#modal_body [role=region]")].map(node=>document.getElementById(node.getAttribute("aria-labelledby")).textContent);') == labels
-                browser.execute('document.querySelector("[aria-labelledby=settings-display-title] [data-ui-action=quota-display][data-mode=used]").click();document.querySelector("[aria-labelledby=settings-display-title] [data-presentation-style=bar]").click();closeModal();openSettings();')
-                assert browser.execute('return document.querySelector("[aria-labelledby=settings-display-title] [data-ui-action=quota-display][data-mode=used]").getAttribute("aria-pressed")==="true" && document.querySelector("[aria-labelledby=settings-display-title] [data-presentation-style=bar]").getAttribute("aria-pressed")==="true";')
-                assert browser.execute('return !!document.querySelector("[aria-labelledby=settings-general-title] [data-id=auto_enable_on_start]") && !!document.querySelector("[aria-labelledby=settings-general-title] [data-id=external_collaboration]") && !!document.querySelector("[aria-labelledby=settings-external-title] [data-id=subscription_search]") && !!document.querySelector("[aria-labelledby=settings-native-title] [data-id=background_compaction]") && document.querySelectorAll("[data-ui-action=routing-settings]").length===1;')
+                screenshot(browser,args.output,f'settings-home-{language}-{width}')
+                browser.execute('document.querySelector("[data-settings-category=general]").click();document.querySelector("[data-ui-action=quota-display][data-mode=used]").click();document.querySelector("[data-presentation-style=bar]").click();closeModal();openSettings("general");')
+                assert browser.execute('return document.querySelector("[data-ui-action=quota-display][data-mode=used]").getAttribute("aria-pressed")==="true" && document.querySelector("[data-presentation-style=bar]").getAttribute("aria-pressed")==="true";')
                 assert browser.execute('const node=document.getElementById("modal_body");return node.scrollWidth<=node.clientWidth+1;')
                 screenshot(browser,args.output,f'settings-{language}-{width}')
+                browser.execute('document.getElementById("modal_back").click();document.querySelector("[data-settings-category=external]").click();')
+                screenshot(browser,args.output,f'external-settings-{language}-{width}')
+                browser.execute('document.getElementById("modal_back").click();document.querySelector("[data-settings-category=native]").click();')
                 browser.execute('document.getElementById("background-compaction-label").parentNode.querySelector(".shadow-help").focus();')
                 wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden;'))
                 text = browser.execute('return document.getElementById("shadow_feedback").textContent;')
                 assert '73%' in text and '0.163' in text
                 assert ('重启 Codex' if language == 'zh-CN' else 'restart Codex').lower() in text.lower(), (language,text)
                 browser.escape()
-                browser.execute('document.querySelector("[aria-labelledby=settings-native-title] [data-ui-action=routing-settings]").scrollIntoView({block:"center"});')
-                assert browser.execute('const box=document.querySelector("[aria-labelledby=settings-native-title] [data-ui-action=routing-settings]").getBoundingClientRect();return box.top>=0 && box.bottom<=innerHeight;')
+                browser.execute('document.querySelector("[data-ui-action=routing-settings]").scrollIntoView({block:"center"});')
+                assert browser.execute('const box=document.querySelector("[data-ui-action=routing-settings]").getBoundingClientRect();return box.top>=0 && box.bottom<=innerHeight;')
                 screenshot(browser,args.output,f'native-settings-{language}-{width}')
                 browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
                 assert browser.execute('return document.getElementById("routing_memory_model").value;') == 'gpt-6-luna'
@@ -115,7 +116,7 @@ def main():
                 assert browser.execute('const text=document.getElementById("shadow_feedback").textContent;return text.includes("95,000") && text.includes("80,000");')
                 browser.escape()
         checks.append('Chinese/English at narrow/desktop widths: grouped settings keep local display choices, service controls and a single native routing entry; context and Beta help fit without overflow')
-        browser.execute('closeModal();openSettings();document.querySelector("[data-ui-action=routing-settings]").click();window.savedFetch=window.fetch;window.fetch=(path,options)=>String(path)==="/api/config"&&options?.method==="POST"?Promise.resolve(new Response(JSON.stringify({error:{message:"Fixture save failure"}}),{status:500})):window.savedFetch(path,options);document.getElementById("routing_memory_model").value="gpt-6.1-sol";document.getElementById("modal_submit").click();')
+        browser.execute('closeModal();openSettings("native");document.querySelector("[data-ui-action=routing-settings]").click();window.savedFetch=window.fetch;window.fetch=(path,options)=>String(path)==="/api/config"&&options?.method==="POST"?Promise.resolve(new Response(JSON.stringify({error:{message:"Fixture save failure"}}),{status:500})):window.savedFetch(path,options);document.getElementById("routing_memory_model").value="gpt-6.1-sol";document.getElementById("modal_submit").click();')
         wait_for(lambda: browser.execute('return !!document.getElementById("modal_status").textContent && !document.getElementById("modal_submit").disabled;'))
         assert stored()['memories']['extract_model'] == 'gpt-6.1-sol'
         assert browser.execute('return document.getElementById("routing_memory_model").value==="gpt-6.1-sol" && state.memory_model==="gpt-6-luna";')

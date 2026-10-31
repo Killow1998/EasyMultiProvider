@@ -87,9 +87,9 @@ def main():
         browser.navigate(shadow)
         wait_for(lambda:browser.execute('return shadowSnapshot?.usage_events===4;'))
         assert browser.execute('return window.EMP_REAL_SHADOW===true && !window.EMP_IMPORT_DEMO && !document.getElementById("demo_import_banner") && document.getElementById("integration_toggle").disabled;')
-        browser.execute('window.EMP_REVIEW_ACTION("background");')
-        wait_for(lambda:browser.execute('return !!document.getElementById("settings-native-title");'))
-        assert browser.execute('return location.origin===arguments[0] && window.EMP_REAL_SHADOW===true && document.querySelectorAll("#modal_body [role=region]").length===4;',shadow)
+        browser.execute('settings.open("native");')
+        wait_for(lambda:browser.execute('return !!document.querySelector("[data-settings-section=native]");'))
+        assert browser.execute('return location.origin===arguments[0] && window.EMP_REAL_SHADOW===true;',shadow)
         browser.execute('closeModal();')
         own={'X-EMP-Session':browser.execute('return localStorage.getItem("emp_management_session_v1");')}
         query='/api/usage?sessions=true&start=0&end='+str(time.time()+3600)
@@ -103,6 +103,13 @@ def main():
         assert request(shadow+query+'&account=%40native&owner=ambiguous',headers=own)[0]==400
         detail=request(shadow+'/api/usage?series=true&conversation=true&session='+MAIN+'&start=0&end='+str(time.time()+3600),headers=own)[1]
         assert detail['totals']['requests']==3 and {row['session_kind'] for row in detail['components']}=={'conversation','review','sidechat'}
+        end=time.time()
+        for span,bucket in [(3600,600),(86400,3600),(604800,86400),(2592000,86400)]:
+            period_query=f'?start={end-span}&end={end}'
+            usage=request(shadow+'/api/usage'+period_query+'&series=true',headers=own)[1]
+            calls=request(shadow+'/api/calls'+period_query,headers=own)[1]
+            assert usage['bucket']==calls['bucket']==bucket,(usage,calls)
+        checks.append('Usage and call statistics both use the candidate snapshot and agree on 1h, 1d, 7d and 30d bucket widths')
         assert not any((root/'scratch').rglob('auth.json'))
         for path in (root/'scratch').rglob('config.json'):
             config=json.loads(path.read_text())
@@ -111,24 +118,26 @@ def main():
         checks.append('Account-scoped bills use source-resolved identity with candidate accounting; explicit owner selection is bounded and ambiguous filters are rejected')
         for language in ['zh-CN','en']:
             browser.execute('setLanguage(arguments[0]);document.getElementById("shadow_review_button").click();',language)
-            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['tutorials','native_local_key']
-            browser.execute('document.querySelector("[data-shadow-demo=tutorials]").click();')
-            wait_for(lambda:browser.execute('return !!document.getElementById("tutorial_list");'))
-            browser.execute('document.getElementById("modal_back").click();document.querySelector("[data-shadow-demo=native_local_key]").click();')
-            wait_for(lambda:browser.execute('return !!document.querySelector("[data-ui-action=native-use-local-key]");'))
-            browser.execute('document.querySelector("[data-ui-action=native-use-local-key]").click();')
-            assert browser.execute('return document.querySelectorAll("[name=native_key_action]").length===2;')
-            browser.execute('document.getElementById("modal_back").click();')
-            wait_for(lambda:browser.execute('return !!document.querySelector("[data-ui-action=native-use-local-key]");'))
-            browser.execute('document.getElementById("modal_back").click();')
-            assert browser.execute('return !!document.querySelector("[data-shadow-demo=native_local_key]");')
+            assert browser.execute('return !!document.querySelector("[data-shadow-demo=statistics]") && !!document.querySelector("[data-shadow-demo=appearance]");')
+            browser.execute('document.querySelector("[data-shadow-demo=statistics]").click();')
+            wait_for(lambda:browser.execute('return !!document.querySelector(".presentation-chart-canvas");'))
             browser.execute('closeModal();document.querySelector("[data-i18n=statistics]").click();document.querySelector("[data-stats-view=sessions]").click();')
             wait_for(lambda:browser.execute('return document.querySelectorAll("[data-session-bill]").length===1;'))
             assert browser.execute('return document.querySelector("[data-session-bill]").textContent.includes("Raw source conversation");')
             _,png=request(browser.base+'/screenshot')
             args.output.with_name(args.output.stem+'-'+language+'.png').write_bytes(base64.b64decode(png['value']))
             browser.execute('closeModal();')
-        checks.append('Both languages review tutorials and Native key switching with working back navigation and show source conversation usage')
+        checks.append('Both languages review current statistics changes and show source conversation usage')
+        browser.execute('statistics.open();')
+        wait_for(lambda:browser.execute('return !document.querySelector("#presentation_stats [data-report-action=refresh]").disabled;'))
+        wait_for(lambda:browser.execute('return managementEvents.connected();'))
+        browser.execute('window.snapshotReadCount=0;window.snapshotEventCount=0;window.snapshotOriginalFetch=window.fetch;window.snapshotOriginalEvent=processManagementEvent;processManagementEvent=function(type,data){if(type==="usage-updated")snapshotEventCount++;snapshotOriginalEvent(type,data);};window.fetch=function(path,options){if(/^\\/api\\/(calls|usage)\\?/.test(String(path)))snapshotReadCount++;return snapshotOriginalFetch(path,options);};')
+        assert request(base+'/api/usage/scan',{},headers)[0]==202
+        wait_for(lambda:browser.execute('return snapshotEventCount>0;'))
+        time.sleep(.4)
+        assert browser.execute('return snapshotReadCount;')==0
+        browser.execute('processManagementEvent=snapshotOriginalEvent;window.fetch=snapshotOriginalFetch;closeModal();')
+        checks.append('Live source usage events leave the fixed snapshot alone instead of cancelling and restarting its statistics queries')
         add(state,'later-source',MAIN,'gpt-6.1-sol',50)
         assert request(shadow+query,headers=own)[1]['totals']['requests']==4
         browser.execute('statistics.open();')
@@ -141,7 +150,7 @@ def main():
         assert request(shadow+'/api/shadow/snapshot',{})[0]==401
         assert request(base+'/healthz')[0]==200
         checks.append('Snapshot refresh reads new source rows; direct lifecycle/config/inference writes are rejected and the source stays healthy')
-        browser.execute('closeModal();openSettings();document.querySelector("[data-id=background_compaction]").click();')
+        browser.execute('closeModal();openSettings("native");document.querySelector("[data-id=background_compaction]").click();')
         wait_for(lambda:browser.execute('return state.background_compaction===true;'))
         assert (source/'config.json').read_bytes()==source_config
         assert (home/'auth.json').read_bytes()==source_auth

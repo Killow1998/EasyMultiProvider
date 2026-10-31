@@ -54,7 +54,7 @@ class FileSnapshot:
         return cls(path=path, size=path.stat().st_size, sha256=sha256_file(path))
 
 
-def append_items(path: Path, items: list[dict[str, Any]]) -> None:
+def append_items(path: Path, items: list[dict[str, Any]], *, kind: str = "response_item") -> None:
     before = FileSnapshot.capture(path)
     largest = -1
     with path.open("rb") as source:
@@ -72,7 +72,7 @@ def append_items(path: Path, items: list[dict[str, Any]]) -> None:
             record = {
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
                 "ordinal": largest,
-                "type": "response_item",
+                "type": kind,
                 "payload": item,
             }
             stream.write(json.dumps(record, separators=(",", ":")).encode("utf-8") + b"\n")

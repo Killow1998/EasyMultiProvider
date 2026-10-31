@@ -6,11 +6,31 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 
+def forward_stream(handler, response):
+    try:
+        handler.send_response(response.status)
+        handler.send_header('Content-Type', response.getheader('Content-Type'))
+        handler.send_header('Cache-Control', 'no-store')
+        handler.send_header('X-Content-Type-Options', 'nosniff')
+        handler.send_header('Connection', 'close')
+        handler.end_headers()
+        handler.close_connection = True
+        while line := response.readline():
+            handler.wfile.write(line)
+            handler.wfile.flush()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+
+
 def asset_file(web, name):
     if '/' in name or '\\' in name or name in {'', '.', '..'}:
         return None
     if name.startswith('tutorial-') and name.endswith('.gif'):
         return web.parents[2] / 'docs/assets/tutorials' / name.removeprefix('tutorial-')
+    if name == 'emp-icon.png':
+        return web.parents[2] / 'assets/branding/easy-multi-provider-icon-1024.png'
+    if name == 'emp-icon-mono.svg':
+        return web.parents[2] / 'assets/branding/native/easy-multi-provider-tray.svg'
     return web / name
 
 
@@ -29,7 +49,7 @@ def candidate_frontend(stack, backend, web, index_extra="", port=0, index_head="
             elif path.startswith('/api/recovery'):
                 # Recovery demos simulate requests in the page; never forward a reset.
                 status, content_type, body = 403, 'application/json', b'{"error":"preview_only"}'
-            elif self.command == 'GET' and (path == '/' or path.startswith('/assets/')):
+            elif self.command == 'GET' and (path == '/' or path.startswith('/assets/')) and path not in {'/assets/app-icon.png','/assets/app-icon-source.png'}:
                 name = 'index.html' if path == '/' else path.removeprefix('/assets/')
                 asset = asset_file(web, name)
                 if asset is None or not asset.is_file():
@@ -59,6 +79,8 @@ def candidate_frontend(stack, backend, web, index_extra="", port=0, index_head="
                 try:
                     connection.request(self.command, self.path, body=body, headers=headers)
                     response = connection.getresponse()
+                    if response.getheader('Content-Type', '').startswith('text/event-stream'):
+                        return forward_stream(self, response)
                     status, content_type, body = response.status, response.getheader('Content-Type'), response.read()
                 finally:
                     connection.close()

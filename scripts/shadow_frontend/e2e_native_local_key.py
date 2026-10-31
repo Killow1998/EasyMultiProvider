@@ -54,16 +54,16 @@ def main():
                             'en' if scenario == 'keep-existing' else 'zh-CN')
             wait_for(lambda: browser.execute('return !!document.querySelector("[data-ui-action=account-details][data-id=\\"@native\\"]");'))
             browser.execute('document.querySelector("[data-ui-action=account-details][data-id=\\"@native\\"]").click();')
-            wait_for(lambda: browser.execute('return !!document.querySelector("[data-ui-action=native-use-local-key]");'))
+            wait_for(lambda: browser.execute('return !!document.getElementById("account_usage");'))
             if scenario == 'keep-new':
                 status, screenshot = request(browser.base + '/screenshot'); assert status == 200
                 (args.output / 'account-details.png').write_bytes(base64.b64decode(screenshot['value']))
-            browser.execute('document.querySelector("[data-ui-action=native-use-local-key]").click();')
+            browser.execute('closeModal();document.querySelector("[data-ui-action=native-login]").click();document.querySelector("[data-native-method=local_key]").click();')
             assert browser.execute('return document.querySelectorAll("[name=native_key_action]").length;') == 2
             if scenario == 'keep-new':
                 browser.execute('document.getElementById("modal_back").click();')
-                wait_for(lambda: browser.execute('return !!document.querySelector("[data-ui-action=native-use-local-key]");'))
-                browser.execute('document.querySelector("[data-ui-action=native-use-local-key]").click();')
+                wait_for(lambda: browser.execute('return !!document.querySelector("[data-native-method=local_key]");'))
+                browser.execute('document.querySelector("[data-native-method=local_key]").click();')
             if scenario in ('keep-new', 'keep-existing'):
                 status, screenshot = request(browser.base + '/screenshot'); assert status == 200
                 (args.output / ('switch-options-en.png' if scenario == 'keep-existing' else 'switch-options.png')).write_bytes(base64.b64decode(screenshot['value']))

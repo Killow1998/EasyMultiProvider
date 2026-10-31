@@ -234,7 +234,15 @@ fn flush_calls(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
     }));
 }
 
-fn standalone_tool_output(item: &Map<String, Value>) -> Result<Option<String>, ProtocolError> {
+fn flush_tool_media(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
+    if !pending.is_empty() {
+        messages.push(serde_json::json!({
+            "role": "user", "content": std::mem::take(pending),
+        }));
+    }
+}
+
+fn standalone_tool_output(item: &Map<String, Value>) -> Result<Option<Value>, ProtocolError> {
     if item.get("type").and_then(Value::as_str) != Some("function_call_output")
         || item.get("call_id").is_some_and(|value| !value.is_null())
     {
@@ -253,19 +261,21 @@ fn standalone_tool_output(item: &Map<String, Value>) -> Result<Option<String>, P
             ));
         }
     };
-    let output = request_text(
-        item.get("output").or(Some(&Value::String(String::new()))),
-        "request projection failed: invalid standalone tool output",
-        "request projection failed: unsupported standalone tool output",
-    )?;
+    let output = chat_content(item.get("output").or(Some(&Value::String(String::new()))))?;
     let label = if namespace.is_empty() {
         name.to_owned()
     } else {
         format!("{namespace}/{name}")
     };
-    Ok(Some(format!(
-        "Standalone tool output from {label}:\n{output}"
-    )))
+    let header = format!("Standalone tool output from {label}:\n");
+    Ok(Some(match output {
+        Value::String(text) => Value::String(format!("{header}{text}")),
+        Value::Array(mut parts) => {
+            parts.insert(0, serde_json::json!({"type": "text", "text": header}));
+            Value::Array(parts)
+        }
+        _ => unreachable!("chat content is text or content parts"),
+    }))
 }
 
 fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
@@ -292,6 +302,7 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
         _ => return Err(request_error("request projection failed: invalid input")),
     };
     let mut pending_calls = Vec::new();
+    let mut pending_tool_media = Vec::new();
     let mut call_ids = BTreeSet::new();
     let mut output_ids = BTreeSet::new();
     for raw in source {
@@ -304,6 +315,12 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or("message");
+        if !matches!(
+            item_type,
+            "function_call_output" | "custom_tool_call_output" | "reasoning" | "additional_tools"
+        ) {
+            flush_tool_media(&mut messages, &mut pending_tool_media);
+        }
         match item_type {
             "compaction" => {
                 flush_calls(&mut messages, &mut pending_calls);
@@ -370,6 +387,7 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
             "function_call_output" | "custom_tool_call_output" => {
                 flush_calls(&mut messages, &mut pending_calls);
                 if let Some(standalone) = standalone_tool_output(item)? {
+                    flush_tool_media(&mut messages, &mut pending_tool_media);
                     messages.push(serde_json::json!({"role": "user", "content": standalone}));
                     continue;
                 }
@@ -383,14 +401,28 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
                     ));
                 }
                 let empty_output = Value::String(String::new());
+                let content = match chat_content(item.get("output").or(Some(&empty_output)))? {
+                    text @ Value::String(_) if pending_tool_media.is_empty() => text,
+                    content => {
+                        // Chat tool messages accept text only. Attach media after all paired results.
+                        pending_tool_media.push(serde_json::json!({
+                            "type": "text", "text": format!("Tool result for {call_id}:\n"),
+                        }));
+                        if let Value::Array(parts) = content {
+                            pending_tool_media.extend(parts);
+                        } else {
+                            pending_tool_media
+                                .push(serde_json::json!({"type": "text", "text": content}));
+                        }
+                        Value::String(
+                            "The complete tool result follows after the tool responses.".to_owned(),
+                        )
+                    }
+                };
                 messages.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": call_id,
-                    "content": request_text(
-                        item.get("output").or(Some(&empty_output)),
-                        "request projection failed: invalid tool output",
-                        "request projection failed: unsupported tool output",
-                    )?,
+                    "content": content,
                 }));
             }
             "reasoning" | "additional_tools" => {}
@@ -403,6 +435,7 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
         }
     }
     flush_calls(&mut messages, &mut pending_calls);
+    flush_tool_media(&mut messages, &mut pending_tool_media);
     Ok(messages)
 }
 

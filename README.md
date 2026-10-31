@@ -63,16 +63,16 @@ You can use external models without a Codex subscription or OpenAI API key.
 If Codex is signed out, EMP creates an **EMP local key** for that connection.
 Existing subscription and API-key sign-ins are kept. Open **Change sign-in method**
 to sign in to a subscription with an official device code or browser, enter your
-own OpenAI API key, or use an existing Other subscription. Restart Codex Runtime
-after switching. Removing the local key restores the native connection while
-EMP keeps running.
+own OpenAI API key, use an existing Other subscription, or switch to an EMP local
+key. Restart Codex Runtime after switching. Removing the local key restores the
+native connection while EMP keeps running.
 
-For API clients and port forwarding, open **Settings → General service settings → Gateway
+For API clients and port forwarding, open **Settings → General → Gateway
 connection** to copy the separate, stable **EMP Gateway Key**. Changing Native
 sign-in keeps this key valid. [Gateway API and Jev](docs/gateway.md).
 
-To switch an existing Native subscription to a local key, open **Native → Account
-info → Switch to EMP local key**. Keep the subscription as an Other account or
+To switch an existing Native subscription to a local key, open **Change sign-in
+method → EMP local key**. Keep the subscription as an Other account or
 remove the current Native sign-in, then restart Codex Runtime.
 
 If saved settings or their encryption key cannot be opened, EMP shows a recovery
@@ -113,6 +113,17 @@ Open WebUI pages then close when the browser allows it; other pages show
 **EMP has exited** and stop sending requests.
 The menu follows the language selected in WebUI. Linux desktops need a
 StatusNotifier-compatible tray or panel.
+
+Open **Settings > General > EMP icon** to choose the sunglasses icon, a service
+icon in color or monochrome, or a square SVG up to 1 MB. The selection is saved
+on this device and updates the browser tab, tray, desktop shortcuts and
+macOS application/Dock icon.
+
+Official API services show account balance or key budget beside the model count,
+in the same position as subscription Credits. DeepSeek and Moonshot query account
+balances; OpenRouter queries the current key's remaining budget. Other official
+services, including OpenAI, provide a billing-console link from their information
+page. These amounts are separate from EMP's API-equivalent usage estimates.
 
 For foreground logs, run `EMP serve`. A successful start prints:
 
@@ -177,7 +188,7 @@ model call verify different parts of the connection.
 ### Quick tutorials
 
 Select **Tutorials** in the WebUI header, then choose a task on the left to watch
-its demonstration on the right. The ten GIFs are bundled for offline viewing.
+its demonstration on the right. The eleven GIFs are bundled for offline viewing.
 
 [Watch the step-by-step GIF tutorials](docs/tutorials.md) for Native model settings,
 imported subscriptions, external API services, and shared import/export controls.
@@ -323,8 +334,6 @@ control changes catalog labels, not context windows or request limits.
 Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/README.md), which defaults to read-only management data and candidate accounting over isolated snapshots of real usage. Synthetic demos require an explicit selection. Review controls and simulated failures are not included in the normal management page.
 
 ## Codex compatibility
-
-The current source version is **v0.13.17**.
 
 Maintenance targets the latest five stable Codex minor series: the latest stable
 series and the previous four. Patch releases share a series; prereleases do not
