@@ -196,14 +196,26 @@ fn valid_session_persists_across_restart() {
         let asset = format!("/assets/{}", suffix.split('"').next().expect("asset path"));
         let received = request(port, &asset, &[]);
         assert!(received.starts_with(b"HTTP/1.1 200 OK\r\n"), "{asset}");
-        let text = std::str::from_utf8(&received).expect("UTF-8 asset");
+        let payload = body(&received);
+        let headers = std::str::from_utf8(&received[..received.len() - payload.len()])
+            .expect("ASCII asset headers");
         let mime = if asset.ends_with(".css") {
             "text/css"
+        } else if asset.ends_with(".png") {
+            "image/png"
         } else {
             "text/javascript"
         };
-        assert!(text.contains(mime), "{asset}: wrong content type");
-        assert!(!body(&received).is_empty(), "{asset}: empty asset");
+        assert!(headers.contains(mime), "{asset}: wrong content type");
+        assert!(!payload.is_empty(), "{asset}: empty asset");
+        if mime == "image/png" {
+            assert!(
+                payload.starts_with(b"\x89PNG\r\n\x1a\n"),
+                "{asset}: invalid PNG"
+            );
+        } else {
+            std::str::from_utf8(payload).expect("UTF-8 text asset");
+        }
     }
     let denied = request(port, "/api/config", &[]);
     assert!(denied.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));

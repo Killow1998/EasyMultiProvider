@@ -198,7 +198,7 @@ fn codex_sees_the_enabled_model_catalog() {
 }
 
 #[test]
-fn chat_completion_reasoning_and_usage_arrive_as_a_responses_result() {
+fn chat_completion_omits_raw_reasoning_and_preserves_answer_and_usage() {
     let upstream = Upstream::start();
     let workspace = Workspace::with_routes(&upstream);
     let emp = workspace.start();
@@ -226,11 +226,12 @@ fn chat_completion_reasoning_and_usage_arrive_as_a_responses_result() {
     assert_eq!(result["status"], "completed");
     assert_eq!(result["output_text"], "Four.");
     assert_eq!(result["usage"], responses_usage());
-    assert_eq!(output_types(&result), ["reasoning", "message"]);
+    assert_eq!(output_types(&result), ["message"]);
+    assert!(!response.text().contains("Check the sum."));
 }
 
 #[test]
-fn chat_stream_reasoning_and_answer_stream_as_distinct_items() {
+fn chat_stream_omits_raw_reasoning_and_preserves_answer_and_usage() {
     let upstream = Upstream::start();
     let workspace = Workspace::with_routes(&upstream);
     let emp = workspace.start();
@@ -238,6 +239,7 @@ fn chat_stream_reasoning_and_answer_stream_as_distinct_items() {
         json!({"choices": [{"delta": {"content": null, "reasoning_content": "Check "}}]}),
         json!({"choices": [{"delta": {"reasoning_content": "the sum.", "content": "Four."}}]}),
         json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        json!({"choices": [], "usage": chat_usage()}),
     ]);
 
     let response = emp.responses(&json!({"model": "test/model", "input": "hello", "stream": true}));
@@ -252,10 +254,9 @@ fn chat_stream_reasoning_and_answer_stream_as_distinct_items() {
     upstream.assert_idle();
 
     let events = response.sse_events();
-    assert_eq!(
-        joined_deltas(&events, "response.reasoning_text.delta"),
-        "Check the sum."
-    );
+    assert_eq!(joined_deltas(&events, "response.reasoning_text.delta"), "");
+    assert!(!response.text().contains("Check "));
+    assert!(!response.text().contains("the sum."));
     assert_eq!(
         joined_deltas(&events, "response.output_text.delta"),
         "Four."
@@ -263,10 +264,8 @@ fn chat_stream_reasoning_and_answer_stream_as_distinct_items() {
     let completed = events.last().expect("terminal event");
     assert_eq!(completed["type"], "response.completed");
     assert_eq!(completed["response"]["output_text"], "Four.");
-    assert_eq!(
-        output_types(&completed["response"]),
-        ["reasoning", "message"]
-    );
+    assert_eq!(output_types(&completed["response"]), ["message"]);
+    assert_eq!(completed["response"]["usage"], responses_usage());
 }
 
 #[test]
