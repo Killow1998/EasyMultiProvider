@@ -4,6 +4,11 @@ use emp_transport::{ClientWebSocket, WebSocketPoll};
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 
+pub(super) const INLINE_ID_ERRORS: [&str; 2] = [
+    "Supplied input item IDs require persisted-item lookup that is not supported by rustponsesapi.",
+    "This request does not support user-supplied input item IDs.",
+];
+
 #[derive(Default, Debug)]
 pub(super) struct Traffic {
     pub(super) ws_connections: usize,
@@ -28,10 +33,9 @@ pub(super) enum Fault {
     RejectPrefill,
     GeneratePrefill,
     SilentPrefill,
-    RejectInlineIds,
-    RejectAllInputs,
-    RejectOtherInput,
-    RejectAfterCreated,
+    RejectInlineIds(&'static str),
+    RejectAllInputs(&'static str),
+    RejectAfterCreated(&'static str),
 }
 
 pub(super) struct Upstream {
@@ -157,24 +161,22 @@ impl Upstream {
                             context_bytes = 0;
                         }
                         context_bytes += text.len();
-                        if !warmup
-                            && (matches!(fault, Fault::RejectAllInputs | Fault::RejectOtherInput)
-                                || (matches!(fault, Fault::RejectInlineIds | Fault::RejectAfterCreated)
-                                    && body["input"].as_array().unwrap().iter().any(|item| {
-                                        matches!(item["type"].as_str(), Some("message" | "additional_tools"))
-                                            && item.get("id").is_some()
-                                            && (item["content"].is_array() || item["tools"].is_array())
-                                    })))
+                        let rejection = match fault {
+                            Fault::RejectAllInputs(message) => Some(message),
+                            Fault::RejectInlineIds(message) | Fault::RejectAfterCreated(message)
+                                if body["input"].as_array().unwrap().iter().any(|item| {
+                                    matches!(item["type"].as_str(), Some("message" | "additional_tools"))
+                                        && item.get("id").is_some()
+                                        && (item["content"].is_array() || item["tools"].is_array())
+                                }) => Some(message),
+                            _ => None,
+                        };
+                        if !warmup && let Some(message) = rejection
                         {
                             traffic.lock().unwrap().inline_rejections += 1;
-                            if fault == Fault::RejectAfterCreated {
+                            if matches!(fault, Fault::RejectAfterCreated(_)) {
                                 ws.send_json(&json!({"type":"response.created","response":{"id":"resp_started","status":"in_progress"}})).unwrap();
                             }
-                            let message = if fault == Fault::RejectOtherInput {
-                                "another unsupported input"
-                            } else {
-                                "Supplied input item IDs require persisted-item lookup that is not supported by rustponsesapi."
-                            };
                             ws.send_json(&json!({"type":"error","status":400,"error":{
                                 "code":"unsupported_parameter","param":"input",
                                 "message":message
@@ -185,7 +187,7 @@ impl Upstream {
                             Fault::DisconnectFull | Fault::DisconnectFullOnce => !warmup && context_bytes > 512 * 1024,
                             Fault::DisconnectIncremental | Fault::RejectIncremental | Fault::ExpireIncremental => body["previous_response_id"].is_string(),
                             Fault::RejectPrefill | Fault::GeneratePrefill | Fault::SilentPrefill => warmup,
-                            Fault::None | Fault::ResetConnection | Fault::RejectInlineIds | Fault::RejectAllInputs | Fault::RejectOtherInput | Fault::RejectAfterCreated => false,
+                            Fault::None | Fault::ResetConnection | Fault::RejectInlineIds(_) | Fault::RejectAllInputs(_) | Fault::RejectAfterCreated(_) => false,
                         };
                         if fault_applies && (fault == Fault::DisconnectFull || !fault_used.swap(true, Ordering::AcqRel)) {
                             match fault {
@@ -243,7 +245,7 @@ impl Upstream {
                         last_id = format!("resp_{connection}_{sequence}");
                         ws.send_json(&json!({"type":"response.created","response":{"id":last_id,"status":"in_progress"}})).unwrap();
                         let mut output = Vec::new();
-                        if !warmup && matches!(fault, Fault::RejectInlineIds | Fault::DisconnectFullOnce) {
+                        if !warmup && matches!(fault, Fault::RejectInlineIds(_) | Fault::DisconnectFullOnce) {
                             let item = json!({"id":format!("msg_{connection}_{sequence}"),"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OK","annotations":[]}]});
                             ws.send_json(&json!({"type":"response.output_item.added","output_index":0,"item":item})).unwrap();
                             ws.send_json(&json!({"type":"response.output_text.delta","item_id":item["id"],"output_index":0,"content_index":0,"delta":"OK"})).unwrap();

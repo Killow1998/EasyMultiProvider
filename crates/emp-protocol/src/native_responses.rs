@@ -150,8 +150,13 @@ pub fn persisted_input_lookup_rejected(event: &Value) -> bool {
         && event["status"] == 400
         && event["error"]["code"] == "unsupported_parameter"
         && event["error"]["param"] == "input"
-        && event["error"]["message"]
-            == "Supplied input item IDs require persisted-item lookup that is not supported by rustponsesapi."
+        && matches!(
+            event["error"]["message"].as_str(),
+            Some(
+                "Supplied input item IDs require persisted-item lookup that is not supported by rustponsesapi."
+                    | "This request does not support user-supplied input item IDs."
+            )
+        )
 }
 
 /// Inline text/media and tool declarations do not need a persisted lookup.

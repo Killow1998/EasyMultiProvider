@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.13.23 (2026-11-01)
+
+### 中文
+
+- 修复 Native 和导入 Codex 订阅带历史续接时，因上游拒绝输入项 ID 返回的 400 错误。兼容新旧错误格式，沿用一次性恢复，保留工具配对、历史引用和用量记录。
+
+### English
+
+- Fix 400 errors when Native and imported Codex subscriptions continue history containing input item IDs. Recognize both upstream error formats and reuse one-time recovery while preserving tool pairing, history references and usage records.
+
 ## 0.13.22 (2026-10-31)
 
 ### 中文
