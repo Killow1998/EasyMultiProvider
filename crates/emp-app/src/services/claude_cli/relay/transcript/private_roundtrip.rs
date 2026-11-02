@@ -6,7 +6,6 @@ use crate::services::claude_cli::{cancellation::Cancellation, media, process, pr
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[test]
@@ -131,7 +130,7 @@ fn private_cpa_transcript_roundtrip() {
             }
         });
         let cancelled = Cancellation::new().unwrap();
-        let result = process::run(guarded, Arc::from(prepared.stdin), &cancelled, || None);
+        let result = process::run(guarded, prepared.stdin, &cancelled, || None);
         let wire_result = wire.join().unwrap();
         if let Err(reason) = &result {
             eprintln!(

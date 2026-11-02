@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.13.24 (2026-11-02)
+
+### 中文
+
+- 减少长历史在请求解析、WebSocket 收发、统计和模型适配中的重复复制，缩短大块缓冲区的保留时间；Linux 在请求空闲时归还可释放的内存页。
+- 原生模型目录按优先级读取，找到有效目录即停止，减少启动与目录刷新时的重复读取。
+- 加速统计查询，复用已筛选记录及二进制 JSON，保留完整汇总、分页、计费和实际查询进度。
+- 统一 HTTP、SSE 和 WebSocket 的繁忙及请求体积超限提示；保留上游状态、已生成内容、工具进度与用量，不增加自动重试。
+- 恢复原生时，仅对确认需要后续处理的 EMP 历史检查点给出提示，移除大量未检查会话的无效警告。
+
+### English
+
+- Reduce duplicate long-history copies across request parsing, WebSocket I/O, accounting and model adapters. Release large buffers sooner and return free heap pages between requests on Linux.
+- Stop native catalog reads at the first valid preferred source, reducing duplicate reads during startup and catalog refresh.
+- Speed up statistics by reusing filtered records and binary JSON while retaining complete aggregates, pagination, pricing and actual query progress.
+- Unify busy and request-size errors across HTTP, SSE and WebSocket. Preserve upstream status, generated content, tool progress and usage without adding automatic retries.
+- During native restoration, show history notices only for confirmed EMP checkpoints needing follow-up. Remove unhelpful warnings about unchecked sessions.
+
 ## 0.13.23 (2026-11-01)
 
 ### 中文

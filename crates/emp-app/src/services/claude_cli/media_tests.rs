@@ -57,18 +57,28 @@ fn large_original_media_and_instructions_are_kept_above_the_old_adapter_limit() 
 }
 
 #[test]
-fn text_input_keeps_the_existing_text_carrier() {
-    let body = json!({"model":"m","input":"hello","stream":true});
-    let prepared = prepare(&body).expect("text input");
-    assert!(matches!(prepared.input_format, InputFormat::Text));
-    assert_eq!(
-        serde_json::from_slice::<Value>(&prepared.stdin).unwrap(),
-        json!({"model":"m","input":"hello","stream":false})
-    );
-    assert!(matches!(
-        prepared.expected_user_content,
-        ExpectedUserContent::Text(_)
-    ));
+fn text_input_preserves_content_across_plain_and_jsonl_carriers() {
+    for repetitions in [1, 1_000_000] {
+        let text = "line\n\"quoted\" 🧪 ".repeat(repetitions);
+        let body = json!({"model":"m","input":text,"stream":true});
+        for prepared in [prepare(&body).unwrap(), prepare_relay(&body).unwrap()] {
+            let mut value: Value = serde_json::from_slice(&prepared.stdin).unwrap();
+            if repetitions == 1 {
+                assert!(matches!(prepared.input_format, InputFormat::Text));
+            } else {
+                assert!(matches!(prepared.input_format, InputFormat::StreamJson));
+                assert_eq!(value["type"], "user");
+                assert_eq!(value["message"]["role"], "user");
+                value =
+                    serde_json::from_str(value["message"]["content"].as_str().unwrap()).unwrap();
+            }
+            assert_eq!(value, json!({"model":"m","input":text,"stream":false}));
+            assert!(matches!(
+                prepared.expected_user_content,
+                ExpectedUserContent::Text(_)
+            ));
+        }
+    }
 }
 
 #[test]

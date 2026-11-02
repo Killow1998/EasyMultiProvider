@@ -208,13 +208,14 @@ impl NativeStream {
 
     fn push_event(
         &mut self,
-        event: Value,
+        mut event: Value,
         original_frame: Option<Vec<u8>>,
     ) -> Result<(), RouterError> {
+        let normalized = crate::normalize_upstream_error_event(&mut event).is_some();
         self.observation.observe(&event, original_frame.is_some());
         let mut projected =
             rewrite_native_model_event(&event, &self.requested_model, &self.upstream_model);
-        let model_changed = projected != event;
+        let event_changed = normalized || projected != event;
         if self.plaintext_collaboration {
             projected = restore_collaboration(&projected).map_err(|error| match error {
                 CollaborationError::UnexpectedEncryptedArguments => native_stream_error(
@@ -261,7 +262,7 @@ impl NativeStream {
             self.response.take();
             self.generated.take();
         }
-        let frame = if !model_changed && !self.plaintext_collaboration {
+        let frame = if !event_changed && !self.plaintext_collaboration {
             match original_frame {
                 Some(frame) => frame,
                 None => native_sse_frame(&event_type, &projected)?,

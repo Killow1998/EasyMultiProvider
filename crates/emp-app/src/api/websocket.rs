@@ -47,14 +47,14 @@ impl ObservedWebSocket<'_, '_> {
         &mut self,
         state: &ServerState,
         route: &emp_core::ResolvedRoute,
-        body: &serde_json::Map<String, Value>,
+        body: &Value,
         headers: &BTreeMap<String, String>,
         event: &Value,
     ) {
         let mut outcome = crate::services::request_outcome::RequestOutcome::new(
             state,
             route,
-            &Value::Object(body.clone()),
+            body,
             headers,
             None,
             "responses",
@@ -105,7 +105,7 @@ impl ObservedWebSocket<'_, '_> {
 struct Turn {
     config: Value,
     route: emp_core::ResolvedRoute,
-    body: serde_json::Map<String, Value>,
+    body: Value,
     headers: BTreeMap<String, String>,
     ids: emp_router::ProjectionIds,
     scope: (Option<String>, Option<String>),
@@ -243,9 +243,12 @@ pub(crate) fn serve_responses_websocket(
             websocket.close(1001, "EMP connection is draining");
             return;
         }
+        let decoded_bytes = text.len() as u64;
+        let decoded = serde_json::from_str::<Value>(&text);
+        drop(text);
         // A steering frame can race the preceding terminal event. It is a
         // control message, never another inference or a failed model request.
-        if let Ok(value) = serde_json::from_str::<Value>(&text)
+        if let Ok(value) = &decoded
             && value["type"] == "response.interrupt"
         {
             let late = value["response_id"]
@@ -298,8 +301,8 @@ pub(crate) fn serve_responses_websocket(
             ));
             continue;
         };
-        let mut request_body = match serde_json::from_str::<Value>(&text) {
-            Ok(Value::Object(value)) => value,
+        let mut request_body = match decoded {
+            Ok(value @ Value::Object(_)) => value,
             _ => {
                 let _ = websocket.send_json(&emp_websocket_error(
                     400,
@@ -316,6 +319,8 @@ pub(crate) fn serve_responses_websocket(
             request_body.get("stream"),
         );
         if request_body
+            .as_object_mut()
+            .unwrap()
             .remove("type")
             .and_then(|value| value.as_str().map(str::to_owned))
             .as_deref()
@@ -333,13 +338,13 @@ pub(crate) fn serve_responses_websocket(
         websocket.observation.phase(Phase::ResolveRoute);
         let (config, route, mut request_body) = match crate::services::memory_routing::prepare(
             state,
-            Value::Object(request_body),
+            request_body,
             &incoming,
         ) {
             Ok(PreparedRequest {
                 config,
                 route,
-                body: Value::Object(body),
+                body: body @ Value::Object(_),
             }) => (config, route, body),
             Err(RequestPreparationError::ModelRequired) => {
                 let _ = websocket.send_json(&serde_json::json!({
@@ -375,8 +380,7 @@ pub(crate) fn serve_responses_websocket(
         websocket.observation.selected(&route);
         websocket.observation.phase(Phase::ValidateInput);
         if crate::services::claude_cli::selected(&route)
-            && let Err(error) =
-                crate::services::claude_cli::preflight_input(&Value::Object(request_body.clone()))
+            && let Err(error) = crate::services::claude_cli::preflight_input(&request_body)
         {
             if websocket
                 .send_json(&crate::api::claude_response::websocket_value_for_route(
@@ -401,19 +405,21 @@ pub(crate) fn serve_responses_websocket(
         };
         let request_headers = websocket.observation.headers(incoming.clone());
         websocket.observation.phase(Phase::PrepareHistory);
-        let request_scope =
-            match emp_history::request_history_anchor(&request_body, &request_headers) {
-                Ok(anchor) => (anchor.thread_id, anchor.window_id),
-                Err(error) => {
-                    let failed = history_stream_error(&error, websocket.observation);
-                    let _ = websocket.send_json(&failed);
-                    continue;
-                }
-            };
+        let request_scope = match emp_history::request_history_anchor(
+            request_body.as_object().unwrap(),
+            &request_headers,
+        ) {
+            Ok(anchor) => (anchor.thread_id, anchor.window_id),
+            Err(error) => {
+                let failed = history_stream_error(&error, websocket.observation);
+                let _ = websocket.send_json(&failed);
+                continue;
+            }
+        };
         websocket
             .observation
             .native_continuation()
-            .downstream_decoded_bytes = Some(text.len() as u64);
+            .downstream_decoded_bytes = Some(decoded_bytes);
         if let Some(reason) = native_session.check_scope(
             route.dialect,
             &request_scope,
@@ -429,25 +435,24 @@ pub(crate) fn serve_responses_websocket(
             );
             continue;
         }
-        request_body =
-            match prepare_history(state, &route, Value::Object(request_body), &request_headers) {
-                Ok(Value::Object(body)) => body,
-                Ok(_) => {
-                    let error = HistoryError::new("invalid_history_projection");
-                    let failed = history_stream_error(&error, websocket.observation);
-                    if websocket.send_json(&failed).is_err() {
-                        return;
-                    }
-                    continue;
+        request_body = match prepare_history(state, &route, request_body, &request_headers) {
+            Ok(body @ Value::Object(_)) => body,
+            Ok(_) => {
+                let error = HistoryError::new("invalid_history_projection");
+                let failed = history_stream_error(&error, websocket.observation);
+                if websocket.send_json(&failed).is_err() {
+                    return;
                 }
-                Err(error) => {
-                    let failed = history_stream_error(&error, websocket.observation);
-                    if websocket.send_json(&failed).is_err() {
-                        return;
-                    }
-                    continue;
+                continue;
+            }
+            Err(error) => {
+                let failed = history_stream_error(&error, websocket.observation);
+                if websocket.send_json(&failed).is_err() {
+                    return;
                 }
-            };
+                continue;
+            }
+        };
         websocket.observation.phase(Phase::PrepareDestination);
         let destination_context = {
             let mut monitor = monitor_stream.as_ref().and_then(|probe| {
@@ -456,13 +461,13 @@ pub(crate) fn serve_responses_websocket(
             prepare_destination_context(
                 state,
                 &route,
-                Value::Object(request_body),
+                request_body,
                 &request_headers,
                 monitor.as_mut(),
             )
         };
         request_body = match destination_context {
-            Ok(Value::Object(body)) => body,
+            Ok(body @ Value::Object(_)) => body,
             Ok(_) => {
                 let error = HistoryError::new("invalid_history_projection");
                 let failed = history_stream_error(&error, websocket.observation);
@@ -546,9 +551,9 @@ pub(crate) fn serve_responses_websocket(
             } else {
                 (None, None)
             };
-        turn.body.remove("previous_response_id");
-        let generate = turn
-            .body
+        let body = turn.body.as_object_mut().unwrap();
+        body.remove("previous_response_id");
+        let generate = body
             .get("generate")
             .and_then(|value| value.as_bool())
             .unwrap_or(true);
@@ -567,8 +572,8 @@ pub(crate) fn serve_responses_websocket(
             if websocket.send_json(&serde_json::json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","output":[],"usage":usage}})).is_err(){return;}
             continue;
         }
-        turn.body.remove("generate");
-        turn.body.insert("stream".to_owned(), Value::Bool(true));
+        body.remove("generate");
+        body.insert("stream".to_owned(), Value::Bool(true));
         let Some(socket) = monitor_stream.as_ref() else {
             return;
         };

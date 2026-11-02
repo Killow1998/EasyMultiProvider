@@ -156,7 +156,7 @@ fn execute_complete_with_cli(
         media::prepare_relay(body)
     }
     .map_err(ClaudeCliError::Failure)?;
-    let stdin = Arc::<[u8]>::from(cli_input.stdin);
+    let stdin = cli_input.stdin;
     let expected_user_content = cli_input.expected_user_content;
     let model = candidate.upstream_model.as_str();
     let effort = projection::effort_for_model(body, candidate.model.value())
@@ -240,7 +240,7 @@ fn execute_complete_with_cli(
         });
         let output = process::run_observed(
             command,
-            Arc::clone(&stdin),
+            stdin,
             &cancelled,
             || cancellation_reason(state, &mut monitor),
             |stdout| {
@@ -307,7 +307,7 @@ fn execute_complete_with_cli(
                     relay_result_tx,
                 );
             });
-            let process_result = process::run(command, Arc::clone(&stdin), &cancelled, || {
+            let process_result = process::run(command, stdin, &cancelled, || {
                 cancellation_reason(state, &mut monitor)
             });
             if !matches!(

@@ -162,14 +162,14 @@ def main():
         if args.shadow_url:
             browser.navigate(args.shadow_url)
             assert browser.execute('return window.EMP_REAL_SHADOW===true;')
-            browser.execute('document.getElementById("shadow_review_button").click();document.querySelector("[data-shadow-demo=gateway]").click();')
+            browser.execute('window.EMP_REVIEW_ACTION("gateway");')
             wait_for(lambda: browser.execute('return !!document.getElementById("decision_settings");'), seconds=60)
             assert browser.execute('return !window.EMP_REAL_SHADOW && !!document.getElementById("onboarding_fixture_banner");')
             choose_service(browser, 'example', 'openrouter')
             change(browser, 'decision_model', '~typesafe/jev-latest')
             browser.execute('document.getElementById("modal_submit").click();')
             wait_for(lambda: browser.execute('return state.decision_provider==="example" && !document.getElementById("decision_settings");'))
-            checks.append('Shadow current-review entry opens the production dialog on a separate disposable backend; saving leaves real configuration alone')
+            checks.append('The isolated decision-model scenario opens the production dialog on a separate disposable backend; saving leaves real configuration alone')
     result = {'passed':True, 'checks':checks, 'mock_decision_requests':len(DecisionUpstream.calls), 'mock_catalog_requests':len(DecisionUpstream.catalogs), 'real_model_requests':0, 'embedded_assets':args.embedded}
     (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result))

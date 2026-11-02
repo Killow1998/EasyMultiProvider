@@ -66,17 +66,16 @@ python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --dem
 ```
 
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
-review entry. Its baseline is the published **v0.13.20**, displayed in the dialog.
+review entry. Its baseline is the published **v0.13.23**, displayed in the dialog.
 Keep `reviewRows` in `preview-review.js` cumulative across development tasks;
 reset the list and advance `reviewBaseline` together after the next release.
 Follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
-The current review covers **service actions and sign-in methods**, **settings
-categories**, **decision-model settings**, **quota trends**, **model capabilities**,
-**Codex 0.166 maintenance**, **provider balances**, and **application icons**.
-Model-data and engine-maintenance entries summarize backend changes; the others
-open their interfaces. Settings and quota
-trends use the real-data read-only page. Sign-in and decision-model actions open
-isolated synthetic accounts. Earlier entries remain available as demos where applicable.
+The current review covers **request memory/catalog/report reads**, **request failure
+feedback** and **Native restore history notices**. Memory and failure entries
+summarize backend changes; the history entry opens an isolated lifecycle example. Previously published
+features use their normal product entry points. Their isolated scenarios remain
+available as demos where applicable; their tests do not depend on the current
+review list.
 Ultra uses the production dialog with live catalog capabilities and a browser-local
 preference draft. When
 the source backend predates this capability projection, the read-only bridge reads
@@ -242,7 +241,11 @@ python3 scripts/shadow_frontend/e2e_native_history_restore.py \
   --emp /path/to/candidate/EMP --output /tmp/emp-native-history-restore.json
 ```
 
-It checks idle conversion, unchanged busy history, restart-persistent recovery,
+For an asset-only candidate, add `--web crates/emp-app/web` to use the current
+frontend with the selected backend binary.
+
+It checks idle conversion, unchanged busy history, skipped-only reports without
+an alert, confirmed-checkpoint conversion, a normal restore after a writer closes,
 Chinese/English narrow and desktop layouts, byte-exact backups, idempotence,
 normal Quit and offline Restore. It never reads a production Codex home or
 makes a model request. Native opaque reasoning and tool pairs remain in the

@@ -17,7 +17,7 @@ fn timeout_and_disconnect_stop_the_child_process_group() {
     assert_eq!(
         run_with_timeout_policy(
             command,
-            Arc::from(&b"input"[..]),
+            b"input".to_vec(),
             &cancelled,
             Duration::from_millis(20),
             false,
@@ -38,7 +38,7 @@ fn timeout_and_disconnect_stop_the_child_process_group() {
     assert_eq!(
         run_with_timeout_policy(
             command,
-            Arc::from(&b"input"[..]),
+            b"input".to_vec(),
             &cancelled,
             Duration::from_secs(1),
             false,
@@ -68,7 +68,7 @@ fn normal_parent_exit_kills_descendant_holding_child_pipes_open() {
     assert_eq!(
         run_with_timeout_policy(
             command,
-            Arc::from(&b"input"[..]),
+            b"input".to_vec(),
             &cancelled,
             Duration::from_secs(2),
             false,
@@ -108,7 +108,7 @@ fn output_budget_event_stops_a_waiting_cli_without_waiting_for_timeout() {
         assert_eq!(
             run_with_timeout_policy(
                 command,
-                Arc::from(&b"input"[..]),
+                b"input".to_vec(),
                 &cancelled,
                 Duration::from_secs(2),
                 false,

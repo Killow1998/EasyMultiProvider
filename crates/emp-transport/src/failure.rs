@@ -51,6 +51,7 @@ pub enum FailureClass {
     OutputLimit,
     ContentFilter,
     ContextLengthExceeded,
+    RequestTooLarge,
     ExternalCompactionFailed,
     HistoryReconstructionFailed,
     UpstreamCapacity,
@@ -86,6 +87,7 @@ impl FailureClass {
             Self::OutputLimit => "output_limit",
             Self::ContentFilter => "content_filter",
             Self::ContextLengthExceeded => "context_length_exceeded",
+            Self::RequestTooLarge => "request_too_large",
             Self::ExternalCompactionFailed => "external_compaction_failed",
             Self::HistoryReconstructionFailed => "history_reconstruction_failed",
             Self::UpstreamCapacity => "upstream_capacity",
@@ -121,6 +123,7 @@ impl FailureClass {
             "output_limit" => Self::OutputLimit,
             "content_filter" => Self::ContentFilter,
             "context_length_exceeded" => Self::ContextLengthExceeded,
+            "request_too_large" => Self::RequestTooLarge,
             "external_compaction_failed" => Self::ExternalCompactionFailed,
             "history_reconstruction_failed" => Self::HistoryReconstructionFailed,
             "upstream_capacity" => Self::UpstreamCapacity,
@@ -243,11 +246,17 @@ pub fn network_failure(
     }
 }
 
-fn http_failure_reason(status: u16, detail: &str) -> &'static str {
+fn http_failure_reason(status: u16, detail: &str, code: Option<&str>) -> &'static str {
     let mut text = String::new();
     let mut separated = true;
-    for character in detail.to_ascii_lowercase().chars() {
-        if character.is_ascii_alphanumeric() {
+    for character in code
+        .unwrap_or("")
+        .chars()
+        .chain(std::iter::once(' '))
+        .chain(detail.chars())
+    {
+        let character = character.to_ascii_lowercase();
+        if character.is_alphanumeric() {
             text.push(character);
             separated = false;
         } else if !separated {
@@ -262,16 +271,48 @@ fn http_failure_reason(status: u16, detail: &str) -> &'static str {
     match status {
         401 | 403 => "auth_rejected",
         402 => "payment_required",
-        413 => "request_too_large",
-        _ if contains_any(&["request too large", "payload too large", "input too large"]) => {
-            "request_too_large"
-        }
-        _ if contains_any(&["context length", "context window", "maximum context"]) => {
-            "context_length_exceeded"
-        }
         429 if contains_any(&["quota", "credit", "balance", "insufficient"]) => "quota_exhausted",
         429 if contains_any(&["capacity", "overloaded", "saturated"]) => "upstream_capacity",
         429 => "rate_limited",
+        _ if contains_any(&["context length", "context window", "maximum context"]) => {
+            "context_length_exceeded"
+        }
+        413 => "request_too_large",
+        _ if contains_any(&[
+            "request too large",
+            "payload too large",
+            "maximum allowed number of bytes",
+        ]) || (contains_any(&["request body", "request entity", "request payload"])
+            && contains_any(&["too large", "too big", "exceed", "over", "size limit"])) =>
+        {
+            "request_too_large"
+        }
+        400 | 409 | 422 | 500 | 502 | 503
+            if !contains_any(&[
+                "quota",
+                "credit",
+                "balance",
+                "insufficient",
+                "usage limit",
+                "额度",
+                "余额",
+                "欠费",
+            ]) && contains_any(&[
+                "concurrency limit exceeded",
+                "concurrency limit reached",
+                "too many concurrent",
+                "too many pending requests",
+                "overloaded error",
+                "server overloaded",
+                "model overloaded",
+                "upstream capacity",
+                "并发请求过多",
+                "达到并发上限",
+                "超过并发上限",
+            ]) =>
+        {
+            "upstream_capacity"
+        }
         504 => "upstream_504",
         500 | 502 | 503 => "upstream_unavailable",
         _ => "upstream_rejected",
@@ -297,21 +338,21 @@ pub fn http_failure(input: HttpFailureInput<'_>) -> UpstreamFailure {
     }
     let model_not_found =
         matches!(input.status, 400 | 403 | 404) && input.upstream_code == Some("model_not_found");
-    let mut failure = UpstreamFailure::new(
-        if model_not_found {
-            FailureClass::ProtocolRejection
-        } else {
-            status_error_class(Some(input.status))
-        },
-        input.status,
-        FailurePhase::TerminalValidation,
-    )
-    .with_reason(if model_not_found {
+    let reason = if model_not_found {
         "model_not_found"
     } else {
-        http_failure_reason(input.status, input.detail)
-    });
-    if matches!(input.status, 429 | 503) {
+        http_failure_reason(input.status, input.detail, input.upstream_code)
+    };
+    let class = match reason {
+        "model_not_found" => FailureClass::ProtocolRejection,
+        "context_length_exceeded" => FailureClass::ContextLengthExceeded,
+        "request_too_large" => FailureClass::RequestTooLarge,
+        "upstream_capacity" if input.status != 429 => FailureClass::UpstreamCapacity,
+        _ => status_error_class(Some(input.status)),
+    };
+    let mut failure = UpstreamFailure::new(class, input.status, FailurePhase::TerminalValidation)
+        .with_reason(reason);
+    if matches!(input.status, 429 | 503) || class == FailureClass::UpstreamCapacity {
         failure.retry_after_seconds = input.retry_after_seconds;
     }
     failure
@@ -389,7 +430,15 @@ pub fn public_failure_message(
         return "The upstream model was not found or is unavailable to this account.".to_owned();
     }
     let reason = failure_reason.map(safe_token);
+    if error_class == FailureClass::UpstreamCapacity
+        || (error_class == FailureClass::RateLimit
+            && reason.as_deref() == Some("upstream_capacity"))
+    {
+        return "The upstream is temporarily busy; you can retry your request.".to_owned();
+    }
     match error_class {
+        FailureClass::RequestTooLarge => "The request exceeds the upstream byte-size limit.".to_owned(),
+        FailureClass::ContextLengthExceeded => "The input exceeds the model's context window.".to_owned(),
         FailureClass::ProxyUnavailable => "Configured proxy is unavailable. Check that the proxy is running and its listening port matches your proxy settings.".to_owned(),
         FailureClass::DnsFailure => "The connection host name could not be resolved. Check the service or proxy address and DNS settings.".to_owned(),
         FailureClass::TlsFailure => "Secure connection verification or handshake failed. Check the system clock, certificate trust and proxy HTTPS settings.".to_owned(),
@@ -407,7 +456,6 @@ pub fn public_failure_message(
             Some("quota_exhausted") => {
                 "The upstream error indicates insufficient quota or credits.".to_owned()
             }
-            Some("upstream_capacity") => "The upstream reported limited capacity.".to_owned(),
             _ => "The upstream rate limit was reached.".to_owned(),
         },
         FailureClass::Auth => "The upstream rejected the account credentials.".to_owned(),

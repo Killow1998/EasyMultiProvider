@@ -2,6 +2,63 @@
 
 use super::*;
 
+pub fn normalize_upstream_error_event(event: &mut Value) -> Option<emp_transport::UpstreamFailure> {
+    let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+    if !matches!(kind, "" | "error" | "response.failed") {
+        return None;
+    }
+    let error = if kind == "response.failed" {
+        event.get("response")?.get("error")?
+    } else {
+        event.get("error")?
+    }
+    .as_object()?;
+    let status = event
+        .get("status")
+        .and_then(Value::as_u64)
+        .or_else(|| error.get("status").and_then(Value::as_u64))
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|status| (400..600).contains(status))
+        .unwrap_or(502);
+    let mut failure = http_failure(HttpFailureInput {
+        status,
+        detail: error.get("message").and_then(Value::as_str).unwrap_or(""),
+        upstream_code: error
+            .get("code")
+            .or_else(|| error.get("type"))
+            .and_then(Value::as_str),
+        proxy_evidence: false,
+        retry_after_seconds: error.get("retry_after_seconds").and_then(Value::as_u64),
+    });
+    if !matches!(
+        failure.error_class,
+        FailureClass::UpstreamCapacity | FailureClass::RequestTooLarge
+    ) {
+        return None;
+    }
+    failure.terminal_event = true;
+    let error = if kind == "response.failed" {
+        &mut event["response"]["error"]
+    } else {
+        &mut event["error"]
+    };
+    error["code"] = failure.failure_reason.clone().into();
+    error["error_class"] = failure.error_class.as_str().into();
+    error["failure_reason"] = failure.failure_reason.clone().into();
+    error["status"] = failure.status.into();
+    error["origin"] = "upstream".into();
+    error["message"] = emp_transport::public_failure_message(
+        failure.error_class,
+        failure.failure_reason.as_deref(),
+        failure.status,
+    )
+    .into();
+    if event.get("type").is_none() {
+        event["type"] = "error".into();
+    }
+    Some(failure)
+}
+
 pub(super) fn upstream_error(
     status: u16,
     raw: &[u8],

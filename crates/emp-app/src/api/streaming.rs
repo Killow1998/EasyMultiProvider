@@ -195,7 +195,7 @@ pub(crate) fn serve_native_stream(
             state,
             route,
             config,
-            body.as_object().expect("validated request object"),
+            body,
             incoming,
             ids,
             &mut monitor,
@@ -206,16 +206,8 @@ pub(crate) fn serve_native_stream(
             native::CancellableNativeStreamOpen::Disconnected => return Ok(()),
         },
         None => (
-            native::open_stream_result(
-                state,
-                route,
-                config,
-                body.as_object().expect("validated request object"),
-                incoming,
-                ids,
-                None,
-            )
-            .map_err(crate::api::native_response::error_response)?,
+            native::open_stream_result(state, route, config, body, incoming, ids, None)
+                .map_err(crate::api::native_response::error_response)?,
             None,
         ),
     };

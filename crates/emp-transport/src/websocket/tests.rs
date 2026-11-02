@@ -31,6 +31,57 @@ fn client_socket() -> ClientWebSocket {
 }
 
 #[test]
+fn upstream_masked_frames_roundtrip_across_write_chunks() {
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+
+    for compressed in [false, true] {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut client = client_socket();
+        client.stream = Box::new(peer);
+        let parameters =
+            "permessage-deflate; client_no_context_takeover; server_no_context_takeover";
+        if compressed {
+            client.compression = Some(PerMessageDeflate::negotiated(parameters).unwrap());
+        }
+        let text = (0..200_000)
+            .map(|index| char::from(b'!' + ((index * 17 + index / 37) % 90) as u8))
+            .collect::<String>();
+        let lengths = [0, 125, 126, 65_535, 65_536, 196_613];
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for length in lengths {
+                    client.send_text(&text[..length]).unwrap();
+                }
+            });
+            let mut decoder = FrameDecoder::new(MAX_PROXY_REQUEST_BYTES);
+            let mut codec = PerMessageDeflate::negotiated(parameters).unwrap();
+            for length in lengths {
+                match decoder.poll(&mut socket, true, compressed).unwrap() {
+                    crate::websocket_pump::FramePoll::Message {
+                        payload,
+                        compressed,
+                        ..
+                    } => {
+                        let decoded = if compressed {
+                            codec.decompress(&payload, MAX_PROXY_REQUEST_BYTES).unwrap()
+                        } else {
+                            payload
+                        };
+                        assert_eq!(decoded, &text.as_bytes()[..length]);
+                    }
+                    _ => panic!("expected complete masked text frame"),
+                }
+            }
+        });
+    }
+}
+
+#[test]
 fn text_traffic_measures_encoding_excludes_control_and_keeps_unknown_partial_reads() {
     let mut client = client_socket();
     client.send_text("plain").unwrap();

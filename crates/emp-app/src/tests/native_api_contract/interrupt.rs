@@ -73,6 +73,72 @@ fn request(ws: &mut WebSocketConnection<'_, TcpStream>) -> Value {
 }
 
 #[test]
+fn native_websocket_busy_and_size_errors_preserve_progress_without_replay() {
+    for (status, upstream_code, code, hint) in [
+        (
+            409,
+            "overloaded_error",
+            "upstream_capacity",
+            "you can retry your request",
+        ),
+        (
+            413,
+            "request_too_large",
+            "request_too_large",
+            "byte-size limit",
+        ),
+    ] {
+        for phase in ["before", "text", "tool"] {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+            let worker = thread::spawn(move || {
+                let mut stream = accept_upstream(listener);
+                let mut ws = WebSocketConnection::new(&mut stream);
+                request(&mut ws);
+                if phase == "text" {
+                    ws.send_json(&json!({"type":"response.output_text.delta","delta":"partial"}))
+                        .unwrap();
+                } else if phase == "tool" {
+                    ws.send_json(&json!({"type":"response.output_item.added","output_index":0,"item":{
+                        "id":"fc_fixture","type":"function_call","call_id":"call_lookup","name":"lookup","arguments":"{}"
+                    }})).unwrap();
+                }
+                ws.send_json(&json!({"type":"error","status":status,"diagnostic_id":"retained-fixture", "error":{
+                    "code":upstream_code,"message":"private upstream detail"
+                }})).unwrap();
+            });
+            let (_root, server) = native_alias_server(&base_url);
+            let mut client = connect(&server);
+            client.send_json(&json!({"type":"response.create","model":"native/alias","input":"fixture",
+                "tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{}}}]})).unwrap();
+            if phase != "before" {
+                let kind = if phase == "text" {
+                    "response.output_text.delta"
+                } else {
+                    "response.output_item.added"
+                };
+                event(&mut client, kind);
+            }
+            let failure = event(&mut client, "error");
+            assert_eq!(failure["status"], status);
+            assert_eq!(failure["error"]["code"], code);
+            assert_eq!(failure["diagnostic_id"], "retained-fixture");
+            assert!(failure["error"]["message"].as_str().unwrap().contains(hint));
+            assert!(!failure.to_string().contains("private upstream detail"));
+            drop(client);
+            worker.join().unwrap();
+            let report = recorded_calls(&server, &session_header(&server));
+            let failed = &report["records"][0];
+            assert_eq!(failed["error_origin"], "upstream");
+            assert_eq!(failed["error_code"], code);
+            assert_eq!(failed["error_class"], code);
+            assert_eq!(failed["attempts"], 1);
+            server.shutdown().unwrap();
+        }
+    }
+}
+
+#[test]
 fn local_and_upstream_websocket_errors_have_distinct_receipts_and_preserve_upstream_wire() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let base_url = format!("http://{}/v1", listener.local_addr().unwrap());

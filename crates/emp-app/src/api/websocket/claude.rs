@@ -41,7 +41,7 @@ pub(super) fn serve(
     let mut usage = crate::services::request_outcome::RequestOutcome::new(
         state,
         route,
-        &Value::Object(request_body.clone()),
+        request_body,
         request_headers,
         None,
         "responses",
@@ -51,7 +51,7 @@ pub(super) fn serve(
     let completion = match crate::services::claude_cli::execute_complete(
         state,
         route,
-        &Value::Object(request_body.clone()),
+        request_body,
         request_headers,
         Some(monitor),
         &mut usage,
@@ -89,12 +89,7 @@ pub(super) fn serve(
     usage.observe(&response_value);
     usage.finish();
     if response_value["status"] == "completed" {
-        crate::services::context::record(
-            state,
-            &selected_route,
-            &Value::Object(request_body.clone()),
-            true,
-        );
+        crate::services::context::record(state, &selected_route, request_body, true);
     }
     crate::services::providers::persist_protocol_observation(state, &selected_route);
     let events = match emp_router::response_json_stream_events(response_value, ids, false) {

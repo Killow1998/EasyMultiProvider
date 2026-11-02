@@ -417,13 +417,7 @@ pub(crate) fn responses_request(
                     &route,
                 ));
         return ResponsesRequestResult::Buffered(crate::api::native_response::complete_response(
-            native::complete(
-                state,
-                &route,
-                &config,
-                body.as_object().expect("validated request object"),
-                &incoming,
-            ),
+            native::complete(state, &route, &config, &body, &incoming),
         ));
     }
     if python_truthy(body.get("stream")) {

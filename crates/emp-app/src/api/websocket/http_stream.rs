@@ -85,12 +85,7 @@ pub(super) fn serve_native(
             DisconnectRace::Ready(Ok(Some(event))) => {
                 usage.upstream_observation(&upstream.observation);
                 usage.observe(&event.body);
-                crate::services::context::record_event(
-                    state,
-                    route,
-                    &Value::Object(request_body.clone()),
-                    &event.body,
-                );
+                crate::services::context::record_event(state, route, request_body, &event.body);
                 sent_output |= stream_event_activity(&event.body).0;
                 if websocket.send_upstream_json(&event.body).is_err() {
                     return TurnResult::Closed;
@@ -101,6 +96,7 @@ pub(super) fn serve_native(
             }
             DisconnectRace::Ready(Ok(None)) => break,
             DisconnectRace::Ready(Err(error)) => {
+                usage.router_error(&error);
                 if sent_output {
                     let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
                     let failure = stream_failure_value(&error, &id);
@@ -139,7 +135,7 @@ pub(super) fn serve_external(
     let (mut upstream, candidate, usage) = match crate::services::external::open_stream(
         state,
         route,
-        &Value::Object(request_body.clone()),
+        request_body,
         request_headers,
         ids,
         Some(monitor),
@@ -185,7 +181,7 @@ pub(super) fn serve_external(
                 crate::services::context::record_event(
                     state,
                     &candidate,
-                    &Value::Object(request_body.clone()),
+                    request_body,
                     &event.body,
                 );
                 sent_output |= stream_event_activity(&event.body).0;
@@ -201,6 +197,7 @@ pub(super) fn serve_external(
             }
             DisconnectRace::Ready(Ok(None)) => break,
             DisconnectRace::Ready(Err(error)) => {
+                usage.router_error(&error);
                 if sent_output {
                     let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
                     let failure = stream_failure_value_for_route(&error, &id, &candidate, true);

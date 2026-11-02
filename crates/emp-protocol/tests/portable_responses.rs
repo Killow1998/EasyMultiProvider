@@ -226,6 +226,39 @@ fn response_projection_strips_plaintext_reasoning_from_upstream_output() {
         json!("thinking hard")
     );
     assert_eq!(projected["output"][0]["encrypted_content"], "gAAAA");
+
+    for summary in [None, Some(Value::Null), Some(json!([]))] {
+        let mut response = response.clone();
+        let reasoning = response["output"][0].as_object_mut().unwrap();
+        reasoning.remove("summary");
+        if let Some(summary) = summary {
+            reasoning.insert("summary".into(), summary);
+        }
+        let complete = project_response(&response, &Default::default(), true, true).unwrap();
+        validate_responses_body(&complete, true).unwrap();
+        assert_eq!(complete["output"].as_array().unwrap().len(), 2);
+        assert_eq!(complete["output"][0]["encrypted_content"], "gAAAA");
+        let mut stream = PortableStreamProjector::new(Default::default(), true, true);
+        let done = stream
+            .project(&json!({"type":"response.output_item.done","output_index":0,
+            "item":response["output"][0]}))
+            .unwrap()
+            .unwrap();
+        let terminal = stream
+            .project(&json!({"type":"response.completed","response":response}))
+            .unwrap()
+            .unwrap();
+        assert_eq!(done["item"], terminal["response"]["output"][0]);
+        assert_eq!(terminal["response"], complete);
+        assert!(!terminal.to_string().contains("secret chain"));
+        assert_eq!(
+            project_response(&response, &Default::default(), false, false).unwrap()["output"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }
 
 #[test]

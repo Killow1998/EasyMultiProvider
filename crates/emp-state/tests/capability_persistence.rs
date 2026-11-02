@@ -33,8 +33,18 @@ fn loading_known_model_modalities_preserves_saved_limits_and_reasoning() {
         assert_eq!(model["reasoning_levels"], json!(["low"]));
         assert_eq!(normalize_configuration(Some(&loaded)).unwrap(), loaded);
 
-        raw["models"][0]["capability_sources"]["input_modalities"]["source"] = json!("manual");
-        let restricted = normalize_configuration(Some(&raw)).unwrap();
-        assert_eq!(restricted["models"][0]["input_modalities"], json!(["text"]));
+        for source in ["manual", "observed", "advertised"] {
+            raw["models"][0]["capability_sources"]["input_modalities"]["source"] = json!(source);
+            let restricted = normalize_configuration(Some(&raw)).unwrap();
+            assert_eq!(restricted["models"][0]["input_modalities"], json!(["text"]));
+            assert_eq!(
+                restricted["models"][0]["capability_sources"]["input_modalities"]["source"],
+                source
+            );
+            assert_eq!(
+                normalize_configuration(Some(&restricted)).unwrap(),
+                restricted
+            );
+        }
     }
 }

@@ -287,15 +287,29 @@ impl ClientWebSocket {
         frame.push(0x80 | prefix[0]);
         frame.extend(&prefix[1..]);
         frame.extend_from_slice(&mask);
+        let first = payload.len().min(64 * 1024);
         frame.extend(
-            payload
+            payload[..first]
                 .iter()
                 .enumerate()
                 .map(|(index, byte)| byte ^ mask[index % 4]),
         );
         self.stream
             .write_all(&frame)
-            .and_then(|_| self.stream.flush())
+            .and_then(|()| {
+                // 64 KiB chunks preserve the four-byte mask alignment.
+                for chunk in payload[first..].chunks(64 * 1024) {
+                    frame.clear();
+                    frame.extend(
+                        chunk
+                            .iter()
+                            .enumerate()
+                            .map(|(index, byte)| byte ^ mask[index % 4]),
+                    );
+                    self.stream.write_all(&frame)?;
+                }
+                self.stream.flush()
+            })
             .map_err(|error| ClientWebSocketError {
                 io_kind: Some(error.kind()),
                 ..ClientWebSocketError::new(502, "native upstream websocket write failed")

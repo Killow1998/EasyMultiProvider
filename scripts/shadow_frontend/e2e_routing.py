@@ -174,7 +174,7 @@ def main():
         browser.navigate(shadow + '/?routing=1')
         wait_for(lambda: browser.execute('return !!document.getElementById("routing_image_mode");'))
         assert browser.execute('return !!window.EMP_PREVIEW && !document.getElementById("shadow_routing_button") && document.querySelectorAll("#routing_image_mode option").length===3 && [...document.querySelectorAll("#routing_image_account option")].some(option=>option.value==="routing-demo");')
-        browser.execute('closeModal();setLanguage("en");document.getElementById("shadow_review_button").click();document.querySelector("#modal_body [data-shadow-demo=settings]").click();')
+        browser.execute('closeModal();setLanguage("en");openSettings();')
         wait_for(lambda: browser.execute('return !!document.querySelector("[data-settings-category=native]");'))
         browser.execute('document.querySelector("[data-settings-category=native]").click();document.querySelector("[data-ui-action=routing-settings]").click();')
         wait_for(lambda: browser.execute('return document.getElementById("modal_title").textContent==="Routing settings";'))

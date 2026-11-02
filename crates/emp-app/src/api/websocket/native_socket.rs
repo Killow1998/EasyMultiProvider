@@ -125,7 +125,7 @@ impl NativeSession {
             let mut usage = crate::services::request_outcome::RequestOutcome::new(
                 state,
                 route,
-                &Value::Object(request_body.clone()),
+                request_body,
                 request_headers,
                 Some(&owner),
                 "responses",
@@ -214,7 +214,7 @@ impl NativeSession {
                     client.traffic(),
                     compression,
                 );
-                let event = match message {
+                let mut event = match message {
                     Message::Upstream(event) => event,
                     Message::DownstreamClosed => {
                         usage.disconnected();
@@ -274,6 +274,7 @@ impl NativeSession {
                     Some("response.metadata" | "codex.response.metadata" | "codex.rate_limits")
                 );
                 received_upstream_event = true;
+                emp_router::normalize_upstream_error_event(&mut event);
                 connection_expired = event["error"]["code"] == "websocket_connection_limit_reached"
                     || event["response"]["error"]["code"] == "websocket_connection_limit_reached";
                 if event["error"]["code"] == "previous_response_not_found"

@@ -13,6 +13,8 @@ pub(crate) fn stream_error_code(error_class: FailureClass, reason: Option<&str>)
     }
     match error_class {
         FailureClass::ContextLengthExceeded => "context_length_exceeded",
+        FailureClass::RequestTooLarge => "request_too_large",
+        FailureClass::UpstreamCapacity => "upstream_capacity",
         FailureClass::PaymentRequired => "payment_required",
         FailureClass::RateLimit => "rate_limit_exceeded",
         _ => "upstream_error",

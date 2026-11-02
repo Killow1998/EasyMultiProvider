@@ -136,7 +136,11 @@ fn native_input(source: &Value) -> Result<Value, NativeProjectionError> {
 /// Project a native body without resolving its model or collaboration namespace.
 /// Unlike portable Responses, native incremental IDs and extension fields survive.
 pub fn project_request(body: &Map<String, Value>) -> Result<Value, NativeProjectionError> {
-    let mut projected = body.clone();
+    let mut projected = body
+        .iter()
+        .filter(|(key, _)| key.as_str() != "input")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<Map<String, Value>>();
     projected.insert(
         "input".to_owned(),
         native_input(body.get("input").unwrap_or(&Value::Null))?,

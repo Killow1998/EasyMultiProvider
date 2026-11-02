@@ -51,6 +51,9 @@ pub(crate) fn message(
         (FailureClass::ContextLengthExceeded, _) => {
             "Reduce the input or choose a model with a larger context window."
         }
+        (FailureClass::RequestTooLarge, _) => {
+            "Reduce image or file sizes, or choose a source with a larger per-request byte limit."
+        }
         (
             FailureClass::Network
             | FailureClass::DnsFailure

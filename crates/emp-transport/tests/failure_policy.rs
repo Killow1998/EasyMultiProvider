@@ -217,3 +217,135 @@ fn public_messages_never_echo_upstream_content() {
         "The upstream stream contained invalid JSON."
     );
 }
+
+#[test]
+fn busy_request_errors_keep_their_status_and_do_not_add_gateway_retries() {
+    for (status, detail) in [
+        (
+            400,
+            "Concurrency limit exceeded for account, please retry later",
+        ),
+        (409, "Too many pending requests, please retry later"),
+        (422, "当前并发请求过多，请稍后重试"),
+    ] {
+        let failure = http_failure(HttpFailureInput {
+            status,
+            detail,
+            upstream_code: None,
+            proxy_evidence: false,
+            retry_after_seconds: Some(7),
+        });
+        assert_eq!(failure.status, status);
+        assert_eq!(failure.error_class.as_str(), "upstream_capacity");
+        assert_eq!(failure.failure_reason.as_deref(), Some("upstream_capacity"));
+        assert_eq!(failure.retry_after_seconds, Some(7));
+        assert!(
+            public_failure_message(
+                failure.error_class,
+                failure.failure_reason.as_deref(),
+                status
+            )
+            .contains("you can retry your request")
+        );
+        assert!(!external_http_retry_allowed(
+            &failure, 0, false, false, false
+        ));
+    }
+    for (status, detail) in [
+        (
+            400,
+            "Invalid request parameters: concurrency_limit must be an integer",
+        ),
+        (400, "Insufficient credits, please retry later"),
+        (400, "Monthly usage limit reached, try again later"),
+        (400, "Maximum context length exceeded, please retry later"),
+        (401, "Temporarily unavailable, invalid API key"),
+        (422, "额度不足，超过并发上限，请稍后重试"),
+    ] {
+        let failure = http_failure(HttpFailureInput {
+            status,
+            detail,
+            upstream_code: None,
+            proxy_evidence: false,
+            retry_after_seconds: None,
+        });
+        assert_ne!(
+            failure.failure_reason.as_deref(),
+            Some("upstream_capacity"),
+            "{detail}"
+        );
+        assert!(
+            !public_failure_message(
+                failure.error_class,
+                failure.failure_reason.as_deref(),
+                status
+            )
+            .contains("you can retry your request"),
+            "{detail}"
+        );
+    }
+}
+
+#[test]
+fn body_size_limits_are_distinct_from_context_and_rate_limits() {
+    for (status, detail) in [
+        (
+            400,
+            "Request body is 40.1 MB, over the 32 MB limit for one request (33554432 bytes)",
+        ),
+        (413, "Payload too large"),
+        (400, "Request exceeds the maximum allowed number of bytes"),
+    ] {
+        let failure = http_failure(HttpFailureInput {
+            status,
+            detail,
+            upstream_code: None,
+            proxy_evidence: false,
+            retry_after_seconds: None,
+        });
+        assert_eq!(failure.status, status);
+        assert_eq!(failure.error_class.as_str(), "request_too_large");
+        assert_eq!(failure.failure_reason.as_deref(), Some("request_too_large"));
+        let message = public_failure_message(
+            failure.error_class,
+            failure.failure_reason.as_deref(),
+            status,
+        );
+        assert!(message.contains("byte-size limit"), "{message}");
+        assert!(!external_http_retry_allowed(
+            &failure, 0, false, false, false
+        ));
+    }
+    for (status, detail, reason) in [
+        (
+            400,
+            "Maximum context length exceeded",
+            "context_length_exceeded",
+        ),
+        (
+            413,
+            "Input too large: maximum context length is 100000 tokens",
+            "context_length_exceeded",
+        ),
+        (
+            429,
+            "Request too large for tokens per minute (TPM)",
+            "rate_limited",
+        ),
+        (400, "Input too large", "upstream_rejected"),
+    ] {
+        let failure = http_failure(HttpFailureInput {
+            status,
+            detail,
+            upstream_code: None,
+            proxy_evidence: false,
+            retry_after_seconds: None,
+        });
+        assert_ne!(
+            failure.error_class.as_str(),
+            "request_too_large",
+            "{detail}"
+        );
+        assert_eq!(failure.failure_reason.as_deref(), Some(reason), "{detail}");
+    }
+}

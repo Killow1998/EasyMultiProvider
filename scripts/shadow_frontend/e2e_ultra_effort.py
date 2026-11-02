@@ -187,7 +187,7 @@ def main():
         stack.callback(stop,process)
         shadow = wait_for(lambda: log_path.read_text().split('EMP real-data Shadow: ')[-1].strip() if 'EMP real-data Shadow:' in log_path.read_text() else None)
         browser.navigate(shadow)
-        browser.execute('openReview();document.querySelector("[data-shadow-demo=ultra]").click();')
+        browser.execute('openSettings("native");document.querySelector("[data-ui-action=ultra-settings]").click();')
         wait_for(lambda: browser.execute('return !!document.getElementById("ultra_settings");'))
         assert browser.execute('return document.querySelector("[data-ultra-family] option[value=auto]").textContent;').endswith(' · high')
         assert browser.execute('return state.codex_context_settings.memory_default_models;') == original_memory
@@ -195,7 +195,7 @@ def main():
         assert browser.execute('return state.ultra_reasoning_efforts["gpt-ultra"];') == 'low'
         assert (state_dir.parent/'config.json').read_bytes() == before
         assert current_model()['multi_agent_reasoning_effort'] == 'high'
-        browser.execute('closeModal();openReview();document.querySelector("[data-shadow-demo=routing]").click();')
+        browser.execute('closeModal();openSettings("native");document.querySelector("[data-ui-action=routing-settings]").click();')
         wait_for(lambda: browser.execute('return !!document.getElementById("routing_memory_extraction_model");'))
         browser.execute('document.getElementById("routing_memory_extraction_model").value="gpt-ordinary";document.getElementById("routing_memory_model").value="gpt-ultra";document.getElementById("modal_submit").click();')
         wait_for(lambda: browser.execute('return !document.getElementById("routing_memory_model");'))
@@ -205,7 +205,7 @@ def main():
         assert (state_dir.parent/'config.json').read_bytes() == before
         assert tomllib.loads((home/'config.toml').read_text())['memories'] == original_memory
         assert upstream.calls == 0
-        checks.append('Shadow current changes opens the production Ultra and memory controllers; independent preview saves never write the source instance or its Codex preferences')
+        checks.append('Shadow Native settings open the production Ultra and memory controllers; independent preview saves never write the source instance or its Codex preferences')
         (args.output/'catalog.json').write_text(json.dumps(read('/v1/models')))
     report = {'checks':checks,'real_model_calls':0}
     (args.output/'result.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')

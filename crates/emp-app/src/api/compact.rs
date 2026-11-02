@@ -100,11 +100,7 @@ pub(crate) fn compact_request(
     observation.phase(Phase::Execute);
     if route.dialect == emp_core::Dialect::CodexNative {
         return crate::api::native_response::complete_response(native::compact(
-            state,
-            &route,
-            &config,
-            body.as_object().expect("validated request object"),
-            &incoming,
+            state, &route, &config, &body, &incoming,
         ));
     }
     let ids = match projection_ids() {

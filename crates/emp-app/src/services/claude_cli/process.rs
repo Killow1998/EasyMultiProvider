@@ -2,7 +2,6 @@
 use super::cancellation::Cancellation;
 use std::io::{Read, Write};
 use std::process::{Child, Command};
-use std::sync::Arc;
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,7 +30,7 @@ pub(super) fn run_control(
 ) -> Result<Vec<u8>, &'static str> {
     run_with_timeout_policy(
         command,
-        Arc::from(input),
+        input.to_vec(),
         cancelled,
         Duration::from_secs(20),
         false,
@@ -49,7 +48,7 @@ struct BoundedOutput {
 
 pub(super) fn run(
     command: Command,
-    input: Arc<[u8]>,
+    input: Vec<u8>,
     cancelled: &Cancellation,
     cancellation_requested: impl FnMut() -> Option<CancellationReason>,
 ) -> Result<Vec<u8>, &'static str> {
@@ -66,7 +65,7 @@ pub(super) fn run(
 
 pub(super) fn run_observed(
     command: Command,
-    input: Arc<[u8]>,
+    input: Vec<u8>,
     cancelled: &Cancellation,
     cancellation_requested: impl FnMut() -> Option<CancellationReason>,
     inspect_output: impl FnOnce(&[u8]),
@@ -89,7 +88,7 @@ pub(super) fn run_auth_status(
 ) -> Result<Vec<u8>, &'static str> {
     run_with_timeout_policy(
         command,
-        Arc::from(&b""[..]),
+        Vec::new(),
         cancelled,
         AUTH_STATUS_TIMEOUT,
         true,
@@ -115,7 +114,7 @@ fn cancellation_error(reason: CancellationReason) -> &'static str {
 
 fn run_with_timeout_policy(
     mut command: Command,
-    input: Arc<[u8]>,
+    input: Vec<u8>,
     cancelled: &Cancellation,
     timeout: Duration,
     allow_nonzero_exit: bool,

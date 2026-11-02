@@ -335,6 +335,7 @@ fn project_prepared_external_payload(
 }
 
 mod errors;
+pub use errors::normalize_upstream_error_event;
 mod external_route;
 mod external_stream;
 mod request_encoding;

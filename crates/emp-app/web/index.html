@@ -602,13 +602,12 @@ async function loadIntegration() {
 function nativeHistoryMessage(history) {
   if (!['partial','unchecked','deferred'].includes(history?.status)) return '';
   const report = history.report;
-  if (typeof report?.threads_skipped !== 'number') return tr('core.native_history_unverified');
-  return [report.threads_deferred > 0 && tr('core.native_history_deferred', {count:report.threads_deferred}),
-    report.threads_skipped > 0 && tr('core.native_history_unchecked', {count:report.threads_skipped})]
-    .filter(Boolean).join(' ') || tr('core.native_history_unverified');
+  if (!report) return tr('core.native_history_unverified');
+  return report.threads_deferred > 0
+    ? tr('core.native_history_deferred', {count:report.threads_deferred}) : '';
 }
 function nativeHistoryAction(history) {
-  return tr(typeof history?.report?.threads_skipped === 'number' && history.report.threads_deferred > 0
+  return tr(history?.report?.threads_deferred > 0
     ? 'core.native_history_retry' : 'core.native_history_check');
 }
 function confirmIntegrationAction(action) {

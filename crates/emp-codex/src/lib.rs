@@ -77,20 +77,21 @@ fn load_native_catalog_from_map(config: &Map<String, Value>) -> Value {
             .and_then(Value::as_str)
             .is_some_and(|etag| etag.trim_matches('"').starts_with("emp-"))
     };
-    let cached = read_catalog(&path).filter(is_native);
-    let preserved = read_catalog(&preserved_path).filter(is_native);
     // A later genuine Codex refresh can seed the snapshot again. An EMP-merged
     // cache must never feed back into the native source, regardless of its age.
     let modified = |path: &Path| fs::metadata(path).and_then(|meta| meta.modified()).ok();
     let codex_is_newer = modified(&path)
         .zip(modified(&preserved_path))
         .is_some_and(|(cached, preserved)| cached > preserved);
-    match (cached, preserved) {
-        (Some(cached), Some(_)) if codex_is_newer => cached,
-        (_, Some(preserved)) => preserved,
-        (Some(cached), None) => cached,
-        (None, None) => empty_catalog(),
-    }
+    let candidates = if codex_is_newer {
+        [&path, &preserved_path]
+    } else {
+        [&preserved_path, &path]
+    };
+    candidates
+        .into_iter()
+        .find_map(|path| read_catalog(path).filter(is_native))
+        .unwrap_or_else(empty_catalog)
 }
 
 /// Resolve a subscription model using its catalog owner and context settings.

@@ -11,7 +11,6 @@ use emp_router::native_http::NativeRouter;
 use emp_router::native_http::NativeStream;
 use emp_router::native_http::NativeWebSocketPlan;
 use emp_router::native_http::{NativeCompleteResponse, NativeHttpError};
-use serde_json::Map;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -34,7 +33,7 @@ pub(crate) fn open_stream_result<'a>(
     state: &'a ServerState,
     route: &ResolvedRoute,
     config: &Value,
-    body: &Map<String, Value>,
+    body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     previous_usage: Option<RequestOutcome<'a>>,
@@ -65,7 +64,7 @@ pub(crate) fn open_stream_cancellable<'a>(
     state: &'a ServerState,
     route: &ResolvedRoute,
     config: &Value,
-    body: &Map<String, Value>,
+    body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     monitor: &mut DisconnectMonitor,
@@ -87,22 +86,14 @@ fn open_stream_result_with_monitor<'a>(
     state: &'a ServerState,
     route: &ResolvedRoute,
     config: &Value,
-    body: &Map<String, Value>,
+    body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     monitor: Option<&mut DisconnectMonitor>,
     previous_usage: Option<RequestOutcome<'a>>,
 ) -> Result<CancellableNativeStreamOpen<'a>, NativeHttpError> {
-    let mut usage = previous_usage.unwrap_or_else(|| {
-        RequestOutcome::new(
-            state,
-            route,
-            &Value::Object(body.clone()),
-            incoming,
-            None,
-            "responses",
-        )
-    });
+    let mut usage = previous_usage
+        .unwrap_or_else(|| RequestOutcome::new(state, route, body, incoming, None, "responses"));
     let (result, usage_owner) = {
         let receipt = Mutex::new(&mut usage);
         let on_attempt = || receipt.lock().unwrap().dispatch();
@@ -113,7 +104,7 @@ fn open_stream_result_with_monitor<'a>(
         let mut usage_owner = String::new();
         let open = router.open_stream(
             route,
-            body,
+            body.as_object().unwrap(),
             plaintext_collaboration(config),
             ids,
             |refresh| {
@@ -154,7 +145,7 @@ pub(crate) fn complete(
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
-    body: &Map<String, Value>,
+    body: &Value,
     incoming: &BTreeMap<String, String>,
 ) -> Result<NativeCompleteResponse, NativeHttpError> {
     buffered(state, route, config, body, incoming, "responses")
@@ -164,7 +155,7 @@ pub(crate) fn compact(
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
-    body: &Map<String, Value>,
+    body: &Value,
     incoming: &BTreeMap<String, String>,
 ) -> Result<NativeCompleteResponse, NativeHttpError> {
     buffered(state, route, config, body, incoming, "compact")
@@ -174,18 +165,11 @@ fn buffered(
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
-    body: &Map<String, Value>,
+    body: &Value,
     incoming: &BTreeMap<String, String>,
     operation: &str,
 ) -> Result<NativeCompleteResponse, NativeHttpError> {
-    let mut usage = RequestOutcome::new(
-        state,
-        route,
-        &Value::Object(body.clone()),
-        incoming,
-        None,
-        operation,
-    );
+    let mut usage = RequestOutcome::new(state, route, body, incoming, None, operation);
     let (result, usage_owner) = {
         let receipt = Mutex::new(&mut usage);
         let on_attempt = || receipt.lock().unwrap().dispatch();
@@ -203,14 +187,14 @@ fn buffered(
         let result = if operation == "compact" {
             runtime.block_on(router.execute_compact(
                 route,
-                body,
+                body.as_object().unwrap(),
                 plaintext_collaboration(config),
                 &mut headers,
             ))
         } else {
             runtime.block_on(router.execute_complete(
                 route,
-                body,
+                body.as_object().unwrap(),
                 plaintext_collaboration(config),
                 true,
                 &mut headers,
@@ -229,7 +213,7 @@ fn buffered(
                     crate::services::context::record_event(
                         state,
                         route,
-                        &Value::Object(body.clone()),
+                        body,
                         &serde_json::json!({"type":format!("response.{}",value["status"].as_str().unwrap_or("unknown")),"response":value}),
                     );
                 }
@@ -244,7 +228,7 @@ fn buffered(
                 crate::services::context::record_event(
                     state,
                     route,
-                    &Value::Object(body.clone()),
+                    body,
                     &serde_json::json!({"type":"error","error":error.body["error"]}),
                 );
             }
@@ -258,13 +242,13 @@ pub(crate) fn websocket_plan(
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
-    body: &Map<String, Value>,
+    body: &Value,
     incoming: &BTreeMap<String, String>,
 ) -> Result<NativeWebSocketPlan, NativeHttpError> {
     let headers = resolve_headers(state, route, incoming, true, false)?;
     NativeRouter::new(&state.backend.transport.client).prepare_websocket(
         route,
-        body,
+        body.as_object().unwrap(),
         plaintext_collaboration(config),
         headers,
     )

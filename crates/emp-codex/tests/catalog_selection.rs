@@ -253,9 +253,22 @@ fn native_snapshot_survives_missing_or_merged_codex_cache_and_accepts_new_native
     assert_eq!(load_native_catalog(&config), latest_native);
     emp_codex::preserve_native_catalog(&config).unwrap();
     assert_eq!(
-        serde_json::from_slice::<Value>(&fs::read(snapshot).unwrap()).unwrap(),
+        serde_json::from_slice::<Value>(&fs::read(&snapshot).unwrap()).unwrap(),
         latest_native
     );
+    for (preferred, fallback) in [(&cache, &snapshot), (&snapshot, &cache)] {
+        for invalid in [
+            b"{truncated".as_slice(),
+            br#"{"models":null}"#,
+            br#"{"etag":"emp-merged","models":[{"slug":"imported/only"}]}"#,
+        ] {
+            fs::write(preferred, invalid).unwrap();
+            fs::write(fallback, serde_json::to_vec(&latest_native).unwrap()).unwrap();
+            set_modified(preferred, 400);
+            set_modified(fallback, 300);
+            assert_eq!(load_native_catalog(&config), latest_native);
+        }
+    }
 }
 
 #[test]

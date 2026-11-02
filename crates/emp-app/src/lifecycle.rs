@@ -1,6 +1,8 @@
 //! Service ownership, background-worker registration and ordered shutdown.
 
 mod connections;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod memory;
 mod resources;
 mod shutdown;
 mod signals;

@@ -37,7 +37,7 @@ window.fetch=async(path,options={})=>{
   // Lifecycle actions are simulated before even the disposable backend is called.
   if(route==='/api/quit'||route.startsWith('/api/integration')){
     if(route.endsWith('/restore')){
-      lifecycleHistory={status:lifecycleState==='native'?'complete':'unchecked',report:{threads_repaired:1,threads_deferred:0,threads_skipped:lifecycleState==='native'?0:1,skipped_reasons:lifecycleState==='native'?{}:{active_codex_writer:1},deferred_reasons:{}}};
+      lifecycleHistory={status:lifecycleState==='native'?'complete':'partial',report:{threads_repaired:1,threads_deferred:lifecycleState==='native'?0:1,threads_skipped:0,skipped_reasons:{},deferred_reasons:lifecycleState==='native'?{}:{rollback_or_interrupted_turn:1}}};
       lifecycleState='native';
     }
     if(route.endsWith('/enable')){lifecycleState='emp_applied';lifecycleHistory=null;}

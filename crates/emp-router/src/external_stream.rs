@@ -166,9 +166,22 @@ impl ExternalStream {
         Ok(())
     }
 
-    fn consume_json(&mut self, value: Value, frame: ChatFrame) -> Result<(), RouterError> {
+    fn consume_json(&mut self, mut value: Value, frame: ChatFrame) -> Result<(), RouterError> {
+        let failure = normalize_upstream_error_event(&mut value);
         self.observation
             .observe(&value, matches!(frame, ChatFrame::Sse));
+        if let Some(failure) = failure
+            && !matches!(&self.projection, StreamProjection::Responses { .. })
+        {
+            return Err(RouterError::new(
+                RouterErrorKind::Upstream,
+                failure.status,
+                failure.error_class,
+                failure.failure_reason,
+                failure.retry_after_seconds,
+                "upstream stream failed",
+            ));
+        }
         match &mut self.projection {
             StreamProjection::Chat(projector) => {
                 self.pending.extend(

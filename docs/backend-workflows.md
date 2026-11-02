@@ -27,6 +27,24 @@ independent protocol, persistence and transport implementations into one crate.
 Within `emp-app`, `services/request_facts.rs` owns pure request classification.
 Memory routing, accounting and passive receipts consume it independently;
 accounting does not ask logging or routing policy to interpret client metadata.
+
+Upstream refusal classification belongs to `emp-transport::http_failure`.
+`emp-router::normalize_upstream_error_event` applies the same policy once at
+the upstream stream boundary for busy and request-byte-limit errors. It retains
+response IDs, usage and progress. Chat/Anthropic report typed router failures;
+Responses and Native retain their original event envelopes. Downstream HTTP,
+SSE and WebSocket delivery use the same safe explanations and preserve explicit
+upstream status. A stream error without a status retains the existing 502
+fallback. No image removal or extra inference retry is introduced. Quota,
+authentication, schema, context and TPM failures remain distinct. WebSocket
+HTTP-stream relays record typed failure facts before delivering the terminal
+error, matching the HTTP/SSE relay's accounting behavior.
+
+Call-report normalization produces binary JSON once. The report reader filters
+records into its connection-local temporary table, then aggregates and pages
+that selection without reapplying the input predicates. Only paged records are
+converted back to JSON text. The stored ledger and pricing owners are unchanged.
+
 Request preparation checks the body object once and passes a mutable JSON map
 to its external-settings transformation. Configuration uses the existing owned
 snapshot boundary. These helpers add no runtime state or recovery policy.
@@ -131,7 +149,7 @@ reported with the remaining directory. Contracts live in
 | `services/catalog`, `services/account_catalog` | Publish local catalog; separately request existing subscription refresh / fetch and identity-check a subscription catalog | Requested work is not completed work. Source generation and pseudonym identify background outcomes; publication has its own result. No new polling or probes. |
 | `services/migration` | After existing one-use export authorization: encrypt; or decode/decrypt → commit account bundle → publish catalog | Bundle commit and later catalog publication have separate receipts. Passwords and bundles never enter observation. |
 | `services/quota/commands` | Validate account → hold existing account lock → read quota, or explicitly reset then read quota | Reset outcome (`reset`, no credit, nothing to reset, already redeemed) and follow-up read are separate. A failed follow-up read does not cause another reset. |
-| `services/integration/commands` | Confirm → temporarily drain admission for restore → hold operation lock → convert coordinated idle EMP history with backups → restore search/configuration → runtime observation → summary → reopen admission | Busy or unverified history is deferred without blocking configuration restore. A native WebUI can finish deferred conversion; the same service can be enabled again. Runtime observation failure does not undo a committed restore. Only Quit EMP requests process exit. |
+| `services/integration/commands` | Confirm → temporarily drain admission for restore → hold operation lock → convert coordinated idle EMP history with backups → restore search/configuration → runtime observation → summary → reopen admission | Busy or unreadable history is counted as skipped; it does not create a pending-conversion notice. Confirmed EMP checkpoints awaiting conversion retain the native WebUI action. Each normal restore checks idle history again. Runtime observation failure does not undo a committed restore. Only Quit EMP requests process exit. |
 | `services/shutdown` | Check update and active-work constraints → restore owned integration → verify native configuration → return readiness | An applied or unresolved previous listener lease keeps EMP running. Readiness is not proof of process exit, client receipt or desktop recovery. HTTP, tray and lifecycle owners perform delivery and stopping. |
 
 Desktop menus live in `src/tray`, with separate StatusNotifier, Windows and

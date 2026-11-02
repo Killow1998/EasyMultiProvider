@@ -98,6 +98,16 @@ pub(crate) struct ActivityGuard<'a> {
 }
 
 impl ActivityService {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    pub(crate) fn is_idle(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .routes
+            .values()
+            .all(|activity| activity.in_flight == 0)
+    }
+
     pub(crate) fn new(events: Arc<ManagementEvents>) -> Self {
         Self {
             state: Mutex::default(),

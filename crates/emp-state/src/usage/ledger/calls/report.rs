@@ -103,7 +103,7 @@ impl UsageLedger {
         connection.execute(
             &format!("CREATE TEMP TABLE report_calls AS SELECT
                 request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,
-                jsonb(facts) AS facts,delivery,state,report_record() AS read_progress FROM {calls} WHERE {predicate}"),
+                facts,delivery,state,report_record() AS read_progress FROM {calls} WHERE {predicate}"),
             params_from_iter(&args),
         )?;
         let calls = "report_calls AS call_records";
@@ -124,14 +124,14 @@ impl UsageLedger {
             COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_samples,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tokens_per_second,
             COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tps_samples
-            FROM {calls} WHERE {predicate}"), &args)?;
+            FROM {calls}"), &[])?;
         // Aggregate the full filtered range, independently of record pagination.
         let failures = rows(&connection, &format!("SELECT
             COALESCE(json_extract(facts,'$.error_origin'),json_extract(delivery,'$.error_origin'),'unknown') AS origin,
             COALESCE(json_extract(facts,'$.error_code'),json_extract(delivery,'$.error_code'),json_extract(facts,'$.failure_reason'),json_extract(facts,'$.error_class'),'unknown') AS code,
             json_extract(facts,'$.status') AS status, COUNT(*) AS count
-            FROM {calls} WHERE {predicate} AND state='failed'
-            GROUP BY origin,code,status ORDER BY count DESC,origin,code,status LIMIT 12"), &args)?;
+            FROM {calls} WHERE state='failed'
+            GROUP BY origin,code,status ORDER BY count DESC,origin,code,status LIMIT 12"), &[])?;
         if let Some(summary) = summary.first_mut() {
             summary["failure_breakdown"] = json!(failures);
         }
@@ -152,12 +152,9 @@ impl UsageLedger {
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.duration_ms') END) AS duration_ms,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_ms,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tokens_per_second
-            FROM {calls} WHERE {predicate}
+            FROM {calls}
             GROUP BY provider_id,account_id,model_id,upstream_model,speed_mode,requested_effort,reported_effort");
-        connection.execute(
-            &format!("CREATE TEMP TABLE report_models AS {grouped}"),
-            params_from_iter(&args),
-        )?;
+        connection.execute(&format!("CREATE TEMP TABLE report_models AS {grouped}"), [])?;
         let models_total: i64 =
             connection.query_row("SELECT COUNT(*) FROM report_models", [], |row| row.get(0))?;
         let model_args = [SqlValue::Integer(
@@ -176,15 +173,15 @@ impl UsageLedger {
             COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.first_content_ms') END) AS ttft_samples,
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tokens_per_second,
             COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tps_samples
-            FROM {calls} WHERE {predicate} GROUP BY CAST((started_at-{})/{bucket} AS INTEGER) ORDER BY start",filter.start,filter.start,filter.start), &args)?;
-        args.extend([
+            FROM {calls} GROUP BY CAST((started_at-{})/{bucket} AS INTEGER) ORDER BY start",filter.start,filter.start,filter.start), &[])?;
+        let args = [
             SqlValue::Integer(filter.limit as i64),
             SqlValue::Integer(filter.offset.min(i64::MAX as usize) as i64),
-        ]);
+        ];
         let mut statement = connection.prepare(&format!("SELECT json(facts),delivery,
             (SELECT json_object('cost_nanos',cost_nanos,'price_issue',price_issue,'price_key',price_key)
              FROM accounted_usage WHERE id=json_extract(call_records.facts,'$.usage_event_id') LIMIT 1), state
-            FROM (SELECT * FROM {calls} WHERE {predicate}
+            FROM (SELECT * FROM {calls}
                 ORDER BY started_at DESC,request_id DESC,operation LIMIT ? OFFSET ?) AS call_records
             ORDER BY started_at DESC,request_id DESC,operation"))?;
         let records = statement

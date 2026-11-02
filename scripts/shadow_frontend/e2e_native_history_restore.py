@@ -14,6 +14,7 @@ import tempfile
 
 from e2e_environment import request, stop, wait_for
 from e2e_refinements import Browser
+from candidate_web import candidate_frontend
 
 HERE = Path(__file__).resolve().parent
 SUMMARY = 'Portable fixture summary for native resume'
@@ -78,6 +79,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--emp', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--web', type=Path)
     args = parser.parse_args()
     checks = []
     with tempfile.TemporaryDirectory(prefix='emp-idle-history-') as temporary, contextlib.ExitStack() as stack:
@@ -133,21 +135,30 @@ def main():
         checks.append('Restore converts idle history, preserves the live writer and keeps EMP running')
 
         browser = Browser(stack, root)
+        if args.web:
+            frontend, _ = candidate_frontend(stack, base, args.web,
+                index_head='<script>localStorage.setItem("emp_management_session_v1",'+json.dumps(headers['X-EMP-Session'])+');</script>')
+            url = frontend
         browser.navigate(url)
         for language, width in [('zh-CN', 390), ('en', 1280)]:
             request(browser.base + '/window/rect', {'width': width, 'height': 1000})
             browser.execute('setLanguage(arguments[0]);', language)
-            wait_for(lambda: browser.execute('return !document.getElementById("native_history_retry").hidden;'))
-            assert browser.execute('return !document.getElementById("native_history_notice").hidden && !document.getElementById("integration_toggle").disabled && document.getElementById("integration_toggle").dataset.action==="enable";')
+            wait_for(lambda: browser.execute('return integrationInfo?.configuration.state==="native";'))
+            assert browser.execute('return document.getElementById("native_history_notice").hidden && document.getElementById("native_history_retry").hidden && !document.getElementById("integration_toggle").disabled && document.getElementById("integration_toggle").dataset.action==="enable";')
+            browser.execute('renderIntegration({...integrationInfo,history_restore:arguments[0]});',
+                            {'status':'unchecked','report':{'threads_deferred':0,'threads_skipped':1942}})
+            assert browser.execute('return document.getElementById("native_history_notice").hidden && document.getElementById("native_history_retry").hidden;')
+            browser.execute('renderIntegration({...integrationInfo,history_restore:arguments[0]});',
+                            {'status':'partial','report':{'threads_deferred':1,'threads_skipped':1942}})
             assert browser.execute('return document.getElementById("native_history_retry").textContent;') == (
-                '检查历史' if language == 'zh-CN' else 'Check history')
-            assert browser.execute('return document.getElementById("native_history_notice").textContent.includes(arguments[0]);',
-                                   '不代表需要转换' if language == 'zh-CN' else 'does not mean they need conversion')
+                '继续转换历史' if language == 'zh-CN' else 'Continue history conversion')
+            assert browser.execute('return !document.getElementById("native_history_notice").hidden && !document.getElementById("native_history_notice").textContent.includes("1942");')
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             assert browser.execute('const button=document.getElementById("native_history_retry").getBoundingClientRect(), text=document.querySelector("#native_history_notice p");return button.left>=0 && button.right<=innerWidth && button.bottom<=innerHeight && text.scrollWidth<=text.clientWidth;')
             _, screenshot = request(browser.base + '/screenshot')
             args.output.with_name(args.output.stem + f'-{language}.png').write_bytes(base64.b64decode(screenshot['value']))
-        checks.append('Chinese/English pending-history recovery is visible on narrow/desktop layouts')
+            browser.execute('renderIntegration({...integrationInfo,history_restore:arguments[0]});',report)
+        checks.append('Skipped-only reports show no warning or retry; confirmed EMP checkpoints retain conversion in Chinese/English narrow/desktop layouts')
 
         stop(process)
         process, base, url, headers = launch(stack, binary, root, env, 2)
@@ -156,12 +167,19 @@ def main():
         assert busy[1].read_bytes() == busy[2]
         fcntl.flock(writer, fcntl.LOCK_UN)
         writer.close()
+        if args.web:
+            frontend, _ = candidate_frontend(stack, base, args.web,
+                index_head='<script>localStorage.setItem("emp_management_session_v1",'+json.dumps(headers['X-EMP-Session'])+');</script>')
+            url = frontend
         browser.navigate(url)
-        browser.execute('document.getElementById("native_history_retry").click();document.getElementById("modal_submit").click();')
+        wait_for(lambda: browser.execute('return integrationInfo?.configuration.state==="native";'))
+        browser.execute('document.getElementById("integration_toggle").click();document.getElementById("modal_submit").click();')
+        wait_for(lambda: browser.execute('return integrationInfo?.configuration.state==="emp_applied" && !integrationBusy;'))
+        browser.execute('document.getElementById("integration_toggle").click();document.getElementById("modal_submit").click();')
         wait_for(lambda: browser.execute('return integrationInfo.history_restore?.status==="complete" && !integrationBusy;'))
         assert browser.execute('return document.getElementById("native_history_retry").hidden;')
         converted(busy[1], busy[2])
-        checks.append('Pending recovery survives restart and completes from the existing WebUI after the writer closes')
+        checks.append('Skipped history stays unchanged across restart and converts on the next normal WebUI restore after the writer closes')
 
         fingerprints = [(item[1].stat().st_mtime_ns, hashlib.sha256(item[1].read_bytes()).hexdigest()) for item in [idle, busy]]
         assert post('/api/integration/restore')['history_restore']['report']['threads_repaired'] == 0

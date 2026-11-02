@@ -364,7 +364,11 @@ impl FrameDecoder {
             {
                 return Err(FrameDecodeError::TooLarge);
             }
-            self.message.extend_from_slice(&frame.payload);
+            if self.message.is_empty() {
+                self.message = frame.payload;
+            } else {
+                self.message.extend_from_slice(&frame.payload);
+            }
             if frame.final_frame {
                 let opcode = self
                     .message_opcode
@@ -454,13 +458,22 @@ impl FrameDecoder {
         } else {
             None
         };
-        let mut payload = self.buffer[header_length..total_length].to_vec();
+        // Copy the smaller side so small coalesced frames do not inherit large buffers.
+        let mut payload = if self.buffer.len() - total_length <= payload_length {
+            let remainder = self.buffer.split_off(total_length);
+            let mut payload = std::mem::replace(&mut self.buffer, remainder);
+            payload.drain(..header_length);
+            payload
+        } else {
+            let payload = self.buffer[header_length..total_length].to_vec();
+            self.buffer.drain(..total_length);
+            payload
+        };
         if let Some(mask) = mask {
             for (index, byte) in payload.iter_mut().enumerate() {
                 *byte ^= mask[index % 4];
             }
         }
-        self.buffer.drain(..total_length);
         Ok(Some(ParsedFrame {
             final_frame,
             rsv1,

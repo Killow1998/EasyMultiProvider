@@ -335,6 +335,8 @@ impl ServerHandle {
             handle.spawn_worker("emp-runtime-watch", |state| {
                 crate::services::runtime::watch_runtime(&state);
             })?;
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            handle.spawn_worker("emp-heap-reclaim", super::memory::run)?;
             Ok::<(), AppError>(())
         })();
         if let Err(error) = started {

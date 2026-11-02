@@ -184,13 +184,7 @@ fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static st
         let stdin = projection::text_transcript(&transcript)?;
         // Claude CLI caps plain stdin at 10 MiB; JSONL has no such text cap.
         let (payload, input_format) = if stdin.len() > 10 * 1024 * 1024 {
-            (
-                serde_json::to_vec(
-                    &json!({"type":"user","message":{"role":"user","content":stdin}}),
-                )
-                .expect("JSONL input"),
-                InputFormat::StreamJson,
-            )
+            (encode_user_message(&stdin)?, InputFormat::StreamJson)
         } else {
             (stdin.as_bytes().to_vec(), InputFormat::Text)
         };
@@ -300,11 +294,11 @@ fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static st
         )?;
     }
 
-    let event = json!({
-        "type":"user",
-        "message":{"role":"user","content":if relay { cli_blocks(&content) } else { content.clone() }}
-    });
-    let mut stdin = serde_json::to_vec(&event).map_err(|_| "claude_cli_invalid_transcript")?;
+    let mut stdin = if relay && content.iter().any(|block| block["type"] == "image") {
+        encode_user_message(cli_blocks(&content))?
+    } else {
+        encode_user_message(&content)?
+    };
     stdin.push(b'\n');
     if stdin.len() > projection::MAX_TRANSCRIPT_BYTES {
         return Err("claude_cli_input_too_large");
@@ -315,6 +309,13 @@ fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static st
         input_format: InputFormat::StreamJson,
         expected_user_content: ExpectedUserContent::Blocks(content),
     })
+}
+
+fn encode_user_message(content: impl serde::Serialize) -> Result<Vec<u8>, &'static str> {
+    let mut bytes = br#"{"message":{"content":"#.to_vec();
+    serde_json::to_writer(&mut bytes, &content).map_err(|_| "claude_cli_invalid_transcript")?;
+    bytes.extend_from_slice(br#","role":"user"},"type":"user"}"#);
+    Ok(bytes)
 }
 
 /// Build the Anthropic Messages view that the CLI is expected to send, for

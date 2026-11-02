@@ -2,6 +2,11 @@
 
 #[cfg_attr(feature = "hotpath", hotpath::main)]
 fn main() -> std::process::ExitCode {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // Set before starting threads so large request buffers can be unmapped on free.
+    unsafe {
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 1024 * 1024);
+    }
     #[cfg(windows)]
     if std::env::args_os().nth(1).is_some() {
         // Desktop starts must not initialize a console before main. Explicit

@@ -1,5 +1,7 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  "reports.upstream_busy": ["上游繁忙","Upstream busy"],
+  "reports.request_byte_size_limit": ["单次请求体积超限","Request byte-size limit exceeded"],
   "reports.query_progress": ["{percent}%","{percent}%"],
   "reports.requested_effort": ["所选推理强度","Selected reasoning effort"],
   "reports.reported_effort": ["服务端推理强度","Upstream reasoning effort"],

@@ -118,6 +118,7 @@ impl ErrorPresentation {
                     "model_overloaded" | "overloaded_error" | "server_overloaded"
                     | "upstream_capacity" => ("模型拥堵", "model overloaded"),
                     "context_length_exceeded" => ("模型上下文超限", "model context limit exceeded"),
+                    "request_too_large" => ("单次请求体积超限", "request byte-size limit exceeded"),
                     _ if status == 429 || matches!(code, "rate_limit_exceeded" | "rate_limit") => {
                         ("请求受限", "rate limit reached")
                     }

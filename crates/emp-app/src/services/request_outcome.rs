@@ -258,7 +258,11 @@ impl<'a> RequestOutcome<'a> {
                     .or_else(|| error["status"].as_u64())
                     .filter(|status| (400..=599).contains(status))
                     .unwrap_or(502) as u16,
-                "stream_error",
+                emp_transport::normalize_error_class(
+                    error.get("error_class").and_then(Value::as_str),
+                    emp_transport::FailureClass::StreamError,
+                )
+                .as_str(),
             );
         }
         if matches!(

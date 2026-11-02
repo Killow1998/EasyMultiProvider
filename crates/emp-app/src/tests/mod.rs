@@ -325,6 +325,22 @@ fn post_stream(server: &ServerHandle, target: &str, body: &[u8], headers: &[&str
     response_until_close(&mut stream)
 }
 
+fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let wire = request(server, "/api/calls", &[session]);
+        let report: Value = serde_json::from_str(wire.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        if !report["records"].as_array().unwrap().is_empty() {
+            return report;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "call receipt not persisted: {report}"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
 struct OneShotUpstream {
     address: SocketAddr,
     observed: mpsc::Receiver<(String, BTreeMap<String, String>, Value)>,
