@@ -1,7 +1,7 @@
 // Keep all unreleased changes since this baseline; do not reset the list per task.
 // Production controllers own their dialogs and text.
-const reviewBaseline='v0.13.24';
-const reviewRows=['chat_output','provider_balances'];
+const reviewBaseline='v0.13.25';
+const reviewRows=[];
 const realShadow=window.EMP_REAL_SHADOW===true;
 const syntheticScenarios=['provider_balances','gateway','onboarding','lan','migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical'];
 const previewScenarios={
@@ -48,7 +48,8 @@ function openTrayPreview(){
   openModal(tr(...previewScenarios.tray.title),`<p>${label}</p><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px">${[['#f4f4f4','#202020'],['#252525','#fff']].map(([background,color])=>`<div style="height:96px;background:${background};color:${color};display:flex;align-items:center;justify-content:center;border-radius:6px"><span role="img" aria-label="EMP" style="width:32px;height:32px;background:currentColor;mask:url(${icon}) center/contain no-repeat"></span></div>`).join('')}</div>`,'',null,null,{back:openReview});
 }
 function openReview(){
-  openModal(tr(...previewScenarios.review.title)+' · '+tr('相较 {version}','Since {version}').replace('{version}',reviewBaseline),`<div class="choice-grid">${reviewRows.map(reviewChoice).join('')}</div>`,'',null);
+  const body=reviewRows.length?`<div class="choice-grid">${reviewRows.map(reviewChoice).join('')}</div>`:`<p>${tr('当前没有待发布改动。','There are no unpublished changes.')}</p>`;
+  openModal(tr(...previewScenarios.review.title)+' · '+tr('相较 {version}','Since {version}').replace('{version}',reviewBaseline),body,'',null);
 }
 window.EMP_REVIEW_ACTION=action=>{
   if(action==='background')action='settings';

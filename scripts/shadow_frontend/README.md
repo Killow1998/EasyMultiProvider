@@ -36,8 +36,7 @@ Real snapshots and acceptance share the disposable EMP launcher in
 Only the synthetic fixture adds a fake upstream and example configuration;
 real snapshot refreshes launch only the candidate backend.
 
-The appearance and provider-balance reviews use the same release baseline as
-the other unreleased changes listed below.
+Appearance and provider-balance review fixtures remain available as archived demos.
 Icon changes in Shadow stay in the browser draft and do not edit OS shortcuts.
 Balance examples open in the separate synthetic preview and are labeled as
 synthetic data. Actual provider queries are not replaced by example amounts.
@@ -73,14 +72,14 @@ python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --dem
 ```
 
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
-review entry. Its baseline is the published **v0.13.24**, displayed in the dialog.
+review entry. Its baseline is the published **v0.13.25**, displayed in the dialog.
 Keep `reviewRows` in `preview-review.js` cumulative across development tasks;
 reset the list and advance `reviewBaseline` together after the next release.
 Follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
-The current review covers **answer/tool-output separation** and **DeepSeek/Kimi
-account balances**. The output entry explains complete/streamed response handling;
-the balance entry opens an isolated example. Published features use their normal
-product entry points. Their isolated scenarios remain
+The current review has no unpublished changes. Answer/tool-output separation and
+DeepSeek/Kimi balances shipped in v0.13.25. Their archived review scenarios remain
+accessible through `/?reviewAction=chat_output` and `/?reviewAction=provider_balances`.
+Published features use their normal product entry points. Their isolated scenarios remain
 available as demos where applicable; their tests do not depend on the current
 review list.
 Ultra uses the production dialog with live catalog capabilities and a browser-local
