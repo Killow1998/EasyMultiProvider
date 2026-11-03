@@ -1,11 +1,11 @@
 // Concrete synthetic scenarios. Navigation and isolation are owned by their adapters.
 function openBalancesDemo() {
-  const ids=['deepseek','openrouter','moonshot','openai','inception'];
+  const ids=['deepseek','moonshot','openrouter','xai','openai','inception'];
   state.providers=ids.map(id=>({...officialProviders[id],id,name:officialProviders[id].name,enabled:true,api_key_set:true}));
   state.models=[];state.provider_balances={};
-  for(const id of ids.filter(id=>id!=='inception')){
-    state.provider_balances[id]={identity:'preview-'+id,preview:true,billing_url:id==='openai'?'https://platform.openai.com/settings/organization/billing/overview':id==='openrouter'?'https://openrouter.ai/settings/credits':id==='deepseek'?'https://platform.deepseek.com/usage':'https://platform.kimi.ai/console/account',refreshable:id!=='openai',
-      observation:id==='openai'?null:{observed_at:Date.now()/1000,error_code:null,balance:{kind:id==='openrouter'?'key_budget':'account_balance',amounts:[{currency:id==='moonshot'?'CNY':'USD',available:id==='deepseek'?0:12.5}]}}};
+  for(const id of ['deepseek','moonshot']){
+    state.provider_balances[id]={identity:'preview-'+id,preview:true,billing_url:id==='deepseek'?'https://platform.deepseek.com/usage':'https://platform.kimi.ai/console/account',refreshable:true,
+      observation:{observed_at:Date.now()/1000,error_code:null,balance:{kind:'account_balance',amounts:[{currency:id==='moonshot'?'CNY':'USD',available:id==='deepseek'?0:12.5}]}}};
   }
   closeModal();fill();
 }

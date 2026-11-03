@@ -119,11 +119,10 @@ icon in color or monochrome, or a square SVG up to 1 MB. The selection is saved
 on this device and updates the browser tab, tray, desktop shortcuts and
 macOS application/Dock icon.
 
-Official API services show account balance or key budget beside the model count,
-in the same position as subscription Credits. DeepSeek and Moonshot query account
-balances; OpenRouter queries the current key's remaining budget. Other official
-services, including OpenAI, provide a billing-console link from their information
-page. These amounts are separate from EMP's API-equivalent usage estimates.
+DeepSeek and Moonshot/Kimi show account balances beside the model count,
+in the same position as subscription Credits. Their information pages include
+the official billing link. These amounts are separate from EMP's API-equivalent
+usage estimates.
 
 For foreground logs, run `EMP serve`. A successful start prints:
 

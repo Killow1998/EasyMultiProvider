@@ -15,13 +15,12 @@ usage remains zero. Use **Statistics** for date and category breakdowns.
 
 ## Official provider balances
 
-The service summary's Credits position also displays official API balances.
+The service summary's Credits position displays DeepSeek and Moonshot/Kimi balances.
 DeepSeek returns its account balance in the reported CNY or USD currencies;
 Moonshot uses CNY on its China endpoint and USD on its international endpoint.
-OpenRouter's ordinary API key reports its remaining key budget, not account
-funds. A missing budget is not a zero balance. OpenAI and other official services
-without an ordinary-key balance endpoint link to their official billing console.
-EMP does not request an organization Admin key or use private dashboard APIs.
+Their information pages link to the official billing console. Other services
+do not display a balance section or receive balance requests. EMP does not query
+Key spending limits, request an organization Admin key or use private dashboard APIs.
 
 Balance queries run separately from inference. Configuration reads use the
 in-memory snapshot; opening the WebUI refreshes observations older than one

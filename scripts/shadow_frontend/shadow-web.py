@@ -16,6 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from frontend import frontend
 from candidate_web import forward_stream
+from local_backend import request
+from real_config import project_config
 from shadow_migration import MigrationPreview
 from migration_selection import PreviewError
 from shadow_release_notes import ReleaseNotes
@@ -79,6 +81,11 @@ class ShadowHandler(BaseHTTPRequestHandler):
     def error(self, status, message):
         self.send(status, {'error': {'message': message}})
 
+    def source_read(self, target):
+        token = json.loads(self.server.state_dir.joinpath('web-session.json').read_text(encoding='utf-8'))['token']
+        origin = f'http://127.0.0.1:{self.server.backend_port}'
+        return request(origin + target, headers={'X-EMP-Session': token, 'Origin': origin}, timeout=30)
+
     def do_GET(self):
         if not self.origin_allowed() or not self.path.startswith('/'):
             return self.error(403, 'Invalid origin')
@@ -102,12 +109,7 @@ class ShadowHandler(BaseHTTPRequestHandler):
                 if path == '/api/calls' and self.headers.get('Accept') == 'text/event-stream':
                     with snapshot.stream(self.path) as upstream:
                         return forward_stream(self, upstream)
-                def source_read(target):
-                    from local_backend import request
-                    token = json.loads(self.server.state_dir.joinpath('web-session.json').read_text())['token']
-                    origin = f'http://127.0.0.1:{self.server.backend_port}'
-                    return request(origin+target,headers={'X-EMP-Session':token,'Origin':origin},timeout=30)
-                status, payload = snapshot.usage(self.path, source_read) if path == '/api/usage' else snapshot.read(self.path)
+                status, payload = snapshot.usage(self.path, self.source_read) if path == '/api/usage' else snapshot.read(self.path)
                 return self.send(status, payload)
             except (OSError, ValueError, http.client.HTTPException):
                 return self.error(503, '无法读取候选版账单快照 / Candidate accounting snapshot is unavailable')
@@ -129,37 +131,8 @@ class ShadowHandler(BaseHTTPRequestHandler):
             if path != '/api/accounts/events' or upstream.status != 200:
                 body = upstream.read()
                 if path == '/api/config' and upstream.status == 200:
-                    body = json.loads(body)
-                    # Older live backends lack this projection. Read their actual
-                    # catalog; never substitute demonstration models into Shadow.
-                    # Versionless reads intentionally strip Ultra for old clients.
-                    models = body.get('catalog_models', [])
-                    if any('ultra_reasoning_levels' not in model or 'ultra_default_effort' not in model for model in models):
-                        from local_backend import request
-                        status, catalog = request(f'http://127.0.0.1:{self.server.backend_port}/v1/models?client_version=0.163.0',
-                            headers={'X-EMP-Session':token}, timeout=30)
-                        if status != 200:
-                            return self.error(503, 'Could not read the live model catalog')
-                        entries = {model['slug']:model for model in catalog.get('models', [])}
-                        concrete = ['none','minimal','low','medium','high','xhigh','max']
-                        for model in models:
-                            entry = entries.get(model['id'], {})
-                            ordered_levels = [level.get('effort') for level in entry.get('supported_reasoning_levels', [])]
-                            levels = set(ordered_levels)
-                            model['ultra_reasoning_levels'] = [level for level in concrete if level in levels] if model.get('source_type') != 'provider' and 'ultra' in levels else []
-                            if 'ultra_default_effort' not in model:
-                                # Published catalogs can contain an EMP override; never label that as official.
-                                override = body.get('ultra_reasoning_efforts', {}).get(model.get('family_id'))
-                                default = entry.get('multi_agent_reasoning_effort')
-                                fallback = next((level for level in reversed(ordered_levels) if level in concrete), 'medium')
-                                model['ultra_default_effort'] = (default if default in concrete and default in levels else 'max' if 'max' in levels else fallback) if model['ultra_reasoning_levels'] and not override else None
-                if path == '/api/config' and snapshot and upstream.status == 200:
-                    status, candidate = snapshot.read('/api/config')
-                    if status != 200:
-                        return self.error(503, 'Candidate configuration is unavailable')
-                    for key in ['emp_version', 'codex_context_settings']:
-                        if key in candidate:
-                            body[key] = candidate[key]
+                    status, body = project_config(json.loads(body), self.source_read, snapshot.read if snapshot else None)
+                    return self.send(status, body)
                 return self.send(upstream.status, body, upstream.getheader('Content-Type', 'application/json'))
             return forward_stream(self, upstream)
         except (BrokenPipeError, ConnectionResetError):

@@ -53,6 +53,7 @@ def add(state, identifier, session, model, amount, parent='', kind=''):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--emp',type=Path,required=True)
+    parser.add_argument('--source-emp',type=Path,help='Older source binary for cross-version Shadow acceptance')
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args()
     checks=[]
@@ -62,8 +63,13 @@ def main():
         home=root/'native';home.mkdir()
         (home/'auth.json').write_text('{"tokens":{"access_token":"source-only-secret","account_id":"fixture"}}')
         (home/'config.toml').write_text('model_context_window = 100000\n[features.async_compaction]\nenabled = false\nmodel_async_compact_threshold_percent = 71\n')
-        base,_,state,headers,upstream=start_backend(stack,args.emp.resolve(),source,
-            {'auto_enable_on_start':False,'providers':[],'models':[], 'codex_base_url':'http://127.0.0.1:9/fixture'},
+        providers=[{'id':identifier,'name':identifier,'base_url':endpoint,'protocol':'chat_completions',
+            'auth_mode':'api_key','enabled':False} for identifier,endpoint in [
+                ('deepseek','https://api.deepseek.com'),('kimi','https://api.moonshot.ai/v1'),
+                ('openrouter','https://openrouter.ai/api/v1'),('xai','https://api.x.ai/v1'),
+                ('openai','https://api.openai.com/v1')]]
+        base,_,state,headers,upstream=start_backend(stack,(args.source_emp or args.emp).resolve(),source,
+            {'auto_enable_on_start':False,'providers':providers,'models':[], 'codex_base_url':'http://127.0.0.1:9/fixture'},
             {'CODEX_HOME':str(home),'PATH':'/usr/bin:/bin'})
         assert request(base+'/api/usage?sessions=true',headers=headers)[0]==200
         seed(state,home)
@@ -92,6 +98,15 @@ def main():
         assert browser.execute('return location.origin===arguments[0] && window.EMP_REAL_SHADOW===true;',shadow)
         browser.execute('closeModal();')
         own={'X-EMP-Session':browser.execute('return localStorage.getItem("emp_management_session_v1");')}
+        source_public=request(base+'/api/config',headers=headers)[1]
+        source_balances=source_public['provider_balances']
+        if args.source_emp:
+            assert {'openrouter','xai','openai'} <= set(source_balances), source_balances
+        preview_balances=request(shadow+'/api/config',headers=own)[1]['provider_balances']
+        assert set(preview_balances)=={'deepseek','kimi'}, preview_balances
+        assert all(entry==source_balances[identifier] for identifier,entry in preview_balances.items())
+        assert browser.execute('return ["deepseek","kimi"].every(id=>document.querySelector(`[data-service="provider:${id}"] .service-balance`)) && ["openrouter","xai","openai"].every(id=>{const row=document.querySelector(`[data-service="provider:${id}"]`);return row && !row.querySelector(".service-balance,[data-ui-action=provider-balance-refresh]");});')
+        checks.append('Real-data Shadow uses candidate balance eligibility and retains source observations; older OpenRouter/xAI/OpenAI balance metadata never reaches the page')
         query='/api/usage?sessions=true&start=0&end='+str(time.time()+3600)
         status,bills=request(shadow+query,headers=own)
         assert status==200 and bills['total']==1 and bills['totals']['requests']==4 and bills['unassigned']['requests']==1,bills
@@ -113,7 +128,13 @@ def main():
         assert not any((root/'scratch').rglob('auth.json'))
         for path in (root/'scratch').rglob('config.json'):
             config=json.loads(path.read_text())
-            assert config['providers']==[] and config['accounts']==[]
+            assert config['accounts']==[]
+            assert {provider['id'] for provider in config['providers']}=={provider['id'] for provider in providers}
+            assert all(provider['enabled'] is False and not provider.get('api_key')
+                and not provider.get('api_key_ref') for provider in config['providers'])
+            for provider in config['providers']:
+                original=next(item for item in source_public['providers'] if item['id']==provider['id'])
+                assert all(provider[field]==original[field] for field in ['name','base_url','protocol']), (provider['id'],provider,original)
         checks.append('Default launcher uses source ledger/metadata and candidate attribution, without seeding examples or copying credentials')
         checks.append('Account-scoped bills use source-resolved identity with candidate accounting; explicit owner selection is bounded and ambiguous filters are rejected')
         for language in ['zh-CN','en']:

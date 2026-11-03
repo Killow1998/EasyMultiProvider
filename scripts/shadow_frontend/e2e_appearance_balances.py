@@ -101,41 +101,80 @@ def main():
         (root/'restart').mkdir()
         (root/'restart/state').mkdir()
         (root/'restart/state/appearance.json').write_bytes((state_dir/'appearance.json').read_bytes())
-        restored_base, _, _, restored_headers, _ = start_backend(stack, args.emp.resolve(), root/'restart')
-        assert request(restored_base+'/api/config', headers=restored_headers)[1]['app_icon']['version'] == custom_color
+        balance_urls = {
+            'deepseek': 'https://api.deepseek.com',
+            'moonshot': 'https://api.moonshot.ai/v1',
+            'moonshot-cn': 'https://api.moonshot.cn/v1',
+            'openrouter': 'https://openrouter.ai/api/v1',
+            'openai': 'https://api.openai.com/v1',
+            'anthropic': 'https://api.anthropic.com/v1',
+            'gemini': 'https://generativelanguage.googleapis.com/v1beta/openai',
+            'xai': 'https://api.x.ai/v1',
+            'zhipu': 'https://api.z.ai/api/paas/v4',
+            'inception': 'https://api.inceptionlabs.ai/v1',
+        }
+        restored_base, _, _, restored_headers, _ = start_backend(stack, args.emp.resolve(), root/'restart',
+            configuration={'providers': [{'id': identifier, 'name': identifier, 'base_url': endpoint,
+                'protocol': 'chat_completions', 'auth_mode': 'api_key'} for identifier, endpoint in balance_urls.items()], 'models': []})
+        restored_config = request(restored_base+'/api/config', headers=restored_headers)[1]
+        assert restored_config['app_icon']['version'] == custom_color
+        assert set(restored_config['provider_balances']) == {'deepseek', 'moonshot', 'moonshot-cn'}
+        for identifier in balance_urls:
+            status, result = request(restored_base+'/api/providers/'+identifier+'/balance', {'force': True}, headers=restored_headers)
+            if identifier in restored_config['provider_balances']:
+                assert status == 200 and result['observation']['error_code'] == 'balance_key_missing', result
+            else:
+                assert status == 404, result
         assert request(base+'/api/app-icon', {'preset': 'custom', 'monochrome': False, 'png': base64.b64encode(b'not png').decode()}, headers=headers)[0] == 400
         assert request(base+'/api/app-icon', {'preset': 'emp', 'monochrome': False})[0] == 401
-        checks.append('A new process loads the saved appearance; malformed icons and unauthenticated writes are rejected')
+        checks.append('A new process loads the saved appearance; balance metadata and refresh routes support only DeepSeek and both Kimi regions; malformed icons and unauthenticated writes are rejected')
 
         browser.execute('''
           closeModal();window.balanceCalls=0;
           const originalFetch=window.fetch;
           window.fetch=async function(path,options){
-            if(/^\\/api\\/providers\\/(deepseek|openrouter|moonshot)\\/balance$/.test(String(path))){
+            if(/^\\/api\\/providers\\/(deepseek|moonshot)\\/balance$/.test(String(path))){
               window.balanceCalls++;
               const id=String(path).split('/')[3],entry=state.provider_balances[id];
               return new Response(JSON.stringify({identity:entry.identity,observation:{observed_at:Date.now()/1000,error_code:null,
-                balance:{kind:id==='openrouter'?'key_budget':'account_balance',amounts:[{currency:'USD',available:12.5}]}}}),{headers:{'Content-Type':'application/json'}});
+                balance:{kind:'account_balance',amounts:[{currency:'USD',available:12.5}]}}}),{headers:{'Content-Type':'application/json'}});
             }
             return originalFetch(path,options);
           };
-          state.providers.push(...['deepseek','openrouter','moonshot','openai','inception'].map(id=>({...officialProviders[id],id,name:officialProviders[id].name,enabled:true})));
+          state.providers.push(...Object.entries(officialProviders).filter(([id])=>id!=='chatgpt').map(([id,provider])=>({...provider,id,enabled:true})));
           state.provider_balances={};
-          for(const id of ['deepseek','openrouter','moonshot','openai']){
-            state.provider_balances[id]={identity:id,billing_url:id==='openai'?'https://platform.openai.com/settings/organization/billing/overview':'https://example.invalid/billing',refreshable:id!=='openai',
-              observation:id==='openai'?null:{observed_at:Date.now()/1000,error_code:null,balance:{kind:id==='openrouter'?'key_budget':'account_balance',amounts:[{currency:id==='moonshot'?'CNY':'USD',available:id==='deepseek'?0:3.25}]}}};
+          for(const id of ['deepseek','moonshot']){
+            state.provider_balances[id]={identity:id,billing_url:id==='deepseek'?'https://platform.deepseek.com/usage':'https://platform.kimi.ai/console/account',refreshable:true,
+              observation:{observed_at:Date.now()/1000,error_code:null,balance:{kind:'account_balance',amounts:[{currency:id==='moonshot'?'CNY':'USD',available:id==='deepseek'?0:3.25}]}}};
           }
           fill();
         ''')
         assert browser.execute('return document.querySelector("[data-service=\\"provider:deepseek\\"] .service-balance").textContent.includes("0.00");')
-        assert browser.execute('return document.querySelector("[data-service=\\"provider:openrouter\\"] .service-balance").title.includes("Key");')
+        assert browser.execute('return document.querySelector("[data-service=\\"provider:moonshot\\"] .service-balance").textContent.includes("3.25");')
+        assert browser.execute('return Object.keys(officialProviders).filter(id=>!["chatgpt","deepseek","moonshot"].includes(id)).every(id=>{const row=document.querySelector(`[data-service="provider:${id}"]`);return row && !row.querySelector(".service-balance, [data-ui-action=provider-balance-refresh]");});')
         assert browser.execute('return document.querySelector("[data-service=\\"provider:inception\\"] .service-brand title").textContent==="Inception";')
         click(browser, '[data-ui-action="provider-balance-refresh"][data-id="deepseek"]')
         wait_for(lambda: browser.execute('return document.querySelector("[data-service=\\"provider:deepseek\\"] .service-balance").textContent.includes("12.50");'))
         assert browser.execute('return window.balanceCalls;') == 1
-        click(browser, '[data-ui-action="provider-details"][data-id="openai"]')
-        wait_for(lambda: browser.execute('return document.querySelector(".provider-balance-details a")?.hostname==="platform.openai.com";'))
-        checks.append('Service summary shows zero balances, separate key budgets, one-click refresh, official billing links and the Mercury icon')
+        click(browser, '[data-ui-action="provider-balance-refresh"][data-id="moonshot"]')
+        wait_for(lambda: browser.execute('return document.querySelector("[data-service=\\"provider:moonshot\\"] .service-balance").textContent.includes("12.50");'))
+        assert browser.execute('return window.balanceCalls;') == 2
+        if args.output:
+            args.output.mkdir(parents=True, exist_ok=True)
+            for language in ['zh-CN','en']:
+                browser.execute('setLanguage(arguments[0]);', language)
+                data=request(browser.base+'/screenshot')[1]['value']
+                (args.output/('balances-'+language+'.png')).write_bytes(base64.b64decode(data))
+            browser.execute('setLanguage("zh-CN");')
+        click(browser, '[data-ui-action="provider-details"][data-id="deepseek"]')
+        wait_for(lambda: browser.execute('return document.querySelector(".provider-balance-details a")?.hostname==="platform.deepseek.com";'))
+        browser.execute('closeModal();')
+        for identifier in ['openrouter', 'openai', 'xai']:
+            click(browser, '[data-ui-action="provider-details"][data-id="'+identifier+'"]')
+            wait_for(lambda: browser.execute('return !document.getElementById("modal_backdrop").classList.contains("hidden");'))
+            assert browser.execute('return !document.querySelector(".provider-balance-details");')
+            browser.execute('closeModal();')
+        checks.append('Only DeepSeek and Kimi show balances and refresh once per click; other official services omit balance controls and billing sections; the Mercury icon remains visible')
         browser.execute('closeModal();settings.open("general");')
         click(browser, '[data-app-icon-open]')
         if args.output:

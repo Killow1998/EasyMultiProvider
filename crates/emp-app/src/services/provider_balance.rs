@@ -48,12 +48,15 @@ pub(crate) fn snapshot(state: &ServerState, config: &Value) -> Value {
         };
         let key = provider_api_key(provider, &state.backend.configuration.vault);
         let identity = identity(provider, &key);
-        results.insert(provider["id"].as_str().expect("provider ID").into(), json!({
-            "identity":identity,
-            "billing_url":service.billing_url,
-            "refreshable":service.adapter.is_some() && provider["enabled"] != false && !key.is_empty(),
-            "observation":cache.get(&identity),
-        }));
+        results.insert(
+            provider["id"].as_str().expect("provider ID").into(),
+            json!({
+                "identity":identity,
+                "billing_url":service.billing_url,
+                "refreshable":provider["enabled"] != false && !key.is_empty(),
+                "observation":cache.get(&identity),
+            }),
+        );
     }
     Value::Object(results)
 }
@@ -71,7 +74,6 @@ pub(crate) fn refresh(state: &ServerState, id: &str, force: bool) -> Option<Valu
         return None;
     }
     let service = official(provider["base_url"].as_str().expect("provider URL"))?;
-    let adapter = service.adapter?;
     let key = provider_api_key(&provider, &state.backend.configuration.vault);
     let identity = identity(&provider, &key);
     let now = crate::util::system_now();
@@ -95,12 +97,7 @@ pub(crate) fn refresh(state: &ServerState, id: &str, force: bool) -> Option<Valu
         state.backend.transport.runtime.block_on(async {
             tokio::time::timeout(
                 Duration::from_secs(5),
-                adapters::query(
-                    &state.backend.transport.client,
-                    adapter,
-                    provider["base_url"].as_str().expect("provider URL"),
-                    &key,
-                ),
+                service.query(&state.backend.transport.client, &key),
             )
             .await
             .unwrap_or(Err("balance_timeout"))

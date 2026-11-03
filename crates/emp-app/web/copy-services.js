@@ -2,10 +2,7 @@
 registerUiCopy({
   'services.balance':['余额','Balance'],
   'services.provider_billing':['账单','Billing'],
-  'services.no_key_budget_short':['未设预算','No budget set'],
   'services.account_balance':['账户可用余额','Available account balance'],
-  'services.key_budget':['此 Key 的剩余预算','Remaining budget for this key'],
-  'services.key_has_no_budget':['此 Key 未设置预算；账户余额请在官方账单查看。','This key has no spending limit. Check the official billing page for account funds.'],
   'services.balance_in_console':['在官方账单查看余额','View balance in the official billing console'],
   'services.balance_loading':['正在查询余额…','Checking balance…'],
   'services.balance_unavailable':['查询失败','Unavailable'],

@@ -5,19 +5,18 @@ function createProviderBalances({getState,api,esc,tr,notice,render}) {
   function description(entry) {
     const observed=entry.observation;
     if(observed?.error_code)return errorText(observed.error_code);
-    const kind=observed?.balance?.kind;
-    return tr(kind==='key_budget'?'services.key_budget':kind==='no_key_budget'?'services.key_has_no_budget':!entry.refreshable?'services.balance_in_console':'services.account_balance');
+    return tr(entry.refreshable?'services.account_balance':'services.balance_in_console');
   }
   function value(entry) {
-    return (entry.observation?.balance?.amounts || []).map(({currency,available})=>new Intl.NumberFormat(document.documentElement.lang,{style:'currency',currency,maximumFractionDigits:2}).format(available)).join(' · ');
+    const balance=entry.observation?.balance;
+    return (balance?.amounts || []).map(({currency,available})=>new Intl.NumberFormat(document.documentElement.lang,{style:'currency',currency,maximumFractionDigits:2}).format(available)).join(' · ');
   }
   function segment(id) {
     const entry=record(id);
     if(!entry)return '';
     const text=value(entry),title=text?description(entry):entry.observation?description(entry):tr(entry.refreshable?'services.balance_loading':'services.balance_in_console');
-    const kind=entry.observation?.balance?.kind;
-    const label=entry.observation?.error_code?'services.balance_unavailable':!entry.refreshable?'services.provider_billing':kind==='no_key_budget'?'services.no_key_budget_short':'services.balance';
-    return `<span class="account-segment account-credit service-balance" title="${esc(title)}"><span class="credit-mark">${kind==='key_budget' || kind==='no_key_budget'?'K':'C'}</span><strong>${esc(text || tr(label))}</strong></span>`;
+    const label=entry.observation?.error_code?'services.balance_unavailable':!entry.refreshable?'services.provider_billing':'services.balance';
+    return `<span class="account-segment account-credit service-balance" title="${esc(title)}"><span class="credit-mark">C</span><strong>${esc(text || tr(label))}</strong></span>`;
   }
   function details(id) {
     const entry=record(id);

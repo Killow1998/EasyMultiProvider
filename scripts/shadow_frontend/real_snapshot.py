@@ -107,7 +107,10 @@ class AccountingSnapshot:
                 catalog = root / 'models.json'
                 catalog.write_text('{"models":[]}')
                 base, _, _, headers = start_backend(pending, self.binary, root,
-                    {'providers':[], 'models':[], 'accounts':[], 'auto_enable_on_start':False,
+                    {'providers':[{**{key:provider[key] for key in ['id','name','base_url','protocol']},
+                        'auth_mode':'api_key','enabled':False} for provider in self.config['providers']
+                        if provider.get('execution_backend') != 'claude_cli'],
+                     'models':[], 'accounts':[], 'auto_enable_on_start':False,
                      'subscription_search':{'enabled':False}, 'native_catalog_path':str(catalog),
                      'pricing_aliases':self.config.get('pricing_aliases',{}),
                      'codex_base_url':'http://127.0.0.1:9/preview-offline'},
