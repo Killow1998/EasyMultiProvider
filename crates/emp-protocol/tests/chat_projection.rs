@@ -55,6 +55,7 @@ fn complete_projection_separates_reasoning_answer_refusal_and_usage() {
     assert_eq!(output[0]["id"], "rs_leading");
     assert_eq!(output[0]["content"][0]["text"], "Check the sum.");
     assert_eq!(output[1]["content"][0]["text"], "Four.");
+    assert_eq!(output[1]["phase"], "final_answer");
     assert_eq!(output[1]["content"][1]["refusal"], "Boundary note.");
     assert_eq!(projected.response["output_text"], "Four.");
     assert_eq!(
@@ -94,23 +95,33 @@ fn complete_projection_requires_object_tool_arguments_and_finish_reason() {
         assert!(response_from_chat(&bad, "test/model", &[], &ids()).is_err());
     }
 
-    let projected = response_from_chat(
-        &json!({"choices": [{"message": {"tool_calls": [{
+    for (arguments, input) in [
+        (" { \"input\": \"pwd\" } ", "pwd"),
+        ("{\"input\":{\"command\":\"pwd\"}}", "{\"command\":\"pwd\"}"),
+        ("{\"command\":\"pwd\"}", "{\"command\":\"pwd\"}"),
+    ] {
+        let upstream = json!({"choices": [{"message": {"tool_calls": [{
             "id": "call_custom",
-            "function": {"name": "shell", "arguments": "{\"input\":\"pwd\"}"},
+            "function": {"name": "shell", "arguments": arguments},
             "extra_content": {"provider": "value"}
-        }]}, "finish_reason": "tool_calls"}]}),
-        "test/model",
-        &["shell"],
-        &ids(),
-    )
-    .expect("custom call");
-    let call = &projected.response["output"][0];
-    assert_eq!(call["type"], "custom_tool_call");
-    assert_eq!(call["call_id"], "call_custom");
-    assert_eq!(call["input"], "pwd");
-    assert_eq!(call["id"], "ctc_62f939c22b98e67f872e1dac");
-    assert_eq!(call["extra_content"], json!({"provider": "value"}));
+        }]}, "finish_reason": "tool_calls"}]});
+        let projected =
+            response_from_chat(&upstream, "test/model", &["shell"], &ids()).expect("custom call");
+        let call = &projected.response["output"][0];
+        assert_eq!(call["type"], "custom_tool_call");
+        assert_eq!(call["call_id"], "call_custom");
+        assert_eq!(call["input"], input);
+        assert_eq!(call["id"], "ctc_62f939c22b98e67f872e1dac");
+        assert_eq!(call["extra_content"], json!({"provider": "value"}));
+
+        let mut stream = ChatStream::new("test/model", ids()).with_custom_names(&["shell"]);
+        stream.start_event().expect("start");
+        stream
+            .push(&upstream, ChatFrame::Ordinary)
+            .expect("ordinary frame");
+        let events = stream.finish().expect("finish");
+        assert_eq!(&terminal_response(&events)["output"][0], call);
+    }
 }
 
 #[test]
@@ -169,6 +180,7 @@ fn stream_keeps_reasoning_and_answer_in_distinct_ordered_items() {
     assert_eq!(part_added.value["part"]["text"], "");
     let response = terminal_response(&events);
     assert_eq!(response["output_text"], "Four.");
+    assert_eq!(response["output"][1]["phase"], "final_answer");
     assert_eq!(response["usage"]["input_tokens"], 2);
     assert_eq!(event_types(&events).last(), Some(&"response.completed"));
     assert!(stream.finish().is_err(), "a terminal event is emitted once");
@@ -269,6 +281,125 @@ fn message_closes_before_tool_and_tool_frames_match_responses() {
     assert_eq!(done.value["arguments"], "{\"x\":4}");
     assert!(done.value.get("delta").is_none());
     assert!(done.value.get("content_index").is_none());
+    let message = events
+        .iter()
+        .find(|event| {
+            event.event == "response.output_item.done" && event.value["item"]["type"] == "message"
+        })
+        .expect("progress message");
+    assert_eq!(message.value["item"]["phase"], "commentary");
+    assert_eq!(
+        terminal_response(&events)["output"][0]["phase"],
+        "commentary"
+    );
+}
+
+#[test]
+fn complete_tool_preamble_is_commentary() {
+    let response = response_from_chat(
+        &json!({"choices": [{"message": {
+            "content": "I will check the file.",
+            "tool_calls": [{"id": "call_read", "function": {"name": "read_file", "arguments": "{}"}}]
+        }, "finish_reason": "tool_calls"}]}),
+        "test/model", &[], &ids(),
+    ).expect("tool response").response;
+    assert_eq!(response["output"][0]["phase"], "commentary");
+    assert_eq!(response["output"][1]["type"], "function_call");
+}
+
+#[test]
+fn native_tool_markup_fails_without_exposing_split_control_tokens() {
+    for markup in ["<｜DSML｜tool_calls>", "</｜DSML｜ parameter>"] {
+        let text = format!("I will run the check.\n{markup}private parameter value");
+        let response =
+            json!({"choices": [{"message": {"content": text}, "finish_reason": "stop"}]});
+        assert_eq!(
+            response_from_chat(&response, "test/model", &[], &ids())
+                .unwrap_err()
+                .kind(),
+            ProtocolErrorKind::ProtocolError
+        );
+        for split in text.char_indices().map(|(index, _)| index) {
+            let mut stream = ChatStream::new("test/model", ids());
+            stream.start_event().expect("start");
+            let mut visible = String::new();
+            let mut error = None;
+            for fragment in [&text[..split], &text[split..]] {
+                match stream.push(
+                    &json!({"choices": [{"delta": {"content": fragment}}]}),
+                    ChatFrame::Sse,
+                ) {
+                    Ok(events) => visible.extend(
+                        events
+                            .iter()
+                            .filter(|event| event.event == "response.output_text.delta")
+                            .map(|event| event.value["delta"].as_str().unwrap()),
+                    ),
+                    Err(failure) => {
+                        error = Some(failure);
+                        break;
+                    }
+                }
+            }
+            assert_eq!(
+                error.expect("native markup must fail").kind(),
+                ProtocolErrorKind::ProtocolError
+            );
+            assert!(!visible.contains("DSML"), "{visible}");
+            assert!(!visible.contains("private parameter value"));
+        }
+    }
+}
+
+#[test]
+fn quoted_tool_markup_and_trailing_less_than_survive_streaming() {
+    for text in [
+        "Use `<｜DSML｜tool_calls>` as a literal example, not a call.",
+        "```xml\n<｜DSML｜invoke name=\"example\">\n</｜DSML｜invoke>\n```\nDone.",
+        "Example: <think>text</think> and <tool_call> are documentation; x <",
+    ] {
+        let response =
+            json!({"choices": [{"message": {"content": text}, "finish_reason": "stop"}]});
+        assert_eq!(
+            response_from_chat(&response, "test/model", &[], &ids())
+                .expect("literal response")
+                .response["output_text"],
+            text
+        );
+        let mut stream = ChatStream::new("test/model", ids());
+        stream.start_event().expect("start");
+        let mut visible = String::new();
+        for character in text.chars() {
+            let events = stream
+                .push(
+                    &json!({"choices": [{"delta": {"content": character.to_string()}}]}),
+                    ChatFrame::Sse,
+                )
+                .expect("literal chunk");
+            visible.extend(
+                events
+                    .iter()
+                    .filter(|event| event.event == "response.output_text.delta")
+                    .map(|event| event.value["delta"].as_str().unwrap()),
+            );
+        }
+        stream
+            .push(
+                &json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+                ChatFrame::Sse,
+            )
+            .expect("stop");
+        stream.mark_done();
+        let terminal = stream.finish().expect("finish");
+        visible.extend(
+            terminal
+                .iter()
+                .filter(|event| event.event == "response.output_text.delta")
+                .map(|event| event.value["delta"].as_str().unwrap()),
+        );
+        assert_eq!(visible, text);
+        assert_eq!(terminal_response(&terminal)["output_text"], text);
+    }
 }
 
 #[test]

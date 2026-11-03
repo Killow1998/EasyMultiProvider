@@ -1,8 +1,4 @@
 //! Request and response projection between Codex and external model protocols.
-//!
-//! The API intentionally keeps `serde_json::Value` as its wire type.  It
-//! preserves unknown upstream fields separately from the canonical Responses
-//! projection and reports protocol failures without embedding payload text.
 
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -75,6 +71,7 @@ fn request_error(message: &'static str) -> ProtocolError {
 }
 
 mod chat_request;
+mod chat_text;
 mod tool_definitions;
 pub use chat_request::responses_to_chat;
 pub mod anthropic_projection;
@@ -312,38 +309,23 @@ fn chat_reasoning_text(message: &Map<String, Value>) -> &str {
     ""
 }
 
-fn combined_array_text(value: &Value, invalid: &'static str) -> Result<String, ProtocolError> {
-    let parts = value.as_array().ok_or_else(|| protocol_error(invalid))?;
-    let mut result = String::new();
-    for part in parts {
-        let Some(part) = object(part) else {
-            return Err(protocol_error(invalid));
-        };
-        if !matches!(
-            part.get("type").and_then(Value::as_str),
-            Some("text" | "output_text")
-        ) {
-            return Err(protocol_error(invalid));
-        }
-        let Some(text) = part.get("text").and_then(Value::as_str) else {
-            return Err(protocol_error(invalid));
-        };
-        result.push_str(text);
-    }
-    Ok(result)
-}
-
 fn message_text(message: &Map<String, Value>) -> Result<String, ProtocolError> {
+    let invalid = || protocol_error("Chat Completions upstream returned invalid message content");
     match message.get("content") {
         None | Some(Value::Null) => Ok(String::new()),
         Some(Value::String(value)) => Ok(value.clone()),
-        Some(value @ Value::Array(_)) => combined_array_text(
-            value,
-            "Chat Completions upstream returned invalid message content",
-        ),
-        Some(_) => Err(protocol_error(
-            "Chat Completions upstream returned invalid message content",
-        )),
+        Some(Value::Array(parts)) => {
+            let mut result = String::new();
+            for part in parts {
+                let part = object(part).ok_or_else(invalid)?;
+                if !matches!(string_at(part, "type"), Some("text" | "output_text")) {
+                    return Err(invalid());
+                }
+                result.push_str(string_at(part, "text").ok_or_else(invalid)?);
+            }
+            Ok(result)
+        }
+        Some(_) => Err(invalid()),
     }
 }
 
@@ -357,18 +339,9 @@ fn refusal_text(value: &Map<String, Value>) -> Result<String, ProtocolError> {
     }
 }
 
-fn tool_arguments(value: Option<&Value>) -> Result<String, ProtocolError> {
-    match value {
-        Some(Value::String(value)) => match serde_json::from_str::<Value>(value) {
-            Ok(Value::Object(_)) => Ok(value.clone()),
-            _ => Err(protocol_error(
-                "Chat Completions upstream returned invalid tool arguments",
-            )),
-        },
-        None | Some(_) => Err(protocol_error(
-            "Chat Completions upstream returned invalid tool arguments",
-        )),
-    }
+fn tool_arguments(value: &str) -> Result<Map<String, Value>, ProtocolError> {
+    serde_json::from_str(value)
+        .map_err(|_| protocol_error("Chat Completions upstream returned invalid tool arguments"))
 }
 
 fn tool_index(value: Option<&Value>, default: usize) -> Result<i64, ProtocolError> {
@@ -390,18 +363,14 @@ fn tool_index(value: Option<&Value>, default: usize) -> Result<i64, ProtocolErro
     }
 }
 
-fn custom_tool_input(arguments: &str) -> String {
-    let parsed = serde_json::from_str::<Value>(arguments)
-        .unwrap_or_else(|_| Value::String(arguments.to_owned()));
-    let value = if let Value::Object(object) = &parsed {
-        object.get("input").unwrap_or(&parsed)
-    } else {
-        &parsed
-    };
-    if let Value::String(value) = value {
-        return value.clone();
+fn custom_tool_input(mut arguments: Map<String, Value>) -> String {
+    match arguments
+        .remove("input")
+        .unwrap_or(Value::Object(arguments))
+    {
+        Value::String(value) => value,
+        value => value.to_string(),
     }
-    serde_json::to_string(value).unwrap_or_else(|_| arguments.to_owned())
 }
 
 fn custom_tool_id(call_id: &str) -> String {
@@ -510,157 +479,8 @@ fn reasoning_item(id: &str, text: &str) -> Value {
     })
 }
 
-fn tool_item(
-    call: &Map<String, Value>,
-    custom_names: &BTreeSet<String>,
-) -> Result<Value, ProtocolError> {
-    let raw_id = string_at(call, "id").unwrap_or_default();
-    let name = call
-        .get("function")
-        .and_then(object)
-        .and_then(|function| string_at(function, "name"))
-        .unwrap_or_default();
-    if raw_id.is_empty() || name.is_empty() {
-        return Err(protocol_error(
-            "Chat Completions upstream returned an invalid tool call",
-        ));
-    }
-    let arguments = tool_arguments(
-        call.get("function")
-            .and_then(object)
-            .and_then(|function| function.get("arguments")),
-    )?;
-    let mut item = if custom_names.contains(name) {
-        serde_json::json!({
-            "id": custom_tool_id(raw_id),
-            "type": "custom_tool_call",
-            "status": "completed",
-            "call_id": raw_id,
-            "name": name,
-            "input": custom_tool_input(&arguments),
-        })
-    } else {
-        serde_json::json!({
-            "id": raw_id,
-            "type": "function_call",
-            "status": "completed",
-            "call_id": raw_id,
-            "name": name,
-            "arguments": arguments,
-        })
-    };
-    if let Some(extra) = call.get("extra_content").filter(|extra| extra.is_object()) {
-        item["extra_content"] = extra.clone();
-    }
-    Ok(item)
-}
-
-/// Project one complete Chat Completions response into Responses JSON.
-pub fn response_from_chat(
-    value: &Value,
-    requested_model: &str,
-    custom_names: &[&str],
-    ids: &ChatIds,
-) -> Result<ChatProjection, ProtocolError> {
-    let Some(root) = object(value) else {
-        return Err(protocol_error(
-            "Chat Completions upstream returned an invalid response",
-        ));
-    };
-    if root.get("error").is_some_and(json_truthy) {
-        return Err(upstream_error(
-            "Chat Completions upstream returned an error",
-        ));
-    }
-    let choice = root
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(object)
-        .ok_or_else(|| protocol_error("Chat Completions upstream returned an invalid response"))?;
-    let message = choice
-        .get("message")
-        .and_then(object)
-        .ok_or_else(|| protocol_error("Chat Completions upstream returned an invalid response"))?;
-    let custom_names = custom_names
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect::<BTreeSet<_>>();
-    let mut output = Vec::new();
-    let reasoning = chat_reasoning_text(message);
-    if !reasoning.is_empty() {
-        output.push(reasoning_item(&ids.reasoning, reasoning));
-    }
-    let text = message_text(message)?;
-    let refusal = refusal_text(message)?;
-    let mut content = Vec::new();
-    if !text.is_empty() {
-        content.push(serde_json::json!({
-            "type": "output_text", "text": text, "annotations": []
-        }));
-    }
-    if !refusal.is_empty() {
-        content.push(serde_json::json!({"type": "refusal", "refusal": refusal}));
-    }
-    if !content.is_empty() {
-        output.push(serde_json::json!({
-            "id": ids.message,
-            "type": "message",
-            "status": "completed",
-            "role": "assistant",
-            "content": content,
-        }));
-    }
-    let calls = match message.get("tool_calls") {
-        None => &[][..],
-        Some(Value::Array(calls)) => calls.as_slice(),
-        Some(_) => {
-            return Err(protocol_error(
-                "Chat Completions upstream returned an invalid tool call",
-            ));
-        }
-    };
-    let mut seen_ids = BTreeSet::new();
-    for call in calls {
-        let Some(call) = object(call) else {
-            return Err(protocol_error(
-                "Chat Completions upstream returned an invalid tool call",
-            ));
-        };
-        let raw_id = string_at(call, "id").unwrap_or_default();
-        if raw_id.is_empty() || !seen_ids.insert(raw_id) {
-            return Err(protocol_error(
-                "Chat Completions upstream returned an invalid tool call",
-            ));
-        }
-        output.push(tool_item(call, &custom_names)?);
-    }
-    let reason = incomplete_reason(choice.get("finish_reason"))?;
-    let mut response = serde_json::json!({
-        "id": ids.response,
-        "object": "response",
-        "status": if reason.is_some() { "incomplete" } else { "completed" },
-        "model": requested_model,
-        "output": output,
-        "output_text": text,
-    });
-    if let Some(reason) = reason {
-        response["incomplete_details"] = serde_json::json!({"reason": reason});
-    }
-    if let Some(usage) = root.get("usage").filter(|usage| !usage.is_null()) {
-        response["usage"] = projected_usage(usage)?;
-    }
-    if let Some(service_tier) = string_at(root, "service_tier") {
-        response["service_tier"] = Value::String(service_tier.to_owned());
-    }
-    let mut unknown_fields = Vec::new();
-    collect_unknown_fields(&mut unknown_fields, value);
-    Ok(ChatProjection {
-        response,
-        unknown_fields,
-    })
-}
-
+mod chat_response;
+pub use chat_response::response_from_chat;
 mod chat_stream;
 pub use chat_stream::{ChatFrame, ChatStream, StreamEvent};
 

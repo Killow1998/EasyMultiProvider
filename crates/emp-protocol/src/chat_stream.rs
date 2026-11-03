@@ -57,6 +57,7 @@ pub struct ChatStream {
     reasoning: String,
     late_reasoning: String,
     content_parts: Vec<(ContentKind, String)>,
+    text_channel: chat_text::ChatText,
     tool_calls: BTreeMap<i64, ToolCallState>,
     tool_call_ids: BTreeSet<String>,
     custom_names: BTreeSet<String>,
@@ -108,6 +109,7 @@ impl ChatStream {
             reasoning: String::new(),
             late_reasoning: String::new(),
             content_parts: Vec::new(),
+            text_channel: chat_text::ChatText::default(),
             tool_calls: BTreeMap::new(),
             tool_call_ids: BTreeSet::new(),
             custom_names: BTreeSet::new(),
@@ -189,8 +191,7 @@ impl ChatStream {
         let choice = root
             .get("choices")
             .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .cloned();
+            .and_then(|choices| choices.first());
         let Some(choice) = choice else {
             if self.usage.is_some() {
                 return Ok(events);
@@ -199,26 +200,24 @@ impl ChatStream {
                 "Chat Completions upstream returned an invalid stream chunk",
             ));
         };
-        let choice = object(&choice).ok_or_else(|| {
+        let choice = object(choice).ok_or_else(|| {
             protocol_error("Chat Completions upstream returned an invalid stream chunk")
         })?;
         if let Some(reason) = choice.get("finish_reason").filter(|value| !value.is_null()) {
             self.finish_reason = Some(reason.clone());
         }
-        let mut delta = choice
-            .get("delta")
-            .cloned()
-            .unwrap_or_else(|| Value::Object(Map::new()));
-        if object(&delta).is_none_or(Map::is_empty)
+        let empty_delta = Value::Object(Map::new());
+        let mut delta = choice.get("delta").unwrap_or(&empty_delta);
+        if object(delta).is_none_or(Map::is_empty)
             && let Some(message) = choice.get("message").filter(|value| value.is_object())
         {
-            delta = message.clone();
+            delta = message;
             self.ordinary_complete = frame == ChatFrame::Ordinary
                 && choice
                     .get("finish_reason")
                     .is_some_and(|value| !value.is_null());
         }
-        let delta = object(&delta).ok_or_else(|| {
+        let delta = object(delta).ok_or_else(|| {
             protocol_error("Chat Completions upstream returned an invalid stream chunk")
         })?;
         self.consume_reasoning(delta, &mut events)?;
@@ -239,12 +238,19 @@ impl ChatStream {
                 "Chat Completions upstream ended before [DONE]",
             ));
         }
+        let pending = self.text_channel.finish();
+        self.append_content(ContentKind::OutputText, &pending, &mut events)?;
         if !self.saw_output {
             return Err(stream_error(
                 "upstream returned an empty Chat Completions response",
             ));
         }
         let reason = incomplete_reason(self.finish_reason.as_ref())?;
+        let phase = if self.tool_calls.is_empty() {
+            "final_answer"
+        } else {
+            "commentary"
+        };
         self.finished = true;
         let message_index = usize::from(self.reasoning_started);
         if self.reasoning_started && !self.message_started {
@@ -272,7 +278,7 @@ impl ChatStream {
                     value,
                 ));
             }
-            events.push(self.item_done(message_index, &self.message_output()));
+            events.push(self.item_done(message_index, &self.message_output(phase)));
         }
         let late_index = message_index + usize::from(self.message_started);
         if !self.late_reasoning.is_empty() {
@@ -305,7 +311,7 @@ impl ChatStream {
                     "upstream returned a tool call without a name",
                 ));
             }
-            let arguments = tool_arguments(Some(&Value::String(state.arguments.clone())))?;
+            let fields = tool_arguments(&state.arguments)?;
             let custom = self.custom_names.contains(&state.name);
             let item_id = if custom {
                 custom_tool_id(&state.id)
@@ -330,30 +336,15 @@ impl ChatStream {
             } else {
                 added["arguments"] = Value::String(String::new());
             }
-            if let Some(extra) = &state.extra_content {
-                added["extra_content"] = extra.clone();
+            if let Some(extra) = state.extra_content {
+                added["extra_content"] = extra;
             }
             events.push(self.item_added(output_index, &added));
             let projected_input = if custom {
-                custom_tool_input(&arguments)
+                custom_tool_input(fields)
             } else {
-                arguments.clone()
+                state.arguments
             };
-            let mut output = serde_json::json!({
-                "id": item_id,
-                "type": call_type,
-                "status": "completed",
-                "call_id": state.id,
-                "name": state.name,
-            });
-            if custom {
-                output["input"] = Value::String(projected_input.clone());
-            } else {
-                output["arguments"] = Value::String(arguments.clone());
-            }
-            if let Some(extra) = state.extra_content {
-                output["extra_content"] = extra;
-            }
             if custom {
                 events.push(self.tool_delta_event(
                     "response.custom_tool_call_input.delta",
@@ -366,7 +357,7 @@ impl ChatStream {
                     "response.function_call_arguments.delta",
                     output_index,
                     &item_id,
-                    &arguments,
+                    &projected_input,
                 ));
                 events.push(self.event(
                     "response.function_call_arguments.done",
@@ -374,19 +365,22 @@ impl ChatStream {
                         "type": "response.function_call_arguments.done",
                         "item_id": item_id,
                         "output_index": output_index,
-                        "arguments": arguments,
+                        "arguments": projected_input,
                     }),
                 ));
             }
-            function_outputs.push(output.clone());
+            let mut output = added;
+            output["status"] = Value::String("completed".into());
+            output[if custom { "input" } else { "arguments" }] = Value::String(projected_input);
             events.push(self.item_done(output_index, &output));
+            function_outputs.push(output);
         }
         let mut outputs = Vec::new();
         if self.reasoning_started {
             outputs.push(reasoning_item(&self.reasoning_id, &self.reasoning));
         }
         if self.message_started {
-            outputs.push(self.message_output());
+            outputs.push(self.message_output(phase));
         }
         if !self.late_reasoning.is_empty() {
             outputs.push(reasoning_item(

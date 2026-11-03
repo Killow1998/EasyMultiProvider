@@ -126,7 +126,7 @@ impl ChatStream {
         )
     }
 
-    pub(super) fn message_output(&self) -> Value {
+    pub(super) fn message_output(&self, phase: &str) -> Value {
         let content = self
             .content_parts
             .iter()
@@ -137,6 +137,7 @@ impl ChatStream {
             "type": "message",
             "status": "completed",
             "role": "assistant",
+            "phase": phase,
             "content": content
         })
     }
@@ -180,79 +181,71 @@ impl ChatStream {
         delta: &Map<String, Value>,
         events: &mut Vec<StreamEvent>,
     ) -> Result<(), ProtocolError> {
-        let text = match delta.get("content") {
-            None | Some(Value::Null) => String::new(),
-            Some(Value::String(value)) => value.clone(),
-            Some(value @ Value::Array(_)) => combined_array_text(
-                value,
-                "Chat Completions upstream returned invalid message content",
-            )?,
-            Some(_) => {
-                return Err(protocol_error(
-                    "Chat Completions upstream returned invalid message content",
-                ));
-            }
-        };
+        let text = message_text(delta)?;
         let refusal = refusal_text(delta)?;
+        if self.message_closed && (!text.is_empty() || !refusal.is_empty()) {
+            return Err(protocol_error(
+                "Chat Completions upstream returned content after a tool call",
+            ));
+        }
+        let text = self.text_channel.push(&text)?;
         for (kind, fragment) in [
             (ContentKind::OutputText, text),
             (ContentKind::Refusal, refusal),
         ] {
-            if fragment.is_empty() {
-                continue;
+            self.append_content(kind, &fragment, events)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn append_content(
+        &mut self,
+        kind: ContentKind,
+        fragment: &str,
+        events: &mut Vec<StreamEvent>,
+    ) -> Result<(), ProtocolError> {
+        if fragment.is_empty() {
+            return Ok(());
+        }
+        self.add_stream_text(fragment)?;
+        self.saw_output = true;
+        if !self.message_started {
+            if self.reasoning_started {
+                events
+                    .push(self.item_done(0, &reasoning_item(&self.reasoning_id, &self.reasoning)));
             }
-            if self.message_closed {
-                return Err(protocol_error(
-                    "Chat Completions upstream returned content after a tool call",
-                ));
-            }
-            self.add_stream_text(&fragment)?;
-            self.saw_output = true;
-            if !self.message_started {
-                if self.reasoning_started {
-                    events.push(
-                        self.item_done(0, &reasoning_item(&self.reasoning_id, &self.reasoning)),
-                    );
-                }
-                self.message_started = true;
-                let message_index = usize::from(self.reasoning_started);
-                events.push(self.item_added(
-                    message_index,
-                    &serde_json::json!({
-                        "id": self.message_id,
-                        "type": "message",
-                        "status": "in_progress",
-                        "role": "assistant",
-                        "content": []
-                    }),
-                ));
-            }
+            self.message_started = true;
             let message_index = usize::from(self.reasoning_started);
-            let content_index = self.content_index(kind);
-            if content_index == self.content_parts.len() {
-                self.content_parts.push((kind, fragment.clone()));
-                events.push(self.content_part_event(
-                    "response.content_part.added",
-                    message_index,
-                    content_index,
-                    kind,
-                    "",
-                ));
-            } else {
-                self.content_parts[content_index].1.push_str(&fragment);
-            }
-            let event = match kind {
-                ContentKind::OutputText => "response.output_text.delta",
-                ContentKind::Refusal => "response.refusal.delta",
-            };
-            events.push(self.message_event(
-                event,
+            events.push(self.item_added(
                 message_index,
-                content_index,
-                "delta",
-                &fragment,
+                &serde_json::json!({
+                    "id": self.message_id,
+                    "type": "message",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": []
+                }),
             ));
         }
+        let message_index = usize::from(self.reasoning_started);
+        let content_index = self.content_index(kind);
+        if content_index == self.content_parts.len() {
+            self.content_parts.push((kind, fragment.to_owned()));
+            events.push(self.content_part_event(
+                "response.content_part.added",
+                message_index,
+                content_index,
+                kind,
+                "",
+            ));
+        } else {
+            self.content_parts[content_index].1.push_str(fragment);
+        }
+        let event = match kind {
+            ContentKind::OutputText => "response.output_text.delta",
+            ContentKind::Refusal => "response.refusal.delta",
+        };
+        events.push(self.message_event(event, message_index, content_index, "delta", fragment));
         Ok(())
     }
 

@@ -8,6 +8,39 @@ independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 Older series leave routine maintenance; their dated acceptance records remain.
 
+## Chat output acceptance (2026-11-02 UTC)
+
+The local candidate based on `70cf0e1`, still reporting EMP 0.13.24, was tested
+with the installed Codex 0.166.0 Linux engine. This is separate from the
+published 0.13.24 executable. The maintenance window is unchanged.
+
+Chat Completions text accompanying structured tool calls now completes with
+`phase: "commentary"`; standalone answers complete with `phase: "final_answer"`.
+HTTP, SSE output-item completion and the terminal response carry the same phase.
+Text deltas remain incremental; the converter does not buffer an entire answer
+to choose a phase. Codex persists both phases correctly in its actual rollout.
+
+Native DeepSeek DSML envelopes in the text channel now produce a protocol error
+instead of leaking tool parameters or claiming successful completion. The text
+boundary retains split marker prefixes across SSE chunks. Backtick-quoted code
+examples and ordinary `<think>` / `<tool_call>` documentation remain text.
+Only structured tool calls are executed; malformed text is not reinterpreted as
+an executable command. Existing reasoning-field suppression remains unchanged.
+
+- All `emp-protocol` tests pass. The focused `user_journeys chat_` checks pass
+  five actual-EMP process journeys, covering HTTP/SSE phases, tool-result
+  continuation, reasoning/usage separation, refusal and damaged tool output.
+- Real-provider candidate checks complete **50 model requests across 30 user
+  turns**, including GLM Flash and DeepSeek code/tool interactions. A dedicated
+  progress-message case persists **four commentary and four final messages** for
+  GLM Flash, and **five commentary and four final messages** for DeepSeek. No
+  raw reasoning or tool markup appears in these samples. Every request is
+  classified as a model test. The earlier published-build GLM samples are
+  retained separately rather than relabeled as candidate results.
+- `cargo clippy -p emp-protocol -p emp-app --all-targets -- -D warnings`, Rust
+  formatting and diff checks pass. Existing EMP instances were not restarted;
+  installed login and encrypted credential files remain unchanged.
+
 ## Current target and acceptance (2026-10-31 UTC)
 
 The maintenance target is **0.162–0.166**, following the official stable

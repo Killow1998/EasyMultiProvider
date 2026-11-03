@@ -225,6 +225,7 @@ fn chat_completion_omits_raw_reasoning_and_preserves_answer_and_usage() {
     let result = response.json();
     assert_eq!(result["status"], "completed");
     assert_eq!(result["output_text"], "Four.");
+    assert_eq!(result["output"][0]["phase"], "final_answer");
     assert_eq!(result["usage"], responses_usage());
     assert_eq!(output_types(&result), ["message"]);
     assert!(!response.text().contains("Check the sum."));
@@ -264,8 +265,118 @@ fn chat_stream_omits_raw_reasoning_and_preserves_answer_and_usage() {
     let completed = events.last().expect("terminal event");
     assert_eq!(completed["type"], "response.completed");
     assert_eq!(completed["response"]["output_text"], "Four.");
+    assert_eq!(completed["response"]["output"][0]["phase"], "final_answer");
     assert_eq!(output_types(&completed["response"]), ["message"]);
     assert_eq!(completed["response"]["usage"], responses_usage());
+}
+
+#[test]
+fn chat_tool_preamble_is_commentary_and_tool_result_reaches_final_answer() {
+    let upstream = Upstream::start();
+    let workspace = Workspace::with_routes(&upstream);
+    let emp = workspace.start();
+    for streaming in [false, true] {
+        let tool = json!({"id": "call_read", "type": "function", "function": {
+            "name": "read_file", "arguments": "{\"path\":\"example.txt\"}"
+        }});
+        if streaming {
+            upstream.reply_chat_stream(&[
+                json!({"choices": [{"delta": {"content": "I will read the file."}}]}),
+                json!({"choices": [{"delta": {"tool_calls": [tool]}, "finish_reason": "tool_calls"}]}),
+            ]);
+        } else {
+            upstream.reply_json(&json!({"choices": [{"message": {
+                "content": "I will read the file.", "tool_calls": [tool]
+            }, "finish_reason": "tool_calls"}]}));
+        }
+        let first = emp.responses(
+            &json!({"model": "test/model", "input": "read the file", "stream": streaming}),
+        );
+        assert_eq!(first.status, 200, "{}", first.text());
+        let projected = if streaming {
+            let events = first.sse_events();
+            let message = events
+                .iter()
+                .find(|event| {
+                    event["type"] == "response.output_item.done"
+                        && event["item"]["type"] == "message"
+                })
+                .expect("progress message");
+            assert_eq!(message["item"]["phase"], "commentary");
+            events.last().expect("completion")["response"].clone()
+        } else {
+            first.json()
+        };
+        assert_eq!(projected["output"][0]["phase"], "commentary");
+        assert_eq!(projected["output"][1]["type"], "function_call");
+        upstream.next_request();
+        upstream.reply_json(&json!({"choices": [{"message": {"content": "The file says OK."}, "finish_reason": "stop"}]}));
+        let mut input = vec![json!({"role": "user", "content": "read the file"})];
+        input.extend(
+            projected["output"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .cloned(),
+        );
+        input.push(json!({"type": "function_call_output", "call_id": "call_read", "output": "OK"}));
+        let final_response = emp.responses(&json!({"model": "test/model", "input": input}));
+        assert_eq!(final_response.status, 200, "{}", final_response.text());
+        assert_eq!(final_response.json()["output"][0]["phase"], "final_answer");
+        let forwarded = upstream.next_request().body.expect("follow-up body");
+        assert!(
+            forwarded["messages"]
+                .as_array()
+                .expect("history")
+                .iter()
+                .any(|message| message["role"] == "tool"
+                    && message["tool_call_id"] == "call_read"
+                    && message["content"] == "OK")
+        );
+        upstream.assert_idle();
+    }
+}
+
+#[test]
+fn chat_raw_tool_markup_returns_a_protocol_error_without_leaking_parameters() {
+    let upstream = Upstream::start();
+    let workspace = Workspace::with_routes(&upstream);
+    let emp = workspace.start();
+    let markup = "</｜DSML｜ parameter>private parameter value</｜DSML｜ calls>";
+    for streaming in [false, true] {
+        if streaming {
+            upstream.reply_chat_stream(&[
+                json!({"choices": [{"delta": {"content": "I will check the file.\n</｜D"}}]}),
+                json!({"choices": [{"delta": {"content": "SML｜ parameter>private parameter value"}, "finish_reason": "stop"}]}),
+            ]);
+        } else {
+            upstream.reply_json(
+                &json!({"choices": [{"message": {"content": markup}, "finish_reason": "stop"}]}),
+            );
+        }
+        let response = emp.responses(
+            &json!({"model": "test/model", "input": "check the file", "stream": streaming}),
+        );
+        assert!(!response.text().contains("private parameter value"));
+        assert!(!response.text().contains("</｜DSML｜"));
+        if streaming {
+            assert_eq!(response.status, 200);
+            let events = response.sse_events();
+            assert_eq!(
+                events.last().expect("terminal error")["type"],
+                "response.failed"
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| event["type"] == "response.completed")
+            );
+        } else {
+            assert_eq!(response.status, 502, "{}", response.text());
+        }
+        upstream.next_request();
+        upstream.assert_idle();
+    }
 }
 
 #[test]
