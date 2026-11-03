@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.13.25 (2026-11-03)
+
+### 中文
+
+- 修复外部 Chat 模型的进度说明与最终回答混淆的问题；完整和流式响应统一保留消息阶段、工具调用关系和用量。
+- 识别混入正文的 DeepSeek 原生工具控制标记并明确报错，避免工具参数作为最终回答显示；保留代码示例和正常文字。
+- 服务余额仅显示 DeepSeek 和 Kimi 的账户余额，移除 Key 预算及其他服务的余额入口。
+- 合并工具参数和正文解析，减少流式响应的重复复制，整理余额适配与预览配置的职责边界。
+
+### English
+
+- Keep external Chat model progress separate from final answers. Complete and streamed responses retain consistent message phases, tool-call relationships and usage.
+- Report native DeepSeek tool-control markers in answer text as protocol errors instead of displaying tool parameters as a final answer. Preserve quoted code examples and ordinary text.
+- Show account balances only for DeepSeek and Kimi. Remove key budgets and balance controls for other services.
+- Share tool-argument and text parsing, reduce duplicate streaming-response copies, and clarify balance-adapter and preview-configuration ownership.
+
 ## 0.13.24 (2026-11-02)
 
 ### 中文
