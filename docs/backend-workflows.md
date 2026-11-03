@@ -58,6 +58,20 @@ Response projection moves the already-owned output items instead of cloning
 the entire output twice more. Input validation and the final custom-call shape
 check remain at their protocol boundaries.
 
+Complete Chat response conversion belongs to `chat_response.rs`; `chat_stream.rs`
+owns incremental state and `chat_stream/events.rs` owns its event construction.
+Both paths use the same content reader and parse tool arguments once into a JSON
+object. Custom-tool projection consumes that object, while function calls retain
+their original argument text. The stream borrows incoming choices/deltas and moves
+completed tool items into the final response without a second full-item clone.
+
+`provider_balance/adapters.rs` owns official-service recognition, parsed query
+addresses and response decoding. The balance service receives an `OfficialService`
+and calls it directly; it does not reparse URLs or select adapter-specific paths.
+Balance visibility follows the backend's supported metadata in both product UI
+and Shadow. `real_config.py` owns Shadow's cross-version metadata projection;
+the HTTP handler owns authentication and read-only forwarding.
+
 ## Before / after
 
 These are responsibility diagrams, not a complete crate dependency graph.

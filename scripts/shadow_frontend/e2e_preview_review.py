@@ -1,4 +1,4 @@
-"""Review the shared recovery/lifecycle UI without touching real EMP state."""
+"""Review current changes and archived flows without touching real EMP state."""
 import argparse
 import base64
 import contextlib
@@ -33,15 +33,16 @@ def main():
             wait_for(lambda: json.loads((target / 'config.json').read_text())['language'] == lang)
             before = (target / 'config.json').read_bytes()
             assert browser.execute('return !document.getElementById("shadow_routing_button");')
-            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['performance', 'failures', 'lifecycle']
-            browser.execute('document.querySelector("[data-shadow-demo=performance]").click();')
+            assert browser.execute('return document.getElementById("modal_title").textContent.includes("v0.13.24");')
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['chat_output', 'provider_balances']
+            browser.execute('document.querySelector("[data-shadow-demo=chat_output]").click();')
             assert browser.execute('return !document.getElementById("modal_back").hidden;')
             browser.execute('document.getElementById("modal_back").click();')
-            assert browser.execute('return !!document.querySelector("[data-shadow-demo=lifecycle]");')
-            browser.execute('document.querySelector("[data-shadow-demo=failures]").click();')
+            assert browser.execute('return !!document.querySelector("[data-shadow-demo=provider_balances]");')
+            browser.execute('window.EMP_REVIEW_ACTION("failures");')
             assert browser.execute('return !document.getElementById("modal_back").hidden;')
             browser.execute('document.getElementById("modal_back").click();')
-            assert browser.execute('return !!document.querySelector("[data-shadow-demo=performance]");')
+            assert browser.execute('return !!document.querySelector("[data-shadow-demo=chat_output]");')
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             _, png = request(browser.base + '/screenshot')
             args.output.with_name(args.output.stem + f'-overview-{lang}.png').write_bytes(base64.b64decode(png['value']))
@@ -62,7 +63,7 @@ def main():
             browser.execute('document.getElementById("modal_provider_key").value="fixture-draft";document.querySelector(".provider-connection-details").open=true;')
             assert browser.execute('return document.getElementById("modal_provider_key").value==="fixture-draft" && document.documentElement.scrollWidth<=innerWidth;')
             browser.execute('document.getElementById("modal_back").click();')
-            assert browser.execute('return !!document.querySelector("#modal_body [data-shadow-demo=performance]");')
+            assert browser.execute('return !!document.querySelector("#modal_body [data-shadow-demo=chat_output]");')
             browser.execute('window.EMP_REVIEW_ACTION("migration");')
             wait_for(lambda: browser.execute('return document.getElementById("shadow_migration_file")?.files.length===1;'))
             gate = threading.Event()
@@ -93,9 +94,12 @@ def main():
             wait_for(lambda: browser.execute('return document.getElementById("native_history_retry").hidden && !document.getElementById("integration_toggle").disabled;'))
             browser.execute('document.getElementById("integration_toggle").click();document.getElementById("modal_submit").click();')
             wait_for(lambda: browser.execute('return document.getElementById("integration").dataset.state==="emp_applied";'))
+            browser.execute('document.getElementById("shadow_review_button").click();document.querySelector("[data-shadow-demo=provider_balances]").click();')
+            wait_for(lambda: browser.execute('return document.querySelectorAll(".service-balance").length===2;'))
+            assert browser.execute('return ["deepseek","moonshot"].every(id=>document.querySelector(`[data-service="provider:${id}"] .service-balance`));')
             assert request(backend + '/healthz')[0] == 200
             assert (target / 'config.json').read_bytes() == before
-            checks.append(f'{lang}: this update has one lifecycle review entry; existing billing, settings and archived demos remain accessible')
+            checks.append(f'{lang}: this update compares with v0.13.24 and opens chat-output and balance reviews; existing billing, settings and archived demos remain accessible')
         for reason in ['key_mismatch', 'key_missing', 'key_invalid', 'key_permissions', 'config_invalid', 'reset_incomplete']:
             request(browser.base + '/url', {'url': frontend + '/recovery?reason=' + reason})
             wait_for(lambda: browser.execute('return !document.getElementById("reset").disabled;'))
