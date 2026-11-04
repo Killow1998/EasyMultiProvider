@@ -43,19 +43,28 @@ pub(crate) fn refresh(
     {
         return unauthorized_response();
     }
-    if let Err(error) = read_json_body(stream, request, prefix, state) {
-        return body_error_response(error);
-    }
+    let body = match read_json_body(stream, request, prefix, state) {
+        Ok(body) => body,
+        Err(error) => return body_error_response(error),
+    };
+    let force = match body.get("force") {
+        None => false,
+        Some(Value::Bool(force)) => *force,
+        _ => return json_error_response(400, status_text(400), "force must be boolean", None, &[]),
+    };
     let id = request
         .raw_path()
         .strip_prefix("/api/providers/")
         .and_then(|path| path.strip_suffix("/quota"))
         .map(|id| percent_decode(id, false))
         .unwrap_or_default();
-    if !local_provider(state, &id) {
-        return not_found_response();
+    if local_provider(state, &id) {
+        return reply(crate::services::claude_cli::quota_query::refresh(state));
     }
-    reply(crate::services::claude_cli::quota_query::refresh(state))
+    match crate::services::cpa_quota::refresh(state, &id, force) {
+        Some(value) => reply(Ok(value)),
+        None => not_found_response(),
+    }
 }
 
 /// Called only after the common GET management-session check.

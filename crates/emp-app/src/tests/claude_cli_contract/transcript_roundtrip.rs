@@ -152,7 +152,16 @@ fn turn(
                     "one response per turn"
                 ),
                 Some("response.completed") => {
-                    assert_eq!(created, Some(event["response"]["id"].clone()));
+                    assert!(
+                        created
+                            .as_ref()
+                            .and_then(Value::as_str)
+                            .is_some_and(|id| !id.is_empty())
+                    );
+                    assert_eq!(
+                        event["response"]["id"], "",
+                        "the CLI adapter has no resumable server history"
+                    );
                     break event["response"].clone();
                 }
                 _ => {}
@@ -250,10 +259,8 @@ fn installed_cli_multiturn_http_and_websocket_preserve_images_and_exact_tool_res
             let call_id = first["output"][0]["call_id"].as_str().unwrap();
             assert_source_images(&upstream.next(), &images[..1]);
             if let Some(socket) = &mut socket {
-                // Non-native continuation IDs are deliberately rejected; Codex
-                // retries with full history. Rejecting the ID must not poison
-                // this connection or accidentally call the provider.
-                socket.send_json(&json!({"type":"response.create","model":"demo/model","previous_response_id":first["id"],"input":[]})).unwrap();
+                // An ID retained by an older client still requests full history.
+                socket.send_json(&json!({"type":"response.create","model":"demo/model","previous_response_id":"resp-before-upgrade","input":[]})).unwrap();
                 let error = loop {
                     let event = ws_event(socket);
                     if event["type"] == "error" {
@@ -275,7 +282,11 @@ fn installed_cli_multiturn_http_and_websocket_preserve_images_and_exact_tool_res
             ]}));
             history.push(json!({"role":"user","content":"Continue exactly.\n"}));
             let final_response = turn(&server, &mut socket, &body);
-            assert_ne!(first["id"], final_response["id"]);
+            if websocket {
+                assert_eq!(final_response["id"], "");
+            } else {
+                assert_ne!(first["id"], final_response["id"]);
+            }
             assert_eq!(
                 crate::services::compaction::response_output_text(&final_response).as_deref(),
                 Some("follow-up preserved")

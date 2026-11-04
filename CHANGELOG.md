@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.13.26 (2026-11-04)
+
+### 中文
+
+- 修复外部模型工具交互中反复要求重发历史的问题，直接发送完整上下文，保留工具结果、原生增量续传和用量记录。
+- 调用记录关联历史重发后的完成结果，避免把已恢复的请求一直显示为等待重发。
+- CPA 服务显示 5h／7d 剩余额度和最近重置时间，悬停查看各账号明细；支持缓存、手动刷新以及额度接口恢复后的立即重试。
+- 按当前界面更新全部 11 项使用教程，修正模型设置、连接设置和移除入口，保留中英字幕、固定视角和并排隧道演示。
+
+### English
+
+- Stop repeated history resends during external-model tool interactions. Send full context directly while preserving tool results, native incremental continuation and usage records.
+- Link completed follow-ups to their history-resend records instead of leaving recovered requests waiting for another resend.
+- Show CPA 5h/7d remaining quotas and the nearest reset, with individual accounts on hover. Support cached reads, manual refresh and immediate retry when a quota endpoint becomes available.
+- Refresh all 11 tutorials for the current interface. Correct model settings, connection settings and removal entry points while retaining bilingual captions, a fixed camera and side-by-side tunnel transfer.
+
 ## 0.13.25 (2026-11-03)
 
 ### 中文

@@ -76,8 +76,12 @@ review entry. Its baseline is the published **v0.13.25**, displayed in the dialo
 Keep `reviewRows` in `preview-review.js` cumulative across development tasks;
 reset the list and advance `reviewBaseline` together after the next release.
 Follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
-The current review has no unpublished changes. Answer/tool-output separation and
-DeepSeek/Kimi balances shipped in v0.13.25. Their archived review scenarios remain
+The current review covers external continuation, history-resend records, CPA quotas
+and refreshed tutorials.
+The CPA review opens an isolated observer fixture through the production Rust
+quota route. It retains the real-data Shadow as the default; no live Key is copied.
+Answer/tool-output separation and DeepSeek/Kimi balances shipped in v0.13.25.
+Their archived review scenarios remain
 accessible through `/?reviewAction=chat_output` and `/?reviewAction=provider_balances`.
 Published features use their normal product entry points. Their isolated scenarios remain
 available as demos where applicable; their tests do not depend on the current
@@ -239,6 +243,15 @@ python3 scripts/shadow_frontend/e2e_preview_review.py \
   --emp /path/to/candidate/EMP --output /tmp/emp-shadow-review.json
 ```
 
+CPA quota acceptance covers caller authentication, the shared-pool response,
+partial/stale/disabled accounts, zero values, nearest resets, caching, Key changes,
+Refresh All and Chinese/English hover/focus views without model calls:
+
+```sh
+python3 scripts/shadow_frontend/e2e_cpa_quota.py \
+  --emp /path/to/candidate/EMP --output /tmp/emp-cpa-quota
+```
+
 The actual native-history restore acceptance uses a fresh backend, synthetic
 rollouts, an operating-system writer lock, and real Firefox interaction:
 
@@ -286,7 +299,9 @@ and shows unknown generation speed. These are fixture values, not model benchmar
 
 Performance acceptance (Python 3.14 for native zstd request decoding) exercises
 paced upstream events, real durable aggregation,
-single-batch/buffered exclusions, legacy rows and the Chinese/English UI:
+single-batch/buffered exclusions, legacy rows and the Chinese/English UI.
+Explicitly linked and unlinked synthetic history-resend records exercise the
+completion explanation without changing usage totals:
 
 ```sh
 python3 scripts/shadow_frontend/e2e_performance.py \

@@ -8,20 +8,20 @@ in a new window when you want to see the details.
 
 也可在 WebUI 顶栏打开 **使用教程**：左侧选择操作，右侧观看演示；需要看清细节时，可在新窗口打开大图。十一支 GIF 均可离线观看。
 
-Expand a task to view its GIF. Each recording uses the actual EMP interface with
+Expand a task to view its GIF. These recordings use the EMP 0.13.26 interface with
 sample data, a Chinese UI, and Chinese and English captions.
 
-展开需要的操作即可观看 GIF。录屏使用实际 EMP 界面与示例数据，界面为简体中文，附中英字幕。
+展开需要的操作即可观看 GIF。录屏使用 EMP 0.13.26 界面与示例数据，界面为简体中文，附中英字幕。
 
 ## GPT Models and Subscriptions / GPT 模型与订阅
 
 <details>
 <summary>1. Change Native GPT context / 修改 Native GPT 上下文</summary>
 
-Open **Native → Model settings**, edit the model's context window, and save.
+Use the gear on the Native row, edit the model's context window, and save.
 The available limit comes from your account's model catalogue.
 
-点击 **Native → 模型设置**，修改对应模型的上下文并保存。可填写的上限以自己账号的模型目录为准。
+点击 **Native 行右侧的齿轮**，修改对应模型的上下文并保存。可填写的上限以自己账号的模型目录为准。
 
 ![Change Native GPT context / 修改 Native GPT 上下文](assets/tutorials/00-native-context.gif)
 
@@ -46,10 +46,10 @@ GPT-5.6 Sol, Terra, and Luna to ☀️, 🌍, and 🌙, saving each one.
 <details>
 <summary>3. Remove an imported Codex subscription / 移除导入的 Codex 订阅</summary>
 
-Open the imported account and select **Remove**. Removing it from EMP keeps
+Open the imported account and select **Remove** beside its information. Removing it from EMP keeps
 the current Native sign-in.
 
-点击导入的账号，选择 **移除** 并确认。本机 Native 登录保留。
+点击导入的账号，在账号信息右侧选择 **移除** 并确认。本机 Native 登录保留。
 
 ![Remove an imported Codex subscription / 移除导入的 Codex 订阅](assets/tutorials/00-remove-subscription.gif)
 
@@ -96,10 +96,10 @@ window, and save.
 <details>
 <summary>6. Rename a service and a model / 修改服务和模型名称</summary>
 
-Change the service name in **Connection settings**. Use the arrow beside a
+Open the service details and use its gear to change the service name. Use the arrow beside a
 model to change its display name; its upstream model ID stays the same.
 
-在 **连接设置** 修改服务名称；点击模型右侧箭头修改模型显示名称，上游模型 ID 保持不变。
+点击服务名称打开信息，再点击右侧齿轮修改服务名称；点击模型右侧箭头修改模型显示名称，上游模型 ID 保持不变。
 
 ![Rename a service and a model / 修改服务和模型名称](assets/tutorials/06-rename.gif)
 

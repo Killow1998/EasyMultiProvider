@@ -177,21 +177,28 @@ def seed_retry_examples(state):
 
 
 def preview(stack, backend, bundle, session, port=0, return_url=None):
+    from cpa_quota_fixture import start_pool
+    pool = start_pool(stack)
+    pool_provider = {'id':'cpa-quota-example','name':'CPA','execution_backend':'claude_cli',
+        'auth_mode':'api_key','protocol':'anthropic_messages','api_key':'synthetic-cpa-only',
+        'base_url':f'http://127.0.0.1:{pool.server_port}/cpa/v1'}
     def preview_script():
         script = (HERE / 'preview.js').read_text().replace('__FIXTURE_BUNDLE__',json.dumps(bundle)).replace('__FIXTURE_PASSWORD__',json.dumps(PASSWORD))
         icon = 'data:image/png;base64,' + base64.b64encode((HERE.parents[1] / 'assets/branding/native/easy-multi-provider-tray.png').read_bytes()).decode()
         script += '\n' + (HERE / 'preview-review.js').read_text().replace('__TRAY_TEMPLATE_ICON__',icon)
         script += '\n' + (HERE / 'preview-actions.js').read_text()
         return '<script>' + script + '</script>'
-    head='<script>'+ (HERE / 'shadow-service-demo.js').read_text() + '</script><script>localStorage.setItem("emp_management_session_v1",'+json.dumps(session)+');</script>'
+    head='<script>'+ (HERE / 'shadow-service-demo.js').read_text() + '</script><script>window.EMP_CPA_QUOTA_PROVIDER='+json.dumps(pool_provider)+';localStorage.setItem("emp_management_session_v1",'+json.dumps(session)+');</script>'
     if return_url:
         head += '<script>window.EMP_REAL_SHADOW_URL=' + json.dumps(return_url) + ';</script>'
     web = HERE.parents[1] / 'crates/emp-app/web'
     def recovery_page():
         shim = '<script>' + (HERE / 'preview-recovery.js').read_text() + '</script>'
         return (web / 'recovery.html').read_text().replace('<script>', shim + '<script>', 1)
-    return candidate_frontend(stack, backend, web, preview_script,port=port,index_head=head,
-                              pages={'/recovery': recovery_page})
+    url, server = candidate_frontend(stack, backend, web, preview_script,port=port,index_head=head,
+                                    pages={'/recovery': recovery_page})
+    server.cpa_pool = pool
+    return url, server
 
 
 def serve(binary, port=4201, open_browser=False):

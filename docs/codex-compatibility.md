@@ -8,6 +8,35 @@ independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 Older series leave routine maintenance; their dated acceptance records remain.
 
+## External WebSocket continuation (2026-11-04 UTC)
+
+The development candidate based on v0.13.25 removes repeated history resends
+from stateless external tool loops. It projects an empty completion ID on the
+downstream WebSocket, using Codex's existing full-input path. Active response IDs,
+internal accounting IDs and Native WebSocket incremental state are retained.
+No conversation-history cache is added. HTTP/SSE response IDs are unchanged.
+
+Real Linux Codex engines **0.162.1, 0.163.0, 0.164.0, 0.165.0 and 0.166.0**
+each passed Chat Completions, Anthropic Messages and external Responses tool loops
+against isolated EMP and simulated upstreams: **15 protocol sessions, 75 model
+requests, 30 actual dynamic-tool invocations and zero history rejections**.
+Each protocol session records exactly 50 input / 10 output fixture tokens and
+five distinct original accounting response IDs. Tool discovery, ordered history
+and both actual tool results reach the final model request.
+
+Disabling only the completion-ID projection makes the same Codex 0.166 test fail:
+five model requests produce four history rejections. Restoring it removes them.
+The 50 ordinary Native API contracts also pass, including incremental continuation,
+HTTP recovery and interruption. The installed Claude CLI's multi-turn HTTP and
+WebSocket checks retain exact tool results and multiple images against a simulated
+CPA endpoint. These tests use synthetic credentials and do not spend model quota.
+
+```sh
+EMP_TEST_CODEX_CLI=/path/to/codex cargo test -p emp-app --lib \
+  installed_codex_external_tool_roundtrips_do_not_request_history_replays \
+  -- --include-ignored --nocapture
+```
+
 ## Chat output acceptance (2026-11-02 UTC)
 
 The local candidate based on `70cf0e1`, still reporting EMP 0.13.24, was tested

@@ -104,11 +104,11 @@ pub(super) fn serve(
             return TurnResult::Finished;
         }
     };
-    for event in events {
+    for mut event in events {
         if event["type"] == "response.created" {
             continue;
         }
-        if websocket.send_json(&event).is_err() {
+        if websocket.send_stateless_json(&mut event, false).is_err() {
             return TurnResult::Closed;
         }
         if terminal_stream_event(&event) {

@@ -29,6 +29,36 @@ failures retain an error state rather than turning into a measured zero.
 Changing a provider endpoint or credential selects a different cache entry.
 Self-hosted endpoints do not receive speculative balance requests.
 
+## CPA subscription quota
+
+CPA services exposing the observer's `GET /v1/quota` use the existing service Key.
+The observer scopes account visibility; EMP does not request a management Key.
+Service rows show the 5h/7d remaining percentage and each window's nearest future
+reset. Hover or focus the quota to see anonymous accounts, their 5h/7d quotas,
+resets and stale/disabled/unknown states.
+
+Each summary window uses the arithmetic mean of enabled, fresh, known account
+percentages; valid zero is included. Disabled, stale and missing values do not
+enter the mean or the nearest reset. No known values means unknown.
+These subscription percentages are separate from token usage and money balances.
+
+Queries read the observer snapshot separately from inference and cache it for
+five minutes. Visible pages check cache age once per minute; hidden pages stop
+these checks. Service Refresh and Refresh quota force a snapshot read, including
+after an unsupported endpoint becomes available. Reads do
+not generate inference records. Endpoint or Key changes select a new cache entry.
+An unsupported quota endpoint leaves the service's model connection unchanged.
+
+## History resend records
+
+**History resend** records an instruction to send full context, not a model failure.
+When a matching follow-up completes, its request ID is retained on the original
+record and Calls shows the completed recovery. This uses the existing scoped
+diagnostic correlation; older unlinked records retain their observed status.
+The resend record does not become another successful inference or duplicate usage.
+Current Codex clients send full input directly after stateless external WebSocket
+completions, avoiding the normal tool-loop rejection and replay.
+
 ## Reasoning effort and speed tier
 
 Expand a record in **Statistics > Calls** to see the selected reasoning effort,

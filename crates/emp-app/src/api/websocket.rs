@@ -70,6 +70,22 @@ impl ObservedWebSocket<'_, '_> {
     fn send_upstream_json(&mut self, event: &Value) -> Result<(), emp_transport::WebSocketError> {
         self.send(event, true)
     }
+    fn send_stateless_json(
+        &mut self,
+        event: &mut Value,
+        upstream: bool,
+    ) -> Result<(), emp_transport::WebSocketError> {
+        if event["type"] != "response.completed" {
+            return self.send(event, upstream);
+        }
+        // Codex sends full input when the completion has no resumable ID.
+        // Keep the original ID for accounting and late interrupt recognition.
+        let id = std::mem::replace(&mut event["response"]["id"], Value::String(String::new()));
+        let result = self.send(event, upstream);
+        *self.last_response_id = id.as_str().map(str::to_owned);
+        event["response"]["id"] = id;
+        result
+    }
     fn send(&mut self, event: &Value, upstream: bool) -> Result<(), emp_transport::WebSocketError> {
         let formatted = self.observation.errors().event(event, upstream);
         let event = formatted.as_ref().unwrap_or(event);

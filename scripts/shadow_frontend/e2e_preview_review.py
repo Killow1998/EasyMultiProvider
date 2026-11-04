@@ -34,8 +34,8 @@ def main():
             before = (target / 'config.json').read_bytes()
             assert browser.execute('return !document.getElementById("shadow_routing_button");')
             assert browser.execute('return document.getElementById("modal_title").textContent.includes("v0.13.25");')
-            assert browser.execute('return document.querySelectorAll("#modal_body [data-shadow-demo]").length;') == 0
-            assert browser.execute('return document.getElementById("modal_body").textContent;') == ('当前没有待发布改动。' if lang == 'zh-CN' else 'There are no unpublished changes.')
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['continuation','cpa_quota','tutorials']
+            browser.execute('document.querySelector("[data-shadow-demo=continuation]").click();document.getElementById("modal_back").click();')
             browser.execute('window.EMP_REVIEW_ACTION("chat_output");')
             assert browser.execute('return !document.getElementById("modal_back").hidden;')
             browser.execute('document.getElementById("modal_back").click();')
@@ -100,7 +100,7 @@ def main():
             assert browser.execute('return ["deepseek","moonshot"].every(id=>document.querySelector(`[data-service="provider:${id}"] .service-balance`));')
             assert request(backend + '/healthz')[0] == 200
             assert (target / 'config.json').read_bytes() == before
-            checks.append(f'{lang}: this update compares with published v0.13.25 and has no unpublished changes; archived chat-output and balance reviews, billing and settings remain accessible')
+            checks.append(f'{lang}: this update compares with published v0.13.25 and opens the continuation review; archived chat-output and balance reviews, billing and settings remain accessible')
         for reason in ['key_mismatch', 'key_missing', 'key_invalid', 'key_permissions', 'config_invalid', 'reset_incomplete']:
             request(browser.base + '/url', {'url': frontend + '/recovery?reason=' + reason})
             wait_for(lambda: browser.execute('return !document.getElementById("reset").disabled;'))
@@ -139,6 +139,20 @@ def main():
         assert upstream.calls == 0
         checks.append('Disposable account removal displays progress and updates list; zero model calls')
         checks.append('Historical model-setting conflicts remain reviewable in the same workspace')
+        browser.execute('closeModal();window.EMP_REVIEW_ACTION("cpa_quota");')
+        wait_for(lambda: browser.execute('return !!document.getElementById("cpa-quota-cpa-quota-example")?.content.querySelector("code");'))
+        assert server.cpa_pool.calls and server.cpa_pool.model_calls == 0
+        request(browser.base+'/window/rect', {'width':1280,'height':960})
+        for lang in ['zh-CN','en']:
+            browser.execute('setLanguage(arguments[0]);document.querySelector("[data-service=\\"provider:cpa-quota-example\\"] .service-quota").focus();',lang)
+            wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden;'))
+            png=request(browser.base+'/screenshot')[1]
+            args.output.with_name(args.output.stem+f'-cpa-{lang}.png').write_bytes(base64.b64decode(png['value']))
+        before_refresh=len(server.cpa_pool.calls)
+        browser.execute('document.querySelector("[data-ui-action=provider-quota-refresh][data-id=cpa-quota-example]").click();')
+        wait_for(lambda:len(server.cpa_pool.calls)==before_refresh+1)
+        assert (target/'codex_home/auth.json').read_bytes()==native_before
+        checks.append('CPA review uses the production quota route and a simulated observer; both languages expose per-account details and Refresh queries once without model calls')
     args.output.write_text(json.dumps({'passed': True, 'checks': checks, 'production_state_used': False}, indent=2) + '\n')
     print(json.dumps({'passed': True, 'checks': checks}))
 

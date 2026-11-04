@@ -3,6 +3,7 @@ import argparse
 import base64
 import contextlib
 import json
+import sqlite3
 import tempfile
 import threading
 import time
@@ -109,6 +110,30 @@ def main():
         checks.append('Summary and model groups use generation samples while legacy call facts retain end-to-end rates')
         checks.append('Historical 11500 TPS burst is excluded without rewriting facts; real local tool intervals union to 5 seconds and missing telemetry stays unknown')
 
+        with sqlite3.connect(state / 'usage.sqlite3') as database:
+            for identifier, recovered in [('metrics-recovered', True), ('metrics-history', False)]:
+                facts = {key: measured[key] for key in ['provider_id', 'model_id', 'session_id',
+                    'thread_id', 'usage_category', 'usage_owner'] if key in measured}
+                facts.update({'request_id': identifier, 'route': 'responses',
+                    'selected_name': 'History fixture', 'state': 'recovery_required',
+                    'success': False, 'status': 400, 'error_code': 'previous_response_not_found',
+                    'error_origin': 'emp', 'attempts': 0, 'duration_ms': 24,
+                    'started_at': measured['started_at'] - .1,
+                    'finished_at': measured['started_at'] - .076})
+                if recovered:
+                    facts['recovery_request_id'] = measured['request_id']
+                database.execute('INSERT INTO call_records '
+                    '(request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,state,facts) '
+                    'VALUES (?,?,?,?,?,?,?,?,?,?)', (identifier, 'responses', facts['started_at'],
+                        facts['finished_at'], measured['provider_id'], measured.get('account_id') or '',
+                        measured['model_id'], measured.get('session_id') or '', 'recovery_required', json.dumps(facts)))
+        history_report = request(backend + '/api/calls', headers=headers)[1]
+        history_rows = {row['request_id']: row for row in history_report['records']}
+        assert history_rows['metrics-recovered']['recovery_request_id'] == measured['request_id']
+        assert history_rows['metrics-history'].get('recovery_request_id') is None
+        assert history_report['summary']['input_tokens'] == report['summary']['input_tokens']
+        checks.append('Explicit recovery associations retain successful follow-ups; unlinked historical requests and token totals remain unchanged')
+
         frontend, _ = preview(stack, backend, bundle, headers['X-EMP-Session'])
         browser = Browser(stack, root)
         for language, width, full_label in [('zh-CN', 390, '全程 TPS'), ('en', 1280, 'End-to-end TPS')]:
@@ -147,6 +172,12 @@ def main():
             _, png = request(browser.base + '/screenshot')
             args.output.with_name(args.output.stem + '-' + language + '.png').write_bytes(base64.b64decode(png['value']))
             checks.append(f'{language}: real statistics UI shows separate rates, measured 5-second tool time, missing telemetry, hidden burst TPS and no page overflow')
+            browser.execute('document.querySelector(arguments[0]).open=true;', '[data-call-id="metrics-recovered:responses"]')
+            wait_for(lambda: browser.execute('return !!document.querySelector(\'[data-call-id="metrics-recovered:responses"] .call-result\');'))
+            browser.execute('document.querySelector(arguments[0]).scrollIntoView({block:"center"});', '[data-call-id="metrics-recovered:responses"] .call-result')
+            _, png = request(browser.base + '/screenshot')
+            args.output.with_name(args.output.stem + '-history-' + language + '.png').write_bytes(base64.b64decode(png['value']))
+            checks.append(f'{language}: linked history resend opens its completed follow-up explanation in the real calls UI')
             browser.execute('document.querySelector("[data-stats-view=overview]").click();const select=document.querySelector("[data-stats-group]");select.value="services";select.dispatchEvent(new Event("change",{bubbles:true}));')
             color_check = '''
               const legend=[...document.querySelectorAll('.presentation-chart-legend>span')];

@@ -1,5 +1,17 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  'services.cpa_quota_accounts':['账号额度','Account quotas'],
+  'services.cpa_quota_disabled':['已停用','Disabled'],
+  'services.cpa_quota_stale':['旧数据','Old data'],
+  'services.cpa_quota_unknown':['未知','Unknown'],
+  'services.cpa_quota_connection_failed':['额度接口连接失败','Could not connect to the quota API'],
+  'services.cpa_quota_access_denied':['额度查询被拒绝，请检查服务密钥及其权限。','Quota access was denied. Check the service key and its permissions.'],
+  'services.cpa_quota_unsupported':['此服务未提供额度查询接口','This service does not provide a quota API'],
+  'services.cpa_quota_rate_limited':['额度查询过于频繁，请稍后刷新。','Quota requests are rate limited. Refresh later.'],
+  'services.cpa_quota_unavailable':['额度接口暂不可用','The quota API is unavailable'],
+  'services.cpa_quota_invalid_response':['服务返回的额度数据无效','The service returned invalid quota data'],
+  'services.cpa_quota_key_missing':['请先配置服务密钥','Configure the service API key first'],
+  'services.cpa_quota_timeout':['额度查询超时，请稍后刷新。','Quota query timed out. Refresh later.'],
   'services.balance':['余额','Balance'],
   'services.provider_billing':['账单','Billing'],
   'services.account_balance':['账户可用余额','Available account balance'],

@@ -12,12 +12,21 @@ fn installed_codex_discovers_and_calls_same_named_tools_across_protocols() {
         ("responses", false),
         ("responses", true),
     ] {
-        tool_search(protocol, native);
+        tool_search(protocol, native, false);
         eprintln!("Tool Search accepted: {protocol}, native={native}");
     }
 }
 
-fn tool_search(protocol: &'static str, native: bool) {
+#[test]
+#[ignore = "requires an explicitly selected Codex CLI and isolated loopback access; run explicitly"]
+fn installed_codex_external_tool_roundtrips_do_not_request_history_replays() {
+    for protocol in ["chat_completions", "anthropic_messages", "responses"] {
+        tool_search(protocol, false, true);
+        eprintln!("External WebSocket continuation accepted: {protocol}");
+    }
+}
+
+fn tool_search(protocol: &'static str, native: bool, websocket: bool) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("codex");
@@ -178,7 +187,7 @@ fn tool_search(protocol: &'static str, native: bool) {
     )
     .unwrap();
     let settings = format!(
-        "model = \"demo/model\"\nmodel_provider = \"emp_fixture\"\nmodel_catalog_json = {}\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\nweb_search = \"disabled\"\n[features]\nplugins = false\nincremental_tools = true\n[model_providers.emp_fixture]\nname = \"EMP fixture\"\nbase_url = \"http://{}/v1\"\nwire_api = \"responses\"\nenv_key = \"EMP_TEST_KEY\"\nrequires_openai_auth = false\nsupports_websockets = false\nrequest_max_retries = 0\nhttp_headers = {{ \"X-EMP-Session\" = {} }}\n",
+        "model = \"demo/model\"\nmodel_provider = \"emp_fixture\"\nmodel_catalog_json = {}\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\nweb_search = \"disabled\"\n[features]\nplugins = false\nincremental_tools = true\nresponses_websockets = true\nresponses_websockets_v2 = true\n[model_providers.emp_fixture]\nname = \"EMP fixture\"\nbase_url = \"http://{}/v1\"\nwire_api = \"responses\"\nenv_key = \"EMP_TEST_KEY\"\nrequires_openai_auth = false\nsupports_websockets = {websocket}\nrequest_max_retries = 0\nhttp_headers = {{ \"X-EMP-Session\" = {} }}\n",
         serde_json::to_string(&home.join("models.json").to_string_lossy()).unwrap(),
         server.local_addr(),
         serde_json::to_string(&server.session_token()).unwrap()
@@ -214,8 +223,73 @@ fn tool_search(protocol: &'static str, native: bool) {
     );
     drop(codex);
     upstream.join().unwrap();
+    let state = std::sync::Arc::clone(&server.state);
     server.shutdown().unwrap();
     let journal = crate::tests::internal_events_contract::journal(&root);
+    if websocket {
+        let finished = journal
+            .iter()
+            .filter(|event| event["event"] == "request_finished")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            finished
+                .iter()
+                .filter(|event| event["fields"]["error_code"] == "previous_response_not_found")
+                .count(),
+            0,
+            "external tool roundtrips requested a history replay: {protocol}"
+        );
+        assert!(
+            finished
+                .iter()
+                .all(|event| event["fields"]["transport"] == "websocket")
+        );
+        let calls = state
+            .backend
+            .usage
+            .ledger
+            .query_calls(&emp_state::usage::ledger::CallFilter {
+                start: 0.0,
+                end: crate::util::system_now(),
+                category: None,
+                provider: None,
+                account: None,
+                model: None,
+                models: vec![],
+                session: None,
+                state: None,
+                request: None,
+                offset: 0,
+                limit: 50,
+                models_offset: 0,
+                models_sort: "calls".into(),
+            })
+            .unwrap();
+        assert_eq!(calls["total"], 5, "exactly five model requests: {calls}");
+        assert_eq!(calls["summary"]["completed"], 5);
+        assert_eq!(calls["summary"]["recovery_required"], 0);
+        assert_eq!(calls["summary"]["input_tokens"], 50);
+        assert_eq!(calls["summary"]["output_tokens"], 10);
+        let response_ids = calls["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                row["usage_response_id"]
+                    .as_str()
+                    .expect("original accounting response ID")
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(response_ids.len(), 5);
+        assert!(!response_ids.contains(""));
+        assert!(
+            calls["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["attempts"] == 1)
+        );
+    }
     let last = journal
         .iter()
         .rev()
@@ -242,7 +316,7 @@ pub(super) fn response_events(protocol: &str, id: &str, item: &Value) -> Vec<Val
         .unwrap_or(Value::Null);
     match protocol {
         "chat_completions" => vec![
-            json!({"id":id,"model":"upstream","choices":[{"index":0,"delta":if final_message {
+            json!({"id":id,"model":"upstream","usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12},"choices":[{"index":0,"delta":if final_message {
             json!({"content":"Both fixtures completed"})
         } else {json!({"tool_calls":[{"index":0,"id":id,"type":"function","function":{"name":name,"arguments":args.to_string()}}]})},
             "finish_reason":if final_message {"stop"} else {"tool_calls"}}]}),

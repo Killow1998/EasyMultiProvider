@@ -185,6 +185,7 @@ pub(crate) fn read_management_request(request: Request<'_>, state: &ServerState)
             Ok(mut public) => {
                 public["provider_balances"] =
                     crate::services::provider_balance::snapshot(state, &config);
+                public["provider_quotas"] = crate::services::cpa_quota::snapshot(state, &config);
                 public["app_icon"] = state.backend.app_icon.snapshot().metadata();
                 json_response(&public)
             }

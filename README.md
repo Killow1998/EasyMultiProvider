@@ -156,6 +156,8 @@ in the **Claude Code** section. Both routes require the installed Claude Code CL
   remains available for additional aliases or full IDs.
 - **CPA** uses a Claude-Code-compatible CPA Base URL and API key. For direct
   Anthropic API access, add the separate **Anthropic API** Provider.
+  Services exposing the CPA observer's `/v1/quota` show 5h/7d remaining quota
+  and the nearest reset. Hover over the quota to inspect individual accounts.
 
 ### 4. Apply EMP to Codex
 

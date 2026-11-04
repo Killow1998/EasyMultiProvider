@@ -116,7 +116,7 @@
 <script src="/assets/copy-models.js"></script><script src="/assets/copy-reports.js"></script><script src="/assets/copy-transfers.js"></script>
 <script src="/assets/service-icons.js"></script><script src="/assets/brand-colors.js"></script>
 <script src="/assets/app-icon.js"></script>
-<script src="/assets/provider-balances.js"></script><script src="/assets/service-list.js"></script>
+<script src="/assets/provider-balances.js"></script><script src="/assets/cpa-quota.js"></script><script src="/assets/service-list.js"></script>
 <script src="/assets/service-usage.js"></script>
 <script src="/assets/release-notes.js"></script><script src="/assets/updates.js"></script><script src="/assets/model-editor.js"></script>
 
@@ -221,11 +221,12 @@ const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, ge
 const {open:openUsage} = usageReport;
 const appIcon=createAppIcon({getState:()=>state,api,openModal,$,esc,tr,notice,presets:officialProviders});
 const providerBalances = createProviderBalances({getState:()=>state,api,esc,tr,notice,render:()=>renderServices()});
+const cpaQuotas = createCpaQuotas({getState:()=>state,api,esc,tr,notice,render:()=>renderServices(),meters:(...args)=>presentationQuotaMeters(...args),resetText:resetCountdownText});
 const services = createServiceList({
   getState:() => state, $, esc, tr, presets:officialProviders, icon:serviceIconHtml,
   activity:activityIndicatorHtml, serviceIcon:(...args)=>serviceActivityIcon(...args), updateServiceErrors:()=>{presentationUpdateServiceRequestErrors();presentationUpdateServiceErrorLabels();}, accountSummary:accountSummaryHtml, quotaMeters:(...args)=>presentationQuotaMeters(...args),
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots:() => updateActivityDots(), openModal, api,
-  notice, balances:providerBalances, usageSummary:serviceUsage, onMount:mountServiceActions,settingsConflict:account=>subscriptionPreferenceConflicts(state,account)
+  notice, balances:providerBalances, poolQuotas:cpaQuotas, usageSummary:serviceUsage, onMount:mountServiceActions,settingsConflict:account=>subscriptionPreferenceConflicts(state,account)
 });
 const {render:renderServices, details:openProviderDetails} = services;
 const accountDetails = createAccountDetails({renderInfo:renderAccountInfo,getState:() => state, $, tr, esc, api, services, serviceUsage, persistState, uiIcon,
@@ -467,6 +468,7 @@ function openCatalogDisplayEditor(family) {
 function fill() {
   appIcon.apply();
   providerBalances.sync();
+  cpaQuotas.sync();
   drawLogo(); enhanceLogo($('emp_logo')); presentationSyncMotion(); applyTranslations(); if (updates.info()) renderUpdateHint(updates.info()); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderCatalogDisplay(); renderServices();  updateActivityDots();
 }
 async function load() {
@@ -976,8 +978,9 @@ async function refreshQuotaState() {
     const previous = [...(state.native_account ? [state.native_account] : []), ...(state.accounts || [])];
     const next = [...(snapshot.native_account ? [snapshot.native_account] : []), ...(snapshot.accounts || [])];
     const previousById = new Map(previous.map(account => [account.id, account]));
-    const claudeChanged = JSON.stringify(state.claude_quota || null) !== JSON.stringify(snapshot.claude_quota || null);
+    const claudeChanged = JSON.stringify([state.claude_quota,state.provider_quotas]) !== JSON.stringify([snapshot.claude_quota,snapshot.provider_quotas]);
     state.claude_quota = snapshot.claude_quota || null;
+    state.provider_quotas = snapshot.provider_quotas || {};
     state.memory_routing_status = snapshot.memory_routing_status || null;
     routingSettings.refresh();
     let changed = claudeChanged || JSON.stringify({native_account:state.native_account || null,accounts:state.accounts || []}) !== JSON.stringify({native_account:snapshot.native_account || null,accounts:snapshot.accounts || []});
@@ -1097,11 +1100,13 @@ async function refreshAllAccounts() {
   // Local Claude providers share the same OS login, so query that subscription once.
   const claude = (state.providers || []).find(p => p.execution_backend === 'claude_cli' && p.auth_mode === 'claude_login');
   const balances=(state.providers || []).filter(provider=>providerBalances.canRefresh(provider.id));
-  if (!accounts.length && !claude && !balances.length) return notice(tr("core.no_refreshable_services"), true);
+  const pools=(state.providers || []).filter(provider=>cpaQuotas.canRefresh(provider.id));
+  if (!accounts.length && !claude && !balances.length && !pools.length) return notice(tr("core.no_refreshable_services"), true);
   const button = $('refresh_all'); button.disabled = true;
   try {
     const jobs = accounts.map(a => refreshAccount(a.id, false));
     jobs.push(...balances.map(provider=>providerBalances.refresh(provider.id,false)));
+    jobs.push(...pools.map(provider=>cpaQuotas.refresh(provider.id,false)));
     if (claude) jobs.push(services.refresh(claude.id, false));
     const results = await Promise.all(jobs), failed = results.filter(success => !success).length;
     notice(failed ? tr("core.refresh_complete_succeeded_failed", {count:results.length - failed, failed:failed}) : tr("core.all_service_quotas_refreshed"), Boolean(failed));

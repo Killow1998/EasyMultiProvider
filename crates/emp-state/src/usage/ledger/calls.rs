@@ -64,6 +64,7 @@ fn facts(event: &Value) -> Value {
         "generation_ms",
         "attempts",
         "retry_after_seconds",
+        "continuation_recovery_from",
         "output_emitted",
         "tool_activity",
         "retries",
@@ -137,7 +138,8 @@ impl UsageLedger {
         let session = text(&record, "thread_id", text(&record, "session_id", "")).to_owned();
         record["session_id"] = json!(session);
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
-        self.connect()?.execute("INSERT INTO call_records
+        let connection = self.connect()?;
+        connection.execute("INSERT INTO call_records
             (request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,state,facts)
             VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id,operation) DO UPDATE SET
             started_at=excluded.started_at,finished_at=excluded.finished_at,provider_id=excluded.provider_id,
@@ -145,6 +147,15 @@ impl UsageLedger {
             state=excluded.state,facts=excluded.facts", params![id, text(event,"route","responses"),
             started, finished, text(event,"provider_id",""), text(event,"account_id",""),
             text(event,"model_id",""), &session, state, record.to_string()])?;
+        if state == "completed"
+            && let Some(prior) = event["continuation_recovery_from"].as_str()
+        {
+            connection.execute(
+                "UPDATE call_records SET facts=json_set(facts,'$.recovery_request_id',?)
+                 WHERE request_id=? AND operation=? AND state='recovery_required'",
+                params![id, prior, text(event, "route", "responses")],
+            )?;
+        }
         Ok(())
     }
 

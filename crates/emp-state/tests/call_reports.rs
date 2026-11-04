@@ -24,6 +24,63 @@ fn filter() -> CallFilter {
 }
 
 #[test]
+fn completed_history_recovery_links_its_rejection_without_double_counting_usage() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("usage.sqlite3");
+    let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+    let ledger = UsageLedger::new(path.clone(), Arc::clone(&prices));
+    for id in ["rejected", "unrelated"] {
+        ledger
+            .record_call(
+                &json!({"request_id":id,"route":"responses","model_id":"demo/model",
+            "success":false,"error_code":"previous_response_not_found","status":400,"attempts":0}),
+                10.0,
+                10.01,
+            )
+            .unwrap();
+    }
+    ledger
+        .record_call(
+            &json!({"request_id":"retried","route":"responses","model_id":"demo/model",
+        "success":true,"status":200,"attempts":1,"input_tokens":100,"output_tokens":5,
+        "continuation_recovery_from":"rejected"}),
+            10.1,
+            11.0,
+        )
+        .unwrap();
+    drop(ledger);
+    let ledger = UsageLedger::new(path, prices);
+    let report = ledger.query_calls(&filter()).unwrap();
+    assert_eq!(report["summary"]["completed"], 1);
+    assert_eq!(report["summary"]["recovery_required"], 2);
+    assert_eq!(report["summary"]["success_samples"], 1);
+    assert_eq!(report["summary"]["input_tokens"], 100);
+    assert_eq!(report["summary"]["output_tokens"], 5);
+    let records = report["records"].as_array().unwrap();
+    let rejected = records
+        .iter()
+        .find(|row| row["request_id"] == "rejected")
+        .unwrap();
+    assert_eq!(rejected["state"], "recovery_required");
+    assert_eq!(rejected["recovery_request_id"], "retried");
+    assert_eq!(rejected["attempts"], 0);
+    assert!(
+        records
+            .iter()
+            .find(|row| row["request_id"] == "unrelated")
+            .unwrap()["recovery_request_id"]
+            .is_null()
+    );
+    assert_eq!(
+        records
+            .iter()
+            .find(|row| row["request_id"] == "retried")
+            .unwrap()["continuation_recovery_from"],
+        "rejected"
+    );
+}
+
+#[test]
 fn report_progress_counts_filtered_work_and_stops_when_the_reader_leaves() {
     let root = tempfile::tempdir().unwrap();
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));

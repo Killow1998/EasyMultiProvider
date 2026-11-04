@@ -176,7 +176,7 @@ pub(super) fn serve_external(
                 usage.disconnected();
                 return TurnResult::Closed;
             }
-            DisconnectRace::Ready(Ok(Some(event))) => {
+            DisconnectRace::Ready(Ok(Some(mut event))) => {
                 usage.observe(&event.body);
                 crate::services::context::record_event(
                     state,
@@ -185,7 +185,10 @@ pub(super) fn serve_external(
                     &event.body,
                 );
                 sent_output |= stream_event_activity(&event.body).0;
-                if websocket.send_upstream_json(&event.body).is_err() {
+                if websocket
+                    .send_stateless_json(&mut event.body, true)
+                    .is_err()
+                {
                     return TurnResult::Closed;
                 }
                 if terminal_stream_event(&event.body) {

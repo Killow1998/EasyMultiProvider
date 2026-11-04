@@ -159,8 +159,20 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             .unwrap();
         assert_eq!(
             event(&mut client, "response.completed")["response"]["id"],
-            "resp_after"
+            if native { "resp_after" } else { "" }
         );
+        if !native {
+            client.send_json(&json!({"type":"response.interrupt","response_id":"resp_after","mode":"discard_partial_items"})).unwrap();
+            client
+                .send_json(
+                    &json!({"type":"response.create","model":model,"generate":false,"input":[]}),
+                )
+                .unwrap();
+            assert_eq!(
+                event(&mut client, "response.completed")["response"]["id"],
+                ""
+            );
+        }
         client.close();
         server.shutdown().unwrap();
         worker.join().unwrap();

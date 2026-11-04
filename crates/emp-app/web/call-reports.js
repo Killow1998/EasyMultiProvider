@@ -26,6 +26,7 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
     return field(label,formatted.text,false,formatted.title);
   };
   function resultText(row) {
+    if (row.state === 'recovery_required' && row.recovery_request_id) return tr('reports.history_resend_completed');
     const attempts = n(row.attempts), retries = attempts === null ? null : Math.max(0,attempts-1);
     if (row.state === 'completed') return retries > 0 ? tr(retries === 1 ? "reports.completed_after_one_retry" : "reports.completed_after_retry",{count:number(retries)}) : '';
     if (!['failed','interrupted','cancelled'].includes(row.state)) return '';

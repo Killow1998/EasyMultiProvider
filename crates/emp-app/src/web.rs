@@ -69,6 +69,7 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
             include_bytes!("../../../assets/branding/native/easy-multi-provider-tray.svg")
         }
         "/assets/provider-balances.js" => include_bytes!("../web/provider-balances.js"),
+        "/assets/cpa-quota.js" => include_bytes!("../web/cpa-quota.js"),
         "/assets/service-usage.js" => include_bytes!("../web/service-usage.js"),
         "/assets/service-connections.js" => include_bytes!("../web/service-connections.js"),
         "/assets/service-chooser.js" => include_bytes!("../web/service-chooser.js"),

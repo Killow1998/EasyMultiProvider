@@ -8,8 +8,7 @@ pub(super) fn previous_rejection<'a>(
     recent: &'a VecDeque<Value>,
     current: &Value,
 ) -> Option<&'a str> {
-    if current["dialect"] != "codex_native"
-        || current["route"] != "responses"
+    if current["route"] != "responses"
         || current["has_previous_response"] != false
         || current["request_id"].as_str().is_none()
         || ["thread_ref", "session_ref", "turn_ref"]
@@ -82,6 +81,13 @@ mod tests {
             previous_rejection(&recent, &current),
             Some("aaaaaaaaaaaaaaaa")
         );
+        for dialect in ["chat_completions", "anthropic_messages", "responses"] {
+            current["dialect"] = json!(dialect);
+            assert_eq!(
+                previous_rejection(&recent, &current),
+                Some("aaaaaaaaaaaaaaaa")
+            );
+        }
         for key in [
             "thread_ref",
             "session_ref",

@@ -44,6 +44,15 @@ Call-report normalization produces binary JSON once. The report reader filters
 records into its connection-local temporary table, then aggregates and pages
 that selection without reapplying the input predicates. Only paged records are
 converted back to JSON text. The stored ledger and pricing owners are unchanged.
+The ledger also owns completed recovery links. It records the existing scoped
+diagnostic association on the earlier resend, without a history scan or a new
+successful inference. The stateless WebSocket writer owns only the downstream
+completion-ID projection; accounting observes the original event first.
+
+`services/cpa_quota.rs` owns observer decoding, enabled/fresh account aggregation,
+nearest reset selection and credential-scoped snapshots. Provider quota HTTP
+routes dispatch local Claude and CPA reads; the UI reuses subscription meters
+and the existing hover/focus tooltip. No model request enters this path.
 
 Request preparation checks the body object once and passes a mutable JSON map
 to its external-settings transformation. Configuration uses the existing owned

@@ -340,6 +340,8 @@ EMP v0.9.0 至 v0.9.9 使用同一种加密迁移格式。当前版本可以导�
 
 - **Local Claude subscription** 使用当前操作系统用户的 Claude Code 订阅登录。每次请求前，EMP 会检查 Claude.ai 订阅登录；CLI API Key 和 Console 登录不适用于本机模式。若需登录，请在 Claude Code 中登录。打开 **模型设置**，点击 **更新模型列表**，勾选并保存即可加入 Codex 模型选择器。之后可以直接使用保存的列表，也可通过 **手动添加模型** 补充别名或完整 ID。
 - **CPA** 使用兼容 Claude Code 的 CPA Base URL 和 API Key。直接连接 Anthropic API 时，请另加 **Anthropic API** Provider。
+  提供 CPA observer `/v1/quota` 接口的服务会显示 5h／7d 余量和最近重置时间，
+  悬停在额度上可查看各账号明细。
 
 只有当前原生账号时，可以跳过导入账号和 Provider：点击 Native 徽章，在“模型设置”
 中隐藏模型，在“模型显示”中修改显示名称，保存后点击“将 EMP 应用于

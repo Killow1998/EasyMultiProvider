@@ -1,7 +1,7 @@
 // A view of existing accounts/providers; storage and route identities stay with their owners.
 function createServiceList({getState, $, esc, tr, presets, icon, activity, accountSummary, quotaMeters,
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
-  usageSummary, notice, balances, settingsConflict = () => false, serviceIcon = (kind,id,label,brand,cpa) => activity(kind,id,label)+icon(brand,cpa), updateServiceErrors = () => {}, onMount = () => {}}) {
+  usageSummary, notice, balances, poolQuotas, settingsConflict = () => false, serviceIcon = (kind,id,label,brand,cpa) => activity(kind,id,label)+icon(brand,cpa), updateServiceErrors = () => {}, onMount = () => {}}) {
   const refreshing = new Set(), errors = new Map();
   let detailsController = null;
   function stop() { detailsController?.abort(); detailsController = null; }
@@ -47,18 +47,20 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     const cpa = provider.execution_backend === 'claude_cli' && !local;
     const label = provider.name || provider.id;
     const brand = providerBrand(provider);
-    const defaults = [provider.id, brand, presets[brand]?.name, ...(local ? ['Claude Code','Claude Subscription'] : cpa ? ['Claude CPA','Claude Code CPA'] : [])];
+    const defaults = [provider.id, brand, presets[brand]?.name, ...(local ? ['Claude Code','Claude Subscription'] : cpa ? ['CPA','Claude CPA','Claude Code CPA'] : [])];
     const alias = brand === 'custom' || !defaults.some(name => name && name.toLowerCase() === label.toLowerCase()) ? label : '';
     const summary = `<button type="button" class="account-summary service-summary" data-ui-action="provider-details" data-id="${esc(provider.id)}" aria-haspopup="dialog" aria-label="${esc(label + ' · ' + providerType(provider) + ' · Model: ' + models.length)}" title="${esc(label)}">${alias ? `<span class="account-segment account-name"><span>${esc(alias)}</span></span>` : ''}<span class="account-segment ${alias ? 'service-type' : 'account-name'}">${providerType(provider)}</span><span class="account-segment service-model-count">Model: ${models.length}</span>${balances.segment(provider.id)}</button>`;
     const modelActions = action('provider-model-settings', provider.id, tr("models.manage_models"), 'settings');
     const actions = local ? action('provider-quota-refresh', provider.id, refreshing.has(provider.id) ? tr("services.refreshing") : tr("refresh"), 'refresh', refreshing.has(provider.id))
       + action('provider-quota-history', provider.id, tr("services.trend"), 'chart')
       + modelActions
-      : (balances.canRefresh(provider.id)?action('provider-balance-refresh',provider.id,tr('services.refresh_balance'),'refresh',balances.busy.has(provider.id)):'') + modelActions;
+      : (poolQuotas.canRefresh(provider.id)?action('provider-quota-refresh',provider.id,tr('refresh'),'refresh',poolQuotas.busy.has(provider.id)):'')
+        + (balances.canRefresh(provider.id)?action('provider-balance-refresh',provider.id,tr('services.refresh_balance'),'refresh',balances.busy.has(provider.id)):'') + modelActions;
     return `<article class="entity-card service-card" data-service="provider:${esc(provider.id)}">
       <div class="service-main">${serviceIcon('provider', provider.id, label, brand, cpa, errors.has(provider.id) ? {title:tr("services.quota_refresh_failed"),message:errors.get(provider.id)} : null)}<div class="service-identity">${summary}</div></div>
       <div class="service-actions">${actions}</div>
       ${local ? `<div class="service-quota" title="${esc(getState().claude_quota?.observed_at ? tr("services.updated") + new Date(getState().claude_quota.observed_at * 1000).toLocaleString() : tr("services.quota_updates_after_model_use"))}">${quotaMeters({quota:getState().claude_quota, quota_pending:true}, refreshing.has(provider.id))}</div>` : ''}
+      ${poolQuotas.markup(provider.id)}
     </article>`;
   }
   function mount(context) {
@@ -111,6 +113,7 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     } catch (error) { if (!controller.signal.aborted && $('service_usage') === box) box.textContent = error.message; }
   }
   async function refresh(id, notify = true) {
+    if(poolQuotas.has(id))return poolQuotas.refresh(id,notify);
     if (refreshing.has(id)) return false;
     refreshing.add(id); errors.delete(id); render();
     try {

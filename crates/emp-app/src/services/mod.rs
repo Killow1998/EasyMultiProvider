@@ -8,6 +8,7 @@ pub(crate) mod collaboration;
 pub(crate) mod compaction;
 pub(crate) mod configuration;
 pub(crate) mod connection_admission;
+pub(crate) mod cpa_quota;
 pub(crate) mod events;
 pub(crate) mod external;
 pub(crate) mod failure_feedback;

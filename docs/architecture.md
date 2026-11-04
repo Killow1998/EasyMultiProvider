@@ -323,12 +323,17 @@ existing cancellation signal. Further output is discarded, and EMP sends
 `end_turn: false`. Claude publishes its projected response ID before its buffered
 inference so steering can cancel the CLI process tree and relay. Incorrect
 targets are rejected; late interrupts for the preceding terminal are ignored.
-These adapters have no resumable upstream WebSocket state: an incremental
-continuation receives `previous_response_not_found`, allowing Codex to resend
-full history; the client may switch to HTTP for that recovery. A `generate: false`
-warmup returns an empty response ID because no resumable state exists. Codex then
-sends the complete first request instead of referencing an invented checkpoint.
-Native WebSocket continuations still use the upstream state. EMP does not invent
+External HTTP and CLI adapters have no resumable upstream WebSocket state.
+Their downstream `response.completed` uses an empty response ID, which tells
+Codex to send full input on its next request without first trying an unavailable
+checkpoint. The active `response.created` ID, accounting ID and late-interrupt
+identity remain intact; the projection borrows the event and does not cache or
+copy conversation history. Interrupted responses retain their active ID.
+An older client or an interrupted continuation can still send a prior ID;
+`previous_response_not_found` then requests full history rather than losing input.
+A `generate: false` warmup also returns an empty response ID.
+Native WebSocket continuations keep the actual upstream ID and incremental state.
+Native HTTP fallback retains its existing recovery behavior. EMP does not invent
 usage for cancelled inference.
 
 Native WebSocket forwarding delegates connection identity and scope checks to
