@@ -149,19 +149,14 @@ impl IntegrationManager {
         let (mut document, existed) = self.read_config()?;
         let current = states(&document)?;
         let pending = self.read_lease(&current)?;
-        let original = pending
-            .as_ref()
-            .filter(|lease| lease.status != "restored")
-            .map_or_else(
-                || current.clone(),
-                |lease| {
-                    lease
-                        .fields
-                        .iter()
-                        .map(|(name, field)| (name.clone(), field.original.clone()))
-                        .collect()
-                },
-            );
+        let original = match &pending {
+            Some(lease) if lease.status != "restored" => lease
+                .fields
+                .iter()
+                .map(|(name, field)| (name.clone(), field.original.clone()))
+                .collect(),
+            _ => current.clone(),
+        };
         let desired = BTreeMap::from([
             ("openai_base_url".to_owned(), FieldState::value(base_url)),
             (
@@ -209,19 +204,10 @@ impl IntegrationManager {
                 ));
             }
             if relation == "applied" {
-                let applied = lease
-                    .fields
-                    .iter()
-                    .map(|(name, recovery)| (name.clone(), recovery.applied.clone()))
-                    .collect::<BTreeMap<_, _>>();
-                if [
-                    "openai_base_url",
-                    "model_catalog_json",
-                    REALTIME_SIDEBAND_FIELD,
-                ]
-                .iter()
-                .any(|name| desired[*name] != applied[*name])
-                {
+                if desired.iter().any(|(name, value)| {
+                    !matches!(name.as_str(), "model_provider" | GATEWAY_PROVIDER_FIELD)
+                        && value != &current[name]
+                }) {
                     return Ok(result(
                         "conflict",
                         "conflict",
@@ -231,7 +217,7 @@ impl IntegrationManager {
                         vec!["active_lease".to_owned()],
                     ));
                 }
-                if desired == applied {
+                if desired == current {
                     lease = self.transition(lease, "active", true)?;
                     self.write_lease(&lease)?;
                     return Ok(result(
@@ -274,22 +260,6 @@ impl IntegrationManager {
             Some(lease),
             Vec::new(),
         ))
-    }
-
-    pub fn enable_with_sideband(
-        &self,
-        base_url: &str,
-        catalog: Option<&str>,
-        service_ready: bool,
-        realtime_sideband_base_url: Option<&str>,
-    ) -> Result<IntegrationResult, IntegrationError> {
-        self.enable_with_options(
-            base_url,
-            catalog,
-            service_ready,
-            realtime_sideband_base_url,
-            None,
-        )
     }
 
     pub fn restore(&self) -> Result<IntegrationResult, IntegrationError> {

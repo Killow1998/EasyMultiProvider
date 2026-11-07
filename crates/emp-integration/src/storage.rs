@@ -1,9 +1,8 @@
 //! Lease validation, durable writes and path/lock checks; no integration dispatch.
-use crate::fields::states;
 use crate::files::{MAX_CODEX_CONFIG_BYTES, MAX_LEASE_BYTES, absolute, read_text_limited};
 use crate::{
-    FieldRecovery, FieldState, IntegrationError, IntegrationManager, LeaseRecord, MANAGED_FIELDS,
-    REALTIME_SIDEBAND_FIELD,
+    FieldRecovery, FieldState, GATEWAY_PROVIDER_FIELD, IntegrationError, IntegrationManager,
+    LeaseRecord, MANAGED_FIELDS, REALTIME_SIDEBAND_FIELD,
 };
 use emp_state::IntegrationFileLock;
 use std::collections::BTreeMap;
@@ -42,10 +41,7 @@ impl IntegrationManager {
 
     pub(super) fn read_config(&self) -> Result<(String, bool), IntegrationError> {
         match read_text_limited(&self.config_path, MAX_CODEX_CONFIG_BYTES) {
-            Ok(value) => {
-                states(&value)?;
-                Ok((value, true))
-            }
+            Ok(value) => Ok((value, true)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 Ok((String::new(), false))
             }
@@ -96,7 +92,23 @@ impl IntegrationManager {
     }
 
     pub(super) fn write_lease(&self, lease: &LeaseRecord) -> Result<(), IntegrationError> {
-        let mut bytes = serde_json::to_vec_pretty(lease)
+        let gateway_override = lease.status != "restored"
+            && ["model_provider", GATEWAY_PROVIDER_FIELD]
+                .iter()
+                .any(|name| lease.fields[*name].original != lease.fields[*name].applied);
+        // Ordinary and restored leases remain readable by older EMP versions.
+        let mut legacy;
+        let persisted = if gateway_override {
+            lease
+        } else {
+            legacy = lease.clone();
+            legacy.version = 3;
+            legacy
+                .fields
+                .retain(|name, _| SIDEBAND_MANAGED_FIELDS.contains(&name.as_str()));
+            &legacy
+        };
+        let mut bytes = serde_json::to_vec_pretty(persisted)
             .map_err(|_| IntegrationError("unable to write integration lease"))?;
         bytes.push(b'\n');
         emp_state::filesystem::atomic_write_private_state(&self.lease_path, &bytes)

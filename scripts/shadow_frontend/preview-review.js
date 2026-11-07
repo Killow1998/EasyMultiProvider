@@ -1,7 +1,7 @@
 // Keep all unreleased changes since this baseline; do not reset the list per task.
 // Production controllers own their dialogs and text.
 const reviewBaseline='v0.13.27';
-const reviewRows=[];
+const reviewRows=['routing'];
 const realShadow=window.EMP_REAL_SHADOW===true;
 const syntheticScenarios=['cpa_quota','provider_balances','gateway','onboarding','lan','migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical'];
 const previewScenarios={
@@ -37,7 +37,7 @@ const previewScenarios={
   collaboration:{title:['子代理与订阅性能对比','Subagent and subscription comparisons'],detail:['模式建议、速度与耗时对比，以及匿名的导入订阅／原生直连实测。','Mode recommendations, speed/time comparisons and anonymous imported/native direct measurements.'],open:()=>openCollaborationDemo()},
   metrics:{title:['调用结果与性能统计','Call outcomes and performance'],detail:['合成示例：重试完成、上游等待建议和输出中断；保留速度与工具耗时示例。','Synthetic examples: successful retries, upstream wait advice and interrupted output, alongside speed and tool timing.'],open:()=>statistics.open()},
   context:{title:['上下文与压缩说明','Context and compaction'],detail:['在现有模型设置的问号中查看有效窗口、自动压缩阈值和调整方式。','Use the existing model settings help to inspect usable context, compaction triggers and adjustments.'],open:()=>editAccount(state.native_account.id,{back:openReview})},
-  routing:{title:['路由设置','Routing settings'],detail:['自动审查、图片及记忆路由；记忆提取、记忆整理可分别选择 GPT 模型。','Auto Review, image and memory routing; choose GPT models independently for memory extraction and consolidation.'],open:()=>realShadow?routingSettings.open({back:openSettings}):openRoutingDemo()},
+  routing:{title:['路由设置','Routing settings'],detail:['Free Native 可切换 EMP 本地 Key 使用原生生图工具；问号说明订阅账号、额度和 Runtime 重启步骤。','Switch Free Native to EMP Local Key for native image tools; help covers subscription selection, quota and the Runtime restart.'],open:()=>realShadow?routingSettings.open({back:openSettings}):openRoutingDemo()},
   tray:{title:['macOS 菜单栏图标','macOS menu-bar icon'],detail:['纯色透明图标，预览浅色和深色背景；实际菜单交互仍由系统提供。','A transparent monochrome icon on light and dark backgrounds; the OS provides the actual menu interaction.'],open:openTrayPreview},
   recovery:{title:['key 异常恢复','Key recovery'],detail:['实际恢复页，模拟清除重建和退出','Actual recovery page with simulated reset and exit'],open:()=>location.assign('/recovery')},
   lifecycle:{title:['恢复原生的历史提示','Native restore history notice'],detail:['隔离示例：仅提示已确认但尚未转换的 EMP 压缩点。使用中、缺失等跳过项不再触发待转换提示。','Isolated example: show only confirmed EMP checkpoints awaiting conversion. Busy or missing skipped sessions no longer trigger pending-conversion notices.'],open:()=>openLifecycleDemo()},

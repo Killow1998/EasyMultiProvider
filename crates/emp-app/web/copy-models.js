@@ -145,6 +145,7 @@ registerUiCopy({
   "models.auto_review": ["自动审查","Auto Review"],
   "models.use_another_subscription_when_native_runs_out_of_quota": ["Native 无额度时，使用其他订阅账号。","Use another subscription when Native runs out of quota."],
   "models.image_generation_and_editing": ["图片生成与编辑","Image generation and editing"],
+  "models.image_routing_help": ["Native 登录为 Free 时，Codex 会隐藏原生生图工具，选择其他图片账号也不会显示。\n\n请从 Native 的登录方式入口切换为 EMP 本地 Key。将图片路由设为“指定账号”，选择有生图额度的订阅，保存后重启 Codex Runtime。图片调用消耗所选订阅的额度。","When Native is signed in to a Free account, Codex hides its native image tools even if another image account is selected.\n\nSwitch Native's sign-in method to EMP Local Key. Set image routing to Specific account, choose a subscription with image quota, save, and restart Codex Runtime. Image calls use the selected subscription's quota."],
   "models.follow_conversation": ["跟随对话","Follow conversation"],
   "models.specific_account": ["指定账号","Specific account"],
   "models.automatic": ["自动选择","Automatic"],

@@ -1,14 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.13.28 (2026-11-07)
 
 ### 中文
 
-- 修复 EMP 本地 Key 模式缺少 Codex 原生生图工具的问题，图片继续使用已配置的订阅路由。网关配置随登录方式切换，恢复原生时还原原设置。
+- 修复 EMP 本地 Key 模式缺少 Codex 原生生图工具的问题，图片继续使用已配置的订阅路由。网关配置随登录方式切换，恢复原生时还原原设置。图片路由问号说明 Free 登录限制、本地 Key 切换、订阅额度和 Runtime 重启步骤。
 
 ### English
 
-- Restore Codex's native image tools in EMP local-key mode using the configured subscription route. Apply gateway configuration with the sign-in mode and restore the original settings when returning to native.
+- Restore Codex's native image tools in EMP local-key mode using the configured subscription route. Apply gateway configuration with the sign-in mode and restore the original settings when returning to native. Image-routing help explains the Free sign-in restriction, local-key switch, subscription quota and Runtime restart.
 
 ## 0.13.27 (2026-11-07)
 

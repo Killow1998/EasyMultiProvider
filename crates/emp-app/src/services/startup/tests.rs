@@ -34,11 +34,12 @@ fn loopback_upgrade_preserves_native_settings_and_static_catalogs() {
                 .into_owned();
             assert!(
                 manager
-                    .enable_with_sideband(
+                    .enable_with_options(
                         &previous,
                         Some(&catalog),
                         true,
-                        owned_sideband.then_some(previous.as_str())
+                        owned_sideband.then_some(previous.as_str()),
+                        None,
                     )
                     .unwrap()
                     .ok()

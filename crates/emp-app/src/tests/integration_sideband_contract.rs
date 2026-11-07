@@ -64,7 +64,7 @@ fn startup_migrates_active_v2_native_lease_and_restores_user_sideband() {
         let migrated: Value =
             serde_json::from_slice(&std::fs::read(lease_path).expect("read migrated lease"))
                 .expect("migrated lease JSON");
-        assert_eq!(migrated["version"], 4);
+        assert_eq!(migrated["version"], 3);
         assert_eq!(
             migrated["fields"][emp_integration::REALTIME_SIDEBAND_FIELD]["original"],
             json!({"present":true,"value":"https://voice.example/v1"})

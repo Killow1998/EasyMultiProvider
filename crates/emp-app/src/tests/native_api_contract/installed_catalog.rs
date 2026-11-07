@@ -90,7 +90,7 @@ fn online_catalog(localhost_only: bool, originator: &str) {
         let endpoint = format!("http://localhost:{}/v1", server.local_addr().port());
         assert!(
             manager
-                .enable_with_sideband(&endpoint, None, true, Some(&endpoint))
+                .enable_with_options(&endpoint, None, true, Some(&endpoint), None)
                 .unwrap()
                 .ok()
         );

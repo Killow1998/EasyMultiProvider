@@ -32,11 +32,12 @@ fn fixture() -> (tempfile::TempDir, ServerHandle) {
     assert!(
         integration
             .manager
-            .enable_with_sideband(
+            .enable_with_options(
                 &server.state.base_url,
                 Some("synthetic-models.json"),
                 true,
                 Some(&server.state.base_url),
+                None,
             )
             .unwrap()
             .ok()

@@ -29,8 +29,7 @@ pub(super) fn set_states(
     document: String,
     desired: &BTreeMap<String, FieldState>,
 ) -> Result<String, IntegrationError> {
-    // Root comments are independent of the first key/table in tomlkit. Keep
-    // them outside the edit tree so removing a managed key cannot remove them.
+    // Keep leading comments when the first managed field is removed.
     let header_len: usize = document
         .split_inclusive('\n')
         .take_while(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))
@@ -60,7 +59,6 @@ pub(super) fn set_states(
         parsed[name] = toml_edit::Item::Value(replacement);
     }
     if inserted {
-        // Python's tomlkit retains this separator when managed fields are removed.
         for (_, item) in parsed.iter_mut() {
             let table = match item {
                 toml_edit::Item::Table(table) => Some(table),
@@ -91,24 +89,20 @@ pub(super) fn set_states(
 }
 
 pub(super) fn relation(current: &BTreeMap<String, FieldState>, lease: &LeaseRecord) -> String {
-    let original = lease
-        .fields
+    if MANAGED_FIELDS
         .iter()
-        .map(|(name, recovery)| (name.clone(), recovery.original.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let applied = lease
-        .fields
-        .iter()
-        .map(|(name, recovery)| (name.clone(), recovery.applied.clone()))
-        .collect::<BTreeMap<_, _>>();
-    if current == &original {
+        .all(|name| current[*name] == lease.fields[*name].original)
+    {
         "original"
-    } else if current == &applied {
-        "applied"
     } else if MANAGED_FIELDS
         .iter()
-        .all(|name| current[*name] == original[*name] || current[*name] == applied[*name])
+        .all(|name| current[*name] == lease.fields[*name].applied)
     {
+        "applied"
+    } else if MANAGED_FIELDS.iter().all(|name| {
+        current[*name] == lease.fields[*name].original
+            || current[*name] == lease.fields[*name].applied
+    }) {
         "mixed"
     } else {
         "other"

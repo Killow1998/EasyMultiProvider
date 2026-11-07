@@ -11,13 +11,14 @@ pub(crate) enum EnableError {
 
 pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableError> {
     let manager = &state.backend.integration.manager;
-    let config = state
-        .backend
-        .configuration
-        .read()
-        .map_err(|_| EnableError::Unavailable(503))?
-        .clone();
-    let catalog = server_catalog(state, &config);
+    let catalog = {
+        let config = state
+            .backend
+            .configuration
+            .read()
+            .map_err(|_| EnableError::Unavailable(503))?;
+        server_catalog(state, &config)
+    };
     let visible = catalog["models"]
         .as_array()
         .into_iter()

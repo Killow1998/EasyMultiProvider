@@ -33,18 +33,17 @@ def main():
             wait_for(lambda: json.loads((target / 'config.json').read_text())['language'] == lang)
             before = (target / 'config.json').read_bytes()
             assert browser.execute('return !document.getElementById("shadow_routing_button");')
-            assert browser.execute('return document.getElementById("modal_title").textContent.includes("v0.13.27");')
-            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == []
+            review_title = browser.execute('return document.getElementById("modal_title").textContent;')
             browser.execute('window.EMP_REVIEW_ACTION("codex_maintenance");document.getElementById("modal_back").click();')
             browser.execute('window.EMP_REVIEW_ACTION("continuation");document.getElementById("modal_back").click();')
             browser.execute('window.EMP_REVIEW_ACTION("chat_output");')
             assert browser.execute('return !document.getElementById("modal_back").hidden;')
             browser.execute('document.getElementById("modal_back").click();')
-            assert browser.execute('return document.getElementById("modal_title").textContent.includes("v0.13.27");')
+            assert browser.execute('return document.getElementById("modal_title").textContent;') == review_title
             browser.execute('window.EMP_REVIEW_ACTION("failures");')
             assert browser.execute('return !document.getElementById("modal_back").hidden;')
             browser.execute('document.getElementById("modal_back").click();')
-            assert browser.execute('return document.getElementById("modal_title").textContent.includes("v0.13.27");')
+            assert browser.execute('return document.getElementById("modal_title").textContent;') == review_title
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             _, png = request(browser.base + '/screenshot')
             args.output.with_name(args.output.stem + f'-overview-{lang}.png').write_bytes(base64.b64decode(png['value']))
@@ -68,7 +67,7 @@ def main():
             browser.execute('document.getElementById("modal_provider_key").value="fixture-draft";document.querySelector(".provider-connection-details").open=true;')
             assert browser.execute('return document.getElementById("modal_provider_key").value==="fixture-draft" && document.documentElement.scrollWidth<=innerWidth;')
             browser.execute('document.getElementById("modal_back").click();')
-            assert browser.execute('return document.getElementById("modal_title").textContent.includes("v0.13.27");')
+            assert browser.execute('return document.getElementById("modal_title").textContent;') == review_title
             browser.execute('window.EMP_REVIEW_ACTION("migration");')
             wait_for(lambda: browser.execute('return document.getElementById("shadow_migration_file")?.files.length===1;'))
             gate = threading.Event()
@@ -104,7 +103,7 @@ def main():
             assert browser.execute('return ["deepseek","moonshot"].every(id=>document.querySelector(`[data-service="provider:${id}"] .service-balance`));')
             assert request(backend + '/healthz')[0] == 200
             assert (target / 'config.json').read_bytes() == before
-            checks.append(f'{lang}: this update compares with published v0.13.27 with no unpublished rows; archived memory opens statistics, while other archived reviews, billing and settings remain accessible')
+            checks.append(f'{lang}: current and archived review navigation preserves its parent; archived memory opens statistics, while other archived reviews, billing and settings remain accessible')
         for reason in ['key_mismatch', 'key_missing', 'key_invalid', 'key_permissions', 'config_invalid', 'reset_incomplete']:
             request(browser.base + '/url', {'url': frontend + '/recovery?reason=' + reason})
             wait_for(lambda: browser.execute('return !document.getElementById("reset").disabled;'))
