@@ -1,7 +1,12 @@
 //! The native image fixture models HTTP, WebSocket prefill and image replies.
 use super::*;
 
-pub(super) fn spawn(listener: TcpListener, image_args: Value, edit: bool) -> JoinHandle<()> {
+pub(super) fn spawn(
+    listener: TcpListener,
+    image_args: Value,
+    edit: bool,
+    mcp: bool,
+) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut image_turn = String::new();
         for stage in 0..3 {
@@ -78,7 +83,13 @@ pub(super) fn spawn(listener: TcpListener, image_args: Value, edit: bool) -> Joi
                         .unwrap()
                         .starts_with("gpt-image-")
                 );
-                assert_eq!(request.headers["x-codex-image-turn-id"], image_turn);
+                let metadata: Value =
+                    serde_json::from_str(&request.headers["x-codex-turn-metadata"]).unwrap();
+                if mcp {
+                    assert_eq!(metadata["turn_id"], image_turn)
+                } else {
+                    assert_eq!(request.headers["x-codex-image-turn-id"], image_turn)
+                };
                 if edit {
                     assert!(request.body["images"].is_array());
                 }
@@ -108,13 +119,20 @@ pub(super) fn spawn(listener: TcpListener, image_args: Value, edit: bool) -> Joi
             } else {
                 let serialized = request.body.to_string();
                 assert!(serialized.contains("image-fixture-call"));
-                assert!(
+                assert_eq!(
                     serialized.contains(PNG),
-                    "generated image missing from next inference"
+                    !mcp,
+                    "MCP returns a path; the native extension retains its image result"
                 );
+                if mcp {
+                    assert!(
+                        serialized.contains("generated_images"),
+                        "saved image path reaches the next inference"
+                    );
+                }
             }
             let item = if stage == 0 {
-                json!({"id":"image-fixture-call","type":"function_call","namespace":"image_gen",
+                json!({"id":"image-fixture-call","type":"function_call","namespace":if mcp {"mcp__emp_images"} else {"image_gen"},
                 "name":"imagegen","call_id":"image-fixture-call","arguments":image_args.to_string()})
             } else {
                 json!({"id":"message-fixture","type":"message","role":"assistant","status":"completed",

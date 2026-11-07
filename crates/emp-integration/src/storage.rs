@@ -1,8 +1,8 @@
 //! Lease validation, durable writes and path/lock checks; no integration dispatch.
 use crate::files::{MAX_CODEX_CONFIG_BYTES, MAX_LEASE_BYTES, absolute, read_text_limited};
 use crate::{
-    FieldRecovery, FieldState, GATEWAY_PROVIDER_FIELD, IntegrationError, IntegrationManager,
-    LeaseRecord, MANAGED_FIELDS, REALTIME_SIDEBAND_FIELD,
+    FieldRecovery, FieldState, IMAGE_MCP_FIELD, IntegrationError, IntegrationManager, LeaseRecord,
+    MANAGED_FIELDS, REALTIME_SIDEBAND_FIELD,
 };
 use emp_state::IntegrationFileLock;
 use std::collections::BTreeMap;
@@ -92,13 +92,11 @@ impl IntegrationManager {
     }
 
     pub(super) fn write_lease(&self, lease: &LeaseRecord) -> Result<(), IntegrationError> {
-        let gateway_override = lease.status != "restored"
-            && ["model_provider", GATEWAY_PROVIDER_FIELD]
-                .iter()
-                .any(|name| lease.fields[*name].original != lease.fields[*name].applied);
+        let mcp_override = lease.status != "restored"
+            && lease.fields[IMAGE_MCP_FIELD].original != lease.fields[IMAGE_MCP_FIELD].applied;
         // Ordinary and restored leases remain readable by older EMP versions.
         let mut legacy;
-        let persisted = if gateway_override {
+        let persisted = if mcp_override {
             lease
         } else {
             legacy = lease.clone();

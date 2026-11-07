@@ -4,11 +4,11 @@
 
 ### 中文
 
-- 修复 EMP 本地 Key 模式缺少 Codex 原生生图工具的问题，图片继续使用已配置的订阅路由。网关配置随登录方式切换，恢复原生时还原原设置。图片路由问号说明 Free 登录限制、本地 Key 切换、订阅额度和 Runtime 重启步骤。
+- Free Native 与 EMP 本地 Key 通过一个 MCP 工具生成、编辑图片，沿用图片订阅路由和用量记录。保留原登录、Provider 和会话，无需 Fork；付费 Native 沿用原生生图工具。图片保存到本机，工具只返回文件路径。图片路由问号说明账号额度、授权与 Runtime 重启步骤。
 
 ### English
 
-- Restore Codex's native image tools in EMP local-key mode using the configured subscription route. Apply gateway configuration with the sign-in mode and restore the original settings when returning to native. Image-routing help explains the Free sign-in restriction, local-key switch, subscription quota and Runtime restart.
+- Generate and edit images through one MCP tool for Free Native and EMP Local Key, using the existing subscription route and usage records. Preserve sign-in, provider and original chats without forking; paid Native keeps its native image tools. Save images locally and return only their file paths. Image-routing help covers quota, authorization and the Runtime restart.
 
 ## 0.13.27 (2026-11-07)
 

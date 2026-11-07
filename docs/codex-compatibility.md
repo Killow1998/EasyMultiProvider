@@ -481,27 +481,22 @@ imported accounts with one warmup, no HTTP fallback and no full-history recovery
 
 ### Standalone image tools
 
-**EMP local-key gateway acceptance — 2026-11-07 UTC:** The real Linux Codex
-0.166.0 engine completes native and local-key generation/editing contracts,
-including WebSocket prefill, selected-subscription credentials, saved PNG bytes
-and passing the image into the next inference. Gateway authentication and its
-actor marker are not forwarded to the subscription backend. Integration
-contracts cover version 2/3 leases, repeated activation, key changes, Native
-restoration, inline provider tables and unchanged permission/sandbox settings.
+**Free/EMP-key image MCP acceptance — 2026-11-07 UTC:** The actual Linux Codex
+**0.167.0** engine completes six image-generation/editing journeys: paid Native
+uses its native image extension; Free Native and EMP Local Key use the single
+`emp_images.imagegen` MCP tool. The MCP cases retain `openai` and current sign-in,
+exercise the normal approval response, forward the current turn ID and use the
+selected subscription's credentials. All six persist the expected PNG bytes.
+MCP results and the next inference contain a file path without image Base64.
+The measured `tools/list` declaration is **453 UTF-8 bytes** before Codex's own
+wrapping. The helper uses the existing EMP executable, without an extra runtime.
 
-The Intel macOS embedded engine **0.167.0-alpha.3.2** was checked separately.
-Synthetic Free, paid and API-key identities reproduce the tool-registration
-boundary: Free Native and ordinary API-key providers hide the tool; an API-key
-provider with the OpenAI actor marker exposes it. The marker alone supplies no
-gateway credential. Actual generation and editing persist synthetic PNGs; one
-real subscription-routed generation also returned and saved a PNG while the
-existing Native authentication and configuration remained unchanged.
-
-The same macOS engine rejects resuming an `openai` chat directly as `emp` with
-`modelProviderMismatch`. Its official `thread/fork` accepts the new provider,
-preserves the source chat and exposes the image tool. This is a provider-mode
-transition, separate from switching subscription accounts within one provider.
-See [local-key image setup](gateway.md#codex-image-tools-with-an-emp-local-key).
+Integration contracts cover original/inline MCP entries, unrelated servers,
+version 2/3 leases, repeat activation, switching the helper off, exact restoration
+and unchanged Provider/permission/sandbox settings. Earlier Linux 0.166 and Intel
+macOS **0.167.0-alpha.3.2** native-extension probes are retained in dated evidence;
+the new MCP path keeps the original Provider instead of migrating or forking chats.
+See [image setup](gateway.md#codex-image-tools-with-an-emp-local-key).
 These checks supplement the earlier, dated 0.163.0 image acceptance below.
 
 Codex's standalone `image_gen.imagegen` extension sends JSON to

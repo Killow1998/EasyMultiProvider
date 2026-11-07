@@ -64,8 +64,8 @@ API 客户端和端口转发使用独立的 **EMP 网关 Key**，在 **设置 �
 
 已有 Native 订阅时，可在 **切换登录方式 → EMP 本地 Key** 中，选择
 保留为 Other 账号或移除当前 Native 登录，完成后重启 Codex Runtime。
-支持图片输入的模型可通过已配置的订阅路由使用 Codex 原生生图工具。
-切换到或离开本地 Key 网关模式后，旧会话通过 **在新会话中继续** 保留历史。
+Free Native 和 EMP 本地 Key 使用一个 EMP 生图工具，沿用已配置的订阅图片路由。
+付费 Native 使用原生生图工具。重启 Codex Runtime 加载工具，保留原登录和原会话。
 [登录与图片路由](docs/gateway.md#codex-image-tools-with-an-emp-local-key)。
 
 数据迁移提供 **导入、导出、隧道** 三个入口。导入和导出共用服务选择页，返回时保留已填内容。

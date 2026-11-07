@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 mod fields;
 mod files;
-mod gateway;
+mod image_mcp;
 mod manager;
 mod storage;
 #[cfg(test)]
@@ -21,14 +21,18 @@ pub(crate) use files::{MAX_CODEX_CONFIG_BYTES, MAX_LEASE_BYTES, absolute, read_t
 pub use manager::IntegrationManager;
 
 pub const REALTIME_SIDEBAND_FIELD: &str = "experimental_realtime_ws_base_url";
-pub const GATEWAY_PROVIDER_FIELD: &str = "model_providers.emp";
-pub const MANAGED_FIELDS: [&str; 5] = [
+pub const IMAGE_MCP_FIELD: &str = "mcp_servers.emp_images";
+pub const MANAGED_FIELDS: [&str; 4] = [
     "openai_base_url",
     "model_catalog_json",
     REALTIME_SIDEBAND_FIELD,
-    "model_provider",
-    GATEWAY_PROVIDER_FIELD,
+    IMAGE_MCP_FIELD,
 ];
+pub struct ImageMcpConfig {
+    pub command: String,
+    pub key_file: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldState {
     pub present: bool,

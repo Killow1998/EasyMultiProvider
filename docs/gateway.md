@@ -64,22 +64,25 @@ as Other or removing its Native sign-in. Restart Codex Runtime after switching.
 
 ### Codex image tools with an EMP local key
 
-EMP local-key mode configures an OpenAI-compatible `emp` provider with Codex's
-OpenAI actor header and the gateway bearer credential. Codex can then expose
-`image_gen.imagegen` for image-capable models. In **Settings → Routing settings**,
-choose an eligible subscription for image generation and editing. The selected
-subscription supplies the image quota.
+EMP enables one `emp_images.imagegen` MCP tool when Native is Free or uses an
+EMP local key. The same tool generates images and edits local PNG, JPEG, WebP
+or GIF files. Paid Native subscriptions keep Codex's native image tools.
 
-Codex hides this tool when its Native login is Free, even when the conversation
-uses a paid imported subscription. Switch Native to an EMP local key and keep
-the Free login as Other, or sign in to a paid Native subscription.
+In **Settings → Routing settings**, choose a subscription with image quota.
+Save and restart Codex Runtime to load the tool. Calls follow Codex's current
+MCP permission settings and use the selected subscription's quota. The first
+call can require authorization in Codex.
 
-Restart Codex Runtime after changing the sign-in mode. Existing chats retain
-their original provider identity; use Codex's **Continue in a new chat** action
-to carry their history into the current provider. EMP retains the original
-provider selection and configuration in its private integration lease and
-restores them when leaving gateway mode. Permission and sandbox settings are
-preserved.
+Free Native stays signed in. EMP keeps `openai`, the original conversation IDs,
+and the existing permission/sandbox settings; no fork is needed. The helper is
+the existing EMP executable over stdio, so no additional runtime is installed.
+It reads reference files on the client, forwards the current Codex turn metadata
+to the image route, and saves PNGs under the client's EMP `state/generated_images`
+directory. Tool results contain only a file path, not image Base64 in text.
+
+EMP owns only its `mcp_servers.emp_images` entry. Switching to paid Native or
+restoring native integration reinstates the original entry and keeps other
+MCP servers unchanged.
 
 ## Decision models
 

@@ -50,9 +50,10 @@ fn startup_migrates_active_v2_native_lease_and_restores_user_sideband() {
             .as_object_mut()
             .expect("lease fields")
             .remove(emp_integration::REALTIME_SIDEBAND_FIELD);
-        for name in ["model_provider", emp_integration::GATEWAY_PROVIDER_FIELD] {
-            lease["fields"].as_object_mut().unwrap().remove(name);
-        }
+        lease["fields"]
+            .as_object_mut()
+            .unwrap()
+            .remove(emp_integration::IMAGE_MCP_FIELD);
         std::fs::write(
             lease_path,
             serde_json::to_vec(&lease).expect("legacy lease JSON"),
@@ -121,11 +122,12 @@ fn startup_activates_a_clean_native_configuration_by_default_and_respects_opt_ou
             status.state
         );
         if enabled.unwrap_or(true) {
-            assert_eq!(
-                status.fields["model_provider"].value.as_deref(),
-                Some("emp")
+            assert!(
+                !std::fs::read_to_string(server.state.backend.integration.manager.config_path())
+                    .unwrap()
+                    .contains("model_provider = \"emp\"")
             );
-            assert!(status.fields[emp_integration::GATEWAY_PROVIDER_FIELD].present);
+            assert!(status.fields[emp_integration::IMAGE_MCP_FIELD].present);
             let manager = &server.state.backend.integration.manager;
             let path = status.fields["model_catalog_json"].value.as_deref();
             assert!(
@@ -137,17 +139,19 @@ fn startup_activates_a_clean_native_configuration_by_default_and_respects_opt_ou
             let mut lease: Value =
                 serde_json::from_slice(&std::fs::read(manager.lease_path()).unwrap()).unwrap();
             lease["version"] = json!(3);
-            for name in ["model_provider", emp_integration::GATEWAY_PROVIDER_FIELD] {
-                lease["fields"].as_object_mut().unwrap().remove(name);
-            }
+            lease["fields"]
+                .as_object_mut()
+                .unwrap()
+                .remove(emp_integration::IMAGE_MCP_FIELD);
             std::fs::write(manager.lease_path(), serde_json::to_vec(&lease).unwrap()).unwrap();
             crate::services::startup::reconcile(&server.state).unwrap();
             let migrated = manager.status().unwrap();
-            assert_eq!(
-                migrated.fields["model_provider"].value.as_deref(),
-                Some("emp")
+            assert!(
+                !std::fs::read_to_string(manager.config_path())
+                    .unwrap()
+                    .contains("model_provider = \"emp\"")
             );
-            assert!(migrated.fields[emp_integration::GATEWAY_PROVIDER_FIELD].present);
+            assert!(migrated.fields[emp_integration::IMAGE_MCP_FIELD].present);
         }
         server.shutdown().unwrap();
         assert_eq!(

@@ -9,6 +9,7 @@ mod control;
 pub(crate) mod desktop;
 mod help;
 mod history_migration;
+mod image_mcp;
 mod migrate;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +24,10 @@ pub(crate) enum Cli {
     ApplyUpdate(PathBuf),
     ClaudeTurnComplete(PathBuf),
     PreviewCatalog,
+    ImageMcp {
+        base_url: String,
+        key_file: PathBuf,
+    },
     MigrateConfig {
         source: PathBuf,
         target: PathBuf,
@@ -53,6 +58,17 @@ where
             return Err("Catalog preview reads one JSON object from stdin".into());
         }
         return Ok(Cli::PreviewCatalog);
+    }
+    if command == "--emp-image-mcp" {
+        let (Some(base_url), Some(key_file), None) =
+            (arguments.next(), arguments.next(), arguments.next())
+        else {
+            return Err("--emp-image-mcp requires a gateway URL and key file".into());
+        };
+        return Ok(Cli::ImageMcp {
+            base_url,
+            key_file: PathBuf::from(key_file),
+        });
     }
     if command == "--version" {
         return Ok(Cli::Version);
@@ -258,6 +274,7 @@ pub(crate) fn run() -> Result<ExitCode, String> {
             }
         }
         Cli::Control(command) => return command.run(),
+        Cli::ImageMcp { base_url, key_file } => image_mcp::run(&base_url, &key_file)?,
         Cli::ClaudeTurnComplete(path) => {
             std::fs::write(path, b"complete").map_err(|error| error.to_string())?;
         }

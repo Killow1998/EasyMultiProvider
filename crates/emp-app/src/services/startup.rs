@@ -98,8 +98,15 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
             }
             mark_pending(state, "emp", "EMP configuration applied")?;
         }
-        if emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path)
-            == "local_key"
+        let auth = emp_integration::local_auth::read(&state.backend.accounts.native_auth_path)
+            .map_err(|_| ())?
+            .unwrap_or_default();
+        if (crate::services::integration::enable::image_mcp_required(&auth)
+            || result.lease.as_ref().is_some_and(|lease| {
+                lease.fields[emp_integration::IMAGE_MCP_FIELD]
+                    .applied
+                    .present
+            }))
             && !super::integration::enable::apply(state)
                 .map_err(|_| ())?
                 .ok()

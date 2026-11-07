@@ -3,7 +3,7 @@ use crate::fields::{conflict_names, relation, set_states, states, validate_value
 use crate::files::{absolute, atomic_write};
 use crate::storage::random_hex;
 use crate::{
-    FieldState, GATEWAY_PROVIDER_FIELD, IntegrationError, IntegrationResult, IntegrationStatus,
+    FieldState, IMAGE_MCP_FIELD, IntegrationError, IntegrationResult, IntegrationStatus,
     LeaseRecord, REALTIME_SIDEBAND_FIELD,
 };
 use emp_state::IntegrationFileLock;
@@ -127,7 +127,7 @@ impl IntegrationManager {
         catalog: Option<&str>,
         service_ready: bool,
         realtime_sideband_base_url: Option<&str>,
-        gateway_key: Option<&str>,
+        image_mcp: Option<&crate::ImageMcpConfig>,
     ) -> Result<IntegrationResult, IntegrationError> {
         if !service_ready {
             return Err(IntegrationError(
@@ -140,9 +140,6 @@ impl IntegrationManager {
         }
         if let Some(sideband_url) = realtime_sideband_base_url {
             validate_value(sideband_url)?;
-        }
-        if let Some(key) = gateway_key {
-            validate_value(key)?;
         }
         self.assert_safe_paths()?;
         let _lock = self.lock()?;
@@ -171,17 +168,10 @@ impl IntegrationManager {
                 ),
             ),
             (
-                "model_provider".to_owned(),
-                gateway_key.map_or_else(
-                    || original["model_provider"].clone(),
-                    |_| FieldState::value("emp"),
-                ),
-            ),
-            (
-                GATEWAY_PROVIDER_FIELD.to_owned(),
-                gateway_key.map_or_else(
-                    || original[GATEWAY_PROVIDER_FIELD].clone(),
-                    |key| crate::gateway::definition(base_url, key),
+                IMAGE_MCP_FIELD.to_owned(),
+                image_mcp.map_or_else(
+                    || original[IMAGE_MCP_FIELD].clone(),
+                    |settings| crate::image_mcp::definition(base_url, settings),
                 ),
             ),
         ]);
@@ -204,10 +194,10 @@ impl IntegrationManager {
                 ));
             }
             if relation == "applied" {
-                if desired.iter().any(|(name, value)| {
-                    !matches!(name.as_str(), "model_provider" | GATEWAY_PROVIDER_FIELD)
-                        && value != &current[name]
-                }) {
+                if desired
+                    .iter()
+                    .any(|(name, value)| name != IMAGE_MCP_FIELD && value != &current[name])
+                {
                     return Ok(result(
                         "conflict",
                         "conflict",
