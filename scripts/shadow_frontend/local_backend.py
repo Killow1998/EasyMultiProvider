@@ -91,7 +91,14 @@ def start_backend(stack, binary, root, configuration, env_overrides=None, *, dev
                                env=env, cwd=root, stdout=log, stderr=log,
                                start_new_session=bool(command))
     stack.callback(stop, process, bool(command))
-    url = wait_for(lambda: re.search(r'Open in browser: (http://[^\s]+)', log_path.read_text(encoding='utf-8')))[1]
+    def ready():
+        output = log_path.read_text(encoding='utf-8')
+        if 'Recovery page:' in output:
+            raise RuntimeError(output.splitlines()[0])
+        if process.poll() is not None:
+            raise RuntimeError(re.sub(r'([?&](?:token|bootstrap|session)=)[^&\s]+',r'\1[redacted]',output[-4000:]))
+        return re.search(r'Open in browser: (http://[^\s]+)',output)
+    url = wait_for(ready)[1]
     base = url.split('/?')[0]
     state = root / 'state'
     token = wait_for(lambda: json.loads((state / 'web-session.json').read_text(encoding='utf-8'))['token']

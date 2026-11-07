@@ -573,7 +573,7 @@ fn local_login_rejects_api_key_auth_status_before_inference() {
 }
 
 #[test]
-fn local_cli_quota_reaches_management_views_without_extra_inference() {
+fn local_cli_control_quota_reaches_management_views_without_inference() {
     let directory = tempfile::tempdir().unwrap();
     let root = canonical_root(&directory);
     let home = root.join("home");
@@ -586,12 +586,6 @@ fn local_cli_quota_reaches_management_views_without_extra_inference() {
     let model_queries = root.join("model-query-count");
     let models_unavailable = root.join("models-unavailable");
     let now = crate::util::system_now() as u64;
-    let event = json!({"type":"rate_limit_event","rate_limit_info":{
-        "status":"allowed","unifiedWindows":{
-            "five_hour":{"utilization":0.24,"resetsAt":now+3600},
-            "seven_day":{"utilization":0.13,"resetsAt":now+86400}
-        }, "private_field":"must-not-be-public"}});
-    let result = json!({"type":"result","is_error":false,"structured_output":{"answer":"quota fixture","tool_calls":[]}});
     let reset = time::OffsetDateTime::from_unix_timestamp((now + 3600) as i64)
         .unwrap()
         .format(&time::format_description::well_known::Rfc3339)
@@ -623,8 +617,8 @@ case " $* " in
  *) exit 3;; esac;;
 esac
 printf 'one\n' >> {}
-printf '%s\n' {} {}
-"#, shell_quote(&usage.to_string()), shell_quote(&model_queries.to_string_lossy()), shell_quote(&models_unavailable.to_string_lossy()), shell_quote(&models.to_string()), shell_quote(&counter.to_string_lossy()), shell_quote(&event.to_string()), shell_quote(&result.to_string()))).unwrap();
+exit 3
+"#, shell_quote(&usage.to_string()), shell_quote(&model_queries.to_string_lossy()), shell_quote(&models_unavailable.to_string_lossy()), shell_quote(&models.to_string()), shell_quote(&counter.to_string_lossy()))).unwrap();
     set_executable(&cli);
     let _environment = TestProcessEnvironment::install(&bin, &home, &config_dir);
     let config = root.join("config.json");
@@ -642,26 +636,21 @@ printf '%s\n' {} {}
     assert!(initial["claude_quota"].is_null());
     let response = post(
         &server,
-        "/v1/responses",
-        &serde_json::to_vec(&json!({"model":"local/model","stream":false,"input":"test quota"}))
-            .unwrap(),
+        "/api/providers/local/quota",
+        b"{}",
         &[&session_header(&server)],
     );
     assert_eq!(request_status(&response), 200, "{response}");
-    assert_eq!(
-        response_value(&response)["output"][0]["content"][0]["text"],
-        "quota fixture"
-    );
     for endpoint in ["/api/accounts", "/api/config"] {
         let snapshot = request(&server, endpoint, &[&session_header(&server)]);
         let quota = response_value(&snapshot)["claude_quota"].clone();
         assert_eq!(
             quota["rate_limits_by_limit_id"]["claude"]["primary"]["used_percent"],
-            24.0
+            25.0
         );
         assert_eq!(
             quota["rate_limits_by_limit_id"]["claude"]["secondary"]["used_percent"],
-            13.0
+            14.0
         );
         assert!(!snapshot.contains("must-not-be-public"));
         assert!(!snapshot.contains("fixture@example.invalid"));
@@ -688,7 +677,7 @@ printf '%s\n' {} {}
     let history = response_value(&history);
     assert_eq!(history["series"][0]["points"][0]["remaining_percent"], 75.0);
     assert!(!history.to_string().contains("fixture@example.invalid"));
-    assert_eq!(std::fs::read_to_string(&counter).unwrap(), "one\n");
+    assert!(!counter.exists());
     let discovery = json!({"provider":"local"}).to_string();
     assert_eq!(
         request_status(&post(
@@ -763,7 +752,7 @@ printf '%s\n' {} {}
         std::fs::read_to_string(&model_queries).unwrap(),
         "one\none\n"
     );
-    assert_eq!(std::fs::read_to_string(&counter).unwrap(), "one\n");
+    assert!(!counter.exists());
     server.shutdown().unwrap();
     let server =
         ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();

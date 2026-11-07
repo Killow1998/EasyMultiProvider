@@ -31,7 +31,6 @@ use crate::services::request_preparation::{PreparedRequest, RequestPreparationEr
 use crate::util::projection_ids;
 use crate::util::python_truthy;
 use emp_history::HistoryError;
-use std::collections::BTreeMap;
 use std::net::TcpStream;
 
 pub(crate) enum ResponsesRequestResult {
@@ -81,13 +80,7 @@ pub(crate) fn responses_request(
         body.get("client_metadata"),
         body.get("stream"),
     );
-    let incoming: BTreeMap<String, String> = request
-        .headers
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
-        .collect();
+    let incoming = request.incoming();
     let incoming = observation.headers(incoming);
     observation.phase(Phase::ResolveRoute);
     let PreparedRequest {
@@ -122,6 +115,10 @@ pub(crate) fn responses_request(
         }
     };
     observation.selected(&route);
+    state
+        .backend
+        .claude_turns
+        .selected(&route, &body, &incoming);
     observation.phase(Phase::ValidateInput);
     if crate::services::claude_cli::selected(&route)
         && let Err(error) = crate::services::claude_cli::preflight_input(&body)

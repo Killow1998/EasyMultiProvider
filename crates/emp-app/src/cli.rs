@@ -21,6 +21,8 @@ pub(crate) enum Cli {
         json: bool,
     },
     ApplyUpdate(PathBuf),
+    ClaudeTurnComplete(PathBuf),
+    PreviewCatalog,
     MigrateConfig {
         source: PathBuf,
         target: PathBuf,
@@ -46,8 +48,23 @@ where
             open_browser: true,
         });
     };
+    if command == "--emp-preview-catalog" {
+        if arguments.next().is_some() {
+            return Err("Catalog preview reads one JSON object from stdin".into());
+        }
+        return Ok(Cli::PreviewCatalog);
+    }
     if command == "--version" {
         return Ok(Cli::Version);
+    }
+    if command == "--emp-claude-complete" {
+        let path = arguments
+            .next()
+            .ok_or("Claude completion hook requires a path")?;
+        if arguments.next().is_some() {
+            return Err("Claude completion hook requires one path".into());
+        }
+        return Ok(Cli::ClaudeTurnComplete(PathBuf::from(path)));
     }
     if command == "--emp-apply-update" {
         let path = arguments
@@ -241,6 +258,23 @@ pub(crate) fn run() -> Result<ExitCode, String> {
             }
         }
         Cli::Control(command) => return command.run(),
+        Cli::ClaudeTurnComplete(path) => {
+            std::fs::write(path, b"complete").map_err(|error| error.to_string())?;
+        }
+        Cli::PreviewCatalog => {
+            let input: serde_json::Value = serde_json::from_reader(std::io::stdin().lock())
+                .map_err(|error| error.to_string())?;
+            let mut config = emp_state::normalize_configuration(Some(&input["config"]))
+                .map_err(|error| error.to_string())?;
+            for field in ["catalog_models", "catalog_families"] {
+                config[field] = input["config"][field].clone();
+            }
+            serde_json::to_writer(
+                std::io::stdout().lock(),
+                &emp_codex::management_views::aggregate_views(&config, &input["catalog"]),
+            )
+            .map_err(|error| error.to_string())?;
+        }
         Cli::MigrateHistory { thread_id, json } => return history_migration::run(&thread_id, json),
         Cli::ApplyUpdate(path) => {
             return emp_state::update::worker::run(&path)

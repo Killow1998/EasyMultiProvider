@@ -32,6 +32,7 @@ impl From<std::io::Error> for UsageError {
         Self
     }
 }
+mod affinity;
 mod calls;
 pub use calls::CallFilter;
 mod identities;
@@ -168,6 +169,7 @@ impl UsageLedger {
         calls::initialize(&connection)?;
         identities::initialize(&connection)?;
         sessions::initialize(&connection)?;
+        calls::restore_memory_usage(self, &mut connection)?;
         private(&self.path)?;
         self.initialized.store(true, Ordering::Release);
         Ok(connection)
@@ -184,6 +186,8 @@ impl UsageLedger {
             sha(&json!([category, owner, model, operation, response]))
         } else if let Some(id) = event["observation_id"].as_str().filter(|s| !s.is_empty()) {
             id.to_owned()
+        } else if let Some(request) = event["request_id"].as_str().filter(|s| !s.is_empty()) {
+            sha(&json!([category, owner, model, operation, request]))
         } else {
             let mut bytes = [0; 16];
             getrandom::getrandom(&mut bytes).map_err(|_| UsageError)?;
@@ -242,7 +246,14 @@ impl UsageLedger {
         let operation = event["route"].as_str().unwrap_or("");
         if !(matches!(
             operation,
-            "responses" | "compact" | "image_generation" | "image_edit" | "agent_task_recovery"
+            "responses"
+                | "compact"
+                | "image_generation"
+                | "image_edit"
+                | "agent_task_recovery"
+                | "memory_extraction"
+                | "memory_consolidation"
+                | "decisions"
         ) || crate::diagnostics::MODEL_TEST_OPERATIONS.contains(&operation))
             || !event["usage_category"]
                 .as_str()

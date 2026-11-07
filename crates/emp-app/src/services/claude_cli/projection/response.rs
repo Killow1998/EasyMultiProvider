@@ -7,38 +7,6 @@ use emp_protocol::tool_bridge::ExternalTools;
 use emp_router::CompleteResponse;
 use serde_json::{Value, json};
 
-pub(in crate::services::claude_cli) fn parse_cli_result(
-    stdout: &[u8],
-) -> Result<Value, &'static str> {
-    let mut output: Value = match serde_json::from_slice(stdout) {
-        Ok(output) => output,
-        Err(_) => stdout
-            .split(|byte| *byte == b'\n')
-            .rev()
-            .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
-            .find(|event| event.get("type").and_then(Value::as_str) == Some("result"))
-            .ok_or("claude_cli_invalid_output")?,
-    };
-    if output.get("is_error").and_then(Value::as_bool) == Some(true) {
-        return Err("claude_cli_result_error");
-    }
-    output
-        .get("structured_output")
-        .filter(|value| value.is_object())
-        .ok_or("claude_cli_missing_structured_output")?;
-    let mut observation = emp_router::model_observation::ModelObservation::default();
-    for line in stdout.split(|byte| *byte == b'\n') {
-        if let Ok(event) = serde_json::from_slice::<Value>(line)
-            && matches!(event["type"].as_str(), Some("assistant" | "stream_event"))
-        {
-            observation.observe(&event, false);
-            observation.observe(&event["event"], false);
-        }
-    }
-    output["_emp_model_observation"] = observation.project("");
-    Ok(output)
-}
-
 pub(in crate::services::claude_cli) fn response_from_cli(
     cli_output: &Value,
     route: &ResolvedRoute,
@@ -51,56 +19,18 @@ pub(in crate::services::claude_cli) fn response_from_cli(
         .prepare_or_borrow(request)
         .map_err(|_| ClaudeCliError::Failure("claude_cli_invalid_tool_history"))?;
     let available = available_tools(request);
-    let raw_proposals = proposal["tool_calls"]
-        .as_array()
-        .ok_or(ClaudeCliError::Failure(
-            "claude_cli_invalid_structured_output",
-        ))?;
-    let mut proposed_input = Vec::with_capacity(raw_proposals.len());
-    for raw in raw_proposals {
-        let kind = match raw.get("type").and_then(Value::as_str) {
-            Some("function_call") => ToolKind::Function,
-            Some("custom_tool_call") => ToolKind::Custom,
-            Some("tool_search_call") => ToolKind::Search,
-            _ => return Err(ClaudeCliError::Failure("claude_cli_invalid_tool_proposal")),
-        };
-        let name = raw
-            .get("name")
-            .and_then(Value::as_str)
-            .filter(|name| !name.is_empty())
-            .ok_or(ClaudeCliError::Failure("claude_cli_invalid_tool_proposal"))?;
-        let namespace = raw
-            .get("namespace")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let tool = resolve_tool(&available, namespace, name, kind)
+    let mut proposed_input = Vec::with_capacity(proposal.calls.len());
+    for call in proposal.calls {
+        let tool = resolve_tool(&available, call.namespace, call.name, call.kind)
             .ok_or(ClaudeCliError::Failure("claude_cli_unknown_tool_proposal"))?;
         let name = tool.name.as_str();
         let namespace = tool.namespace.as_str();
-        let item = match kind {
-            ToolKind::Function => {
-                let arguments = raw
-                    .get("arguments")
-                    .filter(|value| value.is_object())
-                    .ok_or(ClaudeCliError::Failure("claude_cli_invalid_tool_proposal"))?;
-                json!({"type":"function_call","name":name,"namespace":namespace,"call_id":next_id("call")?,"arguments":arguments})
-            }
-            ToolKind::Custom => {
-                let input = raw
-                    .get("input")
-                    .and_then(Value::as_str)
-                    .ok_or(ClaudeCliError::Failure("claude_cli_invalid_tool_proposal"))?;
-                json!({"type":"custom_tool_call","name":name,"namespace":namespace,"call_id":next_id("call")?,"input":input,"execution":"client"})
-            }
-            ToolKind::Search => {
-                let arguments = raw
-                    .get("arguments")
-                    .filter(|value| value.is_object())
-                    .ok_or(ClaudeCliError::Failure("claude_cli_invalid_tool_proposal"))?;
-                json!({"type":"tool_search_call","call_id":next_id("call")?,"arguments":arguments,"execution":"client"})
-            }
-        };
-        proposed_input.push(item);
+        let call_id = next_id("call")?;
+        proposed_input.push(match call.kind {
+            ToolKind::Function => json!({"type":"function_call","name":name,"namespace":namespace,"call_id":call_id,"arguments":call.arguments}),
+            ToolKind::Custom => json!({"type":"custom_tool_call","name":name,"namespace":namespace,"call_id":call_id,"input":call.input,"execution":"client"}),
+            ToolKind::Search => json!({"type":"tool_search_call","call_id":call_id,"arguments":call.arguments,"execution":"client"}),
+        });
     }
     let mut bridge_input = bridge
         .prepare(&json!({"input":proposed_input}))
@@ -110,9 +40,7 @@ pub(in crate::services::claude_cli) fn response_from_cli(
         .and_then(Value::as_array_mut)
         .ok_or(ClaudeCliError::Failure("claude_cli_invalid_tool_proposal"))?;
     let mut output = Vec::new();
-    let answer = proposal["answer"].as_str().ok_or(ClaudeCliError::Failure(
-        "claude_cli_invalid_structured_output",
-    ))?;
+    let answer = proposal.answer;
     if !answer.is_empty() {
         output.push(json!({
             "id":next_id("msg")?,
@@ -188,46 +116,76 @@ pub(in crate::services::claude_cli) fn response_from_cli(
     })
 }
 
-fn parse_structured_proposal(output: &Value) -> Result<&Value, ClaudeCliError> {
-    let proposal = output
+struct Proposal<'a> {
+    answer: &'a str,
+    calls: Vec<ToolProposal<'a>>,
+}
+
+struct ToolProposal<'a> {
+    kind: ToolKind,
+    name: &'a str,
+    namespace: &'a str,
+    arguments: &'a serde_json::Map<String, Value>,
+    input: &'a str,
+}
+
+fn parse_structured_proposal(output: &Value) -> Result<Proposal<'_>, ClaudeCliError> {
+    let object = output
         .get("structured_output")
-        .filter(|proposal| proposal.is_object())
+        .and_then(Value::as_object)
         .ok_or(ClaudeCliError::Failure(
             "claude_cli_missing_structured_output",
         ))?;
-    let object = proposal.as_object().ok_or(ClaudeCliError::Failure(
-        "claude_cli_invalid_structured_output",
-    ))?;
-    if object.len() != 2 || !object.contains_key("answer") || !object.contains_key("tool_calls") {
-        return Err(ClaudeCliError::Failure(
-            "claude_cli_invalid_structured_output",
-        ));
+    let invalid = || ClaudeCliError::Failure("claude_cli_invalid_structured_output");
+    if object.len() != 2 {
+        return Err(invalid());
     }
-    if !proposal.get("answer").is_some_and(Value::is_string)
-        || !proposal.get("tool_calls").is_some_and(Value::is_array)
-    {
-        return Err(ClaudeCliError::Failure(
-            "claude_cli_invalid_structured_output",
-        ));
-    }
-    for call in proposal["tool_calls"].as_array().expect("checked array") {
-        let Some(call) = call.as_object() else {
-            return Err(ClaudeCliError::Failure("claude_cli_invalid_tool_proposal"));
+    let answer = object
+        .get("answer")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    let calls = object
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?;
+    let invalid = || ClaudeCliError::Failure("claude_cli_invalid_tool_proposal");
+    let mut proposals = Vec::with_capacity(calls.len());
+    for call in calls {
+        let call = call
+            .as_object()
+            .filter(|call| call.len() == 5)
+            .ok_or_else(invalid)?;
+        let kind = match call.get("type").and_then(Value::as_str) {
+            Some("function_call") => ToolKind::Function,
+            Some("custom_tool_call") => ToolKind::Custom,
+            Some("tool_search_call") => ToolKind::Search,
+            _ => return Err(invalid()),
         };
-        if call.len() != 5
-            || !["type", "name", "namespace", "arguments", "input"]
-                .iter()
-                .all(|field| call.contains_key(*field))
-            || !call.get("type").is_some_and(Value::is_string)
-            || !call.get("name").is_some_and(Value::is_string)
-            || !call.get("namespace").is_some_and(Value::is_string)
-            || !call.get("arguments").is_some_and(Value::is_object)
-            || !call.get("input").is_some_and(Value::is_string)
-        {
-            return Err(ClaudeCliError::Failure("claude_cli_invalid_tool_proposal"));
-        }
+        proposals.push(ToolProposal {
+            kind,
+            name: call
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(invalid)?,
+            namespace: call
+                .get("namespace")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?,
+            arguments: call
+                .get("arguments")
+                .and_then(Value::as_object)
+                .ok_or_else(invalid)?,
+            input: call
+                .get("input")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?,
+        });
     }
-    Ok(proposal)
+    Ok(Proposal {
+        answer,
+        calls: proposals,
+    })
 }
 
 pub(super) fn cli_usage(output: &Value) -> Value {

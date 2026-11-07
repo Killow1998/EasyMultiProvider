@@ -452,6 +452,7 @@ fn downstream_write_failure_does_not_rewrite_or_repeat_upstream_accounting() {
         &server.state,
         json!({"model":"demo/model","input":"hello"}),
         RequestOperation::Responses,
+        &Default::default(),
     )
     .ok()
     .unwrap();

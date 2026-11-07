@@ -32,7 +32,7 @@ pub(crate) fn update(
             canonicalize_private_paths(&mut updated, &state.backend.configuration.config_path)
                 .map_err(ChangeError::invalid)?;
             let sources = catalog_sources(state, &updated);
-            let updated = sources
+            sources
                 .validate_update(&updated, &current)
                 .map_err(ChangeError::invalid)?;
             let before = current.clone();

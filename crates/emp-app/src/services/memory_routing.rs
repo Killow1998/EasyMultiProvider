@@ -2,8 +2,7 @@
 use crate::app::ServerState;
 use crate::services::request_facts::memory_kind;
 use crate::services::request_preparation::{
-    PreparedRequest, RequestOperation, RequestPreparationError, prepare_request,
-    prepare_with_config,
+    PreparedRequest, RequestOperation, RequestPreparationError, prepare_with_config,
 };
 use emp_core::{Dialect, RouteSource};
 use serde_json::{Value, json};
@@ -35,22 +34,50 @@ pub(crate) fn prepare(
     mut body: Value,
     incoming: &BTreeMap<String, String>,
 ) -> Result<PreparedRequest, RequestPreparationError> {
-    let Some(kind) = memory_kind(&body, incoming) else {
-        return prepare_request(state, body, RequestOperation::Responses);
-    };
     let config = state
         .backend
         .configuration
         .snapshot()
         .map_err(|_| RequestPreparationError::ConfigurationUnavailable)?;
-    let field = if kind == "memory_extraction" {
-        "memory_extraction_model"
-    } else {
-        "memory_model"
+    let Some(kind) = memory_kind(&body, incoming) else {
+        return prepare_with_config(state, config, body, RequestOperation::Responses, incoming);
     };
+    let (field, effort_field) = if kind == "memory_extraction" {
+        ("memory_extraction_model", "memory_extraction_effort")
+    } else {
+        ("memory_model", "memory_consolidation_effort")
+    };
+    if let Some(effort) = config[effort_field]
+        .as_str()
+        .filter(|effort| !effort.is_empty())
+    {
+        let mut reasoning = body["reasoning"].as_object().cloned().unwrap_or_default();
+        reasoning.insert("effort".into(), json!(effort));
+        body["reasoning"] = Value::Object(reasoning);
+        if let Some(update) = body
+            .get_mut("input")
+            .and_then(Value::as_array_mut)
+            .and_then(|items| {
+                items
+                    .iter_mut()
+                    .rev()
+                    .find(|item| item["type"] == "configuration_update")
+            })
+        {
+            let mut reasoning = update["reasoning"].as_object().cloned().unwrap_or_default();
+            reasoning.insert("effort".into(), json!(effort));
+            update["reasoning"] = Value::Object(reasoning);
+        }
+    }
     let selected = config[field].as_str().unwrap_or_default().to_owned();
     if selected.is_empty() {
-        return prepare_with_config(state, config, body, RequestOperation::Responses);
+        return prepare_with_config(
+            state,
+            config,
+            body,
+            RequestOperation::Responses,
+            &BTreeMap::new(),
+        );
     }
     let fail = |reason: &'static str| {
         if state
@@ -137,8 +164,14 @@ pub(crate) fn prepare(
         format!("{prefix}/{selected}")
     };
     body["model"] = json!(route_model);
-    let prepared = prepare_with_config(state, config, body, RequestOperation::Responses)
-        .map_err(|_| fail("model_unavailable"))?;
+    let prepared = prepare_with_config(
+        state,
+        config,
+        body,
+        RequestOperation::Responses,
+        &BTreeMap::new(),
+    )
+    .map_err(|_| fail("model_unavailable"))?;
     if prepared.route.dialect != Dialect::CodexNative
         || !matches!(
             prepared.route.source,

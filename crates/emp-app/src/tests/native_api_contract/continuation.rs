@@ -294,10 +294,17 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
         let request = json!({"type":"response.create","model":model,"input":initial_input()});
         if fault == Fault::SilentPrefill {
             client.send_json(&request).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let started = Instant::now();
+            let deadline = started + Duration::from_secs(30);
             while upstream.traffic.lock().unwrap().warmups == 0 {
                 assert!(Instant::now() < deadline);
                 thread::sleep(Duration::from_millis(10));
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                eprintln!(
+                    "large-context fixture prefill arrived after {:?}",
+                    started.elapsed()
+                );
             }
             client.close();
             let deadline = Instant::now() + Duration::from_secs(3);

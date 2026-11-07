@@ -43,7 +43,8 @@ def serve(handler, args):
         demo_lock = threading.Lock()
         def open_demo(scenario=''):
             with demo_lock:
-                kind='onboarding' if scenario in {'gateway','onboarding','lan'} else 'general'
+                kind = ('onboarding' if scenario in {'gateway','onboarding','lan'}
+                        else 'cpa_quota' if scenario == 'cpa_quota' else 'general')
                 if kind not in demo_urls:
                     from preview import fixture, preview, seed_session_bills
                     with contextlib.ExitStack() as pending:
@@ -54,7 +55,8 @@ def serve(handler, args):
                         else:
                             endpoint, _, bundle = fixture(pending, args.emp.resolve(), root)
                             seed_session_bills(endpoint[1])
-                            demo_urls[kind], _ = preview(pending, endpoint[0], bundle, endpoint[2]['X-EMP-Session'], return_url=url)
+                            demo_urls[kind], _ = preview(pending, endpoint[0], bundle, endpoint[2]['X-EMP-Session'], return_url=url,
+                                cpa_history=endpoint[1] if kind == 'cpa_quota' else None)
                         stack.enter_context(pending.pop_all())
                 return demo_urls[kind]
         server.open_demo = open_demo

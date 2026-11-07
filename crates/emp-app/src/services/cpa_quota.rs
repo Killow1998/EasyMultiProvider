@@ -9,10 +9,16 @@ use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use url::Url;
 
+mod history;
+
+const REFRESH_INTERVAL_SECONDS: i64 = 300;
+
 #[derive(Clone, Deserialize, Serialize)]
 struct Window {
     remaining_percent: Option<f64>,
     resets_at: Option<String>,
+    #[serde(skip)]
+    reset_timestamp: Option<i64>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -34,9 +40,16 @@ struct Reply {
 }
 
 #[derive(Clone, Serialize)]
+struct Quota {
+    checked_at: Option<String>,
+    accounts: Vec<Account>,
+    rate_limits_by_limit_id: BTreeMap<&'static str, Value>,
+}
+
+#[derive(Clone, Serialize)]
 struct Observation {
     observed_at: f64,
-    quota: Option<Value>,
+    quota: Option<Quota>,
     error_code: Option<&'static str>,
 }
 
@@ -76,7 +89,7 @@ pub(crate) fn snapshot(state: &ServerState, config: &Value) -> Value {
         }).collect())
 }
 
-async fn query(client: &HttpClient, base: &str, key: &str) -> Result<Value, &'static str> {
+async fn query(client: &HttpClient, base: &str, key: &str) -> Result<Quota, &'static str> {
     let base = base.trim_end_matches('/');
     let base = base.strip_suffix("/v1").unwrap_or(base);
     let url = Url::parse(&format!("{base}/v1/quota")).map_err(|_| "cpa_quota_invalid_response")?;
@@ -104,20 +117,27 @@ async fn query(client: &HttpClient, base: &str, key: &str) -> Result<Value, &'st
         .read_limited(2 * 1024 * 1024)
         .await
         .map_err(|_| "cpa_quota_connection_failed")?;
-    let reply: Reply = serde_json::from_slice(&bytes).map_err(|_| "cpa_quota_invalid_response")?;
-    if reply.scope != "shared_pool"
-        || reply.provider != "claude"
-        || reply
-            .accounts
-            .iter()
-            .flat_map(|account| account.windows.values())
-            .any(|window| {
-                window
-                    .remaining_percent
-                    .is_some_and(|value| !(0.0..=100.0).contains(&value))
-            })
-    {
+    let mut reply: Reply =
+        serde_json::from_slice(&bytes).map_err(|_| "cpa_quota_invalid_response")?;
+    if reply.scope != "shared_pool" || reply.provider != "claude" {
         return Err("cpa_quota_invalid_response");
+    }
+    for window in reply
+        .accounts
+        .iter_mut()
+        .flat_map(|account| account.windows.values_mut())
+    {
+        if window
+            .remaining_percent
+            .is_some_and(|value| !(0.0..=100.0).contains(&value))
+        {
+            return Err("cpa_quota_invalid_response");
+        }
+        window.reset_timestamp = window
+            .resets_at
+            .as_deref()
+            .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+            .map(|value| value.unix_timestamp());
     }
     let now = crate::util::system_now();
     let mut limits = serde_json::Map::new();
@@ -141,13 +161,8 @@ async fn query(client: &HttpClient, base: &str, key: &str) -> Result<Value, &'st
         });
         let reset = windows
             .iter()
-            .filter_map(|window| {
-                let reset = window.resets_at.as_deref()?;
-                let timestamp = OffsetDateTime::parse(reset, &Rfc3339)
-                    .ok()?
-                    .unix_timestamp();
-                (timestamp as f64 > now).then_some(timestamp)
-            })
+            .filter_map(|window| window.reset_timestamp)
+            .filter(|timestamp| *timestamp as f64 > now)
             .min();
         limits.insert(
             kind.into(),
@@ -155,10 +170,11 @@ async fn query(client: &HttpClient, base: &str, key: &str) -> Result<Value, &'st
             "window_minutes":minutes,"resets_at":reset}),
         );
     }
-    Ok(
-        json!({"checked_at":reply.checked_at,"accounts":reply.accounts,
-        "rate_limits_by_limit_id":{"claude":limits}}),
-    )
+    Ok(Quota {
+        checked_at: reply.checked_at,
+        accounts: reply.accounts,
+        rate_limits_by_limit_id: BTreeMap::from([("claude", Value::Object(limits))]),
+    })
 }
 
 pub(crate) fn refresh(state: &ServerState, id: &str, force: bool) -> Option<Value> {
@@ -180,7 +196,7 @@ pub(crate) fn refresh(state: &ServerState, id: &str, force: bool) -> Option<Valu
             .lock()
             .expect("CPA quota cache")
             .get(&identity)
-            .filter(|cached| now - cached.observed_at < 300.0)
+            .filter(|cached| now - cached.observed_at < REFRESH_INTERVAL_SECONDS as f64)
     {
         return Some(json!({"identity":identity,"observation":cached}));
     }
@@ -200,15 +216,25 @@ pub(crate) fn refresh(state: &ServerState, id: &str, force: bool) -> Option<Valu
             .unwrap_or(Err("cpa_quota_timeout"))
         })
     };
+    let observed_at = crate::util::system_now();
+    let history_saved = result.as_ref().is_ok_and(|quota| {
+        history::record(
+            &state.backend.accounts.quota_history,
+            &identity,
+            quota,
+            observed_at as i64,
+        )
+        .is_ok()
+    });
     let observation = Observation {
-        observed_at: crate::util::system_now(),
+        observed_at,
         quota: result.as_ref().ok().cloned(),
         error_code: result.err(),
     };
     state.backend.diagnostics.journal.event(
         "info",
         "cpa_quota_refresh",
-        &json!({"provider_id":id,"error_code":observation.error_code}),
+        &json!({"provider_id":id,"error_code":observation.error_code,"history_saved":history_saved}),
     );
     state
         .backend
@@ -222,4 +248,61 @@ pub(crate) fn refresh(state: &ServerState, id: &str, force: bool) -> Option<Valu
         .management_events
         .publish(super::management_events::Change::Quota);
     Some(json!({"identity":identity,"observation":observation}))
+}
+
+pub(crate) fn sample_due(state: &ServerState) {
+    let ids: Vec<String> = match state.backend.configuration.read() {
+        Ok(config) => config["providers"]
+            .as_array()
+            .expect("normalized providers")
+            .iter()
+            .filter(|provider| provider["enabled"] != false && supported(provider))
+            .map(|provider| provider["id"].as_str().expect("provider ID").to_owned())
+            .collect(),
+        Err(_) => return,
+    };
+    for id in ids {
+        if state.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
+        let _ = refresh(state, &id, false);
+    }
+}
+
+pub(crate) fn history(
+    state: &ServerState,
+    id: &str,
+    start: i64,
+    end: i64,
+) -> Option<Result<Value, &'static str>> {
+    let provider = state.backend.configuration.read().ok()?["providers"]
+        .as_array()
+        .expect("normalized providers")
+        .iter()
+        .find(|provider| provider["id"] == id && supported(provider))?
+        .clone();
+    let key = provider_api_key(&provider, &state.backend.configuration.vault);
+    let identity = identity(&provider, &key);
+    let mut result = history::query(&state.backend.accounts.quota_history, &identity, start, end);
+    if let Ok(payload) = &mut result {
+        let cache = state
+            .backend
+            .provider_quotas
+            .0
+            .lock()
+            .expect("CPA quota cache");
+        let accounts = cache
+            .get(&identity)
+            .and_then(|item| item.quota.as_ref())
+            .map(|quota| {
+                quota
+                    .accounts
+                    .iter()
+                    .map(|account| account.id.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        payload["account_ids"] = json!(accounts);
+    }
+    Some(result)
 }

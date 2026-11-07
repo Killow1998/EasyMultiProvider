@@ -16,8 +16,8 @@ fn instruction_priority_and_context_estimation_match_the_cli_payload() {
     input.extend(history.as_array().unwrap().iter().cloned());
     let body = json!({"instructions":"base rule","input":input,"tools":[],"max_output_tokens":512});
     let prepared = media::prepare(&body).unwrap();
-    let user: Value = serde_json::from_slice(&prepared.stdin).unwrap();
-    let blocks = user["message"]["content"].as_array().unwrap();
+    let user: Value = serde_json::to_value(&prepared.expected_user_content).unwrap();
+    let blocks = user.as_array().unwrap();
     let metadata: Value = serde_json::from_str(blocks[0]["text"].as_str().unwrap()).unwrap();
     assert!(
         metadata["codex_responses_metadata"]
@@ -38,10 +38,7 @@ fn instruction_priority_and_context_estimation_match_the_cli_payload() {
     assert!(!prepared.system_prompt.contains("untrusted tool text"));
     let payload = media::context_payload(&body).unwrap();
     assert_eq!(payload["system"], prepared.system_prompt);
-    assert_eq!(
-        payload["messages"][0]["content"],
-        user["message"]["content"]
-    );
+    assert_eq!(payload["messages"][0]["content"], user);
     assert_eq!(payload["max_tokens"], 512);
     assert_eq!(
         body["input"].as_array().unwrap().len(),
@@ -60,8 +57,8 @@ fn images_keep_their_association_after_instruction_extraction() {
         ]}
     ]});
     let prepared = media::prepare(&body).unwrap();
-    let event: Value = serde_json::from_slice(&prepared.stdin).unwrap();
-    let blocks = event["message"]["content"].as_array().unwrap();
+    let event: Value = serde_json::to_value(&prepared.expected_user_content).unwrap();
+    let blocks = event.as_array().unwrap();
     assert_eq!(
         blocks
             .iter()
@@ -80,10 +77,7 @@ fn images_keep_their_association_after_instruction_extraction() {
     );
     let payload = media::context_payload(&body).unwrap();
     assert_eq!(payload["system"], prepared.system_prompt);
-    assert_eq!(
-        payload["messages"][0]["content"],
-        event["message"]["content"]
-    );
+    assert_eq!(payload["messages"][0]["content"], event);
 }
 
 #[test]
@@ -100,9 +94,14 @@ fn instructions_reject_invalid_content_and_accept_inputs_above_the_old_adapter_l
     }
     let body = json!({"instructions":"system rule", "input":"y".repeat(11 * 1024 * 1024)});
     let prepared = media::prepare(&body).unwrap();
-    assert!(prepared.system_prompt.len() + prepared.stdin.len() > 10 * 1024 * 1024);
-    let event: Value = serde_json::from_slice(&prepared.stdin).unwrap();
-    let transcript: Value =
-        serde_json::from_str(event["message"]["content"].as_str().unwrap()).unwrap();
+    assert!(
+        prepared.system_prompt.len()
+            + serde_json::to_vec(&prepared.expected_user_content)
+                .unwrap()
+                .len()
+            > 10 * 1024 * 1024
+    );
+    let event: Value = serde_json::to_value(&prepared.expected_user_content).unwrap();
+    let transcript: Value = serde_json::from_str(event.as_str().unwrap()).unwrap();
     assert_eq!(transcript["input"], body["input"]);
 }

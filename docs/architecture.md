@@ -120,6 +120,11 @@ for one request-local configuration, credential hydration, route selection and
 summary policy. History/context preparation and transport presentation remain
 at their existing boundaries.
 
+Aggregation resolves inside this preparation boundary, using the same snapshot
+and caller headers. It has no separate request dispatcher or preliminary group
+lookup. Memory jobs may select an account first, then pass their snapshot into
+the same preparation owner.
+
 The same request preparation owner applies an external model's configured
 `output_limit` to `max_output_tokens`, retaining a smaller caller limit. An unset
 limit leaves the request unchanged, and Native requests bypass this adjustment.
@@ -308,7 +313,7 @@ cancels a silent upstream. Once an incremental request receives an upstream
 event, a broken connection is reported as an incomplete stream, not as a missing
 previous response that instructs Codex to replay the request.
 
-HTTP fallback, external HTTP streams and the single-step Claude CLI also accept
+HTTP fallback, external HTTP streams and the Claude TUI adapter also accept
 Codex's steering control (`response.interrupt`, `discard_partial_items`). During
 these turns, a temporary readiness worker owns the existing frame decoder;
 the output writer retains its connection, and complete frame writes are
@@ -415,18 +420,24 @@ See [profiling evidence](performance-profiling.md) for the local measurements.
 Changing all HTTP handling to an async framework is a separate decision, not a
 prerequisite for the ownership fix.
 
-Claude's request-local relay uses socket readiness and a cancellation signal
-shared with its async upstream operation. Cancellation wakes idle accept,
-header/body reads and blocked writes; late subscribers observe the same signal.
-One absolute deadline bounds each relay read/write operation. The CLI process
-monitor retains its bounded exit polling. This does not change subscription
-sampling schedules or introduce an application-wide event framework.
+Claude runs in a real PTY/ConPTY TUI. A per-turn actor owns the CLI, its temporary
+directory, MCP bridge and upstream cancellation. Codex keeps persistent history
+and executes tools; a pending tool call temporarily retains the actor until its
+result arrives. A new user turn starts a new actor. Disconnect, expiry and drop
+cancel upstream work and release the CLI and temporary files.
 
-CLI-added date reminders are normalized at this same relay boundary for text
-and multimodal requests. Only the observed fixed reminder format with a valid
-calendar date can move into system metadata. User text, media order and tool
-history still have to match the prepared transcript; an arbitrary extra block
-or a modified transcript remains an error.
+`tui/session/setup.rs` prepares the private launch environment; `tui/session.rs`
+owns the running MCP and upstream loop. Tool results and context blocks cross
+their internal boundary as typed values. Tool proposals are validated once into
+borrowed fields before catalog/identity projection. Metrics retain deduplicated
+usage receipts, model names and the latest visible answer, not copies of full
+assistant messages or thinking/tool payloads.
+
+An MCP prompt carries an opaque context slot. At the native CLI request boundary,
+EMP replaces that slot with the prepared Codex text, tool results and original
+media. This keeps the TUI's own input budget and image rewriting out of the
+transfer. Native responses and the CLI transcript supply reported usage; the
+adapter projects answers and tool calls back to Codex without executing them.
 
 ### 7. Frontend features own private state and explicit dependencies
 
@@ -825,6 +836,11 @@ the other stage. Partial resets compose from the journal's original values, neve
 from the last EMP override. The two default labels resolve each original model
 separately. Selecting a model sets that stage's client-side context budget after
 restarting Codex; it never enables memories.
+`memory_extraction_effort` and `memory_consolidation_effort` are EMP-only
+preferences. Empty values retain Codex's effort; 0.167 uses Low for extraction and
+Medium for consolidation. The selectors use the model's advertised concrete
+efforts. Changes apply to subsequent memory requests without changing main-turn
+effort or adding unsupported Codex configuration keys.
 `services/memory_routing.rs` serves HTTP and WebSocket at the same preparation
 boundary. Account selection and final route preparation share one configuration
 snapshot, including when the memory override is disabled; concurrent settings
@@ -834,6 +850,9 @@ external chats, global consolidation and unconfirmed sources use Native. Known
 unavailable or exhausted accounts pause visibly without switching subscriptions.
 Request kind selects the corresponding preference in both HTTP and WebSocket;
 pause status carries the stage so its explanation appears under the correct selector.
+The same boundary applies effort to the root reasoning settings and the latest
+inline configuration update, preserving other fields and earlier updates. Memory
+outcome receipts read this routed effort rather than stale client turn metadata.
 Memory work has distinct call labels; global consolidation is not charged to the
 single conversation that happened to launch it.
 
@@ -1293,7 +1312,7 @@ Ambiguous ownership stays unassigned. Bills and chart detail share their reconci
 selection and aggregate projection. See [usage accounting](usage-accounting.md#session-bills)
 for attribution, old-history indexing and missing-price semantics.
 
-Quota sampling remains scheduled backend work at 44-second deadlines. Its
+Codex subscription quota sampling remains scheduled backend work at 44-second deadlines. Its
 existing sampler now owns target selection and worker aggregation. Up to four
 scoped workers borrow their inputs and each writes only its own counter; joining
 aggregates those counters. This removes the shared counting mutex, reference
@@ -1302,6 +1321,13 @@ deduplication, shutdown checks and durable storage remain at their existing
 boundaries. A joined worker's earlier counts remain available even if it panics.
 The frontend's five-minute trend reload reads stored history; the disconnected
 SSE fallback reads current account snapshots. Neither is a model request.
+CPA observation polling shares this backend worker and retains its own 300-second
+cache; the visible page checks that cache every 60 seconds. Manual refresh bypasses
+the cache. Successful observations append the pool and each enabled, fresh account's
+5h/7d windows to the existing quota store, under a credential-scoped CPA owner.
+Unknown values are omitted and zero stays zero. The existing 15-day retention,
+point limits and chart apply to both pool and individual series. History reads
+never query the observer, and recording continues with the Web UI closed.
 
 Each Codex quota/reset helper uses a disposable credential home with plugins
 disabled and a fixed relative `model_catalog_json = "quota-models.json"` pointing

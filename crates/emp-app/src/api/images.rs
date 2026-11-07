@@ -4,7 +4,6 @@ use crate::http::auth::{proxy_allowed, same_origin};
 use crate::http::request::{Request, read_json_body};
 use crate::http::response::{body_error_response, json_error_response, status_text};
 use crate::services::native::images;
-use std::collections::BTreeMap;
 use std::net::TcpStream;
 
 pub(crate) fn image_request(
@@ -32,13 +31,7 @@ pub(crate) fn image_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
-    let mut incoming: BTreeMap<_, _> = request
-        .headers
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
-        .collect();
+    let mut incoming = request.incoming();
     if let Some(id) = request.observation_id {
         incoming.insert("X-EMP-Request-ID".into(), id.into());
     }

@@ -1,5 +1,6 @@
 pub(crate) mod accounts;
 pub(crate) mod activity;
+pub(crate) mod aggregate_routing;
 pub(crate) mod app_icon;
 pub(crate) mod auto_review;
 pub(crate) mod catalog;
@@ -12,6 +13,7 @@ pub(crate) mod cpa_quota;
 pub(crate) mod events;
 pub(crate) mod external;
 pub(crate) mod failure_feedback;
+pub(crate) mod gateway_clients;
 pub(crate) mod history;
 pub(crate) mod integration;
 pub(crate) mod management_events;

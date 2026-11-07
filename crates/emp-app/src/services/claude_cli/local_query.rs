@@ -17,7 +17,7 @@ pub(super) fn with_login<T>(
     for path in [&config, &cache, &cwd] {
         std::fs::create_dir(path).map_err(|_| "claude_cli_temp_unavailable")?;
     }
-    let cancelled = Cancellation::new().map_err(|_| "claude_quota_unavailable")?;
+    let cancelled = Cancellation::new();
     let login = verify_local_subscription(
         state,
         &executable,

@@ -94,6 +94,11 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         }
         let supplied_session = request.session_token();
         if state.sessions.contains(supplied_session.as_deref(), now) {
+            if request.method == RequestMethod::Get
+                && matches!(path, "/api/gateway/clients" | "/api/gateway/usage")
+            {
+                return crate::api::gateway::read(request, state);
+            }
             if request.method == RequestMethod::Get && path == "/api/gateway" {
                 return response(
                     "HTTP/1.1 200 OK",

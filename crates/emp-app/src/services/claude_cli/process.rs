@@ -8,19 +8,12 @@ use std::time::{Duration, Instant};
 
 const MAX_CHILD_STDOUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CHILD_STDERR_BYTES: usize = 1024 * 1024;
-#[cfg(not(test))]
-const CLI_TIMEOUT: Duration = Duration::from_secs(300);
-#[cfg(test)]
-const CLI_TIMEOUT: Duration = Duration::from_secs(10);
 const CHILD_POLL: Duration = Duration::from_millis(25);
 const AUTH_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 
-mod admission;
+pub(super) mod admission;
 mod command;
-pub(super) use command::{
-    CommandConfig, InputFormat, InvocationMode, LocalCommandConfig, auth_status_command, command,
-    control_command, host_cli_home,
-};
+pub(super) use command::{LocalCommandConfig, auth_status_command, control_command, host_cli_home};
 
 pub(super) fn run_control(
     command: Command,
@@ -44,41 +37,6 @@ struct BoundedOutput {
     bytes: Vec<u8>,
     too_large: bool,
     budget_exhausted: bool,
-}
-
-pub(super) fn run(
-    command: Command,
-    input: Vec<u8>,
-    cancelled: &Cancellation,
-    cancellation_requested: impl FnMut() -> Option<CancellationReason>,
-) -> Result<Vec<u8>, &'static str> {
-    run_with_timeout_policy(
-        command,
-        input,
-        cancelled,
-        CLI_TIMEOUT,
-        false,
-        cancellation_requested,
-        |_| {},
-    )
-}
-
-pub(super) fn run_observed(
-    command: Command,
-    input: Vec<u8>,
-    cancelled: &Cancellation,
-    cancellation_requested: impl FnMut() -> Option<CancellationReason>,
-    inspect_output: impl FnOnce(&[u8]),
-) -> Result<Vec<u8>, &'static str> {
-    run_with_timeout_policy(
-        command,
-        input,
-        cancelled,
-        CLI_TIMEOUT,
-        false,
-        cancellation_requested,
-        inspect_output,
-    )
 }
 
 pub(super) fn run_auth_status(

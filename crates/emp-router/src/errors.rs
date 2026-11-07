@@ -59,14 +59,14 @@ pub fn normalize_upstream_error_event(event: &mut Value) -> Option<emp_transport
     Some(failure)
 }
 
-pub(super) fn upstream_error(
-    status: u16,
-    raw: &[u8],
-    retry_after_seconds: Option<u64>,
-) -> RouterError {
-    let code = serde_json::from_slice::<Value>(raw)
-        .ok()
-        .and_then(|body| body.get("error")?.get("code")?.as_str().map(str::to_owned));
+pub fn upstream_error(status: u16, raw: &[u8], retry_after_seconds: Option<u64>) -> RouterError {
+    let code = serde_json::from_slice::<Value>(raw).ok().and_then(|body| {
+        body.get("error")?
+            .get("code")
+            .or_else(|| body.get("error")?.get("type"))?
+            .as_str()
+            .map(str::to_owned)
+    });
     let failure = http_failure(HttpFailureInput {
         status,
         detail: &String::from_utf8_lossy(raw),

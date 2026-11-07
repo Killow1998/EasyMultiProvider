@@ -183,13 +183,7 @@ pub(crate) fn serve_realtime_call(
 }
 
 pub(super) fn incoming_headers(request: Request<'_>) -> BTreeMap<String, String> {
-    request
-        .headers
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
-        .collect()
+    request.incoming()
 }
 
 pub(super) fn native_headers(state: &ServerState) -> Option<BTreeMap<String, String>> {

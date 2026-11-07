@@ -56,12 +56,11 @@ use tempfile::TempDir;
 
 mod activity_contract;
 mod activity_websocket_contract;
+mod aggregate_contract;
 mod auto_review_contract;
 mod cancellation_contract;
 mod catalog_api_contract;
 mod claude_availability_contract;
-mod claude_cli_contract;
-mod claude_cli_failure_contract;
 #[cfg(unix)]
 mod claude_local_login_contract;
 mod collaboration_contract;

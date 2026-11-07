@@ -43,56 +43,6 @@ fn removes_only_responses_reasoning_items_and_preserves_user_fields() {
 }
 
 #[test]
-fn rejects_typed_multimodal_input_but_keeps_schema_and_tool_result_json() {
-    let unsupported = json!({
-        "input":[{"type":"message","role":"user","content":[
-            {"type":"input_text","text":"hello"},
-            {"type":"input_image","image_url":"data:image/png;base64,not-a-real-image"}
-        ]}],
-        "tools":[{"type":"function","name":"file","parameters":{"properties":{"image":{"type":"string"},"audio":{"type":"string"}}}}]
-    });
-    assert_eq!(
-        text_transcript(&unsupported),
-        Err("unsupported_input_modality")
-    );
-
-    let text_only = json!({
-        "input":[
-            {"type":"function_call_output","call_id":"call-1","output":{"type":"input_image","ordinary_result":true}},
-            {"type":"message","role":"user","content":[{"type":"input_text","text":"still text"}]}
-        ],
-        "tools":[{"type":"function","name":"schema","parameters":{"properties":{"input_file":{"type":"string"}}}}]
-    });
-    let encoded = text_transcript(&text_only).expect("ordinary JSON is preserved");
-    let projected: Value = serde_json::from_str(&encoded).expect("JSON transcript");
-    assert_eq!(projected["input"][0]["output"]["type"], "input_image");
-    assert_eq!(
-        projected["tools"][0]["parameters"]["properties"]["input_file"]["type"],
-        "string"
-    );
-
-    let role_only_message = json!({
-        "input":[{"role":"user","content":[
-            {"type":"input_image","image_url":"data:image/png;base64,not-a-real-image"}
-        ]}]
-    });
-    assert_eq!(
-        text_transcript(&role_only_message),
-        Err("unsupported_input_modality")
-    );
-
-    let tool_output_content = json!({
-        "input":[{"type":"function_call_output","call_id":"call-1","output":[
-            {"type":"input_file","file_id":"file_fake"}
-        ]}]
-    });
-    assert_eq!(
-        text_transcript(&tool_output_content),
-        Err("unsupported_input_modality")
-    );
-}
-
-#[test]
 fn cli_usage_reuses_anthropic_cache_projection_and_keeps_unknowns_unknown() {
     let route = test_route();
     let request = json!({"model":"m","input":"hello","tools":[]});
@@ -395,34 +345,7 @@ fn effort_diagnostics_report_only_known_enums_or_types() {
 }
 
 #[test]
-fn cli_result_and_effort_mapping_reject_unusable_values() {
-    let stdout = serde_json::to_vec(&json!({
-        "type":"result",
-        "structured_output":{"answer":"ok","tool_calls":[]}
-    }))
-    .expect("CLI result");
-    let parsed = parse_cli_result(&stdout).expect("structured CLI result");
-    assert_eq!(parsed["structured_output"]["answer"], "ok");
-    assert_eq!(
-        parse_cli_result(br#"{"type":"result","is_error":true,"structured_output":{}}"#),
-        Err("claude_cli_result_error")
-    );
-    let jsonl = br#"{"type":"system","subtype":"init"}
-{"type":"result","subtype":"success","structured_output":{"answer":"ok","tool_calls":[]}}
-"#;
-    assert_eq!(
-        parse_cli_result(jsonl).unwrap()["structured_output"]["answer"],
-        "ok"
-    );
-    let observed = parse_cli_result(br#"{"type":"assistant","message":{"model":"actual-revision"}}
-{"type":"result","structured_output":{"answer":"ok","tool_calls":[]},"modelUsage":{"billing-only-name":{}}}
-"#).unwrap();
-    assert_eq!(
-        observed["_emp_model_observation"]["response_model"],
-        "actual-revision"
-    );
-    let billing_only = parse_cli_result(br#"{"type":"result","structured_output":{"answer":"ok","tool_calls":[]},"modelUsage":{"billing-only-name":{}}}"#).unwrap();
-    assert!(billing_only["_emp_model_observation"]["response_model"].is_null());
+fn effort_mapping_rejects_unknown_levels() {
     assert_eq!(
         effort(&json!({"reasoning":{"effort":"low"}})),
         Ok(Some("low"))

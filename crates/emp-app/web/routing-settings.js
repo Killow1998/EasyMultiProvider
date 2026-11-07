@@ -1,14 +1,14 @@
 // Route preferences share one dialog; changes apply only after Save succeeds.
-function createRoutingSettings({getState, cloneState, persistState, openModal, closeModal, $, esc, tr, help}) {
+function createRoutingSettings({getState, cloneState, persistState, openModal, closeModal, $, esc, tr}) {
   const memoryStages = [
-    {field:'memory_extraction_model', id:'routing_memory_extraction_model', kind:'memory_extraction', defaultKey:'extract_model', label:'models.memory_extraction_model', help:'models.memory_extraction_help'},
-    {field:'memory_model', id:'routing_memory_model', kind:'memory_consolidation', defaultKey:'consolidation_model', label:'models.memory_model', help:'models.memory_routing_help'},
+    {field:'memory_extraction_model', effort:'memory_extraction_effort', defaultEffort:'low', id:'routing_memory_extraction_model', kind:'memory_extraction', defaultKey:'extract_model', label:'models.memory_extraction_model', help:'models.memory_extraction_help'},
+    {field:'memory_model', effort:'memory_consolidation_effort', defaultEffort:'medium', id:'routing_memory_model', kind:'memory_consolidation', defaultKey:'consolidation_model', label:'models.memory_model', help:'models.memory_routing_help'},
   ];
   function memoryModels(state) {
     const models = new Map();
     for (const model of [...(state.subscription_models || []), ...(state.catalog_models || []).filter(model => ['native','account'].includes(model.source_type))]) {
       const id = model.id.split('/').at(-1);
-      if (/^gpt-[a-z0-9._-]+$/.test(id) && !models.has(id)) models.set(id, model.default_display_name || model.display_name || id);
+      if (/^gpt-[a-z0-9._-]+$/.test(id) && !models.has(id)) models.set(id, {label:model.default_display_name || model.display_name || id, levels:model.reasoning_levels || []});
     }
     return models;
   }
@@ -26,18 +26,24 @@ function createRoutingSettings({getState, cloneState, persistState, openModal, c
   }
   function open({back} = {}, draft) {
     const state = getState(), eligible = accounts(state);
-    draft ||= {review:state.auto_review_fallback !== false, mode:state.image_routing?.mode || 'follow', account:state.image_routing?.account_id || '', memory_model:state.memory_model || '', memory_extraction_model:state.memory_extraction_model ?? state.memory_model ?? ''};
+    draft ||= {review:state.auto_review_fallback !== false, mode:state.image_routing?.mode || 'follow', account:state.image_routing?.account_id || '', memory_model:state.memory_model || '', memory_extraction_model:state.memory_extraction_model ?? state.memory_model ?? '', memory_extraction_effort:state.memory_extraction_effort || '', memory_consolidation_effort:state.memory_consolidation_effort || ''};
     const selected = draft.account || eligible[0]?.id || '';
     const options = eligible.map(account => `<option value="${esc(account.id)}" ${account.id === selected ? 'selected' : ''}>${esc(account.name || account.id)}</option>`).join('');
     const missing = selected && !eligible.some(account => account.id === selected);
     const title = tr("models.routing_settings");
     const models = memoryModels(state);
     const defaults = state.codex_context_settings?.memory_default_models;
+    const comparisonRows = [
+      ['models.memory_usage_extraction', '0.98×', '3.27×', '0.57%', '11.92×'],
+      ['models.memory_usage_consolidation', '1.40×', '5.44×', '90.84%', '3.19×'],
+      ['models.memory_usage_conversation', '1×', '1×', '97.32%', '1×'],
+    ].map(([label,...values]) => `<tr><th scope="row">${tr(label)}</th>${values.map(value => `<td>${value}</td>`).join('')}</tr>`).join('');
+    const comparison = `<strong>${tr('models.memory_usage_title')}</strong><p>${tr('models.memory_usage_reference')}</p><p>${tr('models.memory_usage_baseline')}</p><div class="collaboration-table" tabindex="0" role="region" aria-label="${esc(tr('models.memory_usage_title'))}"><table><thead><tr>${['models.memory_usage_stage','reports.input_tokens','reports.output_tokens','models.memory_usage_cache','models.memory_usage_usd'].map(key => `<th scope="col">${tr(key)}</th>`).join('')}</tr></thead><tbody>${comparisonRows}</tbody></table></div><p>${tr('models.memory_usage_basis')}</p>`;
     const memoryRows = memoryStages.map(stage => {
       const selectedModel = draft[stage.field], defaultModel = defaults?.[stage.defaultKey];
       const defaultLabel = defaultModel ? tr('models.codex_memory_defaults', {models:defaultModel}) : tr('models.memory_defaults_unavailable');
-      const options = [...models].map(([id,label]) => `<option value="${esc(id)}" ${selectedModel === id ? 'selected' : ''}>${esc(label)}</option>`).join('');
-      return `<div class="setting-row routing-mode"><div class="setting-title collaboration-title"><label for="${stage.id}">${tr(stage.label)}</label>${help(tr(stage.help))}</div><select id="${stage.id}"><option value="">${esc(defaultLabel)}</option>${selectedModel && !models.has(selectedModel) ? `<option value="${esc(selectedModel)}" selected disabled>${esc(selectedModel)} · ${tr('core.unavailable')}</option>` : ''}${options}</select></div><p id="${stage.id}_status" class="setting-help" role="status"></p>`;
+      const options = [...models].map(([id,model]) => `<option value="${esc(id)}" ${selectedModel === id ? 'selected' : ''}>${esc(model.label)}</option>`).join('');
+      return `<div class="setting-row routing-mode"><div class="setting-title collaboration-title"><label for="${stage.id}">${tr(stage.label)}</label><button type="button" class="shadow-help" data-shadow-help="" data-shadow-help-template="${stage.id}_help" aria-label="${esc(tr(stage.label))}" aria-haspopup="dialog" aria-expanded="false" aria-controls="shadow_feedback">?</button><template id="${stage.id}_help"><div class="collaboration-comparison">${tr(stage.help).split('\n\n').map(text => `<p>${esc(text)}</p>`).join('')}${comparison}</div></template></div><div class="memory-routing-controls"><select id="${stage.id}"><option value="">${esc(defaultLabel)}</option>${selectedModel && !models.has(selectedModel) ? `<option value="${esc(selectedModel)}" selected disabled>${esc(selectedModel)} · ${tr('core.unavailable')}</option>` : ''}${options}</select><select id="${stage.id}_effort" aria-label="${esc(tr('models.memory_effort_for', {stage:tr(stage.label)}))}" title="${esc(tr('models.subscription_comparison_effort'))}"></select></div></div><p id="${stage.id}_status" class="setting-help" role="status"></p>`;
     }).join('');
     openModal(title, `<div class="routing-settings">
       <div class="setting-row"><div><div class="setting-title" id="routing_review_label">${tr("models.auto_review")}</div><p class="setting-help" id="routing_review_help">${tr("models.use_another_subscription_when_native_runs_out_of_quota")}</p></div><button type="button" class="setting-switch" id="routing_review" role="switch" aria-checked="${draft.review}" aria-labelledby="routing_review_label" aria-describedby="routing_review_help"></button></div>
@@ -50,23 +56,36 @@ function createRoutingSettings({getState, cloneState, persistState, openModal, c
       const mode = $('routing_image_mode').value, account = $('routing_image_account').value;
       if (mode === 'account' && !accounts(getState()).some(item => item.id === account)) throw new Error(tr("models.choose_an_available_subscription_account"));
       candidate.image_routing = {mode, account_id:mode === 'account' ? account : ''};
-      for (const stage of memoryStages) candidate[stage.field] = $(stage.id).value;
+      for (const stage of memoryStages) {
+        candidate[stage.field] = $(stage.id).value;
+        candidate[stage.effort] = $(stage.id + '_effort').value;
+      }
       const memoryChanged = memoryStages.some(stage => candidate[stage.field] !== (getState()[stage.field] ?? ''));
+      const effortChanged = memoryStages.some(stage => candidate[stage.effort] !== (getState()[stage.effort] ?? ''));
       controls.forEach(control => control.disabled = true);
       try {
-        await persistState(tr(memoryChanged ? 'models.memory_routing_saved' : 'models.routing_settings_saved'), candidate);
+        await persistState(tr(memoryChanged ? 'models.memory_routing_saved' : effortChanged ? 'models.memory_effort_saved' : 'models.routing_settings_saved'), candidate);
         if (form.isConnected) (back || closeModal)();
       } finally { controls.forEach(control => control.disabled = false); }
     }, null, {back, reopen:() => open({back}, read())});
-    function read() { return {review:$('routing_review').getAttribute('aria-checked') === 'true', mode:$('routing_image_mode').value, account:$('routing_image_account').value, ...Object.fromEntries(memoryStages.map(stage => [stage.field, $(stage.id).value]))}; }
+    function read() { return {review:$('routing_review').getAttribute('aria-checked') === 'true', mode:$('routing_image_mode').value, account:$('routing_image_account').value, ...Object.fromEntries(memoryStages.flatMap(stage => [[stage.field, $(stage.id).value], [stage.effort, $(stage.id + '_effort').value]]))}; }
     $('routing_review').onclick = () => $('routing_review').setAttribute('aria-checked', String($('routing_review').getAttribute('aria-checked') !== 'true'));
     $('routing_image_mode').onchange = () => {
       $('routing_image_account_row').hidden = $('routing_image_mode').value !== 'account';
     };
     for (const stage of memoryStages) {
-      const select = $(stage.id);
-      select.onchange = () => { select.title = select.selectedOptions[0].textContent; };
-      select.onchange();
+      const select = $(stage.id), effort = $(stage.id + '_effort');
+      function updateEfforts(selected) {
+        const levels = models.get(select.value || defaults?.[stage.defaultKey])?.levels || [];
+        effort.innerHTML = `<option value="">${esc(tr('models.memory_effort_default', {effort:stage.defaultEffort}))}</option>${selected && !levels.includes(selected) ? `<option value="${esc(selected)}" selected disabled>${esc(selected)} · ${tr('core.unavailable')}</option>` : ''}${levels.map(level => `<option value="${esc(level)}" ${level === selected ? 'selected' : ''}>${esc(level)}</option>`).join('')}`;
+      }
+      select.onchange = () => {
+        select.title = select.selectedOptions[0].textContent;
+        const levels = models.get(select.value || defaults?.[stage.defaultKey])?.levels || [];
+        updateEfforts(levels.includes(effort.value) ? effort.value : '');
+      };
+      select.title = select.selectedOptions[0].textContent;
+      updateEfforts(draft[stage.effort]);
     }
     refresh();
   }

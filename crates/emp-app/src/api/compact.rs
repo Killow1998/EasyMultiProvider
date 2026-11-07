@@ -1,5 +1,3 @@
-//! Api compact.
-
 use crate::api::failure_response::request_router_error_response;
 use crate::api::failure_response::route_resolution_response;
 use crate::api::history_response::destination_error_response;
@@ -20,10 +18,9 @@ use crate::services::native;
 use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::providers::persist_protocol_observation;
 use crate::services::request_preparation::{
-    PreparedRequest, RequestOperation, RequestPreparationError, prepare_request,
+    PreparedRequest, RequestOperation, RequestPreparationError,
 };
 use crate::util::projection_ids;
-use std::collections::BTreeMap;
 use std::net::TcpStream;
 
 pub(crate) fn compact_request(
@@ -60,29 +57,36 @@ pub(crate) fn compact_request(
         body.get("stream"),
     );
     observation.phase(Phase::ResolveRoute);
+    let incoming = observation.headers(request.incoming());
     let PreparedRequest {
         config,
         route,
         mut body,
-    } = match prepare_request(state, body, RequestOperation::Compact) {
+    } = match crate::services::request_preparation::prepare_request(
+        state,
+        body,
+        RequestOperation::Compact,
+        &incoming,
+    ) {
         Ok(prepared) => prepared,
         Err(RequestPreparationError::ModelRequired) => {
             return request_router_error_response(400, "request.model is required");
         }
         Err(RequestPreparationError::Route(error)) => return route_resolution_response(error),
+        Err(RequestPreparationError::ConfigurationUnavailable) => {
+            return json_error_response(
+                500,
+                status_text(500),
+                "configuration is unavailable",
+                None,
+                &[],
+            );
+        }
         Err(_) => {
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
     };
     observation.selected(&route);
-    let incoming = request
-        .headers
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
-        .collect::<BTreeMap<_, _>>();
-    let incoming = observation.headers(incoming);
     observation.phase(Phase::PrepareHistory);
     body = match prepare_history(state, &route, body, &incoming) {
         Ok(body) => body,

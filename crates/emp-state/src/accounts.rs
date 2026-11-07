@@ -6,7 +6,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 mod identity;
-pub use identity::same_account_auth;
+pub use identity::{account_auth_identity, same_account_auth};
 
 const MAX_HIDDEN_MODELS: usize = 1000;
 const MAX_MODEL_ID_BYTES: usize = 256;

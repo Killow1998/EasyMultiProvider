@@ -1,8 +1,24 @@
 """Disposable CPA observer for quota acceptance and the isolated Shadow example."""
 import datetime as dt
 import json
+import sqlite3
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def seed_pool_history(state):
+    """A day's synthetic five-minute observations from the fixture's actual stored rows."""
+    with sqlite3.connect(state/'quota_history.sqlite3') as database:
+        latest = {}
+        for row in database.execute('SELECT account_key,limit_id,window_kind,window_minutes,used_percent,resets_at FROM quota_samples WHERE account_key LIKE \'cpa:%\' ORDER BY observed_at DESC'):
+            latest.setdefault(row[:3], row)
+        now = int(time.time())
+        rows = []
+        for owner, limit, kind, minutes, used, reset in latest.values():
+            for index in range(288, -1, -1):
+                rows.append((owner, now-index*300, limit, kind, minutes, max(0, used-index/24), reset))
+        database.executemany('INSERT OR REPLACE INTO quota_samples (account_key,observed_at,limit_id,window_kind,window_minutes,used_percent,resets_at) VALUES (?,?,?,?,?,?,?)', rows)
 
 
 class QuotaObserver(BaseHTTPRequestHandler):

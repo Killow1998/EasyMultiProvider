@@ -49,6 +49,92 @@ after an unsupported endpoint becomes available. Reads do
 not generate inference records. Endpoint or Key changes select a new cache entry.
 An unsupported quota endpoint leaves the service's model connection unchanged.
 
+### CPA operator integration
+
+In EMP, choose **Add service → Claude Code / CPA → CPA**, then enter the CPA Base
+URL and its service Key. The question mark beside Base URL links to this contract.
+The Key must authorize both model calls and quota reads. EMP uses no separate
+management Key or account-list endpoint.
+
+The CPA service or its observer must expose `GET /v1/quota` and return HTTP 200
+with `Content-Type: application/json`. An API compatible with Anthropic Messages
+does not automatically include this quota endpoint; the operator implements it
+using its own account-quota observations.
+
+EMP strips one trailing `/v1` and appends `/v1/quota`, preserving any earlier path:
+
+| CPA Base URL | Quota URL |
+|---|---|
+| `https://cpa.example.com` | `https://cpa.example.com/v1/quota` |
+| `https://cpa.example.com/cpa/v1` | `https://cpa.example.com/cpa/v1/quota` |
+
+```sh
+curl -H "Authorization: Bearer $CPA_API_KEY" \
+  -H "Accept: application/json" \
+  https://cpa.example.com/cpa/v1/quota
+```
+
+Example snapshot; the operator supplies current observations and reset times:
+
+```json
+{
+  "scope": "shared_pool",
+  "provider": "claude",
+  "checked_at": "2026-11-07T12:00:00Z",
+  "accounts": [
+    {
+      "id": "account-a",
+      "enabled": true,
+      "stale": false,
+      "status": "ok",
+      "as_of": "2026-11-07T12:00:00Z",
+      "windows": {
+        "five_hour": {"remaining_percent": 80, "resets_at": "2026-11-07T15:00:00Z"},
+        "seven_day": {"remaining_percent": 40, "resets_at": "2026-11-12T12:00:00Z"}
+      }
+    },
+    {
+      "id": "account-b",
+      "enabled": true,
+      "stale": false,
+      "status": "ok",
+      "as_of": "2026-11-07T12:00:00Z",
+      "windows": {
+        "five_hour": {"remaining_percent": 40, "resets_at": "2026-11-07T14:00:00Z"},
+        "seven_day": {"remaining_percent": 0, "resets_at": "2026-11-10T12:00:00Z"}
+      }
+    }
+  ]
+}
+```
+
+| Field | Contract |
+|---|---|
+| `scope`, `provider` | Required strings, exactly `shared_pool` and `claude`. |
+| `accounts` | Required array; return only accounts visible to the calling service Key. |
+| Account `id` | Required stable anonymous string; EMP uses it to join trend history. |
+| `enabled`, `stale` | Required booleans. Disabled or stale accounts do not enter the summary. |
+| `status` | Required string, such as `ok`, `error` or `disabled`; report freshness through `stale`. |
+| `windows` | Required object. `five_hour` and `seven_day` are the displayed windows; use `{}` if unknown. |
+| `remaining_percent` | Number from 0 to 100, or `null` if unknown. Zero is an observed exhausted window. |
+| `resets_at` | RFC 3339 timestamp with a timezone, or `null` if unknown. |
+| `checked_at`, `as_of` | Snapshot/account timestamps or `null`; both may be omitted. |
+
+The example displays 60% for 5h and 20% for 7d. EMP averages known percentages
+from enabled, fresh accounts, rounds the displayed percentage upward, and uses
+the nearest future reset for each window. Raw trend samples retain fractional
+precision. Missing values stay unknown; do not substitute zero for failed reads.
+Return anonymous IDs and quota observations, without account credentials.
+
+Serve a cached observer snapshot rather than querying every account during each
+EMP read. EMP reads at most 2 MiB and waits up to five seconds. Its background
+sampler refreshes every five minutes; manual refresh reads immediately. Trend
+queries use EMP's local fifteen-day history, so the CPA needs no history API.
+HTTP 404/405 hides the service's quota Refresh, Trend and both meters while
+retaining model calls; HTTP 401/403 means
+the service Key lacks access. After enabling the endpoint, use the global
+Refresh quota in EMP to read it immediately and restore those controls.
+
 ## History resend records
 
 **History resend** records an instruction to send full context, not a model failure.
@@ -68,6 +154,8 @@ Standard belongs to the Standard performance group. Model groups retain both
 effort values, so different reported efforts are not averaged together.
 
 The current turn's effort takes precedence over the initial request setting.
+Background memory receipts use the effort forwarded by EMP, including an override
+that differs from the original Codex turn metadata.
 Upstream effort is captured before protocol projection removes reasoning fields.
 Tier confirmation does not require token usage. An absent tier report displays
 **Tier unconfirmed**, including older records that lack confirmation provenance.
@@ -147,6 +235,28 @@ computer and cloud-only conversations are not included.
 Live HTTP, SSE and native WebSocket observations complement the local rollouts.
 Records use completion time, with an inclusive start and exclusive end. The
 bounded diagnostic logs are not treated as a complete accounting history.
+
+Background memory extraction and consolidation count toward the selected
+subscription's usage, alongside ordinary responses. On initialization, EMP
+restores missing memory entries from saved call receipts, retaining the original
+account, token counts and completion time. This reads existing records without
+calling the model again. Saved response identities and the normal history/live
+reconciliation prevent duplicate totals after a restart or history scan. Restored
+entries use the available price catalog; unreported token counts remain unknown.
+Calls without a response ID reuse their request identity so recording the call
+receipt and reopening the ledger cannot add another copy.
+
+Both memory-model help bubbles compare a fixed November 4–5, 2026 Pacific
+24-hour sample against ordinary conversation/coding: input/output token ratios,
+input-cache hit rates and API-equivalent USD ratios. Both memory stages use
+GPT-6.1 Sol; ordinary calls mainly use Sol with a little GPT-6 Luna. Automatic
+reviews and calls without token reports are excluded. USD uses Standard and
+cache-read unit rates without a long-context surcharge. Subscription allowance
+remains a server-side measurement. Users can select each stage's model and effort
+independently; Codex 0.167 defaults to Low extraction and Medium consolidation.
+Effort changes apply to subsequent memory requests. Unset model hints
+follow the trusted runtime: Codex 0.167 uses GPT-6 Luna for extraction and
+GPT-6.1 Terra for consolidation. Explicit original choices remain unchanged.
 
 Repeated cumulative notifications are ignored. Event identities deduplicate
 archive copies and inherited fork turns. A checkpoint includes the file identity,

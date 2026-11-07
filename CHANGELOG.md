@@ -1,6 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.13.27 (2026-11-07)
+
+### 中文
+
+- 修复后台记忆提取和整理的用量漏记，自动补齐已有调用记录，保留原账号、时间和用量，并防止重启或扫描历史后重复计入。
+- CPA 趋势支持查看整个号池或单个账号的 5h／7d 余量，保留十五天历史；关闭 Web UI 后仍会采样。额度百分比统一向上取整，连接设置提供号池余量接口说明与对接示例；未提供接口时隐藏额度刷新、趋势和圆环。
+- 更新 Codex 0.167 适配，维护最近五个正式系列 0.163–0.167。补齐请求取消、失败或缺失用量响应的压缩、分页历史和动态工具目录验收。默认记忆模型随运行时显示，保留用户原有选择。
+- 记忆提取和整理可分别调整思考强度，默认保留 Low／Medium，主对话强度不变。两个问号说明加入 24 小时实测的 token、缓存命中率和 USD 对比，并说明账号归属、启用与生效方式。
+- 网关支持为设备创建独立连接 Key，分别查看调用、token 和已知价格的 USD 估算；端口转发后的请求按 Key 归属，撤销后停止接收该 Key 的新请求。连接设置、设备管理和用量分区展示。
+- Decision API 调用纳入统一计量，保留原始响应、上游错误、交付状态和已报告用量，区分未知与真实零值；独立于对话账单和生成 TPS，取消时终止上游请求。
+- Claude CPA 改由真实 Claude Code TUI 推理，Codex 保留历史并执行工具。当前回合内临时复用工具状态，新回合重新建立 CLI；完整转发长上下文、原图和 PDF，保留思考强度与已报告用量，结束或取消后清理临时进程和文件。上游流式错误立即返回，避免 CLI 隐藏重试。
+- 新增可选的聚合路由，内部 ID 自动生成，用户只设置显示前缀，不额外插入分隔符；原模型名称保持不变并跟随改名更新。同一模型拒绝重复前缀，不同模型可共用前缀，保存失败时保留表单。通过三张策略卡片选择优先级、相同订阅等级的额度均衡或新会话轮询，问号内分行说明。已有会话保持实际账号，额度不足或来源不可用后切换；保留手动来源，按共同能力和最小上下文发布聚合模型。
+
+### English
+
+- Fix missing usage for background memory extraction and consolidation. Restore saved call receipts with their original account, time and tokens, without duplicate totals after restart or history scans.
+- View CPA pool or individual-account 5h/7d remaining-quota trends with fifteen days of history. Sampling continues while the Web UI is closed. Quota percentages consistently round upward. Connection settings link quota API requirements and an integration example. Hide quota refresh, trends and meters when the service has no quota endpoint.
+- Update Codex 0.167 compatibility and maintain the latest five stable series, 0.163–0.167. Verify cancellation, compaction after failed or usage-less responses, paginated history and dynamic tool catalogs. Default memory-model hints follow the runtime while retaining existing choices.
+- Set extraction and consolidation effort independently, retaining the default Low/Medium and the main conversation's effort. Both help panels include measured 24-hour token, cache-hit and USD comparisons, with account routing, activation and application guidance.
+- Create separate gateway keys for devices and view their calls, tokens and USD estimates with known pricing. Forwarded requests retain key-based attribution; revocation rejects subsequent requests. Connection settings, device management and usage have separate views.
+- Account for Decision API calls in the shared ledger while retaining native responses, upstream errors, delivery status and reported usage. Distinguish unknown from reported zero, keep Decision calls separate from conversation bills and generation TPS, and cancel their upstream work on disconnect.
+- Run Claude CPA through the real Claude Code TUI while Codex owns history and executes tools. Reuse temporary tool state within a user turn and start a fresh CLI for the next turn. Forward complete long contexts, original images and PDFs; retain effort and reported usage; and clean up temporary processes and files after completion or cancellation. Return upstream stream errors immediately to prevent hidden CLI retries.
+- Add opt-in aggregate routing with automatic internal IDs and user-defined display prefixes without an added separator. Preserve original model names and reflect their later renames. Reject duplicate prefixes for the same model, allow shared prefixes across different models and retain the form after a failed save. Three strategy cards select priority order, same-plan quota balance or new-conversation round robin, with line-separated help. Keep existing conversations on their actual account until quota or availability requires a change. Retain manual sources and expose common capabilities and the smallest context window.
 
 ## 0.13.26 (2026-11-04)
 

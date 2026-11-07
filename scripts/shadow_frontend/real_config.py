@@ -3,13 +3,20 @@
 
 def project_config(public, source_read, candidate_read=None):
     models = public.get('catalog_models', [])
-    if any('ultra_reasoning_levels' not in model or 'ultra_default_effort' not in model for model in models):
+    model_options = models + public.get('subscription_models', [])
+    if (any('reasoning_levels' not in model for model in model_options) or
+            any('ultra_reasoning_levels' not in model or 'ultra_default_effort' not in model for model in models)):
         # Versionless catalogs hide Ultra from old clients. Read actual versioned metadata.
         status, catalog = source_read('/v1/models?client_version=0.163.0')
         if status != 200:
             return 503, {'error': {'message': 'Could not read the live model catalog'}}
         entries = {model['slug']: model for model in catalog.get('models', [])}
         concrete = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+        for model in model_options:
+            if 'reasoning_levels' not in model:
+                model['reasoning_levels'] = [level['effort'] for level in
+                    entries.get(model['id'], {}).get('supported_reasoning_levels', [])
+                    if level.get('effort') in concrete]
         for model in models:
             entry = entries.get(model['id'], {})
             ordered_levels = [level.get('effort') for level in entry.get('supported_reasoning_levels', [])]

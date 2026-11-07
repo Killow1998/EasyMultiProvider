@@ -9,7 +9,7 @@ pub(crate) struct ReviewState {
 }
 
 impl ReviewState {
-    pub(super) fn cooling(&self) -> BTreeSet<String> {
+    pub(crate) fn cooling(&self) -> BTreeSet<String> {
         let now = Instant::now();
         self.cooldowns
             .lock()
@@ -45,6 +45,16 @@ impl ReviewState {
         } else {
             provider
         };
+        self.record_source_result(account, success, reason, error);
+    }
+
+    pub(crate) fn record_source_result(
+        &self,
+        account: &str,
+        success: bool,
+        reason: &str,
+        error: &str,
+    ) {
         if success {
             self.clear(account);
             return;

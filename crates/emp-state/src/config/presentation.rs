@@ -24,6 +24,23 @@ pub(super) fn normalize_memory_model<'a>(
     }
 }
 
+pub(super) fn normalize_memory_effort<'a>(
+    raw: Option<&'a Value>,
+    field: &str,
+) -> ConfigResult<&'a str> {
+    match raw {
+        None => Ok(""),
+        Some(Value::String(effort))
+            if effort.is_empty() || crate::model_values::is_concrete_reasoning_effort(effort) =>
+        {
+            Ok(effort)
+        }
+        _ => Err(ConfigError::new(format!(
+            "{field} must be a concrete reasoning effort or empty"
+        ))),
+    }
+}
+
 const MAX_CATALOG_ALIAS_BYTES: usize = 512;
 const RUNTIME_SOURCES: [&str; 8] = [
     "auto",

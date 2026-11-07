@@ -7,9 +7,13 @@ from scripts.shadow_frontend.local_backend import request
 from .fixture import Fixture, message, turn
 
 
-def run(codex, emp, root, evidence, source='native'):
-    with Fixture(codex, emp, root, evidence, configuration={
-            'memory_extraction_model':'gpt-6-luna', 'memory_model':'gpt-5.6-luna'}) as fixture:
+def run(codex, emp, root, evidence, source='native', defaults=None):
+    overrides = {} if defaults else {'memory_extraction_model':'gpt-6-luna', 'memory_model':'gpt-5.6-luna'}
+    expected_efforts = ('low','medium') if defaults else ('high','low')
+    if not defaults:
+        overrides.update(memory_extraction_effort='high', memory_consolidation_effort='low')
+    expected_extraction, expected_consolidation = defaults or ('gpt-6-luna','gpt-5.6-luna')
+    with Fixture(codex, emp, root, evidence, configuration=overrides) as fixture:
         seed = fixture.client()
         thread = seed.rpc('thread/start', {'cwd':str(fixture.home), 'approvalPolicy':'never',
                           'sandbox':'workspace-write'})['thread']['id']
@@ -34,8 +38,9 @@ def run(codex, emp, root, evidence, source='native'):
             db.execute('UPDATE threads SET updated_at=? WHERE id=?', (int(time.time())-86400, thread))
         config = 'service_tier="fast"\n'+fixture.config.replace('memories=false', 'memories=true')
         config += ('[memories]\ngenerate_memories=true\nmin_rollout_idle_hours=0\n'
-                   'max_rollouts_per_startup=1\nmin_rate_limit_remaining_percent=0\n'
-                   'extract_model="gpt-6.1-sol"\nconsolidation_model="gpt-6.1-sol"\n')
+                   'max_rollouts_per_startup=1\nmin_rate_limit_remaining_percent=0\n')
+        if not defaults:
+            config += 'extract_model="gpt-6.1-sol"\nconsolidation_model="gpt-6.1-sol"\n'
         memory_tier = {'native':None, 'imported':'flex', 'external':'fast'}[source]
         if memory_tier:
             config += 'consolidation_service_tier='+json.dumps(memory_tier)+'\n'
@@ -54,15 +59,18 @@ def run(codex, emp, root, evidence, source='native'):
             nonlocal wrote
             body = record['body']
             if 'MEMORY_STARTUP_TRIGGER' in json.dumps(body) and 'rollout_summary' not in body.get('text', {}).get('format', {}).get('schema', {}).get('properties', {}):
+                assert body['reasoning']['effort'] == 'high', 'Memory effort changed the main conversation'
                 if source == 'native':
                     assert body.get('service_tier') == 'priority', ('main tier', body.get('service_tier'))
                 return message('Memory startup trigger complete.')
             schema = body.get('text', {}).get('format', {}).get('schema', {})
             if 'rollout_summary' in schema.get('properties', {}):
+                assert body['reasoning']['effort'] == expected_efforts[0], body['reasoning']
                 assert 'raw_memory' not in schema['properties'], 'v1 extraction contract used'
                 return message(json.dumps({'rollout_summary':'Fixture preference: use focused acceptance tests.',
                                            'rollout_slug':'focused-acceptance'}))
             assert body.get('service_tier', 'default') == expected_tier, ('consolidation tier', body.get('service_tier'), expected_tier)
+            assert body['reasoning']['effort'] == expected_efforts[1], body['reasoning']
             if not wrote:
                 declarations = body.get('tools', []) + [tool for item in body.get('input', [])
                     if isinstance(item, dict) and item.get('type') == 'additional_tools' for tool in item['tools']]
@@ -108,13 +116,17 @@ def run(codex, emp, root, evidence, source='native'):
         assert status == 200, ledger
         extraction = [row for row in ledger['records'] if row['route'] == 'memory_extraction']
         consolidation = [row for row in ledger['records'] if row['route'] == 'memory_consolidation']
-        assert len(extraction) == 1 and extraction[0]['upstream_model'] == 'gpt-6-luna', ledger
+        assert len(extraction) == 1 and extraction[0]['upstream_model'] == expected_extraction, ledger
+        assert extraction[0]['requested_effort'] == expected_efforts[0], extraction
         assert extraction[0]['account_id'] == ('fixture-imported' if source == 'imported' else '@native'), ledger
-        assert len(consolidation) == 2 and all(row['upstream_model'] == 'gpt-5.6-luna' for row in consolidation), ledger
+        assert len(consolidation) == 2 and all(row['upstream_model'] == expected_consolidation for row in consolidation), ledger
         assert all(row['account_id'] == '@native' for row in consolidation), ledger
+        assert all(row['requested_effort'] == expected_efforts[1] for row in consolidation), consolidation
         assert (fixture.home/'config.toml').read_text() == config
         result = {'passed':True, 'source':source, 'seed_thread':thread, 'memory_root':'memories_v2',
                   'consolidation_service_tier':expected_tier,
+                  'memory_models':{'extraction':expected_extraction,'consolidation':expected_consolidation},
+                  'memory_efforts':{'extraction':expected_efforts[0],'consolidation':expected_efforts[1]},
                   'state':state, 'ledger':ledger, 'requests':len(fixture.upstream.requests)}
         (evidence/'result.json').write_text(json.dumps(result, indent=2))
         print(json.dumps({'passed':True, 'requests':result['requests'], 'memory_tables':list(state)}), flush=True)

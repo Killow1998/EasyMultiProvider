@@ -158,6 +158,11 @@ in the **Claude Code** section. Both routes require the installed Claude Code CL
   Anthropic API access, add the separate **Anthropic API** Provider.
   Services exposing the CPA observer's `/v1/quota` show 5h/7d remaining quota
   and the nearest reset. Hover over the quota to inspect individual accounts.
+  The trend button shows either the entire pool or one account, with separate
+  5h/7d curves. EMP records observations approximately every five minutes and
+  retains 15 days; recording continues while the Web UI is closed.
+  CPA connection settings link the [quota API integration contract](docs/usage-accounting.md#cpa-operator-integration).
+  Services without that endpoint hide quota refresh, trends and meters.
 
 ### 4. Apply EMP to Codex
 

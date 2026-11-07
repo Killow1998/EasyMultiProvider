@@ -176,12 +176,19 @@ def seed_retry_examples(state):
                  status,json.dumps(row),json.dumps(delivery)))
 
 
-def preview(stack, backend, bundle, session, port=0, return_url=None):
-    from cpa_quota_fixture import start_pool
+def preview(stack, backend, bundle, session, port=0, return_url=None, cpa_history=None):
+    from cpa_quota_fixture import start_pool, seed_pool_history
     pool = start_pool(stack)
     pool_provider = {'id':'cpa-quota-example','name':'CPA','execution_backend':'claude_cli',
         'auth_mode':'api_key','protocol':'anthropic_messages','api_key':'synthetic-cpa-only',
         'base_url':f'http://127.0.0.1:{pool.server_port}/cpa/v1'}
+    if cpa_history is not None:
+        headers = {'X-EMP-Session':session}
+        config = request(backend+'/api/config', headers=headers)[1]
+        config.update(providers=[pool_provider], models=[])
+        assert request(backend+'/api/config', config, headers)[0] == 200
+        assert request(backend+'/api/providers/cpa-quota-example/quota', {}, headers)[1]['observation']['error_code'] is None
+        seed_pool_history(cpa_history)
     def preview_script():
         script = (HERE / 'preview.js').read_text().replace('__FIXTURE_BUNDLE__',json.dumps(bundle)).replace('__FIXTURE_PASSWORD__',json.dumps(PASSWORD))
         icon = 'data:image/png;base64,' + base64.b64encode((HERE.parents[1] / 'assets/branding/native/easy-multi-provider-tray.png').read_bytes()).decode()

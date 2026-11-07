@@ -342,6 +342,10 @@ EMP v0.9.0 至 v0.9.9 使用同一种加密迁移格式。当前版本可以导�
 - **CPA** 使用兼容 Claude Code 的 CPA Base URL 和 API Key。直接连接 Anthropic API 时，请另加 **Anthropic API** Provider。
   提供 CPA observer `/v1/quota` 接口的服务会显示 5h／7d 余量和最近重置时间，
   悬停在额度上可查看各账号明细。
+  点击趋势图标，可选择整个号池或单个账号，分别查看 5h／7d 曲线。
+  EMP 约每五分钟记录一次，保留十五天；关闭 Web UI 后仍会记录。
+  CPA 连接设置提供[额度接口对接说明](docs/usage-accounting.md#cpa-operator-integration)。
+  未提供接口的服务不显示额度刷新、趋势和圆环。
 
 只有当前原生账号时，可以跳过导入账号和 Provider：点击 Native 徽章，在“模型设置”
 中隐藏模型，在“模型显示”中修改显示名称，保存后点击“将 EMP 应用于

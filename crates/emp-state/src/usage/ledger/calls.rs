@@ -1,5 +1,4 @@
-//! Durable, content-free call facts beside the existing accounting ledger.
-//! Usage totals continue to use accounted_usage; this table never reprices them.
+//! Content-free call receipts and recovery of unrecorded memory usage.
 use super::*;
 
 mod report;
@@ -7,7 +6,9 @@ pub use report::CallFilter;
 
 pub(super) fn initialize(connection: &Connection) -> Result<()> {
     connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS call_records (
+        "CREATE TABLE IF NOT EXISTS aggregate_bindings (caller TEXT NOT NULL, thread TEXT NOT NULL, model TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(caller,thread,model));
+        CREATE TABLE IF NOT EXISTS aggregate_cursors (model TEXT PRIMARY KEY, next INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS call_records (
         request_id TEXT NOT NULL, operation TEXT NOT NULL, started_at REAL NOT NULL,
         finished_at REAL NOT NULL, provider_id TEXT NOT NULL, account_id TEXT NOT NULL,
         model_id TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL, facts TEXT NOT NULL,
@@ -18,11 +19,44 @@ pub(super) fn initialize(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn restore_memory_usage(
+    ledger: &UsageLedger,
+    connection: &mut Connection,
+) -> Result<()> {
+    let missing = rows(connection, "SELECT facts,finished_at FROM call_records c
+        WHERE operation IN ('memory_extraction','memory_consolidation')
+        AND json_type(facts,'$.usage_event_id')='text'
+        AND NOT EXISTS(SELECT 1 FROM usage_events u WHERE u.id=json_extract(c.facts,'$.usage_event_id'))", &[])?;
+    let transaction = connection.transaction()?;
+    for record in missing {
+        let mut event: Value = serde_json::from_str(record["facts"].as_str().ok_or(UsageError)?)
+            .map_err(|_| UsageError)?;
+        // Older receipts retained the turn/model under their request-field names.
+        if event["usage_turn"].is_null() {
+            event["usage_turn"] = event["turn_id"].clone();
+        }
+        if event["route_model"].is_null() {
+            event["route_model"] = event["model_id"].clone();
+        }
+        let mut values =
+            ledger.values(&event, record["finished_at"].as_f64().ok_or(UsageError)?)?;
+        values[0] = sql(&event["usage_event_id"]);
+        insert(&transaction, &values, &event)?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 // Explicit fields only: no prompts, arbitrary errors, credentials or response bodies.
 fn facts(event: &Value) -> Value {
     let mut result = Map::new();
     for field in [
         "request_id",
+        "caller_id",
+        "caller_name",
+        "peer_ip",
+        "aggregate_model",
+        "aggregate_source",
         "route",
         "client_model",
         "upstream_model",
@@ -70,6 +104,8 @@ fn facts(event: &Value) -> Value {
         "retries",
         "attempt_routes",
         "usage_response_id",
+        "usage_turn",
+        "route_model",
         "input_tokens",
         "output_tokens",
         "cached_input_tokens",
@@ -101,6 +137,44 @@ fn facts(event: &Value) -> Value {
 }
 
 impl UsageLedger {
+    pub fn query_callers(&self, start: f64, end: f64) -> Result<Value> {
+        if !Self::valid_period(start, end, "all") {
+            return Err(UsageError);
+        }
+        let _guard = self.lock.lock().map_err(|_| UsageError)?;
+        let connection = self.connect()?;
+        let probes = crate::diagnostics::MODEL_TEST_OPERATIONS
+            .map(|_| "?")
+            .join(",");
+        let args = [SqlValue::Real(start), SqlValue::Real(end)]
+            .into_iter()
+            .chain(
+                crate::diagnostics::MODEL_TEST_OPERATIONS.map(|name| SqlValue::Text(name.into())),
+            )
+            .collect::<Vec<_>>();
+        let rows = rows(&connection, &format!("SELECT
+            COALESCE(json_extract(c.facts,'$.caller_id'),'unknown') AS caller_id,
+            json_extract(c.facts,'$.caller_name') AS caller_name,
+            GROUP_CONCAT(DISTINCT json_extract(c.facts,'$.peer_ip')) AS peer_ips,
+            c.operation,c.provider_id,c.account_id,c.model_id,
+            COUNT(*) AS calls,SUM(c.state='completed') AS completed,
+            SUM(json_extract(c.facts,'$.input_tokens')) AS input_tokens,
+            SUM(json_extract(c.facts,'$.output_tokens')) AS output_tokens,
+            SUM(json_extract(c.facts,'$.cached_input_tokens')) AS cached_input_tokens,
+            COUNT(CASE WHEN json_type(c.facts,'$.input_tokens')='integer'
+                AND json_type(c.facts,'$.output_tokens')='integer' THEN 1 END) AS reported_calls,
+            SUM(json_extract(c.facts,'$.duration_ms')) AS duration_ms,
+            SUM(CASE WHEN u.price_issue IS NULL THEN u.cost_nanos END) AS cost_nanos,
+            COUNT(CASE WHEN u.price_issue IS NULL THEN u.cost_nanos END) AS priced_calls
+            FROM ({}) AS c LEFT JOIN accounted_usage u ON u.id=json_extract(c.facts,'$.usage_event_id')
+            WHERE c.started_at>=? AND c.started_at<?
+            AND c.operation NOT IN ({probes})
+            GROUP BY caller_id,caller_name,c.operation,c.provider_id,c.account_id,c.model_id
+            ORDER BY caller_id,c.operation,c.provider_id,c.model_id", crate::usage::call_outcome::REPORT_CALLS),
+            &args)?;
+        Ok(json!({"start":start,"end":end,"rows":rows}))
+    }
+
     /// The last completed conversation turn identifies its account across restarts.
     /// Auxiliary jobs must never replace the conversation's selected route.
     pub fn latest_conversation_call(&self, thread: &str) -> Result<Option<Value>> {

@@ -138,14 +138,18 @@ impl ImageRoutes {
                 model: selected,
                 provider,
             } => {
-                let prepared =
-                    prepare_request(state, json!({"model":selected}), RequestOperation::Images)
-                        .map_err(|_| {
-                            NativeHttpError::router(
-                                409,
-                                "The image tool's selected account is no longer available",
-                            )
-                        })?;
+                let prepared = prepare_request(
+                    state,
+                    json!({"model":selected}),
+                    RequestOperation::Images,
+                    &Default::default(),
+                )
+                .map_err(|_| {
+                    NativeHttpError::router(
+                        409,
+                        "The image tool's selected account is no longer available",
+                    )
+                })?;
                 if prepared.route.provider_id != provider
                     || prepared.route.dialect != Dialect::CodexNative
                 {

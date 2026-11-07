@@ -3,6 +3,37 @@ use crate::merged_catalog::{build_catalog, family_identity, strip_context_prefix
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+/// Shadow uses the production aggregation over resolved, credential-free source metadata.
+pub fn aggregate_views(config: &Value, source: &Value) -> Value {
+    let mut models = array(source, "models")
+        .iter()
+        .filter(|model| model["_emp_aggregate"] != true)
+        .cloned()
+        .collect::<Vec<_>>();
+    let family_names = array(config, "catalog_families")
+        .iter()
+        .map(|family| {
+            (
+                text(family, "id").to_owned(),
+                text(family, "display_name").to_owned(),
+            )
+        })
+        .collect();
+    crate::merged_catalog::append_aggregates(config, &mut models, &family_names);
+    let catalog = json!({"models":models});
+    let mut controls = array(config, "catalog_models")
+        .iter()
+        .filter(|model| model["source_type"] != "aggregate")
+        .cloned()
+        .collect::<Vec<_>>();
+    controls.extend(
+        catalog_models(config, source, &catalog, &catalog)
+            .into_iter()
+            .filter(|model| model["source_type"] == "aggregate"),
+    );
+    json!({"catalog_families":catalog_families(config,&controls),"catalog_models":controls})
+}
+
 /// Project only UI fields from one already resolved set of catalog sources.
 pub fn model_views(
     config: &Value,
@@ -43,6 +74,7 @@ pub fn subscription_model_options(catalog: &Value) -> Vec<Value> {
             "default_context_window":model.get("context_window").cloned().unwrap_or(json!(0)),
             "max_context_window":maximum, "effective_context_window_percent":percentage,
             "auto_compact_token_limit":model.get("auto_compact_token_limit"),
+            "reasoning_levels":reasoning_levels(model),
             "supports_reasoning_summaries":model.get("supports_reasoning_summary_parameter")==Some(&Value::Bool(true))
                 || model.get("supports_reasoning_summaries")==Some(&Value::Bool(true)),
         })
@@ -56,7 +88,10 @@ fn catalog_models(config: &Value, native: &Value, catalog: &Value, baseline: &Va
     }).map(|model| {
         let route = text(model,"slug");
         let external = array(config,"models").iter().find(|model| text(model,"id")==route);
-        let (kind, source_id, source, fallback, verified) = if let Some(external) = external {
+        let aggregate = array(config,"model_groups").iter().find(|group| text(group,"id") == route);
+        let (kind, source_id, source, fallback, verified) = if let Some(group) = aggregate {
+            ("aggregate", text(group,"id"), model, group["sources"][0].as_str().unwrap_or(route).rsplit('/').next().unwrap_or(route), true)
+        } else if let Some(external) = external {
             ("provider", text(external,"provider"), external, route,
                 ["family_id", "upstream_id"].iter().any(|field|!text(external,field).trim().is_empty()))
         } else if let Some((account, suffix)) = array(config,"accounts").iter().filter(|account| {
@@ -73,11 +108,20 @@ fn catalog_models(config: &Value, native: &Value, catalog: &Value, baseline: &Va
             "default_display_name":strip_context_prefix(default_name), "context_window":usable_context(model),
             "source_type":kind, "source_id":source_id, "family_id":family_identity(source,fallback),
             "family_verified":verified,
+            "reasoning_levels":reasoning_levels(model),
             "ultra_reasoning_levels":if kind == "provider" { Vec::new() } else { crate::merged_catalog::ultra_reasoning_levels(model) },
             "ultra_default_effort":if kind == "provider" { None } else { ultra_default_effort(original) },
             "supports_reasoning_summaries":model.get("supports_reasoning_summary_parameter")==Some(&Value::Bool(true)),
         })
     }).collect()
+}
+
+fn reasoning_levels(model: &Value) -> Vec<&str> {
+    array(model, "supported_reasoning_levels")
+        .iter()
+        .filter_map(|level| level["effort"].as_str())
+        .filter(|effort| emp_state::model_values::is_concrete_reasoning_effort(effort))
+        .collect()
 }
 
 // Match Codex's Ultra resolution: advertised override, max, then last concrete preset.

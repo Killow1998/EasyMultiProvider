@@ -3,6 +3,7 @@ pub(crate) mod app_icon;
 pub(crate) mod catalog;
 pub(crate) mod compact;
 pub(crate) mod decisions;
+pub(crate) mod gateway;
 pub(crate) mod images;
 pub(crate) mod inspection;
 pub(crate) mod integration;

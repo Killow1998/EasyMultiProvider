@@ -23,7 +23,9 @@ let the candidate decide which balance sections are supported. Real balance
 observations remain source data; unsupported fields from older backends are
 omitted. No provider keys, credential references or custom headers are copied.
 `real_config.py` owns the source/candidate metadata projection, including older
-Ultra catalogs and balance eligibility. Source forwarding remains read-only.
+Ultra catalogs, advertised memory-effort choices and balance eligibility. Missing
+effort metadata on older backends comes from their actual versioned model catalog.
+Source forwarding remains read-only.
 For account-scoped usage, the running backend only resolves the current
 opaque owner fingerprint through a read-only query. The candidate then computes
 the filtered report from its snapshot too; no source report or cached name is
@@ -76,12 +78,14 @@ review entry. Its baseline is the published **v0.13.26**, displayed in the dialo
 Keep `reviewRows` in `preview-review.js` cumulative across development tasks;
 reset the list and advance `reviewBaseline` together after the next release.
 Follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
-There are no pending review rows. External continuation, linked history-resend
-records, CPA quotas and all 11 refreshed tutorials shipped in v0.13.26.
-Their archived scenarios remain available through `/?reviewAction=continuation`,
-`/?reviewAction=cpa_quota` and `/?reviewAction=tutorials`.
-The CPA review opens an isolated observer fixture through the production Rust
-quota route. It retains the real-data Shadow as the default; no live Key is copied.
+The pending row is **CPA quotas and trends**: the existing service-row trend icon
+opens a pool/account selector and separate 5h/7d views. Its explicit synthetic
+scenario seeds 24 hours of observations through the candidate quota store;
+the normal real-data Shadow never seeds history. No live Key is copied.
+External continuation, linked history-resend records, CPA snapshot quotas and
+all 11 refreshed tutorials shipped in v0.13.26. Their scenarios remain available
+through `/?reviewAction=continuation`, `/?reviewAction=cpa_quota` and
+`/?reviewAction=tutorials`.
 Answer/tool-output separation and DeepSeek/Kimi balances shipped in v0.13.25.
 Their archived review scenarios remain
 accessible through `/?reviewAction=chat_output` and `/?reviewAction=provider_balances`.
@@ -247,7 +251,11 @@ python3 scripts/shadow_frontend/e2e_preview_review.py \
 
 CPA quota acceptance covers caller authentication, the shared-pool response,
 partial/stale/disabled accounts, zero values, nearest resets, caching, Key changes,
-Refresh All and Chinese/English hover/focus views without model calls:
+Refresh All and Chinese/English hover/focus views. It also checks fractional means,
+pool/account 5h/7d trends, upward rounding after remaining/used conversion,
+unchanged fractional history, durable history across a fresh
+backend, sampling without a page and five-minute cache reuse in the shared worker.
+No model calls are made:
 
 ```sh
 python3 scripts/shadow_frontend/e2e_cpa_quota.py \

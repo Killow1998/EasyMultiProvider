@@ -72,7 +72,7 @@ function createManagementClient({tr, fetch, storage, window}) {
       // Upstream failures carry error.type; EMP's own 401s mean this page lost its session.
       const session = response.status === 401 && SESSION_ERRORS.includes(data.error?.message);
       if (session) clearSessionToken();
-      const error = new Error(session ? tr("core.this_page_is_no_longer_signed_in_emp_may") : data.error?.message || response.statusText || `HTTP ${response.status}`);
+      const error = new Error(session ? tr("core.this_page_is_no_longer_signed_in_emp_may") : tr(data.error?.message || response.statusText || `HTTP ${response.status}`));
       error.session = session;
       error.payload = data;
       error.status = response.status;

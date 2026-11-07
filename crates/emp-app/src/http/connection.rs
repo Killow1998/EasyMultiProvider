@@ -58,6 +58,11 @@ pub(crate) fn handle_connection(
         return;
     };
     request.observation_id = observation_id.as_deref();
+    let source = crate::http::request::RequestSource {
+        caller: crate::http::auth::proxy_identity(request, state, system_now()),
+        peer: stream.peer_addr().ok().map(|peer| peer.ip()),
+    };
+    request.source = Some(&source);
     observation.received(request);
     let path = request.raw_path();
     if request.method == RequestMethod::Get && path == "/api/accounts/events" {
@@ -90,6 +95,9 @@ pub(crate) fn handle_connection(
     } else {
         let now = system_now();
         match (request.method, path) {
+            (RequestMethod::Post | RequestMethod::Delete, "/api/gateway/clients") => Some(
+                crate::api::gateway::mutate(&mut stream, request, raw.body_prefix, state, now),
+            ),
             (RequestMethod::Post, "/v1/decisions" | "/v1/systemone") => Some(
                 crate::api::decisions::request(&mut stream, request, raw.body_prefix, state, now),
             ),

@@ -37,6 +37,9 @@ fn generation_tokens_per_second(
 
 impl RequestOutcome<'_> {
     pub(super) fn record_performance(&mut self, duration_ms: u64) {
+        if self.event["route"] == "decisions" {
+            return;
+        }
         if let Some(first) = self.models.first_content {
             self.event["first_content_ms"] =
                 json!(first.saturating_duration_since(self.started).as_millis() as u64);

@@ -15,9 +15,9 @@ struct Admission {
     changed: Condvar,
 }
 
-pub(super) struct Permit<'a>(&'a Admission);
+pub(in crate::services::claude_cli) struct Permit<'a>(&'a Admission);
 
-pub(super) fn acquire(
+pub(in crate::services::claude_cli) fn acquire(
     cancelled: &Cancellation,
     cancellation: &mut impl FnMut() -> Option<CancellationReason>,
 ) -> Result<Permit<'static>, &'static str> {

@@ -123,6 +123,10 @@ pub(crate) fn claude_message(route: &ResolvedRoute, cause: &str, stage: &str) ->
             "while contacting the selected service",
             "No assistant output was delivered; upstream execution and billing are unknown.",
         ),
+        "output_budget" => (
+            "when the upstream response reached its output limit",
+            "Reported upstream usage is retained in statistics.",
+        ),
         _ => (
             "at an unknown stage",
             "No assistant output was delivered; upstream execution and billing are unknown.",

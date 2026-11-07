@@ -40,14 +40,13 @@ fn text_with_many_parts_keeps_one_complete_item_without_repeating_metadata() {
         "content":vec![json!({"type":"input_text","text":"hello"}); 192]
     }]});
     let prepared = prepare(&body).unwrap();
-    assert!(matches!(prepared.input_format, InputFormat::StreamJson));
     let ExpectedUserContent::Blocks(blocks) = prepared.expected_user_content else {
         panic!("structured history");
     };
     assert_eq!(blocks.len(), 2);
     let marker: Value = serde_json::from_str(blocks[1]["text"].as_str().unwrap()).unwrap();
     assert_eq!(marker["item"], body["input"][0]);
-    assert!(prepared.stdin.len() < 100 * 1024);
+    assert!(serde_json::to_vec(&blocks).unwrap().len() < 100 * 1024);
 }
 
 #[test]

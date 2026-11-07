@@ -1,8 +1,9 @@
 // Concrete synthetic scenarios. Navigation and isolation are owned by their adapters.
 async function openCpaQuotaDemo() {
   const candidate=cloneState();candidate.providers=[window.EMP_CPA_QUOTA_PROVIDER];candidate.models=[];
+  closeModal();
   await api('/api/config',{method:'POST',body:JSON.stringify(candidate)});
-  state=await api('/api/config');closeModal();fill();
+  state=await api('/api/config');fill();
 }
 function openBalancesDemo() {
   const ids=['deepseek','moonshot','openrouter','xai','openai','inception'];

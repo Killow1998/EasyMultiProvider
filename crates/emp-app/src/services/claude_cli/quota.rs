@@ -52,41 +52,6 @@ impl LocalQuota {
         observation.generation
     }
 
-    pub(super) fn record(&self, generation: u64, stdout: &[u8], now: f64) -> bool {
-        let mut windows = serde_json::Map::new();
-        for line in stdout.split(|byte| *byte == b'\n') {
-            let Ok(event) = serde_json::from_slice::<Value>(line) else {
-                continue;
-            };
-            if event.get("type").and_then(Value::as_str) != Some("rate_limit_event") {
-                continue;
-            }
-            let info = &event["rate_limit_info"];
-            for (name, kind, minutes) in [
-                ("five_hour", "primary", 300),
-                ("seven_day", "secondary", 10080),
-            ] {
-                let bucket = info["unifiedWindows"].get(name).or_else(|| {
-                    (info.get("rateLimitType").and_then(Value::as_str) == Some(name))
-                        .then_some(info)
-                });
-                if let Some(bucket) = bucket.and_then(|value| window(value, minutes, now)) {
-                    windows.insert(kind.to_owned(), bucket);
-                }
-            }
-        }
-        if windows.is_empty() {
-            return false;
-        }
-        let mut observation = self.inner.lock().unwrap_or_else(|error| error.into_inner());
-        if observation.owner.is_none() || observation.generation != generation {
-            return false;
-        }
-        observation.windows.extend(windows);
-        observation.observed_at = now;
-        true
-    }
-
     pub(super) fn record_usage(&self, generation: u64, usage: &Value, now: f64) -> bool {
         let mut windows = serde_json::Map::new();
         for (name, kind, minutes) in [
@@ -100,7 +65,7 @@ impl LocalQuota {
             else {
                 continue;
             };
-            // get_usage uses percentages and ISO dates; stream events use fractions and epoch seconds.
+            // get_usage reports percentages and RFC 3339 dates.
             let reset = match bucket.get("resets_at") {
                 Some(Value::String(date)) => match time::OffsetDateTime::parse(
                     date,
@@ -175,15 +140,6 @@ impl LocalQuota {
     }
 }
 
-fn window(value: &Value, minutes: u32, now: f64) -> Option<Value> {
-    let used = value.get("utilization")?.as_f64()? * 100.0;
-    let resets_at = value.get("resetsAt")?.as_f64()?;
-    if !used.is_finite() || used < 0.0 || !resets_at.is_finite() || resets_at <= now {
-        return None;
-    }
-    Some(json!({"used_percent":used,"window_minutes":minutes,"resets_at":resets_at}))
-}
-
 /// These are status fields from the CLI, never read from its credential store.
 pub(super) fn identity(stdout: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(stdout).ok()?;
@@ -208,15 +164,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_windows_preserve_used_units_ignore_text_and_expire_without_inventing_quota() {
+    fn control_usage_windows_preserve_units_and_expire_without_inventing_quota() {
         let directory = tempfile::tempdir().unwrap();
         let quota = LocalQuota::new(directory.path().join("quota.sqlite3"));
         let generation = quota.begin(Some("account-a".into()));
-        let stdout = br#"{"type":"assistant","rate_limit_info":{"utilization":0.99,"resetsAt":9999,"rateLimitType":"five_hour"}}
-{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":{"five_hour":{"utilization":0.24,"resetsAt":500},"seven_day":{"utilization":0.13,"resetsAt":900}},"private":"hidden"}}
-{"type":"result","structured_output":{"answer":"done","tool_calls":[]}}
-"#;
-        assert!(quota.record(generation, stdout, 100.0));
+        assert!(quota.record_usage(
+            generation,
+            &json!({"rate_limits":{
+            "five_hour":{"utilization":24,"resets_at":"1970-01-01T00:08:20Z"},
+            "seven_day":{"utilization":13,"resets_at":"1970-01-01T00:15:00Z"}}}),
+            100.0
+        ));
         let snapshot = quota.snapshot(100.0);
         assert_eq!(
             snapshot["rate_limits_by_limit_id"]["claude"]["primary"]["used_percent"],
@@ -233,27 +191,23 @@ mod tests {
                 .is_none()
         );
         assert!(quota.snapshot(900.0).is_null());
-        assert!(!quota.record(
-            generation,
-            br#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}"#,
-            101.0
-        ));
+        assert!(!quota.record_usage(generation, &json!({"rate_limits":{}}), 101.0));
     }
 
     #[test]
     fn new_login_and_newer_requests_reject_old_observations() {
         let directory = tempfile::tempdir().unwrap();
         let quota = LocalQuota::new(directory.path().join("quota.sqlite3"));
-        let event = br#"{"type":"rate_limit_event","rate_limit_info":{"rateLimitType":"five_hour","utilization":1.1,"resetsAt":500}}"#;
+        let event = json!({"rate_limits":{"five_hour":{"utilization":110,"resets_at":"1970-01-01T00:08:20Z"}}});
         let old = quota.begin(Some("account-a".into()));
-        assert!(quota.record(old, event, 100.0));
+        assert!(quota.record_usage(old, &event, 100.0));
         let new = quota.begin(Some("account-b".into()));
         assert!(quota.snapshot(100.0).is_null());
-        assert!(!quota.record(old, event, 101.0));
-        assert!(quota.record(new, event, 102.0));
+        assert!(!quota.record_usage(old, &event, 101.0));
+        assert!(quota.record_usage(new, &event, 102.0));
         quota.begin(None);
         assert!(quota.snapshot(102.0).is_null());
-        assert!(!quota.record(new, event, 103.0));
+        assert!(!quota.record_usage(new, &event, 103.0));
     }
 
     #[test]

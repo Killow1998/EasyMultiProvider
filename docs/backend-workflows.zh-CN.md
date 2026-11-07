@@ -66,6 +66,9 @@ Chat 完整响应由 `chat_response.rs` 转换；`chat_stream.rs` 管增量状�
 `services/cpa_quota.rs` 负责 observer 解析、启用且有效账号的汇总、最近重置时间和
 按凭据区分的快照缓存。服务额度接口分派本机 Claude 与 CPA 查询；界面复用
 订阅额度组件和已有悬停／焦点气泡。此路径不发起模型请求。
+`cpa_quota/history.rs` 将号池与各账号的 5h／7d 观测写入已有额度 SQLite，
+按 CPA 凭据隔离。共用后台采样任务复用五分钟快照缓存；趋势接口只读本地历史，
+不再查询 observer。历史保留十五天。
 
 余额适配器负责确认官方地址、保存解析后的查询地址和解析余额。余额服务直接调用
 `OfficialService`，不再重复解析 URL 或选择服务商路径。正式界面和 Shadow 均使用

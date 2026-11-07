@@ -154,7 +154,7 @@ def check_page(browser, shadow):
                 browser.execute('closeModal();window.fetch=window.trendFetch;delete window.trendFetch;')
                 cases.append({'language': language, 'theme': theme, 'width': width})
     browser.execute('closeModal();')
-    browser.execute('document.querySelector("[data-i18n=settings_menu]").click();document.querySelector("[data-presentation-style=bar]").click();')
+    browser.execute('document.querySelector("[data-i18n=settings_menu]").click();document.querySelector("[data-settings-category=general]").click();document.querySelector("[data-presentation-style=bar]").click();')
     assert browser.execute('return document.body.dataset.quotaStyle === "bar";')
     browser.execute('document.querySelector("[data-presentation-style=ring]").click();')
     assert browser.execute('return document.body.dataset.quotaStyle === "ring";')
@@ -194,7 +194,10 @@ def main():
         assert '服务'.encode('utf-8') in frontend('index.html', 'fixture-only')
     with tempfile.TemporaryDirectory(prefix='emp-shadow-e2e-') as temp, contextlib.ExitStack() as stack:
         root = Path(temp)
-        base, url, state, headers, upstream = start_backend(stack, args.emp.resolve(), root)
+        base, url, state, headers, upstream = start_backend(stack, args.emp.resolve(), root,
+            {'codex_base_url':'http://127.0.0.1:9/fixture-native'})
+        (root/'codex_home/auth.json').write_text(json.dumps({'tokens':{
+            'account_id':'fixture-native','access_token':'synthetic-native-no-network'}}))
         payload = {'model': 'demo/model', 'input': 'ok', 'stream': False}
         assert request(base + '/v1/responses', payload, headers)[0] == 401
         browser = Browser(stack, root)

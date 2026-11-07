@@ -3,6 +3,84 @@ use serde_json::json;
 use std::sync::Arc;
 
 #[test]
+fn memory_receipts_restore_priced_usage_once_and_reconcile_rollout_history() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("usage.sqlite3");
+    let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+    prices.replace(
+        json!({"example-model":{
+            "input_cost_per_token":"0.001", "output_cost_per_token":"0.002",
+            "cache_read_input_token_cost":"0.0001"
+        }}),
+        1.0,
+    );
+    let ledger = UsageLedger::new(path.clone(), prices.clone());
+    let mut events = Vec::new();
+    for operation in ["memory_extraction", "memory_consolidation", "responses"] {
+        let event = json!({
+            "request_id":operation, "route":operation, "usage_response_id":operation,
+            "usage_category":"native", "usage_owner":"account:memory",
+            "model_id":"example-model", "upstream_model":"example-model",
+            "thread_id":"memory-job", "turn_id":operation,
+            "success":true, "status":200, "response_status":"completed",
+            "input_tokens":1000, "cached_input_tokens":800,
+            "output_tokens":20, "reasoning_tokens":5
+        });
+        ledger.record_call(&event, 10.0, 12.0).unwrap();
+        events.push(event);
+    }
+    assert_eq!(
+        ledger.query(0.0, 100.0, "all", 1000.0).unwrap()["totals"]["requests"],
+        0
+    );
+    drop(ledger);
+    let ledger = UsageLedger::new(path.clone(), prices.clone());
+    let report = ledger
+        .query_owner(0.0, 100.0, "account:memory", 1000.0)
+        .unwrap();
+    assert_eq!(report["totals"]["requests"], 2);
+    assert_eq!(report["totals"]["input_tokens"], 2000);
+    assert_eq!(report["totals"]["cached_input_tokens"], 1600);
+    assert_eq!(report["totals"]["output_tokens"], 40);
+    assert_eq!(report["totals"]["reasoning_tokens"], 10);
+    assert_eq!(report["totals"]["cost_nanos"], 640_000_000);
+    for event in &events[..2] {
+        ledger.record(event, 12.0);
+    }
+    let mut historical = events[0].clone();
+    historical["usage_turn"] = historical["turn_id"].clone();
+    historical["route_model"] = historical["model_id"].clone();
+    ledger
+        .record_history(&[(historical, 12.0)], "memory-rollout", &json!({}))
+        .unwrap();
+    drop(ledger);
+    let reopened = UsageLedger::new(path.clone(), prices.clone());
+    let again = reopened
+        .query_owner(0.0, 100.0, "account:memory", 1000.0)
+        .unwrap();
+    assert_eq!(again["totals"], report["totals"]);
+
+    let failed = json!({
+        "request_id":"failed-memory", "route":"memory_consolidation",
+        "usage_category":"native", "usage_owner":"account:memory",
+        "model_id":"example-model", "upstream_model":"example-model",
+        "success":false, "status":502
+    });
+    reopened.record(&failed, 14.0);
+    reopened.record_call(&failed, 13.0, 14.0).unwrap();
+    drop(reopened);
+    let final_report = UsageLedger::new(path, prices)
+        .query_owner(0.0, 100.0, "account:memory", 1000.0)
+        .unwrap();
+    assert_eq!(final_report["totals"]["requests"], 3);
+    assert_eq!(final_report["totals"]["reported_requests"], 2);
+    assert_eq!(
+        final_report["totals"]["cost_nanos"],
+        report["totals"]["cost_nanos"]
+    );
+}
+
+#[test]
 fn account_details_keep_tokens_periods_and_start_time_with_the_verified_owner() {
     let directory = tempfile::tempdir().unwrap();
     let ledger = UsageLedger::new(

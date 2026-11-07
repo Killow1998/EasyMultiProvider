@@ -14,11 +14,11 @@ function shadowSave(candidate) {
   localStorage.setItem(shadowStorageKey, JSON.stringify(shadowDraft));
   return shadowDraft;
 }
-function shadowMerge(live) {
+function shadowMerge(live, draft = shadowDraft) {
   if (shadowServicesDemoActive) return shadowServiceDemoState(live);
-  if (!shadowDraft) return live;
-  const result = structuredClone({...live,...shadowDraft});
-  for (const key of ['emp_version','claude_quota','catalog_models','catalog_families']) result[key] = live[key];
+  if (!draft) return live;
+  const result = structuredClone({...live,...draft});
+  for (const key of ['emp_version','claude_quota','catalog_models','catalog_families','subscription_models','codex_context_settings']) result[key] = live[key];
   const liveAccounts = new Map([live.native_account,...(live.accounts || [])].filter(Boolean).map(a => [a.id,a]));
   result.accounts = (result.accounts || []).map(a => ({...liveAccounts.get(a.id),...a,quota:liveAccounts.get(a.id)?.quota || a.quota}));
   if (result.native_account && live.native_account) result.native_account = {...result.native_account,quota:live.native_account.quota,hidden_models:result.native_hidden_models ?? result.native_account.hidden_models,model_context_windows:result.native_model_context_windows ?? result.native_account.model_context_windows};
@@ -46,6 +46,15 @@ function shadowMerge(live) {
 function shadowReply(payload, status = 200) {
   return new Response(JSON.stringify(payload), {status,headers:{'Content-Type':'application/json'}});
 }
+async function shadowConfiguration(live, options, draft) {
+  const result=shadowMerge(live, draft);
+  if (!window.EMP_REAL_SHADOW || !(live.model_groups?.length || result.model_groups?.length)) return result;
+  const headers=new Headers(options.headers);headers.set('Content-Type','application/json');
+  const response=await shadowNativeFetch('/api/shadow/catalog',{method:'POST',headers,body:JSON.stringify(shadowScrub(result))});
+  const catalog=await response.json();
+  if (!response.ok) throw new Error(tr(catalog.error?.message || 'aggregate.preview_failed'));
+  return Object.assign(result,catalog);
+}
 async function shadowRead(path, options) {
   const response = await shadowNativeFetch(path, {...options,method:'GET',body:undefined});
   if (!response.ok) throw new Error('读取 EMP 数据失败');
@@ -69,7 +78,7 @@ window.fetch = async function(path, options = {}) {
   const route = url.pathname, method = (options.method || 'GET').toUpperCase();
   if (route === '/api/session' || route === '/api/accounts/events') return shadowNativeFetch(path, options);
   if (method === 'GET') {
-    if (route === '/api/config') return shadowReply(shadowMerge(await shadowRead(path, options)));
+    if (route === '/api/config') return shadowReply(await shadowConfiguration(await shadowRead(path, options),options));
     const providerModels = route.match(/^\/api\/providers\/([^/]+)\/models$/);
     if (providerModels) return shadowReply(await shadowSavedModels(decodeURIComponent(providerModels[1]),options));
     const accountModels = route.match(/^\/api\/accounts\/([^/]+)\/models$/);
@@ -121,9 +130,15 @@ window.fetch = async function(path, options = {}) {
   if (route === '/api/config') {
     for (const provider of payload.providers || []) if (provider.api_key) provider.api_key_set = true;
     const live = await shadowRead('/api/config',options);
+    if (window.EMP_REAL_SHADOW && !shadowServicesDemoActive) {
+      const result=await shadowConfiguration(live,options,shadowScrub(payload));
+      shadowSave(payload);
+      return shadowReply(result);
+    }
     shadowSave(payload);
-    return shadowReply(shadowMerge(live));
+    return shadowReply(await shadowConfiguration(live,options));
   }
+  if (route === '/api/gateway/clients' && window.EMP_REAL_SHADOW) return shadowNativeFetch(path,options);
   if (route === '/api/language') return shadowReply(shadowSave({...state,language:payload.language}));
   if (route === '/api/catalog/context-preference') return shadowReply(shadowSave({...state,...payload}));
   if (route === '/api/catalog/refresh' || route === '/api/client-events') return shadowReply({ok:true});

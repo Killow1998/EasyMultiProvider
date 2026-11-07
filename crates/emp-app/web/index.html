@@ -126,7 +126,7 @@
 <script src="/assets/management-client.js"></script>
 <script src="/assets/management-events.js"></script>
 <script src="/assets/quota-display.js"></script>
-<script src="/assets/context-help.js"></script><script src="/assets/decision-settings.js"></script><script src="/assets/settings.js"></script>
+<script src="/assets/context-help.js"></script><script src="/assets/decision-settings.js"></script><script src="/assets/gateway-settings.js"></script><script src="/assets/aggregate-settings.js"></script><script src="/assets/settings.js"></script>
 <script src="/assets/collaboration-comparison.js"></script>
 <script src="/assets/routing-settings.js"></script>
 <script src="/assets/ultra-settings.js"></script>
@@ -165,7 +165,7 @@ const managementEvents = createManagementEvents({management,visible:()=>!managem
   onStart:()=>{updateActivityDots();rescheduleActivityExpiry();void accountDetails.refresh();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
 const contextHelp = createContextHelp({getState:() => state, tr});
-const routingSettings = createRoutingSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
+const routingSettings = createRoutingSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
 const ultraSettings = createUltraSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
 const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
 const tutorials = createTutorials({openModal, $, tr, esc});
@@ -221,7 +221,7 @@ const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, ge
 const {open:openUsage} = usageReport;
 const appIcon=createAppIcon({getState:()=>state,api,openModal,$,esc,tr,notice,presets:officialProviders});
 const providerBalances = createProviderBalances({getState:()=>state,api,esc,tr,notice,render:()=>renderServices()});
-const cpaQuotas = createCpaQuotas({getState:()=>state,api,esc,tr,notice,render:()=>renderServices(),meters:(...args)=>presentationQuotaMeters(...args),resetText:resetCountdownText});
+const cpaQuotas = createCpaQuotas({getState:()=>state,api,esc,tr,notice,render:()=>renderServices(),meters:(...args)=>presentationQuotaMeters(...args),resetText:resetCountdownText,quotaDisplay});
 const services = createServiceList({
   getState:() => state, $, esc, tr, presets:officialProviders, icon:serviceIconHtml,
   activity:activityIndicatorHtml, serviceIcon:(...args)=>serviceActivityIcon(...args), updateServiceErrors:()=>{presentationUpdateServiceRequestErrors();presentationUpdateServiceErrorLabels();}, accountSummary:accountSummaryHtml, quotaMeters:(...args)=>presentationQuotaMeters(...args),
@@ -1244,7 +1244,7 @@ function runDynamicUiAction(element) {
     case 'period-edit': editPeriod(id); return true;
     case 'provider-quota-refresh': services.refresh(id); return true;
     case 'provider-balance-refresh': providerBalances.refresh(id); return true;
-    case 'provider-quota-history': openQuotaHistory(id, 'providers'); return true;
+    case 'provider-quota-history': openQuotaHistory(id, 'providers', {pool:cpaQuotas.has(id)}); return true;
     case 'provider-model-settings': providerModelSettings.open(id); return true;
     case 'provider-add-model': openManualModelModal('', id, {back:modalReturn()}); return true;
     case 'provider-edit': editProvider(id,{back:modalReturn()}); return true;

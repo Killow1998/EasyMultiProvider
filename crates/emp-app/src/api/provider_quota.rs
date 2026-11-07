@@ -69,9 +69,6 @@ pub(crate) fn refresh(
 
 /// Called only after the common GET management-session check.
 pub(crate) fn history(request: Request<'_>, state: &ServerState, id: &str, now: f64) -> Vec<u8> {
-    if !local_provider(state, id) {
-        return not_found_response();
-    }
     let bound = |key| {
         query_values(request.target, key)
             .into_iter()
@@ -88,9 +85,15 @@ pub(crate) fn history(request: Request<'_>, state: &ServerState, id: &str, now: 
             &[],
         );
     }
-    reply(crate::services::claude_cli::quota_query::history(
-        state, start, end,
-    ))
+    if local_provider(state, id) {
+        return reply(crate::services::claude_cli::quota_query::history(
+            state, start, end,
+        ));
+    }
+    match crate::services::cpa_quota::history(state, id, start, end) {
+        Some(result) => reply(result),
+        None => not_found_response(),
+    }
 }
 
 fn reply(result: Result<Value, &'static str>) -> Vec<u8> {

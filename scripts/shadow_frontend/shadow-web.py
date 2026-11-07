@@ -37,7 +37,7 @@ READ_PATHS = {
     '/api/config', '/api/accounts', '/api/accounts/events', '/api/integration',
     '/api/calls', '/api/usage', '/api/diagnostics', '/api/support-report',
     '/api/updates', '/api/runtime/claude-cli', '/api/capabilities',
-    '/api/request-limits', '/api/models/vision-test-image', '/api/models/audio-test-sound',
+    '/api/request-limits', '/api/models/vision-test-image', '/api/models/audio-test-sound','/api/gateway',
 }
 
 
@@ -104,7 +104,7 @@ class ShadowHandler(BaseHTTPRequestHandler):
         snapshot = getattr(self.server, 'snapshot', None)
         if path == '/api/shadow/status' and snapshot:
             return self.send(200, snapshot.status())
-        if path in {'/api/usage','/api/calls'} and snapshot:
+        if path in {'/api/usage','/api/calls','/api/gateway/clients','/api/gateway/usage'} and snapshot:
             try:
                 if path == '/api/calls' and self.headers.get('Accept') == 'text/event-stream':
                     with snapshot.stream(self.path) as upstream:
@@ -146,6 +146,20 @@ class ShadowHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.origin_allowed():
             return self.error(403, 'Invalid origin')
+        if self.path in {'/api/gateway/clients','/api/shadow/catalog'} and getattr(self.server,'snapshot',None):
+            if not secrets.compare_digest(self.headers.get('X-EMP-Session',''),self.server.session):
+                return self.error(401,'management session is required')
+            try:
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<length<=4*1024*1024:return self.error(400,'Invalid preview request')
+                payload=json.loads(self.rfile.read(length))
+                if self.path == '/api/shadow/catalog':
+                    status,result=self.server.snapshot.catalog(payload,self.source_read)
+                    return self.send(status,result)
+                status,result=self.server.snapshot.devices(payload,self.command)
+                return self.send(status,result)
+            except (OSError,ValueError,subprocess.SubprocessError):
+                return self.error(503,'Candidate preview is unavailable')
         if self.path == '/api/session' and secrets.compare_digest(
                 self.headers.get('X-EMP-Bootstrap', ''), self.server.bootstrap):
             return self.send(200, {'session': self.server.session})
@@ -182,6 +196,8 @@ class ShadowHandler(BaseHTTPRequestHandler):
         self.error(403, '影子页只保存预览配置。')
 
     def do_DELETE(self):
+        if self.path == '/api/gateway/clients':
+            return self.do_POST()
         self.error(403, '影子页只保存预览配置。')
 
 

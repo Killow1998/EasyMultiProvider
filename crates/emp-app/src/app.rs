@@ -75,6 +75,8 @@ impl ServerState {
 
 pub(crate) struct BackendState {
     pub(crate) gateway_key: String,
+    pub(crate) gateway_clients: crate::services::gateway_clients::GatewayClients,
+    pub(crate) claude_turns: crate::services::claude_cli::tui::TurnPool,
     pub(crate) configuration: ConfigurationState,
     pub(crate) transport: TransportState,
     pub(crate) accounts: AccountState,
@@ -84,6 +86,7 @@ pub(crate) struct BackendState {
     pub(crate) provider_quotas: crate::services::cpa_quota::PoolQuotas,
     pub(crate) app_icon: crate::services::app_icon::AppIcon,
     pub(crate) auto_review: crate::services::auto_review::ReviewState,
+    pub(crate) aggregate_availability: crate::services::auto_review::ReviewState,
     pub(crate) memory_status: crate::services::memory_routing::MemoryStatus,
     pub(crate) management_events: Arc<crate::services::management_events::ManagementEvents>,
     pub(crate) integration: IntegrationState,
@@ -97,7 +100,7 @@ pub(crate) struct BackendState {
 
 pub(crate) struct TransportState {
     pub(crate) collaboration: crate::services::collaboration::CollaborationState,
-    pub(crate) client: HttpClient,
+    pub(crate) client: Arc<HttpClient>,
     pub(crate) support_network: crate::services::network_evidence::NetworkSnapshot,
     pub(crate) runtime: Runtime,
     pub(crate) request_limits: Arc<RequestLimits>,
@@ -175,6 +178,10 @@ impl BackendState {
             Arc::new(crate::services::management_events::ManagementEvents::default());
         Ok(Self {
             gateway_key: emp_state::gateway_key::load_or_create(&state_root.join("gateway-key"))?,
+            gateway_clients: crate::services::gateway_clients::GatewayClients::open(
+                state_root.join("gateway-clients.json"),
+            )?,
+            claude_turns: Default::default(),
             usage: crate::services::usage::UsageState::new(
                 &state_root,
                 Arc::clone(&management_events),
@@ -183,7 +190,7 @@ impl BackendState {
             configuration: ConfigurationState::new(config, config_path.to_path_buf(), vault),
             transport: TransportState {
                 collaboration: Default::default(),
-                client,
+                client: Arc::new(client),
                 support_network,
                 runtime,
                 request_limits,
@@ -206,6 +213,7 @@ impl BackendState {
             },
             activity: ActivityService::new(Arc::clone(&management_events)),
             auto_review: Default::default(),
+            aggregate_availability: Default::default(),
             provider_balances: Default::default(),
             provider_quotas: Default::default(),
             app_icon: crate::services::app_icon::AppIcon::new(&state_root),

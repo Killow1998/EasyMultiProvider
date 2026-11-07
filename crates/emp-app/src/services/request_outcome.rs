@@ -24,6 +24,7 @@ pub(crate) struct RequestOutcome<'a> {
     started: Instant,
     first_token: Option<Instant>,
     event: Value,
+    aggregate_owner: Option<String>,
     models: emp_router::model_observation::ModelObservation,
     source_clock: bool,
     buffered: bool,
@@ -95,6 +96,16 @@ impl<'a> RequestOutcome<'a> {
             .as_object_mut()
             .unwrap()
             .extend(request_facts::facts(body, incoming, memory_kind));
+        if let Some(source) = route.model.value().get("_emp_aggregate_source") {
+            event["aggregate_model"] = json!(route.requested_model);
+            event["aggregate_source"] = source.clone();
+        }
+        if operation == "decisions" {
+            event["parent_thread_id"] = event["thread_id"].clone();
+            event["session_id"] = Value::Null;
+            event["thread_id"] = Value::Null;
+            event["session_kind"] = json!("decision");
+        }
         if emp_state::diagnostics::MODEL_TEST_OPERATIONS.contains(&operation) {
             event["session_id"] = Value::Null;
             event["thread_id"] = Value::Null;
@@ -110,7 +121,11 @@ impl<'a> RequestOutcome<'a> {
         event["requested_effort"] = json!(request_facts::reasoning_effort(
             body.get("reasoning"),
             body.get("input"),
-            body.get("client_metadata")
+            if memory_kind.is_some() {
+                None
+            } else {
+                body.get("client_metadata")
+            }
         ));
         event["selected_name"] = route
             .model
@@ -146,6 +161,12 @@ impl<'a> RequestOutcome<'a> {
         }));
         let identity = crate::services::activity::ActivityIdentity::from_route(route);
         let result = Self {
+            aggregate_owner: route
+                .model
+                .value()
+                .get("_emp_aggregate_owner")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             collaboration_route: (operation == "responses"
                 && route.dialect == emp_core::Dialect::CodexNative)
                 .then(|| route.requested_model.clone()),
@@ -389,6 +410,17 @@ impl<'a> RequestOutcome<'a> {
                 return;
             }
             self.record_performance(duration_ms);
+            if let Some(owner) = &self.aggregate_owner {
+                self.state
+                    .backend
+                    .aggregate_availability
+                    .record_source_result(
+                        owner,
+                        self.event["success"] == true,
+                        self.event["failure_reason"].as_str().unwrap_or_default(),
+                        self.event["error_class"].as_str().unwrap_or_default(),
+                    );
+            }
             if matches!(
                 emp_state::usage::call_state(&self.event),
                 "completed" | "failed"

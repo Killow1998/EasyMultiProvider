@@ -39,7 +39,7 @@ pub(crate) fn request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
-    let (endpoint, key) = {
+    let (endpoint, key, route) = {
         let Ok(config) = state.backend.configuration.read() else {
             return json_error_response(
                 500,
@@ -141,8 +141,40 @@ pub(crate) fn request(
                 &[],
             );
         }
-        (endpoint, key)
+        let model = body["model"].as_str().expect("validated model");
+        let route = match emp_core::resolved_route_from_parts(
+            model,
+            provider.as_object().expect("normalized provider").clone(),
+            serde_json::from_value(serde_json::json!({"id":model,"upstream_id":model}))
+                .expect("model object"),
+            emp_core::RouteSource::ExplicitModel,
+        ) {
+            Ok(route) => route,
+            Err(_) => {
+                return json_error_response(
+                    503,
+                    status_text(503),
+                    "Decision route is unavailable",
+                    None,
+                    &[],
+                );
+            }
+        };
+        (endpoint, key, route)
     };
+    let mut incoming = request.incoming();
+    if let Some(id) = request.observation_id {
+        incoming.insert("X-EMP-Request-ID".into(), id.into());
+    }
+    let mut outcome = crate::services::request_outcome::RequestOutcome::new(
+        state,
+        &route,
+        &body,
+        &incoming,
+        None,
+        "decisions",
+    );
+    outcome.dispatch();
     let mut headers = BTreeMap::from([
         ("Authorization".to_owned(), format!("Bearer {key}")),
         ("Content-Type".to_owned(), "application/json".to_owned()),
@@ -157,15 +189,26 @@ pub(crate) fn request(
         }
     }
     let transport = &state.backend.transport;
-    let upstream = match transport.runtime.block_on(transport.client.open(
-        HttpMethod::Post,
-        &endpoint,
-        headers,
-        Some(serde_json::to_vec(&body).expect("JSON request")),
-        false,
-    )) {
-        Ok(upstream) => upstream,
-        Err(_) => {
+    use crate::services::disconnect::{DisconnectMonitor, DisconnectRace, raced};
+    let mut monitor = DisconnectMonitor::start(stream).ok();
+    let upstream = match raced(
+        &transport.runtime,
+        monitor.as_mut(),
+        transport.client.open(
+            HttpMethod::Post,
+            &endpoint,
+            headers,
+            Some(serde_json::to_vec(&body).expect("JSON request")),
+            false,
+        ),
+    ) {
+        DisconnectRace::Ready(Ok(upstream)) => upstream,
+        DisconnectRace::Disconnected => {
+            outcome.disconnected();
+            return Vec::new();
+        }
+        DisconnectRace::Ready(Err(_)) => {
+            outcome.status(503, "network_error");
             return json_error_response(
                 503,
                 status_text(503),
@@ -176,6 +219,7 @@ pub(crate) fn request(
         }
     };
     let status = upstream.status();
+    outcome.http_status(status);
     let content_type = upstream
         .header("content-type")
         .unwrap_or("application/json")
@@ -185,12 +229,18 @@ pub(crate) fn request(
         .as_deref()
         .map(|value| vec![("Retry-After", value)])
         .unwrap_or_default();
-    let raw = match transport
-        .runtime
-        .block_on(upstream.read_limited(emp_transport::MAX_PROXY_REQUEST_BYTES))
-    {
-        Ok(raw) => raw,
-        Err(_) => {
+    let raw = match raced(
+        &transport.runtime,
+        monitor.as_mut(),
+        upstream.read_limited(emp_transport::MAX_PROXY_REQUEST_BYTES),
+    ) {
+        DisconnectRace::Ready(Ok(raw)) => raw,
+        DisconnectRace::Disconnected => {
+            outcome.disconnected();
+            return Vec::new();
+        }
+        DisconnectRace::Ready(Err(_)) => {
+            outcome.status(502, "protocol_error");
             return json_error_response(
                 502,
                 status_text(502),
@@ -200,6 +250,27 @@ pub(crate) fn request(
             );
         }
     };
+    if let Ok(mut reported) = serde_json::from_slice::<serde_json::Value>(&raw) {
+        if let Some(usage) = reported
+            .get_mut("usage")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for (canonical, alternate) in [
+                ("input_tokens", "prompt_tokens"),
+                ("output_tokens", "completion_tokens"),
+            ] {
+                if !usage.contains_key(canonical)
+                    && let Some(value) = usage.get(alternate).cloned()
+                {
+                    usage.insert(canonical.into(), value);
+                }
+            }
+        }
+        outcome.observe_upstream(&reported);
+        // HTTP status is authoritative, including bodies that contain a status field.
+        outcome.http_status(status);
+    }
+    outcome.finish();
     response(
         &format!("HTTP/1.1 {status} {}", status_text(status)),
         &content_type,

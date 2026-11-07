@@ -73,6 +73,20 @@ fn auth_identities(auth: &Value) -> BTreeSet<(String, String)> {
     identities
 }
 
+/// Persistent source identity excludes rotating tokens when account/user claims exist.
+pub fn account_auth_identity(auth: &Value) -> String {
+    let identities = auth_identities(auth);
+    let claims = identities
+        .iter()
+        .filter(|(kind, _)| kind != "access_token")
+        .collect::<Vec<_>>();
+    crate::usage::identity_hash(&if claims.is_empty() {
+        serde_json::json!(identities)
+    } else {
+        serde_json::json!(claims)
+    })
+}
+
 /// Compare account and user identity without treating a shared workspace as a user.
 /// Legacy opaque credentials retain account-ID matching; contradictory known
 /// users/accounts never merge. Exact access tokens are the final fallback.

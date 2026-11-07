@@ -55,8 +55,11 @@ fn configuration_normalization_matches_frozen_fixture() {
             "external_collaboration",
             "memory_model",
             "memory_extraction_model",
+            "memory_extraction_effort",
+            "memory_consolidation_effort",
             "background_compaction",
             "ultra_reasoning_efforts",
+            "model_groups",
         ] {
             python_compatible.as_object_mut().unwrap().remove(key);
         }
@@ -80,6 +83,42 @@ fn configuration_normalization_matches_frozen_fixture() {
             case["name"]
         );
     }
+}
+
+#[test]
+fn aggregate_prefixes_identify_models_across_native_account_and_external_route_aliases() {
+    let mut config = json!({
+        "providers":[{"id":"external","base_url":"https://example.invalid/v1"}],
+        "models":[
+            {"id":"external/alias-a","provider":"external","upstream_id":"api-alias","family_id":"gpt-6-astra"},
+            {"id":"external/alias-b","provider":"external","upstream_id":"api-alias","family_id":"gpt-6-astra"}
+        ],
+        "model_groups":[
+            {"id":"auto/a","name_prefix":"auto","sources":["gpt-6-astra","other/gpt-6-astra"]},
+            {"id":"auto/b","name_prefix":"auto","policy":"round_robin","sources":["external/alias-b","external/alias-a"]}
+        ]
+    });
+    let error = normalize_configuration(Some(&config)).expect_err("same model and prefix");
+    assert_eq!(error.to_string(), "aggregate.duplicate_prefix");
+    config["model_groups"][1]["name_prefix"] = json!("balanced");
+    let saved = normalize_configuration(Some(&config)).expect("distinct prefix");
+    assert_eq!(normalize_configuration(Some(&saved)).unwrap(), saved);
+    config["model_groups"][1]["name_prefix"] = json!("auto");
+    config["models"][0]["family_id"] = json!("gpt-6-luna");
+    config["models"][1]["family_id"] = json!("gpt-6-luna");
+    normalize_configuration(Some(&config)).expect("same prefix on distinct models");
+    for group in config["model_groups"].as_array_mut().unwrap() {
+        group["name_prefix"] = json!("");
+    }
+    normalize_configuration(Some(&config)).expect("empty prefixes on distinct models");
+    config["models"][0]["family_id"] = json!("gpt-6-astra");
+    config["models"][1]["family_id"] = json!("gpt-6-astra");
+    assert_eq!(
+        normalize_configuration(Some(&config))
+            .unwrap_err()
+            .to_string(),
+        "aggregate.duplicate_prefix"
+    );
 }
 
 #[test]
@@ -209,15 +248,30 @@ fn memory_models_upgrade_once_and_save_independent_defaults() {
         let mut update = legacy.clone();
         update["memory_extraction_model"] = json!(extraction);
         update["memory_model"] = json!(consolidation);
+        update["memory_extraction_effort"] = json!("high");
+        update["memory_consolidation_effort"] = json!("low");
         let saved = emp_state::merge_web_update(&legacy, &update).unwrap();
         let reloaded = normalize_configuration(Some(&saved)).unwrap();
         assert_eq!(reloaded["memory_extraction_model"], extraction);
         assert_eq!(reloaded["memory_model"], consolidation);
+        assert_eq!(reloaded["memory_extraction_effort"], "high");
+        assert_eq!(reloaded["memory_consolidation_effort"], "low");
         let mut old_client = saved.clone();
         old_client
             .as_object_mut()
             .unwrap()
             .remove("memory_extraction_model");
+        old_client
+            .as_object_mut()
+            .unwrap()
+            .remove("memory_extraction_effort");
+        old_client
+            .as_object_mut()
+            .unwrap()
+            .remove("memory_consolidation_effort");
+        let preserved = emp_state::merge_web_update(&saved, &old_client).unwrap();
+        assert_eq!(preserved["memory_extraction_effort"], "high");
+        assert_eq!(preserved["memory_consolidation_effort"], "low");
         assert_eq!(
             emp_state::merge_web_update(&saved, &old_client).unwrap()["memory_extraction_model"],
             extraction

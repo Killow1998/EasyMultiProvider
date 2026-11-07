@@ -13,7 +13,7 @@ fn timeout_and_disconnect_stop_the_child_process_group() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
-    let cancelled = Cancellation::new().unwrap();
+    let cancelled = Cancellation::new();
     assert_eq!(
         run_with_timeout_policy(
             command,
@@ -34,7 +34,7 @@ fn timeout_and_disconnect_stop_the_child_process_group() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
-    let cancelled = Cancellation::new().unwrap();
+    let cancelled = Cancellation::new();
     assert_eq!(
         run_with_timeout_policy(
             command,
@@ -63,7 +63,7 @@ fn normal_parent_exit_kills_descendant_holding_child_pipes_open() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
-    let cancelled = Cancellation::new().unwrap();
+    let cancelled = Cancellation::new();
     let started = Instant::now();
     assert_eq!(
         run_with_timeout_policy(
@@ -104,7 +104,7 @@ fn output_budget_event_stops_a_waiting_cli_without_waiting_for_timeout() {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
-        let cancelled = Cancellation::new().unwrap();
+        let cancelled = Cancellation::new();
         assert_eq!(
             run_with_timeout_policy(
                 command,

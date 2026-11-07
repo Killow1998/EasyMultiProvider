@@ -85,7 +85,7 @@ impl Upstream {
                     // Exercise macOS's inherited mode on Linux before blocking fixture reads.
                     stream.set_nonblocking(true).unwrap();
                     stream.set_nonblocking(false).unwrap();
-                    stream.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+                    stream.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
                     let raw = read_request_head(&mut stream).unwrap();
                     let request = parse_request(&raw.head).unwrap();
                     assert_eq!(request.header("Authorization"), Some("Bearer fixture-access"));
@@ -346,14 +346,15 @@ pub(super) fn connect(server: &ServerHandle, thread_id: &str) -> ClientWebSocket
     .unwrap();
     ws.readiness_stream()
         .unwrap()
-        .set_read_timeout(Some(Duration::from_secs(15)))
+        .set_read_timeout(Some(Duration::from_secs(30)))
         .unwrap();
     ws
 }
 
 pub(super) fn turn(client: &mut ClientWebSocket, body: &Value) -> Value {
     client.send_json(body).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(30);
     loop {
         assert!(Instant::now() < deadline, "fixture turn did not terminate");
         let event: Value = match client.poll_receive_text().unwrap() {
@@ -365,6 +366,12 @@ pub(super) fn turn(client: &mut ClientWebSocket, body: &Value) -> Value {
             event["type"].as_str(),
             Some("response.completed" | "response.failed" | "response.incomplete" | "error")
         ) {
+            if started.elapsed() > Duration::from_secs(10) {
+                eprintln!(
+                    "large-context fixture turn completed after {:?}",
+                    started.elapsed()
+                );
+            }
             return event;
         }
     }

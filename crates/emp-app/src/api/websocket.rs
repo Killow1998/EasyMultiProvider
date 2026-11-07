@@ -190,13 +190,7 @@ pub(crate) fn serve_responses_websocket(
             return;
         }
     };
-    let incoming = request
-        .headers
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
-        .collect::<BTreeMap<_, _>>();
+    let incoming = request.incoming();
     let head = format!(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
     );
@@ -255,6 +249,16 @@ pub(crate) fn serve_responses_websocket(
                 return;
             }
         };
+        if request
+            .source
+            .and_then(|source| source.caller.as_ref())
+            .is_some_and(|caller| !matches!(caller.id.as_str(), "local" | "shared"))
+            && crate::http::auth::proxy_identity(request, state, crate::util::system_now())
+                .is_none()
+        {
+            websocket.close(1008, "device key was revoked");
+            return;
+        }
         if state.connection_admission.is_quiescing() {
             websocket.close(1001, "EMP connection is draining");
             return;
@@ -394,6 +398,10 @@ pub(crate) fn serve_responses_websocket(
             }
         };
         websocket.observation.selected(&route);
+        state
+            .backend
+            .claude_turns
+            .selected(&route, &request_body, &incoming);
         websocket.observation.phase(Phase::ValidateInput);
         if crate::services::claude_cli::selected(&route)
             && let Err(error) = crate::services::claude_cli::preflight_input(&request_body)

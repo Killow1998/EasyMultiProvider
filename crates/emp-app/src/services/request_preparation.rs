@@ -5,6 +5,7 @@ use crate::services::auto_review::resolve_auto_review_route;
 use crate::services::providers::hydrate_provider_keys;
 use emp_core::{Dialect, OpaqueJson, Protocol, ResolvedRoute, RouteResolutionError, resolve_route};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SummaryPolicy {
@@ -39,13 +40,14 @@ pub(crate) fn prepare_request(
     state: &ServerState,
     body: Value,
     operation: RequestOperation,
+    incoming: &BTreeMap<String, String>,
 ) -> Result<PreparedRequest, RequestPreparationError> {
     let config = state
         .backend
         .configuration
         .snapshot()
         .map_err(|_| RequestPreparationError::ConfigurationUnavailable)?;
-    prepare_with_config(state, config, body, operation)
+    prepare_with_config(state, config, body, operation, incoming)
 }
 
 /// A policy that already selected an account must retain that configuration snapshot.
@@ -54,6 +56,7 @@ pub(super) fn prepare_with_config(
     mut config: Value,
     mut body: Value,
     operation: RequestOperation,
+    incoming: &BTreeMap<String, String>,
 ) -> Result<PreparedRequest, RequestPreparationError> {
     let request = body
         .as_object_mut()
@@ -87,10 +90,13 @@ pub(super) fn prepare_with_config(
             ),
         );
     }
-    let automatic = match operation {
-        RequestOperation::Responses => resolve_auto_review_route(state, &mut config, model),
-        RequestOperation::Compact | RequestOperation::Images => None,
-    };
+    let automatic =
+        super::aggregate_routing::resolve(state, &config, request, incoming).or_else(|| {
+            match operation {
+                RequestOperation::Responses => resolve_auto_review_route(state, &mut config, model),
+                RequestOperation::Compact | RequestOperation::Images => None,
+            }
+        });
     let mut route = automatic
         .unwrap_or_else(|| {
             resolve_route(&config, model, |config, slug, account| {

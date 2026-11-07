@@ -22,7 +22,7 @@ def main():
         root = Path(temporary)
         home = root / 'native'
         home.mkdir()
-        original = ('# Preserve user settings\nmodel = "gpt-6.1-sol"\n'
+        original = ('# Preserve user settings\nmodel = "gpt-6.1-sol"\nmodel_reasoning_effort = "xhigh"\n'
             'openai_base_url = "http://127.0.0.1:9/v1"\n'
             '[features.async_compaction]\nenabled = false\nmodel_async_compact_threshold_percent = 73\n'
             '[memories]\ngenerate_memories = false\nuse_memories = false\n'
@@ -35,6 +35,11 @@ def main():
             'context_window':272000,'max_context_window':872000,'auto_compact_token_limit':200000,
             'effective_context_window_percent':95,'visibility':'list','base_instructions':'fixture'}
             for model in ['gpt-6.1-sol','gpt-6-luna']]}))
+        model_data = json.loads(catalog.read_text())
+        for model in model_data['models']:
+            model['supported_reasoning_levels'] = [{'effort':level,'description':level}
+                for level in (['low','medium','high','xhigh'] if model['slug']=='gpt-6.1-sol' else ['low','medium','high'])]
+        catalog.write_text(json.dumps(model_data))
         base, url, state_dir, _, upstream = start_backend(stack,args.emp.resolve(),root,
             {'auto_enable_on_start':False,'native_catalog_path':str(catalog),
              'codex_base_url':'http://127.0.0.1:9/v1'},
@@ -60,11 +65,17 @@ def main():
         assert stored()['features']['async_compaction']['model_async_compact_threshold_percent'] == 73
         browser.execute('document.querySelector("[data-ui-action=routing-settings]").click();')
         assert set(browser.execute('return [...document.querySelectorAll("#routing_memory_model option")].map(node=>node.value);')) == {'', 'gpt-6.1-sol','gpt-6-luna'}
-        browser.execute('document.getElementById("routing_memory_model").value="gpt-6-luna";document.getElementById("routing_memory_extraction_model").value="gpt-6.1-sol";document.getElementById("modal_submit").click();')
+        browser.execute('document.getElementById("routing_memory_model").value="gpt-6-luna";document.getElementById("routing_memory_model").dispatchEvent(new Event("change"));document.getElementById("routing_memory_extraction_model").value="gpt-6.1-sol";document.getElementById("routing_memory_extraction_model").dispatchEvent(new Event("change"));document.getElementById("routing_memory_extraction_model_effort").value="high";document.getElementById("routing_memory_model_effort").value="low";document.getElementById("modal_submit").click();')
         wait_for(lambda: browser.execute('return !document.getElementById("routing_memory_model") && state.memory_model==="gpt-6-luna";'))
         assert stored()['memories'] == {'generate_memories':False,'use_memories':False,
             'extract_model':'gpt-6.1-sol','consolidation_model':'gpt-6-luna'}
-        checks.append('Saving applies independent memory models and background activation, preserving memory permissions and the user threshold')
+        browser.navigate(url)
+        browser.execute('openSettings("native");document.querySelector("[data-ui-action=routing-settings]").click();')
+        assert browser.execute('return document.getElementById("routing_memory_extraction_model_effort").value==="high" && document.getElementById("routing_memory_model_effort").value==="low";')
+        browser.execute('const model=document.getElementById("routing_memory_model"),effort=document.getElementById("routing_memory_model_effort");model.value="gpt-6.1-sol";model.dispatchEvent(new Event("change"));effort.value="xhigh";model.value="gpt-6-luna";model.dispatchEvent(new Event("change"));')
+        assert browser.execute('return document.getElementById("routing_memory_model_effort").value;') == ''
+        assert stored()['model_reasoning_effort'] == 'xhigh'
+        checks.append('Independent memory models and efforts persist across reload; changing to a model without the chosen effort restores its default, preserving main-chat effort, memory permissions and the user threshold')
         for language in ['zh-CN','en']:
             for width in [390,1280]:
                 request(browser.base + '/window/rect',{'width':width,'height':900})

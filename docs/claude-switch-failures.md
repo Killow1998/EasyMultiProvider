@@ -3,6 +3,30 @@
 Failure records below distinguish request conversion, response conversion and
 runtime lifecycle problems.
 
+## Per-turn Claude TUI candidate (2026-11-06 UTC)
+
+CPA inference now starts the installed Claude Code in a real PTY/ConPTY, not
+`--print` or a private transcript loop. Codex owns persistent history and tools.
+An MCP prompt supplies each user turn's prepared context; a temporary MCP tool
+bridge returns calls to Codex and accepts their results. A new user turn starts
+a fresh CLI. Original text, images and PDF blocks replace opaque context slots
+at the native CLI's upstream boundary, including long inputs above 10 MiB.
+
+Run the isolated behavioral check with the candidate EMP binary:
+
+```bash
+python3 scripts/claude_tui_acceptance.py --binary /absolute/path/to/EMP \
+  --large-context --large-image --codex /absolute/path/to/codex \
+  --output /absolute/path/to/tui-result.json
+```
+
+The Linux check uses the actual installed Claude Code and Codex with synthetic
+upstream responses. It checks tool round trips, new-turn reset, restart/resume
+and media byte preservation; separate `--case` runs cover 401, 429, cancellation
+and output-budget failures. It does not measure real-provider quality or quota.
+Windows ConPTY and macOS local OAuth require their own package acceptance.
+The dated incidents below describe earlier adapters and remain historical evidence.
+
 ## External tool images and raw reasoning (2026-10-31 UTC)
 
 A macOS report on EMP 0.13.20 returned `unsupported tool output` when switching

@@ -72,6 +72,7 @@ impl From<FilesystemError> for ConfigError {
 
 pub type ConfigResult<T> = Result<T, ConfigError>;
 
+mod aggregates;
 mod image_routing;
 mod presentation;
 pub use presentation::{
@@ -128,6 +129,7 @@ fn default_configuration() -> Value {
         "accounts": [],
         "providers": [],
         "models": [],
+        "model_groups": [],
         "native_hidden_models": [],
         "native_model_context_windows": {},
         "catalog_show_context": true,
@@ -140,6 +142,8 @@ fn default_configuration() -> Value {
         "image_routing": {"mode":"follow", "account_id":""},
         "memory_model": "",
         "memory_extraction_model": "",
+        "memory_extraction_effort": "",
+        "memory_consolidation_effort": "",
         "background_compaction": null,
         "ultra_reasoning_efforts": {},
         "codex_runtime_sources": ["auto"],
@@ -609,6 +613,7 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "accounts": accounts,
         "providers": providers,
         "models": models,
+        "model_groups": aggregates::normalize(raw.get("model_groups"), &models)?,
         "native_hidden_models": native_hidden_models,
         "native_model_context_windows": native_model_context_windows,
         "catalog_show_context": catalog_show_context,
@@ -618,6 +623,8 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "image_routing": image_routing,
         "memory_model": memory_model,
         "memory_extraction_model": memory_extraction_model,
+        "memory_extraction_effort": presentation::normalize_memory_effort(raw.get("memory_extraction_effort"), "memory_extraction_effort")?,
+        "memory_consolidation_effort": presentation::normalize_memory_effort(raw.get("memory_consolidation_effort"), "memory_consolidation_effort")?,
         "background_compaction": background_compaction,
         "ultra_reasoning_efforts": presentation::normalize_ultra_efforts(raw.get("ultra_reasoning_efforts"))?,
         "codex_runtime_sources": codex_runtime_sources,

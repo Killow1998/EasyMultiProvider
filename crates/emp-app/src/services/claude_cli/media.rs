@@ -1,4 +1,3 @@
-use super::process::InputFormat;
 use super::projection;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -12,38 +11,14 @@ const MAX_MEDIA_BYTES: usize = projection::MAX_TRANSCRIPT_BYTES;
 
 pub(super) struct PreparedInput {
     pub(super) system_prompt: String,
-    pub(super) stdin: Vec<u8>,
-    pub(super) input_format: InputFormat,
     pub(super) expected_user_content: ExpectedUserContent,
 }
 
+#[derive(serde::Serialize)]
+#[serde(untagged)]
 pub(super) enum ExpectedUserContent {
     Text(String),
     Blocks(Vec<Value>),
-}
-
-/// The relay, not Claude Code's image codec, owns the original media. Only a
-/// fixed image slot crosses the CLI; validation restores the source at that
-/// exact position before any request reaches the provider. Context assessment
-/// and byte budgets continue to use the originals, never these slots.
-pub(super) fn cli_blocks(original: &[Value]) -> Vec<Value> {
-    let slot = cli_image_slot();
-    original
-        .iter()
-        .map(|block| {
-            if block["type"] == "image" {
-                &slot
-            } else {
-                block
-            }
-            .clone()
-        })
-        .collect()
-}
-
-pub(super) fn cli_image_slot() -> Value {
-    json!({"type":"image","source":{"type":"base64","media_type":"image/png",
-        "data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="}})
 }
 
 enum Attachment {
@@ -155,24 +130,6 @@ fn preflight_part(part: &Value) -> Result<(), &'static str> {
 }
 
 pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
-    prepare_with_image_slots(body, false)
-}
-
-pub(super) fn prepare_relay(body: &Value) -> Result<PreparedInput, &'static str> {
-    prepare_with_image_slots(body, true)
-}
-
-fn prepare_with_image_slots(body: &Value, relay: bool) -> Result<PreparedInput, &'static str> {
-    let prepared = prepare_input(body, relay)?;
-    if prepared.stdin.len()
-        > projection::MAX_TRANSCRIPT_BYTES.saturating_sub(prepared.system_prompt.len())
-    {
-        return Err("claude_cli_input_too_large");
-    }
-    Ok(prepared)
-}
-
-fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static str> {
     let mut transcript = projection::normalized_transcript(body);
     let system_prompt = super::instructions::take(&mut transcript)?;
     // Structured history needs stable block boundaries so appending a turn
@@ -181,18 +138,17 @@ fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static st
         transcript.get("input"),
         Some(Value::Array(_) | Value::Object(_))
     ) {
-        let stdin = projection::text_transcript(&transcript)?;
-        // Claude CLI caps plain stdin at 10 MiB; JSONL has no such text cap.
-        let (payload, input_format) = if stdin.len() > 10 * 1024 * 1024 {
-            (encode_user_message(&stdin)?, InputFormat::StreamJson)
-        } else {
-            (stdin.as_bytes().to_vec(), InputFormat::Text)
-        };
+        let stdin = transcript.to_string();
+        let mut budget = JsonByteBudget::new(
+            projection::MAX_TRANSCRIPT_BYTES.saturating_sub(system_prompt.len()),
+        );
+        budget
+            .reserve(64)
+            .and_then(|()| budget.charge(&stdin).map_err(std::io::Error::other))
+            .map_err(|_| "claude_cli_input_too_large")?;
         return Ok(PreparedInput {
             system_prompt,
             expected_user_content: ExpectedUserContent::Text(stdin),
-            stdin: payload,
-            input_format,
         });
     }
     let input = transcript.get("input");
@@ -204,17 +160,14 @@ fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static st
     let mut budget =
         JsonByteBudget::new(projection::MAX_TRANSCRIPT_BYTES.saturating_sub(system_prompt.len()));
     budget
-        .charge(&json!({"type":"user","message":{"role":"user","content":[]}}))
+        .charge(&json!({"content":[],"isError":false}))
         .map_err(|_| "claude_cli_input_too_large")?;
-    budget
-        .reserve(1)
-        .map_err(|_| "claude_cli_input_too_large")?; // JSONL newline
     let mut content = Vec::new();
     push_block(
         &mut content,
         &mut budget,
         text_block(json!({
-            "codex_responses_metadata": request_metadata(&transcript)
+            "codex_responses_metadata": object_without(&transcript, "input")
         }))?,
     )?;
 
@@ -294,28 +247,10 @@ fn prepare_input(body: &Value, relay: bool) -> Result<PreparedInput, &'static st
         )?;
     }
 
-    let mut stdin = if relay && content.iter().any(|block| block["type"] == "image") {
-        encode_user_message(cli_blocks(&content))?
-    } else {
-        encode_user_message(&content)?
-    };
-    stdin.push(b'\n');
-    if stdin.len() > projection::MAX_TRANSCRIPT_BYTES {
-        return Err("claude_cli_input_too_large");
-    }
     Ok(PreparedInput {
         system_prompt,
-        stdin,
-        input_format: InputFormat::StreamJson,
         expected_user_content: ExpectedUserContent::Blocks(content),
     })
-}
-
-fn encode_user_message(content: impl serde::Serialize) -> Result<Vec<u8>, &'static str> {
-    let mut bytes = br#"{"message":{"content":"#.to_vec();
-    serde_json::to_writer(&mut bytes, &content).map_err(|_| "claude_cli_invalid_transcript")?;
-    bytes.extend_from_slice(br#","role":"user"},"type":"user"}"#);
-    Ok(bytes)
 }
 
 /// Build the Anthropic Messages view that the CLI is expected to send, for
@@ -331,13 +266,9 @@ pub(super) fn context_payload(body: &Value) -> Result<Value, &'static str> {
     Ok(json!({
         "system":prepared.system_prompt,
         "messages":[{"role":"user","content":content}],
-        "tools":[{"name":"StructuredOutput","input_schema":schema}],
+        "tools":[{"name":"mcp__emp_codex__codex","input_schema":schema}],
         "max_tokens":body.get("max_output_tokens").cloned().unwrap_or(Value::Null)
     }))
-}
-
-fn request_metadata(transcript: &Value) -> Value {
-    object_without(transcript, "input")
 }
 
 fn is_message(item: &Value) -> bool {

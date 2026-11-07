@@ -13,17 +13,17 @@ fn toggle_preserves_options_and_restores_the_original_feature() {
         let config = temp.path().join("config.toml");
         std::fs::write(&config, original).unwrap();
         let manager = CodexPreferences::new(config.clone(), temp.path().join("lease.json"));
-        let before = manager.snapshot().unwrap();
+        let before = manager.snapshot(None).unwrap();
         manager.apply(Some(true), "", "").unwrap();
-        assert_eq!(manager.snapshot().unwrap()["background_enabled"], true);
+        assert_eq!(manager.snapshot(None).unwrap()["background_enabled"], true);
         assert_eq!(
-            manager.snapshot().unwrap()["background_threshold_percent"],
+            manager.snapshot(None).unwrap()["background_threshold_percent"],
             before["background_threshold_percent"]
         );
         manager.apply(Some(false), "", "").unwrap();
-        assert_eq!(manager.snapshot().unwrap()["background_enabled"], false);
+        assert_eq!(manager.snapshot(None).unwrap()["background_enabled"], false);
         manager.restore().unwrap();
-        assert_eq!(manager.snapshot().unwrap(), before);
+        assert_eq!(manager.snapshot(None).unwrap(), before);
         assert_eq!(std::fs::read_to_string(config).unwrap(), original);
     }
 }
@@ -50,6 +50,36 @@ fn restore_preserves_external_edits_and_unrelated_settings() {
 }
 
 #[test]
+fn memory_defaults_follow_the_runtime_without_replacing_original_choices() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    let manager = CodexPreferences::new(config.clone(), temp.path().join("preferences.json"));
+    assert_eq!(
+        manager.snapshot(Some("0.166.0")).unwrap()["memory_default_models"],
+        json!({"extract_model":"gpt-5.6-luna","consolidation_model":"gpt-5.6-terra"})
+    );
+    assert_eq!(
+        manager.snapshot(Some("0.167.0")).unwrap()["memory_default_models"],
+        json!({"extract_model":"gpt-6-luna","consolidation_model":"gpt-6.1-terra"})
+    );
+    assert_eq!(
+        manager.snapshot(None).unwrap()["memory_default_models"],
+        json!({"extract_model":null,"consolidation_model":null})
+    );
+    std::fs::write(&config, "[memories]\nextract_model='gpt-6.1-sol'\n").unwrap();
+    manager.apply(None, "gpt-6-luna", "gpt-5.6-luna").unwrap();
+    assert_eq!(
+        manager.snapshot(Some("0.167.0")).unwrap()["memory_default_models"],
+        json!({"extract_model":"gpt-6.1-sol","consolidation_model":"gpt-6.1-terra"})
+    );
+    manager.restore().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        "[memories]\nextract_model='gpt-6.1-sol'\n"
+    );
+}
+
+#[test]
 fn memory_model_overrides_preserve_permissions_and_restore_both_original_models() {
     for original in [
         "# User settings\nmodel = 'gpt-fixture'\n",
@@ -60,10 +90,11 @@ fn memory_model_overrides_preserve_permissions_and_restore_both_original_models(
         let config = temp.path().join("config.toml");
         std::fs::write(&config, original).unwrap();
         let manager = CodexPreferences::new(config.clone(), temp.path().join("preferences.json"));
-        let original_models = manager.snapshot().unwrap()["memory_default_models"].clone();
+        let original_models =
+            manager.snapshot(Some("0.166.0")).unwrap()["memory_default_models"].clone();
         manager.apply(None, "gpt-6-luna", "gpt-6-luna").unwrap();
         assert_eq!(
-            manager.snapshot().unwrap()["memory_default_models"],
+            manager.snapshot(Some("0.166.0")).unwrap()["memory_default_models"],
             original_models
         );
         let document: DocumentMut = std::fs::read_to_string(&config).unwrap().parse().unwrap();
@@ -140,7 +171,7 @@ fn memory_stages_reset_independently_to_original_values_or_absence() {
         std::fs::write(&config, original).unwrap();
         let manager = CodexPreferences::new(config.clone(), temp.path().join("preferences.json"));
         let before = manager.read().unwrap();
-        let defaults = manager.snapshot().unwrap();
+        let defaults = manager.snapshot(None).unwrap();
         for (extraction, consolidation) in [
             ("gpt-6-luna", "gpt-6.1-sol"),
             ("", "gpt-6.1-sol"),
@@ -164,7 +195,7 @@ fn memory_stages_reset_independently_to_original_values_or_absence() {
                 };
                 assert_eq!(actual, expected, "{key}");
             }
-            assert_eq!(manager.snapshot().unwrap(), defaults);
+            assert_eq!(manager.snapshot(None).unwrap(), defaults);
         }
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
         manager.apply(None, "gpt-6-luna", "").unwrap();

@@ -9,6 +9,50 @@ sign-in changes. EMP forwards requests with the selected service's saved
 credentials, not the caller's gateway key. This key grants model API access;
 WebUI management still uses its own session.
 
+### Devices and usage
+
+Create a named device key in **Gateway connection** and copy it once into the
+client's Bearer credential. Only its SHA-256 digest and metadata are saved. The
+existing shared key remains available. Named keys authenticate model APIs and
+cannot manage EMP. Revocation rejects subsequent HTTP calls and the next
+generation on an existing WebSocket; it does not replay an in-flight request.
+
+**Caller usage** groups calls by key, operation, service/account and model. The
+peer address comes from the socket, not caller-supplied forwarding headers. Use
+different keys for different devices: a tunnel can give several clients the
+same visible peer address, while a shared key combines their usage. Tokens use
+reported counters, retaining unknown and reported zero as different values.
+USD is an API-price estimate for calls with known pricing, not subscription
+quota. Decision calls have their own operation and do not enter conversation
+bills or generation TPS. A Decision disconnect cancels its upstream request.
+
+### Aggregate routing
+
+Open **Settings → Native services → Aggregate routing**. Choose a model, its
+sources, a display prefix and a policy. The model list includes those with at least
+two enabled sources, using their display names and source counts. EMP generates
+the internal `auto/…` identifier and preserves it when the prefix changes. The
+default display prefix is `auto`, displayed as `autoModel` with no added
+separator. An empty prefix shows just the original model name. The original model name stays unchanged and
+subsequent model renames are reflected in the aggregate display too.
+Different models can share a prefix. Multiple aggregate routes for the same model
+must use distinct prefixes; rejected saves preserve the form and configuration.
+Each route can use a different policy:
+
+| Policy | New conversation allocation |
+|---|---|
+| Priority | First available source in the configured order |
+| Quota balance | Source with the most remaining headroom within the same subscription plan |
+| Round robin | Next available source in the rotation |
+
+Existing conversations stay on their actual account, including after a Native
+account moves to Other. Reordering affects new conversations. Known exhausted,
+disabled and cooling-down sources are skipped; a failed upstream request is
+not replayed against another account. A later request can select another source.
+The alias exposes common capabilities and the smallest context window of its
+sources. Manual model entries remain available. Gateway keys and aggregate
+preferences belong to the gateway instance, independently of service migration.
+
 Codex sign-in is separate. EMP creates an **EMP local key** in `auth.json` only
 when Codex has neither a subscription nor an OpenAI API key. An existing real
 sign-in is preserved. **Change sign-in method** offers subscription sign-in

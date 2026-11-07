@@ -34,7 +34,8 @@ def main():
             before = (target / 'config.json').read_bytes()
             assert browser.execute('return !document.getElementById("shadow_routing_button");')
             assert browser.execute('return document.getElementById("modal_title").textContent.includes("v0.13.26");')
-            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == []
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo);') == ['cpa_quota','memory_usage','codex_maintenance']
+            browser.execute('document.querySelector("[data-shadow-demo=codex_maintenance]").click();document.getElementById("modal_back").click();')
             browser.execute('window.EMP_REVIEW_ACTION("continuation");document.getElementById("modal_back").click();')
             browser.execute('window.EMP_REVIEW_ACTION("chat_output");')
             assert browser.execute('return !document.getElementById("modal_back").hidden;')
@@ -47,6 +48,9 @@ def main():
             assert browser.execute('return document.documentElement.scrollWidth<=innerWidth;')
             _, png = request(browser.base + '/screenshot')
             args.output.with_name(args.output.stem + f'-overview-{lang}.png').write_bytes(base64.b64decode(png['value']))
+            browser.execute('document.querySelector("[data-shadow-demo=memory_usage]").click();')
+            wait_for(lambda: browser.execute('return !!document.querySelector("#presentation_stats [data-stats-view]");'))
+            browser.execute('closeModal();')
             browser.execute('window.EMP_REVIEW_ACTION("bills");')
             wait_for(lambda: browser.execute('return document.querySelectorAll("[data-session-bill]").length===4;'))
             assert browser.execute('return !!document.querySelector("[data-bill-search]") && document.documentElement.scrollWidth<=innerWidth;')
@@ -100,7 +104,7 @@ def main():
             assert browser.execute('return ["deepseek","moonshot"].every(id=>document.querySelector(`[data-service="provider:${id}"] .service-balance`));')
             assert request(backend + '/healthz')[0] == 200
             assert (target / 'config.json').read_bytes() == before
-            checks.append(f'{lang}: this update compares with published v0.13.26 and has no pending rows; archived continuation, chat-output and balance reviews, billing and settings remain accessible')
+            checks.append(f'{lang}: this update compares with published v0.13.26 and lists CPA trends and memory accounting; the memory entry opens statistics, while archived reviews, billing and settings remain accessible')
         for reason in ['key_mismatch', 'key_missing', 'key_invalid', 'key_permissions', 'config_invalid', 'reset_incomplete']:
             request(browser.base + '/url', {'url': frontend + '/recovery?reason=' + reason})
             wait_for(lambda: browser.execute('return !document.getElementById("reset").disabled;'))

@@ -9,6 +9,7 @@ import threading
 import time
 import tomllib
 import secrets
+import subprocess
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from local_backend import request, start_backend
@@ -132,6 +133,25 @@ class AccountingSnapshot:
     def read(self, path):
         with self.lock:
             return request(self.current[1] + path, headers=self.current[2], timeout=30)
+
+    def devices(self, payload, method):
+        with self.lock:
+            return request(self.current[1]+'/api/gateway/clients',payload,
+                {**self.current[2],'Origin':self.current[1]},method=method)
+
+    def catalog(self, config, source_read):
+        status,integration=source_read('/api/integration')
+        version=integration.get('codex_compatibility',{}).get('installed')
+        if status != 200 or not version:
+            raise ValueError('Could not identify the source catalog version')
+        status,catalog = source_read('/v1/models?client_version='+version)
+        if status != 200:
+            raise ValueError('Could not read source model metadata')
+        result = subprocess.run([str(self.binary),'--emp-preview-catalog'],
+            input=json.dumps({'config':config,'catalog':catalog}),text=True,capture_output=True,timeout=20)
+        if result.returncode:
+            return 400, {'error':{'message':result.stderr.strip()}}
+        return 200,json.loads(result.stdout)
 
     @contextlib.contextmanager
     def stream(self, path):

@@ -107,6 +107,16 @@ impl HttpObservation {
             _ => "responded",
         });
         let result = stream.write_all(bytes).and_then(|()| stream.flush());
+        if matches!(
+            self.fields["path"].as_str(),
+            Some("/v1/decisions" | "/v1/systemone")
+        ) && let Some(id) = self.request_id()
+        {
+            let _ = self.ledger.record_call_delivery(id,"decisions", &json!({
+                "delivery":if result.is_ok() {"delivered"} else {"failed"},
+                "duration_ms":self.started.elapsed().as_millis() as u64,
+                "writes_completed":u64::from(result.is_ok()),"response_status":self.fields["status"]}));
+        }
         if result.is_err() {
             self.failure("write_failed");
         }
@@ -182,6 +192,8 @@ fn safe_path(path: &str) -> String {
         | "/v1/models"
         | "/v1/responses"
         | "/v1/responses/compact"
+        | "/v1/decisions"
+        | "/v1/systemone"
         | "/v1/images/generations"
         | "/v1/images/edits"
         | "/v1/live"
@@ -192,6 +204,9 @@ fn safe_path(path: &str) -> String {
         | "/api/catalog/refresh"
         | "/api/client-events"
         | "/api/config"
+        | "/api/gateway"
+        | "/api/gateway/clients"
+        | "/api/gateway/usage"
         | "/api/diagnostics"
         | "/api/integration"
         | "/api/integration/enable"

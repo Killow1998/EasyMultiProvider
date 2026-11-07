@@ -108,6 +108,8 @@ fn memory_http_follows_subscription_and_uses_native_for_external_and_global_jobs
                 .unwrap();
             preferences["memory_extraction_model"] = json!(extraction);
             preferences["memory_model"] = json!(consolidation);
+            preferences["memory_extraction_effort"] = json!("high");
+            preferences["memory_consolidation_effort"] = json!("low");
         }
         prior(&server, category);
         let auth = session_header(&server);
@@ -119,6 +121,11 @@ fn memory_http_follows_subscription_and_uses_native_for_external_and_global_jobs
         }
         let mut request = body();
         request["model"] = json!("gpt-6.1-sol");
+        request["reasoning"] = json!({"effort":"medium","summary":"auto","context":"all_turns"});
+        request["input"] = json!([
+            {"type":"configuration_update","reasoning":{"effort":"medium","context":"all_turns"}},
+            {"type":"message","role":"user","content":"fixture memory only"}
+        ]);
         let wire = post(
             &server,
             "/v1/responses",
@@ -129,6 +136,25 @@ fn memory_http_follows_subscription_and_uses_native_for_external_and_global_jobs
         let (_, headers, sent) = upstream.observed();
         assert_eq!(headers["authorization"], format!("Bearer {expected_token}"));
         assert_eq!(sent["model"], expected_model);
+        let expected_effort = if global { "low" } else { "high" };
+        assert_eq!(sent["reasoning"]["effort"], expected_effort);
+        assert_eq!(sent["reasoning"]["summary"], "auto");
+        assert_eq!(sent["input"][0]["reasoning"]["effort"], expected_effort);
+        assert_eq!(sent["input"][0]["reasoning"]["context"], "all_turns");
+        let usage = server
+            .state
+            .backend
+            .usage
+            .ledger
+            .query(
+                0.0,
+                crate::util::system_now() + 60.0,
+                "all",
+                crate::util::system_now(),
+            )
+            .unwrap();
+        assert_eq!(usage["totals"]["input_tokens"], 10);
+        assert_eq!(usage["totals"]["output_tokens"], 1);
         assert_eq!(
             server
                 .state

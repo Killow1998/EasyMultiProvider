@@ -70,18 +70,69 @@ an executable command. Existing reasoning-field suppression remains unchanged.
   formatting and diff checks pass. Existing EMP instances were not restarted;
   installed login and encrypted credential files remain unchanged.
 
-## Current target and acceptance (2026-10-31 UTC)
+## Current target and acceptance (2026-11-06 UTC)
 
-The maintenance target is **0.162–0.166**, following the official stable
-[0.166.0 release](https://github.com/openai/codex/releases/tag/rust-v0.166.0)
-(2026-10-29 19:47:53 UTC). GitHub identifies it as the latest release with
+The maintenance target is **0.163–0.167**, following the official stable
+[0.167.0 release](https://github.com/openai/codex/releases/tag/rust-v0.167.0)
+(2026-11-06 01:40:00 UTC). GitHub identifies it as the latest release with
 `prerelease=false`.
 
 | Target series | Existing evidence |
 | --- | --- |
-| 0.162–0.164 | Dated Linux engine acceptance below; App/IDE checks are listed separately with their exact engine versions. |
+| 0.163–0.164 | Dated Linux engine acceptance below; App/IDE checks are listed separately with their exact engine versions. |
 | 0.165 | Official Linux 0.165.0 engine passed the local EMP 0.13.17 candidate contracts recorded below. |
 | 0.166 | Official Linux 0.166.0 engine passed the local EMP 0.13.20 maintenance candidate contracts recorded below. |
+| 0.167 | Official Linux 0.167.0 engine passed the local EMP 0.13.26 maintenance candidate contracts on 2026-11-06 UTC. |
+
+## Feature ownership and acceptance — Codex 0.167.0
+
+The stable 0.166.0 → 0.167.0 review uses the [official changelog](https://learn.chatgpt.com/docs/changelog)
+and tagged source. This stage maintains the existing feature boundary.
+
+| Upstream change | EMP maintenance and observable result |
+| --- | --- |
+| [Memory default models #58091](https://github.com/openai/codex/pull/58091) | Default hints follow the trusted runtime. Unset 0.167 memory models resolve to GPT-6 Luna extraction and GPT-6.1 Terra consolidation; 0.163–0.166 retain their earlier defaults. Explicit original choices survive EMP overrides and exact restore. A separate real-engine case verifies extraction, consolidation, a later memory read and the ledger using the new defaults. |
+| `codex agents --no-daemon`, unread agent results and backend/session switching with retained drafts | Client-owned agent-center and navigation behavior; EMP retains its existing request and history paths. Three protocols × three collaboration modes pass actual child execution, return and resume. |
+| Terminal image thumbnails and clickable image paths | Client-owned rendering. Model catalogs retain text/image modalities and the existing external image projection. |
+| API-key/cloud sign-in alternatives and optional GCP setup | Client-owned sign-in UI. Existing EMP authentication and explicitly selected upstreams remain unchanged. |
+| [Experimental Windows/macOS system-proxy opt-in #58157](https://github.com/openai/codex/pull/58157) | This PR exposes the existing `respect_system_proxy` flag in the experimental menu; its false default stays unchanged. Two real-engine Native requests verify that EMP preserves the opt-in beta header only when enabled. Linux localhost-only proxy bypass also passes. OS proxy discovery remains a Codex client operation. |
+| Inline patch approval and provider-switch history access | Keep approval/sandbox settings and ordered tool results. The history contract restores the original configuration exactly; three external tool protocols complete without history rejections. |
+| [Responses Lite cancellation #57864](https://github.com/openai/codex/pull/57864) | `interrupt_on_cancel` defaults to false in 0.167. An isolated real-engine opt-in sends `response.interrupt`, receives its acknowledgement and ends the turn without replaying inference. Native and external steering also pass on 0.167; EMP leaves the client's feature choice intact. |
+| [Retained-output context estimation #58404](https://github.com/openai/codex/pull/58404) | Two real-engine cases return a long retained output followed by failure or a completion without Usage. Each triggers exactly one V2 compaction containing that output, continues and resumes a new process. Missing token reports remain unknown in EMP's call records. |
+| Lower idle allocator overhead in the standalone musl CLI | Codex binary optimization; EMP does not change its allocator or add a second runtime. |
+| [Stable deferred tool world #58410](https://github.com/openai/codex/pull/58410) | The existing incremental tool bridge resolves namespace-qualified discovery, revisions and removed/redeclared tools. The 0.167 installed-engine external continuation run includes actual discovery and invocation of two same-named tools, across Chat, Anthropic and external Responses. |
+| [Incremental Exec flag #58122](https://github.com/openai/codex/pull/58122) | This PR adds the `incremental_exec_tools` flag with a false default; it does not add a new wire representation. EMP retains the existing declaration/removal bridge and does not force the client flag on. |
+| [Early child-edge persistence #58129](https://github.com/openai/codex/pull/58129) | The parent edge can exist before child metadata or history. The persisted edge format is unchanged. EMP's metadata-only reader already resolves such children, including later-arriving edges, without writing the Codex database. The session-directory contracts verify these cases. |
+| [Paginated assistant text release #58751](https://github.com/openai/codex/pull/58751) | Codex releases superseded live text while persisted replay uses its ordinary reducer. Both long-output cases use paginated history and two assistant texts in one turn; compaction and process resume retain both texts. EMP continues to read persisted history. |
+| [Negotiated Code Mode output truncation #58125](https://github.com/openai/codex/pull/58125) | Negotiation belongs to the Code Mode host connection. Model-facing results retain the existing structured text/image content shape. EMP keeps ordered results and uses its current projection; no extra truncation pass or output buffer is added. |
+| [Provider request preparation #58121](https://github.com/openai/codex/pull/58121), [transient auth reload #58324](https://github.com/openai/codex/pull/58324) and [keyring fallback #58343](https://github.com/openai/codex/pull/58343) | These are client credential lifecycle changes. EMP preserves the current caller-key boundary, account identity and credential ownership; no new authentication fields appear in model requests. Existing login/restoration contracts remain the gate. |
+| [Provider OAuth file storage #58219](https://github.com/openai/codex/pull/58219) | The optional provider grant store is `secrets/gateway_oauth.json`. Codex owns it; EMP does not replace it when applying or restoring its own Native integration. |
+| [Turn-scoped standalone search #58189](https://github.com/openai/codex/pull/58189) and [native Guardian evidence #58040](https://github.com/openai/codex/pull/58040) | Search permissions and Guardian command evidence are prepared within Codex. The existing Native request path preserves their payload; Auto Review remains subscription-routed, and EMP does not change approval or network permissions. |
+| [Audio file references #58430](https://github.com/openai/codex/pull/58430) | The protocol can represent uploaded audio references; Codex explicitly rejects them in unsupported runtime inputs. This representation change does not require a new EMP audio-upload feature. Existing supported input modalities and explicit unsupported-input errors remain. |
+
+The final feature run completed at **06:24:13–06:25:16 UTC** on 2026-11-06.
+The verified official Linux executable has SHA-256
+`cdcb45aaa01d0f14e298985e09465aebccd47f64ecd298aea44814af7b62bbda`.
+The unreleased EMP 0.13.26 candidate, based on `58d79c4`, has SHA-256
+`5dbcf057474df4d91683b116e60cbef46b353c4c8ed4501c4dedac20794a76a2`.
+It is separate from the installed/published executable.
+
+| Contract | Result on 2026-11-06 UTC |
+| --- | --- |
+| Complete feature acceptance | Eight groups and 77 synthetic inference requests: 40 effort requests over HTTP/SSE and WebSocket, 21 memory requests, four fork requests and 12 Terra catalog requests. Fresh/legacy memory imports pass without inference. |
+| Created history and native restore | 55 assertions: real MCP around compaction, parent/fork/grandchild resumes, per-thread dynamic tools, exact original configuration and permissions, unchanged backups and idempotent restore. |
+| Code Mode | Nine three-protocol/three-mode cases pass; enabled modes complete children and process resume without encrypted-history recovery calls. |
+| App Server protocol | Three turns plus process resume preserve item timestamps; four native-USD states remain separate from estimates; three Zstd negotiation states and reconnect pass. |
+| Installed-engine external continuation and proxy | Chat, Anthropic and external Responses complete tool loops without history rejections. A localhost-only proxy exception retains local catalog access. |
+| Additional lifecycle run, 07:34:34–07:34:39 UTC | Two retained-output cases make eight ordinary generation requests and two V2 compaction requests. Unknown usage, paginated history with superseded text and process resume pass on the same final candidate. Three installed-engine controls cover opt-in cancellation and Native/external steering. |
+| Shared-fixture and system-proxy metadata regression | Forty HTTP/SSE and WebSocket requests preserve effort changes and continuation across Native, external Responses, Chat and Anthropic. Two additional Native requests verify the system-proxy beta-header opt-in. These Linux metadata checks do not read Windows/macOS proxy settings. |
+| Preferences and browser behavior | Six preference contracts pass, including version-specific defaults and original-choice preservation. Bilingual narrow/desktop settings E2E and current-review navigation pass; both memory help bubbles expose the measured token-share reference. |
+| Static checks | Strict affected-crate/all-target Clippy, Rust formatting and diff checks pass. |
+
+All model/backend responses in these tests are synthetic and loopback-only.
+The standalone engine was not installed over Xian's active CLI. The dated
+0.163–0.166 evidence below retains its original engines, candidates and dates;
+this stage adds the 0.167 Linux run rather than relabeling those old runs.
 
 ## Feature ownership and acceptance — Codex 0.166.0
 

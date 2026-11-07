@@ -252,8 +252,11 @@ fn merge_web_update_at_time(
         "external_collaboration",
         "image_routing",
         "decision_provider",
+        "model_groups",
         "memory_model",
         "memory_extraction_model",
+        "memory_extraction_effort",
+        "memory_consolidation_effort",
         "background_compaction",
         "ultra_reasoning_efforts",
     ] {

@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from . import catalog, effort, forks, imports, memory
+from . import catalog, effort, forks, imports, lifecycle, memory
 
 
 def main():
@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--native-catalog', type=Path)
-    parser.add_argument('--suite', choices=['all', 'effort', 'memory', 'imports', 'forks', 'catalog'], default='all')
+    parser.add_argument('--suite', choices=['all', 'effort', 'memory', 'imports', 'forks', 'catalog', 'lifecycle'], default='all')
     args = parser.parse_args()
     if args.suite in ('all', 'catalog') and args.native_catalog is None:
         parser.error('--native-catalog must be the pinned official models-manager/models.json')
@@ -35,7 +35,7 @@ def main():
              ('effort-websocket', effort.run, {'transport':'websocket'}),
              *[('memory-'+source, memory.run, {'source':source}) for source in ('native', 'external', 'imported')],
              ('imports', imports.run, {}), ('forks', forks.run, {}),
-             ('catalog', catalog.run, {'catalog':args.native_catalog})]
+             ('catalog', catalog.run, {'catalog':args.native_catalog}), ('lifecycle', lifecycle.run, {})]
     for name, run, options in cases:
         if args.suite != 'all' and name.split('-')[0] != args.suite:
             continue

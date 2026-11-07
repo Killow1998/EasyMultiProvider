@@ -9,10 +9,6 @@ use toml_edit::{DocumentMut, Item};
 const SCHEMA: &str = "easy-multi-provider.codex-preference";
 const KEY: &str = "async_compaction";
 const MEMORY_KEYS: [&str; 2] = ["extract_model", "consolidation_model"];
-// Codex 0.163.0/0.164.0: codex-rs/model-provider/src/provider.rs.
-// Display fallback only; leaving a preference unset must still follow Codex.
-const DEFAULT_MEMORY_EXTRACTION_MODEL: &str = "gpt-5.6-luna";
-const DEFAULT_MEMORY_CONSOLIDATION_MODEL: &str = "gpt-5.6-terra";
 
 pub struct CodexPreferences {
     config: PathBuf,
@@ -220,7 +216,19 @@ impl CodexPreferences {
         let memory = self.memories().restore_current();
         background.and(memory)
     }
-    fn memory_defaults(&self, document: &DocumentMut) -> Result<Value, IntegrationError> {
+    fn memory_defaults(
+        &self,
+        document: &DocumentMut,
+        runtime_version: Option<&str>,
+    ) -> Result<Value, IntegrationError> {
+        let defaults = match runtime_version
+            .and_then(|version| version.strip_prefix("0."))
+            .and_then(|version| version.split('.').next()?.parse::<u64>().ok())
+        {
+            Some(167) => Some(("gpt-6-luna", "gpt-6.1-terra")),
+            Some(163..=166) => Some(("gpt-5.6-luna", "gpt-5.6-terra")),
+            _ => None,
+        };
         let current = encode(document, true)?;
         let manager = self.memories();
         let lease = manager.read_lease()?;
@@ -232,12 +240,12 @@ impl CodexPreferences {
             .unwrap_or(&current);
         let models = decode(original)?;
         Ok(json!({
-            "extract_model":models.as_ref().and_then(|models| models.get("extract_model")).and_then(Item::as_str).unwrap_or(DEFAULT_MEMORY_EXTRACTION_MODEL),
-            "consolidation_model":models.as_ref().and_then(|models| models.get("consolidation_model")).and_then(Item::as_str).unwrap_or(DEFAULT_MEMORY_CONSOLIDATION_MODEL),
+            "extract_model":models.as_ref().and_then(|models| models.get("extract_model")).and_then(Item::as_str).or(defaults.map(|models| models.0)),
+            "consolidation_model":models.as_ref().and_then(|models| models.get("consolidation_model")).and_then(Item::as_str).or(defaults.map(|models| models.1)),
         }))
     }
     /// Credential-free hints; command-line/profile/session overrides remain client-owned.
-    pub fn snapshot(&self) -> Result<Value, IntegrationError> {
+    pub fn snapshot(&self, runtime_version: Option<&str>) -> Result<Value, IntegrationError> {
         let document = self.read()?;
         let setting = feature(&document)?;
         let enabled = setting
@@ -255,7 +263,7 @@ impl CodexPreferences {
             "model_context_window":document.get("model_context_window").and_then(Item::as_integer),
             "model_auto_compact_token_limit":document.get("model_auto_compact_token_limit").and_then(Item::as_integer),
             "model_auto_compact_token_limit_scope":document.get("model_auto_compact_token_limit_scope").and_then(Item::as_str).unwrap_or("total"),
-            "memory_default_models":self.memory_defaults(&document).ok(),
+            "memory_default_models":self.memory_defaults(&document,runtime_version).ok(),
             "source":"user_config","restart_required":true}),
         )
     }

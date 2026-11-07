@@ -4,7 +4,7 @@ function createQuotaDisplay({read, save}) {
   function value(remaining) {
     if (remaining == null || !Number.isFinite(Number(remaining))) return null;
     const percent = Math.max(0, Math.min(100, Number(remaining)));
-    return Math.round((mode === 'used' ? 100 - percent : percent) * 100) / 100;
+    return Math.ceil(mode === 'used' ? 100 - percent : percent);
   }
   return {
     mode:() => mode,

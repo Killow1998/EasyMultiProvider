@@ -296,28 +296,53 @@ pub(crate) fn valid_caller_authorization(value: Option<&str>, auth_path: &Path) 
 }
 
 pub(crate) fn proxy_allowed(request: Request<'_>, state: &ServerState, now: f64) -> bool {
+    request.source.map_or_else(
+        || proxy_identity(request, state, now).is_some(),
+        |source| source.caller.is_some(),
+    )
+}
+
+pub(crate) fn proxy_identity(
+    request: Request<'_>,
+    state: &ServerState,
+    now: f64,
+) -> Option<crate::services::gateway_clients::Caller> {
+    use crate::services::gateway_clients::Caller;
     if request.header_count("Authorization") > 1 {
-        return false;
+        return None;
     }
-    let gateway = request
+    let token = request
         .header("Authorization")
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .is_some_and(|value| {
-            constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes())
-        });
+        .and_then(|value| value.strip_prefix("Bearer "));
+    let gateway = token.and_then(|value| {
+        if constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes()) {
+            Some(Caller {
+                id: "shared".into(),
+                name: String::new(),
+            })
+        } else {
+            state.backend.gateway_clients.identify(value)
+        }
+    });
     // Forwarded API clients have their own Host/port. Browser management remains
     // origin-scoped and never accepts this credential in place of its session.
-    if gateway && request.header("Origin").is_none() {
-        return true;
+    if gateway.is_some() && request.header("Origin").is_none() {
+        return gateway;
     }
     if !same_origin(request, state.port) {
-        return false;
+        return None;
     }
     let supplied_session = request.session_token();
-    gateway
-        || state.sessions.contains(supplied_session.as_deref(), now)
+    if gateway.is_some() {
+        return gateway;
+    }
+    (state.sessions.contains(supplied_session.as_deref(), now)
         || valid_caller_authorization(
             request.header("Authorization"),
             &state.backend.accounts.native_auth_path,
-        )
+        ))
+    .then(|| Caller {
+        id: "local".into(),
+        name: String::new(),
+    })
 }

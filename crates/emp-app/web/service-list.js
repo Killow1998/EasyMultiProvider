@@ -54,7 +54,8 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     const actions = local ? action('provider-quota-refresh', provider.id, refreshing.has(provider.id) ? tr("services.refreshing") : tr("refresh"), 'refresh', refreshing.has(provider.id))
       + action('provider-quota-history', provider.id, tr("services.trend"), 'chart')
       + modelActions
-      : (poolQuotas.canRefresh(provider.id)?action('provider-quota-refresh',provider.id,tr('refresh'),'refresh',poolQuotas.busy.has(provider.id)):'')
+      : (poolQuotas.canRefresh(provider.id) && poolQuotas.canViewHistory(provider.id)?action('provider-quota-refresh',provider.id,tr('refresh'),'refresh',poolQuotas.busy.has(provider.id))
+        + action('provider-quota-history',provider.id,tr('services.trend'),'chart'):'')
         + (balances.canRefresh(provider.id)?action('provider-balance-refresh',provider.id,tr('services.refresh_balance'),'refresh',balances.busy.has(provider.id)):'') + modelActions;
     return `<article class="entity-card service-card" data-service="provider:${esc(provider.id)}">
       <div class="service-main">${serviceIcon('provider', provider.id, label, brand, cpa, errors.has(provider.id) ? {title:tr("services.quota_refresh_failed"),message:errors.get(provider.id)} : null)}<div class="service-identity">${summary}</div></div>

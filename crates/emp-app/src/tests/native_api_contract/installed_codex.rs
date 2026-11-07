@@ -110,16 +110,22 @@ impl Drop for Codex {
 #[test]
 #[ignore = "requires installed Codex CLI and isolated loopback access; run explicitly"]
 fn installed_codex_steers_an_external_stream_and_finishes_the_same_turn() {
-    steering(false);
+    stream_control(false, false);
 }
 
 #[test]
 #[ignore = "requires installed Codex CLI and isolated loopback access; run explicitly"]
 fn installed_codex_interrupts_a_native_stream_and_continues_the_same_turn() {
-    steering(true);
+    stream_control(true, false);
 }
 
-fn steering(native: bool) {
+#[test]
+#[ignore = "requires Codex 0.167+ and isolated loopback access; run explicitly"]
+fn installed_codex_cancels_responses_lite_upstream_without_replaying_generation() {
+    stream_control(true, true);
+}
+
+fn stream_control(native: bool, cancel: bool) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("codex");
@@ -131,7 +137,7 @@ fn steering(native: bool) {
     let (release, steered) = mpsc::channel();
     let upstream = thread::spawn(move || {
         if native {
-            native_upstream(listener, sender)
+            native_upstream(listener, sender, cancel)
         } else {
             http_upstream(listener, sender, steered)
         }
@@ -184,6 +190,10 @@ fn steering(native: bool) {
         server.local_addr(),
         serde_json::to_string(&server.session_token()).unwrap()
     );
+    let settings = settings.replace(
+        "instant_interrupt = true",
+        &format!("instant_interrupt = true\ninterrupt_on_cancel = {cancel}"),
+    );
     std::fs::write(home.join("config.toml"), settings).unwrap();
     let mut codex = Codex::start(&home);
     let version = codex.rpc(1, "initialize", json!({"clientInfo":{"name":"emp_steering_fixture","title":"EMP steering fixture","version":"1"},"capabilities":{"experimentalApi":true}}));
@@ -209,6 +219,27 @@ fn steering(native: bool) {
             .all(|event| event["fields"]["transport"] == "websocket"),
         "warmup must not force Codex into HTTP fallback"
     );
+    if cancel {
+        codex.rpc(4, "turn/interrupt", json!({"threadId":id,"turnId":turn_id}));
+        let completed = codex.wait(|value| value["method"] == "turn/completed");
+        assert_eq!(completed["params"]["turn"]["status"], "interrupted");
+        assert_eq!(completed["params"]["turn"]["id"], turn_id);
+        assert_eq!(
+            upstream.join().unwrap().len(),
+            1,
+            "cancel must not replay inference"
+        );
+        let journal = crate::tests::internal_events_contract::journal(&root);
+        assert!(
+            journal
+                .iter()
+                .any(|event| event["event"] == "websocket_control"
+                    && event["fields"]["forwarded"] == true)
+        );
+        drop(codex);
+        server.shutdown().unwrap();
+        return;
+    }
     // This error is produced by Codex's RPC validation, before reaching EMP.
     codex.send(json!({"id":5,"method":"turn/steer","params":{"threadId":id,"expectedTurnId":"wrong-turn","input":[{"type":"text","text":"rejected steering"}]}}));
     let rejected = codex.wait(|value| value["id"] == 5);
@@ -360,7 +391,7 @@ fn http_upstream(
     bodies
 }
 
-fn native_upstream(listener: TcpListener, first: mpsc::Sender<()>) -> Vec<Value> {
+fn native_upstream(listener: TcpListener, first: mpsc::Sender<()>, cancel: bool) -> Vec<Value> {
     let mut socket = accept(&listener);
     let raw = read_request_head(&mut socket).unwrap();
     let request = parse_request(&raw.head).unwrap();
@@ -383,7 +414,16 @@ fn native_upstream(listener: TcpListener, first: mpsc::Sender<()>) -> Vec<Value>
         control,
         json!({"type":"response.interrupt","response_id":"resp_codex_first","mode":"discard_partial_items"})
     );
-    ws.send_json(&json!({"type":"response.incomplete","response":{"id":"resp_codex_first","status":"incomplete","output":[],"incomplete_details":{"reason":"interrupted"},"end_turn":false}})).unwrap();
+    if cancel {
+        ws.send_json(
+            &json!({"type":"response.interrupt.accepted","response_id":"resp_codex_first"}),
+        )
+        .unwrap();
+    }
+    ws.send_json(&json!({"type":"response.incomplete","response":{"id":"resp_codex_first","status":"incomplete","output":[],"incomplete_details":{"reason":"interrupted"},"end_turn":false,"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}})).unwrap();
+    if cancel {
+        return vec![initial];
+    }
     let next = frame(&mut ws);
     for event in complete() {
         ws.send_json(&event).unwrap();

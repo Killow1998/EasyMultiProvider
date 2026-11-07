@@ -4,81 +4,37 @@ const TINY_PNG: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
 #[test]
-fn only_cpa_relay_uses_image_slots_not_local_login_or_context_assessment() {
+fn original_images_and_large_text_keep_their_content_without_stdin_carriers() {
     let body = json!({"input":[{"role":"user","content":[
         {"type":"input_image","image_url":format!("data:image/png;base64,{TINY_PNG}")},
         {"type":"input_image","image_url":"https://images.invalid/original.png"}
     ]}]});
-    let direct = prepare(&body).unwrap();
-    let relay = prepare_relay(&body).unwrap();
-    let direct_wire: Value = serde_json::from_slice(&direct.stdin).unwrap();
-    let relay_wire: Value = serde_json::from_slice(&relay.stdin).unwrap();
-    let ExpectedUserContent::Blocks(original) = relay.expected_user_content else {
-        panic!("structured input required");
+    let prepared = prepare(&body).unwrap();
+    let ExpectedUserContent::Blocks(blocks) = prepared.expected_user_content else {
+        panic!("native blocks");
     };
-    assert_eq!(direct_wire["message"]["content"], json!(original));
     assert_eq!(
         context_payload(&body).unwrap()["messages"][0]["content"],
-        json!(original)
+        json!(blocks)
     );
-    assert_eq!(
-        relay_wire["message"]["content"],
-        json!(cli_blocks(&original))
-    );
-    assert_ne!(relay_wire, direct_wire);
-    let images: Vec<_> = original
+    let images = blocks
         .iter()
-        .filter(|part| part["type"] == "image")
-        .collect();
+        .filter(|block| block["type"] == "image")
+        .collect::<Vec<_>>();
     assert_eq!(images[0]["source"]["data"], TINY_PNG);
     assert_eq!(
         images[1]["source"]["url"],
         "https://images.invalid/original.png"
     );
-}
-
-#[test]
-fn large_original_media_and_instructions_are_kept_above_the_old_adapter_limit() {
-    let mut bytes = STANDARD.decode(TINY_PNG).unwrap();
-    bytes.resize(4 * 1024 * 1024, 0);
-    let body = json!({"instructions":"x".repeat(6 * 1024 * 1024),"input":[
-        {"role":"user","content":[{"type":"input_image","image_url":format!("data:image/png;base64,{}",STANDARD.encode(bytes))}]}
-    ]});
-    let direct = prepare(&body).unwrap();
-    let relay = prepare_relay(&body).unwrap();
-    assert!(direct.stdin.len() + direct.system_prompt.len() > 10 * 1024 * 1024);
-    assert!(relay.stdin.len() < direct.stdin.len());
-    let (ExpectedUserContent::Blocks(relay_original), ExpectedUserContent::Blocks(direct_original)) =
-        (relay.expected_user_content, direct.expected_user_content)
-    else {
-        panic!("original image blocks are required");
+    let text = "line\\n\\\"quoted\\\" 🧪 ".repeat(1_000_000);
+    let prepared = prepare(&json!({"input":text})).unwrap();
+    let ExpectedUserContent::Text(encoded) = prepared.expected_user_content else {
+        panic!("text");
     };
-    assert_eq!(relay_original, direct_original);
-}
-
-#[test]
-fn text_input_preserves_content_across_plain_and_jsonl_carriers() {
-    for repetitions in [1, 1_000_000] {
-        let text = "line\n\"quoted\" 🧪 ".repeat(repetitions);
-        let body = json!({"model":"m","input":text,"stream":true});
-        for prepared in [prepare(&body).unwrap(), prepare_relay(&body).unwrap()] {
-            let mut value: Value = serde_json::from_slice(&prepared.stdin).unwrap();
-            if repetitions == 1 {
-                assert!(matches!(prepared.input_format, InputFormat::Text));
-            } else {
-                assert!(matches!(prepared.input_format, InputFormat::StreamJson));
-                assert_eq!(value["type"], "user");
-                assert_eq!(value["message"]["role"], "user");
-                value =
-                    serde_json::from_str(value["message"]["content"].as_str().unwrap()).unwrap();
-            }
-            assert_eq!(value, json!({"model":"m","input":text,"stream":false}));
-            assert!(matches!(
-                prepared.expected_user_content,
-                ExpectedUserContent::Text(_)
-            ));
-        }
-    }
+    assert_eq!(
+        serde_json::from_str::<Value>(&encoded).unwrap()["input"],
+        text
+    );
 }
 
 #[test]
@@ -98,15 +54,8 @@ fn images_in_messages_and_tool_output_keep_order_and_association() {
         ]
     });
     let prepared = prepare(&body).expect("multimodal input");
-    assert!(matches!(prepared.input_format, InputFormat::StreamJson));
-    let event: Value =
-        serde_json::from_slice(prepared.stdin.strip_suffix(b"\n").expect("JSONL newline"))
-            .expect("stream-json event");
-    assert_eq!(event["type"], "user");
-    assert_eq!(event["message"]["role"], "user");
-    let blocks = event["message"]["content"]
-        .as_array()
-        .expect("content blocks");
+    let event = serde_json::to_value(&prepared.expected_user_content).unwrap();
+    let blocks = event.as_array().expect("content blocks");
     let images = blocks
         .iter()
         .filter(|block| block["type"] == "image")
@@ -142,10 +91,8 @@ fn remote_images_are_forwarded_without_host_fetch_and_file_ids_are_rejected() {
         ]}]
     });
     let prepared = prepare(&body).expect("remote image");
-    let event: Value =
-        serde_json::from_slice(prepared.stdin.strip_suffix(b"\n").expect("JSONL newline"))
-            .expect("stream-json event");
-    let image = event["message"]["content"]
+    let event = serde_json::to_value(&prepared.expected_user_content).unwrap();
+    let image = event
         .as_array()
         .unwrap()
         .iter()
@@ -186,10 +133,8 @@ fn inline_pdf_and_text_files_keep_document_content_association() {
         ]
     });
     let prepared = prepare(&body).expect("inline documents");
-    let event: Value =
-        serde_json::from_slice(prepared.stdin.strip_suffix(b"\n").expect("JSONL newline"))
-            .expect("stream-json event");
-    let blocks = event["message"]["content"].as_array().expect("content");
+    let event = serde_json::to_value(&prepared.expected_user_content).unwrap();
+    let blocks = event.as_array().expect("content");
     assert!(blocks.iter().any(|block| {
         block["type"] == "document"
             && block["source"]["type"] == "base64"

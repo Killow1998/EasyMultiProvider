@@ -53,6 +53,10 @@ completion-ID projection; accounting observes the original event first.
 nearest reset selection and credential-scoped snapshots. Provider quota HTTP
 routes dispatch local Claude and CPA reads; the UI reuses subscription meters
 and the existing hover/focus tooltip. No model request enters this path.
+Its `cpa_quota/history.rs` module stores pool and individual 5h/7d observations
+under one credential-scoped owner in the existing quota SQLite store. The shared
+backend sampler reuses the five-minute observation cache. Provider history reads
+use that store without querying the observer; retention remains 15 days.
 
 Request preparation checks the body object once and passes a mutable JSON map
 to its external-settings transformation. Configuration uses the existing owned

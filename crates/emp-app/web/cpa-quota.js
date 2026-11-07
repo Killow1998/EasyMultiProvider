@@ -1,4 +1,4 @@
-function createCpaQuotas({getState,api,esc,tr,notice,render,meters,resetText}) {
+function createCpaQuotas({getState,api,esc,tr,notice,render,meters,resetText,quotaDisplay}) {
   const busy=new Set(),record=id=>getState()?.provider_quotas?.[id];
   let timer=null;
   function markup(id) {
@@ -8,13 +8,14 @@ function createCpaQuotas({getState,api,esc,tr,notice,render,meters,resetText}) {
     if(error==='cpa_quota_unsupported')return '';
     if(error)return `<div class="service-quota muted">${esc(tr('services.'+error))}</div>`;
     const quota=observed?.quota;
+    if(!quota)return '';
     const accounts=quota?.accounts || [];
     const names=['five_hour','seven_day'];
     const cell=(account,name)=>{
       if(!account.enabled)return tr('services.cpa_quota_disabled');
       const window=account.windows[name];
       if(!window || window.remaining_percent===null)return tr('services.cpa_quota_unknown');
-      const value=Number(window.remaining_percent.toFixed(1))+'%';
+      const value=quotaDisplay.value(window.remaining_percent)+'%';
       return value+(resetText(window.resets_at)?' · '+resetText(window.resets_at):'')+(account.stale?' · '+tr('services.cpa_quota_stale'):'');
     };
     const template='cpa-quota-'+encodeURIComponent(id);
@@ -49,5 +50,5 @@ function createCpaQuotas({getState,api,esc,tr,notice,render,meters,resetText}) {
   }
   document.addEventListener('visibilitychange',sync);
   window.addEventListener('pagehide',()=>clearTimeout(timer));
-  return {markup,refresh,sync,busy,has:id=>Boolean(record(id)),canRefresh:id=>Boolean(record(id)?.refreshable)};
+  return {markup,refresh,sync,busy,has:id=>Boolean(record(id)),canRefresh:id=>Boolean(record(id)?.refreshable),canViewHistory:id=>Boolean(record(id)?.observation) && record(id).observation.error_code!=='cpa_quota_unsupported'};
 }

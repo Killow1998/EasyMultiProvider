@@ -49,7 +49,7 @@ class Upstream(BaseHTTPRequestHandler):
                 item = self.server.respond(record)
                 if item['type'] == 'message':
                     item['id'] = 'message-'+record['response_id']
-                events = response_events(item, record['response_id']) if body.get('generate') is not False else [
+                events = self.server.response_events(item, record['response_id']) if body.get('generate') is not False else [
                     {'type':'response.completed', 'response':{'id':record['response_id'], 'status':'completed',
                         'output':[], 'usage':{'input_tokens':10, 'output_tokens':0, 'total_tokens':10}}}]
                 for event in events:
@@ -94,7 +94,7 @@ class Upstream(BaseHTTPRequestHandler):
                       {'type':'message_delta', 'delta':{'stop_reason':'end_turn'}, 'usage':{'output_tokens':3}},
                       {'type':'message_stop'}]
         else:
-            events = response_events(item, identity)
+            events = self.server.response_events(item, identity)
         encoded = b''.join(b'data: '+json.dumps(event).encode()+b'\n\n' for event in events)
         if self.path.endswith('/chat/completions'):
             encoded += b'data: [DONE]\n\n'
@@ -123,6 +123,7 @@ class Fixture:
         self.upstream.daemon_threads = True
         self.upstream.requests, self.upstream.sequence = [], itertools.count(1)
         self.upstream.respond = lambda _record: message()
+        self.upstream.response_events = response_events
         self.stack.callback(self.upstream.server_close)
         threading.Thread(target=self.upstream.serve_forever, daemon=True).start()
         self.stack.callback(self.upstream.shutdown)

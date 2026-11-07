@@ -2,8 +2,10 @@
 use emp_state::{codex_input_modalities, normalize_reasoning_levels};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+mod aggregates;
+pub(crate) use aggregates::append as append_aggregates;
 
-/// Compose Python's catalog without reading credentials or touching Codex files.
+/// Compose resolved source snapshots without reading credentials or touching Codex files.
 /// Account snapshot ownership and duplicate identity are resolved by the caller.
 pub fn build_catalog(
     config: &Value,
@@ -189,8 +191,18 @@ pub fn build_catalog(
         };
         key(left).cmp(&key(right))
     });
+    let mut family_names = BTreeMap::new();
     for entry in &mut result {
         apply_presentation(config, entry);
+        let name = strip_context(text(entry, "display_name"));
+        let source_prefix = format!("{} · ", text(entry, "_emp_source_label"));
+        family_names
+            .entry(text(entry, "_emp_family").to_owned())
+            .or_insert_with(|| {
+                name.strip_prefix(&source_prefix)
+                    .unwrap_or(&name)
+                    .to_owned()
+            });
         for field in [
             "_emp_family",
             "_emp_family_verified",
@@ -203,6 +215,7 @@ pub fn build_catalog(
             entry.as_object_mut().expect("model object").remove(field);
         }
     }
+    aggregates::append(config, &mut result, &family_names);
     json!({"models":result})
 }
 
@@ -349,8 +362,7 @@ fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
             .cloned()
             .unwrap_or(json!(DEFAULT_EFFECTIVE_CONTEXT_PERCENT));
     }
-    // The Python entry is first decorated without user overrides, then again
-    // during family/route presentation. Preserve both passes for exact labels.
+    // Keep default labels stable before applying family and route overrides.
     entry["display_name"] = json!(display_name(&entry, &json!({}), true));
     entry["description"] = json!(description_with_context(&entry, &json!({}), true));
     entry

@@ -49,6 +49,7 @@ pub(crate) fn run(state: &Arc<ServerState>) {
         deadline = Instant::now() + QUOTA_SAMPLE_INTERVAL;
         if !state.shutdown.load(Ordering::Acquire) {
             super::sample_quotas_once(state);
+            crate::services::cpa_quota::sample_due(state);
             // Disabled or duplicate accounts are not sampled;
             // their rotated credentials still need saving.
             super::flush_pending_rotations(state);
