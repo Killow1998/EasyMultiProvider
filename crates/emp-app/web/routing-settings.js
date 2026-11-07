@@ -22,7 +22,7 @@ function createRoutingSettings({getState, cloneState, persistState, openModal, c
   }
   function accounts(state) {
     return [...(state.native_account ? [{...state.native_account, id:'@native', name:'Native'}] : []), ...(state.accounts || [])]
-      .filter(account => account.enabled !== false && account.credential_set && account.credential_status !== 'invalid' && !account.duplicate && account.quota?.plan_type?.toLowerCase() !== 'free');
+      .filter(account => account.auth_mode !== 'local_key' && account.enabled !== false && account.credential_set && account.credential_status !== 'invalid' && !account.duplicate && account.quota?.plan_type?.toLowerCase() !== 'free');
   }
   function open({back} = {}, draft) {
     const state = getState(), eligible = accounts(state);

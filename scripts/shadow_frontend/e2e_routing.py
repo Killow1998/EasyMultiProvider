@@ -165,6 +165,17 @@ def main():
         checks.append('Simplified Chinese and English render correctly at narrow/desktop widths without overflow')
         checks.append('Help measurements expand within the viewport; tables retain sticky headers, and Escape restores focus without leaving External service settings')
         checks.append('Imported/native direct comparison shows five efforts and 20 matched pairs per effort in the existing help, without account names, at narrow/desktop widths in both languages')
+        browser.execute('return api("/api/native/login/use-local-key",{method:"POST",body:JSON.stringify({account_action:"remove"})});')
+        account_state = browser.execute('return api("/api/accounts");')
+        assert account_state['native_account']['auth_mode'] == 'local_key'
+        browser.navigate(frontend)
+        browser.execute('openSettings("native");document.querySelector("[data-ui-action=routing-settings]").click();')
+        change(browser, 'routing_image_mode', 'account')
+        image_accounts = browser.execute('return [...document.getElementById("routing_image_account").options].map(option=>option.value);')
+        assert '@native' not in image_accounts and 'image-fixture' in image_accounts, image_accounts
+        save(browser, 'account', 'image-fixture')
+        assert json.loads((root / 'config.json').read_text())['image_routing'] == {'mode':'account', 'account_id':'image-fixture'}
+        checks.append('Switching to EMP Local Key removes it from image-quota accounts and preserves imported subscription selection and saving')
         for route, label in [('image_generation', 'Image generation'), ('image_edit', 'Image edit')]:
             assert browser.execute('const container=document.createElement("div");container.innerHTML=callReports.recordHtml({request_id:"fixture",route:arguments[0],model_id:"gpt-image-2",state:"completed"});return container.querySelector("summary").textContent.includes(arguments[1]) && container.textContent.includes("Image model");', route, label)
         assert upstream.calls == 0
