@@ -62,6 +62,25 @@ the Native service's action group. Applying an Other subscription keeps its
 imported record. Switching a subscription to an EMP local key offers keeping it
 as Other or removing its Native sign-in. Restart Codex Runtime after switching.
 
+### Codex image tools with an EMP local key
+
+EMP local-key mode configures an OpenAI-compatible `emp` provider with Codex's
+OpenAI actor header and the gateway bearer credential. Codex can then expose
+`image_gen.imagegen` for image-capable models. In **Settings → Routing settings**,
+choose an eligible subscription for image generation and editing. The selected
+subscription supplies the image quota.
+
+Codex hides this tool when its Native login is Free, even when the conversation
+uses a paid imported subscription. Switch Native to an EMP local key and keep
+the Free login as Other, or sign in to a paid Native subscription.
+
+Restart Codex Runtime after changing the sign-in mode. Existing chats retain
+their original provider identity; use Codex's **Continue in a new chat** action
+to carry their history into the current provider. EMP retains the original
+provider selection and configuration in its private integration lease and
+restores them when leaving gateway mode. Permission and sandbox settings are
+preserved.
+
 ## Decision models
 
 Add an external API service with its own API key, then open

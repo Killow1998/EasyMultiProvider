@@ -74,6 +74,9 @@ sign-in keeps this key valid. [Gateway API and Jev](docs/gateway.md).
 To switch an existing Native subscription to a local key, open **Change sign-in
 method → EMP local key**. Keep the subscription as an Other account or
 remove the current Native sign-in, then restart Codex Runtime.
+Image-capable models can use Codex's native image tools through a configured
+subscription route. For existing chats, use **Continue in a new chat** after
+switching to or from local-key gateway mode. [Sign-in and image routing](docs/gateway.md#codex-image-tools-with-an-emp-local-key).
 
 If saved settings or their encryption key cannot be opened, EMP shows a recovery
 page with **Clear old settings and set up again** and **Quit EMP**.

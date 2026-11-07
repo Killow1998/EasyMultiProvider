@@ -12,9 +12,14 @@ use std::time::Duration;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const LEGACY_MANAGED_FIELDS: [&str; 2] = ["openai_base_url", "model_catalog_json"];
+const SIDEBAND_MANAGED_FIELDS: [&str; 3] = [
+    "openai_base_url",
+    "model_catalog_json",
+    REALTIME_SIDEBAND_FIELD,
+];
 const LEASE_SCHEMA: &str = "easy-multi-provider.integration-lease";
 const LEGACY_LEASE_VERSION: u64 = 2;
-const LEASE_VERSION: u64 = 3;
+const LEASE_VERSION: u64 = 4;
 
 impl IntegrationManager {
     pub(super) fn lock(&self) -> Result<IntegrationFileLock, IntegrationError> {
@@ -59,13 +64,13 @@ impl IntegrationManager {
         };
         let mut lease: LeaseRecord = serde_json::from_slice(&raw)
             .map_err(|_| IntegrationError("unable to read integration lease"))?;
-        let lease_fields: &[&str] = if lease.version == LEGACY_LEASE_VERSION {
-            &LEGACY_MANAGED_FIELDS
-        } else {
-            &MANAGED_FIELDS
+        let lease_fields: &[&str] = match lease.version {
+            LEGACY_LEASE_VERSION => &LEGACY_MANAGED_FIELDS,
+            3 => &SIDEBAND_MANAGED_FIELDS,
+            _ => &MANAGED_FIELDS,
         };
         let known_shape = lease.schema == LEASE_SCHEMA
-            && matches!(lease.version, LEGACY_LEASE_VERSION | LEASE_VERSION)
+            && matches!(lease.version, LEGACY_LEASE_VERSION | 3 | LEASE_VERSION)
             && lease.config_path == absolute(&self.config_path)?.to_string_lossy()
             && matches!(
                 lease.status.as_str(),
@@ -77,17 +82,16 @@ impl IntegrationManager {
         if !known_shape || lease.fields.len() != lease_fields.len() || !managed_fields_complete {
             return Err(IntegrationError("unsupported integration lease"));
         }
-        if lease.version == LEGACY_LEASE_VERSION {
-            let sideband = current[REALTIME_SIDEBAND_FIELD].clone();
-            lease.fields.insert(
-                REALTIME_SIDEBAND_FIELD.to_owned(),
-                FieldRecovery {
-                    original: sideband.clone(),
-                    applied: sideband,
-                },
-            );
-            lease.version = LEASE_VERSION;
+        for name in MANAGED_FIELDS {
+            lease
+                .fields
+                .entry(name.to_owned())
+                .or_insert_with(|| FieldRecovery {
+                    original: current[name].clone(),
+                    applied: current[name].clone(),
+                });
         }
+        lease.version = LEASE_VERSION;
         Ok(Some(lease))
     }
 

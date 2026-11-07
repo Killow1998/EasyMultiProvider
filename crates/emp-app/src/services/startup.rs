@@ -90,13 +90,21 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
                 return Err(());
             }
             if !manager
-                .enable_with_sideband(base_url, catalog, true, sideband)
+                .enable_with_options(base_url, catalog, true, sideband, None)
                 .map_err(|_| ())?
                 .ok()
             {
                 return Err(());
             }
             mark_pending(state, "emp", "EMP configuration applied")?;
+        }
+        if emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path)
+            == "local_key"
+            && !super::integration::enable::apply(state)
+                .map_err(|_| ())?
+                .ok()
+        {
+            return Err(());
         }
     }
     // Automatic activation may apply only to a clean native configuration. Recovery

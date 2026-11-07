@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 mod fields;
 mod files;
+mod gateway;
 mod manager;
 mod storage;
 #[cfg(test)]
@@ -20,10 +21,13 @@ pub(crate) use files::{MAX_CODEX_CONFIG_BYTES, MAX_LEASE_BYTES, absolute, read_t
 pub use manager::IntegrationManager;
 
 pub const REALTIME_SIDEBAND_FIELD: &str = "experimental_realtime_ws_base_url";
-pub const MANAGED_FIELDS: [&str; 3] = [
+pub const GATEWAY_PROVIDER_FIELD: &str = "model_providers.emp";
+pub const MANAGED_FIELDS: [&str; 5] = [
     "openai_base_url",
     "model_catalog_json",
     REALTIME_SIDEBAND_FIELD,
+    "model_provider",
+    GATEWAY_PROVIDER_FIELD,
 ];
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldState {

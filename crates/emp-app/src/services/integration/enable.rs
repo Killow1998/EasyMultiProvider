@@ -69,11 +69,13 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
     let created = emp_integration::local_auth::ensure(auth_path, &state.backend.gateway_key)
         .map_err(|_| EnableError::Unavailable(409))?;
     let result = manager
-        .enable_with_sideband(
+        .enable_with_options(
             base_url,
             if dynamic { None } else { Some(path.as_ref()) },
             true,
             dynamic.then_some(base_url.as_str()),
+            (emp_integration::local_auth::mode(auth_path) == "local_key")
+                .then_some(state.backend.gateway_key.as_str()),
         )
         .map_err(|_| EnableError::Unavailable(409));
     if created && !result.as_ref().is_ok_and(|result| result.ok()) {

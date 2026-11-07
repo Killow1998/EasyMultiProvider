@@ -107,6 +107,98 @@ fn enabling_refuses_when_the_service_is_not_listening() {
 }
 
 #[test]
+fn local_key_gateway_updates_and_restores_only_its_owned_configuration() {
+    for providers in [
+        "",
+        "[model_providers.emp]\nname = \"user-provider\"\nbase_url = \"https://user.example/v1\"\n[model_providers.other]\nname = \"other\"\n",
+        "model_providers = { emp = {name = \"user-provider\", base_url = \"https://user.example/v1\"}, other = {name = \"other\"} }\n",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("config.toml");
+        let original = format!(
+            "model_provider = \"openai\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n{providers}"
+        );
+        fs::write(&config, &original).unwrap();
+        let manager = manager(directory.path());
+        assert!(
+            manager
+                .enable("http://127.0.0.1:123/v1", Some("catalog.json"), true)
+                .unwrap()
+                .ok()
+        );
+        let original_fields = manager.status().unwrap().lease.unwrap().fields;
+        for key in ["emp-local-first", "emp-local-second"] {
+            assert!(
+                manager
+                    .enable_with_options(
+                        "http://127.0.0.1:123/v1",
+                        Some("catalog.json"),
+                        true,
+                        None,
+                        Some(key)
+                    )
+                    .unwrap()
+                    .ok()
+            );
+            let applied: toml_edit::DocumentMut =
+                fs::read_to_string(&config).unwrap().parse().unwrap();
+            assert_eq!(applied["model_provider"].as_str(), Some("emp"));
+            let gateway = &applied["model_providers"]["emp"];
+            assert_eq!(gateway["experimental_bearer_token"].as_str(), Some(key));
+            assert_eq!(
+                gateway["http_headers"]["x-openai-actor-authorization"].as_str(),
+                Some("emp")
+            );
+            assert_eq!(gateway["requires_openai_auth"].as_bool(), Some(false));
+            assert_eq!(gateway["supports_websockets"].as_bool(), Some(true));
+            assert_eq!(applied["approval_policy"].as_str(), Some("on-request"));
+            assert_eq!(applied["sandbox_mode"].as_str(), Some("workspace-write"));
+            assert_eq!(
+                manager
+                    .enable_with_options(
+                        "http://127.0.0.1:123/v1",
+                        Some("catalog.json"),
+                        true,
+                        None,
+                        Some(key)
+                    )
+                    .unwrap()
+                    .action,
+                "re_adopted"
+            );
+        }
+        assert!(
+            manager
+                .enable("http://127.0.0.1:123/v1", Some("catalog.json"), true)
+                .unwrap()
+                .ok()
+        );
+        let status = manager.status().unwrap();
+        for name in ["model_provider", emp_integration::GATEWAY_PROVIDER_FIELD] {
+            assert_eq!(status.fields[name], original_fields[name].original);
+        }
+        assert!(manager.restore().unwrap().ok());
+        let restored = fs::read_to_string(&config).unwrap();
+        assert!(!restored.contains("emp-local-"));
+        let parsed: toml_edit::DocumentMut = restored.parse().unwrap();
+        assert_eq!(parsed["approval_policy"].as_str(), Some("on-request"));
+        assert_eq!(parsed["sandbox_mode"].as_str(), Some("workspace-write"));
+        if providers.is_empty() {
+            assert!(!parsed.contains_key("model_providers"));
+        } else {
+            assert_eq!(
+                parsed["model_providers"]["emp"]["name"].as_str(),
+                Some("user-provider")
+            );
+            assert_eq!(
+                parsed["model_providers"]["other"]["name"].as_str(),
+                Some("other")
+            );
+        }
+    }
+}
+
+#[test]
 fn search_feature_toggle_and_restore_round_trips_both_field_shapes() {
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("config.toml");

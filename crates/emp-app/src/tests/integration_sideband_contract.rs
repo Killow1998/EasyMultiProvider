@@ -31,10 +31,11 @@ fn startup_migrates_active_v2_native_lease_and_restores_user_sideband() {
         let catalog = crate::services::catalog::generated_catalog_path(&server.state);
         let catalog_value = catalog.to_string_lossy().into_owned();
         let enabled = manager
-            .enable_with_sideband(
+            .enable_with_options(
                 &server.state.base_url,
                 has_catalog.then_some(catalog_value.as_str()),
                 true,
+                None,
                 None,
             )
             .expect("create legacy-compatible active lease");
@@ -49,6 +50,9 @@ fn startup_migrates_active_v2_native_lease_and_restores_user_sideband() {
             .as_object_mut()
             .expect("lease fields")
             .remove(emp_integration::REALTIME_SIDEBAND_FIELD);
+        for name in ["model_provider", emp_integration::GATEWAY_PROVIDER_FIELD] {
+            lease["fields"].as_object_mut().unwrap().remove(name);
+        }
         std::fs::write(
             lease_path,
             serde_json::to_vec(&lease).expect("legacy lease JSON"),
@@ -60,7 +64,7 @@ fn startup_migrates_active_v2_native_lease_and_restores_user_sideband() {
         let migrated: Value =
             serde_json::from_slice(&std::fs::read(lease_path).expect("read migrated lease"))
                 .expect("migrated lease JSON");
-        assert_eq!(migrated["version"], 3);
+        assert_eq!(migrated["version"], 4);
         assert_eq!(
             migrated["fields"][emp_integration::REALTIME_SIDEBAND_FIELD]["original"],
             json!({"present":true,"value":"https://voice.example/v1"})
@@ -116,6 +120,35 @@ fn startup_activates_a_clean_native_configuration_by_default_and_respects_opt_ou
             "{}",
             status.state
         );
+        if enabled.unwrap_or(true) {
+            assert_eq!(
+                status.fields["model_provider"].value.as_deref(),
+                Some("emp")
+            );
+            assert!(status.fields[emp_integration::GATEWAY_PROVIDER_FIELD].present);
+            let manager = &server.state.backend.integration.manager;
+            let path = status.fields["model_catalog_json"].value.as_deref();
+            assert!(
+                manager
+                    .enable(&server.state.base_url, path, true)
+                    .unwrap()
+                    .ok()
+            );
+            let mut lease: Value =
+                serde_json::from_slice(&std::fs::read(manager.lease_path()).unwrap()).unwrap();
+            lease["version"] = json!(3);
+            for name in ["model_provider", emp_integration::GATEWAY_PROVIDER_FIELD] {
+                lease["fields"].as_object_mut().unwrap().remove(name);
+            }
+            std::fs::write(manager.lease_path(), serde_json::to_vec(&lease).unwrap()).unwrap();
+            crate::services::startup::reconcile(&server.state).unwrap();
+            let migrated = manager.status().unwrap();
+            assert_eq!(
+                migrated.fields["model_provider"].value.as_deref(),
+                Some("emp")
+            );
+            assert!(migrated.fields[emp_integration::GATEWAY_PROVIDER_FIELD].present);
+        }
         server.shutdown().unwrap();
         assert_eq!(
             std::fs::read_to_string(codex.join("config.toml")).unwrap(),

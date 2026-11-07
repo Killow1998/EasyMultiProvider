@@ -3,8 +3,8 @@ use crate::fields::{conflict_names, relation, set_states, states, validate_value
 use crate::files::{absolute, atomic_write};
 use crate::storage::random_hex;
 use crate::{
-    FieldState, IntegrationError, IntegrationResult, IntegrationStatus, LeaseRecord,
-    REALTIME_SIDEBAND_FIELD,
+    FieldState, GATEWAY_PROVIDER_FIELD, IntegrationError, IntegrationResult, IntegrationStatus,
+    LeaseRecord, REALTIME_SIDEBAND_FIELD,
 };
 use emp_state::IntegrationFileLock;
 use std::collections::BTreeMap;
@@ -118,15 +118,16 @@ impl IntegrationManager {
         catalog: Option<&str>,
         service_ready: bool,
     ) -> Result<IntegrationResult, IntegrationError> {
-        self.enable_with_sideband(base_url, catalog, service_ready, None)
+        self.enable_with_options(base_url, catalog, service_ready, None, None)
     }
 
-    pub fn enable_with_sideband(
+    pub fn enable_with_options(
         &self,
         base_url: &str,
         catalog: Option<&str>,
         service_ready: bool,
         realtime_sideband_base_url: Option<&str>,
+        gateway_key: Option<&str>,
     ) -> Result<IntegrationResult, IntegrationError> {
         if !service_ready {
             return Err(IntegrationError(
@@ -140,10 +141,27 @@ impl IntegrationManager {
         if let Some(sideband_url) = realtime_sideband_base_url {
             validate_value(sideband_url)?;
         }
+        if let Some(key) = gateway_key {
+            validate_value(key)?;
+        }
         self.assert_safe_paths()?;
         let _lock = self.lock()?;
         let (mut document, existed) = self.read_config()?;
         let current = states(&document)?;
+        let pending = self.read_lease(&current)?;
+        let original = pending
+            .as_ref()
+            .filter(|lease| lease.status != "restored")
+            .map_or_else(
+                || current.clone(),
+                |lease| {
+                    lease
+                        .fields
+                        .iter()
+                        .map(|(name, field)| (name.clone(), field.original.clone()))
+                        .collect()
+                },
+            );
         let desired = BTreeMap::from([
             ("openai_base_url".to_owned(), FieldState::value(base_url)),
             (
@@ -157,19 +175,37 @@ impl IntegrationManager {
                     FieldState::value,
                 ),
             ),
+            (
+                "model_provider".to_owned(),
+                gateway_key.map_or_else(
+                    || original["model_provider"].clone(),
+                    |_| FieldState::value("emp"),
+                ),
+            ),
+            (
+                GATEWAY_PROVIDER_FIELD.to_owned(),
+                gateway_key.map_or_else(
+                    || original[GATEWAY_PROVIDER_FIELD].clone(),
+                    |key| crate::gateway::definition(base_url, key),
+                ),
+            ),
         ]);
-        if let Some(mut lease) = self.read_lease(&current)?
+        document = set_states(document, &desired)?;
+        let desired = states(&document)?;
+        let mut config_existed = existed;
+        if let Some(mut lease) = pending
             && lease.status != "restored"
         {
             let relation = relation(&current, &lease);
             if matches!(relation.as_str(), "other" | "mixed") {
+                let conflicts = conflict_names(&current, &lease);
                 return Ok(result(
                     "conflict",
                     "conflict",
                     &relation,
                     current,
-                    Some(lease.clone()),
-                    conflict_names(&states(&document)?, &lease),
+                    Some(lease),
+                    conflicts,
                 ));
             }
             if relation == "applied" {
@@ -178,7 +214,14 @@ impl IntegrationManager {
                     .iter()
                     .map(|(name, recovery)| (name.clone(), recovery.applied.clone()))
                     .collect::<BTreeMap<_, _>>();
-                if desired != applied {
+                if [
+                    "openai_base_url",
+                    "model_catalog_json",
+                    REALTIME_SIDEBAND_FIELD,
+                ]
+                .iter()
+                .any(|name| desired[*name] != applied[*name])
+                {
                     return Ok(result(
                         "conflict",
                         "conflict",
@@ -188,23 +231,26 @@ impl IntegrationManager {
                         vec!["active_lease".to_owned()],
                     ));
                 }
-                lease = self.transition(lease, "active", true)?;
+                if desired == applied {
+                    lease = self.transition(lease, "active", true)?;
+                    self.write_lease(&lease)?;
+                    return Ok(result(
+                        "re_adopted",
+                        "active",
+                        "applied",
+                        desired,
+                        Some(lease),
+                        Vec::new(),
+                    ));
+                }
+                config_existed = lease.config_existed;
+            } else {
+                lease = self.transition(lease, "restored", false)?;
                 self.write_lease(&lease)?;
-                return Ok(result(
-                    "re_adopted",
-                    "active",
-                    "applied",
-                    desired,
-                    Some(lease),
-                    Vec::new(),
-                ));
             }
-            lease = self.transition(lease, "restored", false)?;
-            self.write_lease(&lease)?;
         }
-        let mut lease = self.make_lease(&current, &desired, existed, "prepared")?;
+        let mut lease = self.make_lease(&original, &desired, config_existed, "prepared")?;
         self.write_lease(&lease)?;
-        document = set_states(document, &desired)?;
         atomic_write(&self.config_path, document.as_bytes())?;
         let (verified, _) = self.read_config()?;
         let verified = states(&verified)?;
@@ -228,6 +274,22 @@ impl IntegrationManager {
             Some(lease),
             Vec::new(),
         ))
+    }
+
+    pub fn enable_with_sideband(
+        &self,
+        base_url: &str,
+        catalog: Option<&str>,
+        service_ready: bool,
+        realtime_sideband_base_url: Option<&str>,
+    ) -> Result<IntegrationResult, IntegrationError> {
+        self.enable_with_options(
+            base_url,
+            catalog,
+            service_ready,
+            realtime_sideband_base_url,
+            None,
+        )
     }
 
     pub fn restore(&self) -> Result<IntegrationResult, IntegrationError> {

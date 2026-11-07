@@ -1,5 +1,5 @@
 //! Managed TOML fields and lease comparison; no filesystem or runtime access.
-use crate::{FieldState, IntegrationError, LeaseRecord, MANAGED_FIELDS};
+use crate::{FieldState, GATEWAY_PROVIDER_FIELD, IntegrationError, LeaseRecord, MANAGED_FIELDS};
 use std::collections::BTreeMap;
 
 pub(super) fn states(document: &str) -> Result<BTreeMap<String, FieldState>, IntegrationError> {
@@ -9,6 +9,9 @@ pub(super) fn states(document: &str) -> Result<BTreeMap<String, FieldState>, Int
     MANAGED_FIELDS
         .into_iter()
         .map(|name| {
+            if name == GATEWAY_PROVIDER_FIELD {
+                return crate::gateway::state(&parsed).map(|state| (name.to_owned(), state));
+            }
             let state = match parsed.get(name) {
                 None => FieldState::absent(),
                 Some(value) => FieldState::value(
@@ -40,6 +43,10 @@ pub(super) fn set_states(
     let mut inserted = false;
     for name in MANAGED_FIELDS {
         let state = &desired[name];
+        if name == GATEWAY_PROVIDER_FIELD {
+            crate::gateway::set(&mut parsed, state)?;
+            continue;
+        }
         if !state.present {
             parsed.as_table_mut().remove(name);
             continue;

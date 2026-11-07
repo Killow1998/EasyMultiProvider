@@ -481,6 +481,29 @@ imported accounts with one warmup, no HTTP fallback and no full-history recovery
 
 ### Standalone image tools
 
+**EMP local-key gateway acceptance — 2026-11-07 UTC:** The real Linux Codex
+0.166.0 engine completes native and local-key generation/editing contracts,
+including WebSocket prefill, selected-subscription credentials, saved PNG bytes
+and passing the image into the next inference. Gateway authentication and its
+actor marker are not forwarded to the subscription backend. Integration
+contracts cover version 2/3 leases, repeated activation, key changes, Native
+restoration, inline provider tables and unchanged permission/sandbox settings.
+
+The Intel macOS embedded engine **0.167.0-alpha.3.2** was checked separately.
+Synthetic Free, paid and API-key identities reproduce the tool-registration
+boundary: Free Native and ordinary API-key providers hide the tool; an API-key
+provider with the OpenAI actor marker exposes it. The marker alone supplies no
+gateway credential. Actual generation and editing persist synthetic PNGs; one
+real subscription-routed generation also returned and saved a PNG while the
+existing Native authentication and configuration remained unchanged.
+
+The same macOS engine rejects resuming an `openai` chat directly as `emp` with
+`modelProviderMismatch`. Its official `thread/fork` accepts the new provider,
+preserves the source chat and exposes the image tool. This is a provider-mode
+transition, separate from switching subscription accounts within one provider.
+See [local-key image setup](gateway.md#codex-image-tools-with-an-emp-local-key).
+These checks supplement the earlier, dated 0.163.0 image acceptance below.
+
 Codex's standalone `image_gen.imagegen` extension sends JSON to
 [`images/generations` and `images/edits`](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/codex-api/src/endpoint/images.rs).
 EMP accepts both beneath `/v1` and forwards the original image model and payload
