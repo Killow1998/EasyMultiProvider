@@ -1,7 +1,7 @@
 // Keep all unreleased changes since this baseline; do not reset the list per task.
 // Production controllers own their dialogs and text.
-const reviewBaseline='v0.13.27';
-const reviewRows=['routing'];
+const reviewBaseline='v0.13.28';
+const reviewRows=[];
 const realShadow=window.EMP_REAL_SHADOW===true;
 const syntheticScenarios=['cpa_quota','provider_balances','gateway','onboarding','lan','migration','connection','collaboration','metrics','recovery','lifecycle','removal','historical'];
 const previewScenarios={

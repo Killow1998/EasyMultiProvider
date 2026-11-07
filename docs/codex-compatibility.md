@@ -497,6 +497,12 @@ and unchanged Provider/permission/sandbox settings. Earlier Linux 0.166 and Inte
 macOS **0.167.0-alpha.3.2** native-extension probes are retained in dated evidence;
 the new MCP path keeps the original Provider instead of migrating or forking chats.
 See [image setup](gateway.md#codex-image-tools-with-an-emp-local-key).
+Official **EMP 0.13.28** on Intel macOS was then accepted with the embedded
+**0.167.0-alpha.3.2** engine: App Server resumed two existing `openai` chats and
+generated one image in each. Both turns completed and displayed Markdown image
+links. Each MCP result contained only the saved PNG path. Native Free authentication, configuration and permission settings
+remained unchanged during the calls; no fork or history migration was used.
+
 These checks supplement the earlier, dated 0.163.0 image acceptance below.
 
 Codex's standalone `image_gen.imagegen` extension sends JSON to
