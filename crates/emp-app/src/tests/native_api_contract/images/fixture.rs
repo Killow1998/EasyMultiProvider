@@ -25,6 +25,9 @@ impl ImageUpstream {
                     }
                     Err(error) => panic!("{error}"),
                 };
+                // Exercise inherited nonblocking mode before the fixture's blocking reads.
+                socket.set_nonblocking(true).unwrap();
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
