@@ -34,7 +34,8 @@ def main():
             before = (target / 'config.json').read_bytes()
             assert browser.execute('return !document.getElementById("shadow_routing_button");')
             review_title = browser.execute('return document.getElementById("modal_title").textContent;')
-            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(node=>node.dataset.shadowDemo).join(",")==="service_details,image_api";')
+            assert 'v0.13.29' in review_title
+            assert browser.execute('return !document.querySelector("#modal_body [data-shadow-demo]");')
             browser.execute('''const script=document.createElement("script");script.textContent=`state.providers.push({id:"review-fixture",name:"Fixture",base_url:"https://example.invalid/v1",protocol:"chat_completions",auth_mode:"api_key",api_key_set:true})`;document.head.append(script);script.remove();window.EMP_REVIEW_ACTION("service_details");''')
             wait_for(lambda:browser.execute('return !!document.querySelector("#service_usage") && !!document.querySelector("[data-ui-action=provider-edit]");'))
             browser.execute('document.querySelector("[data-ui-action=provider-edit]").click();document.getElementById("modal_back").click();')
