@@ -250,7 +250,7 @@ fn websocket_admission_closes_overflow_and_reuses_a_released_slot() {
 
     assert_eq!(overflow_code, Some(1013));
     assert_eq!(opcode, 1);
-    assert_eq!(first_event["type"], "codex.response.metadata");
+    assert_eq!(first_event["type"], "error");
     assert_eq!(
         health_while_websockets_full.as_deref(),
         Some("HTTP/1.1 200 OK\r\n")
