@@ -85,7 +85,7 @@ fn image_tools_follow_their_own_http_and_websocket_turn_accounts() {
             .backend
             .usage
             .ledger
-            .query(0.0, now, "all", now)
+            .query(0.0, now, "all", now, None)
             .unwrap();
         assert_eq!(usage["totals"]["input_tokens"], 8, "{usage}");
         assert_eq!(usage["totals"]["output_tokens"], 4, "{usage}");
@@ -216,7 +216,7 @@ fn image_tools_keep_the_native_account_for_native_turns() {
         .backend
         .usage
         .ledger
-        .query(0.0, now, "all", now)
+        .query(0.0, now, "all", now, None)
         .unwrap();
     assert_eq!(
         usage["totals"]["input_tokens"], 4,
@@ -226,5 +226,87 @@ fn image_tools_keep_the_native_account_for_native_turns() {
         usage["totals"]["output_tokens"], 2,
         "replayed image receipt: {usage}"
     );
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn image_26_api_routes_without_a_codex_turn_and_preserves_options() {
+    let upstream = ImageUpstream::start(200);
+    let (_directory, server) = image_server(&upstream.base_url());
+    server
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap()["providers"] = json!([
+        {"id":"image-api", "name":"Images", "protocol":"responses", "auth_mode":"api_key",
+         "base_url":upstream.base_url(), "api_key":"image-api-fixture", "enabled":true}]);
+    for (model, operation, format) in [
+        ("gpt-image-2.6-sunburst", "generations", "svg"),
+        ("gpt-image-2.6-flare", "generations", "gif"),
+        ("gpt-image-2.6-sunburst", "edits", "gif"),
+    ] {
+        let mut body =
+            json!({"model":model,"prompt":"fixture","output_format":format,"complexity":"low"});
+        if format == "gif" {
+            body["frame_count"] = json!(4);
+            body["frame_duration_ms"] = json!(200);
+        }
+        if operation == "edits" {
+            body["images"] = json!([{"image_url":"data:image/png;base64,ZmFrZQ=="}]);
+        }
+        let wire = post(
+            &server,
+            &format!("/v1/images/{operation}"),
+            &serde_json::to_vec(&body).unwrap(),
+            &[
+                &session_header(&server),
+                "X-EMP-Provider: image-api",
+                "Authorization: Bearer caller-secret",
+                "chatgpt-account-id: must-not-forward",
+            ],
+        );
+        assert!(wire.starts_with("HTTP/1.1 200"), "{wire}");
+        let request = upstream.next();
+        assert_eq!(request.body, body);
+        assert_eq!(request.headers["authorization"], "Bearer image-api-fixture");
+        assert!(!request.headers.contains_key("chatgpt-account-id"));
+        assert!(request.path.ends_with(&format!("/images/{operation}")));
+    }
+    server
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap()["providers"][0]["enabled"] = json!(false);
+    for provider in ["unknown-service", "image-api"] {
+        let wire = post(
+            &server,
+            "/v1/images/generations",
+            br#"{"model":"gpt-image-2.6-flare","prompt":"fixture"}"#,
+            &[
+                &session_header(&server),
+                &format!("X-EMP-Provider: {provider}"),
+            ],
+        );
+        assert!(wire.starts_with("HTTP/1.1 404"), "{wire}");
+    }
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn image_disconnect_cancels_upstream_without_retry() {
+    let upstream = ImageUpstream::start(499);
+    let (_directory, server) = image_server(&upstream.base_url());
+    select_turn(&server, "selected/gpt-6.1-sol", "cancel-turn", false);
+    upstream.next();
+    let mut socket = TcpStream::connect(server.local_addr()).unwrap();
+    let body = r#"{"model":"gpt-image-2","prompt":"fixture"}"#;
+    write!(socket,"POST /v1/images/generations HTTP/1.1\r\nHost: {}\r\n{}\r\nx-codex-image-turn-id: cancel-turn\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", server.local_addr(), session_header(&server), body.len()).unwrap();
+    assert!(upstream.next().path.ends_with("/images/generations"));
+    drop(socket);
+    assert_eq!(upstream.next().path, "/cancelled");
     server.shutdown().unwrap();
 }

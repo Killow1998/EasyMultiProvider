@@ -83,12 +83,6 @@ impl ImageRoutes {
             .as_str()
             .filter(|model| !model.trim().is_empty())
             .ok_or_else(|| NativeHttpError::router(400, "image request.model is required"))?;
-        let turn = incoming
-            .get("x-codex-image-turn-id")
-            .filter(|turn| !turn.is_empty())
-            .ok_or_else(|| {
-                NativeHttpError::router(400, "image request requires x-codex-image-turn-id")
-            })?;
         let config = state
             .backend
             .configuration
@@ -97,6 +91,31 @@ impl ImageRoutes {
                 NativeHttpError::router(503, "image routing configuration is unavailable")
             })?
             .clone();
+        if let Some(provider_id) = incoming
+            .get("X-EMP-Provider")
+            .or_else(|| incoming.get("x-emp-provider"))
+        {
+            let provider = config["providers"].as_array().and_then(|providers| {
+                providers.iter().find(|provider| {
+                    provider["id"].as_str() == Some(provider_id)
+                        && provider["enabled"] != false
+                        && provider["auth_mode"].as_str().unwrap_or("api_key") == "api_key"
+                })
+            });
+            if let Some(provider) = provider.and_then(Value::as_object) {
+                return image_route(provider, RouteSource::ForwardProvider, model);
+            }
+            return Err(NativeHttpError::router(
+                404,
+                "Image API service not found or unavailable",
+            ));
+        }
+        let turn = incoming
+            .get("x-codex-image-turn-id")
+            .filter(|turn| !turn.is_empty())
+            .ok_or_else(|| {
+                NativeHttpError::router(400, "image request requires x-codex-image-turn-id")
+            })?;
         let (target, asset_account) = {
             let mut routes = self.0.lock().unwrap_or_else(PoisonError::into_inner);
             routes.limited.retain(|_, until| *until > Instant::now());

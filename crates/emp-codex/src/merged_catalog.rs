@@ -305,12 +305,21 @@ fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
         } else {
             description
         };
+    let route = text(model, "id");
+    let source_prefix = format!("{}/", text(model, "provider"));
+    let name = match (
+        nonempty(provider, "name"),
+        route.strip_prefix(&source_prefix),
+    ) {
+        (Some(source), Some(model)) => format!("{source} · {model}"),
+        _ => route.to_owned(),
+    };
     let mut entry = Value::Object(entry);
     let fields = json!({
         "service_tiers":[], "additional_speed_tiers":[], "default_service_tier":null, "availability_nux":null,
         "upgrade":null, "model_specialty":null, "experimental_supported_tools":[], "multi_agent_reasoning_effort":null,
         "use_responses_lite":false, "supports_experimental_context":false, "priority":0,
-        "slug":text(model,"id"), "display_name":text(model,"id"),
+        "slug":route, "display_name":name,
         "description":if description.is_empty() { "External provider model" } else { description },
         "visibility":model.get("visibility").cloned().unwrap_or(json!("list")), "supported_in_api":true,
         "input_modalities":input_modalities,

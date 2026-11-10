@@ -5,24 +5,30 @@ use super::*;
 #[test]
 #[ignore = "requires an explicitly selected Codex and isolated loopback access"]
 fn installed_codex_refreshes_online_catalog_without_process_restart() {
-    online_catalog(false, "online_catalog_fixture");
+    online_catalog(false, "online_catalog_fixture", true);
+}
+
+#[test]
+#[ignore = "requires an explicitly selected Codex and isolated loopback access"]
+fn installed_codex_displays_service_name_with_stable_route() {
+    online_catalog(false, "online_catalog_fixture", false);
 }
 
 #[test]
 #[ignore = "requires an explicitly selected Codex and isolated loopback access"]
 fn installed_codex_uses_localhost_with_a_localhost_only_proxy_exception() {
-    online_catalog(true, "online_catalog_fixture");
+    online_catalog(true, "online_catalog_fixture", true);
 }
 
 #[test]
 #[ignore = "requires Codex 0.165 or later and isolated loopback access"]
 fn installed_codex_refreshes_originator_scoped_catalogs() {
     for originator in ["codex_work_cca", "chatgpt_cca"] {
-        online_catalog(false, originator);
+        online_catalog(false, originator, true);
     }
 }
 
-fn online_catalog(localhost_only: bool, originator: &str) {
+fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("codex");
@@ -52,7 +58,7 @@ fn online_catalog(localhost_only: bool, originator: &str) {
     );
     let config_path = root.join("config.json");
     std::fs::write(&config_path, serde_json::to_vec(&json!({
-        "providers":[{"id":"demo","base_url":upstream.base_url(),"protocol":"responses","api_key":"fixture-only"}],
+        "providers":[{"id":"demo","name":"示例服务","base_url":upstream.base_url(),"protocol":"responses","api_key":"fixture-only"}],
         "models":[{"id":"demo/model","provider":"demo","upstream_id":"upstream","context_window":100000,"enabled":true}]
     })).unwrap()).unwrap();
     let binary = std::env::var("EMP_TEST_CODEX_CLI").expect("explicit installed engine");
@@ -102,13 +108,17 @@ fn online_catalog(localhost_only: bool, originator: &str) {
     assert!(initialized["userAgent"].as_str().unwrap().contains(version));
     codex.send(json!({"method":"initialized"}));
     let first = codex.rpc(2, "model/list", json!({"includeHidden":true}));
+    let model = first["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["id"] == "demo/model")
+        .unwrap_or_else(|| panic!("missing stable route: {first}"));
     assert!(
-        first["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|model| model["id"] == "demo/model"),
-        "{first}"
+        model["displayName"]
+            .as_str()
+            .is_some_and(|name| name.ends_with("示例服务 · model")),
+        "{model}"
     );
     {
         let mut config = server.state.backend.configuration.snapshot().unwrap();
@@ -134,6 +144,11 @@ fn online_catalog(localhost_only: bool, originator: &str) {
         json!({"threadId":id,"input":[{"type":"text","text":"Return ok."}]}),
     );
     codex.wait(|event| event["method"] == "turn/completed");
+    if !check_refresh {
+        drop(codex);
+        server.shutdown().unwrap();
+        return;
+    }
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut rpc_id = 5;
     loop {

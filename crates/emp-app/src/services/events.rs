@@ -82,3 +82,17 @@ pub(crate) fn terminal_stream_event(event: &Value) -> bool {
             )
         })
 }
+
+/// Codex extensions are not part of the public Responses event protocol.
+pub(crate) fn codex_client(headers: &std::collections::BTreeMap<String, String>) -> bool {
+    headers.iter().any(|(key, value)| {
+        matches!(
+            key.to_ascii_lowercase().as_str(),
+            "originator" | "user-agent"
+        ) && value.to_ascii_lowercase().contains("codex")
+    })
+}
+
+pub(crate) fn codex_event(kind: &str) -> bool {
+    kind.starts_with("codex.") || matches!(kind, "response.metadata" | "keepalive")
+}

@@ -12,7 +12,7 @@ fn memory_websocket_pause_keeps_the_connection_usable_for_normal_turns() {
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
     let cookie = session_header(&server);
-    let mut request = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\n\r\n",server.local_addr().port()).into_bytes();
+    let mut request = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\n\r\n",server.local_addr().port()).into_bytes();
     let mut memory = crate::tests::memory_routing_contract::body();
     memory["type"] = json!("response.create");
     request.extend_from_slice(&masked_websocket_text(&memory));

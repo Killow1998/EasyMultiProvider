@@ -10,7 +10,7 @@ fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_p
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let mut request = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: websocket-thread\r\n\r\n",server.local_addr().port()).into_bytes();
+    let mut request = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: websocket-thread\r\n\r\n",server.local_addr().port()).into_bytes();
     request.extend_from_slice(&masked_websocket_text(
         &json!({"type":"response.create","model":"native/alias","input":"hello"}),
     ));
@@ -201,7 +201,7 @@ fn responses_websocket_disconnect_cancels_external_http_stream() {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let mut request = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: external-ws-thread\r\n\r\n",server.local_addr().port()).into_bytes();
+    let mut request = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: external-ws-thread\r\n\r\n",server.local_addr().port()).into_bytes();
     request.extend_from_slice(&masked_websocket_text(
         &json!({"type":"response.create","model":"demo/model","input":"hello"}),
     ));
@@ -234,4 +234,42 @@ fn responses_websocket_disconnect_cancels_external_http_stream() {
     );
     server.shutdown().unwrap();
     worker.join().unwrap();
+}
+
+#[test]
+fn generic_websocket_client_receives_only_public_responses_events() {
+    let upstream = NativeSseUpstream::start(false);
+    let (_directory, server) = native_alias_server(&upstream.base_url());
+    let mut socket = TcpStream::connect(server.local_addr()).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(socket, "GET /v1/responses HTTP/1.1\r\nHost: {}\r\n{}\r\nAuthorization: Bearer fixture\r\nUser-Agent: async-openai\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",server.local_addr(),session_header(&server)).unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        socket.read_exact(&mut byte).unwrap();
+        head.push(byte[0]);
+    }
+    assert!(head.starts_with(b"HTTP/1.1 101"));
+    send_masked_websocket_text(
+        &mut socket,
+        &json!({"type":"response.create","model":"native/alias","input":"hello"}),
+    );
+    loop {
+        let event = receive_websocket_json(&mut socket);
+        let kind = event["type"].as_str().unwrap();
+        assert!(
+            matches!(
+                kind,
+                "response.created" | "response.output_text.delta" | "response.completed"
+            ),
+            "{event}"
+        );
+        if kind == "response.completed" {
+            break;
+        }
+    }
+    drop(socket);
+    server.shutdown().unwrap();
 }

@@ -29,20 +29,21 @@ function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage
   function readUsage(entry) {
     if (entry.pending) return entry.pending;
     const startedRevision = revision;
+    entry.progress=null;
+    if(ownsView(entry))serviceUsage.loading(current.node,null,entry.data);
     entry.controller = new AbortController();
     entry.pending = (async () => {
       let succeeded = false;
       try {
-        const data = await api('/api/usage?account_id='+encodeURIComponent(entry.id)+'&start=0&end='+Date.now()/1000, {signal:entry.controller.signal});
+        const data = await api('/api/usage?lifetime=true&account_id='+encodeURIComponent(entry.id), {signal:entry.controller.signal,onProgress:progress=>{entry.progress=progress;if(ownsView(entry))serviceUsage.loading(current.node,progress,entry.data);}});
         if (usage.get(entry.id) !== entry || entry.identity !== identity(findAccount(entry.id))) return;
-        // The lifetime view needs aggregates, not the report's minute-by-minute series.
         entry.data = {groups:data.groups, first_record_at:data.first_record_at};
         entry.at = Date.now(); entry.revision = startedRevision; succeeded = true;
         paintUsage(entry);
       } catch (error) {
         if ([401,403,404].includes(error.status)) entry.data = null;
         if (ownsView(entry)) {
-          current.node.innerHTML = (entry.data ? serviceUsage.render(entry.data) : '') + `<p class="refresh-error" role="status">${esc(error.message)}</p>`;
+          serviceUsage.failed(current.node,error,()=>void readUsage(entry),entry.data);
         }
       } finally {
         entry.pending = null;
@@ -57,7 +58,7 @@ function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage
     const entry = entryFor(current.id);
     if (!entry) return;
     if (current.entry !== entry) {
-      current.node.innerHTML = `<p class="muted">${tr('services.loading_usage')}</p>`;
+      serviceUsage.loading(current.node,entry.progress);
       current.entry = entry;
       paintUsage(entry);
     }

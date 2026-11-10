@@ -23,6 +23,7 @@ pub(crate) struct TurnPool(Mutex<BTreeMap<(String, String), SharedTurn>>);
 
 enum Reply {
     Dispatched,
+    Text(String, String),
     Complete(Value, Result<(), ClaudeCliError>),
 }
 
@@ -51,6 +52,7 @@ impl Drop for Turn {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn execute(
     state: &ServerState,
     route: &ResolvedRoute,
@@ -59,6 +61,7 @@ pub(super) fn execute(
     executable: &emp_codex::installed_cli::InstalledClaudeCli,
     mut monitor: Option<&mut DisconnectMonitor>,
     usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
+    text: &mut dyn FnMut(&str, &str) -> std::io::Result<()>,
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
     let candidate = route
         .with_protocol(Protocol::AnthropicMessages)
@@ -206,6 +209,12 @@ pub(super) fn execute(
         }
         match turn.receiver.recv_timeout(Duration::from_millis(25)) {
             Ok(Reply::Dispatched) => usage.dispatch(),
+            Ok(Reply::Text(id, delta)) => {
+                if cancelled.is_none() && text(&id, &delta).is_err() {
+                    turn.cancelled.cancel();
+                    cancelled = Some(ClaudeCliError::Disconnected);
+                }
+            }
             Ok(Reply::Complete(output, result)) => {
                 break (output, cancelled.take().map_or(result, Err));
             }

@@ -41,6 +41,7 @@ struct ObservedWebSocket<'a, 'stream> {
     observation: &'a mut RequestObservation,
     control: Option<std::sync::Arc<control::Control>>,
     last_response_id: &'a mut Option<String>,
+    codex: bool,
 }
 impl ObservedWebSocket<'_, '_> {
     fn reject(
@@ -87,6 +88,11 @@ impl ObservedWebSocket<'_, '_> {
         result
     }
     fn send(&mut self, event: &Value, upstream: bool) -> Result<(), emp_transport::WebSocketError> {
+        if !self.codex
+            && crate::services::events::codex_event(event["type"].as_str().unwrap_or_default())
+        {
+            return Ok(());
+        }
         let formatted = self.observation.errors().event(event, upstream);
         let event = formatted.as_ref().unwrap_or(event);
         let result = match &self.control {
@@ -307,6 +313,7 @@ pub(crate) fn serve_responses_websocket(
         presentation.thread(incoming.get("thread-id").map(String::as_str));
         observation = observation.with_errors(presentation);
         let mut websocket = ObservedWebSocket {
+            codex: crate::services::events::codex_client(&incoming),
             inner: &mut websocket,
             observation: &mut observation,
             control: None,

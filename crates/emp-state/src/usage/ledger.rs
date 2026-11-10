@@ -16,6 +16,7 @@ use std::time::Duration;
 
 #[derive(Debug)]
 pub struct UsageError;
+type UsageProgress = Box<dyn Fn(i64, i64) -> std::io::Result<()> + Send>;
 impl std::fmt::Display for UsageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Usage history is unavailable")
@@ -36,6 +37,7 @@ mod affinity;
 mod calls;
 pub use calls::CallFilter;
 mod identities;
+mod read_cache;
 mod series;
 pub use series::UsageSeriesFilter;
 mod sessions;
@@ -60,7 +62,7 @@ fn chart_bucket(span: f64) -> f64 {
 pub struct UsageLedger {
     path: PathBuf,
     pub prices: Arc<PriceCatalog>,
-    lock: Mutex<()>,
+    lock: Mutex<read_cache::ReadCache>,
     initialized: AtomicBool,
     write_error: AtomicBool,
 }
@@ -114,7 +116,7 @@ impl UsageLedger {
         Self {
             path,
             prices,
-            lock: Mutex::new(()),
+            lock: Mutex::new(read_cache::ReadCache::default()),
             initialized: AtomicBool::new(false),
             write_error: AtomicBool::new(false),
         }
@@ -319,23 +321,55 @@ impl UsageLedger {
             && start < end
             && (category == "all" || CATEGORIES.contains(&category))
     }
-    pub fn query(&self, start: f64, end: f64, category: &str, now: f64) -> Result<Value> {
-        self.query_selected(start, end, category, now, None)
-    }
-    pub fn query_owner(&self, start: f64, end: f64, owner: &str, now: f64) -> Result<Value> {
-        if owner.is_empty() {
-            return Err(UsageError);
-        }
-        self.query_selected(start, end, "all", now, Some(owner))
-    }
-    fn query_selected(
+    pub fn query(
         &self,
         start: f64,
         end: f64,
         category: &str,
         now: f64,
-        owner: Option<&str>,
+        cancelled: Option<Arc<AtomicBool>>,
     ) -> Result<Value> {
+        self.query_selected(start..end, category, now, None, None, cancelled)
+    }
+    pub fn query_owner(
+        &self,
+        start: f64,
+        end: f64,
+        owner: &str,
+        now: f64,
+        cancelled: Option<Arc<AtomicBool>>,
+    ) -> Result<Value> {
+        if owner.is_empty() {
+            return Err(UsageError);
+        }
+        self.query_selected(start..end, "all", now, Some(owner), None, cancelled)
+    }
+    pub fn query_lifetime_with_progress(
+        &self,
+        owner: &str,
+        now: f64,
+        progress: impl Fn(i64, i64) -> std::io::Result<()> + Send + 'static,
+        cancelled: Option<Arc<AtomicBool>>,
+    ) -> Result<Value> {
+        self.query_selected(
+            0.0..now,
+            "all",
+            now,
+            Some(owner),
+            Some(Box::new(progress)),
+            cancelled,
+        )
+    }
+    fn query_selected(
+        &self,
+        period: std::ops::Range<f64>,
+        category: &str,
+        now: f64,
+        owner: Option<&str>,
+        progress: Option<UsageProgress>,
+        cancelled: Option<Arc<AtomicBool>>,
+    ) -> Result<Value> {
+        let (start, end) = (period.start, period.end);
         if !Self::valid_period(start, end, category) {
             return Err(UsageError);
         }
@@ -349,7 +383,7 @@ impl UsageLedger {
             selection.push_str(" AND owner = ?");
             parameters.push(SqlValue::Text(owner.into()));
         }
-        let aggregate = TOKEN_FIELDS
+        let mut aggregate = TOKEN_FIELDS
             .iter()
             .map(|field| format!("SUM(COALESCE({field},0)) AS {field}"))
             .collect::<Vec<_>>()
@@ -357,8 +391,33 @@ impl UsageLedger {
             + ", COUNT(*) AS requests, SUM(input_tokens IS NOT NULL AND output_tokens IS NOT NULL) AS reported_requests, SUM(input_tokens IS NOT NULL) AS input_reports, SUM(output_tokens IS NOT NULL) AS output_reports, SUM(cached_input_tokens IS NOT NULL) AS cache_reports, SUM(reasoning_tokens IS NOT NULL) AS reasoning_reports, SUM(cost_nanos IS NOT NULL) AS priced_requests, SUM(COALESCE(cost_nanos,0)) AS cost_nanos";
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let connection = self.connect()?;
-        connection.execute_batch("PRAGMA temp_store=MEMORY")?;
+        let connection = read_cache::QueryConnection::new(&connection, cancelled)?;
+        connection.execute_batch("PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-2048")?;
         connection.execute(&format!("CREATE TEMP TABLE selected_usage AS SELECT observed_at,category,owner,model,service_tier,origin,usage_turn,route_model,price_issue,cost_nanos,{} FROM {RESOLVED_USAGE} WHERE {selection}",TOKEN_FIELDS.join(",")),params_from_iter(&parameters))?;
+        let lifetime = progress.is_some();
+        if let Some(progress) = progress {
+            let count: i64 =
+                connection
+                    .query_row("SELECT COUNT(*) FROM selected_usage", [], |row| row.get(0))?;
+            progress(0, count)?;
+            let completed = std::cell::Cell::new(0);
+            let batch = (count / 100).max(1);
+            connection.create_scalar_function(
+                "usage_progress",
+                0,
+                rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+                move |_| {
+                    let current = completed.get() + 1;
+                    completed.set(current);
+                    if current % batch == 0 || current == count {
+                        progress(current, count)
+                            .map_err(|error| rusqlite::Error::UserFunctionError(Box::new(error)))?;
+                    }
+                    Ok(1_i64)
+                },
+            )?;
+            aggregate.push_str(", COUNT(usage_progress()) AS read_progress");
+        }
         let grouped = |group: &str| {
             rows(
                 &connection,
@@ -369,6 +428,14 @@ impl UsageLedger {
             )
         };
         let groups = grouped("category,owner,model,service_tier")?;
+        if lifetime {
+            let first: Option<f64> = connection.query_row(
+                "SELECT MIN(observed_at) FROM usage_events WHERE owner = ?",
+                params![owner],
+                |row| row.get(0),
+            )?;
+            return Ok(json!({"groups":groups,"first_record_at":first}));
+        }
         let sources = grouped("origin")?;
         let periods = rows(
             &connection,

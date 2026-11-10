@@ -96,7 +96,7 @@ fn conversation_bills_include_related_work_without_changing_frozen_totals() {
             100.0,
         )
         .unwrap();
-    let original = ledger.query(0.0, 200.0, "all", 1000.0).unwrap()["totals"].clone();
+    let original = ledger.query(0.0, 200.0, "all", 1000.0, None).unwrap()["totals"].clone();
     drop(ledger);
     prices.replace(
         json!({"priced":{"input_cost_per_token":"0.01",
@@ -104,14 +104,14 @@ fn conversation_bills_include_related_work_without_changing_frozen_totals() {
         200.0,
     );
     let ledger = UsageLedger::new(path, prices);
-    let mut scope = ledger.session_scope(&filter()).unwrap();
+    let mut scope = ledger.session_scope(&filter(), None).unwrap();
     main_conversation(&mut scope, "main");
     main_conversation(&mut scope, "other");
     assert_eq!(scope.root("child"), Some("main"));
     assert_eq!(scope.root("global-memory"), None);
     assert_eq!(scope.0["review"].kind, "review");
     let bills = ledger
-        .query_sessions(&filter(), &page(), Some(&scope), 1000.0)
+        .query_sessions(&filter(), &page(), Some(&scope), 1000.0, None)
         .unwrap();
     assert_eq!(bills["total"], 2);
     assert_eq!(bills["unassigned"]["requests"], 5);
@@ -119,13 +119,13 @@ fn conversation_bills_include_related_work_without_changing_frozen_totals() {
         assert_eq!(&bills["totals"][field], value, "{field}");
     }
     assert_eq!(
-        ledger.query(0.0, 200.0, "all", 1000.0).unwrap()["totals"],
+        ledger.query(0.0, 200.0, "all", 1000.0, None).unwrap()["totals"],
         original
     );
     let mut selected = filter();
     selected.session = Some("main".into());
     let detail = ledger
-        .query_series(&selected, Some(&scope), 1000.0)
+        .query_series(&selected, Some(&scope), 1000.0, None)
         .unwrap();
     assert_eq!(detail["totals"]["requests"], 4);
     assert_eq!(detail["totals"]["input_tokens"], 200);
@@ -172,7 +172,7 @@ fn conversation_bills_include_related_work_without_changing_frozen_totals() {
     selected.provider = Some("another-service".into());
     assert_eq!(
         ledger
-            .query_series(&selected, Some(&scope), 1000.0)
+            .query_series(&selected, Some(&scope), 1000.0, None)
             .unwrap()["totals"]["requests"],
         0
     );
@@ -193,11 +193,11 @@ fn inherited_events_are_billed_once_only_when_all_copies_agree_on_a_conversation
     shared["session_kind"] = json!("sidechat");
     ledger.record(&shared, 100.0);
     ledger.record_call(&shared, 99.0, 100.0).unwrap();
-    let mut scope = ledger.session_scope(&filter()).unwrap();
+    let mut scope = ledger.session_scope(&filter(), None).unwrap();
     main_conversation(&mut scope, "main");
     assert!(scope.0.contains_key("main") && scope.0.contains_key("child"));
     let bills = ledger
-        .query_sessions(&filter(), &page(), Some(&scope), 1000.0)
+        .query_sessions(&filter(), &page(), Some(&scope), 1000.0, None)
         .unwrap();
     assert_eq!(bills["total"], 1);
     assert_eq!(bills["records"][0]["requests"], 1);
@@ -205,7 +205,7 @@ fn inherited_events_are_billed_once_only_when_all_copies_agree_on_a_conversation
     let mut selected = filter();
     selected.session = Some("main".into());
     let detail = ledger
-        .query_series(&selected, Some(&scope), 1000.0)
+        .query_series(&selected, Some(&scope), 1000.0, None)
         .unwrap();
     assert_eq!(detail["components"].as_array().unwrap().len(), 1);
     assert_eq!(detail["components"][0]["session_kind"], "shared");
@@ -214,7 +214,7 @@ fn inherited_events_are_billed_once_only_when_all_copies_agree_on_a_conversation
     ledger.record(&shared, 100.0);
     main_conversation(&mut scope, "another-main");
     let conflicted = ledger
-        .query_sessions(&filter(), &page(), Some(&scope), 1000.0)
+        .query_sessions(&filter(), &page(), Some(&scope), 1000.0, None)
         .unwrap();
     assert_eq!(conflicted["total"], 0);
     assert_eq!(conflicted["unassigned"]["requests"], 1);

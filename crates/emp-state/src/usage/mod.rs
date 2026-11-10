@@ -95,7 +95,8 @@ pub fn reported_usage(event: &Value) -> serde_json::Map<String, Value> {
             "speed_mode".into(),
             match tier {
                 "default" | "standard" => "standard",
-                "fast" | "priority" | "ultrafast" => "fast",
+                "fast" | "priority" => "fast",
+                "ultrafast" => "ultrafast",
                 other => other,
             }
             .into(),

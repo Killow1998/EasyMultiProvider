@@ -106,8 +106,11 @@ class ShadowHandler(BaseHTTPRequestHandler):
             return self.send(200, snapshot.status())
         if path in {'/api/usage','/api/calls','/api/gateway/clients','/api/gateway/usage'} and snapshot:
             try:
-                if path == '/api/calls' and self.headers.get('Accept') == 'text/event-stream':
-                    with snapshot.stream(self.path) as upstream:
+                lifetime=path=='/api/usage' and urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('lifetime')==['true']
+                if (path == '/api/calls' or lifetime) and self.headers.get('Accept') == 'text/event-stream':
+                    status,target=snapshot.usage_target(self.path,self.source_read) if lifetime else (200,self.path)
+                    if status!=200:return self.send(status,target)
+                    with snapshot.stream(target) as upstream:
                         return forward_stream(self, upstream)
                 status, payload = snapshot.usage(self.path, self.source_read) if path == '/api/usage' else snapshot.read(self.path)
                 return self.send(status, payload)

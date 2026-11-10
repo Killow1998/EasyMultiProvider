@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 import random
+import socket
 from pathlib import Path
 import sys
 import tempfile
@@ -25,11 +26,13 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--large-image', action='store_true')
     parser.add_argument('--large-context', action='store_true')
-    parser.add_argument('--case',choices=['tools','http401','http429','sse-error','cancel','budget'],default='tools')
+    parser.add_argument('--case',choices=['tools','http401','http429','http503','http504','sse-error','stream-error','stream-cancel','cancel','budget'],default='tools')
     parser.add_argument('--codex',type=Path)
+    parser.add_argument('--transport', choices=['json','sse','websocket'], default='json')
     args = parser.parse_args()
     observed = []
     held,cancelled = threading.Event(),threading.Event()
+    visible = threading.Event()
     image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
     if args.large_image:
         def chunk(kind, data):
@@ -82,6 +85,36 @@ def main():
                 {'type': 'message_delta', 'delta': {'stop_reason': 'max_tokens' if args.case=='budget' else 'tool_use' if name else 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': 5}},
                 {'type': 'message_stop'},
             ]
+            if args.transport != 'json':
+                visible.clear()
+                prefix = [
+                    {'type':'content_block_start','index':0,'content_block':{'type':'thinking','thinking':''}},
+                    {'type':'content_block_delta','index':0,'delta':{'type':'thinking_delta','thinking':'PRIVATE_THINKING_MARKER'}},
+                    {'type':'content_block_stop','index':0},
+                ]
+                if name:
+                    prefix += [
+                        {'type':'content_block_start','index':1,'content_block':{'type':'text','text':''}},
+                        {'type':'content_block_delta','index':1,'delta':{'type':'text_delta','text':'PUBLIC_PROGRESS'}},
+                        {'type':'content_block_stop','index':1},
+                    ]
+                for event in events[1:]:
+                    if 'index' in event: event['index'] += 2 if name else 1
+                events[1:1] = prefix
+                self.send_response(200);self.send_header('Content-Type','text/event-stream');self.send_header('Connection','close');self.end_headers()
+                for event in events:
+                    wire=f'event: {event["type"]}\ndata: {json.dumps(event)}\n\n'.encode()
+                    self.wfile.write(wire[:17]);self.wfile.flush();self.wfile.write(wire[17:]);self.wfile.flush()
+                    if event.get('delta',{}).get('type') == 'text_delta':
+                        assert visible.wait(10), 'Public text was buffered until the Claude turn finished'
+                        if args.case == 'stream-error':
+                            self.wfile.write(b'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"PUBLIC_FIXTURE_ERROR"}}\n\n');self.wfile.flush()
+                            break
+                        if args.case == 'stream-cancel':
+                            if not self.rfile.read(1):cancelled.set()
+                            break
+                self.close_connection=True
+                return
             raw = ''.join(f'event: {event["type"]}\ndata: {json.dumps(event)}\n\n' for event in events).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -123,6 +156,53 @@ def main():
             assert cancelled.wait(5),'Disconnected caller left its Claude request running'
             report.update(passed=True,case='cancel',upstream_requests=len(observed),upstream_cancelled=True)
             args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(report,indent=2));print(json.dumps(report));return
+        def complete(body):
+            if args.transport == 'json': return request(base+'/v1/responses',body,headers,timeout=65)
+            address=urlsplit(base);events=[]
+            def accept(event):
+                events.append(event)
+                if args.case=='stream-error' and event['type']=='error':
+                    assert any(item['type']=='response.output_text.delta' for item in events),events
+                    assert event['error']['code']=='upstream_capacity',event
+                    return event
+                assert event['type'] not in ('error','response.failed'),event
+                if event['type']=='response.output_text.delta':
+                    visible.set()
+                    if args.case=='stream-cancel':return {'cancelled':True}
+                if event['type']=='response.completed':
+                    combined=json.dumps(events)
+                    assert 'PRIVATE_THINKING_MARKER' not in combined,combined
+                    deltas=''.join(item.get('delta','') for item in events if item['type']=='response.output_text.delta')
+                    expected='PUBLIC_PROGRESS' if 'PUBLIC_TOOL_RESULT' not in json.dumps(body['input']) else 'PUBLIC_FINAL_ANSWER'
+                    assert deltas==expected,(deltas,expected)
+                    return event['response']
+            if args.transport=='sse':
+                connection=HTTPConnection(address.hostname,address.port,timeout=65)
+                connection.request('POST','/v1/responses',json.dumps({**body,'stream':True}),{'Content-Type':'application/json',**headers})
+                response=connection.getresponse()
+                assert response.status==200,response.read() if response.status!=200 else ''
+                while line:=response.readline():
+                    if line.startswith(b'data: '):
+                        final=accept(json.loads(line[6:]))
+                        if final is not None:
+                            if args.case=='stream-cancel':response.close()
+                            connection.close();return 200,final
+            else:
+                with socket.create_connection((address.hostname,address.port),timeout=65) as sock:
+                    upgrade={**headers,'Host':address.netloc,'Upgrade':'websocket','Connection':'Upgrade','Sec-WebSocket-Version':'13','Sec-WebSocket-Key':base64.b64encode(b'fixture-only-key').decode()}
+                    sock.sendall(('GET /v1/responses HTTP/1.1\r\n'+''.join(f'{key}: {value}\r\n' for key,value in upgrade.items())+'\r\n').encode())
+                    with sock.makefile('rb') as source:
+                        assert b' 101 ' in source.readline()
+                        while source.readline()!=b'\r\n': pass
+                        payload=json.dumps({'type':'response.create',**body}).encode();mask=b'test'
+                        sock.sendall(bytes([129,254])+len(payload).to_bytes(2,'big')+mask+bytes(byte^mask[index%4] for index,byte in enumerate(payload)))
+                        while True:
+                            prefix=source.read(2);assert prefix and prefix[0]&15==1,prefix
+                            size=prefix[1]&127
+                            if size in (126,127): size=int.from_bytes(source.read(2 if size==126 else 8),'big')
+                            final=accept(json.loads(source.read(size)))
+                            if final is not None:return 200,final
+            raise AssertionError('Missing terminal response')
         try:
             if args.case.startswith('http'):
                 address=urlsplit(base);connection=HTTPConnection(address.hostname,address.port,timeout=65)
@@ -131,7 +211,7 @@ def main():
                 if args.case=='http429':assert response.getheader('Retry-After')=='7',dict(response.getheaders())
                 connection.close()
             else:
-                status, first = request(base + '/v1/responses', body, headers, timeout=15 if args.case=='sse-error' else 65)
+                status, first = complete(body)
         except Exception as error:
             report.update(passed=False, failure=type(error).__name__, upstream_requests=len(observed))
             for name in ['backend']:
@@ -144,6 +224,11 @@ def main():
             args.output.write_text(json.dumps(report,indent=2))
             raise
         report['first_status'] = status
+        if args.case in ('stream-error','stream-cancel'):
+            if args.case=='stream-cancel':assert cancelled.wait(5),'Upstream continued after disconnect'
+            assert len(observed)==1,len(observed)
+            report.update(passed=True,case=args.case,transport=args.transport,early_text_verified=True,upstream_requests=1)
+            args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(report,indent=2));print(json.dumps(report));return
         if args.case != 'tools':
             report.update(passed=False,case=args.case,upstream_requests=len(observed))
             args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(report,indent=2))
@@ -161,7 +246,7 @@ def main():
             raise AssertionError(report)
         call = next(item for item in first['output'] if item['type'] == 'function_call')
         body['input'] += first['output'] + [{'type': 'function_call_output', 'call_id': call['call_id'], 'output': 'PUBLIC_TOOL_RESULT'}]
-        status, final = request(base + '/v1/responses', body, headers, timeout=65)
+        status, final = complete(body)
         assert status == 200, final
         assert final['output'][0]['content'][0]['text'] == 'PUBLIC_FINAL_ANSWER', final
         assert len(observed) == 2, len(observed)
@@ -171,14 +256,14 @@ def main():
         assert first['usage']['input_tokens_details']['cache_creation_1h_tokens']==2,first
         assert any(item['role']=='assistant' for item in observed[1]['messages']), 'Tool continuation reset the CLI'
         body['input'] += final['output'] + [{'role':'user','content':'PUBLIC_NEXT_USER_TURN'}]
-        status,next_turn = request(base+'/v1/responses',body,headers,timeout=65)
+        status,next_turn = complete(body)
         assert status == 200 and next_turn['output'][0]['content'][0]['text'] == 'PUBLIC_FINAL_ANSWER',next_turn
         assert len(observed) == 3
         assert all(item.get('output_config',{}).get('effort')=='high' for item in observed),[item.get('output_config') for item in observed]
         assert not any(item['role']=='assistant' for item in observed[2]['messages']), 'A new user turn retained Claude session history'
         system_text = [' '.join(part.get('text', '') for part in body['system']) if isinstance(body['system'], list) else body['system'] for body in observed]
         assert all('cc_entrypoint=cli' in value for value in system_text)
-        report.update(passed=True, upstream_requests=len(observed), tool_call_count=1,
+        report.update(passed=True, transport=args.transport, early_text_verified=args.transport!='json', upstream_requests=len(observed), tool_call_count=1,
             selected_effort='high',cache_creation_1h_tokens=first['usage']['input_tokens_details']['cache_creation_1h_tokens'],
             user_turn_reset=True, tool_round_reuse=True,
             per_request_input_tokens=[first['usage']['input_tokens'], final['usage']['input_tokens'],next_turn['usage']['input_tokens']],
@@ -201,7 +286,8 @@ def main():
         if args.codex:
             from claude_codex_acceptance import run
             shaped_calls=len(observed)
-            report['real_codex']=run(args.codex.resolve(),base,headers,directory,args.output.parent/'real-codex')
+            report['real_codex']=run(args.codex.resolve(),base,headers,directory,args.output.parent/'real-codex',
+                visible.set if args.transport!='json' else None)
             actual=observed[shaped_calls:]
             assert len(actual)==4,len(actual)
             assert any(item['role']=='assistant' for item in actual[1]['messages']), 'Real Codex tool continuation lost CLI affinity'

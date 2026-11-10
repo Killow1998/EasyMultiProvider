@@ -177,7 +177,7 @@ fn collaboration_recovery_rejects_invalid_capture_and_accounts_retries_once() {
         .backend
         .usage
         .ledger
-        .query(now - 60.0, now + 1.0, "all", now)
+        .query(now - 60.0, now + 1.0, "all", now, None)
         .unwrap();
     let recovery = totals["groups"]
         .as_array()

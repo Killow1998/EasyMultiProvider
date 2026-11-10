@@ -64,6 +64,22 @@ impl ImageUpstream {
                 let image = request.path.contains("/images/");
                 let streaming = request.body["stream"] == true;
                 sender.send(request).unwrap();
+                if image && status == 499 {
+                    let mut byte = [0];
+                    assert_eq!(
+                        socket.read(&mut byte).unwrap(),
+                        0,
+                        "gateway must disconnect the image upstream"
+                    );
+                    sender
+                        .send(ObservedNativeRequest {
+                            path: "/cancelled".into(),
+                            headers: BTreeMap::new(),
+                            body: Value::Null,
+                        })
+                        .unwrap();
+                    continue;
+                }
                 let status = if image { status } else { 200 };
                 let body = if !image {
                     let value = json!({"id":"response_fixture", "object":"response", "status":"completed", "model":"upstream", "output":[]});

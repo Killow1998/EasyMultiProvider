@@ -64,6 +64,7 @@ pub(crate) fn execute_complete(
     incoming: &BTreeMap<String, String>,
     monitor: Option<&mut DisconnectMonitor>,
     usage: &mut crate::services::request_outcome::RequestOutcome<'_>,
+    text: &mut dyn FnMut(&str, &str) -> std::io::Result<()>,
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
     let started = Instant::now();
     let result = (|| {
@@ -73,7 +74,16 @@ pub(crate) fn execute_complete(
         preflight_input(body)?;
         let executable = emp_codex::installed_cli::resolve_claude_cli()
             .ok_or(ClaudeCliError::Failure("claude_cli_unavailable"))?;
-        tui::execute(state, route, body, incoming, &executable, monitor, usage)
+        tui::execute(
+            state,
+            route,
+            body,
+            incoming,
+            &executable,
+            monitor,
+            usage,
+            text,
+        )
     })();
     if let Err(error) = &result {
         if matches!(error, ClaudeCliError::Failure("claude_cli_interrupted")) {

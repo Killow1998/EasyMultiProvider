@@ -20,6 +20,7 @@ fn connect(server: &ServerHandle) -> ClientWebSocket {
     let client = ClientWebSocket::connect(
         &format!("ws://{}/v1/responses", server.local_addr()),
         &BTreeMap::from([
+            ("originator".into(), "codex_cli_rs".into()),
             ("X-EMP-Session".into(), server.session_token().to_owned()),
             ("Authorization".into(), "Bearer fixture".into()),
             ("thread-id".into(), "interrupt-fixture".into()),

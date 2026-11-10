@@ -472,6 +472,7 @@ async fn anthropic_passthrough_preserves_cli_body_and_raw_response() {
                 "anthropic-beta".to_owned(),
                 "interleaved-thinking".to_owned(),
             )]),
+            |_| {},
         )
         .await
         .expect("native Messages passthrough");

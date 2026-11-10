@@ -77,12 +77,55 @@ Free Native stays signed in. EMP keeps `openai`, the original conversation IDs,
 and the existing permission/sandbox settings; no fork is needed. The helper is
 the existing EMP executable over stdio, so no additional runtime is installed.
 It reads reference files on the client, forwards the current Codex turn metadata
-to the image route, and saves PNGs under the client's EMP `state/generated_images`
+to the image route, and saves images under the client's EMP `state/generated_images`
 directory. Tool results contain only a file path, not image Base64 in text.
 
 EMP owns only its `mcp_servers.emp_images` entry. Switching to paid Native or
 restoring native integration reinstates the original entry and keeps other
 MCP servers unchanged.
+
+Cancellation closes the helper's HTTP request and the gateway's upstream image
+connection. The helper remains responsive to MCP messages while generating.
+Closing its stdin also cancels active image requests.
+
+### Image 2.6 API
+
+Use `POST /v1/images/generations` or `POST /v1/images/edits` with the gateway key
+and `X-EMP-Provider: <service-id>` to select a configured API-key service.
+The gateway uses that service's stored key; a Codex turn is not required.
+Without this header, existing Codex image calls retain their per-turn
+subscription routing. An unknown or disabled service is rejected.
+
+Example JSON for `generations`:
+
+```json
+{
+  "model": "gpt-image-2.6-sunburst",
+  "prompt": "A simple landscape icon",
+  "output_format": "svg",
+  "complexity": "low"
+}
+```
+
+`gpt-image-2.6-sunburst` and `gpt-image-2.6-flare` support the Image 2.6 options.
+The API forwards the original JSON and upstream response. SVG is generation-only.
+GIF supports generation and editing, with `frame_count` (2–16) and
+`frame_duration_ms` (20–2000). SVG/GIF do not support streaming, partial images
+or output compression. The selected service must provide the requested model.
+[OpenAI image generation guide](https://developers.openai.com/api/docs/guides/image-generation).
+
+The existing MCP `imagegen` tool accepts these model names, `output_format`,
+`complexity`, `frame_count` and `frame_duration_ms`. PNG remains its default;
+SVG, GIF, JPEG and WebP results use matching file extensions. Selecting a model
+does not change the configured subscription account or create API billing credentials.
+
+### Responses client compatibility
+
+Codex clients identify themselves through `originator` or `User-Agent` containing
+`codex` and retain Codex extension events. Other Responses clients receive no
+`codex.*`, `response.metadata` or JSON `keepalive` events. HTTP uses SSE comments
+for these frames; WebSocket omits them. Upstream usage processing runs before
+this output filtering.
 
 ## Decision models
 

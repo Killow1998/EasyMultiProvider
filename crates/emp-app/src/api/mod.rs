@@ -28,6 +28,7 @@ pub(crate) mod updates;
 pub(crate) mod usage;
 
 mod claude_response;
+mod claude_stream;
 mod failure_response;
 mod history_response;
 mod native_response;

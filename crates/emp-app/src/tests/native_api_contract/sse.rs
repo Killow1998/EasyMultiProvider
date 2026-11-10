@@ -90,7 +90,7 @@ fn native_sse_incomplete_preserves_usage_and_deduplicates_response_id() {
             .backend
             .usage
             .ledger
-            .query(0.0, now, "all", now)
+            .query(0.0, now, "all", now, None)
             .unwrap();
         assert_eq!(
             totals["totals"]["input_tokens"].as_u64().unwrap_or(0),
@@ -320,4 +320,49 @@ fn native_sse_downstream_disconnect_cancels_upstream() {
     );
     server.shutdown().unwrap();
     worker.join().unwrap();
+}
+
+#[test]
+fn responses_sse_filters_codex_extensions_only_for_generic_clients() {
+    for codex in [false, true] {
+        let wire = [
+            json!({"type":"codex.rate_limits","rate_limits":{}}),
+            json!({"type":"codex.response.metadata","headers":{}}),
+            json!({"type":"response.metadata","headers":{}}),
+            json!({"type":"keepalive"}),
+            json!({"type":"response.output_text.delta","delta":"hello"}),
+            json!({"type":"codex.rate_limits","rate_limits":{"after_output":true}}),
+            json!({"type":"response.completed","response":{"id":"extension-test","status":"completed","output":[]}}),
+        ].iter().map(|v| format!("data: {v}\n\n")).collect::<String>();
+        let upstream = NativeErrorSseUpstream::start(wire.into_bytes());
+        let (_directory, server) = native_alias_server(&upstream.base_url());
+        let result = post_stream(
+            &server,
+            "/v1/responses",
+            br#"{"model":"native/alias","input":"hello","stream":true}"#,
+            &[
+                &session_header(&server),
+                "Authorization: Bearer fixture",
+                if codex {
+                    "originator: codex_cli_rs"
+                } else {
+                    "User-Agent: async-openai"
+                },
+            ],
+        );
+        assert!(result.contains("response.output_text.delta"), "{result}");
+        assert!(result.contains("response.completed"), "{result}");
+        for extension in [
+            "codex.rate_limits",
+            "codex.response.metadata",
+            "response.metadata",
+            "\"type\":\"keepalive\"",
+        ] {
+            assert_eq!(result.contains(extension), codex, "{result}");
+        }
+        if !codex {
+            assert!(result.contains(": keepalive\n\n"));
+        }
+        server.shutdown().unwrap();
+    }
 }

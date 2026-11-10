@@ -1,8 +1,6 @@
 //! Single-step Claude completion projected into downstream WebSocket events.
 use super::{Turn, TurnResult};
-use crate::api::failure_response::websocket_router_error;
 use crate::app::ServerState;
-use crate::services::events::terminal_stream_event;
 use serde_json::Value;
 
 pub(super) fn serve(
@@ -18,11 +16,8 @@ pub(super) fn serve(
         ids,
         ..
     } = turn;
-    // Expose an ID before the buffered CLI call, so Codex can steer while waiting.
-    let id = format!(
-        "resp_{}",
-        crate::util::random_hex(16).unwrap_or_else(|_| "0".repeat(32))
-    );
+    // Expose an ID before CLI startup, so Codex can steer while waiting.
+    let id = ids.response_id().to_owned();
     if websocket
         .send_json(&serde_json::json!({"type":"response.created", "response":{
             "id":id, "object":"response", "status":"in_progress", "output":[]
@@ -48,6 +43,11 @@ pub(super) fn serve(
     )
     .started_at(websocket.observation.execution_started())
     .transport("websocket");
+    let mut live = crate::api::claude_stream::LiveText::new(ids, true, |event: &Value| {
+        websocket
+            .send_stateless_json(&mut event.clone(), false)
+            .map_err(std::io::Error::other)
+    });
     let completion = match crate::services::claude_cli::execute_complete(
         state,
         route,
@@ -55,12 +55,14 @@ pub(super) fn serve(
         request_headers,
         Some(monitor),
         &mut usage,
+        &mut |id, text| live.push(id, text),
     ) {
         Ok(completion) => completion,
         Err(
             crate::services::claude_cli::ClaudeCliError::Disconnected
             | crate::services::claude_cli::ClaudeCliError::Failure("claude_cli_interrupted"),
         ) => {
+            drop(live);
             if websocket.interrupted() {
                 usage.interrupted();
                 return TurnResult::Finished;
@@ -69,6 +71,7 @@ pub(super) fn serve(
             return TurnResult::Closed;
         }
         Err(error) => {
+            drop(live);
             if websocket
                 .send_json(&crate::api::claude_response::websocket_value_for_route(
                     &error, route,
@@ -92,28 +95,8 @@ pub(super) fn serve(
         crate::services::context::record(state, &selected_route, request_body, true);
     }
     crate::services::providers::persist_protocol_observation(state, &selected_route);
-    let events = match emp_router::response_json_stream_events(response_value, ids, false) {
-        Ok(events) => events,
-        Err(error) => {
-            if websocket
-                .send_json(&websocket_router_error(&error))
-                .is_err()
-            {
-                return TurnResult::Closed;
-            }
-            return TurnResult::Finished;
-        }
-    };
-    for mut event in events {
-        if event["type"] == "response.created" {
-            continue;
-        }
-        if websocket.send_stateless_json(&mut event, false).is_err() {
-            return TurnResult::Closed;
-        }
-        if terminal_stream_event(&event) {
-            break;
-        }
+    if live.finish(response_value).is_err() {
+        return TurnResult::Closed;
     }
     TurnResult::Finished
 }

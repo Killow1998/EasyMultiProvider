@@ -15,6 +15,7 @@ pub(crate) fn execute(
     operation: &str,
     body: &Value,
     incoming: &BTreeMap<String, String>,
+    mut monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
 ) -> Result<NativeCompleteResponse, NativeHttpError> {
     let route = state
         .backend
@@ -60,51 +61,79 @@ pub(crate) fn execute(
                     && !name.eq_ignore_ascii_case("chatgpt-account-id")
             });
         }
-        let mut auth_headers = resolve_headers(state, &route, &incoming, false, false)?;
+        let mut auth_headers = if route.source == emp_core::RouteSource::ForwardProvider {
+            emp_router::upstream_headers(
+                route.provider.value(),
+                emp_core::Protocol::Responses,
+                &incoming,
+            )
+            .map_err(|error| NativeHttpError::router(error.status(), error.to_string()))?
+        } else {
+            resolve_headers(state, &route, &incoming, false, false)?
+        };
         for attempt in 0..2 {
             usage.owner(&emp_state::usage::account_owner(&auth_headers));
             usage.dispatch();
             let runtime = &state.backend.transport.runtime;
-            let upstream = runtime
-                .block_on(state.backend.transport.client.open(
-                    HttpMethod::Post,
-                    &endpoint,
-                    auth_headers.clone(),
-                    Some(encoded.clone()),
-                    false,
-                ))
-                .map_err(|error| transport_error(error.kind()))?;
-            let status = upstream.status();
-            let content_type = upstream
-                .header("content-type")
-                .unwrap_or("application/json")
-                .to_owned();
-            let values = upstream
-                .headers()
-                .map(|(name, value)| (name.to_owned(), json!(value)))
-                .collect::<serde_json::Map<_, _>>();
-            let mut headers: BTreeMap<String, String> =
-                emp_router::native_metadata::native_response_headers(
-                    &json!({"headers":values}),
-                    &route.requested_model,
-                    &route.upstream_model,
-                )
-                .into_iter()
-                .filter_map(|(name, value)| value.as_str().map(|value| (name, value.to_owned())))
-                .collect();
-            for name in ["x-codex-imagegen-request-id", "retry-after"] {
-                if let Some(value) = upstream.header(name) {
-                    headers.insert(name.to_owned(), value.to_owned());
+            let request = async {
+                let upstream = state
+                    .backend
+                    .transport
+                    .client
+                    .open(
+                        HttpMethod::Post,
+                        &endpoint,
+                        auth_headers.clone(),
+                        Some(encoded.clone()),
+                        false,
+                    )
+                    .await?;
+                let status = upstream.status();
+                let content_type = upstream
+                    .header("content-type")
+                    .unwrap_or("application/json")
+                    .to_owned();
+                let values = upstream
+                    .headers()
+                    .map(|(name, value)| (name.to_owned(), json!(value)))
+                    .collect::<serde_json::Map<_, _>>();
+                let mut headers: BTreeMap<String, String> =
+                    emp_router::native_metadata::native_response_headers(
+                        &json!({"headers":values}),
+                        &route.requested_model,
+                        &route.upstream_model,
+                    )
+                    .into_iter()
+                    .filter_map(|(name, value)| {
+                        value.as_str().map(|value| (name, value.to_owned()))
+                    })
+                    .collect();
+                for name in ["x-codex-imagegen-request-id", "retry-after"] {
+                    if let Some(value) = upstream.header(name) {
+                        headers.insert(name.to_owned(), value.to_owned());
+                    }
                 }
-            }
+                let raw = upstream.read_limited(64 * 1024 * 1024).await?;
+                Ok::<_, emp_transport::HttpTransportError>((status, content_type, headers, raw))
+            };
+            let (status, content_type, headers, raw) = match crate::services::disconnect::raced(
+                runtime,
+                monitor.as_deref_mut(),
+                request,
+            ) {
+                crate::services::disconnect::DisconnectRace::Ready(result) => {
+                    result.map_err(|error| transport_error(error.kind()))?
+                }
+                crate::services::disconnect::DisconnectRace::Disconnected => {
+                    usage.disconnected();
+                    return Err(NativeHttpError::router(499, "Image request cancelled"));
+                }
+            };
             let receipt_id = headers
                 .get("x-codex-imagegen-request-id")
                 .or_else(|| headers.get("x-request-id"))
                 .or_else(|| incoming.get("X-EMP-Request-ID"))
                 .cloned();
-            let raw = runtime
-                .block_on(upstream.read_limited(64 * 1024 * 1024))
-                .map_err(|error| transport_error(error.kind()))?;
             if status == 401
                 && attempt == 0
                 && route
@@ -153,7 +182,9 @@ pub(crate) fn execute(
         }
         unreachable!("image authentication retries are bounded")
     })();
-    if let Err(error) = &result {
+    if let Err(error) = &result
+        && error.status != 499
+    {
         usage.native_error(error);
     }
     result

@@ -7,6 +7,7 @@ pub(super) fn read(
     state: &ServerState,
     filter: &UsageSeriesFilter,
     now: f64,
+    cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Vec<u8> {
     let value = |name: &str| query_values(request.target, name).first().cloned();
     let number =
@@ -36,6 +37,7 @@ pub(super) fn read(
         page,
         &query,
         now,
+        cancelled,
     ) else {
         return unavailable();
     };

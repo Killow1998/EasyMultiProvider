@@ -104,10 +104,14 @@ fn report_progress_counts_filtered_work_and_stops_when_the_reader_leaves() {
     let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = Arc::clone(&updates);
     let actual = ledger
-        .query_calls_with_progress(&selected, move |completed, total| {
-            sink.lock().unwrap().push((completed, total));
-            Ok(())
-        })
+        .query_calls_with_progress(
+            &selected,
+            move |completed, total| {
+                sink.lock().unwrap().push((completed, total));
+                Ok(())
+            },
+            None,
+        )
         .unwrap();
     assert_eq!(actual, expected);
     assert_eq!(actual["total"], 3);
@@ -122,22 +126,30 @@ fn report_progress_counts_filtered_work_and_stops_when_the_reader_leaves() {
     );
     assert!(
         ledger
-            .query_calls_with_progress(&selected, |completed, _| {
-                if completed > 0 {
-                    Err(std::io::ErrorKind::BrokenPipe.into())
-                } else {
-                    Ok(())
-                }
-            })
+            .query_calls_with_progress(
+                &selected,
+                |completed, _| {
+                    if completed > 0 {
+                        Err(std::io::ErrorKind::BrokenPipe.into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                None
+            )
             .is_err()
     );
     assert_eq!(ledger.query_calls(&selected).unwrap(), expected);
     selected.model = Some("missing".into());
     let empty = ledger
-        .query_calls_with_progress(&selected, |completed, total| {
-            assert_eq!((completed, total), (0, 0));
-            Ok(())
-        })
+        .query_calls_with_progress(
+            &selected,
+            |completed, total| {
+                assert_eq!((completed, total), (0, 0));
+                Ok(())
+            },
+            None,
+        )
         .unwrap();
     assert_eq!(empty["total"], 0);
 }
@@ -151,6 +163,11 @@ fn reported_tiers_and_effort_survive_restart_without_relabeling_legacy_requests(
     for (id, response, expected) in [
         ("standard", json!({"service_tier":"default"}), "standard"),
         ("fast", json!({"service_tier":"priority"}), "fast"),
+        (
+            "ultrafast",
+            json!({"service_tier":"ultrafast"}),
+            "ultrafast",
+        ),
         ("flex", json!({"service_tier":"flex"}), "flex"),
         ("unconfirmed", json!({}), "unknown"),
     ] {
@@ -188,7 +205,7 @@ fn reported_tiers_and_effort_survive_restart_without_relabeling_legacy_requests(
             assert_eq!(row["reported_effort"], "xhigh");
         }
     }
-    assert_eq!(report["models"].as_array().unwrap().len(), 5);
+    assert_eq!(report["models"].as_array().unwrap().len(), 6);
     let connection = rusqlite::Connection::open(path).unwrap();
     let saved: String = connection
         .query_row(
@@ -393,7 +410,7 @@ fn durable_reports_share_accounting_and_keep_delivery_distinct() {
     assert_eq!(one["generation_tokens_per_second"], 10.0);
     assert!(one["pricing"].is_object());
     assert_eq!(
-        ledger.query(0.0, 1000.0, "all", 1000.0).unwrap()["totals"]["requests"],
+        ledger.query(0.0, 1000.0, "all", 1000.0, None).unwrap()["totals"]["requests"],
         2
     );
     let mut selected = filter();

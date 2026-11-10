@@ -10,8 +10,9 @@ impl UsageState {
         &self,
         home: &Path,
         filter: &UsageSeriesFilter,
+        cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<SessionScope, UsageError> {
-        let mut scope = self.ledger.session_scope(filter)?;
+        let mut scope = self.ledger.session_scope(filter, cancelled)?;
         self.sessions.enrich(home, &mut scope);
         Ok(scope)
     }
@@ -22,11 +23,13 @@ impl UsageState {
         filter: &UsageSeriesFilter,
         conversation: bool,
         now: f64,
+        cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Value, UsageError> {
         let scope = conversation
-            .then(|| self.conversation_scope(home, filter))
+            .then(|| self.conversation_scope(home, filter, cancelled.clone()))
             .transpose()?;
-        self.ledger.query_series(filter, scope.as_ref(), now)
+        self.ledger
+            .query_series(filter, scope.as_ref(), now, cancelled)
     }
 
     pub(crate) fn query_sessions(
@@ -36,8 +39,9 @@ impl UsageState {
         mut page: SessionBillPage,
         query: &str,
         now: f64,
+        cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Value, UsageError> {
-        let scope = self.conversation_scope(home, filter)?;
+        let scope = self.conversation_scope(home, filter, cancelled.clone())?;
         if !query.is_empty() {
             page.matching_sessions = Some(
                 scope
@@ -53,9 +57,9 @@ impl UsageState {
                     .collect(),
             );
         }
-        let mut payload = self
-            .ledger
-            .query_sessions(filter, &page, Some(&scope), now)?;
+        let mut payload =
+            self.ledger
+                .query_sessions(filter, &page, Some(&scope), now, cancelled)?;
         for row in payload["records"].as_array_mut().into_iter().flatten() {
             if let Some(node) = row["session_id"].as_str().and_then(|id| scope.0.get(id)) {
                 row["session_name"] = json!(node.name);

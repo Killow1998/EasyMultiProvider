@@ -1,5 +1,8 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  'services.retry_usage':['重试','Retry'],
+  'services.partial_usage':['部分用量','Partial usage'],
+  'services.partial_estimate':['部分估算','Partial estimate'],
   'services.cpa_quota_accounts':['账号额度','Account quotas'],
   'services.cpa_quota_integration':['CPA 号池余量对接','CPA pool quota integration'],
   'services.cpa_quota_api_help':['CPA 需提供 GET /v1/quota，使用当前服务 Key 进行 Bearer 鉴权。EMP 会保留 Base URL 的路径前缀。\n\n接口返回 scope=shared_pool、provider=claude，以及各账号的 5h／7d 剩余百分比、重置时间和启用／过期状态。\n\nEMP 每 5 分钟读取快照并记录趋势。未提供该接口的 CPA 仍可调用模型。','CPA must provide GET /v1/quota with Bearer authentication using the current service key. EMP preserves the Base URL path prefix.\n\nReturn scope=shared_pool, provider=claude, and each account’s 5h/7d remaining percentages, reset times and enabled/stale states.\n\nEMP reads snapshots every 5 minutes and records trends. CPA model calls still work without this endpoint.'],

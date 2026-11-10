@@ -9,9 +9,10 @@ function createReportQuery({api, onState, onResult}) {
     onState(true, '');
     let error = '';
     try {
-      const result = await api(path, {...options, signal:controller.signal}, progress=>{
+      const onProgress=progress=>{
         if (selected === revision && controller) onState(true, '', progress);
-      });
+      };
+      const result = await api(path, {...options, signal:controller.signal,onProgress});
       if (selected === revision) onResult(result);
     } catch (failure) {
       if (selected === revision && failure.name !== 'AbortError') error = failure.message;
@@ -30,9 +31,9 @@ function setReportState(root, loading, error, tr, progress) {
     percent:progress.total ? Math.floor(progress.completed/progress.total*100) : 100,
   }) : tr("reports.loading");
   status.textContent = loading ? label : error;
-  if (loading && progress) {
+  if (loading) {
     const bar=document.createElement('progress');
-    bar.max=progress.total || 1; bar.value=progress.total ? progress.completed : 1;
+    if(progress){bar.max=progress.total || 1; bar.value=progress.total ? progress.completed : 1;}
     bar.setAttribute('aria-label',label);
     status.append(bar);
   }

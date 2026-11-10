@@ -7,7 +7,8 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
   const tps = value => n(value) === null ? '—' : value.toFixed(1) + ' token/s';
   const tier = value => {
     if (['default','standard'].includes(value)) return tr('reports.tier_standard');
-    if (['priority','fast','ultrafast'].includes(value)) return tr('reports.tier_fast');
+    if (value === 'ultrafast') return tr('reports.tier_ultrafast');
+    if (['priority','fast'].includes(value)) return tr('reports.tier_fast');
     return value && value !== 'unknown' ? value : tr('reports.tier_unconfirmed');
   };
   const effort = value => {
@@ -132,7 +133,7 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
     root.innerHTML = report ? '<div class="report-status" data-report-status role="status" aria-live="polite"></div><div data-call-content></div>' : toolbar();
     const selected = current;
     current.query = createReportQuery({api,
-      onState:(loading,error) => setReportState(root,loading,error,tr),
+      onState:(loading,error,progress) => setReportState(root,loading,error,tr,progress),
       onResult:report => { selected.report = report; render(root.querySelector('[data-call-content]'),report); },
     });
     if (!report) {

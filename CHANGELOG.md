@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.13.29 (2026-11-10)
+
+### 中文
+
+- Claude CPA 的公开文字实时显示，减少持续等待；工具参数完整后再交给 Codex，保留取消与错误处理。
+- 修复 macOS Claude 调用一直等待：统一临时目录信任路径，待上下文命令就绪后再提交。
+- 关闭统计与用量查询时终止后台扫描，减少服务用量查询的内存占用；Fast 和 Ultrafast 分开显示。
+- 统计复用已读取的明细：查看 30 天后切换较短周期或筛选条件，按缓存明细重新统计；账单变化后自动更新。
+- 服务用量按当前账号查询，显示加载进度并支持原地重试；明确标记部分用量与估算，修复弹窗键盘焦点越界。
+- 修复服务详情返回后无法关闭的问题；外部模型默认显示服务名称，保留原有调用 ID。
+- 修复取消生图后请求仍继续等待的问题；MCP 取消或关闭会断开图片上游连接。
+- 普通 Responses 客户端过滤 Codex 专用事件，保持 Codex 客户端的事件与用量处理。
+- 扩展 Image 2.6：支持选择 API 服务，透传复杂度、SVG 和 GIF 参数；MCP 图片工具支持新模型及对应文件格式。
+
+### English
+
+- Stream public Claude CPA text while the turn is running. Deliver tools after their arguments are complete, preserving cancellation and error handling.
+- Fix Claude calls waiting on macOS by canonicalizing the trusted workspace and submitting context only after the CLI command is ready.
+- Stop statistics and usage scans on disconnect, reduce service-usage query memory, and distinguish Fast from Ultrafast.
+- Reuse timestamped report facts across shorter periods and filters. Refresh cached facts when accounting data changes, preserving exact range and performance metrics.
+- Scope lifetime usage reads to the selected owner, show query progress and retry, label partial totals, and keep keyboard focus inside dialogs.
+- Fix returning to a service detail without a close button. External models show the service name while retaining their existing route IDs.
+- Cancel image requests when the MCP caller cancels or disconnects, closing the upstream connection.
+- Filter Codex-only events for generic Responses clients while preserving Codex events and upstream accounting.
+- Extend Image 2.6 support with explicit API-service selection, complexity and SVG/GIF options, and matching MCP output formats.
+
 ## 0.13.28 (2026-11-07)
 
 ### 中文

@@ -40,7 +40,12 @@ pub(crate) fn image_request(
     } else {
         "generations"
     };
+    let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
     crate::api::native_response::complete_response(images::execute(
-        state, operation, &body, &incoming,
+        state,
+        operation,
+        &body,
+        &incoming,
+        monitor.as_mut(),
     ))
 }

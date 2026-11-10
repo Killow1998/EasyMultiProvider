@@ -89,12 +89,17 @@ fn valid(id: &str) -> bool {
 }
 
 impl UsageLedger {
-    pub fn session_scope(&self, filter: &UsageSeriesFilter) -> Result<SessionScope> {
+    pub fn session_scope(
+        &self,
+        filter: &UsageSeriesFilter,
+        cancelled: Option<Arc<AtomicBool>>,
+    ) -> Result<SessionScope> {
         let mut selected = filter.clone();
         selected.session = None;
         let (selection, args) = series::selection(&selected, false)?;
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let connection = self.connect()?;
+        let connection = read_cache::QueryConnection::new(&connection, cancelled)?;
         let ids = rows(
             &connection,
             &format!(

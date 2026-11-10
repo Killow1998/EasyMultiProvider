@@ -20,6 +20,9 @@ impl Context {
             std::fs::create_dir_all(path)
                 .map_err(|_| ClaudeCliError::Failure("claude_cli_temp_unavailable"))?;
         }
+        #[cfg(unix)]
+        let project = std::fs::canonicalize(project)
+            .map_err(|_| ClaudeCliError::Failure("claude_cli_temp_unavailable"))?;
         std::fs::write(config.join(".claude.json"),json!({"hasCompletedOnboarding":true,"theme":"dark","autoUpdates":false,
             "projects":{project.to_string_lossy().as_ref():{"hasTrustDialogAccepted":true,"enableAllProjectMcpServers":true,"hasCompletedProjectOnboarding":true}}}).to_string())
             .map_err(|_| ClaudeCliError::Failure("claude_cli_temp_unavailable"))?;

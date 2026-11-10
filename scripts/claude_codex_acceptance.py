@@ -10,7 +10,7 @@ from scripts.native_restore_acceptance.app_server import AppServer
 from scripts.shadow_frontend.local_backend import request
 
 
-def run(codex,base,headers,root,evidence):
+def run(codex,base,headers,root,evidence,on_text=None):
     home=root/'real-codex';home.mkdir()
     (home/'fixture.txt').write_text('PUBLIC_TOOL_RESULT')
     version=subprocess.check_output([str(codex),'--version'],env={'PATH':os.environ['PATH'],'HOME':str(home),'CODEX_HOME':str(home)},text=True).strip()
@@ -48,6 +48,8 @@ def run(codex,base,headers,root,evidence):
             while True:
                 event=client.read_message(timeout=60)
                 client.events.append(event)
+                if event.get('method')=='item/agentMessage/delta' and on_text:
+                    on_text()
                 if event.get('method')=='item/tool/call':
                     assert event['params']['tool']=='read_public',event
                     tool_calls+=1
@@ -61,7 +63,8 @@ def run(codex,base,headers,root,evidence):
                     break
                 elif 'id' in event and 'method' in event:
                     raise AssertionError(event)
-            assert answer=='PUBLIC_FINAL_ANSWER',(answer,client.events[-5:])
+            expected=('PUBLIC_PROGRESS' if index==0 and on_text else '')+'PUBLIC_FINAL_ANSWER'
+            assert answer==expected,(answer,client.events[-5:])
             answers.append(answer)
     finally:
         client.close()

@@ -30,13 +30,13 @@ fn memory_receipts_restore_priced_usage_once_and_reconcile_rollout_history() {
         events.push(event);
     }
     assert_eq!(
-        ledger.query(0.0, 100.0, "all", 1000.0).unwrap()["totals"]["requests"],
+        ledger.query(0.0, 100.0, "all", 1000.0, None).unwrap()["totals"]["requests"],
         0
     );
     drop(ledger);
     let ledger = UsageLedger::new(path.clone(), prices.clone());
     let report = ledger
-        .query_owner(0.0, 100.0, "account:memory", 1000.0)
+        .query_owner(0.0, 100.0, "account:memory", 1000.0, None)
         .unwrap();
     assert_eq!(report["totals"]["requests"], 2);
     assert_eq!(report["totals"]["input_tokens"], 2000);
@@ -56,7 +56,7 @@ fn memory_receipts_restore_priced_usage_once_and_reconcile_rollout_history() {
     drop(ledger);
     let reopened = UsageLedger::new(path.clone(), prices.clone());
     let again = reopened
-        .query_owner(0.0, 100.0, "account:memory", 1000.0)
+        .query_owner(0.0, 100.0, "account:memory", 1000.0, None)
         .unwrap();
     assert_eq!(again["totals"], report["totals"]);
 
@@ -70,7 +70,7 @@ fn memory_receipts_restore_priced_usage_once_and_reconcile_rollout_history() {
     reopened.record_call(&failed, 13.0, 14.0).unwrap();
     drop(reopened);
     let final_report = UsageLedger::new(path, prices)
-        .query_owner(0.0, 100.0, "account:memory", 1000.0)
+        .query_owner(0.0, 100.0, "account:memory", 1000.0, None)
         .unwrap();
     assert_eq!(final_report["totals"]["requests"], 3);
     assert_eq!(final_report["totals"]["reported_requests"], 2);
@@ -103,7 +103,7 @@ fn account_details_keep_tokens_periods_and_start_time_with_the_verified_owner() 
         );
     }
     let selected = ledger
-        .query_owner(0.0, 1000.0, "account:selected", 1000.0)
+        .query_owner(0.0, 1000.0, "account:selected", 1000.0, None)
         .unwrap();
     assert_eq!(selected["totals"]["requests"], 2);
     assert_eq!(selected["totals"]["input_tokens"], 300);
@@ -119,10 +119,47 @@ fn account_details_keep_tokens_periods_and_start_time_with_the_verified_owner() 
     assert_eq!(selected["periods"].as_array().unwrap().len(), 2);
     assert_eq!(selected["issues"][0]["price_issue"], "unknown_model");
     assert_eq!(
-        ledger.query(0.0, 1000.0, "all", 1000.0).unwrap()["totals"]["requests"],
+        ledger.query(0.0, 1000.0, "all", 1000.0, None).unwrap()["totals"]["requests"],
         3
     );
-    assert!(ledger.query_owner(0.0, 1000.0, "", 1000.0).is_err());
+    let observations = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = observations.clone();
+    let streamed = ledger
+        .query_lifetime_with_progress(
+            "account:selected",
+            1000.0,
+            move |completed, total| {
+                observed.lock().unwrap().push((completed, total));
+                Ok(())
+            },
+            None,
+        )
+        .unwrap();
+    let mut groups = streamed["groups"].clone();
+    for group in groups.as_array_mut().unwrap() {
+        group.as_object_mut().unwrap().remove("read_progress");
+    }
+    let baseline = ledger
+        .query_owner(0.0, 1000.0, "account:selected", 1000.0, None)
+        .unwrap();
+    assert_eq!(groups, baseline["groups"]);
+    assert_eq!(streamed["first_record_at"], baseline["first_record_at"]);
+    let observed = observations.lock().unwrap();
+    assert_eq!(observed.first().unwrap().0, 0);
+    let (completed, total) = observed.last().unwrap();
+    assert_eq!(completed, total);
+    assert!(*total > 0);
+    assert!(
+        ledger
+            .query_lifetime_with_progress(
+                "account:selected",
+                1000.0,
+                |_, _| Err(std::io::ErrorKind::BrokenPipe.into()),
+                None
+            )
+            .is_err()
+    );
+    assert!(ledger.query_owner(0.0, 1000.0, "", 1000.0, None).is_err());
 }
 
 #[test]
@@ -154,12 +191,12 @@ fn chart_series_preserve_totals_and_filter_by_receipt_and_service() {
         session: None,
         state: None,
     };
-    let series = ledger.query_series(&filter, None, 1000.0).unwrap();
+    let series = ledger.query_series(&filter, None, 1000.0, None).unwrap();
     assert_eq!(series["totals"]["input_tokens"], 60);
     assert_eq!(series["totals"]["requests"], 3);
     assert_eq!(
         series["totals"]["cost_nanos"],
-        ledger.query(0.0, 100.0, "all", 1000.0).unwrap()["totals"]["cost_nanos"]
+        ledger.query(0.0, 100.0, "all", 1000.0, None).unwrap()["totals"]["cost_nanos"]
     );
     assert_eq!(
         series["series"]
@@ -173,25 +210,25 @@ fn chart_series_preserve_totals_and_filter_by_receipt_and_service() {
     filter.provider = Some("first".into());
     filter.model = Some("route/model".into());
     assert_eq!(
-        ledger.query_series(&filter, None, 1000.0).unwrap()["totals"]["input_tokens"],
+        ledger.query_series(&filter, None, 1000.0, None).unwrap()["totals"]["input_tokens"],
         30
     );
     filter.session = Some("b".into());
     filter.state = Some("completed".into());
     assert_eq!(
-        ledger.query_series(&filter, None, 1000.0).unwrap()["totals"]["input_tokens"],
+        ledger.query_series(&filter, None, 1000.0, None).unwrap()["totals"]["input_tokens"],
         20
     );
     filter.state = Some("failed".into());
     assert_eq!(
-        ledger.query_series(&filter, None, 1000.0).unwrap()["totals"]["requests"],
+        ledger.query_series(&filter, None, 1000.0, None).unwrap()["totals"]["requests"],
         0
     );
     filter.state = None;
     filter.session = None;
     filter.category = "native".into();
     assert_eq!(
-        ledger.query_series(&filter, None, 1000.0).unwrap()["totals"]["requests"],
+        ledger.query_series(&filter, None, 1000.0, None).unwrap()["totals"]["requests"],
         0
     );
 }
@@ -214,11 +251,13 @@ fn historical_identity_requires_a_unique_matching_turn_and_route() {
     ] {
         ledger.record(&json!({"route":"responses","observation_id":id,"usage_owner":owner,"usage_category":"subscription","origin":origin,"usage_turn":turn,"route_model":"egg/model","upstream_model":"model","input_tokens":tokens,"output_tokens":1}),100.0);
     }
-    let all = ledger.query(0.0, 200.0, "all", 1000.0).unwrap();
+    let all = ledger.query(0.0, 200.0, "all", 1000.0, None).unwrap();
     assert_eq!(all["totals"]["requests"], 6);
     assert_eq!(all["totals"]["input_tokens"], 210);
     assert_eq!(
-        ledger.query_owner(0.0, 200.0, "account:a", 1000.0).unwrap()["totals"]["input_tokens"],
+        ledger
+            .query_owner(0.0, 200.0, "account:a", 1000.0, None)
+            .unwrap()["totals"]["input_tokens"],
         70
     );
     let unresolved = all["groups"]
@@ -239,7 +278,7 @@ fn historical_identity_requires_a_unique_matching_turn_and_route() {
         state: None,
     };
     assert_eq!(
-        ledger.query_series(&filter, None, 1000.0).unwrap()["totals"]["input_tokens"],
+        ledger.query_series(&filter, None, 1000.0, None).unwrap()["totals"]["input_tokens"],
         70
     );
     ledger

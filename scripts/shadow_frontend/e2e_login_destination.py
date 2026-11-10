@@ -97,13 +97,19 @@ def main():
             assert (home / 'auth.json').read_bytes() == original
             wait_for(lambda:browser.execute('return !document.querySelector("[data-native-login-start]").disabled;'))
             start_login('native')
+            control.write_text('fail')
+            wait_for(lambda:call(path+'status', {})['status'] == 'failed', seconds=30)
+            assert (home / 'auth.json').read_bytes() == original
+            wait_for(lambda:browser.execute('return !document.querySelector("[data-native-login-start]").disabled;'))
+            control.write_text('pending')
+            start_login('native')
             control.write_text('complete')
             wait_for(lambda:call(path+'status', {})['status'] == 'completed', seconds=30)
             saved = (home / 'auth.json').read_bytes()
             assert json.loads(saved)['tokens']['access_token'] == 'fixture-access'
             assert call(path+'status', {})['restart_required']
             assert len(call('/api/config')['accounts']) == 1
-            checks.append(f'{mode}: Cancel preserves Native; explicit replacement changes Native and requires restart')
+            checks.append(f'{mode}: Cancel and failed login preserve Native; retry completes replacement and requires restart')
 
             imported = {'tokens': {'account_id': 'auth-file-fixture', 'access_token': 'file-token'}}
             browser.execute('''closeModal();openServiceChooser();document.querySelector('[data-ui-action=account-import-auth]').click();

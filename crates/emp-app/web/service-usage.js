@@ -1,6 +1,6 @@
 // Service-owned lifetime summaries and service-type/model usage breakdowns.
 function createServiceUsage({esc, tr, number, dateTime, renderLifetime}) {
-  const fields = ['requests', 'priced_requests', 'input_reports', 'output_reports',
+  const fields = ['requests', 'reported_requests', 'priced_requests', 'input_reports', 'output_reports',
     'input_tokens', 'output_tokens', 'cost_nanos', 'cache_reports', 'cached_input_tokens',
     'cache_write_tokens', 'reasoning_reports', 'reasoning_tokens'];
   const cost = row => row.priced_requests ? compactUsage(row.cost_nanos/1e9,true).html : '—';
@@ -17,9 +17,7 @@ function createServiceUsage({esc, tr, number, dateTime, renderLifetime}) {
     }
     return {models:[...models.values()], totals};
   }
-  function render(data) {
-    return renderLifetime(data,{aggregate,number,dateTime});
-  }
+  const render = data => renderLifetime(data,{aggregate,number,dateTime});
   function renderGroups(data, providers, describe) {
     const services = new Map((providers || []).map(provider => [provider.id, provider]));
     const types = [
@@ -45,5 +43,13 @@ function createServiceUsage({esc, tr, number, dateTime, renderLifetime}) {
       return `<section class="usage-service-group" data-usage-service-type="${group.id}"><h3>${group.label}</h3><div class="usage-table"><div class="usage-models"><div class="usage-model-columns usage-model-heading"><span>${tr("reports.model")}</span><span>${tr("services.input")}</span><span>${tr("services.output")}</span><span>${tr("common.usd")}</span><span>${tr("services.calls")}</span></div>${rows}</div></div></section>`;
     }).join('');
   }
-  return {render, renderGroups};
+  function loading(box, progress, data) {
+    box.innerHTML = (data?render(data):'')+'<p class="report-status" data-report-status role="status"></p>';
+    setReportState(box,true,'',tr,progress);
+  }
+  function failed(box,error,retry,data) {
+    box.innerHTML=(data?render(data):'')+`<p class="refresh-error" role="status">${esc(error.message)}</p><button type="button" class="secondary">${tr('services.retry_usage')}</button>`;
+    box.querySelector('button').onclick=retry;
+  }
+  return {render, renderGroups, loading, failed};
 }

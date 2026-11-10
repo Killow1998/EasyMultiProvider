@@ -161,7 +161,7 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const management = createManagementClient({tr, fetch: (...args) => fetch(...args), storage:() => localStorage, window});
 const {request:api, fetch:managementFetch, establish:establishSession, errorText:upstreamErrorText} = management;
-const managementEvents = createManagementEvents({management,visible:()=>!management.isStopped(),onEvent:(type,data)=>processManagementEvent(type,data),
+const managementEvents = createManagementEvents({management,isRunning:()=>!management.isStopped(),onEvent:(type,data)=>processManagementEvent(type,data),
   onStart:()=>{updateActivityDots();rescheduleActivityExpiry();void accountDetails.refresh();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
 const contextHelp = createContextHelp({getState:() => state, tr});
@@ -1161,9 +1161,10 @@ function restoreServiceModal(context, navigation) {
   if (kind === 'account') return active === 'edit' ? editAccount(id, navigation) : openAccountDetails(id, navigation);
   return active === 'edit' ? editProvider(id, navigation) : openProviderDetails(id, navigation);
 }
+let modalOpener = null;
 function openModal(title, body, submitLabel, submit, serviceContext = null, navigation = {}) {
-  const sameService = serviceContext && modalNavigation.service?.id === serviceContext.id && modalNavigation.service?.kind === serviceContext.kind;
-  const back = navigation.back === undefined && sameService ? modalNavigation.back : navigation.back;
+  if ($('modal_backdrop').classList.contains('hidden')) modalOpener = document.activeElement;
+  const back = navigation.back;
   stopModalFeatures();
   modalNavigation = {back, reopen:navigation.reopen, service:serviceContext};
   if (serviceContext) modalNavigation.reopen = () => restoreServiceModal(serviceContext, {back});
@@ -1190,8 +1191,9 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
   };
   button.onclick = submit ? handler : null;
   $('modal_backdrop').classList.remove('hidden');
+  (back ? backButton : closeButton).focus({preventScroll:true});
 }
-function closeModal() { migration.stop(); servicePresentation.hide(); stopModalFeatures(); modalNavigation = {}; $('modal_back').onclick = null; $('modal_back').hidden = true; $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+function closeModal() { migration.stop(); servicePresentation.hide(); stopModalFeatures(); modalNavigation = {}; $('modal_back').onclick = null; $('modal_back').hidden = true; $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; if(modalOpener?.isConnected)modalOpener.focus({preventScroll:true}); modalOpener=null; }
 
 const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,releaseHistoryText,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW),reload:()=>window.location.reload()});
 const {open:openUpdate,stop:stopUpdatePoll,request:requestUpdate,render:renderUpdate,hint:renderUpdateHint,checkHint:checkUpdateHint,openRelease:openLatestRelease,copyCommands:copyLinuxMigrationCommands}=updates;
@@ -1274,6 +1276,13 @@ function handleDynamicUiChange(event) {
 }
 function handleModalKeydown(event) {
   if (event.defaultPrevented || notifications.isOpen()) return;
+  if (event.key === 'Tab' && !$('modal_backdrop').classList.contains('hidden')) {
+    const controls=[...$('modal_backdrop').querySelectorAll('button,input,select,textarea,a[href],[tabindex]')].filter(node=>!node.disabled && node.tabIndex>=0 && node.getClientRects().length);
+    const first=controls[0],last=controls.at(-1);
+    if (!$('modal_backdrop').contains(document.activeElement) || (event.shiftKey ? document.activeElement===first : document.activeElement===last)) {
+      event.preventDefault(); (event.shiftKey ? last : first)?.focus();
+    }
+  }
   if (event.key === 'Escape' && !$('modal_backdrop').classList.contains('hidden')) {
     event.preventDefault();
     (modalNavigation.back || closeModal)();

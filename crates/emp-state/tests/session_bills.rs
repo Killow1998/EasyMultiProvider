@@ -62,11 +62,11 @@ fn session_bills_partition_reconciled_usage_without_filling_unknowns_or_repricin
     incomplete.as_object_mut().unwrap().remove("output_tokens");
     ledger.record(&incomplete, 140.0);
     ledger.record(&event("outside", "three", "priced", 999), 200.0);
-    let before = ledger.query(0.0, 200.0, "all", 1000.0).unwrap();
+    let before = ledger.query(0.0, 200.0, "all", 1000.0, None).unwrap();
     let mut selected = filter();
     let mut paging = page();
     let bills = ledger
-        .query_sessions(&selected, &paging, None, 1000.0)
+        .query_sessions(&selected, &paging, None, 1000.0, None)
         .unwrap();
     assert_eq!(bills["total"], 2);
     assert_eq!(bills["totals"]["requests"], 5);
@@ -82,7 +82,7 @@ fn session_bills_partition_reconciled_usage_without_filling_unknowns_or_repricin
         assert_eq!(bills["totals"][field], before["totals"][field], "{field}");
     }
     selected.session = Some("one".into());
-    let detail = ledger.query_series(&selected, None, 1000.0).unwrap();
+    let detail = ledger.query_series(&selected, None, 1000.0, None).unwrap();
     assert_eq!(detail["totals"]["requests"], 2);
     assert_eq!(detail["totals"]["input_tokens"], 111);
     assert_eq!(detail["totals"]["reported_requests"], 1);
@@ -92,14 +92,14 @@ fn session_bills_partition_reconciled_usage_without_filling_unknowns_or_repricin
     paging.sort = "tokens".into();
     paging.limit = 1;
     let first = ledger
-        .query_sessions(&selected, &paging, None, 1000.0)
+        .query_sessions(&selected, &paging, None, 1000.0, None)
         .unwrap();
     assert_eq!(first["records"][0]["session_id"], "two");
     assert_eq!(first["records"][0]["unpriced_requests"], 1);
     paging.offset = 1;
     assert_eq!(
         ledger
-            .query_sessions(&selected, &paging, None, 1000.0)
+            .query_sessions(&selected, &paging, None, 1000.0, None)
             .unwrap()["records"][0]["session_id"],
         "one"
     );
@@ -107,14 +107,14 @@ fn session_bills_partition_reconciled_usage_without_filling_unknowns_or_repricin
     paging.offset = 0;
     assert_eq!(
         ledger
-            .query_sessions(&selected, &paging, None, 1000.0)
+            .query_sessions(&selected, &paging, None, 1000.0, None)
             .unwrap()["total"],
         1
     );
     selected.provider = Some("other".into());
     assert_eq!(
         ledger
-            .query_sessions(&selected, &paging, None, 1000.0)
+            .query_sessions(&selected, &paging, None, 1000.0, None)
             .unwrap()["totals"]["requests"],
         0
     );
@@ -122,7 +122,7 @@ fn session_bills_partition_reconciled_usage_without_filling_unknowns_or_repricin
     let reopened = UsageLedger::new(path, prices);
     assert_eq!(
         reopened
-            .query_sessions(&filter(), &page(), None, 1000.0)
+            .query_sessions(&filter(), &page(), None, 1000.0, None)
             .unwrap(),
         bills
     );
@@ -146,7 +146,7 @@ fn existing_call_receipts_backfill_session_links_on_upgrade() {
         .unwrap();
     let upgraded = UsageLedger::new(path, prices);
     let bills = upgraded
-        .query_sessions(&filter(), &page(), None, 1000.0)
+        .query_sessions(&filter(), &page(), None, 1000.0, None)
         .unwrap();
     assert_eq!(bills["total"], 1);
     assert_eq!(bills["records"][0]["session_id"], "old-session");

@@ -157,7 +157,7 @@ pub(crate) fn responses_request(
                     ));
                 }
             };
-            let mut downstream = ObservedSse::new(stream, observation);
+            let mut downstream = ObservedSse::new(stream, observation, &incoming);
             let _ = downstream.head();
             let _ = downstream.frames(&[frame], "response.failed");
             return ResponsesRequestResult::Streamed;
@@ -176,7 +176,7 @@ pub(crate) fn responses_request(
         Err(DestinationPrepareError::History(reason)) if stream_requested => {
             let failed = history_stream_error(&HistoryError::new(reason), observation);
             if let Ok(frame) = sse_frame("response.failed", &failed) {
-                let mut downstream = ObservedSse::new(stream, observation);
+                let mut downstream = ObservedSse::new(stream, observation, &incoming);
                 let _ = downstream.head();
                 let _ = downstream.frames(&[frame], "response.failed");
             }
@@ -215,6 +215,7 @@ pub(crate) fn responses_request(
                 &incoming,
                 monitor.as_mut(),
                 &mut usage,
+                &mut |_, _| Ok(()),
             ) {
                 Ok(completion) => {
                     let Some(summary) = crate::services::compaction::response_output_text(
@@ -285,7 +286,7 @@ pub(crate) fn responses_request(
         usage.finish();
         persist_protocol_observation(state, &candidate);
         if python_truthy(body.get("stream")) {
-            let downstream = ObservedSse::new(stream, observation);
+            let downstream = ObservedSse::new(stream, observation, &incoming);
             return match serve_generated_response(downstream, compacted, &ids) {
                 Ok(()) => ResponsesRequestResult::Streamed,
                 Err(error) => ResponsesRequestResult::Buffered(error),
@@ -329,6 +330,23 @@ pub(crate) fn responses_request(
             "responses",
         )
         .started_at(started);
+        let mut downstream =
+            stream_requested.then(|| ObservedSse::new(stream, observation, &incoming));
+        let mut live =
+            crate::api::claude_stream::LiveText::new(&ids, false, |event: &serde_json::Value| {
+                let Some(downstream) = downstream.as_mut() else {
+                    return Ok(());
+                };
+                if event["type"] == "response.created" {
+                    downstream.head()?;
+                }
+                let frame = crate::services::events::sse_frame(
+                    event["type"].as_str().expect("event type"),
+                    event,
+                )
+                .map_err(std::io::Error::other)?;
+                downstream.event(event, &[frame])
+            });
         let completion = match crate::services::claude_cli::execute_complete(
             state,
             &route,
@@ -336,19 +354,35 @@ pub(crate) fn responses_request(
             &incoming,
             monitor.as_mut(),
             &mut usage,
+            &mut |id, text| {
+                if stream_requested {
+                    live.push(id, text)
+                } else {
+                    Ok(())
+                }
+            },
         ) {
             Ok(completion) => completion,
             Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
                 return ResponsesRequestResult::Streamed;
             }
             Err(error) => {
+                if live.started() {
+                    let _ = live.event(&crate::api::claude_response::websocket_value_for_route(
+                        &error, &route,
+                    ));
+                    return ResponsesRequestResult::Streamed;
+                }
                 return ResponsesRequestResult::Buffered(
                     crate::api::claude_response::http_response_for_route(&error, &route),
                 );
             }
         };
         let route = &completion.route;
-        let response_value = completion.response.body;
+        let mut response_value = completion.response.body;
+        if stream_requested {
+            response_value["id"] = serde_json::json!(ids.response_id());
+        }
         usage.candidate(route);
         usage.http_status(completion.response.status);
         usage.upstream_observation(&completion.response.observation);
@@ -359,24 +393,10 @@ pub(crate) fn responses_request(
         }
         crate::services::providers::persist_protocol_observation(state, route);
         if stream_requested {
-            let downstream = ObservedSse::new(stream, observation);
-            return match serve_generated_response(downstream, response_value, &ids) {
-                Ok(()) => ResponsesRequestResult::Streamed,
-                Err(error) => ResponsesRequestResult::Buffered(error),
-            };
+            let _ = live.finish(response_value);
+            return ResponsesRequestResult::Streamed;
         }
-        let body = match serde_json::to_vec(&response_value) {
-            Ok(body) => body,
-            Err(_) => {
-                return ResponsesRequestResult::Buffered(json_error_response(
-                    500,
-                    status_text(500),
-                    "internal server error",
-                    None,
-                    &[],
-                ));
-            }
-        };
+        let body = serde_json::to_vec(&response_value).expect("validated Claude response");
         return ResponsesRequestResult::Buffered(response(
             &format!(
                 "HTTP/1.1 {} {}",
@@ -394,7 +414,7 @@ pub(crate) fn responses_request(
                 crate::services::activity::ActivityIdentity::from_route(&route),
             );
             return match serve_native_stream(
-                ObservedSse::new(stream, observation),
+                ObservedSse::new(stream, observation, &incoming),
                 state,
                 &route,
                 &config,
@@ -426,7 +446,7 @@ pub(crate) fn responses_request(
                     &route,
                 ));
         return match serve_external_stream(
-            ObservedSse::new(stream, observation),
+            ObservedSse::new(stream, observation, &incoming),
             state,
             &route,
             &body,

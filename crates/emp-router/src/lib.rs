@@ -115,6 +115,13 @@ pub struct ProjectionIds {
 }
 
 impl ProjectionIds {
+    pub fn response_id(&self) -> &str {
+        &self.response
+    }
+    pub fn message_id(&self) -> &str {
+        &self.message
+    }
+
     pub fn new(
         response: impl Into<String>,
         message: impl Into<String>,
@@ -389,7 +396,8 @@ fn endpoint(provider: &Map<String, Value>, protocol: Protocol) -> Result<String,
     })
 }
 
-fn upstream_headers(
+/// Build provider authentication without forwarding the gateway caller credential.
+pub fn upstream_headers(
     provider: &Map<String, Value>,
     protocol: Protocol,
     incoming: &BTreeMap<String, String>,

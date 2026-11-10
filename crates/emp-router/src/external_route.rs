@@ -131,6 +131,7 @@ impl<'a> ExternalRouter<'a> {
         body: &Value,
         incoming: &BTreeMap<String, String>,
         protocol_headers: &BTreeMap<String, String>,
+        mut observe: impl FnMut(&Value),
     ) -> Result<PassthroughResponse, RouterError> {
         if route.protocol != Protocol::AnthropicMessages {
             return Err(RouterError::new(
@@ -200,7 +201,7 @@ impl<'a> ExternalRouter<'a> {
         }
         upstream_body["model"] = Value::String(model.to_owned());
         let encoded = request_encoding::encode_projected_request(&upstream_body);
-        let response = self
+        let mut response = self
             .client
             .open(HttpMethod::Post, &target, headers, Some(encoded), true)
             .await
@@ -218,10 +219,25 @@ impl<'a> ExternalRouter<'a> {
                 .map_err(transport_error)?;
             return Err(upstream_error(status, &raw, retry_after_seconds));
         }
-        let raw = response
-            .read_limited(MAX_ANTHROPIC_PASSTHROUGH_BYTES)
-            .await
-            .map_err(transport_error)?;
+        let mut raw = Vec::new();
+        let mut parser = SseJsonParser::new();
+        let streaming = content_type.contains("text/event-stream");
+        while let Some(chunk) = response.next_chunk().await.map_err(transport_error)? {
+            if raw.len() + chunk.len() > MAX_ANTHROPIC_PASSTHROUGH_BYTES {
+                return Err(upstream_body_too_large());
+            }
+            if streaming {
+                for event in parser.push(&chunk).map_err(sse_transport_error)? {
+                    observe(&Value::Object(event));
+                }
+            }
+            raw.extend_from_slice(&chunk);
+        }
+        if streaming {
+            for event in parser.finish().map_err(sse_transport_error)? {
+                observe(&Value::Object(event));
+            }
+        }
         Ok(PassthroughResponse {
             status,
             content_type,

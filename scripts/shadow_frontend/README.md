@@ -74,7 +74,7 @@ python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --dem
 ```
 
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
-review entry. Its baseline is the published **v0.13.27**, displayed in the dialog.
+review entry. Its baseline is the published **v0.13.28**, displayed in the dialog.
 Keep `reviewRows` in `preview-review.js` cumulative across development tasks;
 reset the list and advance `reviewBaseline` together after the next release.
 Follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).

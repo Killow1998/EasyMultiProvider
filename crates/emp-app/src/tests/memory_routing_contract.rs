@@ -151,6 +151,7 @@ fn memory_http_follows_subscription_and_uses_native_for_external_and_global_jobs
                 crate::util::system_now() + 60.0,
                 "all",
                 crate::util::system_now(),
+                None,
             )
             .unwrap();
         assert_eq!(usage["totals"]["input_tokens"], 10);

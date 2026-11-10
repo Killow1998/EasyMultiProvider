@@ -89,13 +89,13 @@ test('usage owns scan cancellation, fallback timers and pricing-save navigation'
   const get=id => nodes[id];
   function openModal() {
     report.stop();
-    const status={textContent:'',dataset:{}};
+    const status={textContent:'',dataset:{},append(){}};
     nodes={usage_report:{querySelector:() => status,querySelectorAll:() => [],setAttribute(){},getAttribute:() => 'false'},usage_category:{value:'all'},usage_bucket:{value:'hour'},usage_result:{innerHTML:''}};
   }
   const periods={...formats,periodPickers:{},setPeriod(){}};
   periods.registerPeriodPicker=(id,preset,callback) => { period={start:1,end:10,preset}; periods.periodPickers[id]=period; callback(period,{user:true}); };
   const context={setTimeout:callback => {timers.set(++timerId,callback);return timerId;},clearTimeout:id => timers.delete(id)};
-  report=feature('usage-report.js','createUsageReport', {...context,createReportQuery:feature('report-query.js','createReportQuery'),setReportState:feature('report-query.js','setReportState')})({
+  report=feature('usage-report.js','createUsageReport', {...context,createReportQuery:feature('report-query.js','createReportQuery'),setReportState:feature('report-query.js','setReportState',{document:{createElement:()=>({setAttribute(){}})}})})({
     ...q,$:get,tr,esc,getState:() => ({providers:[],pricing_aliases:{}}),getLanguage:() => 'en',persistState:() => saving.promise,openModal,
     serviceUsage:{renderGroups:() => ''},callReports:{open(){}},eventsConnected:() => false,periods,
   });
@@ -125,7 +125,7 @@ test('account details retain shared reads without updating another service after
   const state={accounts:[{id:'first',name:'First'},{id:'second',name:'Second'}]};
   const services={open() { details.stop();nodes={account_usage:{innerHTML:''},account_alias:{value:'New alias'},modal_status:{textContent:''}}; },mount() {mounted++;}};
   details=feature('account-details.js','createAccountDetails')({...q,getState:() => state,$:id => nodes[id],tr,esc,services,
-    serviceUsage:{render:data => data.groups[0].model},persistState:() => save.promise,uiIcon:x => x,renderInfo:()=>''});
+    serviceUsage:{loading:node=>{node.innerHTML='Loading';},render:data => data.groups[0].model},persistState:() => save.promise,uiIcon:x => x,renderInfo:()=>''});
   const first=details.open('first'), second=details.open('second');
   const loading=nodes.account_usage.innerHTML;
   assert.equal(q.calls[0].options.signal.aborted,false);
@@ -141,7 +141,7 @@ test('account removal finishes before catalog sync and never closes a replacemen
   const q=queries(), catalog=deferred(), notices=[];
   const services={open(){details.stop();nodes={account_usage:{innerHTML:''}};}};
   details=feature('account-details.js','createAccountDetails')({...q,getState:()=>state,$:id=>nodes[id],tr,esc,services,
-    serviceUsage:{render:()=>''},uiIcon:()=>'',renderInfo:()=>'',
+    serviceUsage:{loading:node=>{node.innerHTML='Loading';},render:()=>''},uiIcon:()=>'',renderInfo:()=>'',
     confirmRemoval:()=>true,notice:text=>notices.push(text),onRemoved:value=>{state=value;},
     closeModal(){closed++;details.stop();},syncSavedCatalog(){synced++;return catalog.promise;}});
   const opening=details.open('first');q.calls[0].resolve({});await opening;
@@ -230,7 +230,7 @@ test('management events own split frames, connection cancellation and reconnect 
   let source, cancellations=0, disconnected=0;
   const connection=feature('management-events.js','createManagementEvents',{
     TextDecoder,setTimeout:fn=>{timers.set(fn,fn);return fn;},clearTimeout:id=>timers.delete(id),
-  })({management:{fetch:q.api,isSignedIn:()=>true,clear(){}},visible:()=>true,onStart(){},onDisconnect:()=>disconnected++,onEvent:(type,data)=>frames.push([type,data])});
+  })({management:{fetch:q.api,isSignedIn:()=>true,clear(){}},isRunning:()=>true,onStart(){},onDisconnect:()=>disconnected++,onEvent:(type,data)=>frames.push([type,data])});
   connection.start();connection.start();assert.equal(q.calls.length,1);
   q.calls[0].resolve({ok:true,body:new ReadableStream({start(controller){source=controller;},cancel(){cancellations++;}})});await tick();
   assert.equal(connection.connected(),true);

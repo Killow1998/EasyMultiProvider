@@ -78,12 +78,18 @@ pub(crate) fn write_stream_frames(
 pub(crate) struct ObservedSse<'a> {
     stream: &'a mut TcpStream,
     observation: &'a mut RequestObservation,
+    codex: bool,
 }
 impl<'a> ObservedSse<'a> {
-    pub(crate) fn new(stream: &'a mut TcpStream, observation: &'a mut RequestObservation) -> Self {
+    pub(crate) fn new(
+        stream: &'a mut TcpStream,
+        observation: &'a mut RequestObservation,
+        incoming: &BTreeMap<String, String>,
+    ) -> Self {
         Self {
             stream,
             observation,
+            codex: crate::services::events::codex_client(incoming),
         }
     }
     pub(crate) fn head(&mut self) -> std::io::Result<()> {
@@ -112,7 +118,7 @@ impl<'a> ObservedSse<'a> {
         self.observation
             .event_type_written(last_event, write_stream_frames(self.stream, &formatted))
     }
-    fn event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
+    pub(crate) fn event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
         if !matches!(event["type"].as_str(), Some("response.failed" | "error")) {
             return self
                 .observation
@@ -215,12 +221,7 @@ pub(crate) fn serve_native_stream(
     relay_native_stream(downstream, state, route, body, usage, upstream, monitor).map(|_| ())
 }
 
-/// One relay state machine for every upstream flavor.
-///
-/// The two upstream types differ only in how a decoded event becomes an SSE
-/// frame and whether the upstream wants a drain call on terminal; everything
-/// else — disconnect racing, pre-output buffering, failure conversion,
-/// header emission — is shared.
+/// Native and external streams share delivery, cancellation and failure handling.
 enum RelayEvent {
     /// End of stream without a terminal event.
     Incomplete,
@@ -242,13 +243,6 @@ trait RelaySource {
         runtime: &tokio::runtime::Runtime,
         monitor: Option<&mut DisconnectMonitor>,
     ) -> RelayEvent;
-}
-
-fn relay_terminal(event: &RelayEvent) -> bool {
-    let RelayEvent::Event { body, .. } = event else {
-        return false;
-    };
-    terminal_stream_event(body)
 }
 
 struct NativeRelay {
@@ -335,7 +329,8 @@ fn relay_stream(
     loop {
         let event = source.next(runtime, monitor.as_mut());
         usage.upstream_observation(source.observation());
-        let terminal = relay_terminal(&event);
+        let terminal =
+            matches!(&event, RelayEvent::Event { body, .. } if terminal_stream_event(body));
         let completed = terminal
             && match &event {
                 RelayEvent::Event { body, .. } => {
@@ -383,6 +378,14 @@ fn relay_stream(
             } => {
                 usage.observe(&event_body);
                 crate::services::context::record_event(state, route, body, &event_body);
+                let frame = if !downstream.codex
+                    && crate::services::events::codex_event(
+                        event_body["type"].as_str().unwrap_or_default(),
+                    ) {
+                    b": keepalive\n\n".to_vec()
+                } else {
+                    frame
+                };
                 let failed = matches!(
                     event_body.get("type").and_then(Value::as_str),
                     Some("response.failed" | "error")

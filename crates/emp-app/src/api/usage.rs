@@ -1,5 +1,6 @@
 //! Existing usage charts and on-demand history refresh endpoints.
 mod labels;
+pub(crate) mod lifetime;
 mod sessions;
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
@@ -20,7 +21,11 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::net::TcpStream;
 
-pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
+pub(crate) fn read(
+    request: Request<'_>,
+    state: &ServerState,
+    cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Vec<u8> {
     let now = system_now();
     let parse = |name: &str, default: f64| {
         query_values(request.target, name)
@@ -66,7 +71,17 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
         },
         None => explicit_owner,
     };
-    let result = if value("series").as_deref() == Some("true")
+    let result = if value("lifetime").as_deref() == Some("true") {
+        let Some(owner) = owner else {
+            return invalid();
+        };
+        state.backend.usage.ledger.query_lifetime_with_progress(
+            &owner,
+            now,
+            |_, _| Ok(()),
+            cancelled,
+        )
+    } else if value("series").as_deref() == Some("true")
         || value("sessions").as_deref() == Some("true")
     {
         let filter = UsageSeriesFilter {
@@ -92,13 +107,14 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
             return invalid();
         }
         if value("sessions").as_deref() == Some("true") {
-            return sessions::read(request, state, &filter, now);
+            return sessions::read(request, state, &filter, now, cancelled);
         }
         state.backend.usage.query_series(
             &state.backend.accounts.codex_home,
             &filter,
             value("conversation").as_deref() == Some("true"),
             now,
+            cancelled,
         )
     } else {
         match owner {
@@ -106,8 +122,12 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
                 .backend
                 .usage
                 .ledger
-                .query_owner(start, end, &owner, now),
-            None => state.backend.usage.ledger.query(start, end, &category, now),
+                .query_owner(start, end, &owner, now, cancelled),
+            None => state
+                .backend
+                .usage
+                .ledger
+                .query(start, end, &category, now, cancelled),
         }
     };
     let Ok(mut payload) = result else {

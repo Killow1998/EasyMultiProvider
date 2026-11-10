@@ -3,6 +3,92 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 #[test]
+fn external_catalog_uses_service_names_without_changing_routes() {
+    let mut config = json!({
+        "catalog_show_context":false,
+        "providers":[
+            {"id":"service-1234abcd","name":"示例服务","protocol":"chat_completions"},
+            {"id":"service-other","name":"Other service","protocol":"responses"}
+        ],
+        "models":[
+            {"id":"service-1234abcd/deepseek","provider":"service-1234abcd","upstream_id":"deepseek"},
+            {"id":"service-other/deepseek","provider":"service-other","upstream_id":"deepseek"}
+        ]
+    });
+    let native = json!({"models":[]});
+    let build = |config: &Value| build_catalog(config, &native, &BTreeMap::new(), &BTreeMap::new());
+    let catalog = build(&config);
+    let entries = catalog["models"].as_array().unwrap();
+    let first = entries
+        .iter()
+        .find(|entry| entry["slug"] == "service-1234abcd/deepseek")
+        .unwrap();
+    let second = entries
+        .iter()
+        .find(|entry| entry["slug"] == "service-other/deepseek")
+        .unwrap();
+    assert_eq!(first["display_name"], "示例服务 · deepseek");
+    assert_eq!(second["display_name"], "Other service · deepseek");
+
+    config["providers"][0]["name"] = json!("新名称");
+    let renamed = build(&config);
+    let first = renamed["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["slug"] == "service-1234abcd/deepseek")
+        .unwrap();
+    assert_eq!(first["display_name"], "新名称 · deepseek");
+
+    config["catalog_presentations"] =
+        json!({"service-1234abcd/deepseek":{"catalog_alias":"My alias"}});
+    let aliased = build(&config);
+    let first = aliased["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["slug"] == "service-1234abcd/deepseek")
+        .unwrap();
+    assert_eq!(first["display_name"], "My alias");
+}
+
+#[test]
+fn aggregate_default_name_matches_the_selected_external_model_family() {
+    let config = json!({
+        "catalog_show_context":false,
+        "providers":[{"id":"service-first","name":"示例服务"},{"id":"service-second","name":"Other"}],
+        "models":[
+            {"id":"service-first/deepseek","provider":"service-first","upstream_id":"deepseek"},
+            {"id":"service-second/deepseek","provider":"service-second","upstream_id":"deepseek"}
+        ],
+        "model_groups":[{"id":"auto/fixture","name_prefix":"auto",
+            "sources":["service-first/deepseek","service-second/deepseek"]}]
+    });
+    let native = json!({"models":[]});
+    let views = emp_codex::management_views::model_views(
+        &config,
+        &native,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    let family = views["catalog_families"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|family| family["id"] == "deepseek")
+        .unwrap();
+    assert_eq!(family["display_name"], "deepseek");
+    let catalog = build_catalog(&config, &native, &BTreeMap::new(), &BTreeMap::new());
+    let aggregate = catalog["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["slug"] == "auto/fixture")
+        .unwrap();
+    assert_eq!(aggregate["display_name"], "autodeepseek");
+}
+
+#[test]
 fn ultra_override_preserves_the_harness_and_tracks_supported_subscription_efforts() {
     let model = json!({"slug":"gpt-ultra","display_name":"Ultra fixture","visibility":"list",
         "default_reasoning_level":"high","multi_agent_reasoning_effort":"xhigh","multi_agent_version":"v2",

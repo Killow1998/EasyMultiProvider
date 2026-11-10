@@ -27,7 +27,7 @@ class PacedResponses(BaseHTTPRequestHandler):
             raw = zstd.decompress(raw)
         body = json.loads(raw)
         response = {'id': 'timing-' + str(time.time_ns()), 'model': 'timing-model',
-            'status': 'completed', 'output': [],
+            'status': 'completed', 'service_tier': 'ultrafast', 'output': [],
             'usage': {'input_tokens': 10, 'output_tokens': 120,
                 'output_tokens_details': {'reasoning_tokens': 20}}}
         self.send_response(200)
@@ -76,7 +76,7 @@ def main():
         assert request(backend + '/api/config', config, headers)[0] == 200
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         for prompt, streamed in [('paced', True), ('single-batch', True), ('coalesced', True), ('buffered', False)]:
-            body = json.dumps({'model': 'timing/model', 'input': prompt, 'stream': streamed}).encode()
+            body = json.dumps({'model': 'timing/model', 'input': prompt, 'stream': streamed, 'service_tier': 'priority'}).encode()
             call = urllib.request.Request(backend + '/v1/responses', body,
                 {**headers, 'Content-Type': 'application/json', 'Authorization': 'Bearer fixture'})
             with opener.open(call, timeout=15) as result:
@@ -87,6 +87,9 @@ def main():
         measured = next(row for row in rows if row['model_id'] == 'timing/model'
             and row.get('generation_tokens_per_second') is not None)
         assert measured['performance_schema'] == 5
+        assert measured['requested_service_tier'] == 'priority'
+        assert measured['service_tier'] == 'ultrafast'
+        assert measured['speed_mode'] == 'ultrafast'
         assert measured['first_content_ms'] >= measured['ttft_ms'] + 100
         assert measured['generation_ms'] >= 150
         expected = round(100000 / measured['generation_ms'], 2)
@@ -149,6 +152,9 @@ def main():
             text = browser.execute('return document.querySelector("[data-call-id=\\"metrics-0:responses\\"]").textContent;')
             assert 'TTFT 2.00 s · TPS 80.0' in text
             assert full_label in text and '20.0' in text
+            tier_row = browser.execute('return document.getElementById("modal_body").textContent;')
+            assert 'Ultrafast' in tier_row and 'Fast' in tier_row
+
             tool_label, unavailable = ('本轮工具耗时','未提供') if language == 'zh-CN' else ('Turn tool time','Unavailable')
             assert tool_label in text
             assert browser.execute('''

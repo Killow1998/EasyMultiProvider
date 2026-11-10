@@ -155,9 +155,23 @@ pub fn catalog_families(config: &Value, models: &[Value]) -> Vec<Value> {
     let mut groups = Vec::<Value>::new();
     for model in models {
         let family = nonempty(model, "family_id").unwrap_or(text(model, "id"));
+        let sources = match text(model, "source_type") {
+            "provider" => array(config, "providers"),
+            "account" => array(config, "accounts"),
+            _ => &[],
+        };
+        let source = sources
+            .iter()
+            .find(|item| text(item, "id") == text(model, "source_id"));
+        let source_name =
+            source.and_then(|item| nonempty(item, "name").or_else(|| nonempty(item, "prefix")));
+        let default = text(model, "default_display_name");
+        let default = source_name
+            .and_then(|name| default.strip_prefix(&format!("{name} · ")))
+            .unwrap_or(default);
         let position = groups.iter().position(|group|text(group,"id")==family).unwrap_or_else(|| {
             groups.push(json!({
-                "id":family, "default_display_name":model["default_display_name"],
+                "id":family, "default_display_name":default,
                 "context_window":model["context_window"], "supports_reasoning_summaries":true,"routes":[],
             }));
             groups.len()-1
@@ -169,7 +183,7 @@ pub fn catalog_families(config: &Value, models: &[Value]) -> Vec<Value> {
             .min()
             .unwrap_or(9);
         if rank(text(model, "source_type")) < preferred {
-            group["default_display_name"] = model["default_display_name"].clone();
+            group["default_display_name"] = json!(default);
             group["context_window"] = model["context_window"].clone();
         }
         group["supports_reasoning_summaries"] = json!(

@@ -76,10 +76,10 @@ function createStatistics({api,$,tr,esc,getState,getLanguage,openModal,callRepor
     root.querySelector('.period-custom').append(root.querySelector('[data-report-status]'));
     const selectedRoot=root;
     query=createReportQuery({
-      api:async(params,options,progress)=>{
+      api:async(params,options)=>{
         const [usage,calls]=await Promise.all([
           api('/api/usage?series=true&'+params,options),
-          api('/api/calls?'+params,{...options,onProgress:progress}),
+          api('/api/calls?'+params,options),
         ]);
         return {calls,usage};
       },

@@ -43,6 +43,8 @@ impl Drop for Context {
 
 mod setup;
 
+const CONTEXT_PROMPT_DESCRIPTION: &str = "Continue the current Codex user turn.";
+
 pub(super) fn run(
     mut context: Context,
     input: mpsc::Receiver<super::ToolResults>,
@@ -59,8 +61,7 @@ pub(super) fn run(
     let mut terminal = Terminal::spawn(context.command.clone())?;
     let mut pending: Option<(TcpStream, Value)> = None;
     let mut deadline = Instant::now() + Duration::from_secs(300);
-    let marker = format!("EMP_TURN_{}", &context.session[..8]);
-    let mut pasted = false;
+    let mut prompt_listed = false;
     let mut submitted = false;
     loop {
         if context.cancelled.is_cancelled() {
@@ -72,15 +73,11 @@ pub(super) fn run(
         if Instant::now() >= deadline {
             return Err(ClaudeCliError::Failure("claude_cli_timeout"));
         }
-        let echoed = terminal.pump(marker.as_bytes())?;
-        if pasted && !submitted && echoed {
+        // Discovery returns before the CLI registers commands; autocomplete acknowledges readiness.
+        let prompt_ready = terminal.pump(CONTEXT_PROMPT_DESCRIPTION.as_bytes())?;
+        if prompt_listed && !submitted && prompt_ready {
             terminal.write(b"\r")?;
             submitted = true;
-            if context.local {
-                output
-                    .send(super::Reply::Dispatched)
-                    .map_err(|_| ClaudeCliError::Disconnected)?;
-            }
         }
         if context.local {
             metrics
@@ -139,9 +136,38 @@ pub(super) fn run(
                 .send(super::Reply::Dispatched)
                 .map_err(|_| ClaudeCliError::Disconnected)?;
             let router = emp_router::ExternalRouter::new(&context.client);
+            let mut message_id = String::new();
+            let mut has_text = false;
+            let mut observe = |event: &Value| {
+                let text = match event["type"].as_str() {
+                    Some("message_start") => {
+                        has_text = false;
+                        message_id = event["message"]["id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                        None
+                    }
+                    Some("content_block_start") if event["content_block"]["type"] == "text" => {
+                        if has_text {
+                            let _ = output
+                                .send(super::Reply::Text(message_id.clone(), "\n".to_owned()));
+                        }
+                        has_text = true;
+                        event["content_block"]["text"].as_str()
+                    }
+                    Some("content_block_delta") if event["delta"]["type"] == "text_delta" => {
+                        event["delta"]["text"].as_str()
+                    }
+                    _ => None,
+                };
+                if let Some(text) = text.filter(|text| !text.is_empty()) {
+                    let _ = output.send(super::Reply::Text(message_id.clone(), text.to_owned()));
+                }
+            };
             let routed = context.runtime.block_on(async {
                 tokio::select! { biased; _ = context.cancelled.cancelled() => Err(ClaudeCliError::Disconnected),
-                    result = router.execute_anthropic_passthrough(&context.route,&request,&context.incoming,&headers) => result.map_err(ClaudeCliError::Router) }
+                    result = router.execute_anthropic_passthrough(&context.route,&request,&context.incoming,&headers,&mut observe) => result.map_err(ClaudeCliError::Router) }
             })?;
             metrics
                 .response(&routed.body)
@@ -181,15 +207,14 @@ pub(super) fn run(
                 json!({"tools":[{"name":"codex","description":"Ask Codex to execute the available tools and wait for their actual results.","inputSchema":projection::proposal_schema()}]})
             }
             Some("prompts/list") => {
-                if !pasted {
-                    terminal.write(
-                        format!("\x1b[200~/mcp__emp_codex__context {marker}\x1b[201~").as_bytes(),
-                    )?;
-                    pasted = true;
-                }
-                json!({"prompts":[{"name":"context","description":"Continue the current Codex user turn.","arguments":[{"name":"turn","required":true}]}]})
+                json!({"prompts":[{"name":"context","description":CONTEXT_PROMPT_DESCRIPTION}]})
             }
             Some("prompts/get") if request["params"]["name"] == "context" => {
+                if context.local {
+                    output
+                        .send(super::Reply::Dispatched)
+                        .map_err(|_| ClaudeCliError::Disconnected)?;
+                }
                 let content = context
                     .context
                     .take()
@@ -226,6 +251,10 @@ pub(super) fn run(
             if id.is_null() { 202 } else { 200 },
             &json!({"jsonrpc":"2.0","id":id,"result":result}),
         )?;
+        if request["method"] == "prompts/list" && !prompt_listed {
+            terminal.write(b"/emp_codex:context")?;
+            prompt_listed = true;
+        }
         if context.local && request["method"] == "tools/call" {
             output
                 .send(super::Reply::Dispatched)

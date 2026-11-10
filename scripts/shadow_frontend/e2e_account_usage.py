@@ -21,8 +21,9 @@ def main():
             {'auto_enable_on_start': False}, {'PATH': '/usr/bin:/bin'})
         browser = Browser(stack, root)
         browser.navigate(url)
+        browser.execute('managementEvents.stop();clearInterval(quotaStateTimer);dismissNotice();')
+        wait_for(lambda: browser.execute('return !quotaStateBusy && !quotaUpdateRunning;'))
         browser.execute('''
-            managementEvents.stop(); clearInterval(quotaStateTimer); dismissNotice();
             window.fixtureReads=[]; window.fixtureClock=0;
             const now=Date.now; Date.now=()=>now()+fixtureClock;
             state.accounts=['first','second'].map(id=>({id,name:id,credential_set:true,
@@ -30,7 +31,7 @@ def main():
             const original=window.fetch;
             window.fetch=(input,options={})=>{
                 const path=String(input);
-                if(path.startsWith('/api/usage?account_id='))return new Promise(resolve=>{
+                if(path.startsWith('/api/usage?lifetime=true&account_id='))return new Promise(resolve=>{
                     fixtureReads.push({path,signal:options.signal,resolve});
                 });
                 if(path.startsWith('/api/accounts/')&&path.endsWith('/models'))
@@ -40,7 +41,7 @@ def main():
             window.releaseUsage=(index,tokens,status=200)=>{
                 const row=fixtureReads[index];
                 const data=status===200?{groups:Array.isArray(tokens)?tokens:[{category:'codex',owner:'fixture',model:'fixture-model',
-                    requests:1,input_reports:1,output_reports:1,input_tokens:tokens,output_tokens:0}],
+                    requests:1,reported_requests:1,input_reports:1,output_reports:1,input_tokens:tokens,output_tokens:0}],
                     first_record_at:1,periods:[{unused:true}]}:{error:{message:'Fixture read failed'}};
                 row.resolve(new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}}));
             };
@@ -154,18 +155,18 @@ def main():
         browser.execute('closeModal();state.accounts=[{id:"summary",name:"Summary",credential_set:true}];renderServices();void openAccountDetails("summary");')
         count(12)
         browser.execute('releaseUsage(11,arguments[0]);', [
-            {'model':'same-model','category':'native','service_tier':'default','requests':1,'input_reports':1,'output_reports':1,'input_tokens':10,'output_tokens':2,'priced_requests':1,'cost_nanos':5_000_000_000},
-            {'model':'same-model','category':'subscription','service_tier':'fast','requests':1,'input_reports':1,'output_reports':1,'input_tokens':20,'output_tokens':3,'priced_requests':1,'cost_nanos':7_000_000_000},
+            {'model':'same-model','category':'native','service_tier':'default','requests':1,'reported_requests':1,'input_reports':1,'output_reports':1,'input_tokens':10,'output_tokens':2,'priced_requests':1,'cost_nanos':5_000_000_000},
+            {'model':'same-model','category':'subscription','service_tier':'fast','requests':1,'reported_requests':1,'input_reports':1,'output_reports':1,'input_tokens':20,'output_tokens':3,'priced_requests':1,'cost_nanos':7_000_000_000},
             {'model':'same-model','requests':1},
-            {'model':'free-model','requests':1,'input_reports':1,'output_reports':1,'input_tokens':4,'output_tokens':0,'priced_requests':1,'cost_nanos':0},
+            {'model':'free-model','requests':1,'reported_requests':1,'input_reports':1,'output_reports':1,'input_tokens':4,'output_tokens':0,'priced_requests':1,'cost_nanos':0},
             {'model':'<unknown>','requests':1},
         ])
-        tokens(39)
+        tokens("39 *")
         for language in ['en','zh-CN']:
             browser.execute('setLanguage(arguments[0]);closeModal();void openAccountDetails("summary");', language)
             rows = browser.execute('return [...document.querySelectorAll("#account_usage tbody tr")].map(row=>[...row.cells].map((cell,index)=>index===3?cell.textContent.replace(/[^0-9.\u2014-]/g,""):cell.textContent));')
             assert len(rows) == 3, rows
-            assert {row[0]:row[1:] for row in rows} == {'same-model':['30','5','12'],'free-model':['4','0','0'],'<unknown>':['—','—','—']}, rows
+            assert {row[0]:row[1:] for row in rows} == {'same-model':['30 *','5 *','12'],'free-model':['4','0','0'],'<unknown>':['—','—','—']}, rows
             assert browser.execute('return document.querySelector("#account_usage footer").textContent.includes("3 / 5") && document.querySelectorAll("#modal_backdrop [data-ui-action=account-remove]").length===1;')
         count(12)
         checks.append('Shipped EN/ZH summaries merge repeated models across tiers, preserve missing versus zero prices and escaped names, reuse cached totals and expose one removal action')

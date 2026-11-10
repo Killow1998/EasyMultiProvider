@@ -292,6 +292,31 @@ pub(crate) fn handle_connection(
                 let _ = crate::api::calls::stream(&mut stream, request, state, now);
                 None
             }
+            (RequestMethod::Get, "/api/usage")
+                if request.header("Accept") == Some("text/event-stream")
+                    && crate::http::request::query_values(request.target, "lifetime")
+                        .as_slice()
+                        == ["true"] =>
+            {
+                let _ = crate::api::usage::lifetime::stream(&mut stream, request, state, now);
+                None
+            }
+            (RequestMethod::Get, "/api/usage" | "/api/calls")
+                if crate::http::auth::same_origin(request, state.port)
+                    && state
+                        .sessions
+                        .contains(request.session_token().as_deref(), now) =>
+            {
+                // Keep the monitor alive until the SQLite read has finished or aborted.
+                let mut monitor =
+                    crate::services::disconnect::DisconnectMonitor::start(&stream).ok();
+                let cancelled = monitor.as_mut().map(|monitor| monitor.cancellation());
+                Some(if path == "/api/calls" {
+                    crate::api::calls::read(request, state, cancelled)
+                } else {
+                    crate::api::usage::read(request, state, cancelled)
+                })
+            }
             (RequestMethod::Get, "/api/accounts/events") => {
                 serve_quota_events(&mut stream, request, state, now);
                 None

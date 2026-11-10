@@ -11,11 +11,15 @@ use serde_json::{Value, json};
 use std::io::Write;
 use std::net::TcpStream;
 
-pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
+pub(crate) fn read(
+    request: Request<'_>,
+    state: &ServerState,
+    cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Vec<u8> {
     let Some(filter) = call_filter(request) else {
         return invalid();
     };
-    match query(state, &filter, |_, _| Ok(())) {
+    match query(state, &filter, |_, _| Ok(()), cancelled) {
         Ok(report) => response(
             "HTTP/1.1 200 OK",
             "application/json",
@@ -50,17 +54,23 @@ pub(crate) fn stream(
     let Some(filter) = call_filter(request) else {
         return stream.write_all(&invalid());
     };
+    let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream)?;
     let progress_stream = stream.try_clone()?;
     crate::api::streaming::write_stream_head(stream)?;
     stream.flush()?;
-    let report = query(state, &filter, move |completed, total| {
-        let mut writer = &progress_stream;
-        writer.write_all(&sse_frame(
-            "progress",
-            &json!({"completed":completed,"total":total}),
-        )?)?;
-        writer.flush()
-    });
+    let report = query(
+        state,
+        &filter,
+        move |completed, total| {
+            let mut writer = &progress_stream;
+            writer.write_all(&sse_frame(
+                "progress",
+                &json!({"completed":completed,"total":total}),
+            )?)?;
+            writer.flush()
+        },
+        Some(monitor.cancellation()),
+    );
     let frame = match report {
         Ok(report) => sse_frame("result", &report)?,
         Err(_) => sse_frame(
@@ -123,12 +133,13 @@ fn query(
     state: &ServerState,
     filter: &CallFilter,
     progress: impl Fn(i64, i64) -> std::io::Result<()> + Send + 'static,
+    cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<Value, UsageError> {
     let mut report = state
         .backend
         .usage
         .ledger
-        .query_calls_with_progress(filter, progress)?;
+        .query_calls_with_progress(filter, progress, cancelled)?;
     let ids = report["records"]
         .as_array()
         .into_iter()

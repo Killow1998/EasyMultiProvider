@@ -1,5 +1,5 @@
 // One owner for the management SSE connection and reconnect lifecycle.
-function createManagementEvents({management,visible,onEvent,onStart,onDisconnect}) {
+function createManagementEvents({management,isRunning,onEvent,onStart,onDisconnect}) {
   let quotaEventsController = null, quotaEventsConnected = false;
   let leading = false;
   const snapshots = new Map();
@@ -15,7 +15,7 @@ function createManagementEvents({management,visible,onEvent,onStart,onDisconnect
     onEvent(type, data);
   }
   if (channel) channel.onmessage = ({data:message}) => {
-    if (!quotaEventsController || !visible() || !Array.isArray(message) || message.length !== 2 || !message.every(value => typeof value === 'string')) return;
+    if (!quotaEventsController || !isRunning() || !Array.isArray(message) || message.length !== 2 || !message.every(value => typeof value === 'string')) return;
     const [type, data] = message;
     if (type === '$sync') {
       if (leading) {
@@ -63,7 +63,7 @@ function createManagementEvents({management,visible,onEvent,onStart,onDisconnect
   }
   async function runQuotaEventStream(controller) {
     let retryDelay = 1000;
-    while (!controller.signal.aborted && visible()) {
+    while (!controller.signal.aborted && isRunning()) {
       try {
         const response = await management.fetch('/api/accounts/events', {headers:{'Accept':'text/event-stream'}, signal:controller.signal, cache:'no-store'});
         if (controller.signal.aborted || quotaEventsController !== controller) {
@@ -84,7 +84,7 @@ function createManagementEvents({management,visible,onEvent,onStart,onDisconnect
           connection(false);
         }
       }
-      if (!controller.signal.aborted && visible()) {
+      if (!controller.signal.aborted && isRunning()) {
         await new Promise(resolve => {
           const done = () => { clearTimeout(timer); controller.signal.removeEventListener('abort', done); resolve(); };
           const timer = setTimeout(done, retryDelay);
@@ -95,7 +95,7 @@ function createManagementEvents({management,visible,onEvent,onStart,onDisconnect
     }
   }
   function startQuotaEvents() {
-    if (!management.isSignedIn() || !visible()) return;
+    if (!management.isSignedIn() || !isRunning()) return;
     if (quotaEventsController) {
       for (const [type, data] of snapshots) onEvent(type, data);
       return;
@@ -104,7 +104,7 @@ function createManagementEvents({management,visible,onEvent,onStart,onDisconnect
     const controller = new AbortController();
     quotaEventsController = controller;
     const run = channel ? navigator.locks.request('emp-management-events', {signal:controller.signal}, async () => {
-      if (controller.signal.aborted || !management.isSignedIn() || !visible()) return;
+      if (controller.signal.aborted || !management.isSignedIn() || !isRunning()) return;
       leading = true;
       snapshots.clear();
       try { await runQuotaEventStream(controller); }
@@ -115,7 +115,7 @@ function createManagementEvents({management,visible,onEvent,onStart,onDisconnect
       if (quotaEventsController === controller) {
         quotaEventsController = null;
         connection(false);
-        if (!controller.signal.aborted && management.isSignedIn() && visible()) startQuotaEvents();
+        if (!controller.signal.aborted && management.isSignedIn() && isRunning()) startQuotaEvents();
       }
     });
   }
@@ -123,7 +123,7 @@ function createManagementEvents({management,visible,onEvent,onStart,onDisconnect
     if (quotaEventsController) quotaEventsController.abort();
     quotaEventsController = null;
     connection(false);
-    if (!visible()) { channel?.close(); channel = null; snapshots.clear(); }
+    if (!isRunning()) { channel?.close(); channel = null; snapshots.clear(); }
   }
   return {start:startQuotaEvents,stop:stopQuotaEvents,connected:()=>quotaEventsConnected};
 }

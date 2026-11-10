@@ -12,9 +12,13 @@ mod credentials;
 #[derive(Default)]
 pub(crate) struct LoginSession(Mutex<LoginState>);
 #[derive(Default)]
-struct LoginState {
-    pending: Option<Pending>,
-    outcome: Value,
+enum LoginState {
+    #[default]
+    Idle,
+    Pending(Pending),
+    Completed(Value),
+    Failed(&'static str),
+    Cancelled,
 }
 struct Pending {
     helper: SubscriptionLogin,
@@ -37,15 +41,15 @@ pub(crate) fn execute(
     };
     let mut login = session.0.lock().map_err(|_| "login_busy")?;
     if !importing && matches!(operation, "use-api-key" | "use-account") {
-        if login.pending.is_some() {
+        if matches!(*login, LoginState::Pending(_)) {
             return Err("login_busy");
         }
         let result = credentials::switch(state, operation, body)?;
-        login.outcome = Value::Null;
+        *login = LoginState::Idle;
         return Ok(result);
     }
     if !importing && operation == "use-local-key" {
-        if login.pending.is_some() {
+        if matches!(*login, LoginState::Pending(_)) {
             return Err("login_busy");
         }
         let keep = match body["account_action"].as_str() {
@@ -92,13 +96,13 @@ pub(crate) fn execute(
                 && crate::services::integration::enable::apply(state)
                     .is_ok_and(|result| result.ok()));
         native_login_changed(state);
-        login.outcome = Value::Null;
+        *login = LoginState::Idle;
         return Ok(
             json!({"status":"completed", "restart_required":true, "integration_updated":integration_updated}),
         );
     }
     match operation {
-        "start" if login.pending.is_none() => {
+        "start" if !matches!(*login, LoginState::Pending(_)) => {
             let method = match body["method"].as_str() {
                 None | Some("device") => LoginMethod::DeviceCode,
                 Some("browser") => LoginMethod::Browser,
@@ -124,23 +128,21 @@ pub(crate) fn execute(
                 .unwrap_or(&state.backend.accounts.codex_binary);
             let helper = SubscriptionLogin::start(selector, method)
                 .map_err(|_| "login_engine_unavailable")?;
-            login.pending = Some(Pending {
+            *login = LoginState::Pending(Pending {
                 helper,
                 _engine: engine,
                 expected,
                 account_name,
                 started: Instant::now(),
             });
-            login.outcome = Value::Null;
         }
         "cancel" => {
-            login.pending = None;
-            login.outcome = json!({"status":"cancelled"});
+            *login = LoginState::Cancelled;
         }
         "start" | "status" => {}
         _ => return Err("login_unknown_operation"),
     }
-    if let Some(pending) = &login.pending {
+    if let LoginState::Pending(pending) = &*login {
         let result = if pending.started.elapsed() > Duration::from_secs(16 * 60) {
             Some(Err("login_expired"))
         } else {
@@ -162,23 +164,19 @@ pub(crate) fn execute(
                 }
                 credentials::install(state, &pending.expected, &auth)
             });
-            login.pending = None;
-            login.outcome = match result {
-                Ok(value) => value,
-                Err(code) => json!({"status":"failed","code":code}),
+            *login = match result {
+                Ok(value) => LoginState::Completed(value),
+                Err(code) => LoginState::Failed(code),
             };
         }
     }
-    Ok(login.pending.as_ref().map_or_else(
-        || {
-            if login.outcome.is_null() {
-                json!({"status":"idle"})
-            } else {
-                login.outcome.clone()
-            }
-        },
-        |pending| pending.helper.snapshot(),
-    ))
+    Ok(match &*login {
+        LoginState::Idle => json!({"status":"idle"}),
+        LoginState::Pending(pending) => pending.helper.snapshot(),
+        LoginState::Completed(value) => value.clone(),
+        LoginState::Failed(code) => json!({"status":"failed","code":code}),
+        LoginState::Cancelled => json!({"status":"cancelled"}),
+    })
 }
 
 fn native_login_changed(state: &ServerState) {

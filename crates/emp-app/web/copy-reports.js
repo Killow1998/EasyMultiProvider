@@ -8,6 +8,7 @@ registerUiCopy({
   "reports.requested_tier": ["请求档位","Requested tier"],
   "reports.reported_tier": ["服务端档位","Upstream tier"],
   "reports.tier_standard": ["Standard（标准）","Standard"],
+  "reports.tier_ultrafast": ["Ultrafast（超快）","Ultrafast"],
   "reports.tier_fast": ["Fast（快速）","Fast"],
   "reports.tier_unconfirmed": ["档位未确认","Tier unconfirmed"],
   "reports.not_specified": ["未指定","Not specified"],

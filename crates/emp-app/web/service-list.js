@@ -106,12 +106,13 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     open(id, 'provider', 'details', `<div class="service-detail-actions"></div>${balances.details(id)}<div id="service_usage">${tr("services.loading_usage")}</div>`, '', null, navigation);
     const box = $('service_usage');
     const controller = new AbortController(); detailsController = controller;
+    usageSummary.loading(box);
     try {
-      const data = await api('/api/usage?category=external&start=0&end='+Date.now()/1000, {signal:controller.signal});
+      const data = await api('/api/usage?lifetime=true&owner='+encodeURIComponent(id), {signal:controller.signal,onProgress:progress=>{if(!controller.signal.aborted && $('service_usage')===box)usageSummary.loading(box,progress);}});
       if (controller.signal.aborted || $('service_usage') !== box) return;
       const rows = (data.groups || []).filter(row => row.category === 'external' && row.owner === id);
-      box.innerHTML = usageSummary.render({groups:rows});
-    } catch (error) { if (!controller.signal.aborted && $('service_usage') === box) box.textContent = error.message; }
+      box.innerHTML = usageSummary.render({...data,groups:rows});
+    } catch (error) { if (!controller.signal.aborted && $('service_usage') === box) usageSummary.failed(box,error,()=>details(id,navigation)); }
   }
   async function refresh(id, notify = true) {
     if(poolQuotas.has(id))return poolQuotas.refresh(id,notify);

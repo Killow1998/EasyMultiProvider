@@ -97,12 +97,20 @@ impl UsageLedger {
         filter: &UsageSeriesFilter,
         scope: Option<&SessionScope>,
         now: f64,
+        cancelled: Option<Arc<AtomicBool>>,
     ) -> Result<Value> {
         let (selection, args) = selection(filter, scope.is_some())?;
         let bucket = chart_bucket(filter.end - filter.start);
-        let _guard = self.lock.lock().map_err(|_| UsageError)?;
-        let connection = self.connect()?;
-        let source = sessions::scoped_source(&connection, scope)?;
+        let mut cache = self.lock.lock().map_err(|_| UsageError)?;
+        let connection = read_cache::CachedRows::select(
+            &mut cache.usage,
+            self,
+            &sessions::source(),
+            "observed_at",
+            filter.start..filter.end,
+            cancelled,
+        )?;
+        let source = sessions::scoped_source(&connection, scope, "cached_rows")?;
         let mut query_args = vec![SqlValue::Real(filter.start), SqlValue::Real(bucket)];
         query_args.extend(args.iter().cloned());
         let series = rows(

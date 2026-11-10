@@ -164,7 +164,7 @@ class AccountingSnapshot:
             finally:
                 connection.close()
 
-    def usage(self, path, source_read):
+    def usage_target(self, path, source_read):
         query = parse_qs(urlsplit(path).query, keep_blank_values=True)
         account = (query.get('account_id') or query.get('account') or [None])[0]
         if account:
@@ -180,7 +180,11 @@ class AccountingSnapshot:
             owner = next(iter(owners), 'account:' + secrets.token_hex(32))
             query.pop('account_id',None); query.pop('account',None)
             query['owner'] = [owner]
-        return self.read('/api/usage?' + urlencode(query,doseq=True))
+        return 200, '/api/usage?' + urlencode(query,doseq=True)
+
+    def usage(self, path, source_read):
+        status,target=self.usage_target(path,source_read)
+        return self.read(target) if status==200 else (status,target)
 
     def status(self):
         with self.lock:

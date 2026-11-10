@@ -43,7 +43,13 @@ pub(crate) fn execute_summary_request(
 ) -> Result<(CompleteResponse, ResolvedRoute), SummaryExecutionError> {
     if crate::services::claude_cli::selected(route) {
         return match crate::services::claude_cli::execute_complete(
-            state, route, body, incoming, monitor, usage,
+            state,
+            route,
+            body,
+            incoming,
+            monitor,
+            usage,
+            &mut |_, _| Ok(()),
         ) {
             Ok(completion) => Ok((completion.response, completion.route)),
             Err(crate::services::claude_cli::ClaudeCliError::Router(error)) => {

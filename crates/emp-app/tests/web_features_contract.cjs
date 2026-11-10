@@ -154,7 +154,7 @@ test('call queries coalesce events and discard stale filters and closed windows'
   const root = {innerHTML:'',setAttribute() {},querySelectorAll:() => [],querySelector(selector) { if (selector === '[data-call-content]') return content; if (!controls.has(selector)) controls.set(selector,{value:'',dataset:{}}); return controls.get(selector); }};
   const report = id => ({start:0,end:Date.now()/1000,records:[{request_id:id,client_model:id,state:'completed'}],total:1,offset:0,limit:50});
   const reports = feature('call-reports.js','createCallReports', {
-    URLSearchParams, createReportQuery:feature('report-query.js','createReportQuery',{AbortController}), setReportState:feature('report-query.js','setReportState'), setTimeout:fn => { timers.set(fn,fn); return fn; }, clearTimeout:id => timers.delete(id),
+    URLSearchParams, createReportQuery:feature('report-query.js','createReportQuery',{AbortController}), setReportState() {}, setTimeout:fn => { timers.set(fn,fn); return fn; }, clearTimeout:id => timers.delete(id),
   })({tr,esc,getLanguage:() => 'en',getState:() => ({}),getActivity:() => ({}),$:() => root,openModal() {},
     periodPickerHtml:() => '',registerPeriodPicker:(_id,_preset,onChange,range) => onChange(range || {start:0,end:Date.now()/1000}),
     api:(path,options) => { const pending=deferred(); requests.push({path,options,...pending}); return pending.promise; }});

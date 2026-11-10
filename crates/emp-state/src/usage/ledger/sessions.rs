@@ -37,9 +37,11 @@ pub(super) fn source() -> String {
     // Copies and inherited fork records may share an event. Ambiguous evidence
     // stays unassigned rather than billing the same event to multiple sessions.
     format!(
-        "(SELECT u.*,COALESCE((SELECT MIN(s.session_id) FROM usage_sessions s
+        "(SELECT u.id,u.observed_at,u.category,u.owner,u.model,u.route_model,u.cost_nanos,u.price_issue,{},
+          COALESCE((SELECT MIN(s.session_id) FROM usage_sessions s
           WHERE s.event_id=u.id HAVING COUNT(*)=1),'') AS session_id
-          FROM {RESOLVED_USAGE} u)"
+          FROM {RESOLVED_USAGE} u)",
+        TOKEN_FIELDS.iter().map(|field| format!("u.{field}")).collect::<Vec<_>>().join(",")
     )
 }
 
@@ -67,6 +69,7 @@ impl UsageLedger {
         page: &SessionBillPage,
         scope: Option<&SessionScope>,
         now: f64,
+        cancelled: Option<Arc<AtomicBool>>,
     ) -> Result<Value> {
         let order = match page.sort.as_str() {
             "recent" => "last_at DESC,session_id",
@@ -89,10 +92,17 @@ impl UsageLedger {
             ));
             args.push(SqlValue::Text(json!(ids).to_string()));
         }
-        let _guard = self.lock.lock().map_err(|_| UsageError)?;
-        let connection = self.connect()?;
-        connection.execute_batch("PRAGMA temp_store=MEMORY")?;
-        let source = scoped_source(&connection, scope)?;
+        let mut cache = self.lock.lock().map_err(|_| UsageError)?;
+        let connection = read_cache::CachedRows::select(
+            &mut cache.usage,
+            self,
+            &source(),
+            "observed_at",
+            filter.start..filter.end,
+            cancelled,
+        )?;
+        connection.execute_batch("DROP TABLE IF EXISTS session_bills")?;
+        let source = scoped_source(&connection, scope, "cached_rows")?;
         connection.execute(
             &format!(
                 "CREATE TEMP TABLE session_bills AS SELECT u.{session} AS session_id,
@@ -138,10 +148,12 @@ impl UsageLedger {
 pub(super) fn scoped_source(
     connection: &Connection,
     scope: Option<&SessionScope>,
+    source: &str,
 ) -> Result<String> {
     let Some(scope) = scope else {
-        return Ok(source());
+        return Ok(source.to_owned());
     };
+    connection.execute_batch("DROP TABLE IF EXISTS conversation_scope")?;
     scope.install(connection)?;
     // Fork copies may have several leaf owners, but one agreed conversation.
     Ok(format!(
@@ -150,6 +162,6 @@ pub(super) fn scoped_source(
           HAVING COUNT(DISTINCT COALESCE(m.root_id,''))=1),'') AS conversation_id,
           COALESCE(n.name,'') AS session_name,COALESCE(n.kind,'shared') AS session_kind
           FROM {} s LEFT JOIN conversation_scope n ON n.thread_id=s.session_id)",
-        source()
+        source
     ))
 }

@@ -24,7 +24,7 @@ impl NativeWebSocketUpstream {
                 .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
                 .collect::<BTreeMap<_, _>>();
             let accept = websocket_accept(&headers["sec-websocket-key"]).unwrap();
-            write!(stream,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nOpenAI-Model: upstream\r\nX-Codex-Turn-State: native-ws-turn\r\nX-Models-Etag: stale-native-ws\r\n\r\n").unwrap();
+            write!(stream,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nOpenAI-Model: upstream\r\nX-Codex-Turn-State: native-ws-turn\r\nX-Models-Etag: stale-native-ws\r\n\r\n").unwrap();
             stream.flush().unwrap();
             let mut websocket = WebSocketConnection::new(&mut stream);
             for (index, id) in ["resp_one", "resp_two"].into_iter().enumerate() {
@@ -82,7 +82,7 @@ fn check_incremental_turn(prewarm: bool) {
         .unwrap();
     write!(
         stream,
-        "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: native-ws-thread\r\nx-openai-subagent: websocket-subagent\r\n\r\n",
+        "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: native-ws-thread\r\nx-openai-subagent: websocket-subagent\r\n\r\n",
         server.local_addr().port()
     )
     .unwrap();
@@ -180,7 +180,7 @@ fn check_incremental_turn(prewarm: bool) {
     assert_eq!(calls["records"][0]["output_tokens"], 0);
     assert_eq!(calls["records"][0]["input_tokens"], 41);
     let now = crate::util::system_now();
-    let usage = ledger.query(0.0, now, "all", now).unwrap();
+    let usage = ledger.query(0.0, now, "all", now, None).unwrap();
     assert_eq!(
         usage["totals"]["input_tokens"],
         if prewarm { 41 } else { 82 },
@@ -214,7 +214,7 @@ impl NativeFailureContinuityUpstream {
                 .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
                 .collect::<BTreeMap<_, _>>();
             let accept = websocket_accept(&headers["sec-websocket-key"]).unwrap();
-            write!(stream,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
+            write!(stream,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
             stream.flush().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(10)))
@@ -318,7 +318,7 @@ fn responses_websocket_retains_last_successful_previous_id_after_failed_or_incom
             .unwrap();
         write!(
             stream,
-            "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: continuity-thread\r\n\r\n",
+            "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: continuity-thread\r\n\r\n",
             server.local_addr().port()
         )
         .unwrap();
@@ -375,7 +375,7 @@ fn responses_websocket_retains_last_successful_previous_id_after_failed_or_incom
                 .backend
                 .usage
                 .ledger
-                .query(0.0, now, "all", now)
+                .query(0.0, now, "all", now, None)
                 .unwrap();
             assert_eq!(usage["totals"]["input_tokens"], 17, "{usage}");
             assert_eq!(usage["totals"]["output_tokens"], 3, "{usage}");

@@ -75,13 +75,12 @@ impl Metrics {
                     }
                 }
                 Some("content_block_delta") if event["delta"]["type"] == "text_delta" => {
-                    if let Some(block) = event["index"]
+                    if let Some(Value::String(text)) = event["index"]
                         .as_u64()
                         .and_then(|index| message["content"].get_mut(index as usize))
+                        .and_then(|block| block.get_mut("text"))
                     {
-                        let mut text = block["text"].as_str().unwrap_or_default().to_owned();
                         text.push_str(event["delta"]["text"].as_str().unwrap_or_default());
-                        block["text"] = json!(text);
                     }
                 }
                 Some("message_delta") => {

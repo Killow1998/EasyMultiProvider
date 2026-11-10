@@ -330,6 +330,7 @@ pub(super) fn connect(server: &ServerHandle, thread_id: &str) -> ClientWebSocket
     let ws = ClientWebSocket::connect(
         &format!("ws://{}/v1/responses", server.local_addr()),
         &BTreeMap::from([
+            ("originator".into(), "codex_cli_rs".into()),
             ("X-EMP-Session".into(), server.session_token()),
             ("thread-id".into(), thread_id.into()),
             (

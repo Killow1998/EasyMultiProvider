@@ -49,6 +49,10 @@ def main():
                 browser.execute('document.getElementById("modal_back").click();')
                 assert browser.execute('return !!document.querySelector("[data-ui-action=service-custom-api]") && document.getElementById("modal_back").hidden;')
                 browser.execute('closeModal();')
+                browser.execute('openProviderDetails("demo");document.querySelector("[data-ui-action=provider-edit]").click();document.getElementById("modal_back").click();')
+                assert browser.execute('return !!document.getElementById("service_usage") && document.getElementById("modal_back").hidden && !document.getElementById("modal_close").hidden;')
+                browser.execute('document.getElementById("modal_close").click();')
+                assert browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");')
         checks.append('Formal service/account/model presentation, physical Reset and return to the chooser in EN/ZH and light/dark')
         browser.execute('setLanguage("zh-CN");setTheme("light");editProvider("demo");')
         assert browser.execute('const key=document.getElementById("modal_provider_key");return key.type==="text" && key.placeholder==="******";')
@@ -60,6 +64,14 @@ def main():
         browser.execute('document.getElementById("modal_provider_name").value="Formal Alias";document.getElementById("modal_submit").click();')
         wait_for(lambda:browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");'))
         assert request(base+'/api/config',headers=headers)[1]['providers'][0]['name']=='Formal Alias'
+        status, picker = request(base+'/v1/models?client_version=0.167.0',headers=headers)
+        assert status == 200, picker
+        model = next(model for model in picker['models'] if model['slug']=='demo/model')
+        assert model['display_name'].endswith('Formal Alias · model'), model
+        status, public_config = request(base+'/api/config',headers=headers)
+        assert status == 200
+        model = next(model for model in public_config['catalog_models'] if model['id']=='demo/model')
+        assert model['default_display_name'] == 'Formal Alias · model', model
         checks.append('Formal API-key cancellation preserves saved credentials; name Save reaches the real temporary config')
         browser.execute('providerModelSettings.open("demo");')
         wait_for(lambda:browser.execute('return !!document.querySelector("[data-manager-action=test]");'))

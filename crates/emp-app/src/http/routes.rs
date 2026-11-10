@@ -115,10 +115,10 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
                 return crate::api::diagnostics::read(state);
             }
             if request.method == RequestMethod::Get && path == "/api/calls" {
-                return crate::api::calls::read(request, state);
+                return crate::api::calls::read(request, state, None);
             }
             if request.method == RequestMethod::Get && path == "/api/usage" {
-                return crate::api::usage::read(request, state);
+                return crate::api::usage::read(request, state, None);
             }
             if request.method == RequestMethod::Get && path == "/api/runtime/claude-cli" {
                 return crate::api::runtime::claude_cli_availability_request();

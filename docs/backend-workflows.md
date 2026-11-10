@@ -2,6 +2,8 @@
 
 [中文一页说明与前后对比](backend-workflows.zh-CN.md)
 
+[State lifecycle map: owners, transitions and verification](state-lifecycles.md)
+
 This is the current implementation contract for the eight library crates and
 their composition in `emp-app`. It supersedes proposals to add availability
 gates, cooldowns or recovery probes as part of this refactor. The existing UI,
@@ -40,10 +42,16 @@ authentication, schema, context and TPM failures remain distinct. WebSocket
 HTTP-stream relays record typed failure facts before delivering the terminal
 error, matching the HTTP/SSE relay's accounting behavior.
 
-Call-report normalization produces binary JSON once. The report reader filters
-records into its connection-local temporary table, then aggregates and pages
-that selection without reapplying the input predicates. Only paged records are
-converted back to JSON text. The stored ledger and pricing owners are unchanged.
+Report readers reuse timestamped facts before aggregation. `usage/ledger/read_cache.rs`
+keeps one disk-backed temporary window for normalized calls and one for reconciled
+usage. Smaller periods and different filters read those windows; overlapping
+extensions read only the missing range and retain at most the widest requested
+window, evicting rows that roll out. SQLite `data_version` invalidates the
+window on writes, including historical corrections, delivery updates and repricing.
+Call normalization retains binary JSON; only paged records become JSON text.
+Session names and conversation scope are joined at query time. The UI still
+receives aggregates and paged records; it does not own accounting calculations.
+The stored ledger and pricing owners are unchanged.
 The ledger also owns completed recovery links. It records the existing scoped
 diagnostic association on the earlier resend, without a history scan or a new
 successful inference. The stateless WebSocket writer owns only the downstream

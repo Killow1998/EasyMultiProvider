@@ -88,6 +88,7 @@ impl Drop for Probe {
 
 pub(crate) struct DisconnectMonitor {
     disconnected: tokio::sync::oneshot::Receiver<()>,
+    cancelled: Arc<AtomicBool>,
     pending: Option<(Probe, tokio::sync::oneshot::Sender<()>)>,
     wake: Arc<Poller>,
     stop: Arc<AtomicBool>,
@@ -109,6 +110,7 @@ impl DisconnectMonitor {
     ) -> std::io::Result<Self> {
         Ok(Self {
             disconnected,
+            cancelled: Arc::new(AtomicBool::new(false)),
             pending: None,
             wake: Arc::new(Poller::new()?),
             stop: Arc::new(AtomicBool::new(false)),
@@ -128,6 +130,7 @@ impl DisconnectMonitor {
         let (sender, disconnected) = tokio::sync::oneshot::channel();
         Ok(Self {
             disconnected,
+            cancelled: Arc::new(AtomicBool::new(false)),
             pending: Some((probe, sender)),
             wake,
             stop,
@@ -143,11 +146,18 @@ impl DisconnectMonitor {
             return;
         };
         let worker_stop = Arc::clone(&self.stop);
+        let cancelled = Arc::clone(&self.cancelled);
         self.worker = Some(thread::spawn(move || {
             if !matches!(probe.wait_for_disconnect(&worker_stop), Ok(false)) {
+                cancelled.store(true, Ordering::Release);
                 let _ = sender.send(());
             }
         }));
+    }
+
+    pub(crate) fn cancellation(&mut self) -> Arc<AtomicBool> {
+        self.activate();
+        Arc::clone(&self.cancelled)
     }
 
     pub(crate) async fn race<F: Future>(&mut self, future: F) -> DisconnectRace<F::Output> {
