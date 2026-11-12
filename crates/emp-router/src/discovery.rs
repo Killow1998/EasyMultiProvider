@@ -23,6 +23,7 @@ mod decisions;
 mod gemini;
 mod generic;
 mod metadata;
+mod vertex;
 
 pub use anthropic::{discover_anthropic_models, project_anthropic_models};
 pub use decisions::discover_decision_models;
@@ -85,6 +86,9 @@ pub async fn discover_models(
     client: &HttpClient,
     provider: &Map<String, Value>,
 ) -> Result<Vec<Value>, RouterError> {
+    if provider.contains_key("vertex") {
+        return vertex::discover(client, provider).await;
+    }
     let protocol = provider
         .get("protocol")
         .and_then(Value::as_str)
@@ -278,7 +282,7 @@ fn model_id(value: Option<&Value>) -> Option<String> {
     }
     (!value.is_empty()
         && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b':' | b'-')
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b':' | b'-' | b'@')
         }))
     .then_some(value)
 }

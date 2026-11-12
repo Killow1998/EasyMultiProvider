@@ -145,6 +145,19 @@ def main():
             args.output.with_name(f'migration-many-services-{width}-{height}.png').write_bytes(base64.b64decode(screenshot['value']))
         checks.append('Eight-service import: the last service remains selectable through actual pointer clicks at desktop, short and narrow sizes')
         request(browser.base + '/window/rect', {'width': 1280, 'height': 900})
+        browser.execute('''const names=[...document.querySelectorAll('[data-migration-name]')];
+          window.savedMigrationName=names[0].value;names[0].value=names[1].value.toUpperCase();
+          names[0].dispatchEvent(new Event('input',{bubbles:true}));''')
+        assert browser.execute('''return [...document.querySelectorAll('[data-migration-warning] [data-shadow-help]')]
+          .some(node=>node.dataset.shadowHelp.includes('used by another service'));''')
+        browser.execute('document.getElementById("modal_submit").click();')
+        wait_for(lambda: browser.execute('return document.getElementById("modal_status").textContent.includes("used by another service");'))
+        assert (target / 'config.json').read_bytes() == before
+        browser.execute('''const input=document.querySelector('[data-migration-name]');
+          input.value=window.savedMigrationName;input.dispatchEvent(new Event('input',{bubbles:true}));''')
+        assert browser.execute('''return ![...document.querySelectorAll('[data-migration-warning] [data-shadow-help]')]
+          .some(node=>node.dataset.shadowHelp.includes('used by another service'));''')
+        checks.append('Duplicate service names are highlighted in the preview and rejected without importing; correcting the name clears the warning')
         # A response that never arrives must leave a usable retry, not a permanent wait.
         gate = threading.Event()
         stack.callback(gate.set)

@@ -15,7 +15,7 @@ def check_bill_lifecycle(browser):
         if(!path.includes('series=true'))return Promise.resolve(page);
         probe.details.push({signal:options.signal});
         return Promise.resolve({groups:[{...totals,model:'lifecycle-model'}],totals});
-      },tr:key=>key,esc:String,number:String,getLanguage:()=> 'en'});
+      },tr:key=>key,esc:String,number:String,modelName:String,getLanguage:()=> 'en'});
       window.billLifecycle=probe;
     ''')
     try:

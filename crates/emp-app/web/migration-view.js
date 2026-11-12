@@ -11,7 +11,7 @@ function createMigrationView(getState) {
   function modelChoices(service, source, importing) {
     if (service.kind === 'provider') {
       return (source.models || []).filter(model => model.provider === service.id).map(model => ({
-        id:model.id, selected:true, name:model.display_name || model.upstream_id,
+        id:model.id, upstream_id:model.upstream_id || model.id.replace(service.id + '/', ''), selected:true, name:model.display_name || model.upstream_id,
         original_name:model.display_name || model.upstream_id,
         context_window:model.context_window || '', enabled:model.enabled !== false,
       }));
@@ -109,9 +109,16 @@ function createMigrationView(getState) {
   }
   function warningHtml(row, candidate, rows) {
     const name = item => candidate.nameEdits?.get(item.kind+':'+item.id)?.trim() || item.name;
-    const warnings = (candidate.warnings || []).filter(warning => warning.kind === row.kind && warning.id === row.id &&
-      (warning.code !== 'duplicate_name' || rows.some(other => (other.kind !== row.kind || other.id !== row.id) && name(other) === name(row))));
-    return warnings.length ? shadowHelp(warnings.map(item => tr(item.message,item.message_en || item.message)).join('\n'),'!','warning') : '';
+    const warnings = (candidate.warnings || []).filter(warning => warning.kind === row.kind && warning.id === row.id && warning.code !== 'duplicate_name')
+      .map(item => tr(item.message,item.message_en || item.message));
+    if(candidate.mode === 'import' && row.record._shadow_migration_token === candidate.token && name(row).includes('/')) {
+      warnings.push(tr('core.service_name_contains_slash'));
+    }
+    if(candidate.mode === 'import' && candidate.token && row.record._shadow_migration_token === candidate.token && rows.some(other =>
+      !other.record.native && (other.kind !== row.kind || other.id !== row.id) && name(other).toLocaleLowerCase() === name(row).toLocaleLowerCase())) {
+      warnings.push(tr('core.service_name_already_in_use'));
+    }
+    return warnings.length ? shadowHelp(warnings.join('\n'),'!','warning') : '';
   }
   function previewRows(rows, candidate, nativePlaceholder = false) {
     const placeholder=nativePlaceholder&&!(candidate.mode==='import'&&rows.some(row=>row.record.native));
@@ -145,7 +152,7 @@ function createMigrationView(getState) {
     const context = candidate.includeContext ? model.context_window : '';
     return `<label class="migration-model">${selectable ? `<input type="checkbox"
       data-migration-model-select="${serviceIndex}:${index}" ${model.selected ? 'checked' : ''}>` : ''}
-      <span>${esc(label || model.id)}<small>${esc(model.id)}${context ? ' · '+compactContext(context) : ''}</small></span></label>`;
+      <span>${esc(label || model.upstream_id || model.id)}<small>${esc(model.upstream_id || model.id)}${context ? ' · '+compactContext(context) : ''}</small></span></label>`;
   }
   function rowHtml(row, index) {
     return `<label class="migration-service"><input type="checkbox" data-migration-select="${index}"

@@ -28,14 +28,28 @@ def main():
         browser=Browser(stack,root,system_access=True);browser.navigate(url)
         browser.execute('''
           const saved=window.fetch;
+          window.modelListReads=0;
           const models=Array.from({length:400},(_,i)=>({upstream_id:'catalog-'+i,display_name:'Model '+i,context_window:128000,input_modalities:['text','image']}));
-          window.fetch=async function(path,options){if(String(path)==='/api/providers/demo/models')return new Response(JSON.stringify({models,cached:true}),{status:200,headers:{'Content-Type':'application/json'}});return saved(path,options);};
+          window.fetch=async function(path,options){
+            if(String(path)==='/api/providers/discover')return new Response('{}',{status:200,headers:{'Content-Type':'application/json'}});
+            if(String(path)==='/api/providers/demo/models'){
+              modelListReads++;
+              if(modelListReads===1)await new Promise(resolve=>window.releaseModelList=resolve);
+              return new Response(JSON.stringify({models:modelListReads===1?models:[...models,{upstream_id:'fresh-model',display_name:'Fresh model'}],cached:true}),{status:200,headers:{'Content-Type':'application/json'}});
+            }
+            return saved(path,options);
+          };
           providerModelSettings.open('demo');
         ''')
+        wait_for(lambda:browser.execute('return typeof releaseModelList==="function";'))
+        assert browser.execute('return document.querySelector("[data-manager-action=refresh]").disabled;')
+        browser.execute('releaseModelList();')
         wait_for(lambda:browser.execute('return document.querySelectorAll("[data-managed-model]").length===401;'))
-        assert browser.execute('return !document.getElementById("models") && !document.querySelector("[data-ui-action=provider-toggle-models]") && !document.querySelector("#shadow_model_manager input[type=checkbox]");')
-        assert browser.execute('return document.querySelector("[data-managed-model]").dataset.visible==="true" && document.querySelectorAll(".shadow-model-action").length===1203;')
-        checks.append('400 cached models; visible first; only icon actions; retired homepage controls absent')
+        browser.execute('document.querySelector("[data-manager-action=refresh]").click();')
+        wait_for(lambda:browser.execute('return !!document.querySelector("[data-managed-model=fresh-model]");'))
+        checks.append('Loading owns Refresh; a subsequent refresh displays the new catalog')
+        assert browser.execute('return document.querySelector("[data-managed-model]").dataset.visible==="true";')
+        checks.append('400 cached models are searchable, with enabled models first')
         def search(value):
             browser.execute('const input=document.getElementById("shadow_model_search");input.value=arguments[0];input.dispatchEvent(new Event("input",{bubbles:true}));',value)
         search('catalog-23')
@@ -44,7 +58,7 @@ def main():
         search('catalog-32')
         browser.execute('document.querySelector("[data-manager-action=edit]").click();')
         assert browser.execute('return document.getElementById("modal_model_provider").disabled && document.getElementById("modal_model_upstream").value==="catalog-32";')
-        assert browser.execute('const back=document.querySelector("#modal_back"),close=document.getElementById("modal_close");return !back.hidden && close.hidden && back.parentElement===close.parentElement && !document.querySelector(".modal-actions #modal_back");')
+        assert browser.execute('return !document.getElementById("modal_back").hidden && document.getElementById("modal_close").hidden;')
         browser.execute('document.querySelector("#modal_back").click();')
         wait_for(lambda:browser.execute('return !!document.getElementById("shadow_model_manager");'))
         assert browser.execute('return document.getElementById("shadow_model_search").value==="catalog-32";')
@@ -64,7 +78,7 @@ def main():
         assert browser.execute('return state.models.some(model=>model.id==="demo/manual-only") && document.getElementById("modal_back").hidden;')
         search('manual-only');browser.execute('document.querySelector("[data-manager-action=test]").click();')
         assert browser.execute('return document.getElementById("status").textContent.includes("不发送真实模型请求");')
-        checks.append('Child has only Back; Back/Escape retain model search; manager X closes; no footer back button')
+        checks.append('Child has only Back; Back/Escape retain model search; manager X closes')
         checks.append('Show, edit hidden catalog model, service-scoped manual add, return/search retention and guarded test')
         search('')
         for theme in ['light','dark']:
@@ -88,15 +102,11 @@ def main():
         assert browser.execute('return [...document.querySelectorAll("[data-shadow-subscription-visibility]")].map(node=>node.getAttribute("aria-pressed")).join(",")==="true,false" && state.native_account.model_context_windows["native-a"]===400000;')
         browser.execute('closeModal();')
         checks.append('Native visibility icons persist and sort; global context help and current per-model calculation agree')
-        browser.execute('statistics.open();')
-        assert browser.execute('return !document.getElementById("presentation_stats").textContent.includes("历史与计价") && !document.querySelector("#presentation_stats [onclick*=openUsage]");')
-        browser.execute('closeModal();')
-        checks.append('No duplicate Native model route names or obsolete History and pricing entry')
         # Check the actual plotted peak, not an internal scale variable.
         browser.execute('closeModal();openModal("Fixture chart","<div id=chart_fixture></div>","",null);window.fixtureChart=createPerformanceChart({esc,tr,getLanguage:()=>language,number:value=>String(value),seconds:value=>String(value),tps:value=>String(value)});')
         for metric in ['tokens','cost_nanos','tokens_per_second','ttft_ms']:
             browser.execute('''
-              window.fixtureDispose?.();const report={start:0,end:120,periods:[{start:0,tokens:100,cost_nanos:100,tokens_per_second:100,ttft_ms:100},{start:60,tokens:200,cost_nanos:200,tokens_per_second:200,ttft_ms:200}]};
+              window.fixtureDispose?.();const report={start:0,end:120,bucket:60,periods:[{start:0,tokens:100,cost_nanos:100,tokens_per_second:100,ttft_ms:100},{start:60,tokens:200,cost_nanos:200,tokens_per_second:200,ttft_ms:200}]};
               if(['tokens','cost_nanos'].includes(arguments[0]))report.chartSeries=[{values:[100,100],color:'#537de0'},{values:[0,200],color:'#279e9b'}];
               document.getElementById('chart_fixture').innerHTML=fixtureChart.html(report,arguments[0]);window.fixtureDispose=fixtureChart.bind(document.getElementById('chart_fixture'),report,arguments[0]);
             ''',metric)

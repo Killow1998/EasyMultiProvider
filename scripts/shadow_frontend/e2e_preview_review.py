@@ -35,7 +35,19 @@ def main():
             assert browser.execute('return !document.getElementById("shadow_routing_button");')
             review_title = browser.execute('return document.getElementById("modal_title").textContent;')
             assert 'v0.13.29' in review_title
-            assert browser.execute('return !document.querySelector("#modal_body [data-shadow-demo]");')
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(button=>button.dataset.shadowDemo);') == ['dialog_ownership','gateway_attribution','discovery']
+            browser.execute('document.querySelector(`[data-shadow-demo="dialog_ownership"]`).click();')
+            wait_for(lambda: browser.execute('return !!document.getElementById("gateway_key");'))
+            browser.execute('document.getElementById("modal_back").click();')
+            assert browser.execute('return document.getElementById("modal_title").textContent;') == review_title
+            browser.execute('document.querySelector(`[data-shadow-demo="gateway_attribution"]`).click();')
+            wait_for(lambda: browser.execute('return !!document.querySelector("[data-gateway-devices]");'))
+            browser.execute('document.querySelector("[data-gateway-devices]").click();')
+            wait_for(lambda: browser.execute('return !!document.querySelector("[data-gateway-add]");'))
+            browser.execute('document.getElementById("modal_back").click();')
+            wait_for(lambda: browser.execute('return !!document.getElementById("gateway_key");'))
+            browser.execute('document.getElementById("modal_back").click();')
+            assert browser.execute('return document.getElementById("modal_title").textContent;') == review_title
             browser.execute('''const script=document.createElement("script");script.textContent=`state.providers.push({id:"review-fixture",name:"Fixture",base_url:"https://example.invalid/v1",protocol:"chat_completions",auth_mode:"api_key",api_key_set:true})`;document.head.append(script);script.remove();window.EMP_REVIEW_ACTION("service_details");''')
             wait_for(lambda:browser.execute('return !!document.querySelector("#service_usage") && !!document.querySelector("[data-ui-action=provider-edit]");'))
             browser.execute('document.querySelector("[data-ui-action=provider-edit]").click();document.getElementById("modal_back").click();')

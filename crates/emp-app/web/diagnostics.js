@@ -1,5 +1,5 @@
 // Feature state is private; the page supplies current data and UI operations.
-function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t, tr, localTimeText, notice}) {
+function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t, tr, modelName, serviceName, localTimeText, notice}) {
   let diagnosticsRequest = 0;
   let supportReportRequest = 0;
   function diagnosticsTransportLabel(value) { const labels = {"http":tr("reports.http"),"sse":tr("reports.sse"),"websocket":tr("reports.websocket")}; return labels[value] || tr("reports.request"); }
@@ -41,16 +41,16 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
     const completed=record.outcome==='completed' || (!record.outcome && record.delivery==='terminal_written' && !record.error_code && (record.downstream_terminal==='completed' || Number(record.response_status)>=200 && Number(record.response_status)<300));
     const outcome=completed ? 'completed' : record.outcome==='interrupted' || record.delivery==='partial' ? 'interrupted' : 'failed';
     const stage=record.last_stage || record.last_phase || '';
-    return `<details class="request-failure"><summary><span>${tr('reports.probe_'+record.operation)}</span><span>${tr('reports.probe_'+outcome)} · ${Number(record.duration_ms || 0).toLocaleString()} ms</span><time class="muted">${esc(localTimeText(Date.parse(record.observed_at)))}</time></summary><dl><dt>${tr('reports.requested_model')}</dt><dd>${esc(record.model_id || '—')}</dd><dt>${tr('reports.probe_stage')}</dt><dd>${esc(stage || '—')}</dd><dt>${tr('reports.diagnostic_id')}</dt><dd>${esc(record.request_id || record.operation_id || '—')}</dd></dl></details>`;
+    return `<details class="request-failure"><summary><span>${tr('reports.probe_'+record.operation)}</span><span>${tr('reports.probe_'+outcome)} · ${Number(record.duration_ms || 0).toLocaleString()} ms</span><time class="muted">${esc(localTimeText(Date.parse(record.observed_at)))}</time></summary><dl><dt>${tr('reports.requested_model')}</dt><dd>${esc(record.model_id ? modelName(record.model_id) : '—')}</dd><dt>${tr('reports.probe_stage')}</dt><dd>${esc(stage || '—')}</dd><dt>${tr('reports.diagnostic_id')}</dt><dd>${esc(record.request_id || record.operation_id || '—')}</dd></dl></details>`;
   }
   function diagnosticFailureHtml(record) {
     const status = Number(record.status);
     const attempt = record.recovery_mode === 'native_http_fallback';
     const result = `${attempt ? tr("reports.pre_fallback_attempt") : ''}${status >= 400 && status <= 599 ? status + ' · ' : ''}${diagnosticsErrorLabel(record.error_class)}`;
-    const source = record.provider_id || (record.dialect === 'codex_native' ? tr("current_codex_login") : tr("reports.not_recorded"));
+    const source = record.provider_id ? serviceName(record.provider_id, record.provider_name) : (record.dialect === 'codex_native' ? tr("current_codex_login") : tr("reports.not_recorded"));
     const fields = [
       [tr("reports.account_provider"), source],
-      [tr("reports.requested_model"), record.model_id || tr("reports.not_recorded")],
+      [tr("reports.requested_model"), record.model_id ? modelName(record.model_id) : tr("reports.not_recorded")],
       [tr("reports.connection_2"), `${diagnosticsProtocolLabel(record.protocol)} · ${diagnosticsTransportLabel(record.transport)}`],
       [tr("reports.duration"), `${Number(record.duration_ms || 0).toLocaleString()} ms`],
       [tr("reports.output_progress"), record.tool_activity ? tr("reports.tool_call_received") : record.output_emitted ? tr("reports.partial_output_received") : tr("reports.no_output_recorded")],
@@ -59,7 +59,7 @@ function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t,
     ];
     if (record.context_decision === 'blocked' || record.context_decision === 'warned') fields.push([tr("reports.context"), diagnosticsContextLabel(record)]);
     const advice = diagnosticFailureAdvice(record);
-    return `<details class="request-failure"><summary><span>${esc(record.model_id || tr("reports.unknown_model"))}</span><span>${esc(result)}</span><time class="muted">${esc(record.observed_at ? localTimeText(Date.parse(record.observed_at)) : '')}</time></summary><dl>${fields.map(([label,value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join('')}</dl><p class="muted">${esc(advice)}</p></details>`;
+    return `<details class="request-failure"><summary><span>${esc(record.model_id ? modelName(record.model_id) : tr("reports.unknown_model"))}</span><span>${esc(result)}</span><time class="muted">${esc(record.observed_at ? localTimeText(Date.parse(record.observed_at)) : '')}</time></summary><dl>${fields.map(([label,value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join('')}</dl><p class="muted">${esc(advice)}</p></details>`;
   }
   function diagnosticFailureAdvice(record) {
     if (record.tool_activity || record.output_emitted) return tr("reports.output_arrived_before_interruption_check_the_task_before_retrying");

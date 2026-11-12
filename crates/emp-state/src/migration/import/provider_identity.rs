@@ -27,9 +27,10 @@ pub(super) fn map_providers(
         let key = keys.get(id).and_then(Value::as_str).unwrap_or("");
         let collision = existing.iter().find(|record| id_of(record) == id);
         let matched = known.iter().find(|record| {
-            !key.trim().is_empty()
-                && record["base_url"].as_str().is_some()
+            record["base_url"].as_str().is_some()
                 && record["base_url"] == provider["base_url"]
+                && record["auth_mode"] == provider["auth_mode"]
+                && record.get("vertex") == provider.get("vertex")
                 && record
                     .get("execution_backend")
                     .and_then(Value::as_str)
@@ -38,7 +39,9 @@ pub(super) fn map_providers(
                         .get("execution_backend")
                         .and_then(Value::as_str)
                         .unwrap_or("http")
-                && crate::config::provider_api_key(record, vault) == key
+                && (provider["auth_mode"] == "vertex_adc"
+                    || !key.trim().is_empty()
+                        && crate::config::provider_api_key(record, vault) == key)
         });
         let occupied_route = current["accounts"]
             .as_array()

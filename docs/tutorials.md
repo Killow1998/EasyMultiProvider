@@ -68,10 +68,10 @@ details; use your own API key.
 
 点击 **添加服务**，填写连接信息并保存，再更新模型列表、显示要使用的模型。预设服务会填好连接参数，填写自己的 API Key 即可。
 
-For Mercury 3, select **Inception / Mercury**, then import `mercury-3` from its
+For Mercury 3, select **Inception**, then import `mercury-3` from its
 model list. [Inception API setup](https://docs.inceptionlabs.ai/get-started).
 
-Mercury 3 可选择 **Inception / Mercury**，再从模型列表导入 `mercury-3`。
+Mercury 3 可选择 **Inception**，再从模型列表导入 `mercury-3`。
 
 ![Add a service / 添加服务](assets/tutorials/01-add-service.gif)
 
@@ -97,9 +97,9 @@ window, and save.
 <summary>6. Rename a service and a model / 修改服务和模型名称</summary>
 
 Open the service details and use its gear to change the service name. Use the arrow beside a
-model to change its display name; its upstream model ID stays the same.
+model to change its display name; its upstream model ID stays the same. Service names must be distinct.
 
-点击服务名称打开信息，再点击右侧齿轮修改服务名称；点击模型右侧箭头修改模型显示名称，上游模型 ID 保持不变。
+点击服务名称打开信息，再点击右侧齿轮修改服务名称；点击模型右侧箭头修改模型显示名称，上游模型 ID 保持不变。不同服务请使用不同名称。
 
 ![Rename a service and a model / 修改服务和模型名称](assets/tutorials/06-rename.gif)
 

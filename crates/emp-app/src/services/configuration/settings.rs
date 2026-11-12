@@ -29,6 +29,8 @@ pub(crate) fn update(
                 .edit()
                 .map_err(|_| ChangeError::Unavailable)?;
             let mut updated = merge_web_update(&current, incoming).map_err(ChangeError::invalid)?;
+            emp_state::config::validate_service_names(&current, &updated)
+                .map_err(ChangeError::invalid)?;
             canonicalize_private_paths(&mut updated, &state.backend.configuration.config_path)
                 .map_err(ChangeError::invalid)?;
             let sources = catalog_sources(state, &updated);

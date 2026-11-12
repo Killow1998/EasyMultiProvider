@@ -391,7 +391,7 @@ fn automatic_http_refresh_publishes_capabilities_etag_and_isolated_account_catal
         .as_array()
         .unwrap()
         .iter()
-        .find(|model| model["slug"] == "demo/first-account-model")
+        .find(|model| model["slug"] == "Demo/first-account-model")
         .expect("new subscription model appears in EMP catalog");
     assert_eq!(demo["context_window"], 262144);
     assert_eq!(demo["supports_reasoning_summaries"], true);
@@ -668,7 +668,7 @@ fn overlapping_refresh_requests_coalesce_and_failed_refresh_retains_last_good_ca
             .as_array()
             .unwrap()
             .iter()
-            .any(|model| model["slug"] == "demo/first-account-model")
+            .any(|model| model["slug"] == "Demo/first-account-model")
     );
     server.shutdown().expect("shutdown");
 }
@@ -720,14 +720,14 @@ fn delete_and_reimport_during_refresh_rejects_the_stale_response() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|model| model["slug"] == "demo/replacement-model")
+            .any(|model| model["slug"] == "Demo/replacement-model")
     );
     assert!(
         !catalog["models"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|model| model["slug"] == "demo/first-account-model")
+            .any(|model| model["slug"] == "Demo/first-account-model")
     );
     server.shutdown().expect("shutdown");
 }

@@ -25,6 +25,7 @@ function createProviderModelManager({getState,cloneState,$,tr,esc,api,persistSta
     const provider=getState().providers.find(item=>item.id===id);if(!provider)return;
     const view={id,query,navigation,models:[],controller:new AbortController()};
     openModal(tr("models.manage_models")+' · '+(provider.name||id),`<div id="shadow_model_manager">
+      ${provider.vertex ? `<p class="muted">${tr(provider.auth_mode==='vertex_api_key'?(provider.vertex.project?'services.vertex_google_catalog_hint':'services.vertex_express_catalog_hint'):'services.vertex_catalog_hint')}</p>` : ''}
       <div class="toolbar"><input type="search" id="shadow_model_search" placeholder="${tr("models.search_model_name_or_id")}" value="${esc(query)}"><button type="button" class="secondary" data-manager-action="refresh" data-icon="refresh">${tr("models.update_model_list")}</button><button type="button" class="secondary" data-manager-action="add" data-icon="plus">${tr("models.add_manually")}</button></div>
       <p id="shadow_model_count" class="muted" role="status"></p><div id="shadow_managed_models">${tr("models.loading_model_list")}</div></div>`,'',null,null,{...navigation,reopen:()=>open(id,view.query,navigation)});
     active=view;view.node=$('shadow_model_manager');
@@ -48,13 +49,14 @@ function createProviderModelManager({getState,cloneState,$,tr,esc,api,persistSta
     };
     await load(view);
   }
-  async function load(view,control){
-    if(view.loading)return;view.loading=true;if(control)control.disabled=true;
+  async function load(view){
+    if(view.loading)return;view.loading=true;
+    const refresh=view.node.querySelector('[data-manager-action=refresh]');refresh.disabled=true;
     try{
       const result=await api('/api/providers/'+encodeURIComponent(view.id)+'/models',{signal:view.controller.signal});
       if(current(view)){view.models=result.models||[];$('modal_status').textContent='';render(view);}
     }catch(error){if(current(view)&&!view.controller.signal.aborted){$('modal_status').textContent=error.message;render(view);}}
-    finally{view.loading=false;if(control?.isConnected)control.disabled=false;}
+    finally{view.loading=false;refresh.disabled=false;}
   }
   function edit(view,model){
     const id=view.id, query=view.query, route=model ? model.id||id+'/'+model.upstream_id : '';

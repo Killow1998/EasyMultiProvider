@@ -219,6 +219,19 @@ pub fn build_catalog(
     json!({"models":result})
 }
 
+/// Keep native model metadata for existing routes without offering an unusable login.
+pub fn hide_native_models(catalog: &mut Value, native: &Value) {
+    let native_slugs: BTreeSet<_> = array(native.get("models"))
+        .iter()
+        .map(|model| text(model, "slug"))
+        .collect();
+    for model in catalog["models"].as_array_mut().into_iter().flatten() {
+        if native_slugs.contains(text(model, "slug")) {
+            model["visibility"] = json!("hide");
+        }
+    }
+}
+
 fn metadata(
     entry: &mut Value,
     family: &str,

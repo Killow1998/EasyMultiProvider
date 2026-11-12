@@ -1,5 +1,5 @@
 // Service-owned lifetime summaries and service-type/model usage breakdowns.
-function createServiceUsage({esc, tr, number, dateTime, renderLifetime}) {
+function createServiceUsage({esc, tr, modelName, number, dateTime, renderLifetime}) {
   const fields = ['requests', 'reported_requests', 'priced_requests', 'input_reports', 'output_reports',
     'input_tokens', 'output_tokens', 'cost_nanos', 'cache_reports', 'cached_input_tokens',
     'cache_write_tokens', 'reasoning_reports', 'reasoning_tokens'];
@@ -17,7 +17,7 @@ function createServiceUsage({esc, tr, number, dateTime, renderLifetime}) {
     }
     return {models:[...models.values()], totals};
   }
-  const render = data => renderLifetime(data,{aggregate,number,dateTime});
+  const render = data => renderLifetime(data,{aggregate,modelName,number,dateTime});
   function renderGroups(data, providers, describe) {
     const services = new Map((providers || []).map(provider => [provider.id, provider]));
     const types = [
@@ -38,7 +38,7 @@ function createServiceUsage({esc, tr, number, dateTime, renderLifetime}) {
       const {models} = aggregate(group.rows);
       const rows = models.sort((a,b) => (b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)||a.model.localeCompare(b.model)).map(model => {
         const details = model.details.slice().sort((a,b) => (b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)).map(row => `<tr><td>${esc(describe(row))}<small>${row.service_tier === 'default' ? tr("services.standard") : esc(row.service_tier || '')}</small></td><td>${input(row)}</td><td>${output(row)}</td><td>${cost(row)}</td><td>${number(row.requests || 0)}</td></tr>`).join('');
-        return `<details class="usage-model"><summary class="usage-model-columns"><span class="usage-model-name">${esc(model.model)}</span><span>${input(model)}</span><span>${output(model)}</span><span>${cost(model)}</span><span>${number(model.requests)}</span></summary><div class="usage-table"><table><thead><tr><th>${tr("services.service_account")}</th><th>${tr("services.input")}</th><th>${tr("services.output")}</th><th>${tr("common.usd")}</th><th>${tr("services.calls")}</th></tr></thead><tbody>${details}</tbody></table></div></details>`;
+        return `<details class="usage-model"><summary class="usage-model-columns"><span class="usage-model-name">${esc(modelName(model.model))}</span><span>${input(model)}</span><span>${output(model)}</span><span>${cost(model)}</span><span>${number(model.requests)}</span></summary><div class="usage-table"><table><thead><tr><th>${tr("services.service_account")}</th><th>${tr("services.input")}</th><th>${tr("services.output")}</th><th>${tr("common.usd")}</th><th>${tr("services.calls")}</th></tr></thead><tbody>${details}</tbody></table></div></details>`;
       }).join('');
       return `<section class="usage-service-group" data-usage-service-type="${group.id}"><h3>${group.label}</h3><div class="usage-table"><div class="usage-models"><div class="usage-model-columns usage-model-heading"><span>${tr("reports.model")}</span><span>${tr("services.input")}</span><span>${tr("services.output")}</span><span>${tr("common.usd")}</span><span>${tr("services.calls")}</span></div>${rows}</div></div></section>`;
     }).join('');

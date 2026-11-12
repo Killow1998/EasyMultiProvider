@@ -151,6 +151,16 @@ def check_page(browser, shadow):
                 wait_for(lambda: browser.execute('return !document.querySelector("#quota_history_back").hidden;'))
                 browser.execute('document.querySelector("#quota_history_back").click();')
                 wait_for(lambda: browser.execute('return document.querySelector("#quota_history_back").hidden && !!document.querySelector("#quota_history_plot svg");'))
+                browser.execute('''closeModal();window.fetch=function(input,...args){if(!String(input).includes('/quota-history?'))return window.trendFetch.call(this,input,...args);
+                    const p=new URL(String(input),location.href).searchParams,start=Number(p.get('start')),end=Number(p.get('end'));
+                    return Promise.resolve(new Response(JSON.stringify({start_at:start,end_at:end,series:[
+                        {window_minutes:300,points:[{observed_at:start+(end-start)*.1,remaining_percent:88}]},
+                        {window_minutes:10080,points:[{observed_at:start+(end-start)*.1,remaining_percent:0}]},
+                        {window_minutes:43200,points:[{observed_at:end-60,remaining_percent:67}]}]}),{status:200,headers:{'Content-Type':'application/json'}}));};
+                    document.querySelector('#services [data-ui-action=account-quota-history]').click();''')
+                wait_for(lambda: browser.execute('return !!document.querySelector("#quota_history_plot svg");'))
+                assert browser.execute('return [...document.querySelectorAll("#quota_history_legend strong")].map(node=>node.textContent);') == ['88%','0%','67%']
+                assert browser.execute('return document.querySelectorAll("#quota_history_plot path[stroke]").length;') == 3
                 browser.execute('closeModal();window.fetch=window.trendFetch;delete window.trendFetch;')
                 cases.append({'language': language, 'theme': theme, 'width': width})
     browser.execute('closeModal();')

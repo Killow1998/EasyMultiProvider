@@ -33,6 +33,7 @@ pub mod official_registry;
 mod retry_after;
 pub use retry_after::parse as parse_retry_after;
 pub mod subscription_catalog;
+mod vertex;
 
 pub const MAX_UPSTREAM_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_UPSTREAM_ERROR_BYTES: usize = 4096;
@@ -186,8 +187,14 @@ impl From<StreamEvent> for StreamResponseEvent {
 #[derive(Debug)]
 enum StreamProjection {
     Chat(ChatStream),
+    Gemini {
+        source: vertex::gemini::Stream,
+        chat: ChatStream,
+    },
     Anthropic(AnthropicStream),
-    Responses { saw_terminal: bool },
+    Responses {
+        saw_terminal: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -208,13 +215,15 @@ pub struct ExternalStream {
     finished: bool,
     failure: Option<RouterError>,
     ids: ProjectionIds,
+    gemini: Option<vertex::GeminiContext>,
 }
 
 pub struct ExternalRouter<'a> {
     client: &'a HttpClient,
+    gemini_signatures: Option<std::sync::Arc<emp_state::gemini_signatures::GeminiSignatures>>,
 }
 
-/// Return Python-compatible concrete candidates for one frozen route.
+/// Return concrete candidates for one frozen route.
 ///
 /// A saved observation is trusted only when the endpoint, deployment and raw
 /// upstream model identities still match. This function never mutates saved
@@ -224,6 +233,16 @@ pub fn protocol_candidates(route: &ResolvedRoute) -> Vec<Protocol> {
         return vec![route.protocol];
     }
     let provider = route.provider.value();
+    if provider.contains_key("vertex") {
+        let model = route.upstream_model.as_str();
+        return vec![
+            if model.starts_with("anthropic/") || model.starts_with("claude-") {
+                Protocol::AnthropicMessages
+            } else {
+                Protocol::ChatCompletions
+            },
+        ];
+    }
     if provider.get("execution_backend").and_then(Value::as_str) == Some("claude_cli") {
         return vec![Protocol::AnthropicMessages];
     }
@@ -316,7 +335,7 @@ fn project_prepared_external_payload(
 ) -> Result<Value, RouterError> {
     let provider = route.provider.value();
     let portable_body = body_with_supported_effort(route, body);
-    match route.protocol {
+    let mut projected = match route.protocol {
         Protocol::Auto => Err(unresolved_protocol()),
         Protocol::ChatCompletions => {
             responses_to_chat(portable_body.as_ref(), &route.upstream_model).map_err(protocol_error)
@@ -338,7 +357,19 @@ fn project_prepared_external_payload(
             payload["model"] = Value::String(route.upstream_model.clone());
             Ok(payload)
         }
+    }?;
+    if provider.contains_key("vertex") {
+        if route.protocol == Protocol::AnthropicMessages {
+            projected
+                .as_object_mut()
+                .expect("projected object")
+                .remove("model");
+            projected["anthropic_version"] = Value::String("vertex-2023-10-16".to_owned());
+        } else if route.upstream_model.starts_with("gemini-") {
+            projected["model"] = Value::String(format!("google/{}", route.upstream_model));
+        }
     }
+    Ok(projected)
 }
 
 mod errors;
@@ -402,24 +433,7 @@ pub fn upstream_headers(
     protocol: Protocol,
     incoming: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, RouterError> {
-    let mut headers = BTreeMap::from([
-        ("Content-Type".to_owned(), "application/json".to_owned()),
-        ("Accept".to_owned(), "application/json".to_owned()),
-        ("User-Agent".to_owned(), format!("EMP/{EMP_VERSION}")),
-    ]);
-    if let Some(request_id) = incoming
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("x-emp-request-id"))
-        .map(|(_, value)| value)
-        .filter(|value| {
-            value.len() == 16
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        })
-    {
-        headers.insert("X-EMP-Request-ID".to_owned(), request_id.clone());
-    }
+    let mut headers = base_headers(incoming);
     let auth_mode = provider
         .get("auth_mode")
         .and_then(Value::as_str)
@@ -460,6 +474,28 @@ pub fn upstream_headers(
         }
     }
     Ok(headers)
+}
+
+fn base_headers(incoming: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut headers = BTreeMap::from([
+        ("Content-Type".to_owned(), "application/json".to_owned()),
+        ("Accept".to_owned(), "application/json".to_owned()),
+        ("User-Agent".to_owned(), format!("EMP/{EMP_VERSION}")),
+    ]);
+    if let Some(request_id) = incoming
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-emp-request-id"))
+        .map(|(_, value)| value)
+        .filter(|value| {
+            value.len() == 16
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+    {
+        headers.insert("X-EMP-Request-ID".to_owned(), request_id.clone());
+    }
+    headers
 }
 
 fn custom_tool_names(body: &Value) -> Vec<String> {

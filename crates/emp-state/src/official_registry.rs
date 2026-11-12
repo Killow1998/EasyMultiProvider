@@ -70,6 +70,24 @@ fn registry() -> Cow<'static, Map<String, Value>> {
     registry_from_path(path.as_deref())
 }
 
+/// Published text models are a reference catalog, not a check of account access.
+pub fn published_text_model_ids(provider_key: &str) -> Vec<String> {
+    let registry = registry();
+    registry
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|model| {
+            model["provider_key"] == provider_key
+                && model["output_modalities"]
+                    .as_array()
+                    .is_some_and(|modes| modes.iter().any(|mode| mode == "text"))
+        })
+        .filter_map(|model| model["model_id"].as_str().map(str::to_owned))
+        .collect()
+}
+
 pub fn identify_provider(provider: &Map<String, Value>) -> Option<String> {
     let registry = registry();
     identify_provider_in_registry(provider, &registry)

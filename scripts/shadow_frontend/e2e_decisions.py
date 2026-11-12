@@ -56,10 +56,32 @@ def main():
         browser = Browser(stack, root)
         browser.navigate(url.replace(base, frontend))
         browser.execute('openSettings();document.querySelector("[data-settings-category=external]").click();document.querySelector("[data-decision-open]").click();')
-        assert browser.execute('return document.getElementById("decision_provider").value==="" && document.getElementById("decision_api").disabled && document.getElementById("decision_model").disabled && !document.querySelector("#decision_provider safe");')
+        assert browser.execute('return document.getElementById("decision_provider").value==="" && document.getElementById("decision_model").disabled && !document.querySelector("#decision_provider safe");')
+        assert browser.execute('return !document.getElementById("decision_api").getClientRects().length && !document.getElementById("decision_model").getClientRects().length && document.getElementById("decision_endpoint").textContent.includes("/v1/decisions") && document.getElementById("decision_endpoint").textContent.includes("/v1/systemone");')
         assert browser.execute('return [...document.querySelectorAll("#decision_provider option")].map(option=>option.value);') == ['', 'openai', 'openrouter', 'typesafe']
         choose_service(browser, 'openrouter', 'openrouter')
         change(browser, 'decision_model', '~typesafe/jev-latest')
+        change(browser, 'decision_model', '@custom')
+        change(browser, 'decision_custom_model', 'draft-before-gateway')
+        browser.execute('document.querySelector("[data-decision-add-service]").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-ui-action=service-custom-api]");'))
+        assert browser.execute('return [...document.querySelectorAll("[data-ui-action=official-provider-choose]")].map(card=>card.dataset.provider);') == ['openai','openrouter']
+        browser.escape()
+        assert browser.execute('return document.getElementById("decision_custom_model").value==="draft-before-gateway" && document.querySelectorAll("[data-decision-add-service]").length===1;')
+        loaded_before_gateway = len(DecisionUpstream.catalogs)
+        browser.execute('document.querySelector("[data-decision-gateway]").click();')
+        wait_for(lambda: browser.execute('return !!document.getElementById("gateway_key");'))
+        browser.execute('document.querySelector("[data-gateway-devices]").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-gateway-add]");'))
+        browser.execute('document.getElementById("modal_back").click();')
+        wait_for(lambda: browser.execute('return !!document.getElementById("gateway_key");'))
+        browser.execute('document.getElementById("modal_back").click();')
+        wait_for(lambda: browser.execute('return !!document.getElementById("decision_settings");'))
+        assert browser.execute('return document.getElementById("decision_provider").value==="openrouter" && document.getElementById("decision_model").value==="@custom" && document.getElementById("decision_custom_model").value==="draft-before-gateway";')
+        assert not json.loads((root / 'config.json').read_text()).get('decision_provider')
+        assert len(DecisionUpstream.catalogs) == loaded_before_gateway
+        change(browser, 'decision_model', '~typesafe/jev-latest')
+        checks.append('Caller-selected service hides irrelevant controls and shows both endpoints; Gateway/device navigation preserves the unsaved model without saving or refetching it')
         loaded = len(DecisionUpstream.catalogs)
         browser.execute('const reopen=modalReturn();setLanguage("en");reopen();')
         wait_for(lambda: browser.execute('return !document.getElementById("decision_model").disabled;'))
@@ -148,7 +170,7 @@ def main():
         assert request(base + '/v1/decisions', body, gateway)[0] == 400
         assert request(base + '/v1/systemone', body, {**gateway, 'X-EMP-Provider':'typesafe'})[1]['model'] == 'jev-custom-alias'
         assert len(DecisionUpstream.calls) == 4
-        assert {item['id'] for item in request(base + '/v1/models', headers=gateway)[1]['data']} == {'openai/luna','openrouter/jev-router'}
+        assert {item['id'] for item in request(base + '/v1/models', headers=gateway)[1]['data']} == {'openai <safe>/luna','openrouter <safe>/jev-router'}
         checks.append('Clearing the default retains preferences and explicit calls; decision models stay out of the Codex picker while the Jev Router text model remains available')
         for path, sent_headers in DecisionUpstream.catalogs:
             service = path.split('/')[1]
@@ -158,6 +180,46 @@ def main():
                 assert path == '/openrouter/v1/models?output_modalities=decisions'
         assert request(base + '/api/decisions/models', {'provider':'openrouter','protocol':'openrouter'}, gateway)[0] == 401
         checks.append('Catalog reads use the configured service credentials and the OpenRouter decision filter; Gateway Key cannot access management discovery')
+
+        empty_root = root / 'first-use'
+        empty_root.mkdir()
+        empty_base, empty_url, _, _ = start_backend(stack, args.emp.resolve(), empty_root,
+            {'auto_enable_on_start':False},
+            {'PATH':'/usr/bin:/bin', 'HTTP_PROXY':'http://127.0.0.1:9', 'HTTPS_PROXY':'http://127.0.0.1:9',
+             'ALL_PROXY':'http://127.0.0.1:9', 'NO_PROXY':'127.0.0.1,localhost'})
+        if not args.embedded:
+            empty_frontend, _ = candidate_frontend(stack, empty_base, Path(__file__).resolve().parents[2] / 'crates/emp-app/web')
+            empty_url = empty_url.replace(empty_base, empty_frontend)
+        browser.navigate(empty_url)
+        browser.execute('openSettings("external");document.querySelector("[data-decision-open]").click();')
+        assert browser.execute('return document.querySelectorAll("#decision_provider option").length===1 && !document.getElementById("decision_model").getClientRects().length;')
+        _, shot = request(browser.base + '/screenshot')
+        (args.output / 'decisions-first-use.png').write_bytes(base64.b64decode(shot['value']))
+        browser.execute('document.querySelector("[data-decision-add-service]").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-ui-action=service-custom-api]");'))
+        assert browser.execute('return !document.querySelector("[data-ui-action=account-import-device]") && !document.querySelector("[data-ui-action=claude-local-choose]");')
+        browser.escape()
+        assert browser.execute('return !!document.getElementById("decision_settings");')
+        browser.execute('document.querySelector("[data-decision-add-service]").click();document.querySelector("[data-ui-action=service-custom-api]").click();')
+        wait_for(lambda: browser.execute('return !!document.getElementById("modal_provider_base");'))
+        browser.execute('document.getElementById("modal_provider_name").value="Decision test service";document.getElementById("modal_provider_base").value=arguments[0];document.getElementById("modal_provider_key").value="fixture-openrouter";document.getElementById("modal_submit").click();', f'http://127.0.0.1:{upstream.server_port}/openrouter/v1')
+        wait_for(lambda: browser.execute('return !!document.getElementById("decision_settings") && !document.getElementById("decision_model").disabled;'))
+        created = next(provider for provider in browser.api('/api/config')['providers'] if provider['name']=='Decision test service')
+        assert browser.execute('return document.getElementById("decision_provider").value;',) == created['id']
+        assert not browser.api('/api/config').get('decision_provider')
+        change(browser, 'decision_model', '~typesafe/jev-latest')
+        browser.execute('document.getElementById("modal_submit").click();')
+        wait_for(lambda: browser.execute('return !document.getElementById("decision_settings");'))
+        assert browser.api('/api/config')['decision_provider'] == created['id']
+        checks.append('First-time Decision setup opens the API-only chooser, returns on cancel, creates a real synthetic service and selects it without saving the decision until explicit Save')
+        browser.execute('openServiceChooser();')
+        assert browser.execute('return !!document.querySelector("[data-ui-action=account-import-device]") && !!document.querySelector("[data-ui-action=claude-local-choose]");')
+        browser.execute('document.querySelector("[data-ui-action=service-custom-api]").click();')
+        wait_for(lambda: browser.execute('return !!document.getElementById("modal_provider_base");'))
+        browser.execute('document.getElementById("modal_provider_name").value="Ordinary API";document.getElementById("modal_provider_base").value=arguments[0];document.getElementById("modal_provider_key").value="fixture-openrouter";document.getElementById("modal_submit").click();', f'http://127.0.0.1:{upstream.server_port}/openrouter/v1')
+        wait_for(lambda: browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");'))
+        assert browser.api('/api/config')['decision_provider'] == created['id']
+        checks.append('Ordinary Add service retains subscription/Claude/API choices and closes after saving; the Decision return callback does not leak into later flows')
 
         if args.shadow_url:
             browser.navigate(args.shadow_url)

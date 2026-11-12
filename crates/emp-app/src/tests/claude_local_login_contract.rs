@@ -731,7 +731,7 @@ exit 3
             .as_array()
             .unwrap()
             .iter()
-            .any(|m| m["id"] == "local/model-alias")
+            .any(|m| m["id"] == "Local Claude/model-alias")
     );
     std::fs::write(&models_unavailable, b"unavailable").unwrap();
     let failed = post(

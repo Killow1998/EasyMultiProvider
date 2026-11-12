@@ -556,6 +556,136 @@ The real server test also fetches the page's referenced assets before login.
 
 #### Frontend development and acceptance
 
+`catalog-display.js` owns model-directory rendering, search, display-name editing
+and readable source/model labels. It reads the current management snapshot through
+`getState` and exposes operations to the page's existing event bindings. Rendering
+does not initialize or mutate presentation settings. The module owns its context
+preference save state; request failures retain the existing rollback and notice.
+The fixed page controls and normalized catalog fields follow their API/DOM
+contracts instead of repeating shape/existence checks at each render.
+
+Gemini's native stream adapter and Chat projector form one `StreamProjection`
+variant. Other protocols cannot carry a detached Gemini adapter; completion,
+termination and tool-signature handling retain their existing owners.
+
+`emp-state/config/service_names.rs` owns name-conflict checks and retained
+account/provider names for both configuration saves and migration imports.
+`route_aliases.rs` owns published route names and resolution.
+Catalog publication uses that resolver once for every proposed readable name;
+persisted route IDs and former names retain their existing precedence.
+New names cannot contain `/`. Validation includes newly imported historical
+names and changed subscription prefixes, preventing them from taking another
+service's route. Unchanged legacy names remain readable. Partial updates do not
+insert a null account list while preserving names. Model management disables
+Refresh during its initial catalog read, then permits an explicit fresh read.
+Catalog publication, ETags and runtime observation share the application-level
+`client_catalog` projection. Both pending and verified runtime expectations use
+its published IDs. Presentation keys accept the same `@` version separator as
+model IDs. Vertex file uploads capture their original form and inputs; a completed
+read applies only while that form remains current.
+
+Local acceptance on **2026-11-12 UTC**, using the unreleased 0.13.29-based tree:
+
+- Six route-alias and seven migration-import contracts cover retained names,
+  identity conflicts and rollback. Four router Vertex contracts and three
+  application contracts cover tools, separated reasoning, OAuth refresh and
+  persisted signatures across restart. Storage failures use standard I/O errors;
+  the router retains its sanitized public error messages.
+- `e2e_external_aliases.py` uses the installed **Codex 0.167.0** with a synthetic
+  upstream. Fifteen upstream requests cover canonical/readable HTTP, SSE and
+  WebSocket routes, Unicode names, renamed-provider/subscription/aggregate
+  conversations and Local Key catalog visibility, without duplicate dispatch.
+- Browser checks cover directory search and context preference persistence,
+  Vertex credential changes, 400-model management, aggregate/gateway actions in
+  both languages, ten navigation cases and 64 delayed-dialog outcomes. Migration
+  navigation covers import/export/tunnel state, timeout/retry, duplicate names,
+  identity merging and delayed commit completion. Model and chart fixtures supply
+  the required route metadata and bucket duration.
+- Workspace library Clippy passes with warnings denied. Rust formatting,
+  changed JavaScript/Python syntax and whitespace checks pass. These runs use
+  isolated temporary state and synthetic upstreams; they do not certify live
+  providers or Windows/macOS packages.
+
+Follow-up rescan on **2026-11-12, 12:59 UTC**, using the same unreleased tree:
+
+- All 169 state tests passed. The final focused run passed eight route-name,
+  eight configuration-merge and seven migration-import contracts. A changed
+  subscription prefix reproduced a collision before the fix and was rejected
+  afterward. Earlier HTTP evidence also reproduced an existing route changing
+  from 200 to 404 after a conflicting historical-name import.
+- The expanded application-library run initially had 358 passing, nine failing
+  and 20 ignored tests. All nine failing cases passed focused reruns: catalog
+  tests now expect published display names, account fixtures use unique names,
+  and the Local Key startup fixture supplies an external model. The SSE and
+  retry cases passed unchanged in isolated reruns. The complete application
+  library was not rerun after these corrections.
+- The 12 frontend contracts passed after supplying their required display-name
+  dependencies. Browser E2E passed model refresh during initial loading, Vertex
+  forms and migration navigation. Codex 0.167.0 completed 15 synthetic-upstream
+  requests for readable and historical routes; public config endpoints rejected
+  slash names and conflicting historical imports. No live provider was called.
+- Workspace library Clippy with warnings denied, Rust formatting and the
+  isolated debug build passed. Production EMP was not restarted.
+
+Review-fix verification on **2026-11-12 UTC**, using the same unreleased
+0.13.29-based tree:
+
+- Before the fixes, focused contracts reproduced Vertex connection overwrites,
+  dropped provider aliases, rejected versioned presentation keys and missing
+  runtime catalog recognition. A real browser reproduced a delayed file read
+  overwriting the next form's credential draft.
+- After the fixes, all 172 state tests, 15 authenticated management HTTP
+  contracts and two startup/sideband contracts passed. Vertex migration covers
+  API keys and service accounts across changed project, location or auth mode,
+  and confirms identical connections still merge. The external import contract
+  saves and reloads encrypted configuration before resolving every old name.
+- Browser acceptance passed current-form file reads, navigation and closure
+  during pending reads, and saving a versioned Claude display name. The shared
+  Codex control-socket contract now recognizes a published service name that
+  differs from its internal ID. Strict workspace library Clippy passed.
+  All fixtures use synthetic credentials; no live Vertex request was made.
+- The installed Codex 0.167.0 completed the 15-request readable/historical-route
+  regression without duplicate dispatch. Migration browser acceptance passed
+  import/export/tunnel navigation, delayed previews and commits, and identity
+  merging in both languages and themes.
+
+Additional Vertex review verification on **2026-11-12 UTC**, using the same
+unreleased 0.13.29-based tree:
+
+- Before the fixes, targeted contracts reproduced duplicate-name failure on ADC
+  reimport, missing thought-only output counts and a missing reported Gemini
+  version. Browser acceptance reproduced the built-in GLM form failing to save.
+- After the fixes, nine migration contracts and six router Vertex contracts
+  passed. The migration identity matrix includes keyless ADC as well as API keys
+  and service accounts. Gemini covers missing usage, explicit zero, thought-only
+  output, combined output, and model-version-only streaming frames.
+- Two TLS-backed application contracts passed. Complete and streaming Gemini
+  requests ending at `MAX_TOKENS` persist seven reported thought tokens as output
+  and retain the reported model version in `/api/calls`. The signature/restart
+  contract also passed. Two environment-dependent Vertex contracts remained
+  ignored in this run; no live Google credentials were used.
+- Browser acceptance passed GLM preset creation and the existing Vertex forms,
+  credential navigation and versioned-name saves. Strict workspace library
+  Clippy, formatting and the isolated debug build passed.
+
+Release close-out on **2026-11-12 UTC**, using the **0.14.0** candidate:
+
+- Gemini streaming now keeps its native adapter and Chat projector in one
+  protocol variant. Removing the detached optional adapter preserves normal,
+  terminal, error and signature behavior without an impossible-state assertion.
+  Catalog rendering reads one management snapshot and trusts its normalized
+  collection fields; startup still handles an unavailable snapshot.
+- Local checks passed 77 router tests, 28 state contracts, 33 application
+  contracts and 26 frontend checks. Nine browser/Codex E2E groups cover Vertex,
+  model management, delayed dialogs, migration, Local Key login, gateway and
+  aggregates, routing, review navigation and readable aliases.
+- The two previously ignored Vertex contracts were run explicitly with isolated
+  state: installed Codex **0.167.0** completed the real tool round trip, and ADC
+  OAuth renewal retained Gemini/Claude routing. Upstreams and credentials were
+  synthetic. Strict workspace/all-target Clippy and formatting passed.
+- `dev/agy` remains unchanged. Its separate native-login follow-up is excluded
+  from this candidate. Production EMP and active sessions are not replaced.
+
 Settings opens three category cards. General contains display preferences,
 startup and gateway connection. External services contains cross-service
 collaboration, web search and decision models. Native services contains background
@@ -1502,12 +1632,15 @@ retired-entry removal and language-specific release notes. Deployment of the new
 backend metadata capture is separate from reloading the read-only shadow server.
 
 
-### Identity-first import and localized error delivery (2026-10-12)
+### Identity-first import and localized error delivery (2026-10-12; updated 2026-11-12)
 
 Migration compares authenticated subscription identities independently of local ID
-collisions. API/OpenRouter/CPA records match by execution method, exact base URL
-and a verified nonempty API key; existing and earlier incoming connections can be
-reused. Different or unverifiable connections remain separate. References, model
+collisions. API/OpenRouter/CPA records match by execution method, authentication
+mode, exact base URL and a verified nonempty API key. Vertex connections also
+match project and location. Keyless ADC connections match this configuration and
+use the destination host's ADC credentials. Existing and earlier incoming
+connections can be reused. Different or unverifiable connections remain separate.
+Replacing an existing provider retains its published names and aliases. References, model
 routes, private keys and display settings follow the existing mapping. Names never
 prove identity. A local Claude login has no comparable migration credential in this
 path, so an unverified login is not automatically merged by mailbox or label.

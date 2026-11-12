@@ -343,6 +343,12 @@ control changes catalog labels, not context windows or request limits.
 
 Developers can verify frontend changes with [Shadow](scripts/shadow_frontend/README.md), which defaults to read-only management data and candidate accounting over isolated snapshots of real usage. Synthetic demos require an explicit selection. Review controls and simulated failures are not included in the normal management page.
 
+### Vertex AI
+
+Choose **Add service → Vertex AI** and select an authentication method. EMP uses a Google Cloud API key for Gemini; leave the project ID empty to use Vertex AI Express, or use a key bound to a service account with a project. Google Cloud Application Default Credentials (ADC) or a service-account JSON file support both Gemini and Claude and require a project ID and location. Enable Vertex AI and grant the project access to the models you use.
+
+API key mode uses EMP's reference catalog of Google models; test a selection to check access in your project and location. ADC and service-account mode retrieve the catalog from Google. ADC uses the system account running EMP; restart EMP after changing its local ADC. EMP encrypts imported service-account JSON in its credential store.
+
 ## Codex compatibility
 
 Maintenance targets the latest five stable Codex minor series: the latest stable
@@ -396,15 +402,19 @@ launcher when your active work permits it. There is no background polling.
 ## Web UI
 
 - **Services** — add subscriptions and API Providers. Click a service badge for
-  its settings, lifetime model usage, alias, quota resets or removal.
+  its settings, lifetime model usage, alias, quota resets or removal. Use a
+  distinct name for each service; re-importing the same subscription updates
+  the existing account. Existing conversations can still use a former name.
 - **Models** — reuse saved model lists and import, test, edit, hide or remove models.
 - **Model display** — arrange the names and context labels shown in Codex.
 - **Header controls** — enable EMP or restore native settings, and open
   Performance, Usage and Settings.
 
 The header **Settings** button groups automatic activation, Codex web search for
-external models, and **Routing settings**. Auto Review can use another subscription
-when Native runs out of quota. Image generation and editing can follow the
+external models, and routing. Open **Settings → Native services → Image, Auto Review and memory routing**. Auto Review can use another subscription
+when Native runs out of quota or uses Free/Go. Free and Go subscriptions are
+excluded from Auto Review; a missing eligible subscription produces an error.
+Image generation and editing can follow the
 conversation (the default), use a specific subscription, or automatically select
 an available account. Automatic image selection considers shared and image limits;
 server-side image references stay with their original account. Saved choices are retained.

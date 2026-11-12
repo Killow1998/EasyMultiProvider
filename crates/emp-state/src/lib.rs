@@ -7,6 +7,7 @@ pub mod discovery_merge;
 pub mod fernet;
 pub mod filesystem;
 pub mod gateway_key;
+pub mod gemini_signatures;
 pub mod lock;
 pub mod migration;
 pub mod model_values;

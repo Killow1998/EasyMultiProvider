@@ -97,7 +97,11 @@ fn startup_activates_a_clean_native_configuration_by_default_and_respects_opt_ou
         let catalog = root.join("catalog.json");
         std::fs::write(&catalog, br#"{"models":[{"slug":"example-native","visibility":"list","supported_in_api":true}]}"#).unwrap();
         let config = root.join("config.json");
-        let mut configuration = json!({"native_catalog_path":catalog});
+        let mut configuration = json!({
+            "native_catalog_path":catalog,
+            "providers":[{"id":"fixture","name":"Fixture","base_url":"https://example.invalid/v1","protocol":"responses"}],
+            "models":[{"id":"fixture/model","provider":"fixture","upstream_id":"model"}]
+        });
         if let Some(enabled) = enabled {
             configuration["auto_enable_on_start"] = json!(enabled);
         }

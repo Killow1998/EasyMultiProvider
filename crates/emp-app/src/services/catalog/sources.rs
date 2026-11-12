@@ -10,6 +10,7 @@ pub(crate) struct CatalogSources {
     accounts: BTreeMap<String, Value>,
     duplicates: BTreeMap<String, String>,
     native_plan: Option<String>,
+    native_is_local_key: bool,
 }
 
 impl CatalogSources {
@@ -43,6 +44,9 @@ impl CatalogSources {
         }
         let native_auth = native_auth_document(&state.backend.accounts.native_auth_path);
         let duplicates = emp_state::duplicate_account_status(native_auth.as_ref(), &credentials);
+        let native_is_local_key = native_auth
+            .as_ref()
+            .is_some_and(emp_integration::local_auth::is_local);
         let native_plan = state
             .backend
             .accounts
@@ -59,16 +63,21 @@ impl CatalogSources {
             accounts,
             duplicates,
             native_plan,
+            native_is_local_key,
         }
     }
 
     pub(super) fn merged(&self, config: &Value) -> Value {
-        emp_codex::merged_catalog::build_catalog(
+        let mut catalog = emp_codex::merged_catalog::build_catalog(
             config,
             &self.native,
             &self.accounts,
             &self.duplicates,
-        )
+        );
+        if self.native_is_local_key {
+            emp_codex::merged_catalog::hide_native_models(&mut catalog, &self.native);
+        }
+        catalog
     }
 
     pub(super) fn public_configuration(
@@ -107,6 +116,7 @@ impl CatalogSources {
             &self.native,
             &self.accounts,
             &self.duplicates,
+            self.native_is_local_key,
         );
         public
             .as_object_mut()

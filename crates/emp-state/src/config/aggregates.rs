@@ -2,6 +2,21 @@ use super::{ConfigError, ConfigResult};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+pub(super) fn source_family<'a>(models: &'a [Value], source: &'a str) -> &'a str {
+    models
+        .iter()
+        .find(|model| model["id"] == source)
+        .and_then(|model| {
+            ["family_id", "upstream_id"].into_iter().find_map(|field| {
+                model[field]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            })
+        })
+        .unwrap_or_else(|| source.rsplit('/').next().expect("source"))
+}
+
 pub(super) fn normalize(raw: Option<&Value>, models: &[Value]) -> ConfigResult<Value> {
     let Some(raw) = raw else {
         return Ok(json!([]));
@@ -66,23 +81,28 @@ pub(super) fn normalize(raw: Option<&Value>, models: &[Value]) -> ConfigResult<V
         }
         if name_key == "name_prefix" {
             let source = sources[0].as_str().expect("normalized source");
-            let family = models
-                .iter()
-                .find(|model| model["id"] == source)
-                .and_then(|model| {
-                    ["family_id", "upstream_id"].into_iter().find_map(|field| {
-                        model[field]
-                            .as_str()
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                    })
-                })
-                .unwrap_or_else(|| source.rsplit('/').next().expect("source"));
+            let family = source_family(models, source);
             if !prefixes.insert((family, name)) {
                 return Err(ConfigError::new("aggregate.duplicate_prefix"));
             }
         }
-        normalized.push(json!({"id":id,(name_key):name,"policy":policy,"sources":sources}));
+        let mut entry = json!({"id":id,(name_key):name,"policy":policy,"sources":sources});
+        if let Some(names) = group.get("route_names") {
+            let mut routes = Vec::new();
+            for route in names
+                .as_array()
+                .ok_or_else(|| ConfigError::new("aggregate.route_names must be an array"))?
+            {
+                let route = super::string_value(Some(route), "aggregate.route_names entry", true)?;
+                if !routes.contains(&route) {
+                    routes.push(route);
+                }
+            }
+            if !routes.is_empty() {
+                entry["route_names"] = json!(routes);
+            }
+        }
+        normalized.push(entry);
     }
     Ok(json!(normalized))
 }

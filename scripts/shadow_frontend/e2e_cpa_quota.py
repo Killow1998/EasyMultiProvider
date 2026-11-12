@@ -42,8 +42,9 @@ def main():
         assert status == 200 and result['observation']['error_code'] is None, result
         quota = result['observation']['quota']
         limits = quota['rate_limits_by_limit_id']['claude']
-        assert limits['primary']['used_percent'] == 40
+        assert limits['primary']['used_percent'] == 60
         assert limits['secondary']['used_percent'] == 80
+        assert quota['accounts'][1]['windows']['five_hour']['remaining_percent'] == 40
         assert limits['primary']['resets_at'] == upstream.started_at+3600
         assert limits['secondary']['resets_at'] == upstream.started_at+172800
         assert len(quota['accounts']) == 5 and 'upstream-only-private' not in json.dumps(result)
@@ -53,7 +54,7 @@ def main():
         for route in ['/api/config', '/api/accounts']:
             metadata = request(base+route, headers=headers)[1]['provider_quotas']['pool']
             assert metadata['identity'] == result['identity'] and metadata['observation'] == result['observation']
-        checks.append('Real management API reuses the CPA Key, retains the URL prefix, averages only enabled fresh known values including zero, selects the nearest reset, omits extra upstream fields and caches reads')
+        checks.append('Real management API reuses the CPA Key, retains the URL prefix, counts weekly-exhausted accounts as zero in 5h availability while preserving individual values; averages only enabled fresh known values, selects the nearest reset, omits extra upstream fields and caches reads')
 
         history_url = base+'/api/providers/pool/quota-history?'+f'start={upstream.started_at-7200}&end={upstream.started_at+60}'
         assert request(history_url)[0] == 401
@@ -67,10 +68,10 @@ def main():
         upstream.quota['accounts'][0]['windows']['five_hour']['remaining_percent'] = 78.2
         upstream.quota['accounts'][0]['windows']['seven_day']['remaining_percent'] = 39
         fractional = request(endpoint, {'force': True}, headers)[1]['observation']['quota']
-        assert fractional['rate_limits_by_limit_id']['claude']['primary']['used_percent'] == 40.9
+        assert fractional['rate_limits_by_limit_id']['claude']['primary']['used_percent'] == 60.9
         history = request(history_url, headers=headers)[1]
         pool = next(series for series in history['series'] if series['limit_id']=='claude' and series['window_minutes']==300)
-        assert [point['remaining_percent'] for point in pool['points']] == [60,59.1]
+        assert [point['remaining_percent'] for point in pool['points']] == [40,39.1]
         assert all(len(series['points'])==2 for series in history['series'])
         assert all(series['window_minutes'] in [300,10080] for series in history['series'])
         history_calls = len(upstream.calls)
@@ -91,16 +92,16 @@ def main():
                 assert request(browser.base+'/actions', {'actions': [{'type': 'pointer', 'id': 'mouse',
                     'parameters': {'pointerType': 'mouse'}, 'actions': [{'type': 'pointerMove', 'duration': 150, **position}]}]})[0] == 200
             wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden;'))
-            assert browser.execute('return [...document.querySelectorAll("[data-service=\\"provider:pool\\"] .presentation-ring-value")].map(node=>node.textContent).join(",")==="60%,20%" && document.getElementById("shadow_feedback").textContent.includes("79%");')
+            assert browser.execute('return [...document.querySelectorAll("[data-service=\\"provider:pool\\"] .presentation-ring-value")].map(node=>node.textContent).join(",")==="40%,20%" && document.getElementById("shadow_feedback").textContent.includes("79%");')
             (args.output/('pool-'+language+'.png')).write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
             browser.execute('document.querySelector("[data-ui-action=provider-quota-history][data-id=pool]").click();')
-            wait_for(lambda: browser.execute('return document.querySelector("#quota_history_plot svg") && document.getElementById("quota_history_legend").textContent.includes("60%");'))
+            wait_for(lambda: browser.execute('return document.querySelector("#quota_history_plot svg") && document.getElementById("quota_history_legend").textContent.includes("40%");'))
             assert browser.execute('return document.getElementById("quota_history_account").value==="claude" && document.querySelectorAll("#quota_history_account option").length===6;')
             (args.output/('trend-pool-'+language+'.png')).write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
             browser.execute('quotaDisplay.set("used");quotaHistory.redraw();')
-            assert browser.execute('return document.getElementById("quota_history_legend").textContent.includes("41%");')
+            assert browser.execute('return document.getElementById("quota_history_legend").textContent.includes("61%");')
             browser.execute('quotaDisplay.set("remaining");quotaHistory.redraw();')
-            browser.execute('const select=document.getElementById("quota_history_account");select.value="account:account-alpha";select.dispatchEvent(new Event("change",{bubbles:true}));document.querySelector("[data-window=\\"10080\\"]").click();')
+            browser.execute('const select=document.getElementById("quota_history_account");select.value="account:account-alpha";select.dispatchEvent(new Event("change",{bubbles:true}));')
             assert browser.execute('return document.getElementById("quota_history_legend").textContent.includes("39%");')
             (args.output/('trend-account-'+language+'.png')).write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
             browser.execute('quotaDisplay.set("used");quotaHistory.redraw();')
@@ -124,11 +125,11 @@ def main():
             checks.append(f'{language}: CPA connection form exposes quota integration help and the operator contract without changing connection settings')
         browser.execute('document.body.dataset.quotaStyle="bar";renderServices();document.querySelector("[data-service=\\"provider:pool\\"] .service-quota").focus();')
         wait_for(lambda: browser.execute('return !document.getElementById("shadow_feedback").hidden;'))
-        assert browser.execute('return [...document.querySelectorAll("[data-service=\\"provider:pool\\"] .quota-value")].map(node=>node.textContent).join(",")==="60%,20%";')
+        assert browser.execute('return [...document.querySelectorAll("[data-service=\\"provider:pool\\"] .quota-value")].map(node=>node.textContent).join(",")==="40%,20%";')
         (args.output/'pool-bars.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
         browser.execute('quotaDisplay.set("used");renderServices();document.querySelector("[data-service=\\"provider:pool\\"] .service-quota").focus();')
         wait_for(lambda: browser.execute('return document.getElementById("shadow_feedback").textContent.includes("22%");'))
-        assert browser.execute('return [...document.querySelectorAll("[data-service=\\"provider:pool\\"] .quota-value")].map(node=>node.textContent).join(",")==="41%,81%";')
+        assert browser.execute('return [...document.querySelectorAll("[data-service=\\"provider:pool\\"] .quota-value")].map(node=>node.textContent).join(",")==="61%,81%";')
         browser.execute('quotaDisplay.set("remaining");renderServices();')
         assert len(upstream.calls) == history_calls
         checks.append('Production Chinese/English rings, bars, per-account hover and trend percentages round upward after remaining/used conversion, while raw history retains fractional precision; no extra quota queries')
@@ -174,6 +175,16 @@ def main():
         assert request(base+'/api/calls', headers=headers)[1]['records'] == []
         assert upstream.model_calls == 0
         checks.append('Changing the CPA Key invalidates its quota cache; quota reads create no inference records and make zero model calls')
+        upstream.quota['accounts'][0]['windows']['seven_day']['remaining_percent'] = 0
+        exhausted = request(endpoint, {'force': True}, headers)[1]['observation']['quota']
+        assert exhausted['rate_limits_by_limit_id']['claude']['primary']['used_percent'] == 100
+        assert exhausted['accounts'][0]['windows']['five_hour']['remaining_percent'] == 78.2
+        upstream.quota['accounts'][0]['windows']['seven_day']['remaining_percent'] = 39
+        upstream.quota['accounts'][1]['windows']['seven_day']['remaining_percent'] = 1
+        recovered = request(endpoint, {'force': True}, headers)[1]['observation']['quota']
+        assert recovered['rate_limits_by_limit_id']['claude']['primary']['used_percent'] == 40.9
+        upstream.quota['accounts'][1]['windows']['seven_day']['remaining_percent'] = 0
+        checks.append('Weekly exhaustion makes every affected 5h pool contribution zero without changing individual 5h observations; recovery restores its contribution')
         guide=(Path(__file__).resolve().parents[2]/'docs/usage-accounting.md').read_text()
         example=json.loads(re.search(r'```json\n(.*?)\n```',guide.split('### CPA operator integration',1)[1],re.S)[1])
         saved_quota=upstream.quota
@@ -181,9 +192,9 @@ def main():
         documented=request(endpoint,{'force':True},headers)[1]['observation']
         assert documented['error_code'] is None
         limits=documented['quota']['rate_limits_by_limit_id']['claude']
-        assert limits['primary']['used_percent']==40 and limits['secondary']['used_percent']==80
+        assert limits['primary']['used_percent']==60 and limits['secondary']['used_percent']==80
         upstream.quota=saved_quota
-        checks.append('The documented CPA JSON example is accepted by the production endpoint and produces the stated 60%/20% summary')
+        checks.append('The documented CPA JSON example is accepted by the production endpoint and produces the stated 40%/20% usable summary')
         (root/'background/state').mkdir(parents=True)
         shutil.copy2(state_root/'quota_history.sqlite3', root/'background/state/quota_history.sqlite3')
         configuration['providers'][0]['enabled'] = True

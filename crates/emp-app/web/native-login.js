@@ -17,17 +17,17 @@ function createNativeLogin({onImported}) {
     $('modal_body').querySelector('[data-native-method=subscription]').onclick=()=>open({back:parent});
     $('modal_body').querySelector('[data-native-method=local_key]').onclick=()=>openLocalKey({back:parent});
     $('modal_body').querySelector('[data-native-method=api_key]').onclick=()=>{
-      openModal(tr('login.api_key'),`<p>${tr('login.api_key_help')}</p><label>${tr('login.api_key')}<input id="native_api_key" type="password" autocomplete="new-password" required></label><p class="muted">${tr('login.native_help')}</p>`,tr('login.apply_method'),()=>saveCredential('use-api-key',{api_key:$('native_api_key').value}),null,{back:parent});
+      openModal(tr('login.api_key'),`<p>${tr('login.api_key_help')}</p><label>${tr('login.api_key')}<input id="native_api_key" type="password" autocomplete="new-password" required></label><p class="muted">${tr('login.native_help')}</p>`,tr('login.apply_method'),()=>saveCredential('use-api-key',{api_key:$('native_api_key').value},$('native_api_key')),null,{back:parent});
       $('native_api_key').focus();
     };
     $('modal_body').querySelector('[data-native-method=other]').onclick=()=>{
-      openModal(tr('login.existing_other'),`<p>${tr('login.existing_other_help')}</p><label>${tr('login.select_other')}<select id="native_other_account">${other.map(account=>`<option value="${esc(account.id)}">${esc(account.name||account.id)}</option>`).join('')}</select></label><p class="muted">${tr('login.native_help')}</p>`,tr('login.apply_method'),()=>saveCredential('use-account',{account_id:$('native_other_account').value}),null,{back:parent});
+      openModal(tr('login.existing_other'),`<p>${tr('login.existing_other_help')}</p><label>${tr('login.select_other')}<select id="native_other_account">${other.map(account=>`<option value="${esc(account.id)}">${esc(account.name||account.id)}</option>`).join('')}</select></label><p class="muted">${tr('login.native_help')}</p>`,tr('login.apply_method'),()=>saveCredential('use-account',{account_id:$('native_other_account').value},$('native_other_account')),null,{back:parent});
     };
   }
-  async function saveCredential(operation,body) {
+  async function saveCredential(operation,body,owner) {
     try {
       const result=await api('/api/native/login/'+operation,{method:'POST',body:JSON.stringify(body)});
-      state=await api('/api/config');fill();closeModal();notice(tr(result.integration_updated?'login.credential_saved':'login.credential_integration_failed'),!result.integration_updated);
+      state=await api('/api/config');fill();if(owner.isConnected)closeModal();notice(tr(result.integration_updated?'login.credential_saved':'login.credential_integration_failed'),!result.integration_updated);
     } catch(error) {
       const key='login.'+(error.payload?.error?.code||error.message);
       throw new Error(tr(key)===key?error.message:tr(key));
@@ -43,7 +43,7 @@ function createNativeLogin({onImported}) {
       button.disabled=true;
       try {
         const result=await api('/api/native/login/use-local-key',{method:'POST',body:JSON.stringify({account_action:subscription?owner.querySelector('[name=native_key_action]:checked').value:'remove'})});
-        state=await api('/api/config');fill();closeModal();notice(tr(result.integration_updated?'login.switch_done':'login.switch_integration_failed'),!result.integration_updated);
+        state=await api('/api/config');fill();if(owner.isConnected)closeModal();notice(tr(result.integration_updated?'login.switch_done':'login.switch_integration_failed'),!result.integration_updated);
       } catch(error) {
         if(owner.isConnected){const key='login.'+(error.payload?.error?.code||error.message);$('modal_status').textContent=tr(key)===key?error.message:tr(key);button.disabled=false;}
       }
@@ -69,7 +69,7 @@ function createNativeLogin({onImported}) {
     owner.node.querySelector('[data-native-login-start]').onclick=()=>run(owner,'start');
     owner.node.querySelector('[data-native-key-remove]')?.addEventListener('click',async()=>{
       if(!confirm(tr('login.remove_confirm')))return;
-      try {await api('/api/native/login/cancel',{method:'POST',body:'{}'});await api('/api/integration/restore',{method:'POST',body:JSON.stringify({confirm_reload:true})});state=await api('/api/config');fill();closeModal();notice(tr('login.removed'));}
+      try {await api('/api/native/login/cancel',{method:'POST',body:'{}'});await api('/api/integration/restore',{method:'POST',body:JSON.stringify({confirm_reload:true})});state=await api('/api/config');fill();if(active(owner))closeModal();notice(tr('login.removed'));}
       catch(error){if(active(owner))$('modal_status').textContent=error.message;}
     });
     selectDestination();

@@ -70,6 +70,7 @@ fn aggregate_default_name_matches_the_selected_external_model_family() {
         &native,
         &BTreeMap::new(),
         &BTreeMap::new(),
+        false,
     );
     let family = views["catalog_families"]
         .as_array()
@@ -85,7 +86,69 @@ fn aggregate_default_name_matches_the_selected_external_model_family() {
         .iter()
         .find(|entry| entry["slug"] == "auto/fixture")
         .unwrap();
-    assert_eq!(aggregate["display_name"], "autodeepseek");
+    assert_eq!(aggregate["display_name"], "auto · deepseek");
+}
+
+#[test]
+fn aggregate_picker_entries_follow_their_sources_and_keep_stable_routes() {
+    let native = json!({"models":[
+        {"slug":"gpt-6-astra","display_name":"Astra","visibility":"list","supported_in_api":true,"context_window":128000},
+        {"slug":"gpt-6.1-terra","display_name":"Terra","visibility":"list","supported_in_api":true,"context_window":128000}
+    ]});
+    let mut config = json!({
+        "catalog_show_context":false,
+        "accounts":[{"id":"zhou","prefix":"zhou","name":"zhou","auth_file":"fixture"}],
+        "catalog_family_presentations":{"gpt-6-astra":{"catalog_alias":"⭐"}},
+        "model_groups":[
+            {"id":"auto/first","name_prefix":"auto222","sources":["gpt-6-astra","zhou/gpt-6-astra"]},
+            {"id":"auto/second","name_prefix":"auto333","sources":["gpt-6-astra","zhou/gpt-6-astra"]},
+            {"id":"auto/legacy","name":"旧路由","sources":["gpt-6-astra","zhou/gpt-6-astra"]}
+        ]
+    });
+    let build = |config: &Value| build_catalog(config, &native, &BTreeMap::new(), &BTreeMap::new());
+    let catalog = build(&config);
+    let models = catalog["models"].as_array().unwrap();
+    let start = models
+        .iter()
+        .position(|model| model["slug"] == "gpt-6-astra")
+        .unwrap();
+    let sequence: Vec<_> = models[start..start + 5]
+        .iter()
+        .map(|model| {
+            (
+                model["slug"].as_str().unwrap(),
+                model["display_name"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sequence,
+        [
+            ("gpt-6-astra", "⭐"),
+            ("zhou/gpt-6-astra", "zhou · ⭐"),
+            ("auto/first", "auto222 · ⭐"),
+            ("auto/second", "auto333 · ⭐"),
+            ("auto/legacy", "旧路由")
+        ]
+    );
+    config["catalog_family_presentations"]["gpt-6-astra"]["catalog_alias"] = json!("☀");
+    config["model_groups"][1]["name_prefix"] = json!("");
+    let renamed = build(&config);
+    let models = renamed["models"].as_array().unwrap();
+    assert_eq!(
+        models
+            .iter()
+            .find(|model| model["slug"] == "auto/first")
+            .unwrap()["display_name"],
+        "auto222 · ☀"
+    );
+    assert_eq!(
+        models
+            .iter()
+            .find(|model| model["slug"] == "auto/second")
+            .unwrap()["display_name"],
+        "☀"
+    );
 }
 
 #[test]
@@ -121,8 +184,13 @@ fn ultra_override_preserves_the_harness_and_tracks_supported_subscription_effort
         emp_state::catalog_etag(&overridden),
         emp_state::catalog_etag(&baseline)
     );
-    let views =
-        emp_codex::management_views::model_views(&config, &native, &accounts, &BTreeMap::new());
+    let views = emp_codex::management_views::model_views(
+        &config,
+        &native,
+        &accounts,
+        &BTreeMap::new(),
+        false,
+    );
     for entry in views["catalog_models"].as_array().unwrap() {
         assert_eq!(
             entry["ultra_default_effort"],

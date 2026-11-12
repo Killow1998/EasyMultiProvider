@@ -1,4 +1,4 @@
-function createAggregateSettings({getState, cloneState, persistState, openModal, $, esc, tr, help}) {
+function createAggregateSettings({getState, cloneState, persistState, openModal, $, esc, tr, modelName, help}) {
   function modelFamilies() {
     const families = new Map();
     for (const model of getState().catalog_models || []) {
@@ -23,8 +23,17 @@ function createAggregateSettings({getState, cloneState, persistState, openModal,
     }
     $('modal_body').querySelectorAll('[data-aggregate-edit]').forEach(button => button.onclick = () => edit(back,Number(button.dataset.aggregateEdit)));
     $('modal_body').querySelectorAll('[data-aggregate-remove]').forEach(button => button.onclick = async () => {
-      const candidate = cloneState(); candidate.model_groups.splice(Number(button.dataset.aggregateRemove),1);
-      await persistState(tr('aggregate.saved'), candidate); open(back);
+      const controls=[...$('modal_body').querySelectorAll('button')].map(control=>[control,control.disabled]);
+      controls.forEach(([control])=>control.disabled=true);
+      try {
+        const candidate = cloneState(); candidate.model_groups.splice(Number(button.dataset.aggregateRemove),1);
+        await persistState(tr('aggregate.saved'), candidate);
+        if(button.isConnected)open(back);
+      } catch(error) {
+        if(button.isConnected)$('modal_status').textContent=error.message;
+      } finally {
+        controls.forEach(([control,disabled])=>control.disabled=disabled);
+      }
     });
   }
   function edit(back, index) {
@@ -41,20 +50,24 @@ function createAggregateSettings({getState, cloneState, persistState, openModal,
     </div>
     <fieldset class="login-choice-group aggregate-policy" id="aggregate_policy"><legend><span class="collaboration-title">${tr('aggregate.policy')} ${help(tr('aggregate.help'))}</span></legend><div class="choice-grid settings-choices">${['priority','balanced','round_robin'].map(value => `<label class="choice native-key-choice"><input type="radio" name="aggregate-policy" value="${value}" ${(group?.policy || 'priority') === value ? 'checked' : ''}><span><strong>${tr('aggregate.' + value)}</strong></span></label>`).join('')}</div></fieldset>
     <div class="section-tools"><strong>${tr('aggregate.sources_title')}</strong></div><div class="aggregate-sources" id="aggregate_sources"></div>`, tr('save_display'), async () => {
-      const sources = [...$('aggregate_sources').querySelectorAll('[data-aggregate-source]')].filter(row => row.querySelector('input').checked).map(row => row.dataset.aggregateSource);
+      const owner=$('aggregate_sources');
+      const sources = [...owner.querySelectorAll('[data-aggregate-source]')].filter(row => row.querySelector('input').checked).map(row => row.dataset.aggregateSource);
       const candidate = cloneState(), updated = {id, name_prefix:$('aggregate_prefix').value, policy:$('aggregate_policy').querySelector('input:checked').value, sources};
       candidate.model_groups ||= [];
       if (index === undefined) candidate.model_groups.push(updated); else candidate.model_groups[index] = updated;
       await persistState(tr('aggregate.saved'), candidate);
-      open(back);
+      if(owner.isConnected)open(back);
     }, null, {back:() => open(back)});
+    function previewName() {
+      $('aggregate_name').textContent = ($('aggregate_prefix').value ? '· ' : '') + ($('aggregate_family').selectedOptions[0]?.dataset.name || '');
+    }
     function sources() {
       const family = $('aggregate_family').value, available = families.get(family) || [];
       const chosen = group && family === selectedFamily ? group.sources : available.map(model => model.id);
       const ordered = [...chosen.map(id => available.find(model => model.id === id) || {id,unavailable:true}), ...available.filter(model => !chosen.includes(model.id))];
-      $('aggregate_name').textContent = $('aggregate_family').selectedOptions[0]?.dataset.name || '';
+      previewName();
       $('aggregate_sources').innerHTML = ordered.map(model => {
-        const label = model.source_type === 'native' ? tr('common.native') : (model.source_type === 'account' ? state.accounts : state.providers).find(source => source.id === model.source_id)?.name || model.display_name || model.id;
+        const label = model.source_type === 'native' ? tr('common.native') : (model.source_type === 'account' ? state.accounts : state.providers).find(source => source.id === model.source_id)?.name || (model.unavailable ? modelName(model.id) : model.display_name || modelName(model.id));
         return `<div class="setting-row aggregate-source" data-aggregate-source="${esc(model.id)}"><label><input type="checkbox" ${chosen.includes(model.id) ? 'checked' : ''}> <span>${esc(label)}${model.unavailable ? `<small class="muted"> · ${tr('aggregate.unavailable')}</small>` : ''}</span></label><div class="aggregate-actions"><button type="button" class="secondary" data-icon="chevron-right" data-source-up title="${esc(tr('aggregate.up'))}" aria-label="${esc(tr('aggregate.up'))}"></button><button type="button" class="secondary" data-icon="chevron-right" data-source-down title="${esc(tr('aggregate.down'))}" aria-label="${esc(tr('aggregate.down'))}"></button></div></div>`;
       }).join('');
       $('aggregate_sources').querySelectorAll('[data-source-up],[data-source-down]').forEach(button => button.onclick = () => {
@@ -64,6 +77,7 @@ function createAggregateSettings({getState, cloneState, persistState, openModal,
       });
     }
     $('aggregate_family').onchange = sources;
+    $('aggregate_prefix').oninput = previewName;
     sources();
   }
   return {open};

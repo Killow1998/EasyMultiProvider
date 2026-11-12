@@ -1,60 +1,43 @@
 # Usage accounting verification
 
-## Regressions
+## Current contracts
 
-`scripts/shadow_frontend/e2e_request_modes.py --emp /path/to/EMP --output /path/to/result.json`
-runs 77 synthetic requests through Native, imported subscriptions, external
-Responses and Chat Completions. It covers HTTP, SSE and Responses WebSocket,
-requested/confirmed tier mismatches, absent tier reports, metadata without usage,
-current-turn effort and Ultra versus reported `xhigh`. It checks persisted call
-details against model-group counts, verifies one upstream request per call, and
-opens the actual bilingual statistics UI. It uses disposable accounts and
-loopback endpoints, with no real provider calls.
+Run `scripts/shadow_frontend/e2e_request_modes.py --emp /path/to/EMP --output
+/path/to/result.json` against a candidate binary. It sends synthetic requests
+through Native, imported subscriptions, external Responses and Chat Completions,
+then opens the actual bilingual statistics UI. It covers HTTP, SSE and Responses
+WebSocket, requested versus reported speed tiers, missing usage, current-turn
+effort and Ultra versus reported `xhigh`. It checks persisted call details,
+model-group totals and upstream request counts. It uses disposable credentials
+and loopback endpoints, with no real provider calls. Its hand-written requests
+declare client version 0.167.0; it does not launch or require a Codex runtime.
 
-`crates/emp-state/tests/call_reports.rs` also verifies that confirmation survives
-reopening the ledger, while old unconfirmed speed labels change only in the read
-projection. Request observation and account-usage contracts cover the existing
-delivery and accounting behavior.
+The Rust accounting contracts are:
 
-`tests/test_usage_history.py` exercises repeated cumulative notifications,
-restart/append checkpoints, archive and fork copies, incomplete final lines,
-file replacement, history/live matching, cumulative fork baselines, unknown
-source attribution, inconsistent gateway totals, schema backup and transaction
-rollback. Fixtures contain no real conversation content or credentials.
+- `crates/emp-state/tests/call_reports.rs`: durable call details, history-recovery
+  linkage without duplicate usage, scan progress/cancellation, tier and effort
+  persistence, and exclusion of invalid historical TPS from generation averages.
+- `crates/emp-state/tests/account_usage.rs`: account ownership, periods and start
+  times; memory receipts reconciled once with rollout history; chart totals and
+  source filters; historical identity requiring a unique matching turn and route.
+- `crates/emp-app/src/tests/gateway_contract.rs`: device attribution, shared-key
+  callers and invalid report periods at the HTTP boundary.
+- `scripts/shadow_frontend/e2e_native_local_key.py`: changing Native credentials
+  retains account data and does not close a newer dialog when a save finishes.
 
-`tests/test_usage_ledger.py` verifies normalized token subsets, cache-write
-lifetimes, context/service price tiers, pending-price refresh, concurrent writes,
-response-ID deduplication, persistence and management API authentication.
+## Data flow
 
-## Ablation and simplification
+`crates/emp-state/src/usage/ledger.rs` owns persisted usage. Its report modules
+project calls, accounts, sessions and chart series from that ledger.
+`crates/emp-codex/src/usage_history.rs` reads Codex history and reconciles it with
+live receipts. Checkpoints skip unchanged files. Account identity and compatible
+turn metadata determine whether historical and live records refer to one call.
 
-Three temporary in-memory ablations were run against the same fixture tests:
+Reported zero and missing usage remain distinct. API-equivalent amounts are
+estimates; unpriced models do not become known zero-cost calls. The UI identifies
+partial pricing. Historical identities or prices absent from the original
+records cannot be reconstructed from token totals alone.
 
-| Disabled behavior | Observed regression |
-| --- | --- |
-| File checkpoints | Unchanged files were reread instead of skipped. |
-| Repeated cumulative guard | Repeated usage notifications increased the total. |
-| History/live matching | The same call was counted in both data sources. |
-
-All three baseline tests passed; each ablation failed the relevant assertion.
-These mechanisms were retained. The ablations did not modify production data
-or leave alternate implementations in the codebase.
-
-The scanner reuses Codex's existing turn-metadata reader and EMP's token/price
-normalization. It has one worker and one checkpoint store, without a scheduler
-framework, parser registry, or separate account-identity abstraction. Queries
-reconcile once into a temporary numeric projection shared by chart/table
-aggregation, instead of repeatedly sorting all historical events.
-
-## User-facing verification
-
-The actual browser was used with an isolated local configuration to verify
-Chinese/English labels, all-history selection, account-category filtering,
-day-to-hour drilldown, scan/refresh actions and the local-time range display.
-The browser reported no JavaScript errors during those flows.
-
-API-equivalent amounts are estimates. Historical prices and account identities
-cannot be reconstructed when the original records lack them. Matching requires
-Codex turn metadata and compatible usage fields; unmatched overlap is reported,
-not silently declared exact. Cross-platform package builds and updater smoke
-tests run in the release workflow; they do not replace real upstream testing.
+The release workflow checks package builds and updater startup. Those checks
+complement the request/accounting contracts; real provider behavior is tested
+separately with explicit account authorization.

@@ -103,7 +103,7 @@ def main():
         root = Path(temporary)
         stack.enter_context(patch.object(fixtures, 'response_events', events))
         stack.enter_context(patch.object(fixtures.Upstream, 'do_POST', post))
-        fixture = stack.enter_context(fixtures.Fixture(None, args.emp.resolve(), root/'fixture', root/'evidence'))
+        fixture = stack.enter_context(fixtures.Fixture(None, args.emp.resolve(), root/'fixture', root/'evidence', client_version='0.167.0'))
         fixture.import_account()
         headers = {**fixture.headers,'Content-Type':'application/json','Authorization':'Bearer fixture-only',
                    'chatgpt-account-id':'fixture-account'}

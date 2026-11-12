@@ -46,7 +46,9 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 flate2 = "1.1"
+rcgen = "0.14.10"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+rustls = "0.23"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }

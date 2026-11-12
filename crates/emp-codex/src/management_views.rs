@@ -1,4 +1,4 @@
-//! Credential-free model and family controls for the unchanged management UI.
+//! Credential-free model and family controls for the management UI.
 use crate::merged_catalog::{build_catalog, family_identity, strip_context_prefix, usable_context};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -40,8 +40,12 @@ pub fn model_views(
     native: &Value,
     account_catalogs: &BTreeMap<String, Value>,
     duplicates: &BTreeMap<String, String>,
+    native_is_local_key: bool,
 ) -> Value {
-    let catalog = build_catalog(config, native, account_catalogs, duplicates);
+    let mut catalog = build_catalog(config, native, account_catalogs, duplicates);
+    if native_is_local_key {
+        crate::merged_catalog::hide_native_models(&mut catalog, native);
+    }
     let mut baseline_config = config.clone();
     baseline_config["catalog_presentations"] = json!({});
     baseline_config["catalog_family_presentations"] = json!({});
@@ -109,8 +113,8 @@ fn catalog_models(config: &Value, native: &Value, catalog: &Value, baseline: &Va
             "source_type":kind, "source_id":source_id, "family_id":family_identity(source,fallback),
             "family_verified":verified,
             "reasoning_levels":reasoning_levels(model),
-            "ultra_reasoning_levels":if kind == "provider" { Vec::new() } else { crate::merged_catalog::ultra_reasoning_levels(model) },
-            "ultra_default_effort":if kind == "provider" { None } else { ultra_default_effort(original) },
+            "ultra_reasoning_levels":if matches!(kind, "provider" | "aggregate") { Vec::new() } else { crate::merged_catalog::ultra_reasoning_levels(model) },
+            "ultra_default_effort":if matches!(kind, "provider" | "aggregate") { None } else { ultra_default_effort(original) },
             "supports_reasoning_summaries":model.get("supports_reasoning_summary_parameter")==Some(&Value::Bool(true)),
         })
     }).collect()
@@ -154,7 +158,12 @@ fn ultra_default_effort(model: &Value) -> Option<&str> {
 pub fn catalog_families(config: &Value, models: &[Value]) -> Vec<Value> {
     let mut groups = Vec::<Value>::new();
     for model in models {
-        let family = nonempty(model, "family_id").unwrap_or(text(model, "id"));
+        let aggregate = text(model, "source_type") == "aggregate";
+        let family = if aggregate {
+            text(model, "id")
+        } else {
+            nonempty(model, "family_id").unwrap_or(text(model, "id"))
+        };
         let sources = match text(model, "source_type") {
             "provider" => array(config, "providers"),
             "account" => array(config, "accounts"),
@@ -165,7 +174,11 @@ pub fn catalog_families(config: &Value, models: &[Value]) -> Vec<Value> {
             .find(|item| text(item, "id") == text(model, "source_id"));
         let source_name =
             source.and_then(|item| nonempty(item, "name").or_else(|| nonempty(item, "prefix")));
-        let default = text(model, "default_display_name");
+        let default = if aggregate {
+            strip_context_prefix(text(model, "display_name"))
+        } else {
+            text(model, "default_display_name")
+        };
         let default = source_name
             .and_then(|name| default.strip_prefix(&format!("{name} · ")))
             .unwrap_or(default);

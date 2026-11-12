@@ -29,7 +29,7 @@ pub(super) fn provider(state: &ServerState, config: &Value, id: &str) -> Option<
 fn identity(provider: &Value) -> String {
     // Connection identity only; renaming a service keeps its saved model list.
     // Credentials are used in memory, and only the digest is stored on disk.
-    let fields: Vec<_> = [
+    let mut fields: Vec<_> = [
         "id",
         "base_url",
         "protocol",
@@ -41,6 +41,9 @@ fn identity(provider: &Value) -> String {
     .iter()
     .map(|key| &provider[*key])
     .collect();
+    if let Some(vertex) = provider.get("vertex") {
+        fields.push(vertex);
+    }
     format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&fields).expect("provider identity JSON"))

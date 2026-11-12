@@ -8,7 +8,15 @@ const PROVIDER_PROTOCOLS: [&str; 4] = [
     "chat_completions",
     "anthropic_messages",
 ];
-const PROVIDER_AUTH_MODES: [&str; 4] = ["api_key", "anthropic_api_key", "forward", "claude_login"];
+const PROVIDER_AUTH_MODES: [&str; 7] = [
+    "api_key",
+    "anthropic_api_key",
+    "forward",
+    "claude_login",
+    "vertex_adc",
+    "vertex_service_account",
+    "vertex_api_key",
+];
 const CAPABILITY_SOURCES: [(&str, f64); 7] = [
     ("official", 0.95),
     ("advertised", 0.75),
@@ -99,7 +107,8 @@ pub(super) fn safe_capability_identity(raw: Option<&Value>, field: &str) -> Conf
     let value = string_value(raw, field, false)?;
     let valid = value.len() <= 256
         && value.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '/' | ':' | '-')
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | '/' | ':' | '-' | '@')
         });
     if !value.is_empty() && !valid {
         return Err(ConfigError::new(format!(
@@ -586,7 +595,8 @@ fn broad_model_id(raw: Option<&Value>, field: &str) -> ConfigResult<String> {
     let value = string_value(raw, field, true)?;
     let valid = !value.is_empty()
         && value.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '/' | ':' | '-')
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | '/' | ':' | '-' | '@')
         });
     if !valid {
         return Err(ConfigError::new(format!(

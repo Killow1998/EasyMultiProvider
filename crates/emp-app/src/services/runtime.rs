@@ -1,6 +1,6 @@
 //! Runtime observations are separate from applied configuration and service health.
 use crate::app::ServerState;
-use crate::services::catalog::server_catalog;
+use crate::services::catalog::client_catalog;
 use emp_codex::runtime_probe::{RuntimeSyncResult, observe};
 use emp_integration::runtime::{RuntimeStore, offline_snapshot};
 use serde_json::{Value, json};
@@ -114,7 +114,7 @@ pub(crate) fn sync_runtime(
         .read()
         .map_err(|_| "configuration is unavailable".to_owned())?
         .clone();
-    let catalog = server_catalog(state, &config);
+    let catalog = client_catalog(state, &config);
     let catalog_ids = catalog["models"]
         .as_array()
         .into_iter()
@@ -236,7 +236,7 @@ pub(crate) fn helper_binary(
 
 pub(crate) fn mark_pending(state: &ServerState, target: &str, detail: &str) -> Result<(), ()> {
     let config = state.backend.configuration.read().map_err(|_| ())?.clone();
-    let catalog = server_catalog(state, &config);
+    let catalog = client_catalog(state, &config);
     let expected = catalog["models"]
         .as_array()
         .into_iter()

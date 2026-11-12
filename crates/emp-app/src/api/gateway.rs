@@ -8,6 +8,7 @@ use crate::{
         },
     },
 };
+use emp_state::usage::ledger::UsageLedger;
 use serde_json::{Value, json};
 use std::net::TcpStream;
 
@@ -21,8 +22,11 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
             .first()
             .map_or(Ok(default), |value| value.parse::<f64>())
     };
-    let (Ok(start), Ok(end)) = (number("start", now - 86400.0), number("end", now)) else {
-        return json_error_response(400, status_text(400), "Invalid report period", None, &[]);
+    let (start, end) = match (number("start", now - 86400.0), number("end", now)) {
+        (Ok(start), Ok(end)) if UsageLedger::valid_period(start, end, "all") => (start, end),
+        _ => {
+            return json_error_response(400, status_text(400), "Invalid report period", None, &[]);
+        }
     };
     match state.backend.usage.ledger.query_callers(start, end) {
         Ok(report) => json_response(&report),
@@ -67,13 +71,27 @@ pub(crate) fn mutate(
         state
             .backend
             .gateway_clients
-            .remove(id)
+            .remove(id, &state.backend.configuration.vault)
             .map(|()| json!({"ok":true}))
     } else {
-        state
-            .backend
-            .gateway_clients
-            .create(body["name"].as_str().unwrap_or_default())
+        let id = match body.get("id") {
+            None => None,
+            Some(Value::String(id)) if !id.is_empty() => Some(id.as_str()),
+            Some(_) => {
+                return json_error_response(
+                    400,
+                    status_text(400),
+                    "A device key ID is required",
+                    None,
+                    &[],
+                );
+            }
+        };
+        state.backend.gateway_clients.issue(
+            body["name"].as_str().unwrap_or_default(),
+            id,
+            &state.backend.configuration.vault,
+        )
     };
     match result {
         Ok(value) => json_response(&value),

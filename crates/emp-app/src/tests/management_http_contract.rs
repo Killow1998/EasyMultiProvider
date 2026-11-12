@@ -457,7 +457,7 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
     let root = canonical_root(&directory);
     let config = root.join("emp-config.json");
     std::fs::write(&config, serde_json::to_vec(&json!({
-        "providers":[{"id":"external","base_url":"https://example.invalid/v1","protocol":"responses"}],
+        "providers":[{"id":"external","name":"Readable service","base_url":"https://example.invalid/v1","protocol":"responses"}],
         "models":[{"id":"external/model-a","provider":"external","upstream_id":"model-a","enabled":true}]
     })).unwrap()).unwrap();
     std::fs::write(root.join("config.toml"), b"").unwrap();
@@ -495,6 +495,13 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
         .unwrap()
         .trim_matches('"');
     let catalog: Value = serde_json::from_slice(&std::fs::read(catalog_path).unwrap()).unwrap();
+    assert!(
+        catalog["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["slug"] == "Readable service/model-a")
+    );
     *codex_models.lock().unwrap() = catalog["models"]
         .as_array()
         .unwrap()
@@ -1041,7 +1048,7 @@ fn name_only_import_reuses_authenticated_account_and_language_changes_only_prefe
     for (name, account) in [
         ("First name", "stable-account"),
         ("Renamed", "stable-account"),
-        ("Renamed", "distinct-account"),
+        ("Distinct account", "distinct-account"),
     ] {
         let response = post(
             &server,
@@ -1060,13 +1067,8 @@ fn name_only_import_reuses_authenticated_account_and_language_changes_only_prefe
         .unwrap()
         .clone();
     assert_eq!(before["accounts"].as_array().unwrap().len(), 2);
-    assert!(
-        before["accounts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|account| account["name"] == "Renamed")
-    );
+    assert_eq!(before["accounts"][0]["name"], "Renamed");
+    assert_eq!(before["accounts"][1]["name"], "Distinct account");
     for language in ["en", "zh-CN"] {
         let response = post(
             &server,

@@ -59,6 +59,7 @@
   <h2 data-i18n="services_title"></h2>
   <div class="toolbar">
     <button id="refresh_all" class="secondary" data-icon="refresh" onclick="refreshAllAccounts()" data-i18n="refresh_quotas"></button>
+    <button id="catalog_aggregate_open" type="button" class="secondary" data-icon="aggregate" onclick="openAggregates()" data-i18n="aggregate.title"></button>
     <button data-icon="plus" onclick="openServiceChooser()" data-i18n="add_provider"></button>
     <button id="shadow_migration_open" type="button" class="secondary" data-icon="upload" onclick="migration.open()" data-i18n="data_migration"></button>
   </div>
@@ -118,7 +119,8 @@
 <script src="/assets/app-icon.js"></script>
 <script src="/assets/provider-balances.js"></script><script src="/assets/cpa-quota.js"></script><script src="/assets/service-list.js"></script>
 <script src="/assets/service-usage.js"></script>
-<script src="/assets/release-notes.js"></script><script src="/assets/updates.js"></script><script src="/assets/model-editor.js"></script>
+<script src="/assets/release-notes.js"></script><script src="/assets/updates.js"></script><script src="/assets/catalog-display.js"></script>
+<script src="/assets/model-editor.js"></script>
 
 <script src="/assets/account-details.js"></script>
 <script src="/assets/account-import.js"></script>
@@ -165,14 +167,16 @@ const managementEvents = createManagementEvents({management,isRunning:()=>!manag
   onStart:()=>{updateActivityDots();rescheduleActivityExpiry();void accountDetails.refresh();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
 const contextHelp = createContextHelp({getState:() => state, tr});
+const catalogDisplay=createCatalogDisplay({getState:()=>state,$,tr,t,esc,api,notice,cloneState,persistState,syncSavedCatalog,openModal,closeModal,activityIndicatorHtml,updateActivityDots});
+const {render:renderCatalogDisplay,openEditor:openCatalogDisplayEditor,toggleContext:toggleCatalogContext,toggleSearch:toggleCatalogSearch,searchKeydown:catalogSearchKeydown,presentationName,modelName:modelDisplayName,serviceName:serviceDisplayName}=catalogDisplay;
 const routingSettings = createRoutingSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
 const ultraSettings = createUltraSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
 const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
 const tutorials = createTutorials({openModal, $, tr, esc});
-const settings = createSettings({api, notice, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, help:shadowHelp, contextHelp, openAppIcon:back=>appIcon.open(back), presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
-const {open:openSettings, toggle:toggleSetting} = settings;
-const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, periodPickerHtml, registerPeriodPicker});
-const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});
+const settings = createSettings({api, notice, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, help:shadowHelp, contextHelp, openAppIcon:back=>appIcon.open(back), addService:navigation=>openServiceChooser(navigation), presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
+const {open:openSettings, toggle:toggleSetting, openAggregates} = settings;
+const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, periodPickerHtml, registerPeriodPicker});
+const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, localTimeText, notice});
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
 let language = 'zh-CN';
 const notifications = createNotifications({$,tr,getLanguage:()=>language});
@@ -209,15 +213,15 @@ const officialProviders = {
   gemini: {id:'gemini', name:'Gemini AI Studio', base_url:'https://generativelanguage.googleapis.com/v1beta/openai', protocol:'chat_completions', auth_mode:'api_key', hint:'Google OpenAI-compatible API'},
   anthropic: {id:'anthropic', name:'Anthropic API', base_url:'https://api.anthropic.com/v1', protocol:'anthropic_messages', auth_mode:'anthropic_api_key', hint:'Anthropic Messages API'},
   deepseek: {id:'deepseek', name:'DeepSeek', base_url:'https://api.deepseek.com', protocol:'chat_completions', auth_mode:'api_key', hint:'DeepSeek OpenAI-compatible API'},
-  inception: {id:'inception', name:'Inception / Mercury', base_url:'https://api.inceptionlabs.ai/v1', protocol:'chat_completions', auth_mode:'api_key'},
+  inception: {id:'inception', name:'Inception', base_url:'https://api.inceptionlabs.ai/v1', protocol:'chat_completions', auth_mode:'api_key'},
   openrouter: {id:'openrouter', name:'OpenRouter', base_url:'https://openrouter.ai/api/v1', protocol:'responses', auth_mode:'api_key', hint:'OpenRouter OpenAI-compatible API'},
   xai: {id:'xai', name:'xAI', base_url:'https://api.x.ai/v1', protocol:'responses', auth_mode:'api_key', hint:'xAI Grok Responses API'},
-  moonshot: {id:'moonshot-kimi', name:'Moonshot/Kimi', base_url:'https://api.moonshot.ai/v1', protocol:'chat_completions', auth_mode:'api_key', hint:'Kimi OpenAI-compatible API'},
-  zhipu: {id:'zhipu-glm', name:'Zhipu/GLM', base_url:'https://api.z.ai/api/paas/v4', protocol:'chat_completions', auth_mode:'api_key', hint:'GLM OpenAI-compatible API'}
+  moonshot: {id:'moonshot-kimi', name:'Moonshot Kimi', base_url:'https://api.moonshot.ai/v1', protocol:'chat_completions', auth_mode:'api_key', hint:'Kimi OpenAI-compatible API'},
+  zhipu: {id:'zhipu-glm', name:'Zhipu GLM', base_url:'https://api.z.ai/api/paas/v4', protocol:'chat_completions', auth_mode:'api_key', hint:'GLM OpenAI-compatible API'}
 };
 
-const serviceUsage = createServiceUsage({renderLifetime:renderLifetimeUsage,esc, tr, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), dateTime:utcDateTimeText});
-const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, getLanguage:() => language, persistState, openModal, serviceUsage, callReports, eventsConnected:() => managementEvents.connected(), periods:{periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg}});
+const serviceUsage = createServiceUsage({renderLifetime:renderLifetimeUsage,esc, tr, modelName:modelDisplayName, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), dateTime:utcDateTimeText});
+const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, getLanguage:() => language, persistState, openModal, serviceUsage, callReports, modelName:modelDisplayName, eventsConnected:() => managementEvents.connected(), periods:{periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg}});
 const {open:openUsage} = usageReport;
 const appIcon=createAppIcon({getState:()=>state,api,openModal,$,esc,tr,notice,presets:officialProviders});
 const providerBalances = createProviderBalances({getState:()=>state,api,esc,tr,notice,render:()=>renderServices()});
@@ -304,36 +308,6 @@ function modelSort(left, right) {
   return release || String(left.id).localeCompare(String(right.id));
 }
 
-function presentationFor(route) {
-  const all = state.catalog_presentations || (state.catalog_presentations = {});
-  return all[route] || {catalog_alias:'', show_context:true, reasoning_summary:'auto'};
-}
-function familyPresentationFor(family) {
-  const all = state.catalog_family_presentations || (state.catalog_family_presentations = {});
-  const fallback = (state.catalog_families || []).find(item => item.id === family)?.presentation;
-  return all[family] || fallback || {catalog_alias:'', show_context:true, reasoning_summary:'auto'};
-}
-function compactContext(value) {
-  const tokens = Number(value || 0); if (!(tokens > 0)) return '?';
-  if (tokens >= 1000000) return (tokens / 1000000).toFixed(2).replace(/0+$/, '').replace(/\.$/, '') + 'M';
-  if (tokens >= 1000) return Math.round(tokens / 1000) + 'K';
-  return String(Math.round(tokens));
-}
-// Codex only uses this share of a model's window (its own default is 95%).
-function usableContext(model) {
-  const maximum = Number(model?.context_window || 0); const percent = Number(model?.effective_context_window_percent) || 95;
-  return maximum > 0 ? Math.max(1, Math.round(maximum * Math.min(percent, 100) / 100)) : 0;
-}
-function canonicalDisplayName(value) { return String(value || '').replace(/^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+/, '').replace(/\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$/, ''); }
-function presentationName(route, fallback, alias) {
-  const family = (state.catalog_families || []).find(item => (item.routes || []).some(candidate => candidate.id === route)); const saved = family ? familyPresentationFor(family.id) : presentationFor(route); const label = alias === undefined ? saved.catalog_alias : alias;
-  return label || canonicalDisplayName(fallback) || route;
-}
-function presentationPreview(route, fallback, context, alias) {
-  const visible = presentationName(route, fallback, alias);
-  const withContext = state.catalog_show_context !== false;
-  return withContext ? `[${String(compactContext(context)).padStart(5, ' ')}]  ${visible}` : visible;
-}
 function cloneState() { return JSON.parse(JSON.stringify(state)); }
 function movePresentation(oldRoute, newRoute, target = state) {
   if (!oldRoute || !newRoute || oldRoute === newRoute) return;
@@ -342,127 +316,6 @@ function movePresentation(oldRoute, newRoute, target = state) {
     all[newRoute] = all[oldRoute];
     delete all[oldRoute];
   }
-}
-function updateCatalogDisplayControls() {
-  const showContext = state?.catalog_show_context !== false;
-  const contextButton = $('catalog_context_toggle');
-  if (contextButton) {
-    const label = showContext ? tr("core.hide_context_labels") : tr("core.show_context_labels");
-    contextButton.setAttribute('aria-pressed', String(showContext));
-    contextButton.setAttribute('aria-label', label);
-    contextButton.title = label;
-    contextButton.disabled = catalogContextPreferenceBusy;
-    const openEye = contextButton.querySelector('[data-catalog-eye="open"]');
-    const closedEye = contextButton.querySelector('[data-catalog-eye="closed"]');
-    if (openEye) openEye.toggleAttribute('hidden', !showContext);
-    if (closedEye) closedEye.toggleAttribute('hidden', showContext);
-  }
-  const searchButton = $('catalog_search_toggle');
-  const searchShell = $('catalog_search_shell');
-  const searchInput = $('catalog_display_search');
-  if (searchButton && searchShell && searchInput) {
-    const expanded = searchShell.classList.contains('is-open');
-    searchButton.setAttribute('aria-expanded', String(expanded));
-    const label = expanded ? tr("core.close_model_search") : tr("search_models");
-    searchButton.setAttribute('aria-label', label);
-    searchButton.title = label;
-    searchInput.setAttribute('aria-label', tr("search_models"));
-    searchInput.placeholder = tr("search_models");
-  }
-}
-function toggleCatalogSearch(expanded) {
-  const shell = $('catalog_search_shell');
-  const input = $('catalog_display_search');
-  if (!shell || !input) return;
-  const open = expanded === undefined ? !shell.classList.contains('is-open') : Boolean(expanded);
-  if (open) {
-    input.inert = false;
-    input.removeAttribute('aria-hidden');
-    input.tabIndex = 0;
-    shell.classList.add('is-open');
-    updateCatalogDisplayControls();
-    input.focus();
-  } else {
-    input.value = '';
-    input.inert = true;
-    input.setAttribute('aria-hidden', 'true');
-    input.tabIndex = -1;
-    shell.classList.remove('is-open');
-    renderCatalogDisplay();
-    $('catalog_search_toggle')?.focus();
-  }
-}
-function catalogSearchKeydown(event) {
-  if (event.key !== 'Escape') return;
-  event.preventDefault();
-  toggleCatalogSearch(false);
-}
-let catalogContextPreferenceBusy = false;
-async function toggleCatalogContext() {
-  if (catalogContextPreferenceBusy) return;
-  const previous = state.catalog_show_context !== false;
-  const next = !previous;
-  state.catalog_show_context = next;
-  catalogContextPreferenceBusy = true;
-  updateCatalogDisplayControls();
-  renderCatalogDisplay();
-
-  try {
-    const saved = await api('/api/catalog/context-preference', {method:'POST', body:JSON.stringify({catalog_show_context:next})});
-    if (typeof saved?.catalog_show_context !== 'boolean') throw new Error(tr("core.could_not_save_the_context_label_preference"));
-    state.catalog_show_context = saved.catalog_show_context;
-    renderCatalogDisplay();
-
-    notice(tr("core.context_label_preference_saved"));
-    void syncSavedCatalog();
-  } catch (error) {
-    state.catalog_show_context = previous;
-    renderCatalogDisplay();
-
-    notice(error.message, true);
-  } finally {
-    catalogContextPreferenceBusy = false;
-    updateCatalogDisplayControls();
-  }
-}
-function catalogSourceLabel(route) {
-  const id=route.id || '';
-  const provider=(state.providers || []).find(item=>id.startsWith(item.id+'/'));
-  if(provider)return provider.name || tr("core.unnamed_service");
-  const account=(state.accounts || []).find(item=>item.prefix && id.startsWith(item.prefix+'/'));
-  if(account)return account.name || tr("core.subscription_account");
-  return id.includes('/') ? tr("core.unlinked_service") : 'Native';
-}
-function renderCatalogDisplay() {
-  updateCatalogDisplayControls();
-  const all = Array.isArray(state?.catalog_families) ? state.catalog_families : [];
-  const query = String($('catalog_display_search')?.value || '').trim().toLowerCase();
-  const matching = all.filter(model => !query || `${model.id} ${model.default_display_name} ${model.display_name} ${(model.routes || []).map(route => route.id).join(' ')}`.toLowerCase().includes(query));
-  const visible = matching;
-  if (!all.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_models'))}</p>`; return; }
-  if (!visible.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_matches'))}</p>`; return; }
-  $('catalog_display_models').innerHTML = visible.map(model => {
-    const routes = model.routes || []; const routeText = [...new Set(routes.map(catalogSourceLabel))].join(' · ');
-    const route = routes[0]?.id || model.id;
-    const displayName = presentationPreview(route, model.default_display_name || model.display_name || model.id, model.context_window);
-    const activity = activityIndicatorHtml('models', '', displayName, routes.map(item => item.id));
-    return `<div class="display-row"><div class="route"><div class="catalog-route-title">${activity}<strong>${esc(displayName)}</strong></div><code>${esc(routeText || model.id)}</code></div><button type="button" class="secondary" data-ui-action="catalog-display-editor" data-id="${esc(model.id)}" aria-label="${esc(tr("core.edit_model_display"))}">›</button></div>`;
-  }).join('');
-  updateActivityDots();
-}
-function openCatalogDisplayEditor(family) {
-  const group = (state.catalog_families || []).find(item => item.id === family); if (!group) return;
-  const presentation = familyPresentationFor(family);
-  const routes = [...new Set((group.routes || []).map(catalogSourceLabel))].join(' · ');
-  openModal(tr("core.edit_model_display"), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr("core.display_name"))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><p class="muted">${esc(tr("core.the_new_name_takes_effect_immediately_after_saving"))}</p>`, tr("core.done"), async () => {
-    const owner = $('modal_body').firstElementChild;
-    const candidate = cloneState(); candidate.catalog_family_presentations ||= {}; candidate.catalog_presentations ||= {};
-    const current = candidate.catalog_family_presentations[family] || familyPresentationFor(family) || {};
-    candidate.catalog_family_presentations[family] = Object.assign({}, current, {catalog_alias:$('modal_catalog_alias').value.trim()});
-    for (const route of group.routes || []) delete candidate.catalog_presentations[route.id];
-    await persistState(tr("core.model_display_saved"), candidate);
-    if (owner?.isConnected) closeModal();
-  });
 }
 
 function fill() {
@@ -1112,19 +965,18 @@ async function refreshAllAccounts() {
     notice(failed ? tr("core.refresh_complete_succeeded_failed", {count:results.length - failed, failed:failed}) : tr("core.all_service_quotas_refreshed"), Boolean(failed));
   } finally { button.disabled = false; }
 }
-async function removeAccount(id, element) { return accountDetails.remove(id, element); }
 
 const serviceConnections=createServiceConnections({getState:()=>state,getLanguage:()=>language,cloneState,$,tr,esc,api,openModal,closeModal,persistState,notice,presets:officialProviders,protocolLabel,authLabel,randomId:()=>crypto.randomUUID(),confirmRemoval:question=>confirm(question)});
-const {openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openCustomProviderForm,editProvider,removeProvider}=serviceConnections;
+const {openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openVertexProvider,openCustomProviderForm,editProvider,removeProvider}=serviceConnections;
 const modelEditorOptions = {getState:() => state, $, tr, esc, api, persistState, openModal, closeModal, notice, help:shadowHelp, contextHelp, upstreamErrorText, testModelAudio, testModelVision, movePresentation, format:{visionStatus, modalityLabel, compactContext, usableContext}};
 const modelEditor = createModelEditor(modelEditorOptions);
 const {open:openManualModelModal} = modelEditor;
-const providerModelSettings = createProviderModelManager({getState:()=>state,cloneState,$,tr,esc,api,persistState,openModal,notice,modelSort,compactContext,capabilitySummary:model=>capabilitySummary(model),uiIcon,testModel,
+const providerModelSettings = createProviderModelManager({getState:()=>state,cloneState,$,tr,esc,api,persistState,openModal,notice,modelSort,compactContext,capabilitySummary,uiIcon,testModel,
   createEditor:options=>createModelEditor({...modelEditorOptions,...options}),isPreview:()=>Boolean(window.EMP_PREVIEW)});
-async function testModel(id) { try { notice(tr("core.testing", {id:id})); const result = await api('/v1/responses', {method:'POST', headers:{'X-EMP-Probe':'model_test'}, body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr("core.test_succeeded") + (result.output_text || tr("core.model_response_received"))); } catch (error) { notice(tr("core.test_failed") + error.message, true); } }
+async function testModel(id) { try { notice(tr("core.testing", {id:modelDisplayName(id)})); const result = await api('/v1/responses', {method:'POST', headers:{'X-EMP-Probe':'model_test'}, body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr("core.test_succeeded") + (result.output_text || tr("core.model_response_received"))); } catch (error) { notice(tr("core.test_failed") + error.message, true); } }
 async function testModelVision(id) {
   try {
-    notice(tr("core.sending_the_emp_icon_to", {id:id}));
+    notice(tr("core.sending_the_emp_icon_to", {id:modelDisplayName(id)}));
     const image = await api('/api/models/vision-test-image');
     if (!String(image.data_url || '').startsWith('data:image/png;base64,')) throw new Error(tr("core.test_image_is_unavailable"));
     const result = await api('/v1/responses', {method:'POST', headers:{'X-EMP-Probe':'vision_test'}, body:JSON.stringify({model:id, input:[{role:'user', content:[{type:'input_text',text:'Describe this image in one short sentence.'},{type:'input_image',image_url:image.data_url}]}], max_output_tokens:512})});
@@ -1138,7 +990,7 @@ async function testModelVision(id) {
 // Sends one second of stereo speech: "Front left" on the left channel, then "Front right" on the right.
 async function testModelAudio(id) {
   try {
-    notice(tr("core.sending_the_channel_test_audio_to", {id:id}));
+    notice(tr("core.sending_the_channel_test_audio_to", {id:modelDisplayName(id)}));
     const sound = await api('/api/models/audio-test-sound');
     if (sound.format !== 'wav' || !sound.data) throw new Error(tr("core.test_audio_is_unavailable"));
     const result = await api('/v1/responses', {method:'POST', headers:{'X-EMP-Probe':'audio_test'}, body:JSON.stringify({model:id, input:[{role:'user', content:[{type:'input_text',text:'Transcribe the speech in this audio and say which stereo channel each phrase plays on.'},{type:'input_audio',input_audio:{data:sound.data, format:'wav'}}]}], max_output_tokens:512})});
@@ -1166,7 +1018,7 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
   if ($('modal_backdrop').classList.contains('hidden')) modalOpener = document.activeElement;
   const back = navigation.back;
   stopModalFeatures();
-  modalNavigation = {back, reopen:navigation.reopen, service:serviceContext};
+  modalNavigation = {back, reopen:navigation.reopen, done:navigation.done, service:serviceContext};
   if (serviceContext) modalNavigation.reopen = () => restoreServiceModal(serviceContext, {back});
   const backButton = $('modal_back');
   backButton.hidden = !back; backButton.onclick = back ? () => back() : null;
@@ -1235,7 +1087,7 @@ function runDynamicUiAction(element) {
     case 'native-login': nativeLogin.manage(); return true;
     case 'account-details': if(id==='@native'&&state.native_account?.auth_mode&&state.native_account.auth_mode!=='subscription')nativeLogin.manage();else openAccountDetails(id); return true;
     case 'account-alias-save': saveAccountAlias(element); return true;
-    case 'account-remove': removeAccount(id, element); return true;
+    case 'account-remove': accountDetails.remove(id, element); return true;
     case 'account-edit': editAccount(id); return true;
     case 'account-refresh': refreshAccount(id); return true;
     case 'account-quota-history': openQuotaHistory(id); return true;
@@ -1254,9 +1106,10 @@ function runDynamicUiAction(element) {
     case 'account-import-device': nativeLogin.open({importing:true,back:modalReturn()}); return true;
     case 'account-import-auth': codexAccountImport.open(); return true;
     case 'account-import-file': codexAccountImport.chooseFile(); return true;
-    case 'service-custom-api': openCustomProviderForm({}, null, {back:modalReturn()}); return true;
+    case 'service-custom-api': openCustomProviderForm({}, null, {back:modalReturn(), done:modalNavigation.done}); return true;
+    case 'vertex-provider-choose': openVertexProvider({}, null, {back:modalReturn(), done:modalNavigation.done}); return true;
     case 'provider-remove': removeProvider(id); return true;
-    case 'official-provider-choose': chooseOfficialProvider(element.dataset.provider || '', null, {back:modalReturn()}); return true;
+    case 'official-provider-choose': chooseOfficialProvider(element.dataset.provider || '', null, {back:modalReturn(), done:modalNavigation.done}); return true;
     case 'claude-provider-choose': openClaudeConnectionChooser({}, {back:modalReturn()}); return true;
     case 'claude-local-choose': openLocalClaudeSubscriptionForm((state.providers || []).find(provider => provider.id === id) || {}, null, {back:modalReturn()}); return true;
     case 'claude-cpa-choose': openClaudeCpaForm((state.providers || []).find(provider => provider.id === id) || {}, null, {back:modalReturn()}); return true;
@@ -1304,7 +1157,7 @@ if (window.addEventListener) {
 </script>
 <script src="/assets/presentation.js"></script>
 <script>
-const statistics=createStatistics({api,$,tr,esc,getState:()=>state,getLanguage:()=>language,openModal,callReports,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport});
+const statistics=createStatistics({api,$,tr,esc,getState:()=>state,getLanguage:()=>language,openModal,callReports,modelName:modelDisplayName,serviceName:serviceDisplayName,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport});
 const presentationSyncMotion=installMotion(refreshResetCountdowns);
 installInteractions();
 installServiceErrors();

@@ -50,7 +50,7 @@ pub fn observed_at_now() -> String {
 
 /// Return a normalized configuration with one successful automatic protocol
 /// observation applied. Explicit providers and missing identities are left
-/// unchanged, matching the Python server's request-completion callback.
+/// unchanged.
 pub fn remember_resolved_protocol_at(
     config: &Value,
     provider_id: &str,
@@ -298,7 +298,11 @@ fn merge_web_update_at_time(
             let claude_login = is_claude_login(provider);
             let local_login_changed =
                 old.is_some_and(|old| stored_provider_is_claude_login(old) != claude_login);
-            let credential_changed = origin_changed || local_login_changed;
+            let vertex_auth_changed = old.is_some_and(|old| {
+                (old.get("vertex").is_some() || provider.get("vertex").is_some())
+                    && old.get("auth_mode") != provider.get("auth_mode")
+            });
+            let credential_changed = origin_changed || local_login_changed || vertex_auth_changed;
             let incoming_file = provider.get("api_key_file").cloned();
             let old_file = old.and_then(|value| value.get("api_key_file"));
 
@@ -529,13 +533,38 @@ fn merge_web_update_at_time(
             }
         }
     }
+    super::service_names::preserve_service_route_names(current, &mut merged);
+    let previous_aliases = super::route_aliases::client_route_aliases(current);
+    let next_aliases = super::route_aliases::client_route_aliases(&merged);
+    let old_groups = values_by_id(current.get("model_groups"));
+    if let Some(groups) = merged["model_groups"].as_array_mut() {
+        for group in groups {
+            let Some(id) = group["id"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            let Some(old) = old_groups.get(id.as_str()) else {
+                continue;
+            };
+            let mut names = old["route_names"].as_array().cloned().unwrap_or_default();
+            for (alias, owner) in &previous_aliases {
+                if owner == &id
+                    && next_aliases.get(alias) != Some(owner)
+                    && !names.iter().any(|name| name == alias)
+                {
+                    names.push(Value::String(alias.clone()));
+                }
+            }
+            if !names.is_empty() {
+                group["route_names"] = Value::Array(names);
+            }
+        }
+    }
     normalize_configuration(Some(&merged))
 }
 
 /// Apply a Web update while preserving secrets and managed discovery metadata.
 ///
-/// This is Python `merge_web_update` with its optional filesystem path omitted;
-/// canonical private-path validation remains a separate state transition.
+/// Canonical private-path validation is a separate state transition.
 pub fn merge_web_update(current: &Value, incoming: &Value) -> ConfigResult<Value> {
     merge_web_update_at_time(current, incoming, observed_at_now)
 }

@@ -1,4 +1,6 @@
 registerUiCopy({
+  'login.login_name_contains_slash':['账号名称不能包含 /，请修改名称后登录。','Account names cannot contain /. Change the name before signing in.'],
+  'login.login_name_already_in_use':['名称已被其他服务或旧会话使用，请更换名称后重新登录。','This name is used by another service or an existing conversation. Choose another name and sign in again.'],
   'login.change_method':['切换登录方式','Change sign-in method'],
   'login.subscription':['Codex 订阅账号','Codex subscription'],
   'login.subscription_help':['通过设备码或本机浏览器登录 Codex 订阅。','Sign in to a Codex subscription using a device code or this computer’s browser.'],

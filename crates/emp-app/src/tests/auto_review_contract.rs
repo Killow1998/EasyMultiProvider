@@ -240,6 +240,7 @@ fn auto_review_selects_candidates_by_headroom_and_cooldown() {
             native_quota.as_ref(),
             native_available,
             &cooling,
+            |_| None,
         );
         assert_eq!(
             serde_json::to_value(&rust_order).unwrap(),
@@ -265,16 +266,19 @@ fn auto_review_selects_candidates_by_headroom_and_cooldown() {
                     .to_string_lossy()
                     .into_owned(),
             );
-            let route = resolve_shared_route(&server, &mut runtime_config, requested)
-                .expect("Rust route resolution");
+            let resolved = resolve_shared_route(&server, &mut runtime_config, requested);
+            if index == 4 {
+                assert!(matches!(
+                    resolved,
+                    Err(RouteResolutionError::ProviderUnavailable(_))
+                ));
+                continue;
+            }
+            let route = resolved.expect("Rust route resolution");
             if index == 1 {
                 assert_eq!(route.requested_model, "stale-prefix/codex-auto-review");
                 assert_eq!(route.upstream_model, "codex-auto-review");
                 assert_eq!(route.provider_id, "backup");
-            } else if index == 4 {
-                assert_eq!(route.requested_model, "codex-auto-review");
-                assert_eq!(route.upstream_model, "ordinary-review");
-                assert_eq!(route.source, emp_core::RouteSource::ExplicitModel);
             }
         }
     }
@@ -346,6 +350,113 @@ fn http_auto_review_skips_symlink_native_and_missing_account_catalog_without_lea
         !wire.contains("selected-token"),
         "credential leaked in client response"
     );
+}
+
+#[test]
+fn http_auto_review_excludes_free_and_go_before_and_after_quota_refresh() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    for quota_known in [false, true] {
+        for native_plan in ["free", "go"] {
+            let upstream = OneShotUpstream::start(json!({
+                "id":"review-paid-only", "object":"response", "status":"completed",
+                "model":"codex-auto-review", "output":[]
+            }));
+            let accounts = [
+                json!({"id":"free", "name":"Free", "prefix":"free", "enabled":true}),
+                json!({"id":"go", "name":"Go", "prefix":"go", "enabled":true}),
+                json!({"id":"plus", "name":"Plus", "prefix":"plus", "enabled":true}),
+            ];
+            let (_directory, server, mut config) =
+                make_review_server(&upstream.base_url(), &accounts, Some("regular"));
+            let auth = |plan: &str, token: &str| {
+                json!({"tokens":{
+                    "access_token":token,
+                    "account_id":format!("{plan}-owner"),
+                    "id_token":format!("fixture.{}.signature", URL_SAFE_NO_PAD.encode(
+                        serde_json::to_vec(&json!({"https://api.openai.com/auth":{"chatgpt_plan_type":plan}})).unwrap()
+                    ))
+                }})
+            };
+            let mut native_document = auth(native_plan, "native-secret");
+            if native_plan == "go" {
+                native_document = native_document["tokens"].take();
+            }
+            std::fs::write(
+                &server.state.backend.accounts.native_auth_path,
+                serde_json::to_vec(&native_document).unwrap(),
+            )
+            .unwrap();
+            if quota_known {
+                *server.state.backend.accounts.native_quota.lock().unwrap() =
+                    Some(json!({"plan_type":native_plan}));
+            }
+            for (index, plan) in ["free", "go", "plus"].into_iter().enumerate() {
+                let path =
+                    std::path::Path::new(config["accounts"][index]["auth_file"].as_str().unwrap());
+                let mut document = auth(plan, &format!("{plan}-token"));
+                if !quota_known {
+                    document = document["tokens"].take();
+                }
+                server
+                    .state
+                    .backend
+                    .configuration
+                    .vault
+                    .write_encrypted_json(path, &document)
+                    .unwrap();
+                if quota_known {
+                    config["accounts"][index]["quota"] = json!({"plan_type":plan});
+                }
+            }
+            *server
+                .state
+                .backend
+                .configuration
+                .test_config()
+                .lock()
+                .unwrap() = config.clone();
+            let wire = post(
+                &server,
+                "/v1/responses",
+                br#"{"model":"free/codex-auto-review","input":"review"}"#,
+                &[&session_header(&server)],
+            );
+            assert!(wire.starts_with("HTTP/1.1 200 OK"), "{wire}");
+            let (_, headers, body) = upstream.observed();
+            assert_eq!(headers["authorization"], "Bearer plus-token");
+            assert_eq!(body["model"], "codex-auto-review");
+
+            config["accounts"][2]["enabled"] = json!(false);
+            *server
+                .state
+                .backend
+                .configuration
+                .test_config()
+                .lock()
+                .unwrap() = config.clone();
+            for requested in ["codex-auto-review", "go/codex-auto-review"] {
+                let wire = post(
+                    &server,
+                    "/v1/responses",
+                    &serde_json::to_vec(&json!({"model":requested, "input":"review"})).unwrap(),
+                    &[&session_header(&server)],
+                );
+                assert!(wire.starts_with("HTTP/1.1 503"), "{wire}");
+                assert!(wire.contains("Free and Go are excluded"), "{wire}");
+            }
+            config["accounts"][2]["enabled"] = json!(true);
+            config["auto_review_fallback"] = json!(false);
+            assert!(
+                resolve_auto_review_route(&server.state, &mut config, "codex-auto-review")
+                    .unwrap()
+                    .is_err()
+            );
+            assert!(
+                resolve_auto_review_route(&server.state, &mut config, "ordinary-model").is_none()
+            );
+        }
+    }
 }
 
 #[test]
@@ -485,14 +596,17 @@ impl Drop for ReviewStreamUpstream {
 
 #[cfg(unix)]
 #[test]
-fn websocket_auto_review_uses_the_shared_imported_account_route() {
+fn websocket_auto_review_excludes_free_and_go_in_the_shared_route() {
     let upstream = ReviewStreamUpstream::start();
-    let accounts = vec![json!({
-        "id":"ws-account","name":"WS Account","prefix":"not-the-request-prefix",
-        "enabled":true,"quota":{"rate_limits":{"primary":{"usedPercent":20}}}
-    })];
+    let accounts = vec![
+        json!({"id":"free","name":"Free","prefix":"free","enabled":true,"quota":{"plan_type":"free"}}),
+        json!({"id":"go","name":"Go","prefix":"go","enabled":true,"quota":{"plan_type":"go"}}),
+        json!({"id":"ws-account","name":"WS Account","prefix":"not-the-request-prefix",
+            "enabled":true,"quota":{"plan_type":"plus","rate_limits":{"primary":{"usedPercent":20}}}}),
+    ];
     let (_directory, server, _) =
-        make_review_server(&upstream.base_url(), &accounts, Some("symlink"));
+        make_review_server(&upstream.base_url(), &accounts, Some("regular"));
+    *server.state.backend.accounts.native_quota.lock().unwrap() = Some(json!({"plan_type":"free"}));
     let url = format!("ws://{}/v1/responses", server.local_addr());
     let headers = BTreeMap::from([(
         "x-emp-session".to_owned(),
@@ -634,6 +748,7 @@ fn disabled_auto_review_fallback_keeps_review_on_native() {
             Some(&exhausted),
             native,
             &BTreeSet::new(),
+            |_| None,
         )
     };
     assert_eq!(candidates(&config, true), ["backup"]);

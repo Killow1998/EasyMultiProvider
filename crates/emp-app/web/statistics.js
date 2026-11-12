@@ -1,17 +1,17 @@
 // One statistics window owns common filters, reads, refresh and chart disposal.
 // Call details and model performance keep their existing report owner/pagination.
-function createStatistics({api,$,tr,esc,getState,getLanguage,openModal,callReports,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport}) {
+function createStatistics({api,$,tr,esc,getState,getLanguage,openModal,callReports,modelName,serviceName,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport}) {
   const {number,seconds,tps,rate,outcomes,bindOutcomes} = callReports;
   const chart=createPerformanceChart({esc,tr,getLanguage,number,seconds,tps});
   const facts=createPerformanceView({esc,tr,getLanguage,number,seconds,tps,rate,outcomes,bindOutcomes,definition:title=>title === 'TTFT' ? tr("reports.time_to_first_content") : title === 'TPS' ? tr("reports.generation_speed_definition") : ''});
-  const usage=createUsageData({tr,esc,number});
-  const bills=createSessionBills({api,tr,esc,number,getLanguage});
+  const usage=createUsageData({tr,esc,number,modelName,serviceName});
+  const bills=createSessionBills({api,tr,esc,number,getLanguage,modelName});
   let root=null, query=null, report=null, view='overview', metric='tokens', grouping='none', filters={}, dispose=() => {}, timer=null;
   const options = rows => rows.map(([id,label])=>`<option value="${esc(id)}">${esc(label)}</option>`).join('');
   function filterHtml() {
     const state=getState();
-    const services=[['',tr("reports.all_services")],['account:@native','Native'],...(state.accounts || []).filter(a=>!a.native).map(a=>['account:'+a.id,a.name || a.id]),...(state.providers || []).map(p=>['provider:'+p.id,p.name || p.id])];
-    return `<div class="call-toolbar"><select data-stats-filter="service" aria-label="${tr("reports.service")}">${options(services)}</select><select data-stats-filter="category" aria-label="${tr("reports.service_type")}">${options([['',tr("reports.all_types")],['native','Codex · Native'],['subscription',tr("reports.codex_subscription")],['external',tr("reports.external_providers")],['unknown',tr("reports.unlinked")]])}</select><select data-stats-filter="model" aria-label="${tr("reports.model")}">${options([['',tr("reports.all_models")],...(state.models || []).map(m=>[m.id,m.display_name || m.id])])}</select><select data-stats-filter="state" aria-label="${tr("reports.status")}">${options([['',tr("reports.all_states")],['completed',tr("reports.completed_2")],['failed',tr("reports.failed_2")],['interrupted',tr("reports.interrupted_2")],['cancelled',tr("reports.disconnected_2")],['recovery_required',tr("reports.history_resend_requested")],['unknown',tr("reports.outcome_not_recorded")]])}</select><input data-stats-filter="session" aria-label="${tr("reports.session_id")}" placeholder="${tr("reports.session_id")}"></div>`;
+    const services=[['',tr("reports.all_services")],['account:@native','Native'],...(state.accounts || []).filter(a=>!a.native).map(a=>['account:'+a.id,a.name || serviceName(a.id)]),...(state.providers || []).map(p=>['provider:'+p.id,p.name || serviceName(p.id)])];
+    return `<div class="call-toolbar"><select data-stats-filter="service" aria-label="${tr("reports.service")}">${options(services)}</select><select data-stats-filter="category" aria-label="${tr("reports.service_type")}">${options([['',tr("reports.all_types")],['native','Codex · Native'],['subscription',tr("reports.codex_subscription")],['external',tr("reports.external_providers")],['unknown',tr("reports.unlinked")]])}</select><select data-stats-filter="model" aria-label="${tr("reports.model")}">${options([['',tr("reports.all_models")],...(state.models || []).map(m=>[m.id,modelName(m.id)])])}</select><select data-stats-filter="state" aria-label="${tr("reports.status")}">${options([['',tr("reports.all_states")],['completed',tr("reports.completed_2")],['failed',tr("reports.failed_2")],['interrupted',tr("reports.interrupted_2")],['cancelled',tr("reports.disconnected_2")],['recovery_required',tr("reports.history_resend_requested")],['unknown',tr("reports.outcome_not_recorded")]])}</select><input data-stats-filter="session" aria-label="${tr("reports.session_id")}" placeholder="${tr("reports.session_id")}"></div>`;
   }
   function stop() {
     query?.cancel(); query=null; dispose(); dispose=()=>{}; facts.stop(); bills.stop();

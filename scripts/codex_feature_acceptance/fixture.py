@@ -111,12 +111,13 @@ def message(text='FIXTURE_COMPLETE'):
 
 
 class Fixture:
-    def __init__(self, codex, emp, root, evidence, *, configuration=None, native_catalog=None):
+    def __init__(self, codex, emp, root, evidence, *, configuration=None, native_catalog=None, client_version=None):
         self.codex, self.root, self.evidence = codex, root, evidence
         self.stack = contextlib.ExitStack()
         self.home = root/'codex'
         self.home.mkdir(parents=True)
-        self.codex_version = subprocess.check_output([str(codex), '--version'], text=True,
+        self.codex_version = client_version if client_version is not None else subprocess.check_output(
+            [str(codex), '--version'], text=True,
             env={'PATH':os.environ['PATH'], 'HOME':str(self.home), 'CODEX_HOME':str(self.home)}).strip().split()[-1]
         self.evidence.mkdir(parents=True, exist_ok=True)
         self.upstream = ThreadingHTTPServer(('127.0.0.1', 0), Upstream)

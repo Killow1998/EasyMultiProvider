@@ -1,7 +1,8 @@
-function createDecisionSettings({getState, cloneState, persistState, openModal, api, $, esc, tr, help}) {
+function createDecisionSettings({getState, cloneState, persistState, openModal, api, $, esc, tr, help, addService, openGateway}) {
+  const eligible = provider => provider.enabled !== false && provider.auth_mode === 'api_key' && provider.execution_backend !== 'claude_cli';
   function open(back, draft) {
     const state = getState();
-    const providers = state.providers.filter(provider => provider.enabled !== false && provider.auth_mode === 'api_key' && provider.execution_backend !== 'claude_cli');
+    const providers = state.providers.filter(eligible);
     const selected = draft?.providerId ?? state.decision_provider ?? '';
     const selections = draft?.selections || new Map();
     const catalogs = draft?.catalogs || new Map();
@@ -9,12 +10,14 @@ function createDecisionSettings({getState, cloneState, persistState, openModal, 
     const missing = selected && !providers.some(provider => provider.id === selected);
     openModal(tr('core.decision_models'), `<div class="routing-settings" id="decision_settings">
       <p class="muted">${tr('core.decision_hint')}</p>
-      <div class="setting-row routing-mode"><label class="setting-title" for="decision_provider">${tr('core.decision_service')}</label><select id="decision_provider"><option value="">${tr('core.decision_no_default')}</option>${missing ? `<option value="${esc(selected)}" selected disabled>${esc(selected)} · ${tr('core.unavailable')}</option>` : ''}${options}</select></div>
-      <div class="setting-row routing-mode"><div class="setting-title collaboration-title"><label for="decision_api">${tr('core.decision_api')}</label>${help(tr('core.decision_api_help'))}</div><select id="decision_api">${['openai','openrouter','systemone'].map(protocol => `<option value="${protocol}">${tr('core.decision_api_' + protocol)}</option>`).join('')}</select></div>
-      <div class="setting-row routing-mode"><label class="setting-title" for="decision_model">${tr('core.decision_model')}</label><div class="input-action"><select id="decision_model"></select><button type="button" class="secondary" data-icon="refresh" id="decision_refresh" title="${esc(tr('core.decision_refresh'))}" aria-label="${esc(tr('core.decision_refresh'))}"></button></div></div>
+      <div class="setting-row routing-mode"><label class="setting-title" for="decision_provider">${tr('core.decision_service')}</label><div class="input-action"><select id="decision_provider"><option value="">${tr('core.decision_no_default')}</option>${missing ? `<option value="${esc(selected)}" selected disabled>${esc(selected)} · ${tr('core.unavailable')}</option>` : ''}${options}</select>${providers.length ? `<button type="button" class="secondary" data-icon="plus" data-decision-add-service title="${esc(tr('add_provider'))}" aria-label="${esc(tr('add_provider'))}"></button>` : ''}</div></div>
+      <div class="setting-row routing-mode" id="decision_api_row"><div class="setting-title collaboration-title"><label for="decision_api">${tr('core.decision_api')}</label>${help(tr('core.decision_api_help'))}</div><select id="decision_api">${['openai','openrouter','systemone'].map(protocol => `<option value="${protocol}">${tr('core.decision_api_' + protocol)}</option>`).join('')}</select></div>
+      <div class="setting-row routing-mode" id="decision_model_row"><label class="setting-title" for="decision_model">${tr('core.decision_model')}</label><div class="input-action"><select id="decision_model"></select><button type="button" class="secondary" data-icon="refresh" id="decision_refresh" title="${esc(tr('core.decision_refresh'))}" aria-label="${esc(tr('core.decision_refresh'))}"></button></div></div>
       <p class="muted" id="decision_catalog_status" role="status"></p>
       <div class="setting-row routing-mode" id="decision_custom_row" hidden><label class="setting-title" for="decision_custom_model">${tr('core.decision_custom_model')}</label><input id="decision_custom_model" autocomplete="off" placeholder="${tr('core.decision_custom_placeholder')}"></div>
       <p class="muted" id="decision_endpoint"></p>
+      ${providers.length ? '' : `<div class="setting-row"><p class="muted">${tr('core.decision_add_service_hint')}</p><button type="button" data-icon="plus" data-decision-add-service>${tr('add_provider')}</button></div>`}
+      <div class="setting-row"><div><div class="setting-title">${tr('core.gateway_connection')}</div><p class="setting-help">${tr('core.decision_gateway_help')}</p></div><button type="button" class="secondary" data-icon="chevron-right" data-decision-gateway aria-label="${esc(tr('core.gateway_connection'))}"></button></div>
     </div>`, tr('save_display'), async () => {
       const selection = read(), candidate = cloneState();
       candidate.decision_provider = selection.providerId;
@@ -49,12 +52,13 @@ function createDecisionSettings({getState, cloneState, persistState, openModal, 
       $('decision_api').value = preference.protocol;
       $('decision_custom_model').value = preference.model;
       $('decision_custom_row').hidden = true;
+      $('decision_api_row').hidden = $('decision_model_row').hidden = !provider;
       $('decision_model').innerHTML = `<option value="">${tr('core.decision_model_placeholder')}</option>`;
-      $('decision_api').disabled = !provider;
       $('decision_model').disabled = true;
-      $('decision_refresh').disabled = !provider;
       $('decision_catalog_status').textContent = '';
-      $('decision_endpoint').textContent = provider ? tr('core.decision_endpoint', {url:location.origin + '/v1/' + (preference.protocol === 'systemone' ? 'systemone' : 'decisions')}) : tr(providers.length ? 'core.decision_explicit_service_hint' : 'core.decision_add_service_hint');
+      const endpoint = path => location.origin + '/v1/' + path;
+      $('decision_endpoint').innerHTML = provider ? esc(tr('core.decision_endpoint', {url:endpoint(preference.protocol === 'systemone' ? 'systemone' : 'decisions')}))
+        : providers.length ? [tr('core.decision_explicit_service_hint'), tr('core.decision_endpoint_decisions', {url:endpoint('decisions')}), tr('core.decision_endpoint_systemone', {url:endpoint('systemone')})].map(esc).join('<br>') : '';
       $('modal_submit').disabled = !!provider;
       if (!provider) return;
       selections.set(active, preference);
@@ -85,6 +89,11 @@ function createDecisionSettings({getState, cloneState, persistState, openModal, 
     };
     $('decision_model').onchange = () => { $('decision_custom_row').hidden = $('decision_model').value !== '@custom'; };
     $('decision_refresh').onclick = () => { remember(); fill(true); };
+    form.querySelector('[data-decision-gateway]').onclick = () => { const current = read(); void openGateway(() => open(back, current)); };
+    form.querySelector('[data-decision-add-service]').onclick = () => {
+      const current = read();
+      addService({presets:['openai', 'openrouter'], back:() => open(back, current), done:id => open(back, {...current, providerId:getState().providers.some(provider => provider.id === id && eligible(provider)) ? id : current.providerId})});
+    };
     fill();
   }
   return {open};

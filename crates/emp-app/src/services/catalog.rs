@@ -17,7 +17,7 @@ use sources::CatalogSources;
 pub(crate) fn refresh_catalog(state: &ServerState) -> Result<(PathBuf, usize), ()> {
     let config = state.backend.configuration.read().map_err(|_| ())?;
     state.catalog_refresh.mark_catalog_publication_pending();
-    let catalog = server_catalog(state, &config);
+    let catalog = client_catalog(state, &config);
     let path = generated_catalog_path(state);
     let previous = std::fs::read(&path)
         .ok()
@@ -47,7 +47,11 @@ pub(crate) fn generated_catalog_path(state: &ServerState) -> PathBuf {
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn response_catalog_etag(state: &ServerState) -> Option<String> {
     let config = state.backend.configuration.read().ok()?.clone();
-    emp_state::catalog_etag(&server_catalog(state, &config)).ok()
+    emp_state::catalog_etag(&client_catalog(state, &config)).ok()
+}
+
+pub(crate) fn client_catalog(state: &ServerState, config: &Value) -> Value {
+    emp_state::config::client_catalog(config, server_catalog(state, config))
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]

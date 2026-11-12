@@ -141,10 +141,12 @@ pub(crate) fn models_request(request: Request<'_>, state: &ServerState) -> Vec<u
     let catalog = server_catalog(state, &config);
     if request.raw_path().starts_with("/v1/models/") {
         let id = percent_decode(&request.raw_path()["/v1/models/".len()..], false);
+        let canonical =
+            emp_state::config::resolve_client_model(&config, &id).unwrap_or_else(|| id.clone());
         if catalog["models"].as_array().is_some_and(|models| {
             models
                 .iter()
-                .any(|model| model.get("slug").and_then(Value::as_str) == Some(&id))
+                .any(|model| model.get("slug").and_then(Value::as_str) == Some(canonical.as_str()))
         }) {
             return json_response(&json!({"id":id,"object":"model","created":0}));
         }
@@ -156,6 +158,7 @@ pub(crate) fn models_request(request: Request<'_>, state: &ServerState) -> Vec<u
             &[],
         );
     }
+    let catalog = emp_state::config::client_catalog(&config, catalog);
     if rich {
         let etag = emp_state::catalog_etag(&catalog);
         return match etag {

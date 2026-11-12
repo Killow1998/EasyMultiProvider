@@ -70,19 +70,83 @@ an executable command. Existing reasoning-field suppression remains unchanged.
   formatting and diff checks pass. Existing EMP instances were not restarted;
   installed login and encrypted credential files remain unchanged.
 
-## Current target and acceptance (2026-11-06 UTC)
+## Current target and acceptance (2026-11-11 UTC)
 
 The maintenance target is **0.163–0.167**, following the official stable
-[0.167.0 release](https://github.com/openai/codex/releases/tag/rust-v0.167.0)
-(2026-11-06 01:40:00 UTC). GitHub identifies it as the latest release with
-`prerelease=false`.
+[0.167.2 release](https://learn.chatgpt.com/docs/changelog)
+(2026-11-11). This is a patch within the existing maintenance window.
 
 | Target series | Existing evidence |
 | --- | --- |
 | 0.163–0.164 | Dated Linux engine acceptance below; App/IDE checks are listed separately with their exact engine versions. |
 | 0.165 | Official Linux 0.165.0 engine passed the local EMP 0.13.17 candidate contracts recorded below. |
 | 0.166 | Official Linux 0.166.0 engine passed the local EMP 0.13.20 maintenance candidate contracts recorded below. |
-| 0.167 | Official Linux 0.167.0 engine passed the local EMP 0.13.26 maintenance candidate contracts on 2026-11-06 UTC. |
+| 0.167 | Official Linux 0.167.0 engine passed the local EMP 0.13.26 candidate contracts on 2026-11-06 UTC. Official Linux 0.167.1 and 0.167.2 passed their separately dated targeted candidate checks below on 2026-11-11 UTC. |
+
+### 0.167.2 patch review and targeted acceptance
+
+The [0.167.2 release](https://learn.chatgpt.com/docs/changelog)
+enables incremental tool declarations by default for the GCP provider. Its
+`incremental_tools_legacy_gcp` switch is independent of Bedrock's
+`incremental_tools_legacy`, which remains off by default. Responses Lite keeps
+its existing route. EMP preserves these client-owned settings. The separate
+EMP-managed Vertex service is described in [Gateway usage](gateway.md); the GCP
+engine checks below do not validate Google Cloud credentials or live inference.
+
+On 2026-11-11 UTC, the official Linux 0.167.2 engine was checked against the
+current EMP candidate with loopback upstreams and synthetic credentials:
+
+- A GCP-configured client targeting EMP sent one `additional_tools` item by
+  default and restored top-level tools when explicitly disabled. Three external
+  routes (Responses, Chat Completions and Anthropic Messages) received their
+  translated tool declarations. In the default GCP mode, Codex discovered and
+  called a dynamic tool, then continued with its result. This is not a real
+  Google Vertex request.
+- Responses Lite tool discovery and invocation passed for Native and all three
+  external protocols. Two same-named tools remained distinct and their results
+  returned to the model in each case.
+- Native and imported-subscription inline-ID recovery completed two turns for
+  both supported 400 error messages. Readable external and aggregate routes,
+  including continuation after renaming, passed the existing eleven-request
+  synthetic end-to-end check.
+
+The official compressed binary matched SHA-256
+`42e5ce1452ab56c4e4a0cd7edb057ee016995cbd9468bf5bb1c3a9fda87d25c6`;
+the temporary download and engine were removed after testing. These are targeted
+Linux checks, not complete Windows, macOS, App or IDE acceptance. The 0.167.0
+and 0.167.1 evidence retains its original dates and scopes.
+
+### 0.167.1 patch review and targeted acceptance
+
+The [pinned 0.167.0 → 0.167.1 comparison](https://github.com/openai/codex/compare/rust-v0.167.0...rust-v0.167.1)
+ends at `0a94398fa60c4fac0e7659e4213a0a36e613dd46`. The final patch restricts
+`incremental_tools_legacy` to Amazon Bedrock providers, with the flag disabled
+by default. Responses Lite retains its existing incremental-tool path. Related
+compaction code chooses tool declarations and base instructions using that route.
+The initial opt-in commit's reference to regular OpenAI Responses does not
+describe the final patch's scope.
+
+Incremental compaction now retains the Web Search tool definition while using
+history-carried declarations for other tools and leaving base instructions in
+their existing history. EMP keeps the client's feature choice and provider
+identity intact; the patch needs no new transport or Bedrock-only flag override.
+
+On 2026-11-11 UTC, the official Linux binary (SHA-256
+`dd5bfdf19d794dcc6fb482d2d5a2d9fb31d11f6caa44b303bb72890d461e8a02`)
+and matching Code Mode host passed:
+
+- The pinned 0.167.1 catalog check: Native/imported Terra metadata, twelve
+  synthetic inference requests, and unchanged context, efforts and modalities.
+- Failed-output and missing-Usage lifecycle cases: retained output triggers
+  compaction, unknown usage stays unknown, and paginated process resume works.
+- Responses, Chat Completions and Anthropic Code Mode journeys in both Off and
+  On-demand modes. Off blocks external children; On-demand completes child
+  requests and preserves their messages/results after process resume.
+
+All inference used isolated synthetic credentials and loopback providers; no
+subscription quota was used. Runtime helpers and their archives were temporary.
+The separate 0.167.0 acceptance records remain dated as originally tested;
+background-compaction coverage is not relabeled as a new 0.167.1 run.
 
 ## Feature ownership and acceptance — Codex 0.167.0
 
@@ -208,7 +272,7 @@ Targeted source review and the new engine run cover these boundaries:
 | Mutable reasoning effort | Native and three external protocols pass HTTP/SSE and WebSocket turns, including unchanged effort, model switching and process resume. The ledger uses current turn metadata before historical overrides or the initial root effort. |
 | GPT-6.1 Terra | Native and imported catalogs preserve the pinned model's capabilities; all six advertised efforts complete. Ultra retains the requested label while sending the catalog's actual `xhigh` effort. |
 | Attached thread forks | Attachment, saved history, restart and bill attribution pass using the existing lineage bridge. No second attachment index was added. |
-| Vertex AI, repository filters and directory grouping | These remain Codex-owned provider/client features. EMP enable/restore preserves GCP selection, endpoint and auth command. Vertex is not introduced as an EMP service. |
+| Vertex AI, repository filters and directory grouping | This 0.165 acceptance covered Codex-owned provider/client features. EMP enable/restore preserves GCP selection, endpoint and auth command. It does not cover the later EMP-managed Vertex service. |
 
 The [0.165 feature registry](https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/features/src/lib.rs)
 still marks async compaction `UnderDevelopment` and default-off. EMP's existing
@@ -233,7 +297,7 @@ the fixture from installed accounts and services; no network namespace is used.
 | External memory import | Three real App Server import cases pass: fresh v2, existing v1 and explicit v2 with legacy memory present. Imported bytes and project scope survive, repeat detection excludes already imported entries, and legacy files remain unchanged. No inference request is needed. |
 | Attached forks | Attached and ordinary forks preserve parent history and attachment after process restart. Ordinary listing excludes the attached child; attachment-aware listing and resume retain it. Four inference requests reconcile to the existing parent-lineage bill. |
 | Terra catalog and effort | Native and imported catalogs preserve ten pinned capability fields, including the 500,000 context window, 872,000 maximum, default Low, Code Mode, Responses Lite and mutable effort. `low`, `medium`, `high`, `xhigh`, `max` and `ultra` each complete on both account paths: 12 inference requests. Ultra sends `xhigh` while its ledger label remains Ultra. This measures protocol behavior, not real model speed. |
-| GCP configuration ownership | The existing integration contract now also verifies that `model_provider = "gcp"`, its endpoint and auth command survive enable and restore. GCP inference/auth remains Codex-owned; no Vertex transport or credential service is added. |
+| GCP configuration ownership | This integration contract verifies that `model_provider = "gcp"`, its endpoint and auth command survive enable and restore. It covers Codex-owned GCP configuration, separately from the later EMP-managed Vertex transport and credentials. |
 
 Two defects were reproduced before repair. Stage-one memory requests use
 `request_kind = "memory"`; ignoring that field bypassed the configured extraction

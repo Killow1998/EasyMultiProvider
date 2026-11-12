@@ -140,7 +140,7 @@ fn normalize_route(raw: &str) -> ConfigResult<String> {
         ));
     }
     if !route.chars().all(|character| {
-        character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '/' | ':' | '-')
+        character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '/' | ':' | '-' | '@')
     }) {
         return Err(presentation_error(
             "catalog_presentations route contains unsupported characters",

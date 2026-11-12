@@ -26,7 +26,7 @@ function presentationRequestError(record) {
     :[401,403].includes(status)?tr("services.authentication_or_access_denied")
     :status>=500?tr("services.the_service_is_unavailable")
     :tr("services.the_model_request_did_not_complete");
-  return {title:tr("services.latest_model_request_failed"),message:[reason,record.model_id,status?'HTTP '+status:'',({emp:'EMP',upstream:tr("reports.upstream_service"),transport:tr("reports.connection"),client:tr("reports.codex_client"),claude_cli:'Claude Code'})[record.error_origin],record.failure_reason || record.error_code || record.error_class].filter(Boolean).join('\n')};
+  return {title:tr("services.latest_model_request_failed"),message:[reason,record.model_id ? modelDisplayName(record.model_id) : '',status?'HTTP '+status:'',({emp:'EMP',upstream:tr("reports.upstream_service"),transport:tr("reports.connection"),client:tr("reports.codex_client"),claude_cli:'Claude Code'})[record.error_origin],record.failure_reason || record.error_code || record.error_class].filter(Boolean).join('\n')};
 }
 function presentationUpdateServiceRequestErrors() {
   for(const button of document.querySelectorAll('#services .presentation-service-icon')) {
@@ -48,10 +48,4 @@ function presentationUpdateServiceRequestErrors() {
     const badge=document.createElement('span');badge.className='presentation-service-error-badge';badge.setAttribute('aria-hidden','true');badge.textContent='!';button.append(badge);
   }
   presentationUpdateServiceErrorLabels();
-}
-function installRequestErrors() {
-  const apply=applyActivitySnapshot;
-  applyActivitySnapshot=function(value){const snapshot=normalizeActivitySnapshot(value);if(!snapshot)return;presentationObserveRequestErrors(snapshot);apply(snapshot);};
-  const update=updateActivityDots;
-  updateActivityDots=function(){update();presentationUpdateServiceRequestErrors();};
 }

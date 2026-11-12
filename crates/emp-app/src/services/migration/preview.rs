@@ -338,11 +338,11 @@ fn preview(
         .collect();
     for (kind, target, name, imported) in &names {
         if *imported
-            && names
-                .iter()
-                .any(|(k, id, n, _)| (k != kind || id != target) && n == name)
+            && names.iter().any(|(k, id, n, _)| {
+                (k != kind || id != target) && n.trim().to_lowercase() == name.trim().to_lowercase()
+            })
         {
-            warnings.push(json!({"kind":kind,"id":target,"code":"duplicate_name","message":"名称相同，可直接在右侧预览中调整。名称不影响身份合并。","message_en":"Matching name; edit it directly in the right preview. Names do not determine identity."}));
+            warnings.push(json!({"kind":kind,"id":target,"code":"duplicate_name","message":"名称已存在，请在右侧修改后导入。","message_en":"This name is already in use. Change it on the right before importing."}));
         }
     }
     config["_shadow_model_previews"] = json!(model_previews);

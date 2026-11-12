@@ -9,11 +9,19 @@ sign-in changes. EMP forwards requests with the selected service's saved
 credentials, not the caller's gateway key. This key grants model API access;
 WebUI management still uses its own session.
 
+Client catalogs use readable account/service names. New and renamed names must
+be unique and cannot contain `/`; upstream model IDs can still contain `/`.
+Renaming retains previously published names for existing conversations. Imports
+cannot claim another service's retained names. Existing configurations remain
+readable, including names saved before this rule.
+
 ### Devices and usage
 
 Create a named device key in **Gateway connection** and copy it once into the
-client's Bearer credential. Only its SHA-256 digest and metadata are saved. The
-existing shared key remains available. Named keys authenticate model APIs and
+client's Bearer credential. EMP encrypts the secret so device management can show
+and copy it later. Older digest-only keys can be explicitly regenerated while
+retaining device usage attribution. The existing shared key remains available.
+Named keys authenticate model APIs and
 cannot manage EMP. Revocation rejects subsequent HTTP calls and the next
 generation on an existing WebSocket; it does not replay an in-flight request.
 
@@ -28,13 +36,18 @@ bills or generation TPS. A Decision disconnect cancels its upstream request.
 
 ### Aggregate routing
 
-Open **Settings → Native services → Aggregate routing**. Choose a model, its
+Open **Aggregate routing** in the service toolbar. Choose a model, its
 sources, a display prefix and a policy. The model list includes those with at least
 two enabled sources, using their display names and source counts. EMP generates
 the internal `auto/…` identifier and preserves it when the prefix changes. The
-default display prefix is `auto`, displayed as `autoModel` with no added
-separator. An empty prefix shows just the original model name. The original model name stays unchanged and
+default display prefix is `auto`, displayed as `auto · Model`. An empty prefix
+shows just the original model name. Each aggregate follows its source model in
+the model list. The original model name stays unchanged and
 subsequent model renames are reflected in the aggregate display too.
+Codex receives a readable route name. EMP retains former names when the prefix
+or model display name changes, so existing conversations can continue. If the
+prefix is empty, contains `/`, or conflicts with an existing route, EMP keeps
+the internal identifier for that route.
 Different models can share a prefix. Multiple aggregate routes for the same model
 must use distinct prefixes; rejected saves preserve the form and configuration.
 Each route can use a different policy:
@@ -68,7 +81,7 @@ EMP enables one `emp_images.imagegen` MCP tool when Native is Free or uses an
 EMP local key. The same tool generates images and edits local PNG, JPEG, WebP
 or GIF files. Paid Native subscriptions keep Codex's native image tools.
 
-In **Settings → Routing settings**, choose a subscription with image quota.
+In **Settings → Native services → Image, Auto Review and memory routing**, choose a subscription with image quota.
 Save and restart Codex Runtime to load the tool. Calls follow Codex's current
 MCP permission settings and use the selected subscription's quota. The first
 call can require authorization in Codex.
@@ -127,10 +140,10 @@ Codex clients identify themselves through `originator` or `User-Agent` containin
 for these frames; WebSocket omits them. Upstream usage processing runs before
 this output filtering.
 
-## Decision models
+## Decision API
 
 Add an external API service with its own API key, then open
-**Settings → External services → Decision models**. Choose the default
+**Settings → External services → Decision API**. Choose the default
 service, then choose a decision model from that service's catalog. EMP matches
 the API type for the official OpenAI, OpenRouter and TypeSafe hosts; compatible
 relays can select the corresponding API type. **Refresh list** reloads the catalog.
@@ -139,6 +152,12 @@ and empty catalogs are shown directly; an existing saved model is retained.
 **Other model (enter manually)** remains available for custom endpoints.
 Preferences belong to each service. Clearing the default keeps those preferences
 and lets clients select a service on each call.
+
+Use **Add service** beside the service selector, or its empty-state action,
+to configure OpenAI, OpenRouter or a compatible custom API and return here. **Gateway connection** opens device-key
+management and returns without saving or losing the Decision draft. When clients
+choose their own service, the dialog shows both endpoint addresses and hides the
+unused default-model controls.
 
 OpenRouter decision catalogs require `GET /v1/models?output_modalities=decisions`:
 the default text catalog does not list these models. TypeSafe supplies available

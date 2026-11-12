@@ -162,7 +162,7 @@ test('service-local model manager cancels replaced reads and ignores stale or cl
   let nodes={}, manager;
   const q=queries();
   manager=feature('model-manager.js','createProviderModelManager')({...q,getState:()=>({providers:[{id:'api'}],models:[]}),$:id=>nodes[id],tr,esc,
-    openModal(){manager.stop();nodes=Object.fromEntries(['shadow_model_manager','shadow_model_search','shadow_model_count','shadow_managed_models','modal_status'].map(id=>[id,{value:'',textContent:'',innerHTML:''}]));},
+    openModal(){manager.stop();nodes=Object.fromEntries(['shadow_model_manager','shadow_model_search','shadow_model_count','shadow_managed_models','modal_status'].map(id=>[id,{value:'',textContent:'',innerHTML:''}]));nodes.shadow_model_manager.querySelector=()=>({disabled:false});},
     modelSort:()=>0,compactContext:String,capabilitySummary:()=>'',uiIcon:()=>'<svg/>',isPreview:()=>false});
   const first=manager.open('api'),second=manager.open('api');
   assert.equal(q.calls[0].options.signal.aborted,true);

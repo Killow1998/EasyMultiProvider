@@ -38,6 +38,150 @@ fn vault(root: &Path) -> VaultStore {
 }
 
 #[test]
+fn vertex_migration_keeps_distinct_projects_locations_and_auth_modes() {
+    let key = json!({"type":"service_account","client_email":"fixture@example.invalid","private_key":"fixture-only"}).to_string();
+    for auth_mode in ["vertex_api_key", "vertex_service_account", "vertex_adc"] {
+        let key = if auth_mode == "vertex_adc" {
+            ""
+        } else {
+            key.as_str()
+        };
+        for change in ["project", "location", "auth_mode", "same"] {
+            let directory = tempdir().unwrap();
+            let root = root(&directory);
+            let path = root.join("config.json");
+            let vault = vault(&root);
+            let current = normalize_configuration(Some(&json!({
+                "providers":[{"id":"vertex","name":"Original","protocol":"auto","auth_mode":auth_mode,"api_key":key,"vertex":{"project":"original-project","location":"global"}}],
+                "models":[{"id":"vertex/model","provider":"vertex","upstream_id":"model"}]
+            }))).unwrap();
+            save_configuration(&current, Some(&path), &vault).unwrap();
+            let current = load_configuration(Some(&path)).unwrap();
+            let mut incoming = current["providers"][0].clone();
+            if auth_mode != "vertex_adc" || change != "same" {
+                incoming["name"] = "Imported".into();
+            }
+            if change == "auth_mode" {
+                incoming[change] = if auth_mode == "vertex_api_key" {
+                    "vertex_service_account"
+                } else {
+                    "vertex_api_key"
+                }
+                .into();
+            } else if change != "same" {
+                incoming["vertex"][change] = if change == "project" {
+                    "other-project"
+                } else {
+                    "us-central1"
+                }
+                .into();
+            }
+            let package = payload(
+                json!({"providers":[incoming],"models":[{"id":"vertex/model","provider":"vertex","upstream_id":"model"}]}),
+                json!([]),
+                json!({"vertex":key}),
+            );
+            let (imported, summary) =
+                import_migration_bundle(&current, &bundle(&package), PASSWORD, &path, &vault)
+                    .unwrap();
+            assert_eq!(
+                imported["providers"].as_array().unwrap().len(),
+                if change == "same" { 1 } else { 2 },
+                "{auth_mode}: {change}"
+            );
+            assert_eq!(
+                imported["providers"][0]["vertex"],
+                current["providers"][0]["vertex"]
+            );
+            assert_eq!(imported["providers"][0]["auth_mode"], auth_mode);
+            let target = &summary.provider_id_map["vertex"];
+            if change == "same" {
+                assert_eq!(target, "vertex");
+            } else {
+                assert_ne!(target, "vertex");
+            }
+            assert!(
+                imported["models"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|model| model["id"] == format!("{target}/model"))
+            );
+        }
+    }
+}
+
+#[test]
+fn reimporting_an_external_connection_keeps_all_published_names() {
+    let directory = tempdir().unwrap();
+    let root = root(&directory);
+    let path = root.join("config.json");
+    let vault = vault(&root);
+    let current = normalize_configuration(Some(&json!({
+        "providers":[{"id":"local","name":"Current","route_names":["Old name"],"base_url":"https://example.invalid/v1","api_key":"fixture-key"}],
+        "models":[{"id":"local/model","provider":"local","upstream_id":"model"}]
+    }))).unwrap();
+    save_configuration(&current, Some(&path), &vault).unwrap();
+    let current = load_configuration(Some(&path)).unwrap();
+    let source = payload(
+        json!({
+            "providers":[{"id":"remote","name":"Imported","route_names":["Remote old"],"base_url":"https://example.invalid/v1"}],
+            "models":[{"id":"remote/model","provider":"remote","upstream_id":"model"}]
+        }),
+        json!([]),
+        json!({"remote":"fixture-key"}),
+    );
+    let (imported, summary) =
+        import_migration_bundle(&current, &bundle(&source), PASSWORD, &path, &vault).unwrap();
+    assert_eq!(summary.provider_id_map["remote"], "local");
+    assert_eq!(imported["providers"].as_array().unwrap().len(), 1);
+    let reloaded = load_configuration(Some(&path)).unwrap();
+    for name in ["Old name", "Current", "Remote old", "Imported"] {
+        assert_eq!(
+            emp_state::config::resolve_client_model(&reloaded, &format!("{name}/model")).as_deref(),
+            Some("local/model"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn conflicting_service_names_remain_previewable_but_are_not_imported() {
+    let directory = tempdir().unwrap();
+    let root = root(&directory);
+    let path = root.join("target/config.json");
+    let vault = vault(&root);
+    let current = normalize_configuration(Some(&json!({"providers":[
+        {"id":"local", "name":"Work", "base_url":"https://local.test/v1"}
+    ]})))
+    .unwrap();
+    save_configuration(&current, Some(&path), &vault).unwrap();
+    let current = load_configuration(Some(&path)).unwrap();
+    let source = payload(
+        json!({"providers":[
+            {"id":"remote", "name":"work", "base_url":"https://remote.test/v1"}
+        ]}),
+        json!([]),
+        json!({}),
+    );
+    let before = fs::read(&path).unwrap();
+    let (preview, _, _) = emp_state::migration::preview_migration_import(
+        &current,
+        &source,
+        &path,
+        &vault,
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(preview["providers"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        import_migration_bundle(&current, &bundle(&source), PASSWORD, &path, &vault).unwrap_err(),
+        MigrationError::DuplicateServiceName
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+}
+
+#[test]
 fn import_merges_without_deleting_local_entries_and_reencrypts_provider_keys() {
     let directory = tempdir().expect("temporary directory");
     let root = root(&directory);

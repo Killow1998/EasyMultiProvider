@@ -5,6 +5,12 @@ use super::*;
 impl ExternalStream {
     pub async fn next_event(&mut self) -> Result<Option<StreamResponseEvent>, RouterError> {
         while let Some(event) = self.next_projected_event().await? {
+            if let Some(context) = &self.gemini
+                && event.event == "response.output_item.done"
+                && let Some(item) = event.body.get("item")
+            {
+                context.remember(item)?;
+            }
             let Some(projected) = self
                 .output
                 .project(&event.body)
@@ -153,7 +159,10 @@ impl ExternalStream {
             }
             match frame {
                 SseFrame::Done => match &mut self.projection {
-                    StreamProjection::Chat(projector) => {
+                    StreamProjection::Chat(projector)
+                    | StreamProjection::Gemini {
+                        chat: projector, ..
+                    } => {
                         projector.mark_done();
                         self.finish_projection()?;
                     }
@@ -183,6 +192,17 @@ impl ExternalStream {
             ));
         }
         match &mut self.projection {
+            StreamProjection::Gemini { source, chat } => {
+                for chunk in source.push(&value)? {
+                    self.observation.observe(&chunk, true);
+                    self.pending.extend(
+                        chat.push(&chunk, ChatFrame::Sse)
+                            .map_err(protocol_error)?
+                            .into_iter()
+                            .map(StreamResponseEvent::from),
+                    );
+                }
+            }
             StreamProjection::Chat(projector) => {
                 self.pending.extend(
                     projector
@@ -253,8 +273,16 @@ impl ExternalStream {
     }
 
     fn finish_projection(&mut self) -> Result<(), RouterError> {
+        if let StreamProjection::Gemini { source, chat } = &mut self.projection
+            && source.finished()
+        {
+            chat.mark_done();
+        }
         match &mut self.projection {
-            StreamProjection::Chat(projector) => {
+            StreamProjection::Chat(projector)
+            | StreamProjection::Gemini {
+                chat: projector, ..
+            } => {
                 self.pending.extend(
                     projector
                         .finish()

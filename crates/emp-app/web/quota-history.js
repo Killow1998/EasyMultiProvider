@@ -2,12 +2,12 @@
 function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compactWindowText,localTimeText,utcOffsetLabel,subscriptionPlanKey,subscriptionPlanLabel,subscriptionPlanColor,periods}) {
   const {periodPickerHtml,registerPeriodPicker,periodPickers,setPeriod,periodPresetRange,refreshPeriod,timeAxisTicks,timeAxisSvg} = periods;
   let activeQuotaAccountId = '', activeQuotaServiceKind = 'accounts', activeQuotaPool = false, quotaHistoryTimer = null,
-      quotaHistoryPayload = null, activeQuotaLimit = 'codex', activeQuotaWindow = '',
+      quotaHistoryPayload = null, activeQuotaLimit = 'codex',
       quotaHistoryZoom = [], quotaHistoryLoading = false, quotaHistoryLoadingVisible = false, query = null;
   const quotaChartColors = ['#3b82f6','#f59e0b','#10b981','#a855f7','#ef4444','#06b6d4'];
   function quotaLimitLabel(limitId) { return activeQuotaPool ? (limitId === 'claude' ? tr('services.cpa_quota_pool') : limitId.replace(/^account:/,'')) : ({codex:'Codex', claude:'Claude', codex_bengalfox:'Codex Spark'})[limitId] || limitId; }
   function quotaSeriesLabel(series) { const duration = compactWindowText(series.window_minutes); const label = duration === '?' ? (series.window_kind === 'primary' ? tr("services.primary") : tr("services.secondary")) : duration; return `${!series.limit_id || series.limit_id === 'codex' ? '' : quotaLimitLabel(series.limit_id) + ' · '}${label}`; }
-  function quotaSeriesColor(series, index) { return Number(series.window_minutes) === 300 ? '#3b82f6' : Number(series.window_minutes) === 10080 ? '#10b981' : quotaChartColors[index % quotaChartColors.length]; }
+  function quotaSeriesColor(series, index) { return ({300:'#3b82f6',10080:'#10b981',43200:'#a855f7'})[series.window_minutes] || quotaChartColors[index % quotaChartColors.length]; }
   function quotaPointBreak(previous, point, gapLimit) {
     if (!previous) return '';
     const priorReset = Number(previous.resets_at), reset = Number(point.resets_at);
@@ -162,28 +162,22 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
     }
     const preferred = activeQuotaPool ? 'claude' : 'codex';
     if (!groups.includes(activeQuotaLimit)) activeQuotaLimit = groups.includes(preferred) ? preferred : groups[0];
-    const groupSeries = allSeries.filter(item => (item.limit_id || 'codex') === activeQuotaLimit);
-    const windowKey = item => String(item.window_minutes || item.window_kind || 'unknown');
-    const windows = activeQuotaPool ? ['300','10080'] : [...new Set(groupSeries.map(windowKey))].sort((a,b) => Number(a) - Number(b));
-    if (!windows.includes(activeQuotaWindow)) activeQuotaWindow = windows[0];
-    const series = groupSeries.filter(item => windowKey(item) === activeQuotaWindow);
+    const series = allSeries.filter(item => (item.limit_id || 'codex') === activeQuotaLimit).sort((a,b) => Number(a.window_minutes)-Number(b.window_minutes));
     const tabs = activeQuotaPool ? `<select id="quota_history_account" aria-label="${esc(tr('services.account'))}">${['claude',...groups.filter(id=>id!=='claude')].map(id=>`<option value="${esc(id)}">${esc(quotaLimitLabel(id))}</option>`).join('')}</select>`
       : groups.length > 1 ? `<div class="quota-ranges quota-groups" aria-label="${esc(tr("services.quota_group"))}">${groups.map(id => `<button type="button" class="secondary" data-limit-id="${esc(id)}">${esc(quotaLimitLabel(id))}</button>`).join('')}</div>` : '';
-    const windowTabs = windows.length > 1 ? `<div class="quota-ranges quota-windows" role="group" aria-label="${esc(tr("services.quota_window"))}">${windows.map(key => `<button type="button" class="secondary" data-window="${esc(key)}">${esc(compactWindowText(key))}</button>`).join('')}</div>` : '';
     const planTimeline = view.end > view.start ? quotaPlanTimeline(payload.plans || [],view) : '';
     const legend = `<span>${quotaDisplay.label(tr)}</span>` + series.map((item,index) => { const samples = item.points.filter(point => quotaValidPoint(point) && point.observed_at >= view.start && point.observed_at <= view.end); const last = samples.length ? samples.reduce((latest, point) => Number(point.observed_at) > Number(latest.observed_at) ? point : latest) : null; const color = quotaSeriesColor(item,index); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(compactWindowText(item.window_minutes))}<strong>${last ? esc(quotaDisplay.value(last.remaining_percent)) + '%' : tr("services.no_data")}</strong></span>`; }).join('');
     const chart = view.end > view.start ? quotaChartSvg(series, view, quotaGapLimit(payload)) : '';
     const plot = chart ? `${chart}<div class="quota-chart-tooltip" role="status" hidden></div>` : `<div class="quota-empty">${quotaHistoryLoading ? tr("services.loading_records") : esc(quotaGapReason(view))}</div>`;
-    for (const [id, markup] of [['quota_history_controls',tabs+windowTabs],['quota_history_plan',planTimeline],['quota_history_legend',legend],['quota_history_plot',plot]]) { const node = $(id); if (node.quotaMarkup !== markup) { node.innerHTML = markup; node.quotaMarkup = markup; } }
+    for (const [id, markup] of [['quota_history_controls',tabs],['quota_history_plan',planTimeline],['quota_history_legend',legend],['quota_history_plot',plot]]) { const node = $(id); if (node.quotaMarkup !== markup) { node.innerHTML = markup; node.quotaMarkup = markup; } }
     content.querySelectorAll('.quota-hover-target').forEach(target => { target.onpointermove = quotaChartHover; target.onpointerleave = quotaChartLeave; });
-    $('quota_history_controls').querySelectorAll('[data-limit-id], [data-window]').forEach(button => { const selected = button.dataset.limitId ? button.dataset.limitId === activeQuotaLimit : button.dataset.window === activeQuotaWindow; button.classList.toggle('active',selected); button.setAttribute('aria-pressed',String(selected)); });
+    $('quota_history_controls').querySelectorAll('[data-limit-id]').forEach(button => { const selected = button.dataset.limitId === activeQuotaLimit; button.classList.toggle('active',selected); button.setAttribute('aria-pressed',String(selected)); });
     if (activeQuotaPool) $('quota_history_account').value = activeQuotaLimit;
     $('quota_history_range').textContent = view.end > view.start ? quotaTimeRangeText(view.start,view.end) : '';
     $('quota_history_back').hidden = !quotaHistoryZoom.length;
     $('quota_history_loading').hidden = !quotaHistoryLoading || !quotaHistoryLoadingVisible;
   }
   function selectQuotaHistoryGroup(limitId) { activeQuotaLimit = limitId; if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload); }
-  function selectQuotaHistoryWindow(windowKey) { activeQuotaWindow = windowKey; if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload); }
   function zoomQuotaHistory(target) {
     const period = periodPickers.quota_history; if (!period) return;
     quotaHistoryZoom.push({preset:period.preset, start:period.start, end:period.end});
@@ -209,7 +203,7 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
     activeQuotaPool = pool;
     openModal(tr(pool ? 'services.cpa_quota_trend' : "services.subscription_quota_trend"), `<div id="quota_history"><div class="quota-history-toolbar"><div id="quota_history_controls" class="quota-chart-toolbar"></div>${periodPickerHtml('quota_history', ['1h','1d','7d','15d'])}</div><div id="quota_history_content"></div></div>`, '', null);
     activeQuotaServiceKind = kind; activeQuotaAccountId = accountId;
-    activeQuotaLimit = pool ? 'claude' : 'codex'; activeQuotaWindow = ''; quotaHistoryZoom = [];
+    activeQuotaLimit = pool ? 'claude' : 'codex'; quotaHistoryZoom = [];
     const root = $('quota_history');
     query = createReportQuery({api,onResult:renderQuotaHistory,onState:(loading,error) => {
       quotaHistoryLoading = loading;
@@ -218,10 +212,9 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
       if (indicator) indicator.hidden = !loading || !quotaHistoryLoadingVisible;
     }});
     root.onclick = event => {
-      const target = event.target.closest('[data-limit-id],[data-window],.quota-segment,#quota_history_back');
+      const target = event.target.closest('[data-limit-id],.quota-segment,#quota_history_back');
       if (!target) return;
       if (target.dataset.limitId) selectQuotaHistoryGroup(target.dataset.limitId);
-      else if (target.dataset.window) selectQuotaHistoryWindow(target.dataset.window);
       else if (target.id === 'quota_history_back') backQuotaHistory();
       else zoomQuotaHistory(target);
     };

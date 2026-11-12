@@ -149,19 +149,32 @@ async fn query(client: &HttpClient, base: &str, key: &str) -> Result<Quota, &'st
             .accounts
             .iter()
             .filter(|account| account.enabled && !account.stale)
-            .filter_map(|account| account.windows.get(name))
-            .filter(|window| window.remaining_percent.is_some())
+            .filter_map(|account| {
+                let window = account.windows.get(name)?;
+                let weekly_block = account
+                    .windows
+                    .get("seven_day")
+                    .filter(|weekly| name == "five_hour" && weekly.remaining_percent == Some(0.0));
+                Some((window, weekly_block))
+            })
+            .filter(|(window, _)| window.remaining_percent.is_some())
             .collect::<Vec<_>>();
         let remaining = (!windows.is_empty()).then(|| {
             windows
                 .iter()
-                .map(|window| window.remaining_percent.expect("known quota"))
+                .map(|(window, weekly_block)| {
+                    if weekly_block.is_some() {
+                        0.0
+                    } else {
+                        window.remaining_percent.expect("known quota")
+                    }
+                })
                 .sum::<f64>()
                 / windows.len() as f64
         });
         let reset = windows
             .iter()
-            .filter_map(|window| window.reset_timestamp)
+            .filter_map(|(window, _)| window.reset_timestamp)
             .filter(|timestamp| *timestamp as f64 > now)
             .min();
         limits.insert(

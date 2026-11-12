@@ -121,6 +121,7 @@ pub enum MigrationError {
     InvalidAccounts,
     InvalidAccountRecord,
     DuplicateAccountIds,
+    DuplicateServiceName,
     InvalidProviderKeys,
     UnknownProviderKey,
     InvalidExportGroup,
@@ -156,6 +157,7 @@ impl fmt::Display for MigrationError {
             Self::InvalidAccounts => f.write_str("migration accounts are invalid"),
             Self::InvalidAccountRecord => f.write_str("migration account record is invalid"),
             Self::DuplicateAccountIds => f.write_str("migration account IDs must be unique"),
+            Self::DuplicateServiceName => f.write_str("core.service_name_already_in_use"),
             Self::InvalidProviderKeys => f.write_str("migration Provider keys are invalid"),
             Self::UnknownProviderKey => {
                 f.write_str("migration contains a key for an unknown Provider")

@@ -2,8 +2,9 @@ mod state;
 pub(crate) use state::ReviewState;
 
 use crate::app::ServerState;
-use crate::services::accounts::native_subscription_headers;
+use crate::services::accounts::{native_auth_document, native_subscription_headers};
 use crate::services::subscription_quota::headroom as quota_headroom;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use emp_core::{ResolvedRoute, RouteResolutionError, RouteSource, resolved_route_from_parts};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
@@ -48,11 +49,45 @@ pub(crate) fn resolve_auto_review_route(
         native_quota.as_ref(),
         native_available,
         &cooling,
+        |id| {
+            let auth = if id == "@native" {
+                native_auth_document(&state.backend.accounts.native_auth_path)
+            } else {
+                let account = config_object
+                    .get("accounts")?
+                    .as_array()?
+                    .iter()
+                    .find(|account| account["id"] == id)?;
+                state
+                    .backend
+                    .configuration
+                    .vault
+                    .read_encrypted_json(std::path::Path::new(account["auth_file"].as_str()?))
+                    .ok()
+            }?;
+            let auth = auth.as_object()?;
+            let tokens = auth
+                .get("tokens")
+                .and_then(Value::as_object)
+                .unwrap_or(auth);
+            ["id_token", "access_token"].into_iter().find_map(|key| {
+                let payload = tokens.get(key)?.as_str()?.split('.').nth(1)?;
+                let bytes = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
+                let claims: Value = serde_json::from_slice(&bytes).ok()?;
+                claims["https://api.openai.com/auth"]["chatgpt_plan_type"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+        },
     );
     config
         .as_object_mut()?
         .insert("_auto_review_candidates".to_owned(), json!(candidates));
-    route_from_candidates(state, config, requested_model)
+    route_from_candidates(state, config, requested_model).or_else(|| {
+        Some(Err(RouteResolutionError::ProviderUnavailable(
+            "Auto Review requires an eligible subscription; Free and Go are excluded".to_owned(),
+        )))
+    })
 }
 
 pub(crate) fn automatic_review_candidates(
@@ -60,9 +95,10 @@ pub(crate) fn automatic_review_candidates(
     native_quota: Option<&Value>,
     native_available: bool,
     cooling: &BTreeSet<String>,
+    auth_plan: impl Fn(&str) -> Option<String>,
 ) -> Vec<String> {
     let mut candidates = Vec::new();
-    if native_available {
+    if native_available && !excluded_review_plan(native_quota, || auth_plan("@native")) {
         candidates.push(Candidate {
             id: "@native".to_owned(),
             native: true,
@@ -87,6 +123,7 @@ pub(crate) fn automatic_review_candidates(
                 || account.get("enabled") == Some(&Value::Bool(false))
                 || !account.get("auth_file").is_some_and(is_python_truthy)
                 || account.get("credential_status").and_then(Value::as_str) == Some("invalid")
+                || excluded_review_plan(account.get("quota"), || auth_plan(id))
             {
                 continue;
             }
@@ -141,6 +178,14 @@ pub(crate) fn automatic_review_candidates(
     });
     native.append(&mut imported);
     native.into_iter().map(|candidate| candidate.id).collect()
+}
+
+fn excluded_review_plan(quota: Option<&Value>, auth_plan: impl FnOnce() -> Option<String>) -> bool {
+    quota
+        .and_then(|quota| quota["plan_type"].as_str())
+        .map(str::to_owned)
+        .or_else(auth_plan)
+        .is_some_and(|plan| matches!(plan.trim().to_ascii_lowercase().as_str(), "free" | "go"))
 }
 
 fn route_from_candidates(

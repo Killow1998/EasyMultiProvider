@@ -254,7 +254,7 @@ pub fn normalize_account(raw: &Value) -> AccountResult<Value> {
         _ => Value::Null,
     };
 
-    Ok(serde_json::json!({
+    let mut account = serde_json::json!({
         "id": id,
         "name": name,
         "prefix": prefix,
@@ -264,7 +264,27 @@ pub fn normalize_account(raw: &Value) -> AccountResult<Value> {
         "hidden_models": hidden_models,
         "model_context_windows": model_context_windows,
         "quota": quota,
-    }))
+    });
+    if let Some(names) = raw.get("route_names") {
+        let names = names
+            .as_array()
+            .ok_or_else(|| AccountError::new("account.route_names must be an array"))?;
+        let mut routes = Vec::new();
+        for value in names {
+            let name = value
+                .as_str()
+                .map(python_trim)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| AccountError::new("account.route_names must contain names"))?;
+            if !routes.contains(&name) {
+                routes.push(name);
+            }
+        }
+        if !routes.is_empty() {
+            account["route_names"] = serde_json::json!(routes);
+        }
+    }
+    Ok(account)
 }
 
 fn account_segment(raw: Option<&Value>, field: &str) -> AccountResult<String> {
@@ -294,11 +314,7 @@ fn account_segment(raw: Option<&Value>, field: &str) -> AccountResult<String> {
     Ok(trimmed.to_owned())
 }
 
-/// Return the Python-derived managed credential path for one account.
-///
-/// The caller supplies already normalized configuration. Path errors keep
-/// Python's `AccountError` type; `_canonicalize_private_paths` converts them to
-/// `ConfigError` at the public configuration boundary.
+/// Return the managed credential path for one normalized account.
 pub fn account_auth_path(
     config: &Value,
     account_id: &str,

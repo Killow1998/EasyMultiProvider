@@ -233,6 +233,8 @@ fn commit_selected(
             )
             .map_err(MigrationError::invalid)?;
             preferences::apply(&mut target, &resolution.updates);
+            emp_state::config::validate_service_names(config, &target)
+                .map_err(MigrationError::invalid)?;
             config
                 .commit_migration(&target, &auth)
                 .map_err(MigrationError::invalid)?;

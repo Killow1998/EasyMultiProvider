@@ -66,6 +66,10 @@ pub(super) fn prepare_with_config(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or(RequestPreparationError::ModelRequired)?;
+    if let Some(canonical) = emp_state::config::resolve_client_model(&config, model) {
+        request.insert("model".to_owned(), canonical.into());
+    }
+    let model = request["model"].as_str().expect("validated model");
     hydrate_provider_keys(&mut config, &state.backend.configuration.vault);
     if let Some(config) = config.as_object_mut() {
         if emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path) == "api_key"

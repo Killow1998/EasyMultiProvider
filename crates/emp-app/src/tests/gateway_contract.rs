@@ -2,6 +2,164 @@
 use super::*;
 
 #[test]
+fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_identity() {
+    use sha2::{Digest, Sha256};
+    let (directory, server) = test_server();
+    let config = directory.path().join("config.json");
+    let path = directory.path().join("state/gateway-clients.json");
+    let value = |response: &str| -> Value {
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    let issued = value(&post(
+        &server,
+        "/api/gateway/clients",
+        br#"{"name":"Test PC"}"#,
+        &[&session_header(&server)],
+    ));
+    let key = issued["api_key"].as_str().unwrap();
+    let id = issued["id"].as_str().unwrap();
+    let persisted = std::fs::read(&path).unwrap();
+    assert!(persisted.starts_with(emp_state::vault::VAULT_MAGIC));
+    assert!(
+        !persisted
+            .windows(key.len())
+            .any(|part| part == key.as_bytes())
+    );
+    assert!(
+        request(
+            &server,
+            "/api/gateway/clients",
+            &[&format!("Authorization: Bearer {key}")]
+        )
+        .starts_with("HTTP/1.1 401")
+    );
+    server.shutdown().unwrap();
+    let server =
+        ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();
+    let listed = value(&request(
+        &server,
+        "/api/gateway/clients",
+        &[&session_header(&server)],
+    ));
+    assert_eq!(listed["clients"][0]["api_key"], key);
+    assert_eq!(
+        server
+            .state
+            .backend
+            .gateway_clients
+            .identify(key)
+            .unwrap()
+            .id,
+        id
+    );
+    server.shutdown().unwrap();
+    std::fs::write(&path,serde_json::to_vec(&json!([{"id":id,"name":"Test PC","digest":format!("{:x}",Sha256::digest(key.as_bytes())),"created_at":1.0}])).unwrap()).unwrap();
+    let server =
+        ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();
+    assert!(
+        value(&request(
+            &server,
+            "/api/gateway/clients",
+            &[&session_header(&server)]
+        ))["clients"][0]["api_key"]
+            .is_null()
+    );
+    assert_eq!(
+        server
+            .state
+            .backend
+            .gateway_clients
+            .identify(key)
+            .unwrap()
+            .id,
+        id
+    );
+    let replaced = value(&post(
+        &server,
+        "/api/gateway/clients",
+        &serde_json::to_vec(&json!({"id":id})).unwrap(),
+        &[&session_header(&server)],
+    ));
+    assert_eq!(replaced["id"], id);
+    let replacement = replaced["api_key"].as_str().unwrap();
+    assert_ne!(key, replacement);
+    assert!(server.state.backend.gateway_clients.identify(key).is_none());
+    assert_eq!(
+        server
+            .state
+            .backend
+            .gateway_clients
+            .identify(replacement)
+            .unwrap()
+            .id,
+        id
+    );
+    server.shutdown().unwrap();
+    let server =
+        ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();
+    assert_eq!(
+        value(&request(
+            &server,
+            "/api/gateway/clients",
+            &[&session_header(&server)]
+        ))["clients"][0]["api_key"],
+        replacement
+    );
+    server
+        .state
+        .backend
+        .gateway_clients
+        .remove(id, &server.state.backend.configuration.vault)
+        .unwrap();
+    assert!(
+        server
+            .state
+            .backend
+            .gateway_clients
+            .identify(replacement)
+            .is_none()
+    );
+    assert!(
+        server
+            .state
+            .backend
+            .gateway_clients
+            .list()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn gateway_usage_rejects_invalid_periods_as_client_errors() {
+    let (_directory, server) = test_server();
+    let session = session_header(&server);
+    assert!(
+        request(&server, "/api/gateway/usage?start=0&end=10", &[&session])
+            .starts_with("HTTP/1.1 200")
+    );
+    for period in [
+        "start=NaN&end=10",
+        "start=0&end=inf",
+        "start=-1&end=10",
+        "start=10&end=5",
+        "start=10&end=10",
+        "start=invalid&end=10",
+    ] {
+        let response = request(
+            &server,
+            &format!("/api/gateway/usage?{period}"),
+            &[&session],
+        );
+        assert!(response.starts_with("HTTP/1.1 400"), "{period}: {response}");
+    }
+    server.shutdown().unwrap();
+}
+
+#[test]
 fn gateway_key_survives_login_changes_and_cannot_open_management_endpoints() {
     let (directory, server) = test_server();
     let key = server.state.backend.gateway_key.clone();

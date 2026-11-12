@@ -1,66 +1,47 @@
 # HTTP forwarding
 
-External HTTP requests use urllib3 connection pools through `http_pool.py`.
-Managers are separated by the current proxy URL; loopback providers bypass proxies.
-Origin credentials remain request headers and are never stored as manager defaults.
-HTTP proxy userinfo is URL-decoded into proxy-only authentication headers, including
-CONNECT requests. Different proxy credentials select different managers.
-The manager cache keeps four proxy configurations, each with at most sixteen origin
-pools. A pool retains up to 32 idle connections; it does not impose a new generation
-concurrency limit or wait queue.
+EMP uses the Rust transport in `crates/emp-transport/src/http_client.rs`.
+Reqwest clients are reused by proxy and redirect policy. The cache retains at
+most four client configurations; each destination keeps up to 32 idle
+connections for 60 seconds. These are idle-connection limits, not generation
+concurrency limits. Authorization remains a per-request header.
 
-TLS uses the verified operating-system context selected at startup. Redirects and
-automatic transport retries are disabled so POST bodies and authorization headers
-cannot be silently replayed. Existing route-level retry rules remain unchanged.
+Proxy selection is performed by `http_policy` and `system_proxy`. Loopback
+requests bypass proxies. Native WebSocket preparation and its handshake use the
+same selected proxy snapshot. Later requests can observe refreshed system
+settings without changing an in-flight request.
 
-SSE iteration uses `read1` and a line buffer, rather than waiting to fill a large
-read buffer. Incomplete lines are limited to 1 MiB at this layer, including the
-newline when present; scanning resumes at newly received bytes. An oversized line
-closes the connection before the outer SSE parser can be bypassed by buffering.
-Completed HTTP bodies return their connection to the pool. Cancelled
-or unread responses close their connection. A validated Responses terminal permits
-up to 100 ms / 64 KiB of trailing HTTP cleanup after terminal delivery, allowing the
-final chunk to be consumed. If cleanup cannot finish, the connection is discarded.
-This cleanup budget does not extend generation or first-output timeouts.
+TLS verification stays enabled. Ordinary requests reject redirects; callers
+that explicitly need redirects use the bounded same-origin path. Transport-level
+retries are disabled. Route-level recovery decides whether a request can be
+sent again, so a failed POST is not silently replayed by the HTTP client.
 
-`tests/test_http_pool.py` checks reuse using actual TCP client ports, early SSE
-delivery before the upstream finishes, cancellation, bounded cleanup, credential
-separation, proxy changes, and the absence of automatic replay/redirects.
+Streaming responses are read incrementally. Response reads enforce decoded-body
+limits and first-event/idle deadlines. After a validated terminal event, cleanup
+may drain at most 64 KiB within 100 ms. Unread, cancelled or unfinished responses
+lose their connection; cleanup does not extend generation timeouts.
 
-Native compressed WebSocket plans carry the selected proxy from preparation into
-the handshake. The connection key uses that same snapshot; the next plan reads
-system settings again. Successful responses and pongs remain fresh for 20 seconds,
-after which reuse requires a new probe. Send attempts invalidate health until a
-successful terminal arrives. Ordinary send failures are not automatically replayed.
-The sole after-send exception is a peer-initiated 1009 (message too big) close
-before any response event: the full request falls back to the existing HTTP/zstd
-path inside EMP, without first sending `response.failed` to Codex. That route
-stays on HTTP for the remainder of this downstream connection; other routes and
-connections retain native WebSocket support. An incremental request still asks
-Codex for a full retry with `previous_response_not_found`, rather than dropping
-its transport state and forwarding only the delta. Local 1009 closes, accepted
-requests, output/tool activity and ambiguous disconnects do not permit replay.
-Native pre-output events share the external stream's 256-event / 1 MiB limits.
-The downstream WebSocket uses each event's existing UTF-8 JSON encoding for both
-the byte count and transmission.
+Native WebSocket failures can temporarily use HTTP/SSE. The affected route waits
+30 seconds before a later full-history request may try WebSocket again. An
+incremental request that cannot reuse its continuation asks Codex to resend full
+history; EMP does not forward its delta as a complete conversation. A failed
+probe does not automatically repeat inference. The implementation is in
+`crates/emp-app/src/services/native_connections.rs` and the native continuation
+path.
 
-A same-path network A/B check on 2026-09-14 measured warm-request medians of 819 ms
-with a new connection and 193 ms with pooling (five samples each, excluding the
-first connection). This isolates connection overhead; it is not a model TTFT or
-TPS benchmark. Large history uploads and upstream generation latency remain
-separate costs.
+## Verification
 
-A 2026-09-18 investigation found repeated 1009 closes for an approximately
-48 MB native WebSocket request, followed by successful HTTP/zstd forwarding of
-the same logical history. Codex's client source keeps a failed WebSocket fallback
-at session scope; EMP must not multiply that transition into repeated failed
-model responses. The older journal lacks close-frame ordering, so it cannot
-establish which peer initiated those historical 1009 closes. New exception
-diagnostics retain the close ordering without its reason or frame contents.
-The local patch ran 103 relevant tests successfully (one platform-specific skip),
-including a real compressed loopback socket's close ordering, one internal HTTP
-fallback, subsequent full-request recovery, non-replay guards and preserved
-prompt-cache keys. Compressed connections now explicitly own the library's
-context-manager lifetime across supported versions. This is controlled
-regression evidence, not a measured improvement in real model TTFT or an
-installed-app test.
+- `crates/emp-transport/tests/http_client.rs`: real loopback TCP/TLS tests for
+  pooling, credential separation, redirects, absence of automatic POST replay,
+  early streaming, cancellation, deadlines and response limits.
+- `crates/emp-transport/src/http_client/tests.rs`: proxy changes and the bounded
+  client cache.
+- `crates/emp-app/src/tests/native_api_contract/continuation/transport.rs`:
+  HTTP fallback, WebSocket recovery after cooldown and continuation isolation.
+
+The 2026-09-14 Python implementation measured warm connection medians of 819 ms
+without pooling and 193 ms with pooling (five samples each). Those historical
+measurements describe connection overhead, not current Rust performance or model
+TTFT. Current transport acceptance uses the Rust contracts listed above.
+The 2026-09-18 Python diagnosis reproduced a 1009 close with roughly 48 MB of
+history and passed 103 related tests; that result belongs to the old transport.

@@ -116,8 +116,71 @@ function chooseOfficialProvider(key, serviceContext = null, navigation = {}) {
   const keyField = preset.auth_mode === 'forward' ? `<p class="muted">${tr("services.use_codex_sign_in")}</p>` : apiKeyField('modal_provider_key', existing?.api_key_set);
   openModal(tr("services.configure") + preset.name, `${keyField}<details class="provider-connection-details"><summary>${tr("services.connection_details")}</summary><p class="muted">${tr("common.base_url")}: <code>${esc(preset.base_url)}</code><br>${tr("reports.protocol")}: ${esc(protocolLabel(preset.protocol))}<br>${tr("services.authentication")}: ${esc(authLabel(preset.auth_mode))}</p></details>`, tr("services.save_service"), async () => {
     const keyValue = preset.auth_mode === 'forward' ? '' : $('modal_provider_key').value.trim(); if (preset.auth_mode !== 'forward' && !keyValue && !(existing && existing.api_key_set)) throw new Error(tr("services.enter_an_api_key"));
-    await saveAndClose(Object.assign({}, preset, {api_key:keyValue}));
+    await saveAndClose(Object.assign({}, preset, {api_key:keyValue}), navigation.done);
   }, serviceContext, navigation);
+}
+function openVertexProvider(existing = {}, serviceContext = null, navigation = {}) {
+  const editing = Boolean(existing.id);
+  serviceContext ||= editing ? {id:existing.id, kind:'provider', active:'edit'} : null;
+  let defaultName = 'Vertex AI';
+  for (let suffix = 2; !editing && providerNameTaken(defaultName); suffix++) defaultName = `Vertex AI ${suffix}`;
+  const body = `<div class="grid">
+    <div><label>${tr('services.name')}<input id="modal_vertex_name" value="${esc(existing.name || defaultName)}"></label></div>
+    <div><label>${tr('services.vertex_auth')}<select id="modal_vertex_auth"><option value="vertex_api_key">${tr('services.vertex_api_key')}</option><option value="vertex_adc">${tr('services.vertex_adc')}</option><option value="vertex_service_account">${tr('services.vertex_service_account')}</option></select></label></div>
+    <div id="modal_vertex_project_group"><label><span id="modal_vertex_project_label">${tr('services.vertex_project')}</span><input id="modal_vertex_project" value="${esc(existing.vertex?.project || '')}"></label></div>
+    <div id="modal_vertex_location_group"><label>${tr('services.vertex_region')}<input id="modal_vertex_location" value="${esc(existing.vertex?.location || 'global')}"></label></div>
+    <div class="wide" id="modal_vertex_api_key_group">${apiKeyField('modal_vertex_api_key', existing.auth_mode === 'vertex_api_key' && existing.api_key_set)}</div>
+    <div class="wide" id="modal_vertex_json_group"><label>${tr('services.vertex_service_account')}<textarea id="modal_vertex_json" rows="5" spellcheck="false" placeholder="${existing.auth_mode === 'vertex_service_account' && existing.api_key_set ? '******' : ''}"></textarea></label><input type="file" id="modal_vertex_file" accept=".json,application/json"></div>
+    <p class="muted wide" id="modal_vertex_help"></p></div>`;
+  openModal(editing ? tr('services.configure')+'Vertex AI' : 'Vertex AI', body, tr('services.save_service'), async () => {
+    const mode = $('modal_vertex_auth').value;
+    const project = $('modal_vertex_project').value.trim();
+    const key = mode === 'vertex_api_key' ? $('modal_vertex_api_key').value.trim()
+      : mode === 'vertex_service_account' ? $('modal_vertex_json').value.trim() : '';
+    const savedForMode = existing.auth_mode === mode && existing.api_key_set;
+    if (mode !== 'vertex_api_key' && !project) throw new Error(tr('services.vertex_project_required'));
+    if (mode !== 'vertex_adc' && !key && !savedForMode) throw new Error(tr('services.vertex_key_or_json'));
+    if (mode === 'vertex_service_account' && key) {
+      let parsed;
+      try { parsed = JSON.parse(key); } catch (_) { throw new Error(tr('services.vertex_json_invalid')); }
+      if (parsed.type !== 'service_account' || !parsed.private_key || !parsed.client_email) throw new Error(tr('services.vertex_json_invalid'));
+    }
+    await saveAndClose({id:existing.id || 'service-'+randomId().slice(0,8),
+      name:$('modal_vertex_name').value.trim() || defaultName, base_url:'https://aiplatform.googleapis.com/v1',
+      protocol:'auto', auth_mode:mode, api_key:key,
+      vertex:{project, location:$('modal_vertex_location').value.trim() || 'global'}}, navigation.done);
+  }, serviceContext, navigation);
+  const auth = $('modal_vertex_auth');
+  const form = $('modal_body').firstElementChild;
+  const credentialsInput = $('modal_vertex_json');
+  const projectInput = $('modal_vertex_project');
+  auth.value = existing.auth_mode?.startsWith('vertex_') ? existing.auth_mode : 'vertex_api_key';
+  function updateFields() {
+    const mode = auth.value;
+    const express = mode === 'vertex_api_key' && !$('modal_vertex_project').value.trim();
+    $('modal_vertex_location_group').hidden = express;
+    $('modal_vertex_project_group').classList.toggle('wide', express);
+    $('modal_vertex_project_label').textContent = tr(mode === 'vertex_api_key' ? 'services.vertex_project_optional' : 'services.vertex_project');
+    $('modal_vertex_api_key_group').hidden = mode !== 'vertex_api_key';
+    $('modal_vertex_json_group').hidden = mode !== 'vertex_service_account';
+    $('modal_vertex_help').textContent = tr(mode === 'vertex_adc' ? 'services.vertex_adc_help' : mode === 'vertex_api_key' ? 'services.vertex_key_help' : 'services.vertex_json_help');
+  }
+  auth.addEventListener('change', updateFields);
+  $('modal_vertex_project').addEventListener('input', updateFields); updateFields();
+  function fillProjectFromJson() {
+    if (projectInput.value.trim()) return;
+    try { const project = JSON.parse(credentialsInput.value).project_id; if (project) { projectInput.value = project; updateFields(); } } catch (_) {}
+  }
+  credentialsInput.addEventListener('input', fillProjectFromJson);
+  $('modal_vertex_file').addEventListener('change', async event => {
+    const file = event.target.files[0];
+    if (file) {
+      const content = await file.text();
+      if ($('modal_body').firstElementChild !== form) return;
+      credentialsInput.value = content;
+      fillProjectFromJson();
+    }
+  });
 }
 function openCustomProviderForm(existing, serviceContext = null, navigation = {}) {
   existing = existing || {};
@@ -127,7 +190,7 @@ function openCustomProviderForm(existing, serviceContext = null, navigation = {}
     const id = existing.id || 'service-'+randomId().slice(0,8); const base = $('modal_provider_base').value.trim(); if (!base) throw new Error(tr("services.base_url_is_required")); const keyValue = $('modal_provider_key').value.trim();
     const protocolValue = $('modal_provider_protocol').value; const authMode = $('modal_provider_auth').value;
     if (authMode !== 'forward' && !keyValue && !existing.api_key_set) throw new Error(tr("services.enter_an_api_key"));
-    await saveAndClose({id, name:$('modal_provider_name').value.trim() || tr("services.api_service"), base_url:base, protocol:protocolValue, auth_mode:authMode, api_key:keyValue});
+    await saveAndClose({id, name:$('modal_provider_name').value.trim() || tr("services.api_service"), base_url:base, protocol:protocolValue, auth_mode:authMode, api_key:keyValue}, navigation.done);
   }, serviceContext, navigation);
   const protocol = $('modal_provider_protocol'); protocol.innerHTML = providerProtocolOptions(); protocol.value = existing.protocol || 'auto';
   if (existing.auth_mode) $('modal_provider_auth').value = existing.auth_mode;
@@ -135,21 +198,25 @@ function openCustomProviderForm(existing, serviceContext = null, navigation = {}
 function editProvider(id, navigation = {}) {
   const provider = (getState().providers || []).find(p => p.id === id); if (!provider) return;
   const context = {id, kind:'provider', active:'edit'};
-  if (provider.execution_backend === 'claude_cli') editClaudeProvider(provider, context, navigation);
+  if (provider.vertex) openVertexProvider(provider, context, navigation);
+  else if (provider.execution_backend === 'claude_cli') editClaudeProvider(provider, context, navigation);
   else openCustomProviderForm(provider, context, navigation);
 }
-async function saveAndClose(provider) {
+async function saveAndClose(provider, done) {
   const owner=$('modal_body').firstElementChild;
   await saveProvider(provider);
-  if(owner?.isConnected)closeModal();
+  if(owner?.isConnected)done ? done(provider.id) : closeModal();
 }
 async function saveProvider(provider) {
-  const old = (getState().providers || []).find(p => p.id === provider.id); const localLogin = provider.execution_backend === 'claude_cli' && provider.auth_mode === 'claude_login'; const apiKey = localLogin ? '' : provider.api_key || (old && old.api_key_set ? '••••••••' : '');
+  const old = (getState().providers || []).find(p => p.id === provider.id); const localLogin = provider.execution_backend === 'claude_cli' && provider.auth_mode === 'claude_login';
+  const vertexAdc = provider.auth_mode === 'vertex_adc';
+  const authChanged = old && (old.vertex || provider.vertex) && old.auth_mode !== provider.auth_mode;
+  const apiKey = localLogin || vertexAdc ? '' : provider.api_key || (old && old.api_key_set && !authChanged ? '••••••••' : '');
   const candidate = cloneState(); const next = Object.assign({}, old || {}, provider, {api_key:apiKey, enabled:true});
   if (localLogin) { next.base_url = ''; next.api_key = ''; next.api_key_file = ''; delete next.api_key_set; }
   const index = candidate.providers.findIndex(p => p.id === next.id); if (index >= 0) candidate.providers[index] = next; else candidate.providers.push(next); await persistState('', candidate);
   const saved = (getState().providers || []).find(p => p.id === provider.id);
-  if (!saved || (saved.auth_mode !== 'forward' && saved.auth_mode !== 'claude_login' && !saved.api_key_set)) throw new Error(tr("services.the_api_key_was_not_saved_enter_it_again"));
+  if (!saved || (!['forward', 'claude_login', 'vertex_adc'].includes(saved.auth_mode) && !saved.api_key_set)) throw new Error(tr("services.the_api_key_was_not_saved_enter_it_again"));
   notice(tr("services.service_saved"));
 }
 async function removeProvider(id) {
@@ -165,5 +232,5 @@ async function removeProvider(id) {
 }
 
 
-return {openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openCustomProviderForm,editProvider,removeProvider};
+return {openClaudeConnectionChooser,openClaudeCpaForm,openLocalClaudeSubscriptionForm,chooseOfficialProvider,openVertexProvider,openCustomProviderForm,editProvider,removeProvider};
 }

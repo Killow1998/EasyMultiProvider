@@ -2402,6 +2402,16 @@
     },
     {
       "provider_key": "google_gemini",
+      "model_id": "gemini-4-carbon",
+      "display_name": "gemini-4-carbon",
+      "reviewed_at": "2026-11-12",
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "aliases": [],
+      "sources_by_field": {"input_modalities": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-carbon"], "output_modalities": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-carbon"]}
+    },
+    {
+      "provider_key": "google_gemini",
       "model_id": "gemini-4-argon",
       "display_name": "gemini-4-argon",
       "reviewed_at": "2026-10-30",

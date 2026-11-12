@@ -98,8 +98,10 @@ impl ConfigurationEdit<'_> {
         candidate: &Value,
         files: &mut FileTransaction,
     ) -> Result<Value, ConfigError> {
+        let mut candidate = candidate.clone();
+        emp_state::config::preserve_service_route_names(&self.current, &mut candidate);
         save_configuration_in_transaction(
-            candidate,
+            &candidate,
             Some(&self.store.config_path),
             &self.store.vault,
             files,

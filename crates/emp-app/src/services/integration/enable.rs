@@ -82,6 +82,11 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
     let auth_path = &state.backend.accounts.native_auth_path;
     let created = emp_integration::local_auth::ensure(auth_path, &state.backend.gateway_key)
         .map_err(|_| EnableError::Unavailable(409))?;
+    if created && refresh_catalog(state).is_err() {
+        emp_integration::local_auth::restore(auth_path)
+            .map_err(|_| EnableError::Unavailable(409))?;
+        return Err(EnableError::Unavailable(503));
+    }
     let auth = emp_integration::local_auth::read(auth_path)
         .map_err(|_| EnableError::Unavailable(409))?
         .ok_or(EnableError::Unavailable(409))?;

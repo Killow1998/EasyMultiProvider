@@ -6,8 +6,9 @@ pub fn safe_id(value: Option<&Value>, fallback: &str) -> String {
     let Some(text) = value.and_then(Value::as_str).map(str::trim).filter(|s| {
         !s.is_empty()
             && s.len() <= 256
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'/' | b':' | b'-'))
+            && s.bytes().all(|b| {
+                b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'/' | b':' | b'-' | b'@')
+            })
     }) else {
         return fallback.to_owned();
     };

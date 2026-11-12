@@ -49,7 +49,7 @@ fn failed_merged_catalog_write_recovers_from_unchanged_source_cache() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|model| model["slug"] == "demo/first-account-model")
+            .any(|model| model["slug"] == "Demo/first-account-model")
     );
     server.shutdown().expect("shutdown");
 }

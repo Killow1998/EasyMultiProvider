@@ -25,7 +25,7 @@ test('usage groups service types before models and preserves account/tier detail
     row('unknown','history:legacy',0,{model:'<legacy>',input_reports:0,output_reports:0,priced_requests:0}),
   ]};
   const original = JSON.stringify(data);
-  const usage = feature('service-usage.js', 'createServiceUsage')({esc, tr, number:String, money:value => 'USD ' + value, dateTime:String,
+  const usage = feature('service-usage.js', 'createServiceUsage')({modelName:String, esc, tr, number:String, money:value => 'USD ' + value, dateTime:String,
     renderLifetime:feature('service-presentation.js','renderLifetimeUsage',{esc,tr})});
   const html = usage.renderGroups(data, [
     {id:'local',execution_backend:'claude_cli',auth_mode:'claude_login'},
@@ -87,7 +87,7 @@ test('old bookmarks and page reloads reuse the stored header session', async () 
 });
 
 test('common call details escape model/session names and keep missing metrics empty', () => {
-  const reports = feature('call-reports.js','createCallReports')({tr,esc,getLanguage:() => 'en'});
+  const reports = feature('call-reports.js','createCallReports')({modelName:String,serviceName:String, tr,esc,getLanguage:() => 'en'});
   const html = reports.recordHtml({request_id:'one',session_name:'<script>',client_model:'selected',upstream_model:'sent',response_model:'reported',state:'completed',input_tokens:100,cached_input_tokens:50,output_tokens:20});
   assert.match(html,/&lt;script&gt;/);
   assert.match(html,/Selected in Codex/);assert.match(html,/Sent upstream/);assert.match(html,/Reported upstream/);
@@ -97,7 +97,7 @@ test('common call details escape model/session names and keep missing metrics em
 
 test('call details distinguish visible generation from the full request rate in both languages', () => {
   for (const language of ['en','zh-CN']) {
-    const reports = feature('call-reports.js','createCallReports')({tr:uiTranslate(language),esc,getLanguage:() => language});
+    const reports = feature('call-reports.js','createCallReports')({modelName:String,serviceName:String, tr:uiTranslate(language),esc,getLanguage:() => language});
     const row = {request_id:'one',state:'completed',duration_ms:10000,ttft_ms:1,
       first_content_ms:2000,tokens_per_second:20,generation_tokens_per_second:80};
     const html = reports.recordHtml(row);
@@ -112,7 +112,7 @@ test('call details distinguish visible generation from the full request rate in 
 });
 
 test('request success separates model failures, recovery and client cancellation', () => {
-  const reports = feature('call-reports.js','createCallReports')({tr,esc,getLanguage:() => 'en'});
+  const reports = feature('call-reports.js','createCallReports')({modelName:String,serviceName:String, tr,esc,getLanguage:() => 'en'});
   const result = reports.outcomes({calls:20,completed:9,failed:1,interrupted:2,cancelled:3,recovery_required:4,unknown:1,success_samples:10,failure_breakdown:[{origin:'transport',code:'upstream_error',count:1}]});
   assert.equal(result.value,'90.0%'); assert.equal(result.label,'Request success rate');
   assert.match(result.hint,/1 failed/); assert.match(result.detailsHtml,/4 history resends/); assert.match(result.detailsHtml,/Connection<\/td><td>Response transport failed/);
@@ -155,7 +155,7 @@ test('call queries coalesce events and discard stale filters and closed windows'
   const report = id => ({start:0,end:Date.now()/1000,records:[{request_id:id,client_model:id,state:'completed'}],total:1,offset:0,limit:50});
   const reports = feature('call-reports.js','createCallReports', {
     URLSearchParams, createReportQuery:feature('report-query.js','createReportQuery',{AbortController}), setReportState() {}, setTimeout:fn => { timers.set(fn,fn); return fn; }, clearTimeout:id => timers.delete(id),
-  })({tr,esc,getLanguage:() => 'en',getState:() => ({}),getActivity:() => ({}),$:() => root,openModal() {},
+  })({modelName:String,serviceName:String,tr,esc,getLanguage:() => 'en',getState:() => ({}),getActivity:() => ({}),$:() => root,openModal() {},
     periodPickerHtml:() => '',registerPeriodPicker:(_id,_preset,onChange,range) => onChange(range || {start:0,end:Date.now()/1000}),
     api:(path,options) => { const pending=deferred(); requests.push({path,options,...pending}); return pending.promise; }});
   const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
@@ -257,7 +257,7 @@ test('closing diagnostics discards in-flight reports without a polling timer', a
 
 // Native browser effects are accepted in E2E; this VM checks page binding order.
 test('usage services display account labels and distinguish unlinked history without exposing fingerprints', () => {
-  const usage = feature('usage-data.js', 'createUsageData')({tr, esc, number:String});
+  const usage = feature('usage-data.js', 'createUsageData')({modelName:String,serviceName:String, tr, esc, number:String});
   const amount = {model:'model',requests:1,priced_requests:0,input_tokens:10,output_tokens:2,cached_input_tokens:0,cost_nanos:0};
   const groups = [
     {...amount,category:'subscription',owner:'account:private-fingerprint',owner_name:'Native',owner_email:'n***@fixture.invalid',owner_local_id:'@native'},
@@ -273,7 +273,7 @@ test('usage services display account labels and distinguish unlinked history wit
 });
 
 test('usage service colors distinguish colliding identities and stay stable across metrics and filters', () => {
-  const usage = feature('usage-data.js', 'createUsageData')({tr, esc, number:String});
+  const usage = feature('usage-data.js', 'createUsageData')({modelName:String,serviceName:String, tr, esc, number:String});
   const groups = ['a','i','q'].map((id,index) => ({category:'subscription',owner:'account:'+id,
     owner_name:['Native','egg','yht'][index],model:'model',requests:1,priced_requests:0,
     input_tokens:10,output_tokens:2,cached_input_tokens:0,cost_nanos:0}));

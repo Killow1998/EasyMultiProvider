@@ -11,11 +11,14 @@ emp-core = { path = "../emp-core" }
 emp-protocol = { path = "../emp-protocol" }
 emp-state = { path = "../emp-state" }
 emp-transport = { path = "../emp-transport" }
+google-cloud-auth = "=1.18.0"
 serde_json.workspace = true
+sha2 = "0.10.9"
 libc = "0.2"
 time = { version = "0.3.55", features = ["parsing"] }
 tokio = { version = "1.53.1", features = ["time"] }
 url = "2.5.7"
 
 [dev-dependencies]
+tempfile = "3.27"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time"] }

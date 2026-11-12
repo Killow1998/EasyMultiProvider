@@ -18,4 +18,5 @@ mod memory;
 mod oversized;
 mod sse;
 mod support;
+mod vertex;
 mod websocket;

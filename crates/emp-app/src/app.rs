@@ -106,6 +106,7 @@ pub(crate) struct TransportState {
     pub(crate) request_limits: Arc<RequestLimits>,
     pub(crate) native_connections: crate::services::native_connections::NativeConnections,
     pub(crate) image_routes: crate::services::native::images::ImageRoutes,
+    pub(crate) gemini_signatures: Arc<emp_state::gemini_signatures::GeminiSignatures>,
 }
 
 impl BackendState {
@@ -180,6 +181,7 @@ impl BackendState {
             gateway_key: emp_state::gateway_key::load_or_create(&state_root.join("gateway-key"))?,
             gateway_clients: crate::services::gateway_clients::GatewayClients::open(
                 state_root.join("gateway-clients.json"),
+                &vault,
             )?,
             claude_turns: Default::default(),
             usage: crate::services::usage::UsageState::new(
@@ -196,6 +198,9 @@ impl BackendState {
                 request_limits,
                 native_connections: Default::default(),
                 image_routes: Default::default(),
+                gemini_signatures: Arc::new(emp_state::gemini_signatures::GeminiSignatures::new(
+                    state_root.join("gemini-signatures.sqlite3"),
+                )),
             },
             accounts: AccountState {
                 native_auth_path,

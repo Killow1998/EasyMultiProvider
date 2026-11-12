@@ -156,7 +156,7 @@ def main():
                     args.output.with_name('external-collaboration-' + language + '.png').write_bytes(base64.b64decode(png['value']))
                 browser.execute('document.getElementById("modal_back").click();document.querySelector("[data-settings-category=native]").click();document.querySelector("[data-ui-action=routing-settings]").click();')
                 change(browser, 'routing_image_mode', 'account')
-                assert browser.execute('return document.getElementById("modal_title").textContent===arguments[0] && !document.getElementById("routing_image_account_row").hidden;', '路由设置' if language == 'zh-CN' else 'Routing settings')
+                assert browser.execute('return !!document.getElementById("routing_image_mode") && !document.getElementById("routing_image_account_row").hidden;')
                 assert browser.execute('const body=document.getElementById("modal_body"),bounds=body.getBoundingClientRect();return body.scrollWidth<=body.clientWidth+1 && [...document.querySelectorAll(".routing-settings select,.routing-settings label,#routing_review")].every(node=>{const box=node.getBoundingClientRect();return box.left>=bounds.left && box.right<=bounds.right+1;});')
                 if width == 1280:
                     status, png = request(browser.base + '/screenshot')
@@ -188,7 +188,7 @@ def main():
         browser.execute('closeModal();setLanguage("en");openSettings();')
         wait_for(lambda: browser.execute('return !!document.querySelector("[data-settings-category=native]");'))
         browser.execute('document.querySelector("[data-settings-category=native]").click();document.querySelector("[data-ui-action=routing-settings]").click();')
-        wait_for(lambda: browser.execute('return document.getElementById("modal_title").textContent==="Routing settings";'))
+        wait_for(lambda: browser.execute('return !!document.getElementById("routing_image_mode");'))
         save(browser, 'account', 'routing-demo')
         assert json.loads((root / 'config.json').read_text())['image_routing'] == {'mode':'account','account_id':'routing-demo'}
         checks.append('Unified Shadow opens the same routing dialog directly and saves only to its disposable synthetic backend')

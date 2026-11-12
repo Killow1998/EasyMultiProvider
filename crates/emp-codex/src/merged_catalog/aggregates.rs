@@ -16,7 +16,7 @@ pub(crate) fn append(
         };
         let mut entry = (*first).clone();
         entry["slug"] = group["id"].clone();
-        entry["description"] = group["id"].clone();
+        entry["description"] = json!("Aggregate routing");
         entry["_emp_aggregate"] = json!(true);
         let original = array(config.get("models"))
             .iter()
@@ -31,7 +31,11 @@ pub(crate) fn append(
                 .get(text(&entry, "family_id"))
                 .cloned()
                 .unwrap_or_else(|| strip_context(text(first, "display_name")));
-            json!(format!("{prefix}{name}"))
+            json!(if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix} · {name}")
+            })
         } else {
             group["name"].clone()
         };
@@ -93,6 +97,15 @@ pub(crate) fn append(
             entry[field] = json!(sources.iter().all(|model| model[field] == true));
         }
         apply_presentation(config, &mut entry);
-        models.push(entry);
+        let position = models
+            .iter()
+            .rposition(|model| {
+                array(group.get("sources"))
+                    .iter()
+                    .any(|source| source.as_str() == Some(text(model, "slug")))
+                    || (model["_emp_aggregate"] == true && model["family_id"] == entry["family_id"])
+            })
+            .expect("at least one source exists");
+        models.insert(position + 1, entry);
     }
 }

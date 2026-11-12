@@ -195,8 +195,10 @@ pub(crate) fn import_account_state(
             accounts.push(account);
             let mut updated = config.clone();
             updated["accounts"] = Value::Array(accounts);
-            let updated =
+            let mut updated =
                 normalize_configuration(Some(&updated)).map_err(|error| error.to_string())?;
+            emp_state::config::preserve_service_route_names(&config, &mut updated);
+            emp_state::config::validate_service_names(&config, &updated).map_err(str::to_owned)?;
             if config["accounts"]
                 .as_array()
                 .into_iter()

@@ -12,12 +12,8 @@ ORPHAN = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 
 
 def check_conversation_ownership(base, state, home, headers, query, main):
-    config = request(base + '/api/config', headers=headers)[1]
-    config['models'].append({'id': 'demo/codex-auto-review', 'provider': 'demo',
-                             'upstream_id': 'upstream-model', 'enabled': True})
-    assert request(base + '/api/config', config, headers)[0] == 200
     for thread, model, parent, sidechat in [
-        (REVIEW, 'demo/codex-auto-review', main, False),
+        (REVIEW, 'demo/model', main, False),
         (SIDECHAT, 'demo/model', main, True),
         (AGENT, 'demo/model', SIDECHAT, False),
         (ORPHAN, 'demo/model', '', False),

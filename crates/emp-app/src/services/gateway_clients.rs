@@ -1,4 +1,4 @@
-//! Named API callers. Only key digests are persisted; names are not hardware identities.
+//! Named API callers with retrievable vault-encrypted credentials.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -16,6 +16,8 @@ struct Client {
     name: String,
     digest: String,
     created_at: f64,
+    #[serde(default)]
+    api_key: Option<String>,
 }
 
 pub(crate) struct GatewayClients {
@@ -24,11 +26,23 @@ pub(crate) struct GatewayClients {
 }
 
 impl GatewayClients {
-    pub(crate) fn open(path: PathBuf) -> io::Result<Self> {
+    pub(crate) fn open(
+        path: PathBuf,
+        vault: &emp_state::VaultStore,
+    ) -> Result<Self, crate::error::AppError> {
         let clients = match std::fs::read(&path) {
-            Ok(raw) => serde_json::from_slice(&raw).map_err(io::Error::other)?,
+            Ok(raw) => {
+                let value = if raw.starts_with(emp_state::vault::VAULT_MAGIC) {
+                    vault.read_encrypted_json(&path)?
+                } else {
+                    serde_json::from_slice(&raw)
+                        .map_err(|_| emp_state::FilesystemError::InvalidJson)?
+                };
+                serde_json::from_value(value)
+                    .map_err(|_| emp_state::FilesystemError::InvalidJson)?
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         };
         Ok(Self {
             path,
@@ -56,44 +70,65 @@ impl GatewayClients {
                 .expect("gateway clients")
                 .iter()
                 .map(|client| {
-                    json!({"id":client.id,"name":client.name,"created_at":client.created_at})
+                    json!({"id":client.id,"name":client.name,"created_at":client.created_at,"api_key":client.api_key})
                 })
                 .collect::<Vec<_>>()
         )
     }
 
-    pub(crate) fn create(&self, name: &str) -> io::Result<Value> {
-        if name.trim().is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Caller name must contain 1–64 characters",
-            ));
-        }
-        let key = format!(
-            "emp-client-{}",
-            crate::util::random_hex(32).map_err(io::Error::other)?
-        );
-        let client = Client {
-            id: crate::util::random_hex(16).map_err(io::Error::other)?,
-            name: name.trim().into(),
-            digest: format!("{:x}", Sha256::digest(key.as_bytes())),
-            created_at: crate::util::system_now(),
-        };
-        let result = json!({"id":client.id,"name":client.name,"api_key":key});
+    pub(crate) fn issue(
+        &self,
+        name: &str,
+        replace: Option<&str>,
+        vault: &emp_state::VaultStore,
+    ) -> io::Result<Value> {
         let mut clients = self
             .clients
             .lock()
             .map_err(|_| io::Error::other("gateway clients"))?;
         let mut updated = clients.clone();
-        updated.push(client);
-        emp_state::atomic_write_private_state(&self.path, &serde_json::to_vec(&updated)?)
+        let index = if let Some(id) = replace {
+            updated
+                .iter()
+                .position(|client| client.id == id)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "Device key was not found")
+                })?
+        } else {
+            if name.trim().is_empty()
+                || name.chars().count() > 64
+                || name.chars().any(char::is_control)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Caller name must contain 1–64 characters",
+                ));
+            }
+            updated.push(Client {
+                id: crate::util::random_hex(16).map_err(io::Error::other)?,
+                name: name.trim().into(),
+                digest: String::new(),
+                created_at: crate::util::system_now(),
+                api_key: None,
+            });
+            updated.len() - 1
+        };
+        let key = format!(
+            "emp-client-{}",
+            crate::util::random_hex(32).map_err(io::Error::other)?
+        );
+        let client = &mut updated[index];
+        client.digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+        client.api_key = Some(key.clone());
+        let result = json!({"id":client.id,"name":client.name,"api_key":key});
+        vault
+            .write_encrypted_json(&self.path, &serde_json::to_value(&updated)?)
             .map_err(io::Error::other)?;
         *clients = updated;
         Ok(result)
     }
 
-    pub(crate) fn remove(&self, id: &str) -> io::Result<()> {
+    pub(crate) fn remove(&self, id: &str, vault: &emp_state::VaultStore) -> io::Result<()> {
         let mut clients = self
             .clients
             .lock()
@@ -103,7 +138,8 @@ impl GatewayClients {
             .filter(|client| client.id != id)
             .cloned()
             .collect();
-        emp_state::atomic_write_private_state(&self.path, &serde_json::to_vec(&updated)?)
+        vault
+            .write_encrypted_json(&self.path, &serde_json::to_value(&updated)?)
             .map_err(io::Error::other)?;
         *clients = updated;
         Ok(())

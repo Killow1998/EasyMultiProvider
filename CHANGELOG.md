@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.14.0 (2026-11-12)
+
+### 中文
+
+- 新增 Vertex AI 服务：使用 Google Cloud API Key 连接 Gemini，或使用默认凭据／服务账号连接 Gemini 和 Claude；保留 Gemini 工具签名以支持后续工具轮次和重启恢复。API Key 支持 Express 和项目模式，使用参考模型目录，修复带项目 ID 时误报 Key 无效。
+- 整理模型目录与服务名称的职责，移除重复渲染、重复兜底、无调用方的参数和过时说明；统一 Gemini 流式协议状态，保留搜索、改名、迁移与旧会话路由行为。
+- 修复省略账号字段的配置更新报错、历史名称冲突导致旧路由失效，以及首次加载模型列表时刷新结果丢失的问题。添加、导入或改名时禁止账号和服务名称包含 `/`；既有配置仍可读取。
+- 修复 Vertex 迁移误合并不同项目、区域或认证方式的连接；重新导入外部服务时保留旧名称和历史路由。
+- 运行时校验使用 Codex 实际接收的模型目录，修复持续提示重新加载的问题；支持带 `@` 的版本化模型显示设置；切换或关闭 Vertex 表单后，未完成的凭据文件读取不再写入其他表单。
+- 修复内置 GLM 预设无法添加，以及无 Key 的 Vertex ADC 连接重复导入失败；相同 ADC 配置复用连接，不同项目或区域仍保持独立。
+- 保留 Gemini 返回的实际模型版本；只有思考 token 时也计入输出用量，并区分未报告用量与明确零值，覆盖完整响应和流式响应。
+- 使用 EMP 本地 Key 时隐藏无法调用的 Native 模型，保留其他订阅、外部模型及聚合路由；切回订阅或 OpenAI API Key 后恢复显示。
+- Codex 切换其他订阅、外部或聚合模型时使用可读名称，原调用 ID 和改名前的名称继续可用；模型、会话和用量归属保持不变。添加、导入或改名时提示服务名称冲突。
+- 设备 Key 加密保存，可在设备管理中持续查看、复制和移除；旧摘要 Key 可显式重新生成，保留设备用量归属。
+- 修复登录、网关查询与聚合路由的弹窗晚返回问题；保留当前页面和最后选择的查询区间，删除失败时显示错误并恢复操作。
+- 服务列表上方可直接打开聚合路由；路由设置改名为生图、审查与记忆路由。
+- 普通模型保持“模型名称＋来源列表”的原有样式；聚合模型紧跟对应原模型，以“前缀 · 模型名”显示，并标明来源池。Codex 的模型目录使用相同名称和顺序。
+- 自动审查排除 Native 和导入订阅中的 Free／Go 账号；额度尚未查询时读取登录信息中的等级，没有合格订阅时明确报错，不回落到被排除的账号。
+- 跟进 Codex 0.167.2：验证 GCP 增量工具声明、外部协议转换、工具调用和输入 ID 错误恢复；维护范围保持 0.163–0.167。
+- 同一账号或 CPA 号池的 5h、7d、30d 额度趋势同图显示，固定颜色区分，保留账号和查看日期范围选择。
+- CPA 账号周额度用尽时，5h 号池汇总按 0 计入该账号；个人额度保留上游原值，周额度恢复后重新计入。
+- 决策模型改名为决策 API：由调用方指定服务时只显示调用地址；选择服务时可直接添加并返回；表单内可打开网关连接，返回后保留已选内容。
+
+### English
+
+- Add Vertex AI with Google Cloud API keys for Gemini or default/service-account credentials for Gemini and Claude. Preserve Gemini tool signatures across later tool turns and EMP restarts. API keys support Express and project modes with reference catalogs; fix project IDs causing false invalid-key errors.
+- Separate model-directory presentation and service-name validation, removing duplicate renders, repeated fallbacks, unused parameters and stale commentary. Unify Gemini streaming protocol state while retaining search, renames, migration and existing conversation routes.
+- Fix partial configuration updates that omit accounts, historical-name conflicts that break existing routes, and refresh results lost during initial model loading. Reject `/` in new or renamed account/service names while retaining existing configuration compatibility.
+- Keep Vertex connections with different projects, locations or authentication modes separate during migration. Preserve external services' former names and historical routes when importing the same connection again.
+- Verify runtime state against the model catalog actually published to Codex, fixing persistent reload prompts. Support display settings for versioned model IDs containing `@`, and prevent pending credential-file reads from writing into another Vertex form after navigation or closure.
+- Fix adding the built-in GLM preset and reimporting keyless Vertex ADC connections. Reuse identical ADC configurations while keeping different projects or locations separate.
+- Preserve Gemini's reported model version and count thought-only output. Keep unreported usage distinct from explicit zero in both complete and streaming responses.
+- Hide unavailable Native models when using the EMP local key, while retaining other subscriptions, external models and aggregate routes. Restore Native entries after switching back to a subscription or OpenAI API key.
+- Use readable names for other subscriptions, external models and aggregate Codex routes while preserving original IDs, former names, conversations and accounting. Report service name conflicts when adding, importing or renaming.
+- Encrypt saved device keys and keep them available to view, copy and revoke in device management. Explicitly replace legacy digest-only keys while retaining device attribution.
+- Preserve the current dialog during delayed sign-in, gateway and aggregate operations. Keep the latest queried period, and restore controls with an error after failed deletion.
+- Open aggregate routing from the service toolbar. Routing settings become Image, Auto Review and memory routing.
+- Keep the original ordinary-model layout: model name with its source list. Place each aggregate after its source model, show “prefix · model name” and identify its source pool; Codex receives the same names and ordering.
+- Exclude Free and Go Native/imported subscriptions from Auto Review. Use sign-in plan metadata before quotas are available, and report missing eligible subscriptions without falling back to excluded accounts.
+- Track Codex 0.167.2 with targeted checks for GCP incremental tools, external protocol conversion, tool calls and inline-ID recovery. The maintenance window remains 0.163–0.167.
+- Show the selected account or CPA pool's 5h, 7d and 30d quota curves together with fixed colors, retaining account and date-range selection.
+- Count weekly-exhausted CPA accounts as zero in the usable 5h pool. Keep individual upstream observations and restore their contributions when weekly quota recovers.
+- Rename Decision models to Decision API. Client-chosen services show only the request URLs; Add service beside the provider selector returns to the form after setup, and Gateway connection opens from the form while retaining selections.
+
 ## 0.13.29 (2026-11-10)
 
 ### 中文

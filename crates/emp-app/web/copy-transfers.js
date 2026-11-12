@@ -6,7 +6,7 @@ registerUiCopy({
   "transfers.codex_subscriptions_verified_matching_accounts_update_the_existing_service": ["Codex 订阅：账号身份一致时更新已有服务，其余情况新增服务。","Codex subscriptions: matching account identities update the existing service; other accounts are added separately."],
   "transfers.external_api_services_matching_connection_methods_exact_base_url": ["外部 API 服务：连接方式、完整地址与非空 API key 全部一致时合并，其余情况新增服务。合并时更新同名上游模型，并保留其他模型。","External API services merge when their connection method, full URL and nonempty API key all match; otherwise they are added separately. Merging updates matching upstream models and keeps other models."],
   "transfers.local_claude_subscriptions_retain_a_separate_service_when_account": ["本机 Claude 订阅：没有可验证的账号身份时保留为独立服务。","Local Claude subscriptions: retain a separate service when account identity cannot be verified."],
-  "transfers.names_are_for_display_matching_names_do_not_merge": ["服务名称仅用于显示，合并依据账号或连接信息。导入预览列出每项的处理结果。","Service names are display labels. Merging uses account or connection details. The import preview lists the action for each service."],
+  "transfers.names_are_for_display_matching_names_do_not_merge": ["名称用于显示模型来源。相同账号或连接会合并；其他服务请使用不同名称。","Names identify model sources. Matching accounts or connections are merged; other services need distinct names."],
   "transfers.local_claude_subscription": ["本机 Claude 订阅","Local Claude subscription"],
   "transfers.external_api_service": ["外部 API 服务","External API service"],
   "transfers.hide_models": ["隐藏 {count} 个模型","Hide {count} models"],

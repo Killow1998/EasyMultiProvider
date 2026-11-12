@@ -121,22 +121,6 @@ impl Drop for HandoffGuard {
 }
 
 impl UpdateManager {
-    pub fn new(
-        executable: PathBuf,
-        _config: PathBuf,
-        restart_args: Vec<String>,
-        version: &str,
-    ) -> Self {
-        Self::with_endpoints(
-            executable,
-            restart_args,
-            version,
-            UpdateEndpoints::default(),
-            || Err(UpdateError("worker_failed")),
-        )
-        .expect("default update client configuration is valid")
-    }
-
     pub fn with_endpoints<F>(
         executable: PathBuf,
         restart_args: Vec<String>,
@@ -314,10 +298,6 @@ fn is_loopback_host(host: &str) -> bool {
         || host
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback())
-}
-
-pub fn version_tuple(value: &str) -> Result<(u64, u64, u64)> {
-    super::release::parse_version(value)
 }
 
 pub fn installation_target(executable: &Path) -> Result<(PathBuf, String)> {

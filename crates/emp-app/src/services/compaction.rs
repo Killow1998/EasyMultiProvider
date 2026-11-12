@@ -62,7 +62,8 @@ pub(crate) fn execute_summary_request(
         };
     }
 
-    let router = ExternalRouter::new(&state.backend.transport.client);
+    let router = ExternalRouter::new(&state.backend.transport.client)
+        .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
     usage.candidate(route);
     usage.dispatch();
     match crate::services::disconnect::raced(

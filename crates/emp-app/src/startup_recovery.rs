@@ -46,7 +46,11 @@ fn open_vault_with(
     state_root: &Path,
     external: bool,
 ) -> Result<VaultStore, AppError> {
-    let paths = credential_paths(config);
+    let mut paths = credential_paths(config);
+    let clients = state_root.join("gateway-clients.json");
+    if std::fs::read(&clients).is_ok_and(|raw| raw.starts_with(emp_state::vault::VAULT_MAGIC)) {
+        paths.push(clients);
+    }
     let key = state_root.join("master.key");
     // Never create a replacement key silently when a saved credential still
     // refers to the lost key. The recovery page must explain the decision.

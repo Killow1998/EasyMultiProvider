@@ -100,6 +100,10 @@ use model_provider::{
     safe_capability_identity, valid_python_iso_timestamp,
 };
 pub use model_provider::{normalize_model, normalize_model_capability_sources, normalize_provider};
+mod route_aliases;
+pub use route_aliases::{client_catalog, client_route_aliases, resolve_client_model};
+mod service_names;
+pub use service_names::{preserve_service_route_names, validate_service_names};
 
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: i64 = 4200;
@@ -394,11 +398,8 @@ pub fn load_configuration(path: Option<&Path>) -> ConfigResult<Value> {
     Ok(config)
 }
 
-/// Resolve one request-local provider credential from normalized state.
-///
-/// Inline values take precedence. Managed encrypted files fail closed to an
-/// empty value, matching Python's `config.api_key` boundary without exposing a
-/// decryption or filesystem diagnostic to callers.
+/// Inline credentials take precedence over encrypted files. Unreadable files
+/// return an empty credential without exposing storage diagnostics.
 pub fn provider_api_key(provider: &Value, vault: &VaultStore) -> String {
     let Some(provider) = provider.as_object() else {
         return String::new();
@@ -429,8 +430,7 @@ pub fn provider_api_key(provider: &Value, vault: &VaultStore) -> String {
 
 /// Normalize the full top-level configuration without filesystem path canonicalization.
 ///
-/// This is the pure Python `config.normalize` contract. Loading, saving, secret
-/// extraction, and canonical private paths are separate state transitions.
+/// Loading, saving, secret extraction, and canonical private paths are separate.
 pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
     if raw.is_none() || raw.is_some_and(Value::is_null) {
         return Ok(default_configuration());

@@ -6,7 +6,18 @@ const MAX_ANTHROPIC_PASSTHROUGH_BYTES: usize = 12 * 1024 * 1024;
 
 impl<'a> ExternalRouter<'a> {
     pub const fn new(client: &'a HttpClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            gemini_signatures: None,
+        }
+    }
+
+    pub fn with_gemini_signatures(
+        mut self,
+        store: std::sync::Arc<emp_state::gemini_signatures::GeminiSignatures>,
+    ) -> Self {
+        self.gemini_signatures = Some(store);
+        self
     }
 
     pub async fn execute_complete(
@@ -20,10 +31,16 @@ impl<'a> ExternalRouter<'a> {
         let mut tools = external_tools(route);
         let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
         let body = prepared.as_ref();
-        let provider = route.provider.value();
-        let endpoint = endpoint(provider, route.protocol)?;
-        let headers = upstream_headers(provider, route.protocol, incoming)?;
-        let payload = project_prepared_external_payload(route, body)?;
+        let (endpoint, headers) = target(route, incoming, false).await?;
+        let mut payload = project_prepared_external_payload(route, body)?;
+        let gemini = vertex::GeminiContext::for_route(route, self.gemini_signatures.as_ref())?;
+        if let Some(context) = &gemini {
+            context.restore(&mut payload)?;
+        }
+        let native_gemini = route.provider.value()["auth_mode"] == "vertex_api_key";
+        if native_gemini {
+            payload = vertex::gemini::request(&payload)?;
+        }
         let encoded = request_encoding::encode_projected_request(&payload);
         drop(payload);
         let response = self
@@ -50,7 +67,7 @@ impl<'a> ExternalRouter<'a> {
             .read_limited(MAX_UPSTREAM_BODY_BYTES)
             .await
             .map_err(transport_error)?;
-        let upstream: Value = serde_json::from_slice(&raw).map_err(|_| {
+        let mut upstream: Value = serde_json::from_slice(&raw).map_err(|_| {
             RouterError::new(
                 RouterErrorKind::Protocol,
                 502,
@@ -60,6 +77,18 @@ impl<'a> ExternalRouter<'a> {
                 "upstream response is not valid JSON",
             )
         })?;
+        if native_gemini {
+            upstream = vertex::gemini::complete(&upstream, ids.response_id())?;
+        }
+        if let Some(context) = &gemini
+            && let Some(calls) = upstream
+                .pointer("/choices/0/message/tool_calls")
+                .and_then(Value::as_array)
+        {
+            for call in calls {
+                context.remember(call)?;
+            }
+        }
         let canonical_custom_names = custom_tool_names(body);
         let custom_name_refs = canonical_custom_names
             .iter()
@@ -257,12 +286,19 @@ impl<'a> ExternalRouter<'a> {
         let mut tools = external_tools(route);
         let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
         let body = prepared.as_ref();
-        let provider = route.provider.value();
-        let endpoint = endpoint(provider, route.protocol)?;
-        let mut headers = upstream_headers(provider, route.protocol, incoming)?;
+        let (endpoint, mut headers) = target(route, incoming, true).await?;
         headers.insert("Accept".to_owned(), "text/event-stream".to_owned());
         let mut payload = project_prepared_external_payload(route, body)?;
-        payload["stream"] = Value::Bool(true);
+        let gemini = vertex::GeminiContext::for_route(route, self.gemini_signatures.as_ref())?;
+        if let Some(context) = &gemini {
+            context.restore(&mut payload)?;
+        }
+        let native_gemini = route.provider.value()["auth_mode"] == "vertex_api_key";
+        if native_gemini {
+            payload = vertex::gemini::request(&payload)?;
+        } else {
+            payload["stream"] = Value::Bool(true);
+        }
         let canonical_custom_names = custom_tool_names(body);
         let custom_name_refs = canonical_custom_names
             .iter()
@@ -285,10 +321,19 @@ impl<'a> ExternalRouter<'a> {
         let projection = match route.protocol {
             Protocol::Auto => return Err(unresolved_protocol()),
             Protocol::ChatCompletions => {
-                payload["stream_options"] = serde_json::json!({"include_usage": true});
+                if !native_gemini {
+                    payload["stream_options"] = serde_json::json!({"include_usage": true});
+                }
                 let stream = ChatStream::new(&route.requested_model, ids.chat()?)
                     .with_custom_names(&custom_name_refs);
-                StreamProjection::Chat(stream)
+                if native_gemini {
+                    StreamProjection::Gemini {
+                        source: vertex::gemini::Stream::new(ids.response_id()),
+                        chat: stream,
+                    }
+                } else {
+                    StreamProjection::Chat(stream)
+                }
             }
             Protocol::AnthropicMessages => {
                 let stream = AnthropicStream::new(
@@ -355,9 +400,13 @@ impl<'a> ExternalRouter<'a> {
             finished: false,
             failure: None,
             ids: ids.clone(),
+            gemini,
         };
         match &mut stream.projection {
-            StreamProjection::Chat(projector) => {
+            StreamProjection::Chat(projector)
+            | StreamProjection::Gemini {
+                chat: projector, ..
+            } => {
                 stream
                     .pending
                     .push_back(projector.start_event().map_err(protocol_error)?.into());
@@ -370,5 +419,24 @@ impl<'a> ExternalRouter<'a> {
             StreamProjection::Responses { .. } => {}
         }
         Ok(stream)
+    }
+}
+
+async fn target(
+    route: &ResolvedRoute,
+    incoming: &BTreeMap<String, String>,
+    stream: bool,
+) -> Result<(String, BTreeMap<String, String>), RouterError> {
+    let provider = route.provider.value();
+    if provider.contains_key("vertex") {
+        Ok((
+            vertex::endpoint(route, stream)?,
+            vertex::headers(provider, incoming).await?,
+        ))
+    } else {
+        Ok((
+            endpoint(provider, route.protocol)?,
+            upstream_headers(provider, route.protocol, incoming)?,
+        ))
     }
 }

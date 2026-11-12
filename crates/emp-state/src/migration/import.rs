@@ -417,6 +417,7 @@ fn merge_import(
             Value::Object(presentations),
         );
 
+    crate::config::preserve_service_route_names(current, &mut target);
     let mut target =
         normalize_configuration(Some(&target)).map_err(|_| MigrationError::StateUpdateFailed)?;
     let path_config = target.clone();
@@ -500,6 +501,9 @@ pub fn apply_migration_import(
 ) -> MigrationResult<(Value, MigrationImportSummary)> {
     let (target, imported_auth, summary) =
         merge_import(current, decrypted.0, config_path, vault, &BTreeMap::new())?;
+
+    crate::config::validate_service_names(current, &target)
+        .map_err(|_| MigrationError::DuplicateServiceName)?;
 
     let result = persist_migration_import(&target, &imported_auth, config_path, vault)?;
     Ok((result, summary))

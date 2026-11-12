@@ -36,6 +36,39 @@ fn missing_key_does_not_silently_replace_saved_credentials_key() {
 }
 
 #[test]
+fn saved_device_keys_use_credential_recovery_without_rotating_the_master_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    create_private_directory(&state).unwrap();
+    let path = state.join("gateway-clients.json");
+    fs::write(&path, b"[]").unwrap();
+    let config = json!({"providers": [], "accounts": []});
+    let vault = open_vault_with(&config, &state, false).unwrap();
+    let clients =
+        crate::services::gateway_clients::GatewayClients::open(path.clone(), &vault).unwrap();
+    let saved = clients.issue("Test PC", None, &vault).unwrap();
+    fs::remove_file(state.join("master.key")).unwrap();
+    assert!(matches!(
+        open_vault_with(&config, &state, false),
+        Err(AppError::CredentialKeyMissing)
+    ));
+    assert!(!state.join("master.key").exists());
+    let wrong = VaultStore::from_sources(None, &state.join("master.key")).unwrap();
+    assert!(matches!(
+        open_vault_with(&config, &state, false),
+        Err(AppError::Filesystem(
+            FilesystemError::CredentialDecryptFailed
+        ))
+    ));
+    let error = crate::services::gateway_clients::GatewayClients::open(path.clone(), &wrong)
+        .err()
+        .unwrap();
+    assert!(recoverable(&error));
+    let restored = crate::services::gateway_clients::GatewayClients::open(path, &vault).unwrap();
+    assert_eq!(restored.list()[0]["api_key"], saved["api_key"]);
+}
+
+#[test]
 fn mismatched_key_is_visible_but_one_bad_account_does_not_block_good_accounts() {
     let (dir, config, _) = fixture();
     let state = dir.path().join("state");

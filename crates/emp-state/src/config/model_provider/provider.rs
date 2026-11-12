@@ -39,7 +39,10 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     };
     let claude_login = raw.get("execution_backend").and_then(Value::as_str) == Some("claude_cli")
         && raw.get("auth_mode").and_then(Value::as_str) == Some("claude_login");
-    let base_url = if claude_login {
+    let vertex = raw.get("vertex");
+    let base_url = if vertex.is_some() {
+        "https://aiplatform.googleapis.com/v1".to_owned()
+    } else if claude_login {
         let base_url = string_value(raw.get("base_url"), "provider.base_url", false)?;
         if !base_url.is_empty() {
             return Err(ConfigError::new(
@@ -91,8 +94,11 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
         ));
     }
     if !PROVIDER_AUTH_MODES.contains(&auth_mode.as_str()) {
+        return Err(ConfigError::new("provider.auth_mode is not supported"));
+    }
+    if auth_mode.starts_with("vertex_") != vertex.is_some() {
         return Err(ConfigError::new(
-            "provider.auth_mode must be api_key, anthropic_api_key, forward, or claude_login",
+            "Vertex authentication requires Vertex configuration",
         ));
     }
     if auth_mode == "forward" && protocol != "responses" {
@@ -142,6 +148,59 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
         "protocol_observation": protocol_observation,
         "capabilities": capabilities,
     });
+    if let Some(vertex) = vertex {
+        let vertex = vertex
+            .as_object()
+            .ok_or_else(|| ConfigError::new("provider.vertex must be an object"))?;
+        let project = string_value(vertex.get("project"), "provider.vertex.project", false)?;
+        let location = string_value(vertex.get("location"), "provider.vertex.location", false)?;
+        let location = if location.is_empty() {
+            "global"
+        } else {
+            location.as_str()
+        };
+        if !location
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err(ConfigError::new("Vertex location is invalid"));
+        }
+        if auth_mode != "vertex_api_key" && project.is_empty() {
+            return Err(ConfigError::new("Vertex project is required"));
+        }
+        if auth_mode == "vertex_service_account" && !api_key.is_empty() && api_key != MASKED_API_KEY
+        {
+            let account: Value = serde_json::from_str(&api_key)
+                .map_err(|_| ConfigError::new("Vertex service account JSON is invalid"))?;
+            if account["type"] != "service_account"
+                || account["client_email"].as_str().is_none_or(str::is_empty)
+                || account["private_key"].as_str().is_none_or(str::is_empty)
+            {
+                return Err(ConfigError::new("Vertex service account JSON is invalid"));
+            }
+        }
+        if protocol != "auto" || execution_backend != "http" {
+            return Err(ConfigError::new(
+                "Vertex requires automatic protocol selection",
+            ));
+        }
+        normalized["vertex"] = serde_json::json!({"project": project, "location": location});
+    }
+    let mut route_names = Vec::new();
+    if let Some(names) = raw.get("route_names") {
+        for value in names
+            .as_array()
+            .ok_or_else(|| ConfigError::new("provider.route_names must be an array"))?
+        {
+            let value = string_value(Some(value), "provider.route_names entry", true)?;
+            if !route_names.contains(&value) {
+                route_names.push(value);
+            }
+        }
+    }
+    if !route_names.is_empty() {
+        normalized["route_names"] = serde_json::json!(route_names);
+    }
     // Preserve the historic serialized shape for providers using the default.
     // An explicit backend remains visible and round-trips through normal config APIs.
     if raw.contains_key("execution_backend") {

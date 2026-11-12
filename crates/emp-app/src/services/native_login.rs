@@ -77,8 +77,33 @@ pub(crate) fn execute(
                 &auth,
             )
             .cloned();
+            let mut name = "Native".to_owned();
+            if existing.is_none() {
+                let reserved = config["accounts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .chain(config["providers"].as_array().into_iter().flatten())
+                    .flat_map(|service| {
+                        service["route_names"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .chain(service["name"].as_str())
+                            .chain(service["prefix"].as_str())
+                            .chain(service["id"].as_str())
+                    })
+                    .map(|name| name.trim().to_lowercase())
+                    .collect::<std::collections::BTreeSet<_>>();
+                let mut index = 2;
+                while reserved.contains(&name.to_lowercase()) {
+                    name = format!("Native {index}");
+                    index += 1;
+                }
+            }
             drop(config);
-            let mut imported = existing.unwrap_or_else(|| json!({"name":"Native"}));
+            let mut imported = existing.unwrap_or_else(|| json!({"name":name}));
             imported["auth_json"] = auth.clone();
             crate::services::accounts::import_account_state(None, state, &imported)
                 .map_err(|_| "login_import_failed")?;
@@ -114,6 +139,9 @@ pub(crate) fn execute(
                     .map(str::trim)
                     .filter(|name| !name.is_empty() && name.chars().count() <= 256)
                     .ok_or("login_name_required")?;
+                if name.contains('/') {
+                    return Err("login_name_contains_slash");
+                }
                 (None, Some(name.to_owned()))
             } else {
                 (
@@ -159,7 +187,13 @@ pub(crate) fn execute(
                         state,
                         &json!({"name":name,"auth_json":auth}),
                     )
-                    .map_err(|_| "login_import_failed")?;
+                    .map_err(|error| {
+                        if error == "core.service_name_already_in_use" {
+                            "login_name_already_in_use"
+                        } else {
+                            "login_import_failed"
+                        }
+                    })?;
                     return Ok(json!({"status":"completed","restart_required":false}));
                 }
                 credentials::install(state, &pending.expected, &auth)

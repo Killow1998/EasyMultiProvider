@@ -7,6 +7,7 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
   function stop() { detailsController?.abort(); detailsController = null; }
   function providerBrand(provider) {
     if (provider.execution_backend === 'claude_cli') return 'claudecode';
+    if (provider.vertex) return 'gemini';
     try {
       const origin = new URL(provider.base_url).origin;
       return Object.entries(presets).find(([key, preset]) => key !== 'chatgpt' && new URL(preset.base_url).origin === origin)?.[0] || 'custom';

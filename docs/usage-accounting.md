@@ -120,10 +120,13 @@ Example snapshot; the operator supplies current observations and reset times:
 | `resets_at` | RFC 3339 timestamp with a timezone, or `null` if unknown. |
 | `checked_at`, `as_of` | Snapshot/account timestamps or `null`; both may be omitted. |
 
-The example displays 60% for 5h and 20% for 7d. EMP averages known percentages
-from enabled, fresh accounts, rounds the displayed percentage upward, and uses
+The example displays 40% for 5h and 20% for 7d. A known exhausted 7d window makes
+that account's contribution to the usable 5h pool zero; the individual account's
+5h observation stays unchanged. EMP averages these known percentages from
+enabled, fresh accounts, rounds the displayed percentage upward, and uses
 the nearest future reset for each window. Raw trend samples retain fractional
-precision. Missing values stay unknown; do not substitute zero for failed reads.
+precision. The selected pool or account shows its 5h, 7d and 30d series together
+with fixed colors. Missing values stay unknown; do not substitute zero for failed reads.
 Return anonymous IDs and quota observations, without account credentials.
 
 Serve a cached observer snapshot rather than querying every account during each
@@ -144,6 +147,15 @@ diagnostic correlation; older unlinked records retain their observed status.
 The resend record does not become another successful inference or duplicate usage.
 Current Codex clients send full input directly after stateless external WebSocket
 completions, avoiding the normal tool-loop rejection and replay.
+
+## Reported model and output usage
+
+Gemini `generateContent` responses retain the upstream `modelVersion` in call
+records, separately from the selected route and requested upstream model. Output
+usage includes reported answer and thought tokens. A thought-only `MAX_TOKENS`
+response still contributes its reported output; explicit zero stays zero, while
+missing answer and thought counts remain unknown. This applies to complete and
+streaming responses.
 
 ## Reasoning effort and speed tier
 

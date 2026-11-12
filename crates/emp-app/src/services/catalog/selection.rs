@@ -43,7 +43,7 @@ pub(crate) fn select_models(
     let catalog_path = generated_catalog_path(state);
     let catalog = config
         .commit_with(&merged.config, |saved, transaction| {
-            let catalog = server_catalog(state, saved);
+            let catalog = emp_state::config::client_catalog(saved, server_catalog(state, saved));
             transaction.remember(&catalog_path)?;
             write_catalog_json(&catalog_path, &catalog)?;
             Ok(catalog)

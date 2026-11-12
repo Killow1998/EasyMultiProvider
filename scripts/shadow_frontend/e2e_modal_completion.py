@@ -16,7 +16,7 @@ def run_case(browser, operation, outcome, navigation):
       window.completionOperation=arguments[0];window.completionOutcome=arguments[1];
       window.completionCalls=[];
       if(completionOperation==='model'){
-        state.catalog_families=[{id:'completion-model',default_display_name:'Fixture',routes:[]}];
+        state.catalog_families=[{id:'completion-model',default_display_name:'Fixture',routes:[{id:'completion-model',source_type:'native'}]}];
         openCatalogDisplayEditor('completion-model');
         document.getElementById('modal_catalog_alias').value='Unsaved fixture name';
       }else if(completionOperation==='reset'){
