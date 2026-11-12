@@ -74,15 +74,20 @@ python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --dem
 ```
 
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
-review entry. Its baseline is the published **v0.13.29**, displayed in the dialog.
+review entry. Its baseline is the published **v0.14.0**, displayed in the dialog.
 Keep `reviewRows` in `preview-review.js` cumulative across development tasks;
 reset the list and advance `reviewBaseline` together after the next release.
 Follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
+Dialog ownership, readable gateway model IDs, saved device Keys and the routing/
+Decision API entry points shipped in v0.14.0. Their archived scenarios remain
+available through `/?reviewAction=dialog_ownership`,
+`/?reviewAction=gateway_attribution` and `/?reviewAction=discovery`.
 Service/report lifecycle repairs, Claude live text and image API updates shipped
 in v0.13.29. Their archived scenarios remain available through
 `/?reviewAction=service_details` and `/?reviewAction=image_api`.
-CPA pool/account trends shipped in v0.13.27: the existing service-row trend icon
-opens a pool/account selector and separate 5h/7d views. Its explicit synthetic
+CPA pool/account trends shipped in v0.13.27. The service-row trend icon opens a
+pool/account selector; v0.14.0 combines available quota windows in one chart.
+Its explicit synthetic
 scenario seeds 24 hours of observations through the candidate quota store;
 the normal real-data Shadow never seeds history. No live Key is copied.
 External continuation, linked history-resend records, CPA snapshot quotas and

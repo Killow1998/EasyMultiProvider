@@ -686,6 +686,23 @@ Release close-out on **2026-11-12 UTC**, using the **0.14.0** candidate:
 - `dev/agy` remains unchanged. Its separate native-login follow-up is excluded
   from this candidate. Production EMP and active sessions are not replaced.
 
+Publication on **2026-11-12 UTC**, from source
+`3d3e8474b979f1a5937648d47727e4144f7b8f6c`:
+
+- [Runtime CI](https://github.com/Killow1998/EasyMultiProvider/actions/runs/43283868682)
+  passed: 1,045 Rust tests, zero failures and 22 ignored tests, plus frontend,
+  formatting, strict Clippy and Windows exit checks.
+- [Package CI](https://github.com/Killow1998/EasyMultiProvider/actions/runs/43284663534)
+  passed on Linux x64, Windows x64, Intel Mac and Apple Silicon. All six public
+  [v0.14.0 downloads](https://github.com/Killow1998/EasyMultiProvider/releases/tag/v0.14.0)
+  matched their published sizes and SHA-256 digests. Linux checksum, installer
+  syntax, executable version and bilingual release notes matched. Intermediate
+  package artifacts were removed after publication.
+- Shadow advanced its baseline to v0.14.0 and cleared the current review list,
+  retaining archived actions. Six browser checks against the published Linux
+  binary passed, including Chinese/mobile and English/desktop navigation.
+  These isolated checks used synthetic state and did not replace production EMP.
+
 Settings opens three category cards. General contains display preferences,
 startup and gateway connection. External services contains cross-service
 collaboration, web search and decision models. Native services contains background

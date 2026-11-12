@@ -34,13 +34,13 @@ def main():
             before = (target / 'config.json').read_bytes()
             assert browser.execute('return !document.getElementById("shadow_routing_button");')
             review_title = browser.execute('return document.getElementById("modal_title").textContent;')
-            assert 'v0.13.29' in review_title
-            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(button=>button.dataset.shadowDemo);') == ['dialog_ownership','gateway_attribution','discovery']
-            browser.execute('document.querySelector(`[data-shadow-demo="dialog_ownership"]`).click();')
+            assert 'v0.14.0' in review_title
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(button=>button.dataset.shadowDemo);') == []
+            browser.execute('window.EMP_REVIEW_ACTION("dialog_ownership");')
             wait_for(lambda: browser.execute('return !!document.getElementById("gateway_key");'))
             browser.execute('document.getElementById("modal_back").click();')
             assert browser.execute('return document.getElementById("modal_title").textContent;') == review_title
-            browser.execute('document.querySelector(`[data-shadow-demo="gateway_attribution"]`).click();')
+            browser.execute('window.EMP_REVIEW_ACTION("gateway_attribution");')
             wait_for(lambda: browser.execute('return !!document.querySelector("[data-gateway-devices]");'))
             browser.execute('document.querySelector("[data-gateway-devices]").click();')
             wait_for(lambda: browser.execute('return !!document.querySelector("[data-gateway-add]");'))
