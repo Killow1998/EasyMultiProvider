@@ -70,18 +70,101 @@ an executable command. Existing reasoning-field suppression remains unchanged.
   formatting and diff checks pass. Existing EMP instances were not restarted;
   installed login and encrypted credential files remain unchanged.
 
-## Current target and acceptance (2026-11-11 UTC)
+## Current target and acceptance (2026-11-13 UTC)
 
-The maintenance target is **0.163–0.167**, following the official stable
-[0.167.2 release](https://learn.chatgpt.com/docs/changelog)
-(2026-11-11). This is a patch within the existing maintenance window.
+The maintenance target is **0.165–0.169**, following stable
+[0.168.0](https://github.com/openai/codex/releases/tag/rust-v0.168.0)
+(2026-11-13 03:54:29 UTC) and
+[0.169.0](https://github.com/openai/codex/releases/tag/rust-v0.169.0)
+(2026-11-13 08:37:05 UTC). Older acceptance retains its original dates and
+candidate versions; it is not relabeled as a test of this development build.
 
 | Target series | Existing evidence |
 | --- | --- |
-| 0.163–0.164 | Dated Linux engine acceptance below; App/IDE checks are listed separately with their exact engine versions. |
 | 0.165 | Official Linux 0.165.0 engine passed the local EMP 0.13.17 candidate contracts recorded below. |
 | 0.166 | Official Linux 0.166.0 engine passed the local EMP 0.13.20 maintenance candidate contracts recorded below. |
 | 0.167 | Official Linux 0.167.0 engine passed the local EMP 0.13.26 candidate contracts on 2026-11-06 UTC. Official Linux 0.167.1 and 0.167.2 passed their separately dated targeted candidate checks below on 2026-11-11 UTC. |
+| 0.168–0.169 | Official Linux 0.168.0 and 0.169.0 engines passed the v0.14.0-based maintenance candidate checks below on 2026-11-13 UTC. |
+
+### 0.168/0.169 upstream pairing and acceptance
+
+The source review is pinned to `rust-v0.168.0` and `rust-v0.169.0`.
+
+| Upstream change | EMP handling and evidence |
+| --- | --- |
+| Saved providers and account-scoped history | Retain `openai` and the supported top-level `openai_base_url`; do not override the reserved built-in provider table. Subscription, OpenAI API-key and EMP-local-key clients switch across three external protocols and resume the same thread. |
+| Provider-owned auth for memory/Guardian; runtime agent registration | Preserve account credentials and provider context. `runtime_agent_instances` is off by default; custom destinations have separate auth in upstream code. Default clients and Native/external/imported memory routes pass. No registration shim or global feature override is added. |
+| Default Code Mode gRPC and shorter/restored tool IDs | Matching official Code Mode hosts pass three external protocols × Off/On-demand/On. Child messages and results survive process resume. The incremental-revision fixture now explicitly requests `code_mode_only`, rather than relying on optional Code Mode being enabled. |
+| Incremental declarations, removal and re-declaration | Actual engines pass revision/switch/resume and external dynamic-tool round trips in all three protocols. Preserve the existing GCP and Bedrock feature choices; these runs are not live GCP or Bedrock authentication tests. |
+| Retained failed output, missing Usage and paginated history | Two lifecycle cases retain over 68 KiB of output, trigger compaction, preserve unknown usage and resume after process restart. This does not separately certify every unfinished-tool repair in upstream. |
+| Bounded WebSocket frames | Built-in OpenAI clients send 128 KiB prompts, switch protocols and resume in all three sign-in modes; recorded downstream transport is WebSocket. HTTP/SSE effort-switch coverage remains a separate group. |
+| App Server items, Usage and negotiated Zstd | Timestamps survive process resume; missing/null/zero/nonzero native USD remain distinct from estimates. Legacy, negotiated-compressed and reconnected clients pass. |
+| Explicit project trust in exec/review | EMP retains the user's permission and trust configuration. Tests use isolated homes and read-only sandboxes; no project is silently trusted. |
+| Provider management, workspace/sidechat tabs, search, previews, audio and terminal/Cloud UI | Client-owned interfaces remain in Codex. The media follow-up below covers audio transport; it does not claim App/IDE interface acceptance. |
+| Opt-in animated image generation | Leave the flag unchanged. The media follow-up below independently checks the lightweight image MCP and GIF transport, without live image-model acceptance. |
+
+Each engine passed **10 feature groups / 99 simulated inference requests**,
+including effort changes over HTTP/SSE and WebSocket, memory routing, imports,
+fork lineage, the pinned model catalog and lifecycle cases. A separate large-input
+authentication run passed **3 modes / 12 requests** per engine. Code Mode passed
+**9 combinations** per engine. The memory/error harness passed **14 cases** per
+engine, and App Server passed **3 groups** per engine. The Rust Native API suite
+passed **56 checks**, gateway **5**, and Auto Review **9**. Browser acceptance
+separately covers original usage names, account caching, Vertex forms/cloud-list
+semantics and current/archived Shadow navigation.
+
+Receipts identify each tested executable by SHA-256. After the engine runs,
+reference-catalog metadata and report naming were refined in a later candidate
+build: **77 Router checks**, **2 Vertex HTTP contracts** and the affected browser
+suites pass there. Earlier engine results retain their original binary hashes;
+they are not relabeled as reruns of the later build.
+
+All inference, OAuth, usage and quota endpoints were simulated with synthetic
+credentials. No live account quota was spent and no installed EMP, Codex login
+or runtime was changed. These are Linux engine checks, not complete Windows,
+macOS, App or IDE acceptance, nor live Vertex project-access confirmation.
+
+The official compressed Linux engines matched SHA-256:
+
+- 0.168.0: `b983beb86dcc606cead6ee226ae2ab08e7e6eee07df4cb8d16f441f107b9e2ef`.
+- 0.169.0: `9af4d751fce183faedea629437d5252dbf458eeb04130cf4f97be844621ea985`.
+
+Receipts are retained in the workspace's
+`emp_docs/evidence/codex-0168-0169-20261113/`. Temporary standalone engines,
+matching hosts, extracted source and test dependencies are removed after receipt
+collection. The fixture updates and new `--suite auth` check are reproducible
+through `scripts.codex_feature_acceptance`; use each pinned official catalog.
+
+### Media follow-up acceptance (2026-11-14 UTC)
+
+This follows the 2026-11-13 engine checks above; it does not replace their binary
+hashes or extend their App/IDE acceptance. The installed official Linux 0.169.0
+engine and the media candidate use isolated homes, synthetic recordings and
+loopback upstreams, with no paid inference.
+
+- Audio capability is published to 0.168/0.169 clients and omitted for
+  0.165/0.166/0.167 clients. Claude/Anthropic routes retain their supported inputs.
+- Nine real-engine inference requests cover Native, external Responses and
+  external Chat: initial WAV, a follow-up, and process resume for each. Every
+  forwarded recording retains the original bytes.
+- Three additional gateway requests preserve recorded tool outputs for Responses
+  and Chat, and an uploaded file reference for Responses. File ownership remains
+  the upstream's responsibility; Chat requires inline audio.
+- A fourth gateway request checks that the model-directory ETag matches the
+  Native inference response. Version-specific capability projections share the
+  underlying catalog revision instead of triggering redundant refreshes.
+- Vertex's HTTP/TLS tool-and-restart contract retains audio bytes and canonical
+  `audio/mpeg`, alongside the original thought signature.
+- The actual lightweight image MCP process verifies one advertised tool,
+  Image 2.6 SVG/GIF generation, default frame controls, GIF editing, exact
+  two-frame GIF bytes, local-file results, cancellation, ping and EOF cleanup.
+- The image gateway's HTTP/WebSocket turn-affinity contract forwards GIF frame
+  controls unchanged and selects each turn's own image account.
+
+The native opt-in animation flag remains unchanged. These are mocked-upstream
+media transport checks, not live image-model or desktop audio-UI acceptance.
+Detailed receipts are retained at
+`emp_docs/evidence/codex-0169-media-20261114/summary.json` in the parent workspace.
 
 ### 0.167.2 patch review and targeted acceptance
 

@@ -102,8 +102,11 @@ impl ImageRoutes {
                         && provider["auth_mode"].as_str().unwrap_or("api_key") == "api_key"
                 })
             });
-            if let Some(provider) = provider.and_then(Value::as_object) {
-                return image_route(provider, RouteSource::ForwardProvider, model);
+            if let Some(provider) = provider {
+                let key = emp_state::provider_api_key(provider, &state.backend.configuration.vault);
+                let mut provider = provider.as_object().expect("configured provider").clone();
+                provider.insert("api_key".into(), Value::String(key));
+                return image_route(&provider, RouteSource::ForwardProvider, model);
             }
             return Err(NativeHttpError::router(
                 404,

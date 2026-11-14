@@ -47,11 +47,22 @@ pub(crate) fn generated_catalog_path(state: &ServerState) -> PathBuf {
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn response_catalog_etag(state: &ServerState) -> Option<String> {
     let config = state.backend.configuration.read().ok()?.clone();
-    emp_state::catalog_etag(&client_catalog(state, &config)).ok()
+    // The revision identifies the shared catalog, before client-version projection.
+    let catalog = emp_state::config::client_catalog(&config, server_catalog(state, &config));
+    emp_state::catalog_etag(&catalog).ok()
 }
 
 pub(crate) fn client_catalog(state: &ServerState, config: &Value) -> Value {
-    emp_state::config::client_catalog(config, server_catalog(state, config))
+    let catalog = emp_state::config::client_catalog(config, server_catalog(state, config));
+    emp_codex::merged_catalog::for_client_version(
+        catalog,
+        state
+            .backend
+            .integration
+            .inventory
+            .selected_trusted_version()
+            .as_deref(),
+    )
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]

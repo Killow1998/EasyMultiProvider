@@ -1686,3 +1686,31 @@ migration remains available, with its executable quoted for the platform shell.
 EMP cannot change native Codex errors after it has been disabled. Candidate
 Windows/macOS application acceptance and release remain separate from isolated
 Linux tests.
+
+## Query and catalog boundary cleanup — 2026-11-14 UTC
+
+`usage/ledger.rs` owns storage, reconciliation and repricing. Its private
+`ledger/query.rs` module owns period/owner/lifetime summaries under the same
+public `UsageLedger` API. A query applies the validated category, time and owner
+once when selecting rows; subsequent aggregates use that scoped temporary
+table without rebinding the same filters. Cancellation, progress, unknown
+prices and the original recorded names remain part of the query contract.
+
+`merged_catalog/external.rs` owns external-model projection into Codex metadata;
+the parent composes native, subscription and external entries, then applies
+presentation and ordering. Client-version filtering stays separate. Shared
+context/presentation rules remain in the parent rather than copied into adapters.
+
+Usage, statistics and session bills render recorded upstream names directly.
+They no longer accept the catalog's identity-only name callback. The live picker
+and the selected-model explanation retain catalog display names. This boundary
+prevents current configuration changes from reinterpreting historical IDs.
+
+The cleanup adds no feature or dependency. Existing owner isolation, pricing,
+public HTTP/browser journeys and real Codex mocked-upstream checks validate
+observable behavior; public HTTP/Rust interfaces and persistent formats are unchanged.
+
+Acceptance receipts for this stage are retained in the parent workspace at
+`emp_docs/evidence/emp-cleanup-20261114/summary.json`. They distinguish the
+81 Rust checks, four browser suites and the real-engine audio/auth build
+boundaries. All inference upstreams are local fixtures.

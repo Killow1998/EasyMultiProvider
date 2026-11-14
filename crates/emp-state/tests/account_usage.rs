@@ -3,6 +3,55 @@ use serde_json::json;
 use std::sync::Arc;
 
 #[test]
+fn lifetime_pricing_distinguishes_unknown_placeholders_from_known_zero_after_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
+    prices.replace(
+        json!({
+            "free-model":{"input_cost_per_token":"0","output_cost_per_token":"0"},
+            "paid-model":{"input_cost_per_token":"0.001","output_cost_per_token":"0.002"}
+        }),
+        1.0,
+    );
+    let path = root.path().join("usage.sqlite3");
+    let ledger = UsageLedger::new(path.clone(), prices.clone());
+    for model in ["unknown-model", "free-model", "paid-model"] {
+        ledger.record(
+            &json!({"route":"responses","usage_category":"external", "usage_owner":"api",
+            "upstream_model":model,"input_tokens":100,"output_tokens":10}),
+            10.0,
+        );
+    }
+    drop(ledger);
+    let ledger = UsageLedger::new(path, prices);
+    let report = ledger
+        .query_lifetime_with_progress("api", 1000.0, |_, _| Ok(()), None)
+        .unwrap();
+    let groups = report["groups"].as_array().unwrap();
+    for (name, priced) in [("unknown-model", 0), ("free-model", 1), ("paid-model", 1)] {
+        let row = groups.iter().find(|row| row["model"] == name).unwrap();
+        assert_eq!(row["priced_requests"], priced);
+        assert_eq!(row["unpriced_requests"], 1 - priced);
+    }
+    assert_eq!(
+        groups
+            .iter()
+            .find(|row| row["model"] == "free-model")
+            .unwrap()["cost_nanos"],
+        0
+    );
+    assert!(
+        groups
+            .iter()
+            .find(|row| row["model"] == "paid-model")
+            .unwrap()["cost_nanos"]
+            .as_i64()
+            .unwrap()
+            > 0
+    );
+}
+
+#[test]
 fn memory_receipts_restore_priced_usage_once_and_reconcile_rollout_history() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("usage.sqlite3");
@@ -118,6 +167,15 @@ fn account_details_keep_tokens_periods_and_start_time_with_the_verified_owner() 
     );
     assert_eq!(selected["periods"].as_array().unwrap().len(), 2);
     assert_eq!(selected["issues"][0]["price_issue"], "unknown_model");
+    assert_eq!(selected["totals"]["priced_requests"], 0);
+    assert_eq!(selected["totals"]["unpriced_requests"], 2);
+    assert!(
+        selected["periods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["priced_requests"] == 0)
+    );
     assert_eq!(
         ledger.query(0.0, 1000.0, "all", 1000.0, None).unwrap()["totals"]["requests"],
         3
@@ -135,6 +193,13 @@ fn account_details_keep_tokens_periods_and_start_time_with_the_verified_owner() 
             None,
         )
         .unwrap();
+    assert!(
+        streamed["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["priced_requests"] == 0)
+    );
     let mut groups = streamed["groups"].clone();
     for group in groups.as_array_mut().unwrap() {
         group.as_object_mut().unwrap().remove("read_progress");

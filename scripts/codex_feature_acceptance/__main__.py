@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from . import catalog, effort, forks, imports, lifecycle, memory
+from . import audio, auth, catalog, effort, forks, imports, lifecycle, memory
 
 
 def main():
@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--native-catalog', type=Path)
-    parser.add_argument('--suite', choices=['all', 'effort', 'memory', 'imports', 'forks', 'catalog', 'lifecycle'], default='all')
+    parser.add_argument('--suite', choices=['all', 'audio', 'auth', 'effort', 'memory', 'imports', 'forks', 'catalog', 'lifecycle'], default='all')
     args = parser.parse_args()
     if args.suite in ('all', 'catalog') and args.native_catalog is None:
         parser.error('--native-catalog must be the pinned official models-manager/models.json')
@@ -31,11 +31,16 @@ def main():
               'source_ref':'rust-v'+version.split()[-1], 'real_provider_calls':0, 'cases':[], 'inference_requests':0,
               'binary_sha256':{str(path):hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()
                                for path in (args.codex, args.emp)}}
-    cases = [('effort-sse', effort.run, {'transport':'sse'}),
+    cases = [('audio', audio.run, {}), ('auth', auth.run, {}),
+             ('effort-sse', effort.run, {'transport':'sse'}),
              ('effort-websocket', effort.run, {'transport':'websocket'}),
              *[('memory-'+source, memory.run, {'source':source}) for source in ('native', 'external', 'imported')],
              ('imports', imports.run, {}), ('forks', forks.run, {}),
              ('catalog', catalog.run, {'catalog':args.native_catalog}), ('lifecycle', lifecycle.run, {})]
+    if tuple(map(int, version.split()[-1].split('.')[:2])) < (0, 168):
+        if args.suite == 'audio':
+            parser.error('audio acceptance requires Codex 0.168 or later')
+        cases = [case for case in cases if case[0] != 'audio']
     for name, run, options in cases:
         if args.suite != 'all' and name.split('-')[0] != args.suite:
             continue

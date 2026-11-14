@@ -189,6 +189,6 @@ registerUiCopy({
   'services.vertex_project_required':['请输入项目 ID。','Enter a project ID.'],
   'services.vertex_json_invalid':['服务账号 JSON 格式无效。','Service account JSON is invalid.'],
   'services.vertex_catalog_hint':['模型目录包含 Google 和 Claude；项目和区域决定实际可用的模型。','The catalog includes Google and Claude models; availability depends on the project and location.'],
-  'services.vertex_express_catalog_hint':['Express 模式仅支持部分 Gemini 模型；选择后可测试连接。','Express supports a limited selection of Gemini models; test your selection to check access.'],
-  'services.vertex_google_catalog_hint':['显示 EMP 收录的 Google 模型；选择后请测试项目和区域的访问权限。','Showing Google models in EMP’s reference catalog; test your selection to check project and location access.'],
+  'services.vertex_express_catalog_hint':['Express 使用官方参考目录；API Key 不支持云端目录查询。选择模型后测试连接。','Express uses a reference catalog; API keys cannot query the cloud catalog. Test the connection after selecting a model.'],
+  'services.vertex_google_catalog_hint':['API Key 不支持云端目录查询，此处使用官方参考目录。选择模型后测试项目和区域的访问权限。','API keys cannot query the cloud catalog, so this is a reference list. Test the selected model’s project and location access.'],
 });

@@ -175,7 +175,7 @@ const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
 const tutorials = createTutorials({openModal, $, tr, esc});
 const settings = createSettings({api, notice, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, help:shadowHelp, contextHelp, openAppIcon:back=>appIcon.open(back), addService:navigation=>openServiceChooser(navigation), presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
 const {open:openSettings, toggle:toggleSetting, openAggregates} = settings;
-const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, periodPickerHtml, registerPeriodPicker});
+const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, modelDisplayName, serviceName:serviceDisplayName, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, localTimeText, notice});
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
 let language = 'zh-CN';
@@ -220,8 +220,8 @@ const officialProviders = {
   zhipu: {id:'zhipu-glm', name:'Zhipu GLM', base_url:'https://api.z.ai/api/paas/v4', protocol:'chat_completions', auth_mode:'api_key', hint:'GLM OpenAI-compatible API'}
 };
 
-const serviceUsage = createServiceUsage({renderLifetime:renderLifetimeUsage,esc, tr, modelName:modelDisplayName, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), dateTime:utcDateTimeText});
-const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, getLanguage:() => language, persistState, openModal, serviceUsage, callReports, modelName:modelDisplayName, eventsConnected:() => managementEvents.connected(), periods:{periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg}});
+const serviceUsage = createServiceUsage({renderLifetime:renderLifetimeUsage,esc, tr, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), dateTime:utcDateTimeText});
+const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, getLanguage:() => language, persistState, openModal, serviceUsage, callReports, eventsConnected:() => managementEvents.connected(), periods:{periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg}});
 const {open:openUsage} = usageReport;
 const appIcon=createAppIcon({getState:()=>state,api,openModal,$,esc,tr,notice,presets:officialProviders});
 const providerBalances = createProviderBalances({getState:()=>state,api,esc,tr,notice,render:()=>renderServices()});
@@ -1157,7 +1157,7 @@ if (window.addEventListener) {
 </script>
 <script src="/assets/presentation.js"></script>
 <script>
-const statistics=createStatistics({api,$,tr,esc,getState:()=>state,getLanguage:()=>language,openModal,callReports,modelName:modelDisplayName,serviceName:serviceDisplayName,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport});
+const statistics=createStatistics({api,$,tr,esc,getState:()=>state,getLanguage:()=>language,openModal,callReports,serviceName:serviceDisplayName,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport});
 const presentationSyncMotion=installMotion(refreshResetCountdowns);
 installInteractions();
 installServiceErrors();

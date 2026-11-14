@@ -9,13 +9,13 @@ def run(codex, emp, root, evidence, catalog):
     official = json.loads(catalog.read_text())
     expected = next(model for model in official['models'] if model['slug'] == 'gpt-6.1-terra')
     with Fixture(codex, emp, root, evidence, native_catalog=official) as fixture:
-        fixture.import_account()
+        imported = fixture.import_account()
         status, merged = request(fixture.base+'/v1/models?client_version='+fixture.codex_version, headers=fixture.headers)
         assert status == 200, merged
         fields = ['context_window', 'max_context_window', 'default_reasoning_level',
                   'supported_reasoning_levels', 'multi_agent_reasoning_effort', 'tool_mode',
                   'use_responses_lite', 'supports_reasoning_effort_updates', 'prefer_websockets', 'input_modalities']
-        names = ['gpt-6.1-terra', 'imported/gpt-6.1-terra']
+        names = ['gpt-6.1-terra', imported['name']+'/gpt-6.1-terra']
         for name in names:
             model = next(model for model in merged['models'] if model['slug'] == name)
             assert {key:model.get(key) for key in fields} == {key:expected.get(key) for key in fields}, name

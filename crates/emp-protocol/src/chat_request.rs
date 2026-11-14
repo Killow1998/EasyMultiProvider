@@ -57,8 +57,20 @@ fn request_text(
     }
 }
 
-/// Base64 audio with its container format, as both Responses and Chat Completions carry it.
+/// Normalize inline Codex and Chat audio into the Chat data/format pair.
 pub(crate) fn input_audio(part: &Map<String, Value>) -> Option<Value> {
+    if let Some(url) = part.get("audio_url").and_then(Value::as_str) {
+        let (mime, data) = url.strip_prefix("data:audio/")?.split_once(";base64,")?;
+        if mime.is_empty() || data.is_empty() {
+            return None;
+        }
+        let format = match mime {
+            "mpeg" => "mp3",
+            "x-wav" | "wave" => "wav",
+            other => other,
+        };
+        return Some(serde_json::json!({"data":data,"format":format}));
+    }
     let audio = part.get("input_audio").and_then(Value::as_object)?;
     let data = audio
         .get("data")
@@ -127,7 +139,7 @@ fn chat_content(value: Option<&Value>) -> Result<Value, ProtocolError> {
             }
             Some("input_audio") => {
                 let audio = input_audio(part)
-                    .ok_or_else(|| request_error("request projection failed: invalid audio"))?;
+                    .ok_or_else(|| request_error("request projection failed: Chat audio requires inline base64 data; reattach the local recording instead of an uploaded file ID"))?;
                 projected.push(serde_json::json!({"type": "input_audio", "input_audio": audio}));
                 has_nontext = true;
             }

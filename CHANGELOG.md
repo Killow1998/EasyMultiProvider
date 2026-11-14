@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.14.1 (2026-11-14)
+
+### 中文
+
+- 跟进 Codex 0.168／0.169 的认证、Code Mode、增量工具与历史恢复，维护范围推进至 0.165–0.169；保持已有连接和权限设置。
+- 补齐新版 Codex 录音输入：外部 Responses 保留音频地址和文件引用，Chat／Vertex Gemini 接收内联录音；音频可随工具结果、后续对话及恢复历史保留。按客户端版本发布音频能力，兼容旧版目录。
+- 补充 Gemini 4 Hydrogen 参考目录与官方能力记录；Vertex 参考列表保留已知窗口、输出上限和推理档位，不重置已保存的手动设定。请求保留 Hydrogen 的 `xhigh`，其他 Gemini 模型继续按其支持范围映射。
+- 说明 Vertex API Key 使用参考模型目录，ADC／服务账号读取 Google 云端目录；区分迁移凭据与迁移本机登录配置。
+- 修复 API 服务生图未读取加密密钥导致的 503；覆盖正常保存服务后的生成和编辑路径。验证现有 Free／EMP Local Key 轻量生图 MCP 的 Image 2.6 GIF 参数、默认值、编辑与动画原样保存，保持单个工具和本地文件结果。
+- 账号累计用量、服务用量、统计图例和模型汇总使用上游原始模型名；修复当前路由同名时覆盖历史模型名的问题。模型选择器继续使用用户别名。
+- 修复累计用量与 Calls 把未知价格显示为零费用；保留已知零价，部分估算显示已知小计。定价优先使用实际上游名，不再去掉任意私有前缀猜价；已有有价历史保留记录时的费率。
+- 精简用量展示与目录之间的依赖，分离账本查询和外部目录转换，移除重复筛选和只用一次的简单包装；清理过时说明，校正统计分桶与 Vertex 参考目录文档。
+
+### English
+
+- Review Codex 0.168/0.169 authentication, Code Mode, incremental tools and history recovery; advance the maintenance window to 0.165–0.169 while preserving existing connections and permissions.
+- Support current Codex audio inputs: retain audio URLs and file references for external Responses, and project inline recordings for Chat/Vertex Gemini, including tool results and restored history. Publish audio capabilities by client version while retaining older catalog compatibility.
+- Add Gemini 4 Hydrogen reference metadata. Vertex reference lists retain published windows, output limits and reasoning levels without resetting saved user settings; preserve Hydrogen's `xhigh` effort without changing other Gemini mappings.
+- Clarify Vertex reference versus cloud catalogs and which credentials migrate between computers.
+- Load encrypted saved API-service keys for image generation and edits, fixing 503 failures after normal configuration saves. Verify Image 2.6 GIF parameters, defaults, edits and unchanged animated bytes through the existing lightweight Free/EMP Local Key image MCP, retaining one tool and local-file results.
+- Show recorded upstream model names in account/service usage, statistics legends and model summaries; prevent colliding current route IDs from renaming history. Model pickers retain user aliases.
+- Distinguish unknown prices from known zero rates in lifetime usage and Calls, retaining known subtotals. Price authoritative upstream IDs instead of stripping private prefixes to guess public rates; retain recorded rates for previously priced history.
+- Decouple usage presentation from live catalog naming, isolate ledger queries and external-model projection, and remove repeated filtering and trivial single-use wrappers. Clean up stale comments and correct chart-bucket and Vertex-reference documentation.
+
 ## 0.14.0 (2026-11-12)
 
 ### 中文

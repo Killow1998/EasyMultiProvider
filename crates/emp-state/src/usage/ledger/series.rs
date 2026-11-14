@@ -40,7 +40,7 @@ pub(super) fn aggregate() -> String {
            SUM(u.input_tokens IS NOT NULL) AS input_reports,SUM(u.output_tokens IS NOT NULL) AS output_reports,
            SUM(u.cached_input_tokens IS NOT NULL) AS cache_reports,SUM(u.cache_write_tokens IS NOT NULL) AS cache_write_reports,
            SUM(u.reasoning_tokens IS NOT NULL) AS reasoning_reports,
-           SUM(u.cost_nanos IS NOT NULL) AS priced_requests,
+           SUM(u.cost_nanos IS NOT NULL AND u.price_issue IS NULL) AS priced_requests,
            SUM(u.cost_nanos IS NULL OR u.price_issue IS NOT NULL) AS unpriced_requests,
            SUM(COALESCE(u.cost_nanos,0)) AS cost_nanos"
 }

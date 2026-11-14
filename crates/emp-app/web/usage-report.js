@@ -1,5 +1,5 @@
 // Owns data and outstanding work for one usage window.
-function createUsageReport({api, $, tr, esc, getState, getLanguage, persistState, openModal, modelName,
+function createUsageReport({api, $, tr, esc, getState, getLanguage, persistState, openModal,
   serviceUsage, callReports, eventsConnected, periods}) {
   const {periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg} = periods;
   let usageQuery = null, usagePayload = null, usagePoll = null, scanController = null;
@@ -98,7 +98,7 @@ function createUsageReport({api, $, tr, esc, getState, getLanguage, persistState
     const counts = new Map((data.unpriced_models || []).map(row => [row.route_model, row.requests]));
     const models = [...new Set([...counts.keys(), ...Object.keys(aliases)])].filter(Boolean);
     if (!models.length) return '';
-    const rows = models.map(model => `<tr><td><code>${esc(modelName(model))}</code>${counts.has(model) ? `<small>${usageNumber(counts.get(model))} ${tr("reports.requests_counted_as_0")}</small>` : ''}</td><td><input data-pricing-alias="${esc(model)}" value="${esc(aliases[model] || '')}" placeholder="${tr("reports.price_as_e_g_gpt_5_5")}"></td></tr>`).join('');
+    const rows = models.map(model => `<tr><td><code>${esc((model || '—'))}</code>${counts.has(model) ? `<small>${usageNumber(counts.get(model))} ${tr("reports.requests_counted_as_0")}</small>` : ''}</td><td><input data-pricing-alias="${esc(model)}" value="${esc(aliases[model] || '')}" placeholder="${tr("reports.price_as_e_g_gpt_5_5")}"></td></tr>`).join('');
     return `<details class="usage-notice"><summary>${tr("reports.pricing_references")}${counts.size ? ` · ${counts.size} ${tr("reports.models_have_no_public_price_and_count_as_0")}` : ''}</summary><p class="muted">${tr("reports.optionally_choose_a_public_model_to_estimate_these_with")}</p><table class="pricing-aliases">${rows}</table><div class="toolbar"><button class="secondary" data-icon="save" data-usage-action="pricing">${tr("reports.save_pricing_references")}</button></div></details>`;
   }
   async function saveUsagePricing() {

@@ -120,7 +120,7 @@ fn switch_and_resume(protocol: &'static str) {
         entry["tool_mode"] = if entry["slug"] == "demo/direct" {
             json!("direct")
         } else {
-            json!("code_mode")
+            json!("code_mode_only")
         };
         entry["model_messages"]["tools"] =
             json!({"code_mode":{"exec":{"description":format!("{revision} fixture execution")}}});

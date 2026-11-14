@@ -103,6 +103,8 @@ impl VertexFixture {
                         json!({"publisherModels":[{"name":"publishers/google/models/gemini-3-flash", "versionId":"gemini-3-flash-preview"}]})
                     } else {
                         json!({"publisherModels":[{"name":"publishers/google/models/gemini-2.5-flash"},
+                            {"name":"publishers/google/models/gemini-4-hydrogen"},
+                            {"name":"publishers/google/models/gemini-future-fixture"},
                             {"name":"publishers/google/models/gemini-embedding-001"},
                             {"name":"publishers/google/models/gemini-2.5-flash-preview-tts"}],"nextPageToken":"next"})
                     }
@@ -310,8 +312,10 @@ fn vertex_key_roundtrips_a_tool_signature_after_emp_restart() {
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     let upstream = VertexFixture::start();
     let first = server(&root, &upstream);
-    let input =
-        json!([{"type":"message","role":"user","content":[{"type":"input_text","text":"Read"}]}]);
+    let input = json!([{"type":"message","role":"user","content":[
+        {"type":"input_text","text":"Read"},
+        {"type":"input_audio","audio_url":"data:audio/mpeg;base64,SUQz"}
+    ]}]);
     let tools =
         json!([{"type":"function","name":"read","parameters":{"type":"object","properties":{}}}]);
     let body =
@@ -335,6 +339,10 @@ fn vertex_key_roundtrips_a_tool_signature_after_emp_restart() {
     let call_id = call["call_id"].as_str().unwrap().to_owned();
     let initial = upstream.received();
     assert_eq!(initial["headers"]["x-goog-api-key"], "fixture-only");
+    assert_eq!(
+        initial["body"]["contents"][0]["parts"][1],
+        json!({"inlineData":{"mimeType":"audio/mpeg","data":"SUQz"}})
+    );
     assert!(
         initial["path"]
             .as_str()
@@ -358,7 +366,12 @@ fn vertex_key_roundtrips_a_tool_signature_after_emp_restart() {
         result.starts_with("HTTP/1.1 200") && result.contains("Vertex fixture completed."),
         "{result}"
     );
-    assert_signature(&upstream.received()["body"]);
+    let continued = upstream.received();
+    assert_signature(&continued["body"]);
+    assert_eq!(
+        continued["body"]["contents"][0]["parts"][1],
+        initial["body"]["contents"][0]["parts"][1]
+    );
     second.shutdown().unwrap();
 }
 
@@ -490,6 +503,8 @@ fn vertex_adc_routes_gemini_and_claude_with_refreshed_oauth() {
     let result = request(&server, "/api/providers/vertex/models", &[&token]);
     assert!(
         result.contains("gemini-2.5-flash")
+            && result.contains("gemini-4-hydrogen")
+            && result.contains("gemini-future-fixture")
             && result.contains("gemini-3-flash-preview")
             && result.contains("claude-sonnet-4@20250514"),
         "{result}"

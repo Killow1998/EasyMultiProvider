@@ -84,6 +84,20 @@ fn project_content(value: Option<&Value>, index: usize) -> Result<Value, Portabl
                     }
                 }
                 if kind == Some("input_audio")
+                    && let Some((field, value)) =
+                        ["audio_url", "file_id"].into_iter().find_map(|field| {
+                            part.get(field)
+                                .and_then(Value::as_str)
+                                .filter(|value| !value.is_empty())
+                                .map(|value| (field, value))
+                        })
+                {
+                    let mut audio = json!({"type":"input_audio"});
+                    audio[field] = json!(value);
+                    projected.push(audio);
+                    continue;
+                }
+                if kind == Some("input_audio")
                     && let Some(audio) = crate::chat_request::input_audio(part)
                 {
                     projected.push(json!({"type": "input_audio", "input_audio": audio}));

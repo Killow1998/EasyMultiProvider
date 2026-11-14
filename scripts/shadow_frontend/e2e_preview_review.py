@@ -35,7 +35,7 @@ def main():
             assert browser.execute('return !document.getElementById("shadow_routing_button");')
             review_title = browser.execute('return document.getElementById("modal_title").textContent;')
             assert 'v0.14.0' in review_title
-            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(button=>button.dataset.shadowDemo);') == []
+            assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(button=>button.dataset.shadowDemo);') == ['usage_names','vertex_maintenance','codex_0169','media_0169','egm_fixes']
             browser.execute('window.EMP_REVIEW_ACTION("dialog_ownership");')
             wait_for(lambda: browser.execute('return !!document.getElementById("gateway_key");'))
             browser.execute('document.getElementById("modal_back").click();')

@@ -13,7 +13,7 @@ function createUsageValues({tr,esc,number}) {
 }
 
 // All chart groupings project the same reconciled rows; grouping cannot alter totals.
-function createUsageData({tr,esc,number,modelName,serviceName}) {
+function createUsageData({tr,esc,number,serviceName}) {
   const palette = ['#537de0','#279e9b','#c98730','#a371ce','#d2637d','#559746','#d65c46','#b0942d'];
   const serviceColors = new Map();
   const key = row => JSON.stringify([row.category,row.owner]);
@@ -37,7 +37,7 @@ function createUsageData({tr,esc,number,modelName,serviceName}) {
     const count = Math.ceil((report.end-report.start)/report.bucket), groups = new Map();
     for (const row of report.series) {
       const id = grouping === 'services' ? key(row) : grouping === 'models' ? row.model : 'all';
-      if (!groups.has(id)) groups.set(id,{label:grouping === 'services' ? service(row) : grouping === 'models' ? modelName(row.model) : tr("reports.total_usage"),color:grouping === 'none' ? 'var(--accent)' : grouping === 'services' ? serviceColors.get(id) : color(id),values:Array(count).fill(0)});
+      if (!groups.has(id)) groups.set(id,{label:grouping === 'services' ? service(row) : grouping === 'models' ? (row.model || '—') : tr("reports.total_usage"),color:grouping === 'none' ? 'var(--accent)' : grouping === 'services' ? serviceColors.get(id) : color(id),values:Array(count).fill(0)});
       const index = Math.round((row.start-report.start)/report.bucket);
       groups.get(id).values[index] += metric === 'tokens' ? row.input_tokens+row.output_tokens : row.cost_nanos;
     }
@@ -57,7 +57,7 @@ function createUsageData({tr,esc,number,modelName,serviceName}) {
     let previous='';
     const html=rows.map(row => {
       const heading=row.category !== previous ? `<tr class="presentation-usage-category"><th colspan="6">${esc(category(row.category))}</th></tr>` : ''; previous=row.category;
-      return `${heading}<tr><td><strong>${esc(mode === 'models' ? modelName(row.model) : service(row))}</strong>${mode === 'models' ? `<small>${esc(service(row))}</small>` : row.owner_email ? `<small>${esc(row.owner_email)}</small>` : ''}</td><td>${number(row.requests)}</td><td>${count(row,'input_tokens','input_reports')}</td><td>${count(row,'output_tokens','output_reports')}</td><td>${count(row,'cached_input_tokens','cache_reports')}</td><td>${usd(row)}</td></tr>`;
+      return `${heading}<tr><td><strong>${esc(mode === 'models' ? (row.model || '—') : service(row))}</strong>${mode === 'models' ? `<small>${esc(service(row))}</small>` : row.owner_email ? `<small>${esc(row.owner_email)}</small>` : ''}</td><td>${number(row.requests)}</td><td>${count(row,'input_tokens','input_reports')}</td><td>${count(row,'output_tokens','output_reports')}</td><td>${count(row,'cached_input_tokens','cache_reports')}</td><td>${usd(row)}</td></tr>`;
     }).join('');
     return `<div class="usage-table"><table><thead><tr>${[mode === 'models' ? tr("reports.model_service") : tr("reports.service"),tr("reports.records_2"),tr("services.input"),tr("services.output"),tr("reports.cache_read"),'API · USD'].map(title=>`<th>${esc(title)}</th>`).join('')}</tr></thead><tbody>${html || `<tr><td colspan="6">${tr("reports.no_usage_in_this_period")}</td></tr>`}</tbody></table></div>`;
   }

@@ -95,8 +95,14 @@ def main():
         wait_for(lambda: browser.execute('return [...document.querySelectorAll("[data-managed-model]")].some(row=>row.textContent.includes("gemini-4-carbon"));'))
         status, models = request(base+f'/api/providers/{provider_id}/models', headers=headers)
         ids = {row['upstream_id'] for row in models['models']}
-        assert status == 200 and {'gemini-4-carbon', 'gemini-4-argon', 'gemini-3.8-flash'} <= ids
+        assert status == 200 and {'gemini-4-hydrogen', 'gemini-4-carbon', 'gemini-4-argon', 'gemini-3.8-flash'} <= ids
+        hydrogen = next(row for row in models['models'] if row['upstream_id'] == 'gemini-4-hydrogen')
+        assert hydrogen.get('supports_reasoning') is True, hydrogen
+        assert hydrogen['reasoning_levels'] == ['low', 'medium', 'high', 'xhigh'], hydrogen
+        assert hydrogen['context_window'] == 1048576 and hydrogen['output_limit'] == 65536, hydrogen
         assert all(model.startswith('gemini-') and 'image' not in model for model in ids)
+        browser.execute('document.querySelector(\'[data-manager-action="toggle"][data-upstream="gemini-4-hydrogen"]\').click();')
+        wait_for(lambda: browser.execute('return state.models.some(model=>model.upstream_id==="gemini-4-hydrogen" && model.enabled && model.supports_reasoning && model.context_window===1048576 && model.output_limit===65536 && model.reasoning_levels.includes("xhigh"));'))
 
         model_id = provider_id + '/gemini-3.5-flash-lite'
         browser.execute('document.querySelector(\'[data-manager-action="toggle"][data-upstream="gemini-3.5-flash-lite"]\').click();')

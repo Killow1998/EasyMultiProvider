@@ -22,7 +22,7 @@ fn image_tools_follow_their_own_http_and_websocket_turn_accounts() {
             ("generations", "first-turn", "selected"),
             ("edits", "second-turn", "other"),
         ] {
-            let mut body = json!({"model":"gpt-image-2.5-sunburst","prompt":"synthetic prompt", "n":2, "background":"transparent", "future":{"preserve":true}});
+            let mut body = json!({"model":"gpt-image-2.6-sunburst","prompt":"synthetic prompt", "n":2, "background":"transparent", "output_format":"gif", "frame_count":2, "frame_duration_ms":200, "future":{"preserve":true}});
             if operation == "edits" {
                 body["images"] = json!([{"image_url":"data:image/png;base64,ZmFrZQ=="},{"file_id":"file-fixture"}]);
             }
@@ -71,7 +71,7 @@ fn image_tools_follow_their_own_http_and_websocket_turn_accounts() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|r| r["model_id"] == format!("{account}/gpt-image-2.5-sunburst"))
+                .find(|r| r["model_id"] == format!("{account}/gpt-image-2.6-sunburst"))
                 .unwrap();
             assert_eq!(record["turn_id"], turn);
             assert_eq!(record["account_id"], account);
@@ -233,15 +233,25 @@ fn image_tools_keep_the_native_account_for_native_turns() {
 fn image_26_api_routes_without_a_codex_turn_and_preserves_options() {
     let upstream = ImageUpstream::start(200);
     let (_directory, server) = image_server(&upstream.base_url());
-    server
-        .state
-        .backend
-        .configuration
-        .test_config()
-        .lock()
-        .unwrap()["providers"] = json!([
+    let mut config = server.state.backend.configuration.read().unwrap().clone();
+    config["providers"] = json!([
         {"id":"image-api", "name":"Images", "protocol":"responses", "auth_mode":"api_key",
          "base_url":upstream.base_url(), "api_key":"image-api-fixture", "enabled":true}]);
+    let saved = post(
+        &server,
+        "/api/config",
+        &serde_json::to_vec(&config).unwrap(),
+        &[&session_header(&server)],
+    );
+    assert!(saved.starts_with("HTTP/1.1 200"), "{saved}");
+    let saved = server.state.backend.configuration.read().unwrap();
+    assert_eq!(saved["providers"][0]["api_key"], "");
+    assert!(
+        saved["providers"][0]["api_key_file"]
+            .as_str()
+            .is_some_and(|path| !path.is_empty())
+    );
+    drop(saved);
     for (model, operation, format) in [
         ("gpt-image-2.6-sunburst", "generations", "svg"),
         ("gpt-image-2.6-flare", "generations", "gif"),

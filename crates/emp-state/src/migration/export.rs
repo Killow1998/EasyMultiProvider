@@ -95,11 +95,7 @@ impl ExportGroups {
 }
 
 /// Return configuration values that belong only to the selected categories.
-///
-/// The Python implementation keys native availability from the local Codex
-/// model cache and subscription prefixes from account metadata. Family
-/// presentations are intentionally preserved when native or subscription data
-/// is selected, even if that cache is absent.
+/// Keep family presentations for selected subscriptions even without a local model cache.
 pub fn select_export_config(
     config: &Value,
     groups: Option<&ExportGroups>,

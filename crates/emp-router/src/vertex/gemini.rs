@@ -1,4 +1,4 @@
-//! Google generateContent conversion for Vertex API keys.
+//! Google generateContent conversion for Vertex connections.
 
 use super::*;
 use serde_json::json;
@@ -132,6 +132,13 @@ pub(crate) fn request(chat: &Value) -> Result<Value, RouterError> {
         let level = match effort {
             "minimal" | "low" => "LOW",
             "medium" => "MEDIUM",
+            "xhigh"
+                if chat["model"].as_str().is_some_and(|model| {
+                    model.strip_prefix("google/").unwrap_or(model) == "gemini-4-hydrogen"
+                }) =>
+            {
+                "XHIGH"
+            }
             "high" | "xhigh" => "HIGH",
             _ => "",
         };
@@ -178,7 +185,11 @@ fn content_parts(content: &Value) -> Result<Vec<Value>, RouterError> {
             }
             Some("input_audio") => {
                 let audio = &part["input_audio"];
-                parts.push(json!({"inlineData":{"mimeType":format!("audio/{}", audio["format"].as_str().unwrap_or("wav")),"data":audio["data"]}}));
+                let format = audio["format"].as_str().expect("projected audio format");
+                let mime = if format == "mp3" { "mpeg" } else { format };
+                parts.push(
+                    json!({"inlineData":{"mimeType":format!("audio/{mime}"),"data":audio["data"]}}),
+                );
             }
             _ => return Err(invalid_request("unsupported Gemini message content")),
         }

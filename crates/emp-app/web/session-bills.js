@@ -1,5 +1,5 @@
 // Bills reuse reconciled usage. Detail requests belong to the currently open row.
-function createSessionBills({api,tr,esc,number,getLanguage,modelName}) {
+function createSessionBills({api,tr,esc,number,getLanguage}) {
   let current=null, searchTimer=null;
   const time=value=>new Date(value*1000).toLocaleString(getLanguage()==='en'?'en-US':'zh-CN',{hour12:false});
   const {count,tokens,usd}=createUsageValues({tr,esc,number});
@@ -16,7 +16,7 @@ function createSessionBills({api,tr,esc,number,getLanguage,modelName}) {
       for (const field of fields) group[field]+=row[field] || 0;
     }
     const rows=[...groups].sort((a,b)=>(b[1].input_tokens+b[1].output_tokens)-(a[1].input_tokens+a[1].output_tokens)).map(([model,row])=>
-      `<tr><td><strong>${esc(modelName(model))}</strong></td><td>${count(row,'input_tokens','input_reports')}</td><td>${count(row,'output_tokens','output_reports')}</td><td>${count(row,'cached_input_tokens','cache_reports')}</td><td>${count(row,'cache_write_tokens','cache_write_reports')}</td><td>${usd(row)}</td></tr>`).join('');
+      `<tr><td><strong>${esc((model || '—'))}</strong></td><td>${count(row,'input_tokens','input_reports')}</td><td>${count(row,'output_tokens','output_reports')}</td><td>${count(row,'cached_input_tokens','cache_reports')}</td><td>${count(row,'cache_write_tokens','cache_write_reports')}</td><td>${usd(row)}</td></tr>`).join('');
     const kinds={conversation:'reports.bill_conversation',review:'reports.bill_review',sidechat:'reports.bill_sidechat',subagent:'reports.bill_subagent',compaction:'reports.bill_compaction',shared:'reports.bill_shared',memory_extraction:'reports.memory_extraction',memory_consolidation:'reports.memory_consolidation'};
     const parts=(report.components || []).map(row=>{
       const kind=tr(kinds[row.session_kind] || 'reports.bill_related');
