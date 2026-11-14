@@ -74,10 +74,15 @@ python3 scripts/shadow_frontend/shadow-web.py --emp /path/to/candidate/EMP --dem
 ```
 
 Open `http://127.0.0.1:4201/`. **This update** (`/?review=1`) is the single current
-review entry. Its baseline is the published **v0.14.0**, displayed in the dialog.
+review entry. Its baseline is the published **v0.14.1**, displayed in the dialog.
 Keep `reviewRows` in `preview-review.js` cumulative across development tasks;
 reset the list and advance `reviewBaseline` together after the next release.
 Follow the [Shadow navigation rules](../../docs/architecture.md#frontend-development-and-acceptance).
+Upstream usage names, Vertex/Hydrogen metadata, Codex 0.168/0.169 media, and
+pricing/image credential repairs shipped in v0.14.1. Their archived scenarios
+remain available through `/?reviewAction=usage_names`,
+`/?reviewAction=vertex_maintenance`, `/?reviewAction=codex_0169`,
+`/?reviewAction=media_0169` and `/?reviewAction=egm_fixes`.
 Dialog ownership, readable gateway model IDs, saved device Keys and the routing/
 Decision API entry points shipped in v0.14.0. Their archived scenarios remain
 available through `/?reviewAction=dialog_ownership`,

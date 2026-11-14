@@ -86,6 +86,27 @@ candidate versions; it is not relabeled as a test of this development build.
 | 0.167 | Official Linux 0.167.0 engine passed the local EMP 0.13.26 candidate contracts on 2026-11-06 UTC. Official Linux 0.167.1 and 0.167.2 passed their separately dated targeted candidate checks below on 2026-11-11 UTC. |
 | 0.168–0.169 | Official Linux 0.168.0 and 0.169.0 engines passed the v0.14.0-based maintenance candidate checks below on 2026-11-13 UTC. |
 
+### v0.14.1 release acceptance (2026-11-14 UTC)
+
+[Runtime CI](https://github.com/Killow1998/EasyMultiProvider/actions/runs/43572843122)
+passed on `d1e283960e5e942e70f74651207bc578018016e8`: format, frontend
+contracts, workspace Clippy and tests, plus Windows exit recovery. The Rust
+results contain 1,056 passed test executions and 22 ignored cases. The release
+merge `6410a6b29a9e5e7ec959639a9a3217f4ed5c1668` has the same source tree.
+
+[Package CI](https://github.com/Killow1998/EasyMultiProvider/actions/runs/43573307155)
+passed on all four native runners: Windows x64, Linux x64, Intel macOS and Apple
+Silicon macOS. It exercised package startup, update/rollback, TLS, memory admission
+and exit/restoration fixtures, validated the 22-file manifest and SHA-256
+sidecars, and published the six [v0.14.1 assets](https://github.com/Killow1998/EasyMultiProvider/releases/tag/v0.14.1).
+Intermediate Actions artifacts were removed after publication. These package
+checks remain separate from the dated engine contracts above and App/IDE journeys.
+
+The downloaded Linux release reports `EMP 0.14.1` and passed six Shadow browser
+groups covering both languages, archived navigation, recovery, account removal,
+historical settings and CPA quota review. Its executable SHA-256 is
+`ff15e6178156e5f3a149ec7704c4eeefc6808ffd97c9d48f873c43f8464d7238`.
+
 ### 0.168/0.169 upstream pairing and acceptance
 
 The source review is pinned to `rust-v0.168.0` and `rust-v0.169.0`.
