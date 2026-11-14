@@ -76,6 +76,27 @@ fn model_key<'a>(model: &str, prices: &'a Map<String, Value>) -> Option<&'a str>
     if let Some((key, _)) = prices.get_key_value(model) {
         return Some(key);
     }
+    let model = model
+        .split_once('/')
+        .and_then(|(vendor, name)| {
+            [
+                ("gpt-", "openai"),
+                ("claude-", "anthropic"),
+                ("gemini-", "gemini"),
+                ("deepseek-", "deepseek"),
+                ("grok-", "xai"),
+            ]
+            .into_iter()
+            .any(|(prefix, family)| {
+                name.starts_with(prefix)
+                    && (vendor == family || (family == "gemini" && vendor == "google"))
+            })
+            .then_some(name)
+        })
+        .unwrap_or(model);
+    if let Some((key, _)) = prices.get_key_value(model) {
+        return Some(key);
+    }
     for (prefix, family) in [
         ("gemini-", "gemini"),
         ("claude-", "anthropic"),
@@ -211,7 +232,7 @@ pub fn estimate_tokens(usage: &Value, rates: &Value, tier: &str) -> Result<Value
     )
 }
 /// Bump when the lookup rules change so unpriced rows are quoted again.
-const LOOKUP_RULES: u32 = 2;
+const LOOKUP_RULES: u32 = 3;
 struct PriceData {
     prices: Value,
     aliases: Map<String, Value>,
@@ -229,8 +250,8 @@ impl PriceData {
     }
 }
 /// Resolve a request to a price entry: a user alias for the route or upstream
-/// name wins; otherwise try the upstream name, then the name without its
-/// provider/account prefix (for example `work/gpt-5` → `gpt-5`).
+/// name wins. A reported upstream ID is authoritative; only legacy route-only
+/// records need their EMP account/provider prefix removed.
 fn price_source<'a>(
     event: &Value,
     prices: &'a Map<String, Value>,
@@ -245,12 +266,14 @@ fn price_source<'a>(
     if let Some(alias) = alias {
         return model_key(alias, prices);
     }
-    [upstream, route]
-        .into_iter()
-        .filter(|name| !name.is_empty())
-        .flat_map(|name| [Some(name), name.split_once('/').map(|(_, tail)| tail)])
-        .flatten()
-        .find_map(|name| model_key(name, prices))
+    if !upstream.is_empty() {
+        return model_key(upstream, prices);
+    }
+    model_key(route, prices).or_else(|| {
+        route
+            .split_once('/')
+            .and_then(|(_, name)| model_key(name, prices))
+    })
 }
 pub struct PriceCatalog {
     path: PathBuf,
@@ -326,8 +349,7 @@ impl PriceCatalog {
             quote["cost_nanos"] = Value::Null;
             quote["rates"] = json!({});
         }
-        // Without a known price a request costs nothing; the issue stays so the
-        // UI can offer a pricing reference. Only unreported usage stays unpriced.
+        // Preserve the ledger's legacy placeholder; readers must check price_issue.
         if matches!(
             quote["price_issue"].as_str(),
             Some("unknown_model" | "missing_rate")
@@ -364,11 +386,19 @@ mod lookup_tests {
 
     #[test]
     fn account_prefixed_routes_use_the_public_price() {
-        let quote = catalog()
-            .quote(&request("work/gpt-5", "work/gpt-5"))
-            .unwrap();
+        let quote = catalog().quote(&request("work/gpt-5", "gpt-5")).unwrap();
         assert_eq!(quote["price_key"], "gpt-5");
         assert_eq!(quote["cost_nanos"], 1_020_000);
+        for upstream in ["openai/gpt-5", "gpt-5", ""] {
+            assert_eq!(
+                catalog().quote(&request("work/gpt-5", upstream)).unwrap()["price_key"],
+                "gpt-5"
+            );
+        }
+        for upstream in ["private/gpt-5", "local-model"] {
+            let quote = catalog().quote(&request("work/gpt-5", upstream)).unwrap();
+            assert_eq!(quote["price_issue"], "unknown_model", "{quote}");
+        }
     }
 
     #[test]

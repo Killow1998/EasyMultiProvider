@@ -160,8 +160,6 @@ pub(super) fn scan_suffix(
     Ok(SuffixScan::Usable(Box::new(scan)))
 }
 
-/// Shared per-record scan bookkeeping: turns, completion states, response
-/// roles, model contexts. The boundary record itself is handled by the caller.
 /// Replay the frame's records into `visible`, applying rollback markers, the
 /// failed-turn filter, the response-role echo filter, and replacement-history
 /// compaction records. Returns `None` when the boundary was hit and replay

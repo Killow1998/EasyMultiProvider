@@ -48,6 +48,16 @@ def main():
         browser.execute('''
           window.originalUsageFetch=window.fetch;window.usageReads=[];
           window.fetch=(path,options={})=>{
+            if(String(path).startsWith('/api/calls?'))return Promise.resolve(new Response(JSON.stringify({
+              start:1,end:9999999999,offset:0,limit:50,total:2,records:[
+                {request_id:'unknown-price',model_id:'fixture',state:'completed',input_tokens:10,output_tokens:2,pricing:{cost_nanos:0,price_issue:'unknown_model'}},
+                {request_id:'known-zero',model_id:'fixture',state:'completed',input_tokens:10,output_tokens:2,pricing:{cost_nanos:0,price_issue:null}}
+              ]
+            }),{headers:{'Content-Type':'application/json'}}));
+            if(String(path).startsWith('/api/usage?series=true'))return Promise.resolve(new Response(JSON.stringify({
+              ...usageFixture,totals:usageFixture.groups[0],start:1,end:3601,bucket:600,
+              series:[{...usageFixture.groups[0],start:1}],periods:[{start:1,requests:10}]
+            }),{headers:{'Content-Type':'application/json'}}));
             if(!String(path).startsWith('/api/usage?lifetime=true&'))return originalUsageFetch(path,options);
             let stream;
             const response=new ReadableStream({start(controller){stream=controller;}});
@@ -55,7 +65,9 @@ def main():
             usageReads.push(entry);
             return Promise.resolve(new Response(response,{headers:{'Content-Type':'text/event-stream'}}));
           };
-          window.usageFixture={groups:[{category:'external',owner:'demo',model:'fixture',requests:10,reported_requests:1,input_reports:1,output_reports:1,input_tokens:100,output_tokens:50,priced_requests:1,cost_nanos:0}],first_record_at:1};
+          window.usageFixture={groups:[{category:'external',owner:'demo',model:'fixture',requests:10,reported_requests:1,input_reports:1,output_reports:1,input_tokens:100,output_tokens:50,priced_requests:1,unpriced_requests:9,cost_nanos:0}],first_record_at:1};
+          state.catalog_models.push({id:'fixture',display_name:'ALIAS_FIXTURE'});
+          state.models.push({id:'fixture',upstream_id:'UNRELATED_MODEL'});
         ''')
         for language in ['zh-CN', 'en']:
             browser.execute('setLanguage(arguments[0]);openProviderDetails("demo");', language)
@@ -74,6 +86,7 @@ def main():
             browser.execute('usageReads.at(-1).send("result",usageFixture);')
             wait_for(lambda: browser.execute('return !!document.querySelector("#service_usage .usage-total");'))
             assert browser.execute('return document.getElementById("service_usage").textContent.includes(tr("services.partial_usage")) && document.getElementById("service_usage").textContent.includes(tr("services.partial_estimate")) && document.querySelector("#service_usage .usage-total strong").textContent==="150 *";')
+            assert browser.execute('return document.querySelector("#service_usage tbody").textContent.includes("fixture") && !document.getElementById("service_usage").textContent.includes("ALIAS_FIXTURE");')
             browser.execute('closeModal();openProviderDetails("demo");')
             wait_for(lambda: browser.execute('return !!document.querySelector("#service_usage progress");'))
             browser.execute('window.oldUsage=usageReads.at(-1);closeModal();openSettings();')
@@ -82,6 +95,20 @@ def main():
             assert browser.execute('return !document.getElementById("service_usage") && !document.getElementById("modal_backdrop").classList.contains("hidden");')
             browser.execute('closeModal();')
             checks.append(language+': owner query, indeterminate/percentage progress, retry, partial totals and cancellation preserve the next dialog')
+        browser.execute('document.querySelector("[data-i18n=statistics]").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-stats-group]");'))
+        browser.execute('const group=document.querySelector("[data-stats-group]");group.value="models";group.dispatchEvent(new Event("change",{bubbles:true}));')
+        assert browser.execute('return document.querySelector(".presentation-chart-legend").textContent.includes("fixture") && !document.querySelector(".presentation-chart-legend").textContent.includes("ALIAS_FIXTURE");')
+        browser.execute('document.querySelector("[data-stats-view=models]").click();')
+        assert browser.execute('return document.querySelector("[data-stats-content] tbody").textContent.includes("fixture") && !document.querySelector("[data-stats-content]").textContent.includes("ALIAS_FIXTURE");')
+        checks.append('Service usage, model totals and chart legends use upstream names despite catalog aliases')
+        browser.execute('closeModal();state.catalog_models.push({id:state.models[0].id,display_name:"ROUTE_ALIAS_FIXTURE"});callReports.open();')
+        assert browser.execute('return !document.querySelector("[data-call-filter=model]").textContent.includes("ROUTE_ALIAS_FIXTURE");')
+        wait_for(lambda: browser.execute('return document.querySelectorAll(".call-record").length===2;'))
+        for request_id, expected in [('unknown-price','—'),('known-zero','US$0')]:
+            browser.execute('document.querySelector(arguments[0]+" > summary").click();', '[data-call-id="'+request_id+':responses"]')
+            assert browser.execute('const row=document.querySelector(arguments[0]);const field=[...row.querySelectorAll(".call-fact")].find(node=>node.textContent.includes(tr("reports.api_estimate_usd")));return field?.textContent.includes(arguments[1]);', '[data-call-id="'+request_id+':responses"]', expected)
+        checks.append('Calls distinguish an unknown zero placeholder from an explicitly priced zero')
         assert upstream.calls == 0
     result = {'passed':True,'checks':checks,'real_model_requests':0}
     args.output.write_text(json.dumps(result,indent=2)+'\n')

@@ -16,28 +16,21 @@ pub(super) async fn discover(
             ));
         }
         // Model Garden requires OAuth; API keys use a published reference list.
-        let ids: Vec<String> = if provider["vertex"]["project"] == "" {
-            [
-                "gemini-3.1-pro-preview",
-                "gemini-3-flash-preview",
-                "gemini-2.5-pro",
-                "gemini-2.5-flash",
-                "gemini-2.5-flash-lite",
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-        } else {
-            emp_state::official_registry::published_text_model_ids("google_gemini")
-                .into_iter()
-                .filter(|id| id.starts_with("gemini-"))
-                .collect()
-        };
-        let models = ids
-            .into_iter()
-            .map(|id| json!({"upstream_id":id,"display_name":id}))
-            .collect();
-        return Ok(enrich_discovered_models(provider, models));
+        let mut models = emp_state::official_registry::published_text_models("google_gemini");
+        models.retain(|model| {
+            let id = model["upstream_id"].as_str().expect("reference model ID");
+            id.starts_with("gemini-")
+                && (provider["vertex"]["project"] != ""
+                    || [
+                        "gemini-3.1-pro-preview",
+                        "gemini-3-flash-preview",
+                        "gemini-2.5-pro",
+                        "gemini-2.5-flash",
+                        "gemini-2.5-flash-lite",
+                    ]
+                    .contains(&id))
+        });
+        return Ok(models);
     }
     let mut headers = crate::vertex::headers(provider, &BTreeMap::new()).await?;
     headers.insert(

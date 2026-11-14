@@ -75,6 +75,28 @@ the Native service's action group. Applying an Other subscription keeps its
 imported record. Switching a subscription to an EMP local key offers keeping it
 as Other or removing its Native sign-in. Restart Codex Runtime after switching.
 
+### Vertex AI catalogs and migration
+
+Vertex API keys support encrypted service migration. Model Garden's listing API
+requires OAuth, so API-key connections use a published reference catalog rather
+than a project-access check. A project connection includes Gemini 4 Hydrogen;
+Express retains its documented subset. Test the selected model to check access
+in that project and location. ADC and service-account connections instead read
+the paginated Google and Anthropic cloud catalogs, including new model IDs not
+yet recorded in EMP's reference metadata.
+
+ADC migration copies the project, location and authentication mode, not a Google
+login. The receiving computer needs its own ADC credentials. A supplied service
+account JSON, like an API key, migrates as encrypted credentials.
+
+Hydrogen supports `low`, `medium`, `high` and `xhigh`; EMP sends its `xhigh` as
+`XHIGH`. Other Gemini models retain their supported mapping. Its documented
+1,048,576-token window is shared by input and output; foreground output is
+limited to 65,536 tokens. EMP does not implement Hydrogen's long-decode
+continuation protocol. See Google's
+[model specification](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-hydrogen)
+and [Model Garden list API](https://docs.cloud.google.com/vertex-ai/docs/reference/rest/v1beta1/publishers.models/list).
+
 ### Codex image tools with an EMP local key
 
 EMP enables one `emp_images.imagegen` MCP tool when Native is Free or uses an
@@ -131,6 +153,28 @@ The existing MCP `imagegen` tool accepts these model names, `output_format`,
 `complexity`, `frame_count` and `frame_duration_ms`. PNG remains its default;
 SVG, GIF, JPEG and WebP results use matching file extensions. Selecting a model
 does not change the configured subscription account or create API billing credentials.
+
+GIF defaults are left to the image service. The helper forwards optional frame
+controls unchanged and saves the returned animation without converting its frames.
+Generated files stay on disk; MCP returns one path instead of embedding image bytes.
+API-service image requests load that service's encrypted saved key through the
+same credential reader as other external requests; callers never supply its key.
+
+### Recorded audio
+
+For Codex 0.168 and later, external Responses and Chat models publish audio input
+when their saved model metadata declares it. The older client catalog omits audio;
+Claude CLI and Anthropic routes do not advertise it.
+
+Codex recordings use `input_audio.audio_url`. EMP keeps this representation for
+external Responses and converts inline base64 data to Chat's `input_audio`
+data/format pair, including audio returned by tools. Vertex Gemini receives
+`inlineData` with the corresponding audio MIME type. Follow-up turns and resumed
+history retain the recording. The provider must support the recording's format.
+
+Responses file references (`input_audio.file_id`) remain unchanged and require
+the selected upstream to own the file. Chat requires inline recording data; EMP
+does not download private files from another provider or replace audio with text.
 
 ### Responses client compatibility
 

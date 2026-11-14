@@ -71,9 +71,17 @@ fn registry() -> Cow<'static, Map<String, Value>> {
 }
 
 /// Published text models are a reference catalog, not a check of account access.
-pub fn published_text_model_ids(provider_key: &str) -> Vec<String> {
+pub fn published_text_models(provider_key: &str) -> Vec<Value> {
     let registry = registry();
-    registry
+    let Some(publisher) = registry["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["key"] == provider_key)
+    else {
+        return Vec::new();
+    };
+    let models = registry
         .get("models")
         .and_then(Value::as_array)
         .into_iter()
@@ -84,8 +92,11 @@ pub fn published_text_model_ids(provider_key: &str) -> Vec<String> {
                     .as_array()
                     .is_some_and(|modes| modes.iter().any(|mode| mode == "text"))
         })
-        .filter_map(|model| model["model_id"].as_str().map(str::to_owned))
-        .collect()
+        .filter_map(|model| model["model_id"].as_str())
+        .map(|id| json!({"upstream_id":id,"display_name":id}))
+        .collect();
+    let reference = json!({"base_url": publisher["api_base_urls"][0]});
+    enrich_models(reference.as_object().unwrap(), models, false)
 }
 
 pub fn identify_provider(provider: &Map<String, Value>) -> Option<String> {

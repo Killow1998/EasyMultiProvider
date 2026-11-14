@@ -91,6 +91,13 @@ copy the publisher's context, output, protocol or reasoning limits onto it.
 Arbitrary deployment names and family-name matches remain unknown. Explicit
 advertised, manual or observed restrictions always win.
 
+Vertex API Key discovery is an explicit reference-catalog exception: Google does
+not expose Model Garden listing to API keys, so EMP builds that list from the
+published Gemini registry, including reference window, output and reasoning
+metadata. These are model references, not a verification of Vertex deployment
+limits, project access or regional availability. ADC/service-account discovery
+continues to list Google's cloud catalog. Saved manual and observed values win.
+
 Documented API redirects apply only to that API's exact registered roots. For
 example, DeepSeek's official `deepseek-v4-flash` route now serves the vision-capable
 `deepseek-flash` model. OpenRouter retains the original text-only V4 Flash weights.
@@ -110,6 +117,15 @@ operation, not an automatic startup network request.
 
 ## Maintenance
 
+The 2026-11-13 maintenance candidate adds Gemini 4 Hydrogen from Google's
+published model specification. Its reference entry records a shared
+1,048,576-token input/output window, a 65,536-token foreground output limit,
+multimodal input and `low`/`medium`/`high`/`xhigh` reasoning. This entry supplies
+reference capabilities; it does not verify project or region access. Vertex's
+Hydrogen request mapping preserves `xhigh`; other Gemini mappings are unchanged.
+Existing saved user limits are retained. Earlier dated inventories below
+describe their original candidates rather than the current registry count.
+
 Every registry entry records `reviewed_at` and primary source URLs. A normal EMP
 release reviews the bundled registry and updates confirmed changes. Removed or
 uncertain facts become unknown instead of being carried forward by assumption.
@@ -128,7 +144,8 @@ in use. Normal installations need no override.
   inference.
 - Live advertised values beat bundled values.
 - Bundled deployment limits fill missing/unknown fields only for exact official
-  routes and model IDs; published modalities also fill exact IDs on relays.
+  routes and model IDs; the Vertex API Key reference catalog is the explicit
+  exception described above. Published modalities also fill exact IDs on relays.
 - Manual and observed values survive discovery refreshes.
 - Text, image, audio, video, file/PDF and output modalities remain distinct.
 - Provider protocols and model capabilities remain separate.

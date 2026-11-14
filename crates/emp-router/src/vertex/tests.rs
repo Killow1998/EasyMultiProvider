@@ -184,6 +184,19 @@ fn gemini_request_keeps_images_tools_and_parallel_result_order() {
         gemini::request(&carbon).unwrap()["generationConfig"]["thinkingConfig"]["thinkingLevel"],
         "HIGH"
     );
+    for (model, expected) in [
+        ("gemini-4-hydrogen", "XHIGH"),
+        ("google/gemini-4-hydrogen", "XHIGH"),
+        ("gemini-4-carbon", "HIGH"),
+        ("gemini-3-flash-preview", "HIGH"),
+    ] {
+        let request = json!({"model":model,"reasoning_effort":"xhigh","messages":[{"role":"user","content":"hello"}]});
+        assert_eq!(
+            gemini::request(&request).unwrap()["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            expected,
+            "{model}"
+        );
+    }
 }
 
 #[test]

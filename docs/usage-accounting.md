@@ -333,6 +333,13 @@ Display names and approximate model-name matches are never used for prices.
 Unknown models remain unpriced. The total shows the number of priced requests
 and an asterisk when only a subtotal is available.
 
+A reported upstream ID takes precedence over the selected route name. EMP only
+removes an account/service prefix from legacy records with no upstream ID;
+private upstream prefixes are not removed to guess a public price. Explicit
+`pricing_aliases` still take precedence. Existing completed price quotes retain
+their recorded rates; changing lookup rules does not rewrite paid historical
+estimates at today's prices.
+
 The estimate uses USD token rates, including reported cache reads/writes,
 Anthropic cache-write lifetimes, known context-length tiers and service tiers.
 An upstream-reported service tier takes precedence over the requested tier;

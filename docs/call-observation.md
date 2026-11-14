@@ -33,7 +33,9 @@ preview isolation. See [shadow frontend acceptance](../scripts/shadow_frontend/R
 
 The Statistics window shares its time/service/model/session/outcome filters across
 performance and accounting. `/api/usage?series=true` groups the reconciled ledger
-into at most 48 time buckets (minimum 60 seconds), with the same rows feeding
+into 10-minute buckets for intervals up to one hour, hourly buckets up to one
+day, and daily buckets for longer intervals. There is no fixed 48-bucket cap.
+The same rows feed
 Token/USD totals and service/model chart colors. Receipt filters apply only to
 accounting rows linked to matching calls; unmatched history is not guessed.
 

@@ -28,6 +28,8 @@ def main():
             const now=Date.now; Date.now=()=>now()+fixtureClock;
             state.accounts=['first','second'].map(id=>({id,name:id,credential_set:true,
                 hidden_models:[],model_context_windows:{},quota:{account_label:id+'@example.invalid'}}));
+            state.catalog_models.push({id:'fixture-model',display_name:'ACCOUNT_ALIAS_FIXTURE'});
+            state.models.push({id:'fixture-model',upstream_id:'UNRELATED_MODEL'});
             const original=window.fetch;
             window.fetch=(input,options={})=>{
                 const path=String(input);
@@ -71,6 +73,7 @@ def main():
         assert not browser.execute('return fixtureReads[0].signal.aborted;')
         browser.execute('releaseUsage(0,123);')
         tokens(123)
+        assert browser.execute('return document.querySelector("#account_usage tbody").textContent.includes("fixture-model") && !document.getElementById("account_usage").textContent.includes("ACCOUNT_ALIAS_FIXTURE");')
         click('#modal_close')
         click('[data-ui-action=account-edit][data-id=first]')
         click('#modal_close')

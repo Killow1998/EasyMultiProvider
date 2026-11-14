@@ -15,6 +15,7 @@ const deferred = () => { let resolve, reject; const promise = new Promise((yes, 
 function feature(file, factory, globals = {}) {
   const context = vm.createContext({Headers, URL, URLSearchParams, Blob, AbortController, structuredClone, esc, tr, ...globals});
   if(file !== 'service-presentation.js') vm.runInContext(fs.readFileSync(path.join(web,'service-presentation.js'),'utf8'),context,{filename:'service-presentation.js'});
+  if(file === 'service-usage.js') vm.runInContext(fs.readFileSync(path.join(web,'usage-data.js'),'utf8'),context,{filename:'usage-data.js'});
   if(file === 'call-reports.js') for(const dependency of ['call-outcomes.js','performance-chart.js','performance.js']) vm.runInContext(fs.readFileSync(path.join(web,dependency),'utf8'),context,{filename:dependency});
   vm.runInContext(fs.readFileSync(path.join(web, file), 'utf8'), context, {filename:file});
   return context[factory];

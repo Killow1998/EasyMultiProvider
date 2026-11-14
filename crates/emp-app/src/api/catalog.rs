@@ -131,10 +131,12 @@ pub(crate) fn models_request(request: Request<'_>, state: &ServerState) -> Vec<u
     if request.raw_path() == "/v1/models" {
         crate::services::account_catalog::request_refresh(state, false);
     }
-    let rich = request.raw_path() == "/v1/models"
-        && query_values(request.target, "client_version")
-            .iter()
-            .any(|value| !value.is_empty());
+    let versions = query_values(request.target, "client_version");
+    let client_version = versions
+        .iter()
+        .find(|version| !version.is_empty())
+        .map(String::as_str);
+    let rich = request.raw_path() == "/v1/models" && client_version.is_some();
     if rich && preserve_native_catalog(&config).is_err() {
         return internal_error();
     }
@@ -161,6 +163,7 @@ pub(crate) fn models_request(request: Request<'_>, state: &ServerState) -> Vec<u
     let catalog = emp_state::config::client_catalog(&config, catalog);
     if rich {
         let etag = emp_state::catalog_etag(&catalog);
+        let catalog = emp_codex::merged_catalog::for_client_version(catalog, client_version);
         return match etag {
             Ok(etag) => response(
                 "HTTP/1.1 200 OK",
