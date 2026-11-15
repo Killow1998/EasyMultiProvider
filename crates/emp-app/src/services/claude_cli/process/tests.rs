@@ -1,7 +1,6 @@
 use super::*;
 use std::process::Stdio;
 
-#[cfg(unix)]
 #[test]
 fn timeout_and_disconnect_stop_the_child_process_group() {
     use std::os::unix::process::CommandExt;
@@ -49,7 +48,6 @@ fn timeout_and_disconnect_stop_the_child_process_group() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn normal_parent_exit_kills_descendant_holding_child_pipes_open() {
     use std::os::unix::process::CommandExt;
@@ -83,7 +81,6 @@ fn normal_parent_exit_kills_descendant_holding_child_pipes_open() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn output_budget_event_stops_a_waiting_cli_without_waiting_for_timeout() {
     use std::os::unix::process::CommandExt;

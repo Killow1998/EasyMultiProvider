@@ -98,7 +98,6 @@ pub(crate) struct ActivityGuard<'a> {
 }
 
 impl ActivityService {
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     pub(crate) fn is_idle(&self) -> bool {
         self.state
             .lock()
