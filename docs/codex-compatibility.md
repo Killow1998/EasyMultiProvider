@@ -86,6 +86,25 @@ candidate versions; it is not relabeled as a test of this development build.
 | 0.167 | Official Linux 0.167.0 engine passed the local EMP 0.13.26 candidate contracts on 2026-11-06 UTC. Official Linux 0.167.1 and 0.167.2 passed their separately dated targeted candidate checks below on 2026-11-11 UTC. |
 | 0.168–0.169 | Official Linux 0.168.0 and 0.169.0 engines passed the v0.14.0-based maintenance candidate checks below on 2026-11-13 UTC. |
 
+### v0.14.2 local module acceptance (2026-11-15 UTC)
+
+The v0.14.2 candidate was reviewed across all nine Rust crates, xtask and the web
+frontend. Twelve process-isolated removal controls each trigger a behavioral
+failure; restoring the implementation passes the same check. The controls cover
+route identity, checkpoint decoding, reasoning suppression, account ownership,
+active history writers, configuration restoration, loopback proxies, gateway
+attribution, Native image encoding, page-context prefill, stale frontend saves
+and release-version validation. Existing tests gained two missing assertions;
+no new unit-test functions or dependencies were added for this cleanup.
+
+The actual Linux Codex 0.169.0 engine first receives HTTP 400 when resuming an old
+EMP checkpoint against a simulated Native upstream. Background conversion then
+allows that same conversation to resume after EMP stops, preserving the thread
+ID and original history prefix without manual repair. Four additional browser
+E2E suites pass gateway attribution/session bills, service usage, Native history
+restoration and bilingual navigation. All five suites use isolated state and
+simulated upstreams; no real-provider requests or runtime replacement occur.
+
 ### v0.14.1 release acceptance (2026-11-14 UTC)
 
 [Runtime CI](https://github.com/Killow1998/EasyMultiProvider/actions/runs/43572843122)

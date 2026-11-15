@@ -1,6 +1,6 @@
 //! Complete native Responses HTTP forwarding over the shared connection pool.
 //! A request is projected once; retries retain that projection and credential
-//! snapshot except for Python's explicit account refresh/effort fallback.
+//! snapshot except for explicit account refresh and effort fallback.
 
 use crate::discovery::python_json_error_message;
 use crate::native_metadata::{native_response_headers, rewrite_native_model_event};
@@ -125,11 +125,30 @@ fn native_sse_frame(event: &str, body: &Value) -> Result<Vec<u8>, RouterError> {
     Ok(frame)
 }
 
-fn encoded(payload: &Value) -> Result<Vec<u8>, NativeHttpError> {
+fn has_inline_image(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            (object.get("type").and_then(Value::as_str) == Some("input_image")
+                && object
+                    .get("image_url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|url| url.starts_with("data:")))
+                || object.values().any(has_inline_image)
+        }
+        Value::Array(items) => items.iter().any(has_inline_image),
+        _ => false,
+    }
+}
+
+fn encoded(payload: &Value, compress: bool) -> Result<Vec<u8>, NativeHttpError> {
     let bytes = serde_json::to_vec(payload)
         .map_err(|_| NativeHttpError::plain(500, "internal server error"))?;
-    zstd_encode(&bytes)
-        .map_err(|_| NativeHttpError::router(502, "native request compression failed"))
+    if compress {
+        zstd_encode(&bytes)
+            .map_err(|_| NativeHttpError::router(502, "native request compression failed"))
+    } else {
+        Ok(bytes)
+    }
 }
 
 fn selected_headers(response: &HttpResponse, route: &ResolvedRoute) -> BTreeMap<String, String> {
@@ -344,7 +363,9 @@ impl<'a> NativeRouter<'a> {
                 .map_err(collaboration_error)?
                 .0;
         }
-        let mut data = encoded(&payload)?;
+        // Native Lite rejects some Zstd requests containing inline images.
+        let compress = !has_inline_image(&payload["input"]);
+        let mut data = encoded(&payload, compress)?;
         let deadline = Instant::now() + self.client.policy().timeout_policy().non_stream_wall_clock;
         let url = if compact {
             compact_endpoint(route.provider.value())?
@@ -365,7 +386,9 @@ impl<'a> NativeRouter<'a> {
                 headers = Some(resolve_headers(false)?);
             }
             let mut request_headers = headers.as_ref().expect("resolved headers").clone();
-            request_headers.insert("Content-Encoding".to_owned(), "zstd".to_owned());
+            if compress {
+                request_headers.insert("Content-Encoding".to_owned(), "zstd".to_owned());
+            }
             if let Some(observer) = self.attempt_observer {
                 observer();
             }
@@ -468,7 +491,7 @@ impl<'a> NativeRouter<'a> {
                         .as_object_mut()
                         .expect("request object")
                         .remove("reasoning_effort");
-                    data = encoded(&payload)?;
+                    data = encoded(&payload, compress)?;
                     headers = None;
                     continue;
                 }
@@ -541,11 +564,14 @@ impl<'a> NativeRouter<'a> {
                 .map_err(collaboration_error)?
                 .0;
         }
-        let data = encoded(&payload)?;
+        let compress = !has_inline_image(&payload["input"]);
+        let data = encoded(&payload, compress)?;
         let url = endpoint(route.provider.value(), Protocol::Responses)
             .map_err(|error| NativeHttpError::router(error.status(), error.to_string()))?;
         let mut request_headers = resolve_headers(false)?;
-        request_headers.insert("Content-Encoding".to_owned(), "zstd".to_owned());
+        if compress {
+            request_headers.insert("Content-Encoding".to_owned(), "zstd".to_owned());
+        }
         if let Some(observer) = self.attempt_observer {
             observer();
         }

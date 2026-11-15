@@ -6,6 +6,11 @@ Services, Models, Session bills and Calls. Unknown or removed services retain
 their recorded attribution. Historical records are not assigned to today's
 account merely because a route prefix matches.
 
+Gateway clients can also supply session IDs without a local Codex history file.
+Calls display their client or device name, and explicit external session IDs
+group their requests into session bills. Requests without a session ID remain
+in total usage and device usage. See [agent client headers](gateway.md#agent-clients-and-sessions).
+
 Click a service badge to open its information and settings. Its lifetime usage
 summary combines rows with the same upstream model ID across dates, service
 tiers and Native/Subscription categories belonging to that verified account.

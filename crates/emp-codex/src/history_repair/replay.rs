@@ -42,7 +42,7 @@ pub(super) struct RolloutSummary {
 }
 
 pub(super) fn load_rollout_header(
-    paths: &RolloutPaths<'_>,
+    paths: &RolloutPaths,
     info: &ThreadInfo,
 ) -> Result<RolloutHeader, HistoryRepairError> {
     let path = paths.resolve(info)?;
@@ -162,8 +162,8 @@ fn parse_repair_record(line: &[u8]) -> Result<Option<Map<String, Value>>, Histor
     }
 }
 
-pub(super) fn context_for(
-    paths: &RolloutPaths<'_>,
+pub(super) fn replay_closed_lineage(
+    paths: &RolloutPaths,
     snapshot: &mut ContextSnapshot,
     info: &ThreadInfo,
     bound: Option<HistoryBound>,
@@ -185,7 +185,7 @@ pub(super) fn context_for(
             path,
             mode: None,
         };
-        context_for(
+        replay_closed_lineage(
             paths,
             snapshot,
             &parent,
@@ -196,7 +196,7 @@ pub(super) fn context_for(
             visiting,
         )?;
     }
-    let rollout = stream_rollout(&header, snapshot, bound)?;
+    let rollout = stream_rollout(paths, &header, snapshot, bound)?;
     if snapshot.turns.has_open_turns()? {
         return Err(HistoryRepairError::new("unfinished_turn_in_history"));
     }
@@ -205,6 +205,7 @@ pub(super) fn context_for(
 }
 
 fn stream_rollout(
+    paths: &RolloutPaths,
     header: &RolloutHeader,
     snapshot: &mut ContextSnapshot,
     bound: Option<HistoryBound>,
@@ -227,6 +228,7 @@ fn stream_rollout(
     let mut last_ordinal = None;
 
     loop {
+        paths.check_cancelled()?;
         let Some(terminated) = read_repair_line(&mut reader, &mut line)? else {
             break;
         };
@@ -433,9 +435,6 @@ fn process_event(
             snapshot.turns.start(turn)?;
         }
         "task_complete" | "turn_complete" => {
-            if payload.get("error").is_some_and(|value| !value.is_null()) {
-                return Err(HistoryRepairError::new("unsuccessful_turn_in_history"));
-            }
             let turn = payload
                 .get("turn_id")
                 .or_else(|| payload.get("turnId"))

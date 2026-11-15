@@ -114,6 +114,28 @@ pub(super) fn facts(
         .or_else(|| text(&metadata["threadId"]))
         .or_else(|| text(&body["metadata"]["thread_id"]))
         .or_else(|| text(&body["metadata"]["threadId"]));
+    let bounded = |value: &str, limit: usize| {
+        let value = value.trim();
+        (!value.is_empty() && value.len() <= limit && !value.chars().any(char::is_control))
+            .then(|| value.to_owned())
+    };
+    let session = ["session-id", "x-session-id", "session_id"]
+        .into_iter()
+        .find_map(|name| header(name).and_then(|value| bounded(value, 256)))
+        .or_else(|| {
+            body["metadata"]["session_id"]
+                .as_str()
+                .and_then(|value| bounded(value, 256))
+        });
+    let client = ["x-emp-client", "originator"]
+        .into_iter()
+        .find_map(|name| header(name).and_then(|value| bounded(value, 128)))
+        .or_else(|| {
+            header("user-agent")?
+                .split_whitespace()
+                .next()
+                .and_then(|value| bounded(value, 128))
+        });
     let turn = text(&metadata["turn_id"])
         .or_else(|| text(&metadata["turnId"]))
         .or_else(|| header("x-codex-image-turn-id").map(str::to_owned));
@@ -127,6 +149,11 @@ pub(super) fn facts(
         json!("review")
     } else if text(&metadata["forked_from_thread_id"]).is_some() {
         json!("sidechat")
+    } else if (thread.is_some() || session.is_some())
+        && memory_kind.is_none()
+        && !crate::services::events::codex_client(headers)
+    {
+        json!("conversation")
     } else {
         Value::Null
     };
@@ -143,11 +170,11 @@ pub(super) fn facts(
                     .is_some_and(|id| !id.is_null())
             ),
         ),
-        ("client_kind", json!(header("originator"))),
+        ("client_kind", json!(client)),
         ("caller_id", json!(header("x-emp-caller-id"))),
         ("caller_name", json!(header("x-emp-caller-name"))),
         ("peer_ip", json!(header("x-emp-peer-ip"))),
-        ("session_id", json!(header("session-id"))),
+        ("session_id", json!(session)),
         ("thread_id", json!(thread)),
         ("turn_id", json!(turn)),
         ("parent_thread_id", json!(parent)),

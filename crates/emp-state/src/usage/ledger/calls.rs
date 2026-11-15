@@ -54,6 +54,7 @@ fn facts(event: &Value) -> Value {
         "request_id",
         "caller_id",
         "caller_name",
+        "client_kind",
         "peer_ip",
         "aggregate_model",
         "aggregate_source",
@@ -155,6 +156,7 @@ impl UsageLedger {
         let rows = rows(&connection, &format!("SELECT
             COALESCE(json_extract(c.facts,'$.caller_id'),'unknown') AS caller_id,
             json_extract(c.facts,'$.caller_name') AS caller_name,
+            json_extract(c.facts,'$.client_kind') AS client_kind,
             GROUP_CONCAT(DISTINCT json_extract(c.facts,'$.peer_ip')) AS peer_ips,
             c.operation,c.provider_id,c.account_id,c.model_id,
             COUNT(*) AS calls,SUM(c.state='completed') AS completed,
@@ -169,8 +171,8 @@ impl UsageLedger {
             FROM ({}) AS c LEFT JOIN accounted_usage u ON u.id=json_extract(c.facts,'$.usage_event_id')
             WHERE c.started_at>=? AND c.started_at<?
             AND c.operation NOT IN ({probes})
-            GROUP BY caller_id,caller_name,c.operation,c.provider_id,c.account_id,c.model_id
-            ORDER BY caller_id,c.operation,c.provider_id,c.model_id", crate::usage::call_outcome::REPORT_CALLS),
+            GROUP BY caller_id,caller_name,client_kind,c.operation,c.provider_id,c.account_id,c.model_id
+            ORDER BY caller_id,client_kind,c.operation,c.provider_id,c.model_id", crate::usage::call_outcome::REPORT_CALLS),
             &args)?;
         Ok(json!({"start":start,"end":end,"rows":rows}))
     }

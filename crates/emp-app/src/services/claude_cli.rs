@@ -51,12 +51,6 @@ pub(crate) fn preflight_input(body: &Value) -> Result<(), ClaudeCliError> {
 
 pub(crate) use context::{assess_context, context_estimation_payload};
 
-fn configured_limit(route: &ResolvedRoute, field: &str) -> Option<u64> {
-    [route.model.value(), route.provider.value()]
-        .into_iter()
-        .find_map(|record| record.get(field)?.as_u64().filter(|value| *value > 0))
-}
-
 pub(crate) fn execute_complete(
     state: &ServerState,
     route: &ResolvedRoute,

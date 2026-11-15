@@ -281,5 +281,5 @@ impl Drop for ChildTree {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

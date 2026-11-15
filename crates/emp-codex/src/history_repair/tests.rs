@@ -21,6 +21,9 @@ const GRANDCHILD_ID: &str = "33333333-3333-4333-8333-333333333333";
 #[path = "restore_delay_tests.rs"]
 mod restore_delay;
 
+#[path = "background_tests.rs"]
+mod background;
+
 struct Fixture {
     _temporary: tempfile::TempDir,
     home: PathBuf,

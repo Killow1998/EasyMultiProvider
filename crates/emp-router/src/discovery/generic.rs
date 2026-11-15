@@ -155,8 +155,8 @@ pub fn project_generic_models(value: &Map<String, Value>) -> Result<Vec<Value>, 
             });
         let max_input = positive_int(item.get("max_input_tokens"));
         let display_value = first_truthy(item, &["display_name", "name"]);
-        let display_name = model_text(display_value, &model_id, "display name")?;
-        let description = model_text(item.get("description"), "", "description")?;
+        let display_name = model_text(display_value, &model_id)?;
+        let description = model_text(item.get("description"), "")?;
         let input_modalities = normalize_input_modalities(raw_input);
         let output_modalities = normalize_output_modalities(raw_output);
         let mut capability_sources = Map::from_iter([

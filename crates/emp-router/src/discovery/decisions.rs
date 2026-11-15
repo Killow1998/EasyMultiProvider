@@ -57,7 +57,7 @@ pub async fn discover_decision_models(
         if !(native || decisions || protocol == "openai" && id == "gpt-6-luna") {
             continue;
         }
-        let name = model_text(item.get("name"), id, "name")?;
+        let name = model_text(item.get("name"), id)?;
         models.push(json!({"id":id,"name":name}));
     }
     models.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));

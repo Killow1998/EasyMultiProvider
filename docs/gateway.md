@@ -34,6 +34,44 @@ USD is an API-price estimate for calls with known pricing, not subscription
 quota. Decision calls have their own operation and do not enter conversation
 bills or generation TPS. A Decision disconnect cancels its upstream request.
 
+### Agent clients and sessions
+
+Calls display the named device key or the client's supplied name instead of
+an unlinked-session label. `X-EMP-Client` supplies a client label, such as
+`Python nightly`, `Pi` or `OMP`. Otherwise EMP uses `originator`, then the first
+product in `User-Agent`. Client labels describe software; the authenticated key
+still determines device ownership. Device usage separates clients using the same
+key, and Calls shows both names when available. A shared key alone cannot identify
+which device sent a request.
+
+To group an external agent's requests into a session bill, send a stable,
+unique session ID in `session-id`, `x-session-id`, `session_id`, or JSON
+`metadata.session_id`, in that priority order. Pi's session-affinity headers are
+accepted when enabled. Reuse the ID during one conversation and create another
+for the next conversation. Session IDs accept up to 256 bytes and client labels
+up to 128 bytes; empty or invalid labels are ignored. Codex thread metadata keeps
+precedence. Existing `thread-id` and `metadata.thread_id` are also accepted for
+external sessions. Auxiliary Decision or model-test calls keep their existing billing
+rules.
+
+For example, a Python `requests` script can add these headers alongside its
+existing Bearer credential:
+
+```python
+from uuid import uuid4
+
+session_id = str(uuid4())  # Create once per conversation; reuse across its calls.
+headers = {
+    "X-EMP-Client": "Python nightly",
+    "session-id": session_id,
+}
+```
+
+Calls without a session ID retain their client/device label and contribute to
+total usage and device usage. Session details state that no session ID was
+provided. EMP does not infer a conversation from an IP address, cache key or
+request ID. Older records retain only the source information originally recorded.
+
 ### Aggregate routing
 
 Open **Aggregate routing** in the service toolbar. Choose a model, its

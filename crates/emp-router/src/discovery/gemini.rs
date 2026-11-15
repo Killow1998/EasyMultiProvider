@@ -29,7 +29,8 @@ pub async fn discover_gemini_models(
         ));
     }
     let base = base.strip_suffix("/openai").unwrap_or(base);
-    let headers = gemini_discovery_headers(key);
+    let mut headers = common_discovery_headers();
+    headers.insert("x-goog-api-key".to_owned(), key.to_owned());
     let mut budget = DiscoveryBudget::new();
     let mut result = Vec::new();
     let mut page_token = None::<String>;
@@ -93,8 +94,8 @@ fn append_gemini_models(
             .or_else(|| item.get("supportedOutputModalities"));
         let input_limit = positive_int(item.get("inputTokenLimit"));
         let output_limit = positive_int(item.get("outputTokenLimit"));
-        let display_name = model_text(item.get("displayName"), &model_id, "display name")?;
-        let description = model_text(item.get("description"), "", "description")?;
+        let display_name = model_text(item.get("displayName"), &model_id)?;
+        let description = model_text(item.get("description"), "")?;
         result.push(json!({
             "upstream_id": model_id,
             "display_name": display_name,

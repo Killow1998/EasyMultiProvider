@@ -18,6 +18,7 @@ from .created_assertions import (
     expected_baseline_failure,
 )
 from .constants import (
+    ALTERNATE_MODEL,
     CHILD_SUFFIX,
     CREATED_FLOW_PROMPTS,
     EARLY_CHILD_SUFFIX,
@@ -40,51 +41,12 @@ from .fixture import (
     make_env,
     run_turn,
     write_created_flow_config,
+    write_emp_configuration,
 )
 from .history import FileSnapshot, append_items, find_rollout, inspect_reports
 
 
 NATIVE_TOKEN = "emp-acceptance-fake-key-only"
-UPSTREAM_KEY = "emp-acceptance-upstream-key-only"
-ALTERNATE_MODEL = "gpt-5-mini"
-
-
-def write_emp_configuration(root: Path, upstream_url: str, port: int) -> Path:
-    config_path = root / "emp-config.json"
-    config = {
-        "host": "127.0.0.1",
-        "port": port,
-        "native_catalog_path": str(root / "native-models.json"),
-        "providers": [
-            {
-                "id": "fixture",
-                "base_url": upstream_url,
-                "protocol": "responses",
-                "auth_mode": "api_key",
-                "api_key": UPSTREAM_KEY,
-            }
-        ],
-        "models": [
-            {
-                "id": MODEL,
-                "provider": "fixture",
-                "upstream_id": MODEL,
-                "context_window": 8192,
-                "output_limit": 1024,
-                "enabled": True,
-            },
-            {
-                "id": ALTERNATE_MODEL,
-                "provider": "fixture",
-                "upstream_id": ALTERNATE_MODEL,
-                "context_window": 8192,
-                "output_limit": 1024,
-                "enabled": True,
-            },
-        ],
-    }
-    config_path.write_text(json.dumps(config, separators=(",", ":")) + "\n", encoding="utf-8")
-    return config_path
 
 
 def has_emp1(path: Path) -> list[str]:

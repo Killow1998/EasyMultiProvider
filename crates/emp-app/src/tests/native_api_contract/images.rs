@@ -1,6 +1,7 @@
 //! Real HTTP/WS turns and image endpoints against synthetic subscription accounts.
 use super::support::*;
 use super::*;
+mod encoding;
 mod fixture;
 mod installed;
 mod routing;

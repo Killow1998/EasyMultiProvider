@@ -1,6 +1,7 @@
 //! Checkpoint conversion and bounded JSONL replacement writing.
 
 use super::HistoryRepairError;
+use super::paths::RolloutPaths;
 use super::replay::RolloutSummary;
 use super::spool::{ContextSnapshot, JsonlSpool};
 use super::transaction::file_fingerprint;
@@ -9,14 +10,16 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 
 pub(super) fn has_emp1_tail_record(
+    paths: &RolloutPaths,
     snapshot: &mut ContextSnapshot,
 ) -> Result<bool, HistoryRepairError> {
     let mut tail = snapshot.tail_records.reader()?;
     while let Some(record) = tail.next::<Map<String, Value>>()? {
+        paths.check_cancelled()?;
         if map_contains_emp1_encrypted_content(&record) {
             return Ok(true);
         }
@@ -183,6 +186,7 @@ fn make_window_id(rollout: &RolloutSummary, window: u64) -> String {
 }
 
 pub(super) fn write_replacement_rollout(
+    paths: &RolloutPaths,
     rollout: &RolloutSummary,
     snapshot: &mut ContextSnapshot,
     replacement_path: &Path,
@@ -211,6 +215,7 @@ pub(super) fn write_replacement_rollout(
     let mut converted_history = converted_history;
     let mut converted_metadata = converted_metadata;
     loop {
+        paths.check_cancelled()?;
         let Some(item) = history.next::<Map<String, Value>>()? else {
             break;
         };
@@ -250,8 +255,9 @@ pub(super) fn write_replacement_rollout(
     if rollout.compressed {
         let mut encoder = zstd::stream::write::Encoder::new(output, 3)
             .map_err(|_| HistoryRepairError::new("compressed_rollout_write_failed"))?;
-        copy_original_rollout(rollout, &mut encoder)?;
+        copy_original_rollout(paths, rollout, &mut encoder)?;
         append_replacement_records(
+            paths,
             rollout,
             &mut snapshot.tail_records,
             converted_history,
@@ -263,8 +269,9 @@ pub(super) fn write_replacement_rollout(
             .finish()
             .map_err(|_| HistoryRepairError::new("compressed_rollout_write_failed"))?;
     } else {
-        copy_original_rollout(rollout, &mut output)?;
+        copy_original_rollout(paths, rollout, &mut output)?;
         append_replacement_records(
+            paths,
             rollout,
             &mut snapshot.tail_records,
             converted_history,
@@ -281,6 +288,7 @@ pub(super) fn write_replacement_rollout(
 }
 
 fn copy_original_rollout(
+    paths: &RolloutPaths,
     rollout: &RolloutSummary,
     output: &mut impl Write,
 ) -> Result<(), HistoryRepairError> {
@@ -291,14 +299,25 @@ fn copy_original_rollout(
     }
     let raw =
         File::open(&rollout.path).map_err(|_| HistoryRepairError::new("rollout_unavailable"))?;
-    if rollout.compressed {
-        let mut decoder = zstd::stream::read::Decoder::new(raw)
-            .map_err(|_| HistoryRepairError::new("compressed_rollout_invalid"))?;
-        std::io::copy(&mut decoder, output)
-            .map_err(|_| HistoryRepairError::new("compressed_rollout_write_failed"))?;
+    let mut reader: Box<dyn Read> = if rollout.compressed {
+        Box::new(
+            zstd::stream::read::Decoder::new(raw)
+                .map_err(|_| HistoryRepairError::new("compressed_rollout_invalid"))?,
+        )
     } else {
-        let mut raw = raw;
-        std::io::copy(&mut raw, output)
+        Box::new(raw)
+    };
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        paths.check_cancelled()?;
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|_| HistoryRepairError::new("rollout_unavailable"))?;
+        if count == 0 {
+            break;
+        }
+        output
+            .write_all(&buffer[..count])
             .map_err(|_| HistoryRepairError::new("repair_stage_unavailable"))?;
     }
     let after = file_fingerprint(&rollout.path)
@@ -310,6 +329,7 @@ fn copy_original_rollout(
 }
 
 fn append_replacement_records(
+    paths: &RolloutPaths,
     rollout: &RolloutSummary,
     tail_records: &mut JsonlSpool,
     mut history: JsonlSpool,
@@ -332,6 +352,7 @@ fn append_replacement_records(
     let mut history_reader = history.reader()?;
     let mut metadata_reader = metadata.reader()?;
     loop {
+        paths.check_cancelled()?;
         let Some(item) = history_reader.next::<Map<String, Value>>()? else {
             break;
         };
@@ -350,6 +371,7 @@ fn append_replacement_records(
     }
     let mut tail_reader = tail_records.reader()?;
     while let Some(mut record) = tail_reader.next::<Map<String, Value>>()? {
+        paths.check_cancelled()?;
         append_record(output, &mut record, &mut next_ordinal)?;
     }
     Ok(())

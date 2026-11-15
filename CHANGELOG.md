@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+## 0.14.2 (2026-11-15)
+
+### 中文
+
+- 修复 Windows 关闭窗口或结束会话时，原生配置已恢复却返回退出失败的问题；串行执行本进程的退出恢复，避免系统回调与主退出流程互相争抢文件锁。
+- 网关统计保留 Python、Pi、OMP 等客户端名称，识别外部会话头和 `metadata.session_id`，无需本机 Codex 历史即可生成会话账单；未提供会话 ID 时显示客户端或设备名称，设备用量按客户端细分，保留用量总数和 Codex 原有归属。
+- 精简后台迁移、历史准备与代理状态，统一未完成回合校验和上游错误解码；协议服务各自构造鉴权头，移除无用参数、单次包装和过时注释。复用验收配置，保持路由、凭据、取消与计量行为。
+- 运行时静默、逐个转换空闲旧会话的 EMP 压缩点，不弹通知或要求手动检查；扫描不占用 Codex 写入协调锁，提交前重新检查活动会话与历史快照。保留原始历史、工具结果和原生密文，支持已结束的失败回合；退出时取消扫描。
+- 修复含内联图片的 Native 请求因 Zstd 压缩被上游返回 400：HTTP、SSE 和远程压缩直接发送原始 JSON，保留完整图片、加密历史和工具结果；纯文本仍使用压缩，不新增失败重试。
+- 保留上游拒绝请求的 HTTP 状态、错误码、参数和具体原因，兼容 `error` 与 `detail` 包络；提取后的说明沿用现有凭据脱敏并限制长度，不再统一替换为笼统的无输出提示。
+- 在诊断日志中记录可按请求 ID 关联的上游拒绝原因；保留已有重试提示、重试次数和已开始输出后不重放的行为。
+- 修复 App 页面上下文让 Native 长历史分批预填充被误判为未配对工具结果的问题，保留原始内容、顺序和标识；错误提示显示所选服务与实际上游模型名，避免混入内部路由 ID。
+
+### English
+
+- Fix Windows window-close and session-end exits reporting failure after Native settings were restored. Serialize this process's exit restoration so OS callbacks and the main shutdown path do not contend for the same file lock.
+- Retain Python, Pi, OMP and other gateway client names, and recognize external session headers and `metadata.session_id`. Produce session bills without local Codex history, show client/device names when no session ID is supplied, and separate device usage by client while preserving totals and existing Codex attribution.
+- Simplify background migration, history preparation and proxy state, and centralize unfinished-turn checks and upstream error decoding. Keep authentication headers with their protocol adapters; remove unused arguments, single-use wrappers and stale comments. Share acceptance fixtures while preserving routing, credentials, cancellation and accounting behavior.
+- Quietly migrate idle legacy EMP checkpoints one conversation at a time while running, without notifications or manual checks. Scan outside Codex's writer coordination lock and recheck active writers and snapshots before commit. Preserve original history, tool results and native ciphertext, including closed failed turns; cancel scanning on shutdown.
+- Avoid upstream HTTP 400 rejections of Zstd Native requests containing inline images. HTTP, SSE and remote compaction send uncompressed JSON while preserving all image bytes, encrypted history and tool results; text-only requests retain compression, with no new failure retry.
+- Preserve the HTTP status, error code, parameter and specific cause of upstream rejections, including `error` and `detail` envelopes. Reuse credential redaction and bound extracted messages instead of replacing every cause with generic no-output advice.
+- Correlate rejection details with request IDs in diagnostics while retaining retry advice, attempt counts and the existing prohibition on replay after output starts.
+- Keep Native large-history prefill available when App page context is injected without a client tool call, preserving original contents, order and IDs. Show the selected service and upstream model in errors instead of internal route IDs.
+
 ## 0.14.1 (2026-11-14)
 
 ### 中文

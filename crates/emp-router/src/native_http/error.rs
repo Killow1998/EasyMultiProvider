@@ -2,8 +2,7 @@
 use emp_protocol::collaboration::CollaborationError;
 use emp_protocol::native_responses::NativeProjectionError;
 use emp_transport::{
-    FailureClass, HttpFailureInput, HttpTransportErrorKind, http_failure, public_failure_message,
-    status_error_class,
+    FailureClass, HttpFailureInput, HttpTransportErrorKind, http_failure, status_error_class,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -175,80 +174,6 @@ pub(super) fn read_error(kind: HttpTransportErrorKind) -> NativeHttpError {
     }
 }
 
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
-}
-
-fn error_detail(content_type: &str, raw: &[u8]) -> (Option<String>, String) {
-    let media = content_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_lowercase();
-    let decoded = String::from_utf8_lossy(raw);
-    let stripped = decoded.trim_start().to_lowercase();
-    if matches!(media.as_str(), "text/html" | "application/xhtml+xml")
-        || stripped.starts_with("<html")
-        || stripped.starts_with("<!doctype html")
-    {
-        return (
-            None,
-            "HTML error page omitted; the upstream gateway or WAF may have rejected the request"
-                .to_owned(),
-        );
-    }
-    let mut detail = decoded.to_string();
-    let mut code = None;
-    if (media.contains("json") || stripped.starts_with(['{', '[']))
-        && let Ok(value) = serde_json::from_str::<Value>(&decoded)
-    {
-        let nested = if value.is_object() {
-            value
-                .get("error")
-                .filter(|value| truthy(value))
-                .or_else(|| value.get("message").filter(|value| truthy(value)))
-                .unwrap_or(&value)
-        } else {
-            &value
-        };
-        code = nested
-            .get("code")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let nested = if nested.is_object() {
-            ["message", "type", "code"]
-                .iter()
-                .find_map(|key| nested.get(key).filter(|value| truthy(value)))
-                .unwrap_or(nested)
-        } else {
-            nested
-        };
-        detail = nested
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| nested.to_string());
-    }
-    detail = detail.split_whitespace().collect::<Vec<_>>().join(" ");
-    if detail.chars().count() > 512 {
-        detail = detail
-            .chars()
-            .take(509)
-            .collect::<String>()
-            .trim_end()
-            .to_owned()
-            + "...";
-    }
-    (code, detail)
-}
-
 fn proxy_evidence(headers: &str, detail: &str) -> bool {
     let text = format!("{headers} {detail}").to_lowercase();
     [
@@ -273,7 +198,7 @@ pub(super) fn upstream_http_error(
     retry: Option<u64>,
     mut selected: BTreeMap<String, String>,
 ) -> NativeHttpError {
-    let (code, detail) = error_detail(content_type, raw);
+    let (code, detail) = crate::upstream_rejection::details(status, content_type, raw);
     let failure = http_failure(HttpFailureInput {
         status,
         detail: &detail,
@@ -288,12 +213,11 @@ pub(super) fn upstream_http_error(
             reason
         }
     });
-    let message = public_failure_message(failure.error_class, reason, failure.status);
     let mut error = NativeHttpError::classified(
         "upstream",
         failure.status,
         failure.error_class,
-        message,
+        detail,
         reason,
         if failure.error_class == FailureClass::ProxyUnavailable {
             None
@@ -301,6 +225,9 @@ pub(super) fn upstream_http_error(
             failure.retry_after_seconds
         },
     );
+    if let Some(code) = code {
+        error.body["error"]["upstream_code"] = code.into();
+    }
     selected.extend(error.headers);
     error.headers = selected;
     error

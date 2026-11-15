@@ -2,6 +2,7 @@
 pub(crate) mod commands;
 pub(crate) mod enable;
 pub(crate) mod endpoint;
+pub(crate) mod history_migration;
 mod restore;
 use emp_integration::IntegrationManager;
 pub(crate) use restore::restore_native_configuration;
@@ -239,6 +240,7 @@ fn suppress_unsettled_runtime(
 }
 
 pub(crate) struct IntegrationState {
+    exit_restore: std::sync::Mutex<()>,
     pub(crate) manager: IntegrationManager,
     pub(crate) search: emp_integration::search::SearchFeatureManager,
     pub(crate) preferences: emp_integration::preferences::CodexPreferences,
@@ -264,6 +266,7 @@ impl IntegrationState {
         let runtime = RuntimeState::new(manager.lease_path().with_file_name("runtime.json"));
         let history_restore = restore::read_history_restore(&manager, &codex_home);
         Self {
+            exit_restore: std::sync::Mutex::new(()),
             preferences: emp_integration::preferences::CodexPreferences::new(
                 manager.config_path().to_owned(),
                 manager.lease_path().with_file_name("compaction.json"),

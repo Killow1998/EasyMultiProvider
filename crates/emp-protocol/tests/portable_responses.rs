@@ -201,6 +201,7 @@ fn response_projection_strips_plaintext_reasoning_from_upstream_output() {
     let response = json!({
         "id": "resp_1",
         "status": "completed",
+        "reasoning_content": "private top-level reasoning",
         "output": [
             {"type": "reasoning", "id": "r1", "summary": [
                 {"type": "summary_text", "text": "thinking hard"}
@@ -215,11 +216,13 @@ fn response_projection_strips_plaintext_reasoning_from_upstream_output() {
     // Without opt-ins nothing reasoning-shaped reaches Codex.
     let projected =
         project_response(&response, &Default::default(), false, false).expect("projection");
+    assert!(projected.get("reasoning_content").is_none());
     assert_eq!(projected["output"].as_array().map(Vec::len), Some(1));
     assert_eq!(projected["output"][0]["content"][0]["text"], "final answer");
 
     // Opt-ins keep only the opaque/summary forms, never plaintext chains.
     let projected = project_response(&response, &Default::default(), true, true).expect("kept");
+    assert!(projected.get("reasoning_content").is_none());
     assert_eq!(projected["output"][0]["type"], "reasoning");
     assert_eq!(
         projected["output"][0]["summary"][0]["text"],

@@ -3,7 +3,7 @@ pub mod analytics;
 mod journal;
 mod recovery;
 pub mod schema;
-pub use journal::Journal;
+pub use journal::{Journal, redact_sensitive_text};
 use serde_json::{Value, json};
 use std::collections::{HashSet, VecDeque};
 use std::path::Path;

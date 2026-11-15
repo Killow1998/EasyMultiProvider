@@ -64,6 +64,14 @@ impl<'a> Prefill<'a> {
                 // obligation. Preserve each opaque item without manufacturing a pair.
                 "tool_search_call" | "tool_search_output" if item["execution"] == "server" => {}
                 "web_search_call" | "image_generation_call" if item["status"] == "completed" => {}
+                // App page context is injected without a tool invocation.
+                "function_call_output"
+                    if item.get("call_id").is_none()
+                        && item["namespace"] == "agent"
+                        && item["name"].as_str().is_some_and(|name| {
+                            name == "codex_apps_open_page"
+                                || name.starts_with("codex_apps_selected_page_part_")
+                        }) => {}
                 "function_call" | "custom_tool_call" | "tool_search_call" => {
                     if !pending.insert(item["call_id"].as_str()?) {
                         return None;
@@ -152,6 +160,9 @@ mod tests {
         }));
         let mut unknown = with_search;
         unknown["input"][3]["type"] = json!("unknown_tool_call");
+        assert!(Prefill::plan(&unknown).is_none());
+        unknown["input"][3] = json!({"type":"function_call_output","namespace":"agent",
+            "name":"codex_apps_unknown","output":"not a recognized context item"});
         assert!(Prefill::plan(&unknown).is_none());
     }
 }

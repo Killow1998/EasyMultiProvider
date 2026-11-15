@@ -242,7 +242,7 @@ fn stream_errors_keep_pre_and_post_output_boundaries() {
         Some(6),
         3,
         vec![
-            serde_json::to_vec(&json!({"error":{"message":"provider detail must not escape"}}))
+            serde_json::to_vec(&json!({"error":{"code":"rate_limit_exceeded","message":"Too many requests. token=private-upstream-token"}}))
                 .expect("upstream error JSON"),
         ],
     );
@@ -257,10 +257,12 @@ fn stream_errors_keep_pre_and_post_output_boundaries() {
     assert!(response.contains("Retry-After: 6\r\n"));
     assert!(response.contains("\"type\":\"rate_limit\""));
     assert!(response.contains("\"code\":\"rate_limit_exceeded\""));
-    assert!(response.contains("Selected source 'Demo' and model 'demo/model'"));
+    assert!(response.contains("Selected source 'Demo' and model 'upstream-model'"));
     assert!(response.contains("No output was delivered"));
     assert!(!response.contains("insufficient quota"));
-    assert!(!response.contains("provider detail must not escape"));
+    assert!(response.contains("Too many requests"));
+    assert!(response.contains("HTTP 429"));
+    assert!(!response.contains("private-upstream-token"));
     server.shutdown().expect("shutdown");
 
     let partial = format!(
@@ -285,7 +287,7 @@ fn stream_errors_keep_pre_and_post_output_boundaries() {
         .find(|event| event["type"] == "response.failed")
         .expect("terminal failure is valid SSE JSON");
     assert_eq!(failed["response"]["error"]["status"], 502, "{failed}");
-    assert!(response.contains("Selected source 'Demo' and model 'demo/model'"));
+    assert!(response.contains("Selected source 'Demo' and model 'upstream-model'"));
     assert!(response.contains("Some output was delivered"));
     assert!(!response.contains("event: response.completed\n"));
     server.shutdown().expect("shutdown");
@@ -314,9 +316,10 @@ fn explicit_quota_error_keeps_rate_limit_code_and_selected_route() {
     assert_eq!(error["code"], "rate_limit_exceeded");
     assert_eq!(error["failure_reason"], "quota_exhausted");
     let message = error["message"].as_str().unwrap();
-    assert!(message.contains("Selected source 'Demo' and model 'demo/model'"));
-    assert!(message.contains("insufficient quota or credits"));
-    assert!(message.contains("manually choose another source"));
+    assert!(message.contains("Selected source 'Demo' and model 'upstream-model'"));
+    assert!(message.contains("HTTP 429"));
+    assert!(message.contains("insufficient_quota"));
+    assert!(message.contains("quota exhausted"));
     server.shutdown().unwrap();
 }
 

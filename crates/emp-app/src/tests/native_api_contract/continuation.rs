@@ -8,6 +8,48 @@ mod transport;
 use fixture::*;
 
 #[test]
+fn native_app_page_context_keeps_large_history_prefill_and_exact_order() {
+    for imported in [false, true] {
+        let upstream = Upstream::start(10 * 1024 * 1024);
+        let (_directory, server, model) = server(&upstream, imported);
+        let mut input = initial_input();
+        for (index, name) in [
+            "codex_apps_open_page",
+            "codex_apps_selected_page_part_1_of_1",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            input.insert(
+                index + 2,
+                json!({"type":"function_call_output",
+                "id":format!("fco_page_context_{index}"), "namespace":"agent",
+                "name":name, "output":format!("public app context {index}")}),
+            );
+        }
+        let body = json!({"type":"response.create","model":model,"input":input});
+        let mut expected = Sha256::new();
+        append_input(&mut expected, &body);
+        let mut client = connect(&server, "app-page-context-fixture");
+        completed(turn(&mut client, &body));
+        client.close();
+        server.shutdown().unwrap();
+        let stats = upstream.traffic.lock().unwrap();
+        assert_eq!(
+            stats.generated_hashes,
+            [format!("{:x}", expected.finalize())]
+        );
+        assert!(
+            stats.warmups > 0,
+            "large history must use generation-free batches"
+        );
+        assert_eq!(stats.rejected_large, 0);
+        assert_eq!(stats.http_requests, 0);
+        assert_eq!(stats.ws_connections, 1);
+    }
+}
+
+#[test]
 fn native_large_context_keeps_twenty_incremental_turns_for_imported_and_default_accounts() {
     for imported in [true, false] {
         let upstream = Upstream::start(10 * 1024 * 1024);

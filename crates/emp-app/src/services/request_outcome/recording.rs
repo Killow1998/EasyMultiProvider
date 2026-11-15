@@ -1,12 +1,7 @@
 //! Persistent call receipts share the existing usage database and management feed.
-use super::*;
+use super::RequestOutcome;
+use serde_json::json;
 impl RequestOutcome<'_> {
-    pub(super) fn prepare_call_facts(&mut self) {
-        self.update_model_facts();
-        if let Some(identity) = &self.identity {
-            self.event["account_id"] = json!(identity.account_id);
-        }
-    }
     pub(super) fn persist_call(&self) {
         let now = crate::util::system_now();
         let started = now - self.started.elapsed().as_secs_f64();

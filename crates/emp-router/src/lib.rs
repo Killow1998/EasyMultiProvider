@@ -4,21 +4,19 @@
 
 use emp_core::{Dialect, Protocol, ResolvedRoute};
 use emp_protocol::anthropic_projection::{
-    AnthropicError, AnthropicIds, AnthropicStream, response_from_anthropic, responses_to_anthropic,
+    AnthropicIds, AnthropicStream, response_from_anthropic, responses_to_anthropic,
 };
 use emp_protocol::portable_responses::{
-    PortableProjectionError, PortableStreamProjector, ResponsesValidationError,
-    custom_tool_names as portable_custom_tool_names, project_request as project_portable_request,
-    project_response as project_portable_response, validate_responses_body,
+    PortableStreamProjector, custom_tool_names as portable_custom_tool_names,
+    project_request as project_portable_request, project_response as project_portable_response,
+    validate_responses_body,
 };
 use emp_protocol::tool_bridge::ExternalTools;
 use emp_protocol::{
-    ChatFrame, ChatIds, ChatStream, ProtocolError, StreamEvent, response_from_chat,
-    responses_to_chat,
+    ChatFrame, ChatIds, ChatStream, StreamEvent, response_from_chat, responses_to_chat,
 };
 use emp_transport::{
-    FailureClass, HttpClient, HttpFailureInput, HttpMethod, HttpResponse, HttpTransportError,
-    HttpTransportErrorKind, SseFrame, SseJsonParser, TransportError, http_failure,
+    FailureClass, HttpClient, HttpMethod, HttpResponse, SseFrame, SseJsonParser, TransportError,
 };
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, VecDeque};
@@ -33,6 +31,7 @@ pub mod official_registry;
 mod retry_after;
 pub use retry_after::parse as parse_retry_after;
 pub mod subscription_catalog;
+mod upstream_rejection;
 mod vertex;
 
 pub const MAX_UPSTREAM_BODY_BYTES: usize = 64 * 1024 * 1024;

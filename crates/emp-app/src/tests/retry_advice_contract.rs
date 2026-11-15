@@ -66,7 +66,7 @@ fn client_failure(
     assert!(
         !serde_json::to_string(&events)
             .unwrap()
-            .contains("private upstream detail")
+            .contains("fixture-private-upstream-token")
     );
     (status, detail, events)
 }
@@ -74,37 +74,52 @@ fn client_failure(
 #[test]
 fn upstream_refusals_are_classified_without_replay_across_sources_and_transports() {
     for (status, code, detail, hint) in [
-        (400, "model_not_found", "private upstream detail", "model"),
-        (403, "model_not_found", "private upstream detail", "model"),
-        (404, "model_not_found", "private upstream detail", "model"),
+        (
+            400,
+            "model_not_found",
+            "token=fixture-private-upstream-token",
+            "model",
+        ),
+        (
+            403,
+            "model_not_found",
+            "token=fixture-private-upstream-token",
+            "model",
+        ),
+        (
+            404,
+            "model_not_found",
+            "token=fixture-private-upstream-token",
+            "model",
+        ),
         (
             400,
             "upstream_capacity",
-            "Concurrency limit exceeded for account; private upstream detail",
+            "Concurrency limit exceeded for account; token=fixture-private-upstream-token",
             "you can retry your request",
         ),
         (
             409,
             "upstream_capacity",
-            "Too many pending requests; private upstream detail",
+            "Too many pending requests; token=fixture-private-upstream-token",
             "you can retry your request",
         ),
         (
             422,
             "upstream_capacity",
-            "当前并发请求过多，请稍后重试；private upstream detail",
+            "当前并发请求过多，请稍后重试；token=fixture-private-upstream-token",
             "you can retry your request",
         ),
         (
             400,
             "request_too_large",
-            "Request body is 40.1 MB, over the 32 MB limit; private upstream detail",
+            "Request body is 40.1 MB, over the 32 MB limit; token=fixture-private-upstream-token",
             "byte-size limit",
         ),
         (
             413,
             "request_too_large",
-            "Payload too large; private upstream detail",
+            "Payload too large; token=fixture-private-upstream-token",
             "byte-size limit",
         ),
     ] {
@@ -173,7 +188,11 @@ fn upstream_refusals_are_classified_without_replay_across_sources_and_transports
                     failure["message"].as_str().unwrap().contains(hint),
                     "{protocol}/{delivery}/{status}: {failure}"
                 );
-                assert!(!failure.to_string().contains("private upstream detail"));
+                assert!(
+                    !failure
+                        .to_string()
+                        .contains("fixture-private-upstream-token")
+                );
                 let forwarded = upstream.observed().2.to_string();
                 for original in [image, "fixture-history", "fixture-exact-tool-output"] {
                     assert!(
@@ -254,7 +273,7 @@ fn streamed_refusals_keep_advice_and_never_replay_partial_output_or_tools() {
                             }
                         }
                     }
-                    let error = json!({"type":upstream_code,"message":"private upstream detail","status":status});
+                    let error = json!({"type":upstream_code,"message":"token=fixture-private-upstream-token","status":status});
                     events.push(if matches!(protocol, "native" | "responses") {
                         json!({"type":"response.failed","response":{"id":"resp_fixture","status":"failed","output":[],
                             "usage":{"input_tokens":17,"output_tokens":1,"total_tokens":18},"error":error}})
@@ -341,7 +360,7 @@ fn upstream_retry_advice_reaches_http_and_websocket_clients() {
                 status,
                 "application/json",
                 Some(301),
-                vec![br#"{"error":{"message":"private upstream detail"}}"#.to_vec()],
+                vec![br#"{"error":{"message":"token=fixture-private-upstream-token"}}"#.to_vec()],
             );
             let (_directory, server) = configured_server(&upstream.base_url());
             let session = session_header(&server);
@@ -372,7 +391,11 @@ fn upstream_retry_advice_reaches_http_and_websocket_clients() {
                 assert_eq!(failure["status"], status);
                 assert_eq!(failure["error"]["retry_after_seconds"], 301);
                 assert_eq!(failure["error"]["headers"]["Retry-After"], "301");
-                assert!(!failure.to_string().contains("private upstream detail"));
+                assert!(
+                    !failure
+                        .to_string()
+                        .contains("fixture-private-upstream-token")
+                );
             } else {
                 let wire = post(
                     &server,
@@ -385,7 +408,7 @@ fn upstream_retry_advice_reaches_http_and_websocket_clients() {
                     Some(status.to_string().as_str())
                 );
                 assert!(wire.contains("Retry-After: 301\r\n"), "{wire}");
-                assert!(!wire.contains("private upstream detail"));
+                assert!(!wire.contains("fixture-private-upstream-token"));
             }
             assert_eq!(upstream.observed().2["model"], "upstream-model");
             let report = request(&server, "/api/calls", &[&session]);
@@ -396,7 +419,11 @@ fn upstream_retry_advice_reaches_http_and_websocket_clients() {
             assert_eq!(call["attempts"], 1);
             assert_eq!(call["retries"], json!([]));
             assert_eq!(call["state"], "failed");
-            assert!(!report.to_string().contains("private upstream detail"));
+            assert!(
+                !report
+                    .to_string()
+                    .contains("fixture-private-upstream-token")
+            );
             server.shutdown().unwrap();
         }
     }

@@ -169,8 +169,3 @@ or local-state refactor.
 | Updates / recovery | [Update E2E](../scripts/shadow_frontend/e2e_updates.py), [cache E2E](../scripts/shadow_frontend/e2e_update_cache.py), [startup recovery E2E](../scripts/shadow_frontend/e2e_startup_recovery.py) |
 | Responses / cancellation / image tools | [Native API contracts](../crates/emp-app/src/tests/native_api_contract), [MCP verification](../scripts/verify_image_mcp.py) |
 | History / protocols / accounts | Tests in `emp-history`, `emp-protocol`, `emp-codex`; [aggregate contract](../crates/emp-app/src/tests/aggregate_contract.rs) |
-
-For this audit, the affected checks are the Rust login round trip, the twelve
-WebUI lifecycle contracts, the six browser login journeys (synthetic accounts,
-no model calls), candidate build, formatting and Clippy. This is not new
-Windows/macOS or real-provider acceptance.

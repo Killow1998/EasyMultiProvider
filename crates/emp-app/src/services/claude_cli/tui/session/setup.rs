@@ -184,10 +184,16 @@ impl Context {
         {
             command.args(["--effort", effort]);
         }
-        if let Some(limit) = body["max_output_tokens"]
-            .as_u64()
-            .or_else(|| super::super::super::configured_limit(route, "output_limit"))
-        {
+        if let Some(limit) = body["max_output_tokens"].as_u64().or_else(|| {
+            [route.model.value(), route.provider.value()]
+                .into_iter()
+                .find_map(|record| {
+                    record
+                        .get("output_limit")?
+                        .as_u64()
+                        .filter(|value| *value > 0)
+                })
+        }) {
             command.env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", limit.to_string());
         }
         Ok(Self {

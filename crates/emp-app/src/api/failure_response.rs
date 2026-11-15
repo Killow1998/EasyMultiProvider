@@ -102,9 +102,7 @@ pub(crate) fn request_router_error_response(status: u16, message: &str) -> Vec<u
 }
 
 fn routed_message(error: &RouterError, route: &ResolvedRoute, output_started: bool) -> String {
-    let detail = (error.kind() != RouterErrorKind::Upstream
-        && error.kind() != RouterErrorKind::Transport)
-        .then(|| error.to_string());
+    let detail = (error.kind() != RouterErrorKind::Transport).then(|| error.to_string());
     failure_feedback::message(
         route,
         error.error_class(),

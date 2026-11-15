@@ -22,7 +22,7 @@ static REDACTIONS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 static CAMEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"([a-z0-9])([A-Z])").unwrap());
 static SEPARATOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^A-Za-z0-9]+").unwrap());
-fn redact(text: &str) -> String {
+pub fn redact_sensitive_text(text: &str) -> String {
     REDACTIONS.iter().fold(text.to_owned(), |text, pattern| {
         pattern.replace_all(&text, "<redacted>").into_owned()
     })
@@ -88,7 +88,7 @@ fn sanitize(value: &Value, depth: usize) -> Value {
     }
     match value {
         Value::String(text) => {
-            let text = redact(text);
+            let text = redact_sensitive_text(text);
             let mut limited = text.chars().take(2048).collect::<String>();
             if text.chars().count() > 2048 {
                 limited.push_str("<truncated>");
@@ -100,7 +100,7 @@ fn sanitize(value: &Value, depth: usize) -> Value {
             for (key, value) in source.iter().take(128) {
                 let key = key.chars().take(256).collect::<String>();
                 if !forbidden(&key) {
-                    result.insert(redact(&key), sanitize(value, depth + 1));
+                    result.insert(redact_sensitive_text(&key), sanitize(value, depth + 1));
                 }
             }
             if source.len() > 128 {
@@ -279,7 +279,10 @@ impl Journal {
         } else {
             "info"
         };
-        let name = redact(name).chars().take(256).collect::<String>();
+        let name = redact_sensitive_text(name)
+            .chars()
+            .take(256)
+            .collect::<String>();
         let mut record = json!({"timestamp":super::timestamp(),"sequence":writer.sequence+1,"run_id":self.run_id,"level":level,"event":name,"fields":sanitize(fields,0)});
         let mut bytes = serde_json::to_vec(&record).expect("diagnostic JSON");
         if bytes.len() > MAX_RECORD {

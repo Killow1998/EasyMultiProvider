@@ -56,13 +56,13 @@ struct RolloutIndex {
     prefix: MarkerTransform,
 }
 
-struct MarkerScanner<'a, 'home> {
-    paths: &'a RolloutPaths<'home>,
+struct MarkerScanner<'a> {
+    paths: &'a RolloutPaths,
     indexes: HashMap<String, RolloutIndex>,
 }
 
-impl<'a, 'home> MarkerScanner<'a, 'home> {
-    fn new(paths: &'a RolloutPaths<'home>) -> Self {
+impl<'a> MarkerScanner<'a> {
+    fn new(paths: &'a RolloutPaths) -> Self {
         Self {
             paths,
             indexes: HashMap::new(),
@@ -108,7 +108,7 @@ impl<'a, 'home> MarkerScanner<'a, 'home> {
                 path: path.clone(),
                 mode: None,
             };
-            let index = scan_rollout(&info, path, None)?;
+            let index = scan_rollout(self.paths, &info, path, None)?;
             self.indexes.insert(thread_id.to_owned(), index);
         }
 
@@ -130,7 +130,7 @@ impl<'a, 'home> MarkerScanner<'a, 'home> {
                     path: path.clone(),
                     mode: Some(mode.clone()),
                 };
-                scan_rollout(&info, path, Some(bound))?.prefix
+                scan_rollout(self.paths, &info, path, Some(bound))?.prefix
             }
         } else {
             index.prefix
@@ -167,7 +167,7 @@ pub(super) struct AffectedRollout<'a> {
 }
 
 pub(super) fn select_affected_rollouts<'a>(
-    paths: &RolloutPaths<'_>,
+    paths: &RolloutPaths,
     infos: &'a [ThreadInfo],
 ) -> Result<Vec<AffectedRollout<'a>>, HistoryRepairError> {
     let mut scanner = MarkerScanner::new(paths);
@@ -175,7 +175,7 @@ pub(super) fn select_affected_rollouts<'a>(
 
     for info in infos {
         let path = paths.resolve(info)?;
-        let index = scan_rollout(info, path, None)?;
+        let index = scan_rollout(paths, info, path, None)?;
         if !seen_paths.insert(index.path.clone()) {
             return Err(HistoryRepairError::new("rollout_path_conflict"));
         }
@@ -201,6 +201,7 @@ pub(super) fn select_affected_rollouts<'a>(
 }
 
 fn scan_rollout(
+    paths: &RolloutPaths,
     info: &ThreadInfo,
     path: PathBuf,
     bound: Option<HistoryBound>,
@@ -247,6 +248,7 @@ fn scan_rollout(
     let mut prefix = MarkerTransform::identity();
 
     loop {
+        paths.check_cancelled()?;
         let Some(terminated) = read_bounded_line(&mut reader, &mut line, &mut file_bytes)? else {
             break;
         };
