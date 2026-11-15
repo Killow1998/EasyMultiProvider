@@ -121,8 +121,10 @@ impl IntegrationState {
     }
 
     pub(crate) fn restore_owned_on_exit(&self) -> Result<(), AppError> {
-        // Three short lock acquisitions (operation, status, restore) leave
-        // room for local writes within Windows' console-close deadline.
+        let _exit_restore = self
+            .exit_restore
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let manager = self
             .manager
             .clone()

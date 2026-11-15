@@ -6,6 +6,7 @@
 
 ### 中文
 
+- 修复 Windows 关闭窗口或结束会话时，原生配置已恢复却返回退出失败的问题；串行执行本进程的退出恢复，避免系统回调与主退出流程互相争抢文件锁。
 - 网关统计保留 Python、Pi、OMP 等客户端名称，识别外部会话头和 `metadata.session_id`，无需本机 Codex 历史即可生成会话账单；未提供会话 ID 时显示客户端或设备名称，设备用量按客户端细分，保留用量总数和 Codex 原有归属。
 - 精简后台迁移、历史准备与代理状态，统一未完成回合校验和上游错误解码；协议服务各自构造鉴权头，移除无用参数、单次包装和过时注释。复用验收配置，保持路由、凭据、取消与计量行为。
 - 运行时静默、逐个转换空闲旧会话的 EMP 压缩点，不弹通知或要求手动检查；扫描不占用 Codex 写入协调锁，提交前重新检查活动会话与历史快照。保留原始历史、工具结果和原生密文，支持已结束的失败回合；退出时取消扫描。
@@ -16,6 +17,7 @@
 
 ### English
 
+- Fix Windows window-close and session-end exits reporting failure after Native settings were restored. Serialize this process's exit restoration so OS callbacks and the main shutdown path do not contend for the same file lock.
 - Retain Python, Pi, OMP and other gateway client names, and recognize external session headers and `metadata.session_id`. Produce session bills without local Codex history, show client/device names when no session ID is supplied, and separate device usage by client while preserving totals and existing Codex attribution.
 - Simplify background migration, history preparation and proxy state, and centralize unfinished-turn checks and upstream error decoding. Keep authentication headers with their protocol adapters; remove unused arguments, single-use wrappers and stale comments. Share acceptance fixtures while preserving routing, credentials, cancellation and accounting behavior.
 - Quietly migrate idle legacy EMP checkpoints one conversation at a time while running, without notifications or manual checks. Scan outside Codex's writer coordination lock and recheck active writers and snapshots before commit. Preserve original history, tool results and native ciphertext, including closed failed turns; cancel scanning on shutdown.
