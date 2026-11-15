@@ -1,6 +1,13 @@
-//! External route error conversion.
+//! Upstream rejection details and external route error conversion.
 
-use super::*;
+use crate::{RouterError, RouterErrorKind};
+use emp_protocol::ProtocolError;
+use emp_protocol::anthropic_projection::AnthropicError;
+use emp_protocol::portable_responses::{PortableProjectionError, ResponsesValidationError};
+use emp_transport::{
+    FailureClass, HttpFailureInput, HttpTransportError, HttpTransportErrorKind, http_failure,
+};
+use serde_json::Value;
 
 pub fn normalize_upstream_error_event(event: &mut Value) -> Option<emp_transport::UpstreamFailure> {
     let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
@@ -60,13 +67,7 @@ pub fn normalize_upstream_error_event(event: &mut Value) -> Option<emp_transport
 }
 
 pub fn upstream_error(status: u16, raw: &[u8], retry_after_seconds: Option<u64>) -> RouterError {
-    let code = serde_json::from_slice::<Value>(raw).ok().and_then(|body| {
-        body.get("error")?
-            .get("code")
-            .or_else(|| body.get("error")?.get("type"))?
-            .as_str()
-            .map(str::to_owned)
-    });
+    let (code, detail) = crate::upstream_rejection::details(status, "", raw);
     let failure = http_failure(HttpFailureInput {
         status,
         detail: &String::from_utf8_lossy(raw),
@@ -80,7 +81,7 @@ pub fn upstream_error(status: u16, raw: &[u8], retry_after_seconds: Option<u64>)
         failure.error_class,
         failure.failure_reason,
         failure.retry_after_seconds,
-        "upstream request failed",
+        detail,
     )
 }
 

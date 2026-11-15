@@ -229,10 +229,6 @@ fn is_claude_login(provider: &Map<String, Value>) -> bool {
         && provider.get("auth_mode").and_then(Value::as_str) == Some("claude_login")
 }
 
-fn stored_provider_is_claude_login(provider: &Value) -> bool {
-    provider.as_object().is_some_and(is_claude_login)
-}
-
 fn merge_web_update_at_time(
     current: &Value,
     incoming: &Value,
@@ -297,7 +293,7 @@ fn merge_web_update_at_time(
             let origin_changed = old.is_some_and(|old| provider_origin_changed(provider, old));
             let claude_login = is_claude_login(provider);
             let local_login_changed =
-                old.is_some_and(|old| stored_provider_is_claude_login(old) != claude_login);
+                old.is_some_and(|old| old.as_object().is_some_and(is_claude_login) != claude_login);
             let vertex_auth_changed = old.is_some_and(|old| {
                 (old.get("vertex").is_some() || provider.get("vertex").is_some())
                     && old.get("auth_mode") != provider.get("auth_mode")

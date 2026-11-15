@@ -28,7 +28,9 @@ pub async fn discover_anthropic_models(
         .get("anthropic_version")
         .and_then(Value::as_str)
         .unwrap_or("2023-06-01");
-    let headers = anthropic_discovery_headers(key, version);
+    let mut headers = common_discovery_headers();
+    headers.insert("x-api-key".to_owned(), key.to_owned());
+    headers.insert("anthropic-version".to_owned(), version.to_owned());
     let mut budget = DiscoveryBudget::new();
     let mut result = Vec::new();
     let mut url = format!("{base}/models?limit=1000");
@@ -120,7 +122,7 @@ fn append_anthropic_models(
         let raw_input = Value::Array(raw_input);
         let max_input = positive_int(item.get("max_input_tokens"));
         let max_output = positive_int(item.get("max_tokens"));
-        let display_name = model_text(item.get("display_name"), &model_id, "display name")?;
+        let display_name = model_text(item.get("display_name"), &model_id)?;
         let mut capability_sources = Map::from_iter([
             (
                 "supports_reasoning".to_owned(),

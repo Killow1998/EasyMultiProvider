@@ -651,3 +651,82 @@ fn native_compact_endpoint_preserves_opaque_response_and_owned_headers() {
     server.shutdown().unwrap();
     worker.join().unwrap();
 }
+
+#[test]
+fn native_rejections_preserve_specific_cause_and_matching_diagnostics() {
+    for (stream, detail_envelope) in [(false, false), (true, false), (true, true)] {
+        let mut raw = json!({"error":{
+            "code":"unsupported_parameter", "param":"reasoning.effort",
+            "message":"Unsupported parameter: reasoning.effort. Authorization: Bearer fixture-private-credential-123456",
+            "debug":{"api_key":"must-not-be-forwarded"}
+        }});
+        if detail_envelope {
+            raw = json!({"detail":raw["error"]["message"],
+                "debug":{"api_key":"must-not-be-forwarded"}});
+        }
+        let upstream = OneShotUpstream::start_wire(
+            400,
+            "application/json",
+            None,
+            vec![serde_json::to_vec(&raw).unwrap()],
+        );
+        let (directory, server) = forward_server(&upstream.base_url());
+        let wire = post(
+            &server,
+            "/v1/responses",
+            &serde_json::to_vec(&json!({"model":"upstream","input":"hello","stream":stream}))
+                .unwrap(),
+            &[&session_header(&server), "Authorization: Bearer caller"],
+        );
+        assert!(wire.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{wire}");
+        let body: Value = serde_json::from_slice(response_parts(&wire).1).unwrap();
+        let message = body["error"]["message"].as_str().unwrap();
+        for expected in [
+            "HTTP 400",
+            "reasoning.effort",
+            "Unsupported parameter",
+            "Selected source",
+        ] {
+            assert!(message.contains(expected), "missing {expected}: {message}");
+        }
+        assert!(
+            !wire.contains("fixture-private-credential-123456"),
+            "{wire}"
+        );
+        assert!(!wire.contains("must-not-be-forwarded"), "{wire}");
+        server.shutdown().unwrap();
+        let records = crate::tests::internal_events_contract::journal(directory.path());
+        let detail = records
+            .iter()
+            .find(|row| row["event"] == "upstream_request_rejected")
+            .expect("recorded rejection cause");
+        assert_eq!(detail["fields"]["status"], 400);
+        assert_eq!(
+            detail["fields"]["error_code"],
+            if detail_envelope {
+                "upstream_rejected"
+            } else {
+                "unsupported_parameter"
+            }
+        );
+        assert!(
+            detail["fields"]["upstream_message"]
+                .as_str()
+                .unwrap()
+                .contains("Unsupported parameter")
+        );
+        assert!(
+            !detail
+                .to_string()
+                .contains("fixture-private-credential-123456")
+        );
+        let finished = records
+            .iter()
+            .find(|row| row["event"] == "request_finished")
+            .unwrap();
+        assert_eq!(
+            detail["fields"]["request_id"],
+            finished["fields"]["request_id"]
+        );
+    }
+}

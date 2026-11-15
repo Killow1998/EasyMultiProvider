@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 const REPAIR_DIRECTORY: &str = "easy-multi-provider/integration/history-repair";
 
+#[path = "history_repair/background.rs"]
+mod background;
+pub use background::IdleHistoryRepair;
 #[path = "history_repair/checkpoint.rs"]
 mod checkpoint;
 #[path = "history_repair/coordination.rs"]
@@ -171,34 +174,13 @@ fn repair_selected(
     let paths = paths::RolloutPaths::new(&home)?;
     let mut report = HistoryRepairReport::default();
     if automatic {
-        // A transaction is indivisible, even if another interrupted manifest
-        // shares one of its threads. Expand the blocked set before recovering.
-        let mut blocked_reason = "active_codex_writer";
-        loop {
-            let before = active.len();
-            if coordination::protect_active_lineages(&paths, &infos, &mut active).is_err() {
-                active.extend(lock_ids.iter().cloned());
-                blocked_reason = "active_lineage_unverified";
-            }
-            for (_, manifest) in &pending {
-                if manifest
-                    .entries
-                    .iter()
-                    .any(|entry| active.contains(&entry.thread_id))
-                {
-                    active.extend(manifest.entries.iter().map(|entry| entry.thread_id.clone()));
-                }
-            }
-            if active.len() == before {
-                break;
-            }
-        }
-        pending.retain(|(_, manifest)| {
-            !manifest
-                .entries
-                .iter()
-                .any(|entry| active.contains(&entry.thread_id))
-        });
+        let blocked_reason = coordination::protect_active_repairs(
+            &paths,
+            &infos,
+            &lock_ids,
+            &mut pending,
+            &mut active,
+        );
         recover_pending(&home, &repair_root, pending)?;
         infos.retain(
             |info| match coordination::lineage_is_idle(&paths, info, &active) {

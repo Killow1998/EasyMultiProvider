@@ -245,8 +245,11 @@ EMP is designed to keep provider changes from turning into a different coding cl
 EMP preserves native Codex sessions, `resume`, WebSockets, compression, and MCP where supported. Shared HTTP upstream requests negotiate gzip, Brotli, Zstandard and deflate responses with streaming decoding and decoded-body limits. During live provider switching, it reconstructs Codex-owned visible history instead of forwarding provider-private opaque state.
 
 While EMP is active, it converts EMP-owned checkpoints in each request when
-switching to a native model. **Restore Native**, quitting EMP, and `EMP restore`
-restore configuration only; they do not scan or rewrite saved conversations.
+switching to a native model. It also quietly migrates saved EMP checkpoints one
+idle conversation at a time, preserving original history and native ciphertext.
+**Restore Native**, normal Web UI quit, and `EMP restore` also convert eligible
+idle histories before restoring configuration. Active conversations are left
+untouched until they become idle.
 **Restore Native** keeps EMP and its management page running; **Enable EMP**
 can apply integration again in the same process. **Quit EMP** restores native
 settings and then ends the service.
@@ -257,8 +260,8 @@ work; an active turn can be interrupted. Windows logoff and shutdown are handled
 inside EMP before termination, while canceling shutdown leaves EMP running.
 Force-killing a process or losing power gives it no opportunity to run cleanup.
 
-To resume an old conversation containing EMP-owned compaction data directly in
-native Codex after EMP is disabled, close that conversation and run:
+For a specific old conversation that still contains EMP compaction data after
+EMP is disabled, close that conversation and run:
 
 ```sh
 EMP migrate-history --thread-id CONVERSATION_UUID

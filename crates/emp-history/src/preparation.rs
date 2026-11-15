@@ -79,11 +79,17 @@ pub fn prepare_owned<R: HistoryReader + ?Sized>(
     if has_previous_response(root) {
         return Ok(body);
     }
-    let needs_preparation = if native_destination {
-        contains_portable_compaction(root)
-    } else {
-        contains_compaction(root)
+    let input = match root.get("input") {
+        Some(Value::Array(items)) => items.as_slice(),
+        Some(item @ Value::Object(_)) => std::slice::from_ref(item),
+        _ => &[],
     };
+    let needs_preparation = input.iter().filter_map(Value::as_object).any(|item| {
+        item.get("type").and_then(Value::as_str) == Some("compaction")
+            && (!native_destination
+                || portable_encrypted(item)
+                    .is_some_and(|value| value.starts_with(COMPACTION_PREFIX)))
+    });
     if !needs_preparation {
         return Ok(body);
     }
@@ -98,30 +104,6 @@ fn history_projection_root(body: &Value) -> Result<&Map<String, Value>, HistoryE
 fn has_previous_response(root: &Map<String, Value>) -> bool {
     root.get("previous_response_id")
         .is_some_and(|value| !value.is_null())
-}
-
-fn contains_compaction(root: &Map<String, Value>) -> bool {
-    input_objects_match(root, |item| {
-        item.get("type").and_then(Value::as_str) == Some("compaction")
-    })
-}
-
-fn contains_portable_compaction(root: &Map<String, Value>) -> bool {
-    input_objects_match(root, |item| {
-        item.get("type").and_then(Value::as_str) == Some("compaction")
-            && portable_encrypted(item).is_some_and(|value| value.starts_with(COMPACTION_PREFIX))
-    })
-}
-
-fn input_objects_match(
-    root: &Map<String, Value>,
-    predicate: impl Fn(&Map<String, Value>) -> bool,
-) -> bool {
-    match root.get("input") {
-        Some(Value::Array(items)) => items.iter().filter_map(Value::as_object).any(predicate),
-        Some(Value::Object(item)) => predicate(item),
-        _ => false,
-    }
 }
 
 pub fn build_compaction_replacement(

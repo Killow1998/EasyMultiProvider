@@ -235,14 +235,12 @@ pub struct ProxyPolicy {
     explicit: Option<String>,
     environment: Option<ProxyEnvironment>,
     resolver: Option<Arc<ProxyEnvironmentResolver>>,
-    bypass_loopback: bool,
 }
 
 impl PartialEq for ProxyPolicy {
     fn eq(&self, other: &Self) -> bool {
         self.explicit == other.explicit
             && self.environment == other.environment
-            && self.bypass_loopback == other.bypass_loopback
             && match (&self.resolver, &other.resolver) {
                 (None, None) => true,
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
@@ -260,7 +258,6 @@ impl fmt::Debug for ProxyPolicy {
             .field("explicit_configured", &self.explicit.is_some())
             .field("environment_configured", &self.environment.is_some())
             .field("dynamic_resolver_configured", &self.resolver.is_some())
-            .field("bypass_loopback", &self.bypass_loopback)
             .finish()
     }
 }
@@ -277,7 +274,6 @@ impl ProxyPolicy {
             explicit,
             environment,
             resolver: None,
-            bypass_loopback: true,
         }
     }
 
@@ -305,13 +301,12 @@ impl ProxyPolicy {
             explicit: None,
             environment: None,
             resolver: Some(Arc::new(resolver)),
-            bypass_loopback: true,
         }
     }
 
     pub(super) fn proxy_url_for_target(&self, route: &UrlTarget) -> HttpResult<Option<String>> {
         let host = route.host.as_deref().unwrap_or("");
-        if self.bypass_loopback && is_loopback(host) {
+        if is_loopback(host) {
             return Ok(None);
         }
         let environment = self

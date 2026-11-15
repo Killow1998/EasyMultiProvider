@@ -2,6 +2,7 @@
 pub(crate) mod commands;
 pub(crate) mod enable;
 pub(crate) mod endpoint;
+pub(crate) mod history_migration;
 mod restore;
 use emp_integration::IntegrationManager;
 pub(crate) use restore::restore_native_configuration;

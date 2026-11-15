@@ -287,11 +287,7 @@ fn model_id(value: Option<&Value>) -> Option<String> {
     .then_some(value)
 }
 
-fn model_text(
-    value: Option<&Value>,
-    fallback: &str,
-    _field: &'static str,
-) -> Result<String, RouterError> {
+fn model_text(value: Option<&Value>, fallback: &str) -> Result<String, RouterError> {
     let text = value
         .filter(|value| python_truthy(value))
         .and_then(python_scalar)
@@ -482,19 +478,6 @@ fn common_discovery_headers() -> BTreeMap<String, String> {
 fn bearer_discovery_headers(key: &str) -> BTreeMap<String, String> {
     let mut headers = common_discovery_headers();
     headers.insert("Authorization".to_owned(), format!("Bearer {key}"));
-    headers
-}
-
-fn gemini_discovery_headers(key: &str) -> BTreeMap<String, String> {
-    let mut headers = common_discovery_headers();
-    headers.insert("x-goog-api-key".to_owned(), key.to_owned());
-    headers
-}
-
-fn anthropic_discovery_headers(key: &str, version: &str) -> BTreeMap<String, String> {
-    let mut headers = common_discovery_headers();
-    headers.insert("x-api-key".to_owned(), key.to_owned());
-    headers.insert("anthropic-version".to_owned(), version.to_owned());
     headers
 }
 

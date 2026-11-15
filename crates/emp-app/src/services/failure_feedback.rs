@@ -30,12 +30,12 @@ pub(crate) fn message(
         .filter(|name| !name.is_empty())
         .unwrap_or(&route.provider_id);
     let cause = local_detail
-        .map(label)
+        .map(str::to_owned)
         .unwrap_or_else(|| public_failure_message(class, reason, status));
     let progress = if output_started {
         "Some output was delivered, but this turn did not complete."
     } else {
-        "No output was delivered; upstream execution and billing are unknown."
+        "No output was delivered."
     };
     let action = match (class, reason) {
         (_, Some("model_not_found")) => {
@@ -44,15 +44,14 @@ pub(crate) fn message(
         (FailureClass::RateLimit, Some("quota_exhausted")) => {
             "Check this account's quota, wait for recovery, or manually choose another source. Recovery time is unknown unless the upstream provides it."
         }
-        (FailureClass::RateLimit | FailureClass::UpstreamCapacity, _) => {
-            "Wait and retry, or manually choose another source."
-        }
+        (FailureClass::RateLimit, _) => "Wait and retry, or manually choose another source.",
+        (FailureClass::UpstreamCapacity, _) => "Wait briefly; you can retry your request.",
         (FailureClass::Auth, _) => "Check this source's credentials in EMP, then retry.",
         (FailureClass::ContextLengthExceeded, _) => {
             "Reduce the input or choose a model with a larger context window."
         }
         (FailureClass::RequestTooLarge, _) => {
-            "Reduce image or file sizes, or choose a source with a larger per-request byte limit."
+            "Reduce image or file sizes to fit the upstream byte-size limit."
         }
         (
             FailureClass::Network
@@ -68,12 +67,13 @@ pub(crate) fn message(
             | FailureClass::LocalDeadline,
             _,
         ) => "Check the connection, then retry if appropriate.",
+        _ if local_detail.is_some() => "",
         _ => "Inspect EMP diagnostics, then retry or manually choose another source.",
     };
     format!(
         "Selected source '{}' and model '{}': {cause} {progress} {action}",
         label(source),
-        label(&route.requested_model),
+        label(&route.upstream_model),
     )
 }
 
@@ -86,7 +86,9 @@ pub(crate) fn annotate_native(error: &mut NativeHttpError, route: &ResolvedRoute
         error.body["error"]["type"].as_str(),
         status_error_class(Some(error.status)),
     );
-    let detail = message(route, class, Some(reason), error.status, false, None);
+    let original = error.body["error"]["message"].as_str();
+    let original = original.map(|value| value.strip_prefix("[Upstream service] ").unwrap_or(value));
+    let detail = message(route, class, Some(reason), error.status, false, original);
     error.body["error"]["message"] = crate::services::error_origin::message(
         error.body["error"]["origin"].as_str().unwrap_or("unknown"),
         &detail,

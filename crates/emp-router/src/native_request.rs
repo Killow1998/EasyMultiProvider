@@ -7,8 +7,8 @@ use emp_transport::FailureClass;
 use std::collections::BTreeMap;
 
 /// Credentials have already been resolved by the owning application boundary.
-/// `Implicit(None)` preserves Python's incoming-auth fallback when no native
-/// login can be read; `Implicit(Some(empty))` deliberately does not fall back.
+/// `Implicit(None)` uses incoming auth when no native login is available;
+/// `Implicit(Some(empty))` deliberately does not fall back.
 pub enum NativeAuth<'a> {
     Forward,
     Implicit(Option<&'a BTreeMap<String, String>>),

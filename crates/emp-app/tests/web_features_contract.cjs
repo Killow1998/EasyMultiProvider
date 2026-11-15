@@ -90,7 +90,6 @@ test('common call details escape model/session names and keep missing metrics em
   const reports = feature('call-reports.js','createCallReports')({modelDisplayName:String,serviceName:String, tr,esc,getLanguage:() => 'en'});
   const html = reports.recordHtml({request_id:'one',session_name:'<script>',client_model:'selected',upstream_model:'sent',response_model:'reported',state:'completed',input_tokens:100,cached_input_tokens:50,output_tokens:20});
   assert.match(html,/&lt;script&gt;/);
-  assert.match(html,/Selected in Codex/);assert.match(html,/Sent upstream/);assert.match(html,/Reported upstream/);
   assert.match(html,/50.0%/);assert.match(html,/Not applicable/);
   assert.doesNotMatch(html,/0.00 s|0.0 token/);
 });

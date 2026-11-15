@@ -91,15 +91,28 @@ fn loopback_never_uses_a_proxy_and_scheme_order_is_deterministic() {
         ProxyPolicy::from_environment(environment),
         TimeoutPolicy::default(),
     );
-    let loopback = policy
-        .plan(
-            HttpMethod::Post,
-            "http://127.0.0.1:8080/v1",
-            headers(),
-            false,
-        )
-        .expect("loopback plan");
-    assert!(!loopback.route.proxy_origin.is_proxy());
+    let explicit_policy = HttpClientPolicy::new(
+        ProxyPolicy::explicit(Some("http://192.0.2.10:8118".to_owned())),
+        TimeoutPolicy::default(),
+    );
+    for authority in [
+        "127.0.0.1:8080",
+        "127.1.2.3:8080",
+        "[::1]:8080",
+        "localhost.:8080",
+    ] {
+        for policy in [&policy, &explicit_policy] {
+            let loopback = policy
+                .plan(
+                    HttpMethod::Post,
+                    &format!("http://{authority}/v1"),
+                    headers(),
+                    false,
+                )
+                .expect("loopback plan");
+            assert!(!loopback.route.proxy_origin.is_proxy(), "{authority}");
+        }
+    }
 
     let external = policy
         .plan(

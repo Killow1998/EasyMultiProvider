@@ -1,5 +1,24 @@
 # Native restore acceptance harness
 
+For quiet runtime migration followed by direct native resume in the same thread:
+
+```sh
+python3 -B -m scripts.native_restore_acceptance.background \
+  --codex-bin /path/to/codex \
+  --emp-bin /path/to/EMP \
+  --root /mnt/test-data/emp-acceptance/background-run-unique
+```
+
+This fixture first reproduces a native HTTP 400 caused by a private checkpoint,
+then starts a disposable EMP with automatic integration enabled. It waits for
+background conversion without invoking Restore or history repair, verifies the
+original byte prefix, stops EMP, and resumes the same thread through the fake
+native provider. Results are in `ROOT/report.json`. It uses synthetic auth and
+loopback endpoints with external networking blocked; it does not test real
+OpenAI ciphertext decryption or a live desktop App.
+The runtime and created-history scenarios share EMP configuration generation
+through `fixture.py`; neither imports configuration from the other scenario.
+
 This Linux manual acceptance harness uses Python 3, an explicitly supplied Codex CLI and EMP binary, fresh disposable roots on disk, and loopback fake Responses providers. It requires `/usr/bin/prlimit` from util-linux and `/proc/<pid>/status` for process memory limits and RSS sampling. It uses synthetic auth only; it does not validate production-provider ciphertext or contact external services. Every Codex and EMP process is started under a 1536 MiB address space limit. Reports contain executable hashes, peak RSS samples, summarized HTTP observations, and assertion results in `ROOT/result.json`. RSS fields use `null` when no positive `/proc` sample was captured; memory-bound assertions require a positive measurement and do not treat missing data as a pass.
 
 Run the history-created-through-EMP contract:

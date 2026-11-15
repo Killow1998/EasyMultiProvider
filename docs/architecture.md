@@ -56,8 +56,12 @@ The HTTP response owner now contains decoded reads, size/deadline enforcement an
 bounded cleanup. Requests negotiate gzip, Brotli, Zstandard and deflate; reqwest
 streams decoding and removes encoded length/encoding headers. Caller-provided
 `Accept-Encoding` is retained. General API request compression and downstream
-response compression are not added. Existing native zstd requests and WS behavior
-remain. Codec tests require the first SSE event before upstream EOF, validate
+response compression are not added. Native HTTP retains Zstd for text-only
+requests. Requests containing inline images use uncompressed JSON for Responses,
+SSE and remote compaction because the upstream rejects some compressed image
+requests. Image bytes, opaque state and tool history stay unchanged; this does
+not add a retry. WebSocket compression and batching remain independent.
+Codec tests require the first SSE event before upstream EOF, validate
 limits/corruption and compare synthetic encoded bytes; this is not a WAN savings
 estimate.
 
@@ -406,6 +410,10 @@ The delivery receipt records `response_error` with request/connection IDs, phase
 error code, origin and local write result, without copying the error message or
 request body. Upstream receipts take provenance from the receiving boundary,
 ignoring any upstream `origin` claim. Unclassified errors stay `unknown`.
+`emp-router::upstream_rejection` owns HTTP rejection decoding, redaction and
+bounded explanations for both Native and external routes. Error classification
+and protocol-specific response shapes remain with their adapters; decoding does
+not depend on model discovery or the router root's imported protocol types.
 Call records retain origin and the separate downstream delivery facts in the
 existing usage database. A local write result is not a client acknowledgement.
 
@@ -1459,6 +1467,13 @@ Ambiguous ownership stays unassigned. Bills and chart detail share their reconci
 selection and aggregate projection. See [usage accounting](usage-accounting.md#session-bills)
 for attribution, old-history indexing and missing-price semantics.
 
+`request_facts.rs` normalizes explicit external session IDs and bounded client labels
+at the accounting entry. Non-Codex conversation receipts mark these sessions directly;
+they do not require local Codex index entries. The call ledger retains `client_kind`
+alongside authenticated caller identity, and device usage groups by both fields.
+Missing session IDs remain unassigned in bills; call details display available
+client/device names without inferring sessions from addresses or request IDs.
+
 Codex subscription quota sampling remains scheduled backend work at 44-second deadlines. Its
 existing sampler now owns target selection and worker aggregation. Up to four
 scoped workers borrow their inputs and each writes only its own counter; joining
@@ -1532,6 +1547,24 @@ inside the same process after a response ETag changed. This verifies catalog
 refresh, not replacement of an already-open picker or a provider's physical
 context capacity.
 
+While this instance owns an active integration, legacy EMP checkpoints migrate
+quietly in the background. The worker waits 15 seconds after startup, starts
+each step only between model requests, and handles one rollout at a time with
+500 ms between steps and 60 seconds between sweeps. An in-memory size/mtime
+cache avoids rescanning unchanged, successfully inspected files. Discovery is
+refreshed between sweeps, so missing files and active conversations can return.
+The migration queue is an owning iterator; there is no separate index or clone
+of each queued thread. Closed-lineage replay owns the unfinished-turn check for
+both explicit restore and background migration.
+Scanning and replay use a disposable spool without holding Codex's writer
+coordination lock or publishing a recoverable transaction. Commit acquires that
+lock nonblockingly, rechecks active writers and fork lineages, and reuses the
+existing snapshot hashes, transactional backups and atomic publication. Changed
+or busy histories wait for a later sweep. Closed failed turns preserve their
+error records and are eligible; unfinished turns and rollback/interruption
+remain excluded. Scan/replay/copy loops observe shutdown. The worker emits only
+diagnostic events, with no WebUI notification or required history-check action.
+
 Explicit Native restoration and normal Quit also convert eligible idle EMP
 checkpoints before restoring configuration. They share the existing bounded,
 append-only migration and transaction backups; native opaque reasoning and tool
@@ -1547,8 +1580,8 @@ checkpoints and **Check history** for unverified/skipped history, retaining the
 normal **Enable EMP** button. Older combined deferred counts are read as
 unclassified, rather than presented as confirmed pending conversions.
 The outcome survives restart in a home-scoped private report. HTTP,
-tray and offline Restore use the same operation; no new background scanner or
-model request is added. Explicit restoration scans closed history; the first
+tray and offline Restore use the same operation. Background migration adds no
+model request. Explicit restoration scans closed history; the first
 conversion of a large home may take time. WebUI and tray copy identify the
 operation while it runs; repeated menu actions remain disabled.
 OS termination keeps its short configuration-only exit
@@ -1558,10 +1591,11 @@ Inside `emp-codex`, `history_repair.rs` coordinates the operation and retains
 its public entry points. `inventory.rs` owns read-only database discovery and
 path validation. `paths.rs` shares one lazily discovered directory inventory
 across writer guards, selection and replay, including failed/missing lookups.
-It lasts only for that restore; a later operation discovers returned files anew.
+It lasts for one restore or background sweep; a later sweep discovers returned files anew.
 Resolved paths are still checked for unsafe paths, symlinks and ambiguity.
 `coordination.rs` owns writer exclusion and active-fork protection;
-`selection.rs` finds affected checkpoints; and `planning.rs` stages selected
+`selection.rs` finds affected checkpoints; `background.rs` owns progressive
+inspection and split scan/commit scheduling; and `planning.rs` stages selected
 rewrites. Replay, checkpoint conversion, spool storage and transaction recovery
 retain separate owners. These modules import their concrete dependencies
 directly rather than relying on imports forwarded through the controller.

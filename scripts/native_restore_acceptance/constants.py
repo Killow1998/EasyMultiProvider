@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 MODEL = "gpt-5"
+ALTERNATE_MODEL = "gpt-5-mini"
 SUMMARY = "EMP_ACCEPTANCE_SHARED_SUMMARY"
 OPAQUE = "OPAQUE_NATIVE_REASONING_FIXTURE"
 OPAQUE_ID = "reasoning_opaque_acceptance_001"

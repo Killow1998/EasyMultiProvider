@@ -585,6 +585,9 @@ information row places reset/removal beside the name and account; sign-in origin
 is omitted. Provider information retains an icon for connection settings.
 `e2e_account_usage.py` covers cache lifecycle and the
 shipped summaries' model aggregation, unknown/zero prices and EN/ZH rendering.
+`e2e_gateway_attribution.py --binary /absolute/path/to/EMP --output /tmp/emp-client-usage`
+checks external client labels, session bills without local Codex history, and
+per-client device usage through a disposable gateway and real browser in EN/ZH.
 Migration previews merge against
 the current shadow draft and use cached private account/provider identities for repeated
 imports, retaining prior edits and credentials. Export selections are grouped by

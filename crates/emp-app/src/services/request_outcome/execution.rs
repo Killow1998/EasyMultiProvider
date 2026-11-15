@@ -1,5 +1,7 @@
 //! Request-owned execution facts. Activity is a bounded projection, never the ledger source.
-use super::*;
+use super::RequestOutcome;
+use emp_core::ResolvedRoute;
+use serde_json::json;
 
 impl RequestOutcome<'_> {
     pub(crate) fn claude_error(&mut self, error: &crate::services::claude_cli::ClaudeCliError) {

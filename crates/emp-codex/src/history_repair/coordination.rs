@@ -3,10 +3,11 @@ use super::HistoryRepairError;
 use super::inventory::ThreadInfo;
 use super::paths::RolloutPaths;
 use super::replay::load_rollout_header;
+use super::transaction::RepairManifest;
 use crate::history::{MAX_LINEAGE_SEGMENTS as MAX_LINEAGE_DEPTH, uuid_shape};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) const LOCK_DIRECTORY: &str = "thread-writer-locks";
 pub(super) const COORDINATION_LOCK: &str = ".coordination.lock";
@@ -61,10 +62,8 @@ pub(super) fn acquire_coordination_lock(
     Ok(file)
 }
 
-/// Mirrors Codex 0.158.0's publication probe: while holding the shared
-/// coordination lock, try each known writer lock and fail instead of waiting
-/// on a per-thread lock. New writers cannot start until the caller finishes
-/// migration and drops the coordination lock.
+/// Probe writer locks without waiting while holding the coordination lock.
+/// New writers wait until publication finishes and the caller drops that lock.
 pub(super) fn probe_codex_writers(
     home: &Path,
     thread_ids: &BTreeSet<String>,
@@ -132,7 +131,7 @@ pub(super) fn probe_codex_writers(
 /// A live descendant may still refer to its parent's byte offsets. Protect
 /// those ancestors too; only the immutable session header is read here.
 pub(super) fn protect_active_lineages(
-    paths: &RolloutPaths<'_>,
+    paths: &RolloutPaths,
     infos: &[ThreadInfo],
     active: &mut BTreeSet<String>,
 ) -> Result<(), HistoryRepairError> {
@@ -169,7 +168,7 @@ pub(super) fn protect_active_lineages(
 }
 
 pub(super) fn lineage_is_idle(
-    paths: &RolloutPaths<'_>,
+    paths: &RolloutPaths,
     info: &ThreadInfo,
     active: &BTreeSet<String>,
 ) -> Result<bool, HistoryRepairError> {
@@ -197,4 +196,40 @@ pub(super) fn lineage_is_idle(
         };
     }
     Err(HistoryRepairError::new("lineage_invalid"))
+}
+
+pub(super) fn protect_active_repairs(
+    paths: &RolloutPaths,
+    infos: &[ThreadInfo],
+    lock_ids: &BTreeSet<String>,
+    pending: &mut Vec<(PathBuf, RepairManifest)>,
+    active: &mut BTreeSet<String>,
+) -> &'static str {
+    let mut reason = "active_codex_writer";
+    loop {
+        let before = active.len();
+        if protect_active_lineages(paths, infos, active).is_err() {
+            active.extend(lock_ids.iter().cloned());
+            reason = "active_lineage_unverified";
+        }
+        for (_, manifest) in pending.iter() {
+            if manifest
+                .entries
+                .iter()
+                .any(|entry| active.contains(&entry.thread_id))
+            {
+                active.extend(manifest.entries.iter().map(|entry| entry.thread_id.clone()));
+            }
+        }
+        if active.len() == before {
+            break;
+        }
+    }
+    pending.retain(|(_, manifest)| {
+        !manifest
+            .entries
+            .iter()
+            .any(|entry| active.contains(&entry.thread_id))
+    });
+    reason
 }

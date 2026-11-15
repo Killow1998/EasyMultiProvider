@@ -273,7 +273,7 @@ fn a_stream_request_rejected_before_output_records_the_buffered_error_transport(
         401,
         "application/json",
         None,
-        vec![br#"{"error":{"type":"auth","message":"private-upstream-failure"}}"#.to_vec()],
+        vec![br#"{"error":{"type":"auth","message":"Subscription credential expired. token=private-upstream-failure","debug":"private-debug-value"}}"#.to_vec()],
     );
     let (root, server) = configured_server(&upstream.base_url());
     let reply = post(
@@ -293,11 +293,31 @@ fn a_stream_request_rejected_before_output_records_the_buffered_error_transport(
     assert_eq!(done["fields"]["transport"], "http");
     assert_eq!(done["fields"]["response_status"], 401);
     assert_eq!(done["fields"]["delivery"], "terminal_written");
+    let rejection = records
+        .iter()
+        .find(|r| r["event"] == "upstream_request_rejected")
+        .expect("recorded upstream cause");
+    assert_eq!(
+        rejection["fields"]["request_id"],
+        done["fields"]["request_id"]
+    );
+    assert!(
+        rejection["fields"]["upstream_message"]
+            .as_str()
+            .unwrap()
+            .contains("Subscription credential expired")
+    );
     assert!(
         !serde_json::to_string(&records)
             .unwrap()
             .contains("private-upstream-failure")
     );
+    assert!(
+        !serde_json::to_string(&records)
+            .unwrap()
+            .contains("private-debug-value")
+    );
+    assert!(!reply.contains("private-upstream-failure"));
     server.shutdown().unwrap();
 }
 

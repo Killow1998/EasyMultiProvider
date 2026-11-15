@@ -6,8 +6,7 @@ use url::{Host, Url};
 
 const DEFAULT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
-/// A configuration-resolution failure with the same public status and message
-/// boundary as Python's `RouterError` for user-selectable models.
+/// A configuration-resolution failure for user-selectable models.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteResolutionError {
     ProviderUnavailable(String),

@@ -366,6 +366,17 @@ impl<'a> RequestOutcome<'a> {
         self.status(error.status(), error.error_class().as_str());
         self.event["failure_reason"] = json!(error.failure_reason());
         self.event["retry_after_seconds"] = json!(error.retry_after_seconds());
+        if error.kind() == emp_router::RouterErrorKind::Upstream {
+            self.upstream_error_detail(&error.to_string());
+        }
+    }
+    fn upstream_error_detail(&self, message: &str) {
+        self.state.backend.diagnostics.journal.event("warn", "upstream_request_rejected", &json!({
+            "request_id": self.event["request_id"], "provider_id": self.event["provider_id"],
+            "upstream_model": self.event["upstream_model"], "status": self.event["status"],
+            "error_code": self.event["error_code"], "failure_reason": self.event["failure_reason"],
+            "upstream_message": message,
+        }));
     }
     pub(crate) fn native_error(&mut self, error: &emp_router::native_http::NativeHttpError) {
         self.event["error_origin"] = error.body["error"]["origin"].clone();
@@ -378,6 +389,13 @@ impl<'a> RequestOutcome<'a> {
         self.event["failure_reason"] = error.body["error"]["failure_reason"].clone();
         self.event["retry_after_seconds"] =
             json!(error.body["error"]["retry_after_seconds"].as_u64());
+        self.event["error_code"] = error.body["error"]
+            .get("upstream_code")
+            .unwrap_or(&error.body["error"]["code"])
+            .clone();
+        if self.event["error_origin"] == "upstream" {
+            self.upstream_error_detail(error.body["error"]["message"].as_str().unwrap_or_default());
+        }
     }
     pub(crate) fn disconnected(&mut self) {
         self.event["error_origin"] = json!("client");
@@ -433,7 +451,10 @@ impl<'a> RequestOutcome<'a> {
                     self.event["error_class"].as_str().unwrap_or_default(),
                 );
             }
-            self.prepare_call_facts();
+            self.update_model_facts();
+            if let Some(identity) = &self.identity {
+                self.event["account_id"] = json!(identity.account_id);
+            }
             crate::services::memory_routing::observe(self.state, &self.event);
             crate::services::observation::record_completion(self.state, &self.event);
             self.persist_call();

@@ -8,7 +8,7 @@ from typing import Any
 
 from .app_server import AppServer
 from .common import fail
-from .constants import MODEL
+from .constants import ALTERNATE_MODEL, MODEL
 
 EMP_MODEL_PROVIDER = "native_test"
 
@@ -32,6 +32,37 @@ def make_env(home: Path, codex_home: Path, temp_dir: Path, provider_key: str) ->
         "no_proxy": "127.0.0.1,localhost",
         "RUST_LOG": "error",
     }
+
+
+def write_emp_configuration(root: Path, upstream_url: str, port: int) -> Path:
+    config_path = root / "emp-config.json"
+    config = {
+        "host": "127.0.0.1",
+        "port": port,
+        "native_catalog_path": str(root / "native-models.json"),
+        "providers": [
+            {
+                "id": "fixture",
+                "base_url": upstream_url,
+                "protocol": "responses",
+                "auth_mode": "api_key",
+                "api_key": "emp-acceptance-upstream-key-only",
+            }
+        ],
+        "models": [
+            {
+                "id": model,
+                "provider": "fixture",
+                "upstream_id": model,
+                "context_window": 8192,
+                "output_limit": 1024,
+                "enabled": True,
+            }
+            for model in (MODEL, ALTERNATE_MODEL)
+        ],
+    }
+    config_path.write_text(json.dumps(config, separators=(",", ":")) + "\n", encoding="utf-8")
+    return config_path
 
 
 def write_fixture_config(codex_home: Path, state_dir: Path, base_url: str) -> tuple[bytes, bytes]:
