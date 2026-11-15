@@ -34,7 +34,7 @@ def main():
             before = (target / 'config.json').read_bytes()
             assert browser.execute('return !document.getElementById("shadow_routing_button");')
             review_title = browser.execute('return document.getElementById("modal_title").textContent;')
-            assert 'v0.14.1' in review_title
+            assert 'v0.14.2' in review_title
             assert browser.execute('return [...document.querySelectorAll("#modal_body [data-shadow-demo]")].map(button=>button.dataset.shadowDemo);') == []
             browser.execute('window.EMP_REVIEW_ACTION("dialog_ownership");')
             wait_for(lambda: browser.execute('return !!document.getElementById("gateway_key");'))

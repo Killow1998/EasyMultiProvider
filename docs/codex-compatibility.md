@@ -86,7 +86,7 @@ candidate versions; it is not relabeled as a test of this development build.
 | 0.167 | Official Linux 0.167.0 engine passed the local EMP 0.13.26 candidate contracts on 2026-11-06 UTC. Official Linux 0.167.1 and 0.167.2 passed their separately dated targeted candidate checks below on 2026-11-11 UTC. |
 | 0.168–0.169 | Official Linux 0.168.0 and 0.169.0 engines passed the v0.14.0-based maintenance candidate checks below on 2026-11-13 UTC. |
 
-### v0.14.2 local module acceptance (2026-11-15 UTC)
+### v0.14.2 release and module acceptance (2026-11-15 UTC)
 
 The v0.14.2 candidate was reviewed across all nine Rust crates, xtask and the web
 frontend. Twelve process-isolated removal controls each trigger a behavioral
@@ -104,6 +104,19 @@ ID and original history prefix without manual repair. Four additional browser
 E2E suites pass gateway attribution/session bills, service usage, Native history
 restoration and bilingual navigation. All five suites use isolated state and
 simulated upstreams; no real-provider requests or runtime replacement occur.
+
+[Runtime CI](https://github.com/Killow1998/EasyMultiProvider/actions/runs/43736171551)
+passes on `2f5b80c6c9e697321785c9672f70d56560334e71`: 1,057 Linux workspace tests,
+26 frontend contracts, strict Clippy and format checks, plus ten Windows
+restoration/process-exit tests. The 22 existing Linux opt-in cases remain ignored.
+Published merge `a9d0b8d3053c3d9a0236f29e843f91cfe21301ba` has the same source tree.
+
+[Package CI](https://github.com/Killow1998/EasyMultiProvider/actions/runs/43737023418)
+passes on Windows x64, Linux x64, Intel macOS and Apple Silicon macOS, including
+native startup, TLS, update/rollback, request cancellation, memory admission and
+restoration fixtures. All six anonymous release downloads match GitHub sizes and
+SHA-256 digests; the Linux checksum, executable version, installer syntax and
+bilingual release notes also match. Downloads are removed without installation.
 
 ### v0.14.1 release acceptance (2026-11-14 UTC)
 
