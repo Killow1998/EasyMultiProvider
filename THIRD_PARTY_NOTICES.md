@@ -1,5 +1,14 @@
 # Third-party notices
 
+## Experimental aero runtime
+
+The `999.*-exp` edition bundles CPython under the Python Software Foundation
+License and a PyInstaller bootloader under GPL-2.0-or-later with its Bootloader
+Exception. Their complete license texts are included in the packaged `aero`
+directory as `PYTHON-LICENSE.txt` and `PYINSTALLER-LICENSE.txt`.
+
+Sources: <https://www.python.org/>, <https://github.com/pyinstaller/pyinstaller>.
+
 ## Phosphor Icons
 
 EMP includes selected Regular SVG assets from `@phosphor-icons/core` 2.1.1.

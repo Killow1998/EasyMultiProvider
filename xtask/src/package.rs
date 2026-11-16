@@ -132,7 +132,7 @@ fn build(root: &Path, skip_service_smoke: bool) -> Result<Vec<PathBuf>> {
         let script = windows::write_resource_script(
             &build_root.join("windows-resources"),
             &icons.join("easy-multi-provider.ico"),
-            VERSION,
+            VERSION.strip_suffix("-exp").unwrap_or(VERSION),
         )?;
         Some(windows::compile_resource(&script)?)
     } else {
@@ -140,7 +140,7 @@ fn build(root: &Path, skip_service_smoke: bool) -> Result<Vec<PathBuf>> {
     };
     let executable = build_binary(root, target, resource.as_deref())?;
     if target.os == Os::Windows {
-        windows::validate_executable(&executable, VERSION)?;
+        windows::validate_executable(&executable, VERSION.strip_suffix("-exp").unwrap_or(VERSION))?;
     }
     probe_version(&executable)?;
     if !skip_service_smoke {
@@ -163,7 +163,7 @@ fn build(root: &Path, skip_service_smoke: bool) -> Result<Vec<PathBuf>> {
         }
         outputs.push(archive);
     }
-    if target.os == Os::Linux {
+    if target.os == Os::Linux && !VERSION.starts_with("999.") {
         let installer = artifacts.join(format!("{base}-install.sh"));
         copy(&root.join("packaging/install-linux.sh"), &installer)?;
         make_executable(&installer)?;
@@ -563,6 +563,7 @@ fn stage_release_files(
     for name in RELEASE_DOCUMENTS {
         copy(&root.join(name), &destination.join(name))?;
     }
+    stage_aero_runtime(destination)?;
     if target.os == Os::Linux {
         let installer = destination.join("install-user.sh");
         let script =
@@ -577,6 +578,50 @@ fn stage_release_files(
             &root.join("assets/branding/easy-multi-provider-icon.svg"),
             &destination.join("easy-multi-provider.svg"),
         )?;
+    }
+    Ok(())
+}
+
+fn stage_aero_runtime(destination: &Path) -> Result {
+    if !VERSION.starts_with("999.") {
+        return Ok(());
+    }
+    let source = std::env::var_os("EMP_AERO_RUNTIME")
+        .map(PathBuf::from)
+        .ok_or("Experimental packages require EMP_AERO_RUNTIME")?;
+    copy_aero_directory(&source, &destination.join("aero"))?;
+    for (source, target) in [
+        ("README.md", "AERO.md"),
+        ("README.zh-CN.md", "AERO.zh-CN.md"),
+    ] {
+        copy(
+            &project_root().join("experiments/aero").join(source),
+            &destination.join(target),
+        )?;
+    }
+    Ok(())
+}
+
+fn copy_aero_directory(source: &Path, destination: &Path) -> Result {
+    fs::create_dir_all(destination).map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let target = destination.join(entry.file_name());
+        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        if kind.is_dir() {
+            copy_aero_directory(&entry.path(), &target)?;
+        } else {
+            #[cfg(unix)]
+            if kind.is_symlink() {
+                std::os::unix::fs::symlink(
+                    fs::read_link(entry.path()).map_err(|error| error.to_string())?,
+                    target,
+                )
+                .map_err(|error| error.to_string())?;
+                continue;
+            }
+            copy(&entry.path(), &target)?;
+        }
     }
     Ok(())
 }
@@ -617,7 +662,7 @@ fn write_tar(build_root: &Path, output: &Path, executable: &Path, target: Target
 }
 
 fn validate_linux_archive(archive_path: &Path, executable: &Path) -> Result {
-    let expected: BTreeSet<&str> = [
+    let mut expected: BTreeSet<&str> = [
         "EMP",
         "EMP/EMP",
         "EMP/install-user.sh",
@@ -628,6 +673,9 @@ fn validate_linux_archive(archive_path: &Path, executable: &Path) -> Result {
         "EMP/THIRD_PARTY_NOTICES.md",
     ]
     .into();
+    if VERSION.starts_with("999.") {
+        expected.extend(["EMP/AERO.md", "EMP/AERO.zh-CN.md"]);
+    }
     let binary = fs::read(executable).map_err(|error| error.to_string())?;
     let file = File::open(archive_path).map_err(|error| error.to_string())?;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
@@ -647,6 +695,9 @@ fn validate_linux_archive(archive_path: &Path, executable: &Path) -> Result {
             return Err("Linux archive contains an unsafe path".to_owned());
         }
         let kind = entry.header().entry_type();
+        if VERSION.starts_with("999.") && (name == "EMP/aero" || name.starts_with("EMP/aero/")) {
+            continue;
+        }
         if (name == "EMP" && !kind.is_dir()) || (name != "EMP" && !kind.is_file()) {
             return Err("Linux archive may contain only regular files and its root".to_owned());
         }
@@ -716,6 +767,7 @@ fn write_macos_app(destination: &Path, executable: &Path, icon: &Path) -> Result
     }
     copy(executable, &resources.join(PRODUCT_NAME))?;
     make_executable(&resources.join(PRODUCT_NAME))?;
+    stage_aero_runtime(&resources)?;
     copy(icon, &resources.join("easy-multi-provider.icns"))?;
     let scripts = [
         (

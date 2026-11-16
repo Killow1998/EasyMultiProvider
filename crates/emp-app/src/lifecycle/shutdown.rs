@@ -83,6 +83,7 @@ impl ServerHandle {
         // terminate us after its console-close deadline even if work is busy.
         let restoration = prepare_exit(&self.state, preserve_integration);
         self.state.catalog_refresh.stop();
+        self.state.backend.aero.stop();
         // Restore first, then allow admitted handlers to flush their final
         // receipts before process exit. OS exit callbacks only run prepare_exit.
         let admitted_work_drained = if let Some(gate) = self

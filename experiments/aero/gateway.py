@@ -8,6 +8,7 @@ import secrets
 import select
 import socket
 import sqlite3
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -105,7 +106,7 @@ class EmpBackend:
                     "Content-Type": "application/json",
                     "User-Agent": "aero/0.1",
                     "X-EMP-Client": "aero",
-                    "session_id": self.session + ":" + digest(body["model"])[:12],
+                    "session-id": self.session + ":" + digest(body["model"])[:12],
                 },
             )
             response = connection.getresponse()
@@ -395,7 +396,9 @@ def sse_frames(response):
     yield event("response.completed", response=response)
 
 
-def handler_for(config, store, logger, backend_factory=None, token=None):
+def handler_for(
+    config, store, logger, backend_factory=None, token=None, config_path=None
+):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -477,7 +480,11 @@ def handler_for(config, store, logger, backend_factory=None, token=None):
                 if not 0 < size <= 64 * 1024 * 1024:
                     raise AeroError("request body must be 1..67108864 bytes")
                 body = json.loads(self.rfile.read(size))
-                session = self.headers.get("session_id") or body.get("prompt_cache_key")
+                session = (
+                    self.headers.get("session-id")
+                    or self.headers.get("session_id")
+                    or body.get("prompt_cache_key")
+                )
                 if not isinstance(session, str) or not session:
                     raise AeroError("session_id header or prompt_cache_key is required")
                 key = digest([session, body.get("model")])
@@ -487,12 +494,21 @@ def handler_for(config, store, logger, backend_factory=None, token=None):
                         json.dumps({"session": key[:12], **event}, ensure_ascii=False)
                     )
 
+                request_config = (
+                    json.loads(config_path.read_bytes()) if config_path else config
+                )
                 backend = (
                     backend_factory(session)
                     if backend_factory
-                    else EmpBackend(config["upstream"], token, session)
+                    else EmpBackend(
+                        request_config["upstream"],
+                        self.headers.get("X-Aero-Caller-Key", token)
+                        if config_path
+                        else token,
+                        session,
+                    )
                 )
-                engine = Engine(config, backend, lambda state: None)
+                engine = Engine(request_config, backend, lambda state: None)
                 session_lock = store.session_lock(key)
                 while not session_lock.acquire(timeout=0.05):
                     if cancellation() or self.client_gone():
@@ -609,19 +625,25 @@ def handler_for(config, store, logger, backend_factory=None, token=None):
     return Handler
 
 
-def create_server(config, directory, port=0, backend_factory=None, token=None):
+def create_server(
+    config, directory, port=0, backend_factory=None, token=None, config_path=None
+):
     store = Store(directory)
     logger = logging.getLogger("aero." + str(directory))
     logger.setLevel(logging.INFO)
     logger.propagate = False
     if not logger.handlers:
         handler = logging.handlers.RotatingFileHandler(
-            directory / "events.jsonl", maxBytes=10_000_000, backupCount=9
+            directory / "events.jsonl",
+            maxBytes=10_000_000,
+            backupCount=9,
+            encoding="utf-8",
         )
         handler.setFormatter(logging.Formatter("%(message)s"))
         logger.addHandler(handler)
     server = GatewayServer(
-        ("127.0.0.1", port), handler_for(config, store, logger, backend_factory, token)
+        ("127.0.0.1", port),
+        handler_for(config, store, logger, backend_factory, token, config_path),
     )
     return server, store
 
@@ -631,6 +653,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=Path, default=ROOT / "profiles.json")
     parser.add_argument("--runtime", type=Path, default=DEFAULT_RUNTIME)
     parser.add_argument("--port", type=int, default=4219)
+    parser.add_argument("--managed", action="store_true")
     args = parser.parse_args()
     try:
         settings = load_config(args.config)
@@ -638,15 +661,25 @@ if __name__ == "__main__":
     except (OSError, ValueError) as error:
         parser.error(str(error))
     gateway, database = create_server(
-        settings, args.runtime.expanduser().resolve(), args.port, token=bearer
+        settings,
+        args.runtime.expanduser().resolve(),
+        args.port,
+        token=bearer,
+        config_path=args.config.resolve() if args.managed else None,
     )
+    if args.managed:
+
+        def parent_closed():
+            sys.stdin.buffer.read()
+            gateway.shutdown()
+
+        threading.Thread(target=parent_closed, daemon=True).start()
     print(
         json.dumps(
             {
                 "url": f"http://127.0.0.1:{gateway.server_port}/v1",
                 "models": list(settings["models"]),
             },
-            ensure_ascii=False,
         ),
         flush=True,
     )

@@ -115,6 +115,9 @@ impl UpdateState {
     }
 
     pub(crate) fn start(&self, operation: &str) -> Result<Snapshot, &'static str> {
+        if super::aero::enabled() && test_endpoints().is_none() {
+            return Err("experimental_updates_disabled");
+        }
         self.manager.start(operation).map_err(|error| error.0)
     }
 }

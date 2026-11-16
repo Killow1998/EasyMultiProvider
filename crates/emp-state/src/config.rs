@@ -72,6 +72,7 @@ impl From<FilesystemError> for ConfigError {
 
 pub type ConfigResult<T> = Result<T, ConfigError>;
 
+mod aero;
 mod aggregates;
 mod image_routing;
 mod presentation;
@@ -636,6 +637,9 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
             "decision_provider",
             false,
         )?);
+    }
+    if let Some(profiles) = raw.get("aero_profiles") {
+        normalized["aero_profiles"] = aero::normalize(profiles)?;
     }
     let language = match raw.get("language") {
         None => "zh-CN",

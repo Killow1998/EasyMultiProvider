@@ -74,6 +74,7 @@ impl ServerState {
 }
 
 pub(crate) struct BackendState {
+    pub(crate) aero: crate::services::aero::AeroRuntime,
     pub(crate) gateway_key: String,
     pub(crate) gateway_clients: crate::services::gateway_clients::GatewayClients,
     pub(crate) claude_turns: crate::services::claude_cli::tui::TurnPool,
@@ -178,6 +179,7 @@ impl BackendState {
         let management_events =
             Arc::new(crate::services::management_events::ManagementEvents::default());
         Ok(Self {
+            aero: Default::default(),
             gateway_key: emp_state::gateway_key::load_or_create(&state_root.join("gateway-key"))?,
             gateway_clients: crate::services::gateway_clients::GatewayClients::open(
                 state_root.join("gateway-clients.json"),

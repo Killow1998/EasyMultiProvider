@@ -27,6 +27,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod updates;
 pub(crate) mod usage;
 
+pub(crate) mod aero;
 mod claude_response;
 mod claude_stream;
 mod failure_response;

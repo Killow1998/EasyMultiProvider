@@ -125,6 +125,12 @@ impl RequestObservation {
         self.fields["operation"] = json!(kind);
     }
 
+    pub(crate) fn diagnostic_only(&mut self, operation: &str) {
+        self.fields["operation"] = json!(operation);
+        self.ledger = None;
+        self.reports_changed = None;
+    }
+
     pub(crate) fn phase(&mut self, phase: Phase) {
         self.close_phase();
         if matches!(phase, Phase::Execute) {

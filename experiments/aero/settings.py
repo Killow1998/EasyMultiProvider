@@ -11,7 +11,7 @@ DEFAULT_RUNTIME = (
 
 def load_config(path):
     path = path.expanduser().resolve()
-    config = json.loads(path.read_text())
+    config = json.loads(path.read_bytes())
     if not isinstance(config, dict):
         raise ValueError("configuration must be an object")
     endpoint = config.get("upstream", "")
@@ -53,7 +53,7 @@ def load_config(path):
 def gateway_key(config):
     token = os.environ.get("EMP_GATEWAY_KEY")
     if token is None and "key_file" in config:
-        token = config["key_file"].read_text()
+        token = config["key_file"].read_text(encoding="utf-8")
     if not token or not token.strip():
         raise ValueError("Set EMP_GATEWAY_KEY or key_file to an EMP Gateway Key")
     token = token.strip()

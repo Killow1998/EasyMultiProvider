@@ -122,10 +122,12 @@ impl CatalogSources {
             .as_object_mut()
             .expect("public config")
             .extend(views.as_object().expect("model views").clone());
+        crate::services::aero::augment_public(config, &mut public);
         Ok(public)
     }
 
     pub(crate) fn validate_update(&self, updated: &Value, previous: &Value) -> Result<(), String> {
+        crate::services::aero::validate_update(previous, updated, || self.merged(updated))?;
         validate_subscription_contexts(updated, Some(previous), &self.native, &self.accounts)
             .map_err(|error| error.to_string())?;
         let mut base = updated.clone();

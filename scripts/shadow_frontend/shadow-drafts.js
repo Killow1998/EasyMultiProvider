@@ -48,7 +48,7 @@ function shadowReply(payload, status = 200) {
 }
 async function shadowConfiguration(live, options, draft) {
   const result=shadowMerge(live, draft);
-  if (!window.EMP_REAL_SHADOW || !(live.model_groups?.length || result.model_groups?.length)) return result;
+  if (!window.EMP_REAL_SHADOW || !(live.model_groups?.length || result.model_groups?.length || live.aero_profiles?.length || result.aero_profiles?.length)) return result;
   const headers=new Headers(options.headers);headers.set('Content-Type','application/json');
   const response=await shadowNativeFetch('/api/shadow/catalog',{method:'POST',headers,body:JSON.stringify(shadowScrub(result))});
   const catalog=await response.json();

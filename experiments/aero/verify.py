@@ -324,10 +324,7 @@ def test_no_task_cutoff():
     }
 
 
-def test_native_codex(directory):
-    config = json.loads((ROOT / "profiles.json").read_text())
-    steps = []
-
+def native_backend(steps):
     def backend(body, cancelled):
         index = len(steps)
         assert all("spawn_agent" not in name for name in tool_names(body["tools"]))
@@ -420,6 +417,13 @@ def test_native_codex(directory):
             return reply([text("NATIVE_AERO_REVIEWED_OK")])
         raise AssertionError("unexpected native Codex request")
 
+    return backend
+
+
+def test_native_codex(directory):
+    config = json.loads((ROOT / "profiles.json").read_text())
+    steps = []
+    backend = native_backend(steps)
     server, store = create_server(
         config,
         directory / "gateway",

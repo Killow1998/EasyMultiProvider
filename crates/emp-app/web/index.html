@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/assets/app-icon.css">
 <link rel="stylesheet" href="/assets/style.css">
 <link rel="stylesheet" href="/assets/service-list.css">
+<link rel="stylesheet" href="/assets/aero.css">
 <link rel="stylesheet" href="/assets/tutorials.css">
 <link rel="stylesheet" href="/assets/notifications.css">
 
@@ -59,6 +60,7 @@
   <h2 data-i18n="services_title"></h2>
   <div class="toolbar">
     <button id="refresh_all" class="secondary" data-icon="refresh" onclick="refreshAllAccounts()" data-i18n="refresh_quotas"></button>
+    <button id="aero_open" type="button" class="secondary" data-icon="aero" onclick="aero.open()" data-i18n="aero.title" hidden></button>
     <button id="catalog_aggregate_open" type="button" class="secondary" data-icon="aggregate" onclick="openAggregates()" data-i18n="aggregate.title"></button>
     <button data-icon="plus" onclick="openServiceChooser()" data-i18n="add_provider"></button>
     <button id="shadow_migration_open" type="button" class="secondary" data-icon="upload" onclick="migration.open()" data-i18n="data_migration"></button>
@@ -112,6 +114,7 @@
 
 <script src="/assets/i18n.js"></script>
 <script src="/assets/copy-core.js"></script><script src="/assets/copy-services.js"></script>
+<script src="/assets/copy-aero.js"></script><script src="/assets/aero-settings.js"></script>
 <script src="/assets/copy-tutorials.js"></script><script src="/assets/tutorials.js"></script>
 <script src="/assets/copy-notifications.js"></script><script src="/assets/notifications.js"></script>
 <script src="/assets/copy-models.js"></script><script src="/assets/copy-reports.js"></script><script src="/assets/copy-transfers.js"></script>
@@ -167,7 +170,7 @@ const managementEvents = createManagementEvents({management,isRunning:()=>!manag
   onStart:()=>{updateActivityDots();rescheduleActivityExpiry();void accountDetails.refresh();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
 const contextHelp = createContextHelp({getState:() => state, tr});
-const catalogDisplay=createCatalogDisplay({getState:()=>state,$,tr,t,esc,api,notice,cloneState,persistState,syncSavedCatalog,openModal,closeModal,activityIndicatorHtml,updateActivityDots});
+const catalogDisplay=createCatalogDisplay({getState:()=>state,$,tr,t,esc,api,notice,cloneState,persistState,syncSavedCatalog,openModal,closeModal,activityIndicatorHtml,updateActivityDots,openAeroProfile:id=>aero.editProfile(id)});
 const {render:renderCatalogDisplay,openEditor:openCatalogDisplayEditor,toggleContext:toggleCatalogContext,toggleSearch:toggleCatalogSearch,searchKeydown:catalogSearchKeydown,presentationName,modelName:modelDisplayName,serviceName:serviceDisplayName}=catalogDisplay;
 const routingSettings = createRoutingSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
 const ultraSettings = createUltraSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
@@ -175,6 +178,7 @@ const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
 const tutorials = createTutorials({openModal, $, tr, esc});
 const settings = createSettings({api, notice, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, help:shadowHelp, contextHelp, openAppIcon:back=>appIcon.open(back), addService:navigation=>openServiceChooser(navigation), presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
 const {open:openSettings, toggle:toggleSetting, openAggregates} = settings;
+const aero = createAeroSettings({getState:()=>state, cloneState, persistState, openModal, $, esc, tr, help:shadowHelp});
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, modelDisplayName, serviceName:serviceDisplayName, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, localTimeText, notice});
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
@@ -319,6 +323,8 @@ function movePresentation(oldRoute, newRoute, target = state) {
 }
 
 function fill() {
+  $('aero_open').hidden = !state.aero_enabled;
+  $('check_update').hidden = Boolean(state.experimental);
   appIcon.apply();
   providerBalances.sync();
   cpaQuotas.sync();
@@ -334,7 +340,7 @@ async function load() {
     try {
       fill();
       managementEvents.start();
-      void checkUpdateHint();
+      if (!state.experimental) void checkUpdateHint();
       if (quotaStateTimer === null) quotaStateTimer = setInterval(() => { refreshResetCountdowns(); if (!managementEvents.connected()) { requestQuotaSync(); void integrationUpdated(); } }, 60 * 1000);
     } catch (error) { renderError = error; }
     await integration;
@@ -1145,7 +1151,7 @@ document.addEventListener('click', handleDynamicUiClick);
 document.addEventListener('change', handleDynamicUiChange);
 document.addEventListener('keydown', handleModalKeydown);
 
-document.addEventListener('visibilitychange', () => { if (!management.isStopped() && document.visibilityState === 'visible') { managementEvents.start(); requestQuotaSync(); void checkUpdateHint(); } });
+document.addEventListener('visibilitychange', () => { if (!management.isStopped() && document.visibilityState === 'visible') { managementEvents.start(); requestQuotaSync(); if (!state?.experimental) void checkUpdateHint(); } });
 if (window.addEventListener) {
   window.addEventListener('focus', () => { if (!management.isStopped() && management.isSignedIn()) void integrationUpdated(); });
   window.addEventListener('storage', event => {

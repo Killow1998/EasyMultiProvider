@@ -38,7 +38,7 @@ def project_config(public, source_read, candidate_read=None):
         status, candidate = candidate_read('/api/config')
         if status != 200:
             return 503, {'error': {'message': 'Candidate configuration is unavailable'}}
-        for key in ['emp_version', 'codex_context_settings']:
+        for key in ['emp_version', 'codex_context_settings', 'aero_enabled', 'experimental']:
             if key in candidate:
                 public[key] = candidate[key]
         public['provider_balances'] = {

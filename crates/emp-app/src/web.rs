@@ -94,6 +94,10 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/settings.js" => include_bytes!("../web/settings.js"),
         "/assets/gateway-settings.js" => include_bytes!("../web/gateway-settings.js"),
         "/assets/aggregate-settings.js" => include_bytes!("../web/aggregate-settings.js"),
+        "/assets/aero-settings.js" => include_bytes!("../web/aero-settings.js"),
+        "/assets/copy-aero.js" => include_bytes!("../web/copy-aero.js"),
+        "/assets/aero.css" => include_bytes!("../web/aero.css"),
+        "/assets/aero.svg" => include_bytes!("../web/aero.svg"),
         "/assets/decision-settings.js" => include_bytes!("../web/decision-settings.js"),
         "/assets/collaboration-comparison.js" => {
             include_bytes!("../web/collaboration-comparison.js")

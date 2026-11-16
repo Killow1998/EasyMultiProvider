@@ -1,5 +1,6 @@
 pub(crate) mod accounts;
 pub(crate) mod activity;
+pub(crate) mod aero;
 pub(crate) mod aggregate_routing;
 pub(crate) mod app_icon;
 pub(crate) mod auto_review;

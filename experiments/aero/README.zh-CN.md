@@ -1,58 +1,39 @@
 # aero 实验版
 
-aero 是一个可选的 Codex CLI 启动器，让两个模型在同一个任务中分工规划、执行和复核。
-它独立运行，通过 EMP 现有网关调用模型。
+[English](README.md)
+
+EMP **999.14.2-exp** 在刷新额度与聚合路由之间增加带图标的 **上令下效**。选择带来源前缀的统筹模型与执行模型，保存后直接在 Codex 选择 `aero/配对名称`。
+
+统筹模型负责规划、只读检查和复核；执行模型使用 Codex 工具落实计划。EMP 负责连接、认证与计量，角色交接由独立 aero 进程管理，首次调用时启动，随 EMP 退出。
 
 ```text
-Codex CLI → aero → EMP → 规划模型／执行模型
+Codex → EMP 网关 → aero → EMP 网关 → 对应角色的模型
+          配置配对          路由、认证与计量
 ```
 
-Codex 负责文件、命令工具与审批；aero 负责交接与复核；EMP 负责账号、鉴权、转发和
-用量统计。实验分支交付这个独立工具，搭配现有正式版 EMP 使用。
+## 从界面开始
 
-## 开始测试
+1. 在 [预发布下载](https://github.com/Killow1998/EasyMultiProvider/releases) 中下载完整系统压缩包或 macOS DMG。实验标签以 `aero-999.14.2-exp-` 开头，下载文件持续保留；CI 产物只用于构建中转，发布后清理。本实验版关闭更新检查与自动安装。
+2. 完整解压，保留 EMP 旁的 `aero` 文件夹；macOS DMG 已将它放进应用包。无需安装 Python。先退出当前 EMP，再运行实验版。
+3. 点击 **上令下效 → 添加配对**。左卡片选择统筹模型，右卡片选择执行模型；选项区分 Native、其他订阅、外部服务和聚合路由，每个角色可分别设置推理强度。可以保存多组配对进行比较。
+4. 新建 Codex 会话，选择 `aero/配对名称`。已运行的客户端若尚未重新加载模型目录，重新打开模型选择器，或重启该客户端。
 
-需要 Python 3.10+、Codex CLI、ripgrep，以及运行中的 EMP。目前已验收 Linux 和
-Codex 0.169.0 的协议及原生工具往返；其他平台尚未验收。本轮入口是文本任务与直接
-文件／命令工具。
+配对保存在 EMP 配置的 `aero_profiles` 中。独立运行程序的生成配置和 SQLite 对话状态保存在该配置旁的私有 `aero` 目录。网关设备 Key 的归属继续传到实际模型调用，外层转发不重复计量。角色、交接、错误与用量日志轮转总上限为 100 MB。
 
-可以检出 `dev/aero-experiment` 后进入本目录，或在成功的
-[实验 CI](https://github.com/Killow1998/EasyMultiProvider/actions/workflows/aero-experiment.yml) 中下载 `aero-experiment`
-产物，解开下载文件后，再解开其中的 `aero-experiment.zip`。CI 产物保留一天，源码分支
-持续保留。
+Linux 的 Codex 0.169.0 原生工具往返已用合成上游验收。专用 CI 对 Windows、Linux 与两种 macOS 架构的解压安装包进行测试，并从后台 PATH 中移除系统 Python。其他平台桌面客户端仍需使用者验收。本实验入口用于文本任务与直接文件／命令工具。
 
-1. 在 EMP 的 **设置 → 通用 → 网关连接** 中为 aero 创建独立的设备 Key，便于在统计
-   中识别调用。
-2. 将 `profiles.json` 复制为 `profiles.local.json`。`upstream` 填 EMP API 地址；
-   `planner.model` 与 `executor.model` 填自己 EMP 中可用的模型名称。
-   默认 `aero/astra-sol` 由 Astra 规划和复核、Sol 执行。`aero/sol-dsk` 是另一个示例，
-   其中 `deepseek/deepseek-v4-pro` 需要相应服务与模型，也可改成自己的模型。
-3. 通过环境变量 `EMP_GATEWAY_KEY` 提供网关 Key，或把 Key 存入私有的纯文本文件，
-   在本地配置增加 `"key_file": "caller.key"`。相对路径以该配置文件所在目录为准，
-   环境变量优先。aero 不读取或替换 Codex 的 `auth.json`。
-4. 在本目录启动一个新会话：
+## 独立开发入口
 
-```bash
+原有 CLI 入口仍可使用，需要 Python 3.10+、Codex CLI 和 ripgrep：
+
+```sh
+cp profiles.json profiles.local.json
 python3 -B codex.py --config profiles.local.json --model aero/astra-sol --cwd /你的项目路径
 ```
 
-启动器临时监听本机随机端口，只为这个 Codex 进程设置 Provider 和模型目录；Codex
-退出后关闭 aero。现有 Codex 全局配置和 EMP 模型目录保持原样。本轮使用这个 CLI
-入口，aero 模型不进入 ChatGPT App 的全局选择器。
+在私有配置中填写 EMP 的 `upstream` 地址和可用的 `planner.model`、`executor.model`；通过 `EMP_GATEWAY_KEY` 提供网关 Key，或用 `key_file` 指向私有纯文本文件，相对路径以配置目录为准。启动器仅为该 Codex 进程设置 Provider 和目录，不读取或替换 `auth.json`。状态默认位于 `$XDG_STATE_HOME/aero`，否则为 `~/.local/state/aero`，可通过 `--runtime` 修改。目录模板默认读取 `$CODEX_HOME/models_cache.json` 或 `~/.codex/models_cache.json`。
 
-模型元数据模板默认读取 `$CODEX_HOME/models_cache.json`，未设置时读取
-`~/.codex/models_cache.json`。正常启动一次 Codex 可生成缓存，也可以通过
-`--catalog-template /路径/models.json` 指定 Codex 模型目录。
-
-运行状态默认保存在 `$XDG_STATE_HOME/aero`，未设置时为
-`~/.local/state/aero`；可用 `--runtime /私有目录` 修改。`sessions.sqlite3` 保存
-对话与交接历史；日志记录角色、模型、用量、耗时和错误，轮转总上限为 100 MB。请使用
-私有目录。底层模型调用携带稳定的会话标识和 `X-EMP-Client: aero`，供 EMP 归属统计。
-
-也可独立执行 `python3 -B gateway.py --config profiles.local.json`，在
-`http://127.0.0.1:4219/v1/responses` 为 API 客户端提供实验服务；使用同一个网关 Key
-鉴权，并提供稳定的 `session_id` 请求头。`--port` 可修改端口。它是另一种测试入口，
-无需把 aero 再添加成 EMP 的上游服务。
+API 单独测试可运行 `python3 -B gateway.py --config profiles.local.json`，默认监听 `http://127.0.0.1:4219/v1/responses`；使用同一个网关 Key 和稳定的 `session-id` 请求头，`--port` 可修改端口。界面使用时不需要这条命令，也不需要再增加一个服务。
 
 ## 一个任务怎样推进
 

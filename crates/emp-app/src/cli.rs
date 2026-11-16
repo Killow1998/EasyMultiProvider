@@ -286,11 +286,11 @@ pub(crate) fn run() -> Result<ExitCode, String> {
             for field in ["catalog_models", "catalog_families"] {
                 config[field] = input["config"][field].clone();
             }
-            serde_json::to_writer(
-                std::io::stdout().lock(),
-                &emp_codex::management_views::aggregate_views(&config, &input["catalog"]),
-            )
-            .map_err(|error| error.to_string())?;
+            let mut views =
+                emp_codex::management_views::aggregate_views(&config, &input["catalog"]);
+            crate::services::aero::augment_public(&config, &mut views);
+            serde_json::to_writer(std::io::stdout().lock(), &views)
+                .map_err(|error| error.to_string())?;
         }
         Cli::MigrateHistory { thread_id, json } => return history_migration::run(&thread_id, json),
         Cli::ApplyUpdate(path) => {

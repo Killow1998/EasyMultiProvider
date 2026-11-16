@@ -3,12 +3,14 @@ name: aero experiment
 on:
   push:
     branches: [dev/aero-experiment]
-    paths:
-      - "experiments/aero/**"
-      - ".github/workflows/aero-experiment.yml"
   pull_request:
     paths:
       - "experiments/aero/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "xtask/**"
+      - "packaging/**"
       - ".github/workflows/aero-experiment.yml"
   workflow_dispatch:
 
@@ -40,10 +42,10 @@ jobs:
       - run: python -B experiments/aero/verify.py
       - run: python -B experiments/aero/verify_lifecycle.py
 
-  codex-and-bundle:
+  integration:
     needs: protocol
     runs-on: ubuntu-22.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -56,22 +58,127 @@ jobs:
           node-version: "22"
       - run: npm install --global @openai/codex@0.169.0
       - run: python -B experiments/aero/verify.py --native-codex
-      - name: Package the standalone experiment
-        run: |
-          python -B - <<'PY'
-          from pathlib import Path
-          from zipfile import ZIP_DEFLATED, ZipFile
+      - uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          shared-key: aero-integration-1.93.1
+          cache-bin: false
+      - run: cargo +1.93.1 fmt --all -- --check
+      - run: cargo +1.93.1 clippy --locked --workspace -- -D warnings
+      - run: cargo +1.93.1 test --locked -p emp-state --lib
+      - run: cargo +1.93.1 test --locked -p emp-app --lib aggregate_contract -- --test-threads=1
+      - run: node --test crates/emp-app/tests/web_features_contract.cjs
+      - run: cargo +1.93.1 build --locked -p emp-app --bin EMP
+      - run: python -B experiments/aero/verify_emp.py --binary target/debug/EMP --output experiments/aero/evidence/emp --native-codex
 
-          source = Path("experiments/aero")
-          with ZipFile("aero-experiment.zip", "w", ZIP_DEFLATED) as bundle:
-              for path in sorted(source.iterdir()):
-                  if path.suffix in (".py", ".json", ".md", ".toml"):
-                      bundle.write(path, "aero/" + path.name)
-              bundle.write(source / "fixtures/catalog.json", "aero/fixtures/catalog.json")
-              bundle.write("LICENSE", "aero/LICENSE")
+  package:
+    needs: integration
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            name: linux-x86_64
+            archive: EMP-linux-x86_64.tar.gz
+          - runner: windows-2025
+            name: windows-x86_64
+            archive: EMP.zip
+          - runner: macos-15-intel
+            name: macos-x86_64
+            archive: EMP-macos-x86_64.tar.gz
+          - runner: macos-15
+            name: macos-arm64
+            archive: EMP-macos-arm64.tar.gz
+    env:
+      CARGO_BUILD_JOBS: 6
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_RELEASE_DEBUG: 0
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.emp-package-target
+      EMP_AERO_RUNTIME: ${{ github.workspace }}/build/aero-runtime/aero-server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          shared-key: aero-package-${{ matrix.name }}-1.93.1
+          workspaces: ". -> .emp-package-target"
+          cache-bin: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+      - run: python -m pip install pyinstaller==6.22.3
+      - name: Bundle the standalone aero runtime
+        run: python -m PyInstaller --noconfirm --onedir --exclude-module readline --exclude-module curses --exclude-module tkinter --name aero-server --distpath build/aero-runtime --workpath build/aero-freezer --specpath build/aero-freezer experiments/aero/gateway.py
+      - name: Include Python and PyInstaller license texts
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys, sysconfig
+          from pathlib import Path
+          from importlib.metadata import distribution
+          target = Path('build/aero-runtime/aero-server')
+          license_path = next(path for path in [Path(sysconfig.get_path('stdlib'))/'LICENSE.txt', Path(sys.base_prefix)/'LICENSE.txt'] if path.is_file())
+          (target/'PYTHON-LICENSE.txt').write_text(license_path.read_text(encoding='utf-8'), encoding='utf-8')
+          (target/'PYINSTALLER-LICENSE.txt').write_text(distribution('pyinstaller').read_text('licenses/COPYING.txt'), encoding='utf-8')
           PY
+      - name: Build and smoke-test the native EMP package
+        run: cargo +1.93.1 xtask package
+      - name: Verify extracted package without system Python
+        run: python -B experiments/aero/verify_emp.py --archive artifacts/${{ matrix.archive }} --output experiments/aero/evidence/package --without-system-python
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: aero-experiment
-          path: aero-experiment.zip
+          name: aero-${{ matrix.name }}
+          path: |
+            artifacts/*.zip
+            artifacts/*.zip.sha256
+            artifacts/*.tar.gz
+            artifacts/*.tar.gz.sha256
+            artifacts/*.dmg
+            artifacts/*.dmg.sha256
+          if-no-files-found: error
           retention-days: 1
+
+  publish-experiment:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev/aero-experiment'
+    needs: package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: aero-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify checksums and publish persistent experimental downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cd release-assets
+          sha256sum -c ./*.sha256
+          tag="aero-999.14.2-exp-${GITHUB_SHA:0:8}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" ./* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" ./* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false --title "EMP 999.14.2-exp · aero" --notes-file ../experiments/aero/RELEASE.md
+          fi
+      - name: Remove staging artifacts after publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[].id' > artifact-ids.txt
+          while read -r artifact; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact"
+          done < artifact-ids.txt

@@ -42,13 +42,15 @@ The prefixed names are examples; you choose the account, provider, and models. S
 
 ## Quick Start
 
-The `dev/aero-experiment` branch also contains an optional
-[aero Codex CLI launcher](experiments/aero/README.md) for planning/execution
-model pairs. It runs outside the EMP gateway and has its own test workflow.
+The `dev/aero-experiment` branch ships **999.14.2-exp** with
+[Lead & Execute](experiments/aero/README.md): configure source-qualified
+orchestrator/executor pairs in the service toolbar, then select them in Codex.
+Its independent aero runtime is bundled. Experimental downloads stay in
+prereleases, with automatic updates disabled.
 
 ### 1. Download EMP
 
-Download the latest reviewed build from [GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases/latest).
+For this experimental branch, download the complete **999.14.2-exp** prerelease package from [GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases), keeping its bundled `aero` directory. The [aero guide](experiments/aero/README.md) explains model pairing.
 
 | Platform | Package | Install and launch |
 | --- | --- | --- |

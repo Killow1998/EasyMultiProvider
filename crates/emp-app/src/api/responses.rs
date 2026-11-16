@@ -82,6 +82,14 @@ pub(crate) fn responses_request(
     );
     let incoming = request.incoming();
     let incoming = observation.headers(incoming);
+    if crate::services::aero::enabled()
+        && let Ok(config) = state.backend.configuration.snapshot()
+        && body["model"]
+            .as_str()
+            .is_some_and(|model| crate::services::aero::profile(&config, model).is_some())
+    {
+        return crate::api::aero::relay(stream, state, &config, &body, &incoming, observation);
+    }
     observation.phase(Phase::ResolveRoute);
     let PreparedRequest {
         config,

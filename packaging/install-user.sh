@@ -32,6 +32,9 @@ test -f "$source_dir/EMP"
 test -f "$source_dir/easy-multi-provider.svg"
 mkdir -p -- "$install_dir" "$config_dir" "$HOME/.local/bin" "$data_root/applications"
 cp -- "$source_dir/EMP" "$install_dir/EMP"
+if [ -d "$source_dir/aero" ]; then
+    cp -R -- "$source_dir/aero" "$install_dir/aero"
+fi
 chmod 755 "$install_dir/EMP"
 cp -- "$source_dir/easy-multi-provider.svg" "$install_dir/easy-multi-provider.svg"
 

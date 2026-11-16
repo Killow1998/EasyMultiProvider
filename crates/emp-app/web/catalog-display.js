@@ -11,7 +11,7 @@ function usableContext(model) {
 }
 function canonicalDisplayName(value) { return String(value || '').replace(/^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+/, '').replace(/\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$/, ''); }
 
-function createCatalogDisplay({getState, $, tr, t, esc, api, notice, cloneState, persistState, syncSavedCatalog, openModal, closeModal, activityIndicatorHtml, updateActivityDots}) {
+function createCatalogDisplay({getState, $, tr, t, esc, api, notice, cloneState, persistState, syncSavedCatalog, openModal, closeModal, activityIndicatorHtml, updateActivityDots, openAeroProfile}) {
   function familyPresentationFor(family) {
     const state = getState();
     const fallback = state.catalog_families.find(item => item.id === family)?.presentation;
@@ -128,6 +128,7 @@ function createCatalogDisplay({getState, $, tr, t, esc, api, notice, cloneState,
   function catalogSourceLabels(route) {
     const state = getState();
     const id = route.id;
+    if (route.source_type === 'aero') return [tr('aero.title')];
     const group=state.model_groups.find(item=>item.id===id);
     if(group)return group.sources.flatMap(id=>catalogSourceLabels({id}));
     const provider=state.providers.find(item=>id.startsWith(item.id+'/'));
@@ -162,6 +163,7 @@ function createCatalogDisplay({getState, $, tr, t, esc, api, notice, cloneState,
     updateActivityDots();
   }
   function openCatalogDisplayEditor(family) {
+    if ((getState().aero_profiles || []).some(profile => profile.id === family)) { openAeroProfile(family); return; }
     const group = getState().catalog_families.find(item => item.id === family); if (!group) return;
     const presentation = familyPresentationFor(family);
     const routes = [...new Set(group.routes.flatMap(catalogSourceLabels))].join(' · ');

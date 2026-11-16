@@ -153,7 +153,7 @@ fn concurrent_checks_start_only_one_release_job() {
     let manager = UpdateManager::with_endpoints(
         std::env::current_exe().unwrap(),
         Vec::new(),
-        env!("CARGO_PKG_VERSION"),
+        "0.1.0",
         UpdateEndpoints::for_source(&base, format!("{base}/latest")),
         || Err(crate::update::UpdateError("worker_failed")),
     )
@@ -193,7 +193,7 @@ fn startup_rollback_is_visible_in_the_initial_snapshot() {
     let manager = UpdateManager::with_startup_result(
         std::env::current_exe().unwrap(),
         Vec::new(),
-        env!("CARGO_PKG_VERSION"),
+        "0.1.0",
         UpdateEndpoints::default(),
         true,
         || Err(crate::update::UpdateError("worker_failed")),
@@ -403,7 +403,7 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
     let manager = UpdateManager::with_startup_hooks(
         std::env::current_exe().unwrap(),
         Vec::new(),
-        env!("CARGO_PKG_VERSION"),
+        "0.1.0",
         UpdateEndpoints::for_source(&base, format!("{base}/latest")),
         false,
         super::UpdateHooks::new(|| Ok(()), || {}, || Ok(())).with_observer(move |event, fields| {
@@ -480,7 +480,7 @@ fn release_check_retains_notes_without_starting_installation() {
     let manager = UpdateManager::with_endpoints(
         std::env::current_exe().unwrap(),
         Vec::new(),
-        env!("CARGO_PKG_VERSION"),
+        "0.1.0",
         UpdateEndpoints::for_source(&base, format!("{base}/latest")),
         || panic!("checking release notes must never install or exit"),
     )

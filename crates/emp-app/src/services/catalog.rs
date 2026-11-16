@@ -67,7 +67,9 @@ pub(crate) fn client_catalog(state: &ServerState, config: &Value) -> Value {
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn server_catalog(state: &ServerState, config: &Value) -> Value {
-    catalog_sources(state, config).merged(config)
+    let mut catalog = catalog_sources(state, config).merged(config);
+    super::aero::augment_catalog(config, &mut catalog);
+    catalog
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]

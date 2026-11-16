@@ -15,7 +15,7 @@ DEFAULT_TEMPLATE = (
 
 
 def write_catalog(config, template, destination):
-    source = json.loads(template.read_text())["models"]
+    source = json.loads(template.read_bytes())["models"]
     if not source:
         raise ValueError("The Codex model catalog is empty")
     base = next((x for x in source if x["slug"] == "gpt-6.1-sol"), source[0])
@@ -52,7 +52,8 @@ def write_catalog(config, template, destination):
         models.append(model)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
-        json.dumps({"models": models}, ensure_ascii=False, indent=2) + "\n"
+        json.dumps({"models": models}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
 
 

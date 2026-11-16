@@ -2,66 +2,38 @@
 
 [中文](README.zh-CN.md)
 
-aero is an optional Codex CLI launcher for two-model planning, execution and
-review. It uses EMP's existing gateway API. It runs as a separate local process;
-EMP owns provider routing, authentication and accounting, aero owns handoffs,
-and Codex owns file tools and command approval.
+EMP **999.14.2-exp** adds **Lead & Execute** beside Refresh quotas and Aggregate routing. Configure a source-qualified orchestrator/executor pairing, then select `aero/pairing name` in Codex.
+
+The orchestrator plans, reads and reviews; the executor implements through Codex tools. EMP owns routing, authentication and accounting. Role handoffs stay in the independent aero process, launched when needed and stopped with EMP.
 
 ```text
-Codex CLI → aero → EMP → planner / executor models
+Codex → EMP gateway → aero → EMP gateway → role model
+         configuration       routing, authentication and usage
 ```
 
-This branch ships the standalone experiment, not a replacement EMP executable.
-Use the current EMP release. Download `aero-experiment` from a successful
-[experiment workflow](https://github.com/Killow1998/EasyMultiProvider/actions/workflows/aero-experiment.yml), unzip the
-download and then `aero-experiment.zip`, or check out `dev/aero-experiment` and
-open this directory. The workflow bundle is retained for one day; the branch
-remains available as source.
+## Start from the WebUI
 
-## Start a test session
+1. Download a complete experimental native archive or macOS DMG from [prereleases](https://github.com/Killow1998/EasyMultiProvider/releases). Experimental tags start with `aero-999.14.2-exp-`. These downloads remain available; CI artifacts are only temporary staging and are removed after publication. This edition does not check for or install updates.
+2. Extract the complete archive, preserving the `aero` folder beside EMP. macOS DMGs include it inside the app. No system Python installation is required. Run the experimental EMP after exiting your current instance.
+3. Open **Lead & Execute → Add pairing**. The two cards select the orchestrator and executor. Model choices show their source, including aggregate routes, and each role has its own effort setting. You can save several pairings to compare them.
+4. Start a new Codex session and select `aero/pairing name`. If an already-running client has not reloaded the model catalog, reopen its model picker or restart that client.
 
-Requirements: Python 3.10+, Codex CLI, ripgrep and a running EMP. Protocol and
-native tool execution are tested on Linux with Codex 0.169.0. Other platforms
-are not yet accepted. The experiment uses text and direct command/file tools.
+Settings are saved in `aero_profiles` in the normal EMP configuration. The generated sidecar configuration and SQLite conversation state live in a private `aero` directory beside that configuration. Named gateway device Keys retain their caller attribution on the inner model requests. The outer relay does not add a second usage charge. Role usage, errors and handoffs are recorded in rotating logs, capped at 100 MB.
 
-1. In EMP, open **Settings → General → Gateway connection**. Create a named
-   device key for aero so its calls can be identified in usage records.
-2. Copy `profiles.json` to `profiles.local.json`. Set `upstream` to EMP's API
-   base URL and the role models to names available in your EMP catalog. The
-   default `aero/astra-sol` uses Astra for planning/review and Sol for execution.
-   `aero/sol-dsk` is a second example; its executor requires an imported DeepSeek
-   service named `deepseek` with `deepseek-v4-pro` enabled, or a different model
-   name entered in the profile.
-3. Supply the gateway key through `EMP_GATEWAY_KEY` or save it as plain text in
-   a private file and add `"key_file": "caller.key"` to the local profile.
-   Relative key-file paths are resolved beside that profile. Environment
-   credentials take precedence. No Codex `auth.json` is read or replaced.
-4. From this directory, start a new session:
+Linux native tool execution is tested with Codex 0.169.0 and synthetic upstreams. The package workflow verifies extracted Windows, Linux and both macOS architecture archives without system Python on the backend PATH. Desktop client behavior on other platforms still needs user acceptance. This experiment uses text and direct file/command tools.
 
-```bash
-python3 -B codex.py --config profiles.local.json --model aero/astra-sol --cwd /path/to/project
+## Standalone developer entry
+
+The original CLI entry remains available with Python 3.10+, Codex CLI and ripgrep:
+
+```sh
+cp profiles.json profiles.local.json
+python3 -B codex.py --config profiles.local.json --model aero/astra-sol --cwd /your/project
 ```
 
-The launcher uses a random loopback port and closes aero when Codex exits.
-Provider/model overrides apply only to that Codex process. The existing global
-Codex configuration and EMP model catalog stay intact. This launcher is the
-test entry; aero models are not added to the ChatGPT App's global picker.
+Set `upstream`, `planner.model` and `executor.model` in that private configuration to your EMP gateway and available model names. Supply the gateway Key through `EMP_GATEWAY_KEY`, or a private text file referenced by `key_file`. Relative paths resolve beside the configuration file. This launcher uses process-local Provider/catalog overrides and does not read or replace `auth.json`. State defaults to `$XDG_STATE_HOME/aero` or `~/.local/state/aero`; `--runtime` overrides it. The optional catalog template defaults to `$CODEX_HOME/models_cache.json` or `~/.codex/models_cache.json`.
 
-The model metadata template is read from `$CODEX_HOME/models_cache.json`, or
-`~/.codex/models_cache.json`. Start your normal Codex once to create its cache,
-or pass `--catalog-template /path/to/models.json` with a Codex model catalog.
-
-State is kept in `$XDG_STATE_HOME/aero`, defaulting to
-`~/.local/state/aero`. `--runtime /path/to/private-state` selects another
-directory. Session history and handoffs are stored in `sessions.sqlite3`; logs
-contain model/role, usage, timing and failures, with a 100 MB rotation limit.
-Use a private state directory. Stable per-conversation IDs and `X-EMP-Client:
-aero` attribute the underlying model calls in EMP.
-
-For an API client, `python3 -B gateway.py --config profiles.local.json` exposes
-`http://127.0.0.1:4219/v1/responses`; authenticate with the same gateway key and
-send a stable `session_id` header. `--port` changes this listener. This server
-is a separate test entry, not a second service to configure inside EMP.
+For API-only testing, `python3 -B gateway.py --config profiles.local.json` serves `http://127.0.0.1:4219/v1/responses`. Use the same gateway Key and a stable `session-id` header. `--port` changes the listener. Managed GUI usage does not need this command or a second service entry.
 
 ## What happens during a task
 
