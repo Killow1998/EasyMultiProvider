@@ -32,6 +32,9 @@ EMP 在本机运行，主要解决两件事：
 
 ## 快速开始
 
+`dev/aero-experiment` 分支提供可选的 [aero 实验启动器](experiments/aero/README.zh-CN.md)，
+用于在 Codex CLI 中组合规划与执行模型。它独立于 EMP 网关运行，由专用 CI 验证。
+
 1. **下载并安装。** 在 [GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases/latest)
    下载对应平台的文件。Windows 双击 `EMP.exe`；macOS 将 EMP 拖入“应用程序”；
    Linux 解压后运行 `./install-user.sh`，再从应用菜单打开 EMP。详见[安装](#安装)。

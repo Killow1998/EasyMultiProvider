@@ -1,0 +1,77 @@
+name: aero experiment
+
+on:
+  push:
+    branches: [dev/aero-experiment]
+    paths:
+      - "experiments/aero/**"
+      - ".github/workflows/aero-experiment.yml"
+  pull_request:
+    paths:
+      - "experiments/aero/**"
+      - ".github/workflows/aero-experiment.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aero-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  protocol:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install ruff==0.17.5
+      - run: python -m ruff check --no-cache experiments/aero
+      - run: python -m ruff format --check experiments/aero
+      - run: python -B experiments/aero/verify.py
+      - run: python -B experiments/aero/verify_lifecycle.py
+
+  codex-and-bundle:
+    needs: protocol
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "22"
+      - run: npm install --global @openai/codex@0.169.0
+      - run: python -B experiments/aero/verify.py --native-codex
+      - name: Package the standalone experiment
+        run: |
+          python -B - <<'PY'
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          source = Path("experiments/aero")
+          with ZipFile("aero-experiment.zip", "w", ZIP_DEFLATED) as bundle:
+              for path in sorted(source.iterdir()):
+                  if path.suffix in (".py", ".json", ".md", ".toml"):
+                      bundle.write(path, "aero/" + path.name)
+              bundle.write(source / "fixtures/catalog.json", "aero/fixtures/catalog.json")
+              bundle.write("LICENSE", "aero/LICENSE")
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: aero-experiment
+          path: aero-experiment.zip
+          retention-days: 1

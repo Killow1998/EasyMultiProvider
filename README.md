@@ -42,6 +42,10 @@ The prefixed names are examples; you choose the account, provider, and models. S
 
 ## Quick Start
 
+The `dev/aero-experiment` branch also contains an optional
+[aero Codex CLI launcher](experiments/aero/README.md) for planning/execution
+model pairs. It runs outside the EMP gateway and has its own test workflow.
+
 ### 1. Download EMP
 
 Download the latest reviewed build from [GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases/latest).
