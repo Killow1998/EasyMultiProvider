@@ -248,11 +248,11 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
         digest: "a".repeat(64),
     });
     manager.start("install").unwrap();
+    assert_eq!(server.join().unwrap(), 4);
     let deadline = Instant::now() + Duration::from_secs(12);
     while manager.snapshot().state != "error" && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(server.join().unwrap(), 4);
     let snapshot = manager.snapshot();
     assert_eq!(snapshot.error, "update_failed");
     let receipt = snapshot.failure.unwrap();
