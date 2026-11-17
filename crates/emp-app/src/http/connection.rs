@@ -265,14 +265,17 @@ pub(crate) fn handle_connection(
                 state,
                 now,
             )),
-            (RequestMethod::Post, "/v1/responses/compact") => Some(compact_request(
+            (RequestMethod::Post, "/v1/responses/compact") => match compact_request(
                 &mut stream,
                 request,
                 raw.body_prefix,
                 state,
                 now,
                 observation.model.as_mut().expect("model HTTP observation"),
-            )),
+            ) {
+                ResponsesRequestResult::Buffered(response) => Some(response),
+                ResponsesRequestResult::Streamed => None,
+            },
             (RequestMethod::Post, "/v1/responses") => {
                 match responses_request(
                     &mut stream,

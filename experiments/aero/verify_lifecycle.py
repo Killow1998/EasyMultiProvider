@@ -16,6 +16,19 @@ from gateway import ROOT, Cancellation, create_server
 TOKEN = "synthetic-lifecycle-token"
 
 
+def completed_response(data):
+    values = [
+        json.loads(line[5:].strip())
+        for line in data.splitlines()
+        if line.startswith("data:")
+    ]
+    terminal = [
+        value["response"] for value in values if value["type"] == "response.completed"
+    ]
+    assert len(terminal) == 1
+    return terminal[0]
+
+
 def synthetic_config(upstream_url=""):
     roles = {
         "planner": {"model": "planner-local"},
@@ -548,7 +561,8 @@ def authentication_and_protocol(server, upstream):
     assert "response.completed" in stream_data and "stream okay" in stream_data
     calls = upstream.received_count()
     status, replay_data = complete_request(server, stream_body, "stream-success")
-    assert status == 200 and replay_data == stream_data
+    assert status == 200
+    assert completed_response(stream_data) == completed_response(replay_data)
     assert upstream.received_count() == calls
 
     json_body = {
@@ -625,7 +639,7 @@ def successful_tool_retry(server, upstream, body):
     assert upstream.received_count() == calls + 1
     returned = upstream.received_count()
     status, replay = complete_request(server, wire_body, "cancelled")
-    assert status == 200 and replay == data
+    assert status == 200 and completed_response(replay) == completed_response(data)
     assert upstream.received_count() == returned
 
 

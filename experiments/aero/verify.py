@@ -137,15 +137,14 @@ def test_engine():
         for x in seen[-1]["input"]
     )
     expect_error(
-        lambda: engine.run({**body, "input": []}, final_state), "prefix changed"
+        lambda: engine.run({**body, "input": []}, final_state), "matching checkpoint"
     )
     expect_error(
         lambda: engine.run({**body, "previous_response_id": "x"}), "full visible input"
     )
-    expect_error(
-        lambda: normalize([{"type": "compaction", "encrypted_content": "x"}]),
-        "encrypted compaction",
-    )
+    checkpoint = [{"type": "compaction", "encrypted_content": "x"}]
+    assert normalize(checkpoint) == checkpoint
+    assert engine.needs_history({**body, "input": checkpoint}, None)
     assert normalize([{"type": "reasoning", "encrypted_content": "private"}]) == []
 
     config["review_interval"] = 1
@@ -366,9 +365,22 @@ def native_backend(steps):
             shell = next(
                 name
                 for name in tool_names(body["tools"])
-                if name.split(".")[-1] in ("exec_command", "shell_command")
+                if name.split(".")[-1] in ("exec_command", "shell_command", "exec")
             )
             command = "printf '%s\\n' NATIVE_AERO_VERIFIED > verified.txt\ntest \"$(cat verified.txt)\" = NATIVE_AERO_VERIFIED"
+            if shell.split(".")[-1] == "exec":
+                return reply(
+                    [
+                        {
+                            "type": "custom_tool_call",
+                            "name": shell,
+                            "call_id": "call_3",
+                            "input": "text(await tools.exec_command("
+                            + json.dumps({"cmd": command, "max_output_tokens": 1000})
+                            + "));",
+                        }
+                    ]
+                )
             arguments = (
                 {"cmd": command, "max_output_tokens": 1000}
                 if shell.split(".")[-1] == "exec_command"
@@ -385,7 +397,8 @@ def native_backend(steps):
             )
         if index == 3:
             assert any(
-                x.get("type") == "function_call_output" and x.get("call_id") == "call_3"
+                x.get("type") in ("function_call_output", "custom_tool_call_output")
+                and x.get("call_id") == "call_3"
                 for x in body["input"]
             )
             return reply(
@@ -420,7 +433,7 @@ def native_backend(steps):
     return backend
 
 
-def test_native_codex(directory):
+def test_native_codex(directory, code_mode=False):
     config = json.loads((ROOT / "profiles.json").read_text())
     steps = []
     backend = native_backend(steps)
@@ -436,7 +449,13 @@ def test_native_codex(directory):
     cwd.mkdir()
     (cwd / "SPEC.txt").write_text("NATIVE_AERO_SPEC\n")
     catalog = directory / "models.json"
-    write_catalog(config, ROOT / "fixtures" / "catalog.json", catalog)
+    template = ROOT / "fixtures" / "catalog.json"
+    if code_mode:
+        fixture = json.loads(template.read_bytes())
+        fixture["models"][0]["tool_mode"] = "code_mode_only"
+        template = directory / "template.json"
+        template.write_text(json.dumps(fixture))
+    write_catalog(config, template, catalog)
     (directory / "codex-home").mkdir()
     command = codex_command(
         "aero/sol-dsk",
@@ -496,7 +515,8 @@ def test_native_codex(directory):
             )
         (directory / "codex.jsonl").write_text(result.stdout)
         (directory / "codex.stderr").write_text(result.stderr)
-        evidence = ROOT / "evidence"
+        evidence = ROOT / "evidence" / ("code-mode" if code_mode else "direct")
+        evidence.mkdir(parents=True, exist_ok=True)
         for name in ("codex.jsonl", "codex.stderr"):
             (evidence / name).write_text((directory / name).read_text())
         (evidence / "gateway-events.jsonl").write_text(
@@ -651,6 +671,11 @@ if __name__ == "__main__":
         }
         if args.native_codex:
             results.update(test_native_codex(directory))
+            code_mode = directory / "code-mode"
+            code_mode.mkdir()
+            results["native_code_mode"] = test_native_codex(code_mode, code_mode=True)[
+                "native_codex"
+            ]
             results.update(test_native_launcher(directory))
             for name in ("codex.jsonl", "codex.stderr"):
                 (evidence / name).write_text((directory / name).read_text())

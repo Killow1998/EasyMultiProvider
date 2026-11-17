@@ -18,6 +18,7 @@ pub(crate) fn relay(
     body: &Value,
     incoming: &BTreeMap<String, String>,
     observation: &mut RequestObservation,
+    compact: bool,
 ) -> ResponsesRequestResult {
     observation.diagnostic_only("aero");
     observation.phase(Phase::ValidateInput);
@@ -74,6 +75,18 @@ pub(crate) fn relay(
         ("Content-Type".into(), "application/json".into()),
         ("session_id".into(), session.to_owned()),
     ]);
+    for (key, value) in incoming {
+        if matches!(
+            key.to_ascii_lowercase().as_str(),
+            "x-codex-turn-metadata"
+                | "x-codex-thread-id"
+                | "x-codex-parent-thread-id"
+                | "originator"
+                | "version"
+        ) {
+            headers.insert(key.clone(), value.clone());
+        }
+    }
     if let Some((_, value)) = incoming
         .iter()
         .find(|(key, _)| key.eq_ignore_ascii_case("authorization"))
@@ -87,18 +100,44 @@ pub(crate) fn relay(
         return fail(503, "aero.runtime_unavailable");
     };
     let runtime = &state.backend.transport.runtime;
-    let url = format!("{endpoint}/responses");
-    let opened = runtime.block_on(async {
+    let url = format!(
+        "{endpoint}/responses{}",
+        if compact { "/compact" } else { "" }
+    );
+    let mut open = |body: &Value| {
+        runtime.block_on(async {
         tokio::select! {
-            result = monitor.race(state.backend.transport.client.open(HttpMethod::Post,&url,headers,Some(serde_json::to_vec(body).expect("request JSON")),true)) => result,
+            result = monitor.race(state.backend.transport.client.open(HttpMethod::Post,&url,headers.clone(),Some(serde_json::to_vec(body).expect("request JSON")),true)) => result,
             _ = state.wait_for_shutdown() => DisconnectRace::Disconnected,
         }
-    });
-    let mut upstream = match opened {
+    })
+    };
+    let mut upstream = match open(body) {
         DisconnectRace::Ready(Ok(response)) => response,
         DisconnectRace::Ready(Err(_)) => return fail(503, "aero.runtime_unavailable"),
         DisconnectRace::Disconnected => return ResponsesRequestResult::Streamed,
     };
+    if upstream.status() == 409 && upstream.header("x-aero-history") == Some("required") {
+        observation.phase(Phase::PrepareHistory);
+        let reader =
+            emp_codex::history::CodexHomeHistoryReader::new(&state.backend.accounts.codex_home);
+        let visible = match emp_history::prepare(body, incoming, false, &reader) {
+            Ok(visible) => visible,
+            Err(error) => {
+                return ResponsesRequestResult::Buffered(
+                    crate::api::history_response::history_http_error(&error, observation),
+                );
+            }
+        };
+        let mut materialized = body.clone();
+        materialized["_aero_visible_input"] = visible["input"].clone();
+        upstream = match open(&materialized) {
+            DisconnectRace::Ready(Ok(response)) => response,
+            DisconnectRace::Ready(Err(_)) => return fail(503, "aero.runtime_unavailable"),
+            DisconnectRace::Disconnected => return ResponsesRequestResult::Streamed,
+        };
+        observation.phase(Phase::Execute);
+    }
     let status = upstream.status();
     let content_type = upstream
         .header("content-type")

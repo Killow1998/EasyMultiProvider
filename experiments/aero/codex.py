@@ -35,11 +35,10 @@ def write_catalog(config, template, destination):
             supports_reasoning_summary_parameter=False,
             supports_reasoning_effort_updates=False,
             prefer_websockets=False,
-            tool_mode="direct",
+            tool_mode=base.get("tool_mode", "direct"),
             shell_type="shell_command",
             use_responses_lite=False,
-            input_modalities=["text"],
-            supports_search_tool=False,
+            input_modalities=base.get("input_modalities", ["text"]),
             context_window=128000,
             max_context_window=128000,
             auto_compact_token_limit=None,
@@ -48,7 +47,6 @@ def write_catalog(config, template, destination):
             service_tiers=[],
             additional_speed_tiers=[],
         )
-        model["experimental_supported_tools"] = []
         models.append(model)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(

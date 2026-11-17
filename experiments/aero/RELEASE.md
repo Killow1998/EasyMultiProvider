@@ -6,7 +6,15 @@
 
 Orchestrator 负责规划、只读检查和复核；Executor 使用 Codex 的工具执行。EMP 负责连接、认证和计量，aero 独立管理角色交接。外层转发不重复记账。
 
-当前仅支持完整可见历史、HTTP 和文本／直接工具。加密压缩、Code Mode、生图、音频及实时文本流尚未交付。请使用新建的实验会话。协议验收使用合成上游，不能据此断言真实模型的效果、速度或成本更好。
+本次补齐：
+
+- 加密压缩与长会话继续，保留当前计划和执行阶段。
+- Code Mode 与延迟工具发现，统筹读取、执行修改和复核完整往返。
+- 原生生图与 Free 账号 MCP 生图，支持生成、编辑和图片落盘。
+- 图片／音频输入输出，以及 Voice multipart、SDP 和实时 WebSocket 转发。
+- 实时文字流，首段内容在上游生成完成前送达。
+
+验收采用 Codex 0.169.0、隔离配置与合成上游；完整安装包覆盖 Windows、Linux、Intel Mac 和 Apple Silicon Mac。
 
 ---
 
@@ -16,4 +24,6 @@ Download the complete native archive or macOS DMG. The independent aero runtime 
 
 EMP owns routing, authentication and accounting; aero owns role handoffs; Codex owns tool execution and approvals. The relay wrapper does not duplicate usage charges.
 
-This experiment supports full visible history over HTTP and text/direct tools. Encrypted compaction, Code Mode, image/audio and live token streaming are unfinished. Use a new experimental session. Synthetic-upstream acceptance demonstrates protocol behavior, not improved real-model quality, speed or cost.
+This revision adds encrypted compaction with plan/role continuity, Code Mode and deferred tool discovery, native and Free-account MCP image generation/editing, image/audio roundtrips, Voice multipart/SDP/WebSocket forwarding, and live first-token delivery.
+
+Acceptance uses Codex 0.169.0, isolated configuration and synthetic upstreams. Complete packages cover Windows, Linux, Intel Mac and Apple Silicon Mac.

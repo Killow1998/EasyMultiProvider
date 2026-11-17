@@ -6,10 +6,14 @@ pub(super) fn spawn(
     image_args: Value,
     edit: bool,
     mcp: bool,
+    aero: bool,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut image_turn = String::new();
-        for stage in 0..3 {
+        let discovery = usize::from(aero && mcp);
+        let image_stage = if aero { 2 + discovery } else { 1 };
+        let final_stage = if aero { 4 + discovery } else { 2 };
+        for stage in 0..=final_stage {
             let deadline = Instant::now() + Duration::from_secs(20);
             let mut socket = loop {
                 assert!(
@@ -69,13 +73,17 @@ pub(super) fn spawn(
             assert_eq!(request.headers["authorization"], "Bearer selected-fixture");
             assert_eq!(request.headers["chatgpt-account-id"], "selected-owner");
             assert!(!request.headers.contains_key("x-openai-actor-authorization"));
-            if stage == 1 {
+            if stage == image_stage {
                 assert_eq!(
                     request.path,
                     format!(
                         "/backend-api/codex/images/{}",
                         if edit { "edits" } else { "generations" }
-                    )
+                    ),
+                    "unexpected image stage: input tail={:?}",
+                    request.body["input"]
+                        .as_array()
+                        .map(|items| &items[items.len().saturating_sub(4)..])
                 );
                 assert!(
                     request.body["model"]
@@ -112,11 +120,7 @@ pub(super) fn spawn(
                     .as_str()
                     .unwrap()
                     .to_owned();
-                assert!(
-                    request.body.to_string().contains("imagegen"),
-                    "image extension missing"
-                );
-            } else {
+            } else if stage == final_stage {
                 let serialized = request.body.to_string();
                 assert!(serialized.contains("image-fixture-call"));
                 assert_eq!(
@@ -131,7 +135,26 @@ pub(super) fn spawn(
                     );
                 }
             }
-            let item = if stage == 0 {
+            let item = if aero && (stage == 0 || stage == 3 + discovery) {
+                let (name, arguments) = if stage == 0 {
+                    (
+                        "exit_plan_mode",
+                        json!({"plan":"Generate or edit the requested image, then return for review"}),
+                    )
+                } else {
+                    (
+                        "enter_plan_mode",
+                        json!({"reason":"Image generation finished and the result was saved"}),
+                    )
+                };
+                json!({"id":format!("aero-handoff-{stage}"),"type":"function_call","name":name,"call_id":format!("aero-handoff-{stage}"),"arguments":arguments.to_string()})
+            } else if aero && mcp && stage == 1 {
+                json!({"id":"search-image","type":"tool_search_call","execution":"client","call_id":"search-image","arguments":{"query":"imagegen generate and edit images","limit":1}})
+            } else if stage == if aero { 1 + discovery } else { 0 } {
+                assert!(
+                    request.body.to_string().contains("imagegen"),
+                    "image extension missing"
+                );
                 json!({"id":"image-fixture-call","type":"function_call","namespace":if mcp {"mcp__emp_images"} else {"image_gen"},
                 "name":"imagegen","call_id":"image-fixture-call","arguments":image_args.to_string()})
             } else {
@@ -143,7 +166,7 @@ pub(super) fn spawn(
                 json!({"type":"response.created","response":{"id":id,"status":"in_progress","output":[]}}),
                 json!({"type":"response.output_item.added","output_index":0,"item":item}),
                 json!({"type":"response.output_item.done","output_index":0,"item":item}),
-                json!({"type":"response.completed","response":{"id":id,"status":"completed","output":[item],"end_turn":stage==2}}),
+                json!({"type":"response.completed","response":{"id":id,"status":"completed","output":[item],"end_turn":stage==final_stage}}),
             ];
             if let Some(websocket) = &mut websocket {
                 for event in events {

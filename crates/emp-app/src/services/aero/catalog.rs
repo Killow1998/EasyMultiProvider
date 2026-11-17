@@ -26,16 +26,26 @@ pub(crate) fn augment_catalog(config: &Value, catalog: &mut Value) {
             .iter()
             .filter_map(|role| role["context_window"].as_u64())
             .min()
-            .unwrap_or(128000)
-            .min(128000);
+            .unwrap_or(128000);
+        let modalities: Vec<Value> = roles[0]["input_modalities"]
+            .as_array()
+            .cloned()
+            .unwrap_or_else(|| vec![json!("text")])
+            .into_iter()
+            .filter(|modality| {
+                roles[1]["input_modalities"]
+                    .as_array()
+                    .map_or(*modality == "text", |values| values.contains(modality))
+            })
+            .collect();
         let fields = json!({
             "slug":route_name(profile), "display_name":format!("aero · {}",profile["name"].as_str().expect("profile name")),
             "description":"Orchestrator and executor through aero", "visibility":"list", "supported_in_api":true,
             "default_reasoning_level":null,"supported_reasoning_levels":[],"supports_reasoning_effort_updates":false,
             "supports_reasoning_summaries":false,"supports_reasoning_summary_parameter":false,
-            "prefer_websockets":false,"use_responses_lite":false,"tool_mode":"direct","shell_type":"shell_command",
-            "input_modalities":["text"],"supports_search_tool":false,"experimental_supported_tools":[],
+            "prefer_websockets":false,"use_responses_lite":false,
             "context_window":window,"max_context_window":window,"auto_compact_token_limit":null,
+            "input_modalities":modalities,
             "service_tiers":[],"additional_speed_tiers":[],"upgrade":null,"availability_nux":null,
         });
         model
@@ -72,8 +82,7 @@ pub(crate) fn augment_public(config: &Value, public: &mut Value) {
             .iter()
             .filter_map(|role| role["context_window"].as_u64())
             .min()
-            .unwrap_or(128000)
-            .min(128000);
+            .unwrap_or(128000);
         let name = format!("aero · {}", profile["name"].as_str().expect("profile name"));
         public["catalog_models"]
             .as_array_mut()

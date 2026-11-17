@@ -88,7 +88,15 @@ pub(crate) fn responses_request(
             .as_str()
             .is_some_and(|model| crate::services::aero::profile(&config, model).is_some())
     {
-        return crate::api::aero::relay(stream, state, &config, &body, &incoming, observation);
+        return crate::api::aero::relay(
+            stream,
+            state,
+            &config,
+            &body,
+            &incoming,
+            observation,
+            false,
+        );
     }
     observation.phase(Phase::ResolveRoute);
     let PreparedRequest {

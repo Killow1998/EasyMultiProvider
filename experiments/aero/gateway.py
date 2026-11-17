@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from engine import AeroError, Engine, digest
+from events import ResponseEvents
 from settings import DEFAULT_RUNTIME, ROOT, gateway_key, load_config
 
 
@@ -73,12 +74,20 @@ class Cancellation:
 
 
 class EmpBackend:
-    def __init__(self, base_url, token, session):
+    def __init__(self, base_url, token, session, on_event=None, headers=None):
         self.url = urlsplit(base_url)
         self.token = token
         self.session = session
+        self.on_event = on_event
+        self.headers = headers or {}
 
     def __call__(self, body, cancelled):
+        return self.request(body, cancelled, "/responses")
+
+    def compact(self, body, cancelled):
+        return self.request(body, cancelled, "/responses/compact")
+
+    def request(self, body, cancelled, path):
         connection_class = (
             http.client.HTTPSConnection
             if self.url.scheme == "https"
@@ -99,9 +108,10 @@ class EmpBackend:
                 raise AeroError("request cancelled", 499)
             connection.request(
                 "POST",
-                self.url.path.rstrip("/") + "/responses",
+                self.url.path.rstrip("/") + path,
                 body=json.dumps(body, ensure_ascii=False).encode(),
                 headers={
+                    **self.headers,
                     "Authorization": "Bearer " + self.token,
                     "Content-Type": "application/json",
                     "User-Agent": "aero/0.1",
@@ -135,6 +145,8 @@ class EmpBackend:
                     if payload == b"[DONE]":
                         continue
                     event = json.loads(payload)
+                    if self.on_event and path == "/responses":
+                        self.on_event(event)
                     if event.get("type") in (
                         "response.completed",
                         "response.incomplete",
@@ -313,89 +325,6 @@ class GatewayServer(ThreadingHTTPServer):
                 self.lifecycle.wait()
 
 
-def sse_frames(response):
-    sequence = 0
-
-    def event(kind, **fields):
-        nonlocal sequence
-        body = {"type": kind, "sequence_number": sequence, **fields}
-        sequence += 1
-        return (
-            "event: "
-            + kind
-            + "\ndata: "
-            + json.dumps(body, ensure_ascii=False)
-            + "\n\n"
-        )
-
-    yield event(
-        "response.created",
-        response={**response, "output": [], "status": "in_progress", "usage": None},
-    )
-    for index, item in enumerate(response["output"]):
-        initial = {**item, "status": "in_progress"}
-        if item["type"] == "message":
-            initial["content"] = []
-        elif item["type"] == "function_call":
-            initial["arguments"] = ""
-        elif item["type"] == "custom_tool_call":
-            initial["input"] = ""
-        yield event("response.output_item.added", output_index=index, item=initial)
-        if item["type"] == "message":
-            for part_index, part in enumerate(item["content"]):
-                yield event(
-                    "response.content_part.added",
-                    item_id=item["id"],
-                    output_index=index,
-                    content_index=part_index,
-                    part={**part, "text": ""},
-                )
-                yield event(
-                    "response.output_text.delta",
-                    item_id=item["id"],
-                    output_index=index,
-                    content_index=part_index,
-                    delta=part.get("text", ""),
-                )
-                yield event(
-                    "response.output_text.done",
-                    item_id=item["id"],
-                    output_index=index,
-                    content_index=part_index,
-                    text=part.get("text", ""),
-                )
-                yield event(
-                    "response.content_part.done",
-                    item_id=item["id"],
-                    output_index=index,
-                    content_index=part_index,
-                    part=part,
-                )
-        elif item["type"] == "function_call":
-            yield event(
-                "response.function_call_arguments.delta",
-                item_id=item["id"],
-                output_index=index,
-                delta=item["arguments"],
-            )
-            yield event(
-                "response.function_call_arguments.done",
-                item_id=item["id"],
-                output_index=index,
-                arguments=item["arguments"],
-            )
-        elif item["type"] == "custom_tool_call":
-            yield event(
-                "response.custom_tool_call_input.delta",
-                item_id=item["id"],
-                call_id=item["call_id"],
-                output_index=index,
-                delta=item["input"],
-            )
-        yield event("response.output_item.done", output_index=index, item=item)
-    yield event("response.completed", response=response)
-
-
 def handler_for(
     config, store, logger, backend_factory=None, token=None, config_path=None
 ):
@@ -440,6 +369,66 @@ def handler_for(
                 cancellation.cancel()
                 return False
 
+        def forward_media(self, payload, cancellation):
+            settings = json.loads(config_path.read_bytes()) if config_path else config
+            target = urlsplit(settings["upstream"])
+            connection_type = (
+                http.client.HTTPSConnection
+                if target.scheme == "https"
+                else http.client.HTTPConnection
+            )
+            connection = connection_type(target.hostname, target.port, timeout=2)
+            if not cancellation.attach(connection):
+                return
+            self.close_connection = True
+            try:
+                connection.connect()
+                if not cancellation.publish(connection.sock):
+                    return
+                connection.sock.settimeout(None)
+                headers = {
+                    key: value
+                    for key, value in self.headers.items()
+                    if key.lower()
+                    not in (
+                        "host",
+                        "authorization",
+                        "x-aero-caller-key",
+                        "content-length",
+                        "transfer-encoding",
+                    )
+                }
+                headers["Authorization"] = "Bearer " + (
+                    self.headers.get("X-Aero-Caller-Key", token)
+                    if config_path
+                    else token
+                )
+                headers["Content-Length"] = str(len(payload))
+                if self.headers.get("Upgrade", "").lower() != "websocket":
+                    headers["Connection"] = "close"
+                connection.request(
+                    self.command,
+                    target.path.rstrip("/") + self.path.removeprefix("/v1"),
+                    body=payload,
+                    headers=headers,
+                )
+                while not cancellation():
+                    readable, _, _ = select.select(
+                        [connection.sock, self.connection], [], [], 0.05
+                    )
+                    if self.connection in readable:
+                        data = self.connection.recv(65536)
+                        if not data:
+                            return
+                        connection.sock.sendall(data)
+                    if connection.sock in readable:
+                        data = connection.sock.recv(65536)
+                        if not data or not self.stream_write(data, cancellation):
+                            return
+            finally:
+                cancellation.detach(connection)
+                connection.close()
+
         def do_GET(self):
             if self.path == "/healthz":
                 self.send_json(200, {"status": "ok", "models": list(config["models"])})
@@ -457,6 +446,14 @@ def handler_for(
                         ],
                     },
                 )
+            elif self.path.startswith("/v1/live/") and self.allowed():
+                cancellation = Cancellation()
+                if self.server.register_cancellation(cancellation):
+                    try:
+                        self.forward_media(b"", cancellation)
+                    finally:
+                        cancellation.cancel()
+                        self.server.unregister_cancellation(cancellation)
             else:
                 self.send_json(404, {"error": {"message": "not found"}})
 
@@ -472,14 +469,20 @@ def handler_for(
                     raise AeroError(
                         "local Codex caller authentication is required", 401
                     )
-                if self.path != "/v1/responses":
-                    raise AeroError(
-                        "aero currently supports HTTP /v1/responses only", 404
-                    )
                 size = int(self.headers.get("Content-Length", "0"))
                 if not 0 < size <= 64 * 1024 * 1024:
                     raise AeroError("request body must be 1..67108864 bytes")
-                body = json.loads(self.rfile.read(size))
+                payload = self.rfile.read(size)
+                if self.path in (
+                    "/v1/images/generations",
+                    "/v1/images/edits",
+                    "/v1/live",
+                ):
+                    self.forward_media(payload, cancellation)
+                    return
+                if self.path not in ("/v1/responses", "/v1/responses/compact"):
+                    raise AeroError("Unknown inference endpoint", 404)
+                body = json.loads(payload)
                 session = (
                     self.headers.get("session-id")
                     or self.headers.get("session_id")
@@ -497,6 +500,15 @@ def handler_for(
                 request_config = (
                     json.loads(config_path.read_bytes()) if config_path else config
                 )
+                items = body.get("input", [])
+                compact = self.path.endswith("/compact") or (
+                    isinstance(items, list)
+                    and bool(items)
+                    and items[-1].get("type") == "compaction_trigger"
+                )
+                events = (
+                    ResponseEvents(body.get("model")) if body.get("stream") else None
+                )
                 backend = (
                     backend_factory(session)
                     if backend_factory
@@ -506,6 +518,19 @@ def handler_for(
                         if config_path
                         else token,
                         session,
+                        events.upstream if events and not compact else None,
+                        {
+                            key: value
+                            for key, value in self.headers.items()
+                            if key.lower()
+                            in (
+                                "x-codex-turn-metadata",
+                                "x-codex-thread-id",
+                                "x-codex-parent-thread-id",
+                                "originator",
+                                "version",
+                            )
+                        },
                     )
                 )
                 engine = Engine(request_config, backend, lambda state: None)
@@ -518,7 +543,14 @@ def handler_for(
                 try:
                     if cancellation():
                         raise AeroError("request cancelled", 499)
-                    if body.get("stream"):
+                    previous = store.get(key)
+                    if engine.needs_history(body, previous):
+                        self.send_response(409)
+                        self.send_header("X-Aero-History", "required")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    if events:
                         streaming = True
                         self.send_response(200)
                         self.send_header("Content-Type", "text/event-stream")
@@ -529,11 +561,28 @@ def handler_for(
                         if not self.stream_write(b": aero connected\n\n", cancellation):
                             return
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        future = pool.submit(
-                            engine.run, body, store.get(key), cancellation, observe
+                        future = (
+                            pool.submit(
+                                engine.compact, body, previous, cancellation, observe
+                            )
+                            if compact
+                            else pool.submit(
+                                engine.run,
+                                body,
+                                previous,
+                                cancellation,
+                                observe,
+                                events,
+                            )
                         )
                         heartbeat = time.monotonic()
                         while True:
+                            if events:
+                                frames = events.drain()
+                                if frames and not self.stream_write(
+                                    frames, cancellation
+                                ):
+                                    return
                             done, _ = concurrent.futures.wait((future,), timeout=0.05)
                             if done:
                                 response, candidate = future.result()
@@ -556,9 +605,8 @@ def handler_for(
                         observe({"kind": "cancelled"})
                         return
                     if streaming:
-                        for frame in sse_frames(response):
-                            if not self.stream_write(frame.encode(), cancellation):
-                                return
+                        events.finish(response)
+                        self.stream_write(events.drain(), cancellation)
                     else:
                         if cancellation() or self.client_gone():
                             cancellation.cancel()

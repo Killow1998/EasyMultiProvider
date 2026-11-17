@@ -16,11 +16,17 @@ Codex → EMP gateway → aero → EMP gateway → role model
 1. Download a complete experimental native archive or macOS DMG from [prereleases](https://github.com/Killow1998/EasyMultiProvider/releases). Experimental tags start with `aero-999.14.2-exp-`. These downloads remain available; CI artifacts are only temporary staging and are removed after publication. This edition does not check for or install updates.
 2. Extract the complete archive, preserving the `aero` folder beside EMP. macOS DMGs include it inside the app. No system Python installation is required. Run the experimental EMP after exiting your current instance.
 3. Open **Lead & Execute → Add pairing**. The two cards select the orchestrator and executor. Model choices show their source, including aggregate routes, and each role has its own effort setting. You can save several pairings to compare them.
-4. Start a new Codex session and select `aero/pairing name`. If an already-running client has not reloaded the model catalog, reopen its model picker or restart that client.
+4. In your Codex session, select `aero/pairing name`. If an already-running client has not reloaded the model catalog, reopen its model picker or restart that client.
 
 Settings are saved in `aero_profiles` in the normal EMP configuration. The generated sidecar configuration and SQLite conversation state live in a private `aero` directory beside that configuration. Named gateway device Keys retain their caller attribution on the inner model requests. The outer relay does not add a second usage charge. Role usage, errors and handoffs are recorded in rotating logs, capped at 100 MB.
 
-Linux native tool execution is tested with Codex 0.169.0 and synthetic upstreams. The package workflow verifies extracted Windows, Linux and both macOS architecture archives without system Python on the backend PATH. Desktop client behavior on other platforms still needs user acceptance. This experiment uses text and direct file/command tools.
+## History, tools and media
+
+- **Encrypted compaction** preserves the current plan, role and pending review. Both roles continue from a readable shared summary; EMP's existing history reader restores Native encrypted checkpoints.
+- **Code Mode** and deferred tool discovery stay enabled. Planner file reads translate into Codex Code Mode calls; the executor uses the client's available tools.
+- **Images** use EMP's image routing through the native tool or the lightweight Free-account MCP, including generation, editing and files saved by Codex.
+- **Audio** input and output are retained. Voice multipart requests, SDP responses and real-time WebSocket connections pass through EMP.
+- **Live text** reaches Codex as the model generates it, across role handoffs. Tool calls are checked against the current phase before Codex executes them.
 
 ## Standalone developer entry
 
@@ -49,33 +55,18 @@ For API-only testing, `python3 -B gateway.py --config profiles.local.json` serve
 - Role efforts come from the profile. The Codex effort selector is disabled for
   these virtual models. There is no task-duration or handoff-count cutoff.
 
-## Test scope and known gaps
+## Acceptance
 
-The CI checks use synthetic upstreams and an isolated Codex home. They cover
-role handoffs, read/write/verify through native Codex tools, authentication,
-retry replay, persistence, client disconnects and shutdown. They make no paid
-model calls. Passing proves protocol behavior, not that two models are faster,
-cheaper or more capable than one.
+Checks use Codex 0.169.0, an isolated Codex home and synthetic upstreams. They cover direct and Code Mode file operations, deferred MCP image generation/editing, continuation after compaction, image/audio roundtrips, first-token delivery before completion, authentication, replay, disconnect cancellation and shutdown. Extracted Windows, Linux and both macOS architecture packages also verify their bundled aero runtime without system Python.
 
-Current limits:
-
-- Full visible HTTP Responses history only. WebSocket, `previous_response_id`,
-  item references and encrypted compaction are rejected. Changes to the saved
-  conversation prefix are rejected rather than discarding handoff history.
-- Long-session compaction and interruption during a live model call are not
-  accepted yet. Use a new, bounded project session for this experiment.
-- The launcher advertises text input and direct tools. Code Mode, built-in
-  search, image/audio generation and nested subagents are outside this version.
-- Responses are buffered until a model/handback segment finishes. SSE heartbeats
-  keep the connection alive; intermediate tokens are not streamed to Codex.
-- Returned aggregate counters sum reported usage; missing role usage is not a
-  complete total. Use EMP's individual call records for accounting.
+Codex retains tool execution and approvals. Responses use HTTP/SSE; real-time media sidebands use WebSocket. EMP's individual call records retain role-model and device attribution.
 
 ## Reproduce the checks
 
 ```bash
 python3 -B verify.py
 python3 -B verify_lifecycle.py
+python3 -B verify_features.py
 python3 -B verify.py --native-codex
 python3 -m pip install ruff==0.17.5
 python3 -m ruff check --no-cache .

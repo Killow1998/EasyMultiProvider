@@ -16,11 +16,17 @@ Codex → EMP 网关 → aero → EMP 网关 → 对应角色的模型
 1. 在 [预发布下载](https://github.com/Killow1998/EasyMultiProvider/releases) 中下载完整系统压缩包或 macOS DMG。实验标签以 `aero-999.14.2-exp-` 开头，下载文件持续保留；CI 产物只用于构建中转，发布后清理。本实验版关闭更新检查与自动安装。
 2. 完整解压，保留 EMP 旁的 `aero` 文件夹；macOS DMG 已将它放进应用包。无需安装 Python。先退出当前 EMP，再运行实验版。
 3. 点击 **上令下效 → 添加配对**。左卡片选择统筹模型，右卡片选择执行模型；选项区分 Native、其他订阅、外部服务和聚合路由，每个角色可分别设置推理强度。可以保存多组配对进行比较。
-4. 新建 Codex 会话，选择 `aero/配对名称`。已运行的客户端若尚未重新加载模型目录，重新打开模型选择器，或重启该客户端。
+4. 在 Codex 会话中选择 `aero/配对名称`。已运行的客户端若尚未重新加载模型目录，重新打开模型选择器，或重启该客户端。
 
 配对保存在 EMP 配置的 `aero_profiles` 中。独立运行程序的生成配置和 SQLite 对话状态保存在该配置旁的私有 `aero` 目录。网关设备 Key 的归属继续传到实际模型调用，外层转发不重复计量。角色、交接、错误与用量日志轮转总上限为 100 MB。
 
-Linux 的 Codex 0.169.0 原生工具往返已用合成上游验收。专用 CI 对 Windows、Linux 与两种 macOS 架构的解压安装包进行测试，并从后台 PATH 中移除系统 Python。其他平台桌面客户端仍需使用者验收。本实验入口用于文本任务与直接文件／命令工具。
+## 对话、工具与媒体
+
+- **加密压缩**：调用 Codex 压缩后继续原会话，保留当前计划、角色和待复核状态。两种角色共享可读摘要；Native 加密检查点通过 EMP 既有历史读取链路恢复。
+- **Code Mode**：保留 Codex 的 Code Mode 与延迟工具发现。统筹阶段的读文件工具转换为 Code Mode 调用，执行阶段直接使用 Codex 提供的工具。
+- **生图**：使用 EMP 既有图片路由，支持原生生图工具和 Free 账号的轻量 MCP，包含生成、编辑和图片落盘。
+- **音频**：保留音频输入与输出，Voice 的 multipart、SDP 和实时 WebSocket 连接经 EMP 转发。
+- **实时文字**：模型生成文字时立即返回，跨角色交接连续显示；工具调用经当前阶段检查后交给 Codex 执行。
 
 ## 独立开发入口
 
@@ -46,28 +52,18 @@ API 单独测试可运行 `python3 -B gateway.py --config profiles.local.json`�
 - 各角色的推理强度由配置指定，这些虚拟模型没有 Codex effort 选择器。没有任务
   总时长或交接次数上限。
 
-## 已验证与尚未覆盖
+## 验收方式
 
-CI 使用合成后端和隔离的 Codex Home，验证角色交接、原生工具读写与校验、鉴权、重试
-重放、持久化、断连取消和退出。CI 不调用付费模型。这证明协议行为，不能代替真实任务
-的能力、速度和费用对照。
+验收使用 Codex 0.169.0、隔离的 Codex Home 和合成上游，覆盖直接工具与 Code Mode 的读写校验、延迟 MCP 生图、加密检查点继续、图片／音频往返、首段文字实时送达、鉴权、重放、断连取消和退出。Windows、Linux、Intel Mac 与 Apple Silicon Mac 的解压安装包另外验证内置 aero，无需系统 Python。
 
-当前限制：
-
-- 仅接收完整、可见的 HTTP Responses 历史。WebSocket、`previous_response_id`、
-  item reference 和加密 compaction 会明确失败。历史前缀被改写时也会拒绝，保留原交接
-  历史，避免静默丢失状态。
-- 长会话压缩与真实推理中的即时插话尚未验收，本轮适合新建、有明确范围的项目会话。
-- 使用文本和直接工具；Code Mode、内置搜索、生图、音频、嵌套子代理不属于本版。
-- 内容在模型／交接片段完成后返回；SSE 心跳只保活，尚未实时转发中间文本。
-- 汇总计数只相加已报告的用量，部分角色未报告时不构成完整总量；计量以 EMP 的逐次
-  调用记录为准。
+Codex 工具执行与审批沿用客户端；Responses 使用 HTTP/SSE，媒体的实时侧信道使用 WebSocket。计量查看 EMP 的逐次调用记录，可按统筹／执行模型和设备归属查询。
 
 ## 复现验收
 
 ```bash
 python3 -B verify.py
 python3 -B verify_lifecycle.py
+python3 -B verify_features.py
 python3 -B verify.py --native-codex
 python3 -m pip install ruff==0.17.5
 python3 -m ruff check --no-cache .

@@ -41,6 +41,7 @@ jobs:
       - run: python -m ruff format --check experiments/aero
       - run: python -B experiments/aero/verify.py
       - run: python -B experiments/aero/verify_lifecycle.py
+      - run: python -B experiments/aero/verify_features.py
 
   integration:
     needs: protocol
@@ -69,8 +70,13 @@ jobs:
       - run: cargo +1.93.1 clippy --locked --workspace -- -D warnings
       - run: cargo +1.93.1 test --locked -p emp-state --lib
       - run: cargo +1.93.1 test --locked -p emp-app --lib aggregate_contract -- --test-threads=1
+      - run: cargo +1.93.1 test --locked -p emp-app --lib realtime -- --test-threads=1
       - run: node --test crates/emp-app/tests/web_features_contract.cjs
       - run: cargo +1.93.1 build --locked -p emp-app --bin EMP
+      - name: Verify Codex native and Free MCP image generation and editing through aero
+        env:
+          EMP_TEST_EMP_BIN: ${{ github.workspace }}/target/debug/EMP
+        run: EMP_TEST_CODEX_BIN="$(command -v codex)" cargo +1.93.1 test --locked -p emp-app --lib generate_and_edit -- --ignored --test-threads=1
       - run: python -B experiments/aero/verify_emp.py --binary target/debug/EMP --output experiments/aero/evidence/emp --native-codex
 
   package:

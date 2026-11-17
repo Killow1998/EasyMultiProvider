@@ -16,6 +16,7 @@ from zipfile import ZipFile
 
 from codex import codex_command
 from verify import call, native_backend, reply, text
+from verify_features import PNG, LiveText
 from verify_lifecycle import ControlledUpstream, JsonResponse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/shadow_frontend"))
@@ -224,6 +225,102 @@ def run(binary, output, browser_enabled, without_python=False, native_codex=Fals
             and "AERO_SSE_REVIEWED_OK" in streamed
         ), streamed
         connection.close()
+        live = LiveText()
+        upstream.actions.put(live)
+        connection = http.client.HTTPConnection(
+            address.hostname, address.port, timeout=30
+        )
+        connection.request(
+            "POST",
+            "/v1/responses",
+            json.dumps({**body, "stream": True}),
+            {
+                **gateway_headers,
+                "session_id": "aero-live-e2e",
+                "Content-Type": "application/json",
+            },
+        )
+        response = connection.getresponse()
+        try:
+            assert response.status == 200
+            while not live.release.is_set():
+                line = response.readline()
+                assert line, "The stream ended before the first live text delta"
+                if (
+                    line.startswith(b"data: ")
+                    and json.loads(line[6:]).get("delta") == "Hello "
+                ):
+                    live.release.set()
+            assert b"response.completed" in response.read()
+        finally:
+            live.release.set()
+            connection.close()
+        summary_text = (
+            "Retain the public image/audio fixture and continue the agreed task"
+        )
+        upstream.actions.put(JsonResponse(reply([text(summary_text)])))
+        status, compacted = request(
+            backend + "/v1/responses/compact",
+            body,
+            {**gateway_headers, "session_id": "aero-compact-e2e"},
+            timeout=30,
+        )
+        assert status == 200, compacted
+        checkpoint = compacted["output"]
+        assert checkpoint[0]["type"] == "compaction", compacted
+        for session, marker in [
+            ("aero-compact-e2e", "AERO_COMPACT_CONTINUED"),
+            ("aero-foreign-checkpoint-e2e", "AERO_CHECKPOINT_RECOVERED"),
+        ]:
+            upstream.actions.put(JsonResponse(reply([text(marker)])))
+            status, continued = request(
+                backend + "/v1/responses",
+                {
+                    **body,
+                    "input": checkpoint
+                    + [{"role": "user", "content": "Continue the checkpoint task"}],
+                },
+                {**gateway_headers, "session_id": session},
+                timeout=30,
+            )
+            assert status == 200 and marker in json.dumps(continued), continued
+            assert summary_text in json.dumps(upstream.received[-1]), upstream.received[
+                -1
+            ]
+            assert "emp1:" not in json.dumps(upstream.received[-1]["input"])
+        wav = base64.b64encode(b"RIFF\x00\xffWAVEfixture").decode()
+        upstream.actions.put(JsonResponse(reply([text("AERO_MEDIA_RECEIVED")])))
+        status, media = request(
+            backend + "/v1/responses",
+            {
+                **body,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "Inspect these public fixtures",
+                            },
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/png;base64," + PNG,
+                            },
+                            {
+                                "type": "input_audio",
+                                "input_audio": {"data": wav, "format": "wav"},
+                            },
+                        ],
+                    }
+                ],
+            },
+            {**gateway_headers, "session_id": "aero-media-e2e"},
+            timeout=30,
+        )
+        assert status == 200 and "AERO_MEDIA_RECEIVED" in json.dumps(media), media
+        assert PNG in json.dumps(upstream.received[-1]["input"]) and wav in json.dumps(
+            upstream.received[-1]["input"]
+        )
         native_steps = []
         if native_codex:
             scripted = native_backend(native_steps)
@@ -388,6 +485,9 @@ def run(binary, output, browser_enabled, without_python=False, native_codex=Fals
             "browser": "passed" if browser_enabled else "not run",
             "without_system_python": without_python,
             "sse": "passed",
+            "live_first_token": "passed",
+            "compact_continue_and_foreign_checkpoint_recovery": "passed",
+            "image_audio_input": "passed",
             "native_codex": "passed" if native_codex else "not run",
             "upstream_calls": len(upstream.received),
         }

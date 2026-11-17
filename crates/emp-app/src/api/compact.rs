@@ -2,6 +2,7 @@ use crate::api::failure_response::request_router_error_response;
 use crate::api::failure_response::route_resolution_response;
 use crate::api::history_response::destination_error_response;
 use crate::api::history_response::history_http_error;
+use crate::api::responses::ResponsesRequestResult;
 use crate::app::ServerState;
 use crate::http::auth::proxy_allowed;
 use crate::http::auth::same_origin;
@@ -30,25 +31,25 @@ pub(crate) fn compact_request(
     state: &ServerState,
     now: f64,
     observation: &mut RequestObservation,
-) -> Vec<u8> {
+) -> ResponsesRequestResult {
     if !proxy_allowed(request, state, now) {
         let status = if same_origin(request, state.port) {
             401
         } else {
             403
         };
-        return json_error_response(
+        return ResponsesRequestResult::Buffered(json_error_response(
             status,
             status_text(status),
             "proxy caller authentication is required",
             None,
             &[],
-        );
+        ));
     }
     observation.phase(Phase::ReadBody);
     let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,
-        Err(error) => return body_error_response(error),
+        Err(error) => return ResponsesRequestResult::Buffered(body_error_response(error)),
     };
     observation.body(
         body.get("reasoning"),
@@ -58,6 +59,38 @@ pub(crate) fn compact_request(
     );
     observation.phase(Phase::ResolveRoute);
     let incoming = observation.headers(request.incoming());
+    if crate::services::aero::enabled()
+        && let Ok(config) = state.backend.configuration.snapshot()
+        && body["model"]
+            .as_str()
+            .is_some_and(|model| crate::services::aero::profile(&config, model).is_some())
+    {
+        return crate::api::aero::relay(
+            stream,
+            state,
+            &config,
+            &body,
+            &incoming,
+            observation,
+            true,
+        );
+    }
+    ResponsesRequestResult::Buffered(execute_compact_request(
+        stream,
+        state,
+        body,
+        incoming,
+        observation,
+    ))
+}
+
+fn execute_compact_request(
+    stream: &mut TcpStream,
+    state: &ServerState,
+    body: serde_json::Value,
+    incoming: std::collections::BTreeMap<String, String>,
+    observation: &mut RequestObservation,
+) -> Vec<u8> {
     let PreparedRequest {
         config,
         route,

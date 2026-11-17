@@ -1,3 +1,4 @@
+import base64
 import copy
 import hashlib
 import json
@@ -81,7 +82,7 @@ READ_TOOLS = [
 ]
 
 
-def tool_names(tools):
+def tool_names(tools, history=()):
     names = set()
     for tool in tools:
         if tool.get("type") == "namespace":
@@ -90,6 +91,50 @@ def tool_names(tools):
             )
         elif tool.get("name"):
             names.add(tool["name"])
+        elif tool.get("type") == "tool_search":
+            names.add("tool_search")
+    for item in history:
+        if item.get("type") in ("additional_tools", "tool_search_output"):
+            for tool in item.get("tools", []):
+                if tool.get("type") == "namespace":
+                    names = {
+                        name
+                        for name in names
+                        if not name.startswith(tool["name"] + ".")
+                    }
+                names.update(tool_names([tool]))
+        elif item.get("role") == "developer":
+            for part in item.get("content", []):
+                if part.get("type") != "input_text":
+                    continue
+                sections = [
+                    section.splitlines() for section in part["text"].split("\n\n")
+                ]
+                headers = (
+                    "The following tools are no longer available. Do not call them:",
+                    "The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:",
+                )
+                if not all(
+                    len(lines) > 1
+                    and lines[0] in headers
+                    and all(
+                        line.startswith("- ") and len(line) > 2 for line in lines[1:]
+                    )
+                    for lines in sections
+                ):
+                    continue
+                removed = [
+                    line[2:]
+                    for line in part["text"].splitlines()
+                    if line.startswith("- ")
+                ]
+                names = {
+                    name
+                    for name in names
+                    if not any(
+                        name == old or name.startswith(old + ".") for old in removed
+                    )
+                }
     return names
 
 
@@ -121,13 +166,10 @@ def normalize(items):
     result = []
     for original in items:
         item = copy.deepcopy(original)
+        item.pop("internal_chat_message_metadata_passthrough", None)
         kind = item.get("type", "message" if "role" in item else "")
-        if kind == "reasoning":
+        if kind in ("reasoning", "compaction_trigger"):
             continue
-        if kind in ("compaction", "item_reference"):
-            raise AeroError(
-                "aero requires visible conversation history; encrypted compaction and item references are not supported"
-            )
         if kind == "message":
             role = item["role"]
             content = item.get("content", [])
@@ -144,12 +186,22 @@ def normalize(items):
             item = {"type": "message", "role": role, "content": parts}
         elif kind == "function_call":
             item = {key: item[key] for key in ("type", "call_id", "name", "arguments")}
+            if original.get("namespace"):
+                item["namespace"] = original["namespace"]
         elif kind == "custom_tool_call":
             item = {key: item[key] for key in ("type", "call_id", "name", "input")}
+            if original.get("namespace"):
+                item["namespace"] = original["namespace"]
         elif kind in ("function_call_output", "custom_tool_call_output"):
-            item = {key: item[key] for key in ("type", "call_id", "output")}
+            item = {
+                key: item[key]
+                for key in ("type", "call_id", "name", "namespace", "output")
+                if key in item
+            }
         else:
-            raise AeroError(f"aero does not yet support input item type {kind!r}")
+            item.pop("id", None)
+            if kind != "tool_search_output":
+                item.pop("status", None)
         result.append(item)
     return result
 
@@ -206,9 +258,21 @@ def translate_read(call, tools):
         None,
     )
     if shell is None:
-        raise AeroError(
-            "Codex must expose exec_command, shell_command or shell for planner file reads"
+        code = next((name for name in names if name.split(".")[-1] == "exec"), None)
+        if code is None:
+            raise AeroError(
+                "Codex must expose a shell tool or Code Mode for file reads"
+            )
+        parameters = json.dumps(
+            {"cmd": command, "max_output_tokens": 6000}, ensure_ascii=False
         )
+        source = "text(await tools.exec_command(" + parameters + "));"
+        return {
+            "type": "custom_tool_call",
+            "call_id": call["call_id"],
+            "name": code,
+            "input": source,
+        }
     leaf = shell.split(".")[-1]
     if leaf == "exec_command":
         parameters = {"cmd": command, "max_output_tokens": 6000}
@@ -250,14 +314,151 @@ def add_usage(total, usage):
         details[field] += (usage.get(key) or {}).get(field) or 0
 
 
+def prepare_history(body, state, incoming):
+    users = digest([x for x in incoming if x.get("role") == "user"])
+    if state is None:
+        state = {
+            "public": [],
+            "history": [],
+            "users": users,
+            "role": "planner",
+            "plan": "",
+            "executor_calls": 0,
+            "finished": False,
+            "review_due": "",
+        }
+    else:
+        state = copy.deepcopy(state)
+    public = state["public"]
+    if "_aero_visible_input" in body:
+        state["history"] = normalize(body["_aero_visible_input"])
+        public = incoming
+        state["public"] = incoming
+        state["pending"] = {}
+        state["finished"] = False
+    elif incoming[: len(public)] != public:
+        raise AeroError(
+            "The conversation history changed without a matching checkpoint",
+            409,
+        )
+    pending = state.get("pending", {})
+    for original in incoming[len(public) :]:
+        item = copy.deepcopy(original)
+        if item.get("call_id") in pending and item["type"].endswith("_output"):
+            item["type"] = pending.pop(item["call_id"])
+        state["history"].append(item)
+    state["pending"] = pending
+    if users != state["users"]:
+        if state["role"] == "executor":
+            state["review_due"] = (
+                "A new user message arrived. Report the previous work before the planner processes it."
+            )
+        else:
+            state["role"] = "planner"
+        state["finished"] = False
+        state["users"] = users
+    return incoming, state
+
+
 class Engine:
     def __init__(self, config, backend, save):
         self.config = config
         self.backend = backend
         self.save = save
 
-    def run(
+    def needs_history(self, body, state):
+        source = body.get("input", [])
+        if isinstance(source, str) or not any(
+            item.get("type") == "compaction" for item in source
+        ):
+            return False
+        incoming = normalize(body.get("input", []))
+        return (
+            "_aero_visible_input" not in body
+            and any(item.get("type") == "compaction" for item in incoming)
+            and not (state and incoming[: len(state["public"])] == state["public"])
+            and not (
+                state and state.get("request") == digest({**body, "input": incoming})
+            )
+            and not (state and state.get("compact_request") == digest(body))
+        )
+
+    def compact(
         self, body, state=None, cancelled=lambda: False, observe=lambda event: None
+    ):
+        fingerprint = digest(body)
+        if state and state.get("compact_request") == fingerprint:
+            return state["compact_response"], state
+        model = body["model"]
+        profile = self.config["models"][model]
+        _, state = prepare_history(body, state, normalize(body.get("input", [])))
+        upstream = {
+            "model": profile["planner"]["model"],
+            "input": state["history"]
+            + [
+                message(
+                    "Current role: "
+                    + state["role"]
+                    + "\nCurrent implementation plan:\n"
+                    + state["plan"]
+                )
+            ],
+            "instructions": body.get("instructions") or "",
+        }
+        compacted = self.backend.compact(upstream, cancelled)
+        usage = copy.deepcopy(compacted.get("usage") or {})
+        output = compacted["output"]
+        summary = "\n".join(
+            base64.urlsafe_b64decode(item["encrypted_content"][5:]).decode()
+            for item in output
+            if item.get("encrypted_content", "").startswith("emp1:")
+        )
+        if not summary:
+            request = {
+                "model": profile["planner"]["model"],
+                "input": output,
+                "instructions": "Return a concise, readable checkpoint summary of the conversation. Preserve the task, current plan, progress, tool evidence, decisions, user constraints and remaining work. Return only the summary.",
+                "tools": [],
+                "stream": True,
+                "store": False,
+            }
+            if profile["planner"].get("effort"):
+                request["reasoning"] = {"effort": profile["planner"]["effort"]}
+            summary_response = self.backend(request, cancelled)
+            summary = output_text(summary_response.get("output", []))
+            add_usage(usage, summary_response.get("usage") or {})
+        if not summary.strip():
+            raise AeroError("The compaction model returned an empty summary", 502)
+        response = {**compacted, "model": model, "usage": usage}
+        if body.get("stream"):
+            response.update(object="response", status="completed")
+        state["history"] = [message(summary)]
+        state["public"] = normalize(output)
+        state["users"] = digest(
+            [item for item in state["public"] if item.get("role") == "user"]
+        )
+        state["compact_request"] = fingerprint
+        state["compact_response"] = response
+        state.pop("request", None)
+        if cancelled():
+            raise AeroError("request cancelled", 499)
+        observe(
+            {
+                "kind": "compacted",
+                "role": state["role"],
+                "summary_characters": len(summary),
+            }
+        )
+        self.save(state)
+        return response, state
+
+    def run(
+        self,
+        body,
+        state=None,
+        cancelled=lambda: False,
+        observe=lambda event: None,
+        events=None,
     ):
         if cancelled():
             raise AeroError("request cancelled", 499)
@@ -279,41 +480,13 @@ class Engine:
                 raise AeroError("request cancelled", 499)
             observe({"kind": "replay"})
             return state["response"], state
-        users = digest([x for x in incoming if x.get("role") == "user"])
-        if state is None:
-            state = {
-                "public": [],
-                "history": [],
-                "users": users,
-                "role": "planner",
-                "plan": "",
-                "executor_calls": 0,
-                "finished": False,
-                "review_due": "",
-            }
-        else:
-            state = copy.deepcopy(state)
-        public = state["public"]
-        if incoming[: len(public)] != public:
-            raise AeroError(
-                "aero conversation prefix changed; start a new session rather than losing handoff history",
-                409,
-            )
-        state["history"].extend(incoming[len(public) :])
-        if users != state["users"]:
-            if state["role"] == "executor":
-                state["review_due"] = (
-                    "A new user message arrived. Report the previous work before the planner processes it."
-                )
-            else:
-                state["role"] = "planner"
-            state["finished"] = False
-            state["users"] = users
+        incoming, state = prepare_history(body, state, incoming)
         if state["finished"]:
             raise AeroError(
                 "the previous turn is complete; a new user message is required", 409
             )
         visible = []
+        visible_items = events.items if events else wire_items
         usage = {}
         while True:
             if cancelled():
@@ -342,6 +515,7 @@ class Engine:
                     "stream",
                     "store",
                     "metadata",
+                    "_aero_visible_input",
                 }
             }
             protocol = PLANNER if role == "planner" else EXECUTOR
@@ -378,6 +552,8 @@ class Engine:
                 }
             )
             started = time.monotonic()
+            if events:
+                events.begin_model()
             result = self.backend(upstream, cancelled)
             if cancelled():
                 raise AeroError("request cancelled", 499)
@@ -408,9 +584,22 @@ class Engine:
             if role == "executor":
                 state["executor_calls"] += 1
             calls = [
-                x for x in output if x["type"] in ("function_call", "custom_tool_call")
+                x
+                for x in output
+                if x["type"]
+                in ("function_call", "custom_tool_call", "tool_search_call")
             ]
-            texts = [x for x in output if x["type"] == "message"]
+            texts = [
+                x
+                for x in result.get("output", [])
+                if x["type"]
+                not in (
+                    "function_call",
+                    "custom_tool_call",
+                    "tool_search_call",
+                    "reasoning",
+                )
+            ]
             internal = [
                 x
                 for x in calls
@@ -446,12 +635,23 @@ class Engine:
                 else:
                     state["role"] = "planner"
                 state["review_due"] = ""
-                visible.extend(wire_items(texts))
+                visible.extend(visible_items(texts))
                 observe({"kind": "handoff", "from": role, "to": state["role"]})
                 continue
             if calls:
-                names = tool_names(offered)
-                denied = [x for x in calls if x.get("name") not in names]
+                names = tool_names(
+                    offered,
+                    incoming if role == "executor" and not review else (),
+                )
+                denied = [
+                    x
+                    for x in calls
+                    if ((x.get("namespace") + ".") if x.get("namespace") else "")
+                    + x.get(
+                        "name", "tool_search" if x["type"] == "tool_search_call" else ""
+                    )
+                    not in names
+                ]
                 if denied:
                     for call in calls:
                         state["history"].append(
@@ -474,7 +674,12 @@ class Engine:
                     if role == "planner"
                     else calls
                 )
-                visible.extend(wire_items(texts + translated))
+                for original, actual in zip(calls, translated):
+                    if original["type"] != actual["type"]:
+                        state["pending"][actual["call_id"]] = (
+                            original["type"] + "_output"
+                        )
+                visible.extend(visible_items(texts + translated))
                 if role == "executor" and state["executor_calls"] >= self.config.get(
                     "review_interval", 30
                 ):
@@ -490,7 +695,7 @@ class Engine:
                         "[plan review] The executor ended without a tool handback. Review its report and evidence; finish or revise the plan."
                     )
                 )
-                visible.extend(wire_items(texts))
+                visible.extend(visible_items(texts))
                 observe(
                     {
                         "kind": "handoff",
@@ -500,11 +705,11 @@ class Engine:
                     }
                 )
                 continue
-            visible.extend(wire_items(texts, final=True))
+            visible.extend(visible_items(texts, final=True))
             state["finished"] = True
             break
         response = {
-            "id": "resp_aero_" + uuid.uuid4().hex,
+            "id": events.response["id"] if events else "resp_aero_" + uuid.uuid4().hex,
             "object": "response",
             "created_at": int(time.time()),
             "status": "completed",

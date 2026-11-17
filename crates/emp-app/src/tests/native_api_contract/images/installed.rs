@@ -16,7 +16,7 @@ const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z
 #[ignore = "requires an explicitly selected Codex CLI and isolated loopback access"]
 fn installed_codex_image_tools_use_the_selected_subscription_for_generate_and_edit() {
     for edit in [false, true] {
-        image_turn(edit, SignIn::Paid);
+        image_turn(edit, SignIn::Paid, false);
     }
 }
 
@@ -25,12 +25,22 @@ fn installed_codex_image_tools_use_the_selected_subscription_for_generate_and_ed
 fn installed_codex_free_and_local_key_mcp_generate_and_edit_images() {
     for sign_in in [SignIn::Free, SignIn::LocalKey] {
         for edit in [false, true] {
-            image_turn(edit, sign_in);
+            image_turn(edit, sign_in, false);
         }
     }
 }
 
-fn image_turn(edit: bool, sign_in: SignIn) {
+#[test]
+#[ignore = "requires an explicitly selected Codex CLI and isolated loopback access"]
+fn installed_codex_aero_native_and_free_mcp_generate_and_edit_images() {
+    for sign_in in [SignIn::Paid, SignIn::Free] {
+        for edit in [false, true] {
+            image_turn(edit, sign_in, true);
+        }
+    }
+}
+
+fn image_turn(edit: bool, sign_in: SignIn, aero: bool) {
     let mcp = !matches!(sign_in, SignIn::Paid);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -56,6 +66,17 @@ fn image_turn(edit: bool, sign_in: SignIn) {
     std::fs::write(home.join("auth.json"),serde_json::to_vec(&json!({"auth_mode":"chatgpt",
         "tokens":{"access_token":"native-fixture","refresh_token":"","id_token":id_token,"account_id":"native-owner"},
         "last_refresh":"2026-10-16T00:00:00Z"})).unwrap()).unwrap();
+    if aero {
+        server
+            .state
+            .backend
+            .configuration
+            .test_config()
+            .lock()
+            .unwrap()["aero_profiles"] = json!([
+            {"id":"aero/image-fixture","name":"Image fixture","planner":{"model":"selected/gpt-6.1-sol"},"executor":{"model":"selected/gpt-6.1-sol"}}
+        ]);
+    }
     let config = server.state.backend.configuration.snapshot().unwrap();
     let seed = emp_codex::merged_catalog::build_catalog(
         &json!({"providers":[{"id":"fixture","protocol":"responses","auth_mode":"api_key","api_key":"fake","base_url":"http://127.0.0.1:1/v1"}],
@@ -67,12 +88,13 @@ fn image_turn(edit: bool, sign_in: SignIn) {
     let mut model = seed["models"][0].clone();
     model["slug"] = json!("gpt-6.1-sol");
     model["input_modalities"] = json!(["text", "image"]);
-    let catalog = emp_codex::merged_catalog::build_catalog(
+    let mut catalog = emp_codex::merged_catalog::build_catalog(
         &config,
         &json!({"models":[model]}),
         &BTreeMap::new(),
         &BTreeMap::new(),
     );
+    crate::services::aero::augment_catalog(&config, &mut catalog);
     let catalog_path = home.join("client-models.json");
     std::fs::write(&catalog_path, serde_json::to_vec(&catalog).unwrap()).unwrap();
     let settings = format!(
@@ -140,14 +162,14 @@ fn image_turn(edit: bool, sign_in: SignIn) {
     } else {
         json!({"prompt":"synthetic image generation"})
     };
-    let upstream = upstream::spawn(listener, image_args, edit, mcp);
+    let upstream = upstream::spawn(listener, image_args, edit, mcp, aero);
     let mut codex = Codex::start(home);
     codex.rpc(1,"initialize",json!({"clientInfo":{"name":"emp_image_fixture","version":"1"},"capabilities":{"experimentalApi":true}}));
     codex.send(json!({"method":"initialized"}));
     let started = codex.rpc(
         2,
         "thread/start",
-        json!({"model":"selected/gpt-6.1-sol","modelProvider":if mcp { "openai" } else { "emp_fixture" },
+        json!({"model":if aero {"aero/Image fixture"} else {"selected/gpt-6.1-sol"},"modelProvider":if mcp { "openai" } else { "emp_fixture" },
         "cwd":home,"approvalPolicy":if mcp {"on-request"} else {"never"},"sandbox":"read-only","ephemeral":true}),
     );
     codex.rpc(3,"turn/start",json!({"threadId":started["thread"]["id"],"input":[{"type":"text","text":"Generate the synthetic image fixture"}]}));
