@@ -60,7 +60,7 @@ def stop(process, process_group=False):
             process.wait()
 
 
-def start_backend(stack, binary, root, configuration, env_overrides=None, *, device_fixture=False):
+def start_backend(stack, binary, root, configuration, env_overrides=None, *, device_fixture=False, graceful=False):
     config = root / 'config.json'
     config.write_text(json.dumps(configuration))
     env = {key: value for key, value in os.environ.items() if key not in {
@@ -103,4 +103,7 @@ def start_backend(stack, binary, root, configuration, env_overrides=None, *, dev
     state = root / 'state'
     token = wait_for(lambda: json.loads((state / 'web-session.json').read_text(encoding='utf-8'))['token']
                      if (state / 'web-session.json').exists() else None)
+    if graceful:
+        stack.callback(process.wait, timeout=8)
+        stack.callback(request, base + '/api/quit', {}, {'X-EMP-Session': token})
     return base, url, state, {'X-EMP-Session': token}

@@ -76,6 +76,7 @@ def run(binary, output, browser_enabled, without_python=False, native_codex=Fals
             binary,
             root,
             configuration,
+            graceful=True,
             env_overrides={
                 "PATH": str(root / "no-system-python"),
                 "PYTHONIOENCODING": "ascii",
@@ -491,8 +492,8 @@ def run(binary, output, browser_enabled, without_python=False, native_codex=Fals
             "native_codex": "passed" if native_codex else "not run",
             "upstream_calls": len(upstream.received),
         }
-        (output / "emp-e2e.json").write_text(json.dumps(summary, indent=2) + "\n")
-        print(json.dumps(summary, indent=2))
+    (output / "emp-e2e.json").write_text(json.dumps(summary, indent=2) + "\n")
+    print(json.dumps(summary, indent=2))
 
 
 if __name__ == "__main__":
