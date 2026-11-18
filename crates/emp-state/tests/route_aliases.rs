@@ -92,7 +92,7 @@ fn subscription_name_changes_preserve_old_conversation_routes() {
         json!({"models":[{"slug":"ho91/gpt-6.1-sol","availability_nux":{"message":"Try it"}}]});
     assert_eq!(
         client_catalog(&config, catalog.clone())["models"][0]["slug"],
-        "工作/gpt-6.1-sol"
+        "%E5%B7%A5%E4%BD%9C/gpt-6.1-sol"
     );
     assert_eq!(
         resolve_client_model(&config, "工作/gpt-6.1-sol").as_deref(),
@@ -111,7 +111,10 @@ fn subscription_name_changes_preserve_old_conversation_routes() {
         Some("ho91/gpt-6.1-sol")
     );
     let visible = client_catalog(&changed, catalog);
-    assert_eq!(visible["models"][0]["slug"], "家庭/gpt-6.1-sol");
+    assert_eq!(
+        visible["models"][0]["slug"],
+        "%E5%AE%B6%E5%BA%AD/gpt-6.1-sol"
+    );
     assert_eq!(
         visible["models"][0]["availability_nux"]["message"],
         "Try it"
@@ -155,7 +158,7 @@ fn readable_catalog_names_preserve_canonical_routes_and_old_names_after_rename()
     let catalog = json!({"models":[{"slug":route},{"slug":"gpt-6.1-sol"}]});
     assert_eq!(
         client_catalog(&config, catalog.clone())["models"][0]["slug"],
-        "床/vendor/deepseek"
+        "%E5%BA%8A/vendor/deepseek"
     );
     assert_eq!(client_route_aliases(&config)["床/vendor/deepseek"], route);
     let mut renamed = config.clone();
@@ -170,7 +173,7 @@ fn readable_catalog_names_preserve_canonical_routes_and_old_names_after_rename()
     );
     assert_eq!(
         client_catalog(&reloaded, catalog)["models"][0]["slug"],
-        "新服务/vendor/deepseek"
+        "%E6%96%B0%E6%9C%8D%E5%8A%A1/vendor/deepseek"
     );
 }
 
@@ -198,7 +201,7 @@ fn aggregate_route_names_remain_readable_and_existing_sessions_survive_changes()
     let catalog = json!({"models":[{"slug":"gpt-6.1-sol"}, {"slug":route}]});
     assert_eq!(
         client_catalog(&config, catalog.clone())["models"][1]["slug"],
-        "auto222 · ⭐"
+        "auto222 %C2%B7 %E2%AD%90"
     );
     assert_eq!(client_route_aliases(&config)["auto222 · ⭐"], route);
 
@@ -209,7 +212,7 @@ fn aggregate_route_names_remain_readable_and_existing_sessions_survive_changes()
     assert_eq!(client_route_aliases(&renamed)["auto333 · ⭐"], route);
     assert_eq!(
         client_catalog(&renamed, catalog.clone())["models"][1]["slug"],
-        "auto333 · ⭐"
+        "auto333 %C2%B7 %E2%AD%90"
     );
     let mut reused = renamed.clone();
     reused["model_groups"].as_array_mut().unwrap().push(json!({
@@ -255,7 +258,7 @@ fn aggregate_name_collision_does_not_redirect_a_provider_or_account() {
     assert!(!client_route_aliases(&config).contains_key("auto222/gpt-6.1-sol"));
     assert_eq!(
         client_catalog(&config, catalog.clone())["models"][1]["slug"],
-        "auto222 · gpt-6.1-sol"
+        "auto222 %C2%B7 gpt-6.1-sol"
     );
 
     let mut collision = config.clone();

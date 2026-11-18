@@ -39,7 +39,11 @@ impl CatalogSources {
                         .and_then(|auth| emp_codex::account_auth_headers(auth))
                 },
             )
-            .unwrap_or_else(|| native.clone());
+            .unwrap_or_else(|| {
+                let mut catalog = native.clone();
+                catalog["_emp_catalog_origin"] = serde_json::json!("reference");
+                catalog
+            });
             accounts.insert(id.to_owned(), catalog);
         }
         let native_auth = native_auth_document(&state.backend.accounts.native_auth_path);

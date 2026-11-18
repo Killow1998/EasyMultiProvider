@@ -7,6 +7,20 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 const COMPATIBILITY: &[&str] = &["available", "unavailable", "unknown"];
+const PROBE_FAILURES: &[&str] = &[
+    "not_found",
+    "untrusted_path",
+    "writable_path",
+    "untrusted_launcher",
+    "bundle_snapshot_failed",
+    "bundle_verification_failed",
+    "spawn_failed",
+    "process_failed",
+    "probe_timeout",
+    "probe_output_limit",
+    "unrecognized_version",
+    "probe_io",
+];
 const RUNTIME_SOURCES: &[&str] = &[
     "configured",
     "codex_app",
@@ -17,6 +31,7 @@ const RUNTIME_SOURCES: &[&str] = &[
     "cursor",
     "nvm",
     "path_cli",
+    "running",
 ];
 const CREDENTIAL_STATES: &[&str] = &["valid", "invalid", "unknown"];
 
@@ -349,6 +364,11 @@ fn runtime_report(state: &ServerState) -> Value {
                 "compatibility": choice(object.get("status").and_then(Value::as_str), COMPATIBILITY),
                 "source": choice(object.get("source").and_then(Value::as_str), RUNTIME_SOURCES),
                 "selected": object.get("helper").and_then(Value::as_bool) == Some(true),
+                "probe_failure": item["failure"].as_str().map(|value| choice(Some(value), PROBE_FAILURES)),
+                "launch_source": item["launch_source"].as_str().map(|value| choice(Some(value), &["private_bundle", "original"])),
+                "os_error": item["os_error"].as_i64(),
+                "exit_code": item["exit_code"].as_i64(),
+                "signal": item["signal"].as_i64(),
             }))
         })
         .collect::<Vec<_>>();

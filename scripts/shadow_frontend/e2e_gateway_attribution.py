@@ -25,10 +25,12 @@ def main():
             pass
 
         def do_POST(self):
-            self.rfile.read(int(self.headers['Content-Length']))
-            body = json.dumps({'id': 'fixture', 'object': 'chat.completion', 'model': 'upstream',
-                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'done'}, 'finish_reason': 'stop'}],
-                'usage': {'prompt_tokens': 7, 'completion_tokens': 3, 'total_tokens': 10}}).encode()
+            payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            response = {'id': 'fixture', 'object': 'chat.completion', 'model': payload['model'],
+                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'done'}, 'finish_reason': 'stop'}]}
+            if 'unreported fixture' not in json.dumps(payload['messages']):
+                response['usage'] = {'prompt_tokens': 7, 'completion_tokens': 3, 'total_tokens': 10}
+            body = json.dumps(response).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -44,14 +46,18 @@ def main():
         config = {'auto_enable_on_start': False,
             'providers': [{'id': 'fixture', 'name': 'Fixture', 'auth_mode': 'api_key', 'api_key': 'fixture-only',
                 'protocol': 'chat_completions', 'base_url': f'http://127.0.0.1:{upstream.server_port}/v1'}],
-            'models': [{'id': 'fixture/model', 'provider': 'fixture', 'upstream_id': 'upstream', 'enabled': True}]}
+            'models': [{'id': 'fixture/' + alias, 'provider': 'fixture', 'upstream_id': model, 'enabled': True}
+                for alias, model in [('model', 'upstream-one'), ('second', 'upstream-two')]]}
         backend, url, _, management = start_backend(stack, args.binary.resolve(), root, config)
         _, connection = request(backend + '/api/gateway', headers=management)
         _, device = request(backend + '/api/gateway/clients', {'name': 'Pi workstation'}, management)
+        assert request(backend + '/api/gateway/clients', {'name': 'Spare device'}, management)[0] == 200
         for client, key, extra in [
             ({'User-Agent': 'Pi/1.4.0', 'x-session-id': 'pi-task'}, connection['api_key'], {}),
             ({'User-Agent': 'Pi/1.4.0', 'session_id': 'pi-task'}, connection['api_key'], {}),
             ({'X-EMP-Client': 'Python nightly'}, device['api_key'], {}),
+            ({'X-EMP-Client': 'OMP'}, device['api_key'], {'input': 'unreported fixture'}),
+            ({'X-EMP-Client': 'OMP'}, device['api_key'], {'model': 'fixture/second'}),
             ({'User-Agent': 'OpenAI/Python 1.0'}, connection['api_key'], {'metadata': {'session_id': 'python-task'}}),
         ]:
             status, response = request(backend + '/v1/responses',
@@ -74,11 +80,13 @@ def main():
             browser.execute('closeModal();setLanguage(arguments[0]);', language)
             click('button[onclick="statistics.open()"]')
             click('[data-stats-view="calls"]')
-            wait_for(lambda: browser.execute('return document.querySelectorAll(".call-record").length;') == 4)
+            wait_for(lambda: browser.execute('return document.querySelectorAll(".call-record").length;') == 6)
             labels = browser.execute('return [...document.querySelectorAll(".call-session")].map(node=>node.childNodes[0].textContent);')
             assert 'Pi workstation' in labels and 'pi-task' in labels and 'python-task' in labels, labels
             browser.execute('''
-                const row=[...document.querySelectorAll('.call-record')].find(node=>node.querySelector('.call-session').childNodes[0].textContent==='Pi workstation');
+                const row=[...document.querySelectorAll('.call-record')].find(node=>
+                    node.querySelector('.call-session').childNodes[0].textContent==='Pi workstation' &&
+                    node.textContent.includes('Python nightly'));
                 row.querySelector('summary').click();
             ''')
             wait_for(lambda: browser.execute('return document.querySelector(".call-record[open]")?.textContent.includes("Python nightly");'))
@@ -97,9 +105,25 @@ def main():
             click('[data-settings-category="general"]')
             click('[data-gateway-open]')
             click('[data-gateway-usage]')
-            wait_for(lambda: browser.execute('return document.querySelector("#modal_body table")?.textContent.includes("Python nightly");'))
+            toggle = '.gateway-device-toggle'
+            wait_for(lambda: browser.execute('return document.querySelector(".gateway-device-toggle")?.getAttribute("aria-expanded");') == 'false')
+            assert browser.execute('''
+                return [...document.querySelectorAll('.gateway-usage-table tbody:not([hidden]) tr')]
+                    .map(row => [row.cells[0].textContent.trim(), row.cells[1].textContent.trim()]);
+            ''') == [['Pi workstation', '3'], ['Spare device', '0']]
+            click(toggle)
+            assert browser.execute(r'''
+                return [...document.querySelectorAll('.gateway-device-models:not([hidden]) tr')]
+                    .map(row => [row.cells[0].textContent.trim(), row.cells[1].textContent.trim(),
+                        row.cells[2].innerText.trim().replace(/\s+/g,' ')]);
+            ''') == [['upstream-one', '2', '7 / 3'], ['upstream-two', '1', '7 / 3']]
+            click('[data-gateway-days="7"]')
+            wait_for(lambda: browser.execute('return document.querySelector("[data-gateway-days][aria-pressed=true]")?.dataset.gatewayDays;') == '7')
+            assert browser.execute('return document.querySelector(".gateway-device-toggle").getAttribute("aria-expanded");') == 'true'
             screenshot('client-usage-' + language)
-            checks.append(language + ': Calls show client/device names, missing-session explanation, two external bills and per-client gateway usage')
+            click(toggle)
+            assert browser.execute('return !!document.querySelector(".gateway-device-models[hidden]");')
+            checks.append(language + ': Calls show client/device names, two external bills and expandable per-device model usage')
         report = {'passed': True, 'real_provider_calls': 0, 'checks': checks}
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report))

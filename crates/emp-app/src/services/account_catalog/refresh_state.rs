@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-pub(crate) const CATALOG_MAX_AGE: Duration = Duration::from_secs(15 * 60);
+const CATALOG_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const CATALOG_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
 const BASE_RETRY: Duration = Duration::from_secs(30);
@@ -228,6 +228,22 @@ impl CatalogRefreshState {
 mod tests {
     use super::CatalogRefreshState;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn successful_refresh_waits_a_day_unless_forced_or_the_source_changes() {
+        let state = CatalogRefreshState::default();
+        let now = Instant::now();
+        assert!(state.due("account", "owner-a", 0, false, now));
+        state.completed("account", true, false, now);
+        let day = Duration::from_secs(86_400);
+        let before_expiry = now + day - Duration::from_secs(1);
+        assert!(!state.due("account", "owner-a", 0, false, before_expiry));
+        assert!(state.due("account", "owner-a", 0, true, before_expiry));
+        assert!(state.due("account", "owner-a", 0, false, now + day));
+        state.mark_fresh("account", "owner-a", 0, now + day);
+        assert!(!state.due("account", "owner-a", 0, false, now + day));
+        assert!(state.due("account", "owner-b", 0, false, now + day));
+    }
 
     #[test]
     fn authentication_failures_back_off_and_source_changes_retry_immediately() {

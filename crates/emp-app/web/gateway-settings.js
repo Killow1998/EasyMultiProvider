@@ -1,4 +1,4 @@
-function createGatewaySettings({api, openModal, notice, $, esc, tr, modelName, serviceName, help}) {
+function createGatewaySettings({api, openModal, notice, $, esc, tr, help}) {
   let currentRead;
   async function read(path) {
     const owner=$('modal_body').firstElementChild, request=currentRead={};
@@ -50,13 +50,40 @@ function createGatewaySettings({api, openModal, notice, $, esc, tr, modelName, s
     },null,{back:()=>devices(back)});
     if(key)$('modal_body').querySelector('[data-created-copy]').onclick=()=>navigator.clipboard.writeText(key).then(()=>notice(tr('core.gateway_key_copied')),error=>notice(error.message,true));
   }
-  async function usage(back, days = 1) {
+  async function usage(back, days = 1, expanded = new Set()) {
     const end = Date.now() / 1000;
-    const report = await read(`/api/gateway/usage?start=${end - days * 86400}&end=${end}`);
+    const report = await read(`/api/gateway/usage?group=device&start=${end - days * 86400}&end=${end}`);
     if(!report)return;
-    const rows = report.rows.map(row => `<tr><td title="${esc(row.peer_ips || '')}">${esc(row.caller_name || row.client_kind || tr('gateway.source_' + (['local','shared'].includes(row.caller_id) ? row.caller_id : 'unknown')))}${row.caller_name && row.client_kind ? `<small>${esc(row.client_kind)}</small>` : ''}</td><td>${esc(modelName(row.model_id))}<small class="muted">${esc(serviceName(row.provider_id))} · ${row.operation === 'decisions' ? tr('core.decision_models') : esc(row.operation)}</small></td><td>${row.calls}</td><td title="${esc(tr('gateway.reported_calls',{reported:row.reported_calls,calls:row.calls}))}">${row.input_tokens === null ? '—' : compactUsage(row.input_tokens).html} / ${row.output_tokens === null ? '—' : compactUsage(row.output_tokens).html}</td><td title="${esc(tr('gateway.priced_calls', {priced:row.priced_calls, calls:row.calls}))}">${row.cost_nanos === null ? '—' : compactUsage(row.cost_nanos / 1e9,true).html}</td></tr>`).join('');
-    openModal(tr('gateway.usage'), `<div class="call-toolbar"><div class="period-presets" id="gateway_usage_days" role="group" aria-label="${esc(tr('gateway.period'))}">${[1,7,15,30].map(value => `<button type="button" class="secondary${value === days ? ' active' : ''}" data-gateway-days="${value}" aria-pressed="${value === days}">${tr('gateway.days',{days:value})}</button>`).join('')}</div>${help(tr('gateway.usage_help'))}</div><div class="usage-table"><table><thead><tr>${['gateway.caller','reports.model','reports.count','gateway.tokens','gateway.estimated_cost'].map(key => `<th>${tr(key)}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="5">${tr('gateway.no_calls')}</td></tr>`}</tbody></table></div>`, '', null, null, {back, reopen:() => usage(back,days)});
-    $('gateway_usage_days').querySelectorAll('[data-gateway-days]').forEach(button => button.onclick = () => usage(back,Number(button.dataset.gatewayDays)));
+    const metrics = row => `<td>${row.calls}</td>
+      <td title="${esc(tr('gateway.reported_calls',{reported:row.reported_calls,calls:row.calls}))}">
+        ${row.input_tokens === null ? '—' : compactUsage(row.input_tokens).html} / ${row.output_tokens === null ? '—' : compactUsage(row.output_tokens).html}
+      </td>
+      <td title="${esc(tr('gateway.priced_calls',{priced:row.priced_calls,calls:row.calls}))}">
+        ${row.cost_nanos === null ? '—' : compactUsage(row.cost_nanos / 1e9,true).html}
+      </td>`;
+    const rows = report.rows.map((device, index) => {
+      const name = esc(device.caller_name);
+      const nameCell = `<span class="gateway-device-name">${name}</span>`;
+      const detailsId = `gateway_device_models_${index}`;
+      const open = expanded.has(device.caller_id);
+      const label = device.models.length
+        ? `<button type="button" class="gateway-device-toggle" data-icon="chevron-right" data-device-id="${esc(device.caller_id)}" aria-expanded="${open}" aria-controls="${detailsId}">${name}</button>`
+        : nameCell;
+      const summary = `<tbody><tr><th scope="row">${label}</th>${metrics(device)}</tr></tbody>`;
+      if (!device.models.length) return summary;
+      const models = device.models.map(model => `<tr><th scope="row">${esc(model.model || tr('reports.unknown_model'))}</th>${metrics(model)}</tr>`).join('');
+      return summary + `<tbody id="${detailsId}" class="gateway-device-models" ${open ? '' : 'hidden'}>${models}</tbody>`;
+    }).join('');
+    openModal(tr('gateway.usage'), `<div class="call-toolbar"><div class="period-presets" id="gateway_usage_days" role="group" aria-label="${esc(tr('gateway.period'))}">${[1,7,15,30].map(value => `<button type="button" class="secondary${value === days ? ' active' : ''}" data-gateway-days="${value}" aria-pressed="${value === days}">${tr('gateway.days',{days:value})}</button>`).join('')}</div>${help(tr('gateway.usage_help'))}</div><div class="usage-table gateway-usage-table"><table><thead><tr>${['gateway.device_or_model','reports.count','gateway.tokens','gateway.estimated_cost'].map(key => `<th scope="col">${tr(key)}</th>`).join('')}</tr></thead>${rows || `<tbody><tr><td colspan="4">${tr('gateway.no_clients')}</td></tr></tbody>`}</table></div>`, '', null, null, {back, reopen:() => usage(back,days,expanded)});
+    $('gateway_usage_days').querySelectorAll('[data-gateway-days]').forEach(button => button.onclick = () => usage(back,Number(button.dataset.gatewayDays),expanded));
+    $('modal_body').querySelectorAll('.gateway-device-toggle').forEach(button => button.onclick = () => {
+      const details = $(button.getAttribute('aria-controls'));
+      const deviceId = button.dataset.deviceId;
+      if (details.hidden) expanded.add(deviceId);
+      else expanded.delete(deviceId);
+      details.hidden = !details.hidden;
+      button.setAttribute('aria-expanded', String(!details.hidden));
+    });
   }
   return {open};
 }

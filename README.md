@@ -90,7 +90,8 @@ An interrupted reset uses the same confirmed action; EMP handles the saved
 transaction files automatically. Developer-supplied external key overrides are
 reported as launch errors and do not enter this local-settings recovery flow.
 
-For the Linux `.tar.gz`, run these commands in the download directory:
+For Linux, extract the archive for your architecture. The stable packaging
+workflow also builds `EMP-linux-arm64.tar.gz`. This example uses x64:
 
 ~~~bash
 tar -xzf EMP-linux-x86_64.tar.gz
@@ -384,7 +385,7 @@ observed version from these locations (a configured binary wins):
   `~/.config/nvm`, or `~/.nvm`,
 - and, on Linux, `$CODEX_HOME/plugins/.plugin-appserver/codex`.
 
-Discovery covers Windows x64, Linux x64, macOS Intel and macOS Apple Silicon.
+Discovery covers Windows x64, Linux x64 and ARM64, macOS Intel and macOS Apple Silicon.
 EMP recognizes the known installation layouts of the CLI, IDE extension and
 desktop app on each platform.
 

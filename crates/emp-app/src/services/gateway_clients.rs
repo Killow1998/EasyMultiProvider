@@ -76,6 +76,18 @@ impl GatewayClients {
         )
     }
 
+    pub(crate) fn devices(&self) -> Vec<Caller> {
+        self.clients
+            .lock()
+            .expect("gateway clients")
+            .iter()
+            .map(|client| Caller {
+                id: client.id.clone(),
+                name: client.name.clone(),
+            })
+            .collect()
+    }
+
     pub(crate) fn issue(
         &self,
         name: &str,

@@ -9,12 +9,14 @@ built on its native operating system.
 | --- | --- | --- |
 | `windows-2025` | Windows x64 | `EMP.exe`, `EMP.zip` |
 | `ubuntu-22.04` | Linux x86_64 | executable, `.tar.gz`, interactive installer `.sh` |
+| `ubuntu-22.04-arm` | Linux ARM64 | executable, `.tar.gz`, interactive installer `.sh` |
 | `macos-15-intel` | macOS Intel | executable, `.tar.gz`, `.app` in `.dmg` |
 | `macos-15` | macOS Apple Silicon | executable, `.tar.gz`, `.app` in `.dmg` |
 
 Linux binaries target Ubuntu 22.04 or a compatible distribution with glibc 2.35
-or newer. macOS artifacts are architecture-specific, unsigned development
-builds; they are not universal binaries.
+or newer. For HTTPS requests and self-update, minimal Ubuntu containers need
+the `ca-certificates` package. macOS artifacts are architecture-specific,
+unsigned development builds; they are not universal binaries.
 
 ## Local build
 
@@ -66,10 +68,11 @@ candidate that must roll back. On macOS it installs from the real `.dmg`. On
 Linux it also installs the archive with `install-user.sh` into an isolated
 desktop-user home. The packaged runtime and its install/update scripts do not
 require Python.
-The Linux bootstrap installer (`EMP-linux-x86_64-install.sh`) needs only
-`curl`, `tar`, `gzip` and `sha256sum`: it resolves the latest stable tag from
-the `releases/latest` redirect, verifies the archive against the published
-`EMP-linux-x86_64.tar.gz.sha256`, checks every archive entry, and lets the
+The Linux bootstrap installers (`EMP-linux-x86_64-install.sh` and
+`EMP-linux-arm64-install.sh`) use `curl`, `tar`, `gzip` and `sha256sum`. The
+script selects the archive for the host architecture, resolves the latest
+stable tag, verifies the archive against its published SHA-256 sidecar, checks
+every archive entry, and lets the
 verified binary migrate an older configuration with
 `EMP --emp-migrate-config SOURCE TARGET`.
 
@@ -109,10 +112,9 @@ Chinese rendering in the UI; no remote release body is changed by a local edit.
 
 ### Build and publication
 
-Pull requests run one Linux format, lint and test job. A newer push to the same
-pull request cancels its superseded run. The checks are not repeated on merge,
-and ordinary source or documentation changes do not build release packages.
-Focused checks can also be run locally before opening a pull request.
+Pull requests run workspace checks on Linux and exit tests on Windows. A newer
+push to the same pull request cancels its superseded run. Focused checks can
+also be run locally before opening a pull request.
 
 The **Package** workflow runs only for a version tag or an explicit manual
 dispatch. Its temporary Actions artifacts expire after one day; published
@@ -122,15 +124,18 @@ restricted-permission regressions. Tests use isolated installations; a green
 run does not establish compatibility with every installed desktop App or IDE
 extension, which requires checking the actual runtime and existing user state.
 
-The **Package** workflow builds on all four native runners, merges the outputs,
-checks the exact 22-file manifest and each SHA-256 sidecar with
-`cargo xtask validate-release`, and publishes six
+The **Package** workflow builds on five native runners, merges the outputs,
+checks the exact 28-file manifest and each SHA-256 sidecar with
+`cargo xtask validate-release`, and publishes nine
 user-facing assets:
 
 - `EMP.exe`
 - `EMP-linux-x86_64.tar.gz`
 - `EMP-linux-x86_64.tar.gz.sha256` (read by the Linux installer)
 - `EMP-linux-x86_64-install.sh`
+- `EMP-linux-arm64.tar.gz`
+- `EMP-linux-arm64.tar.gz.sha256`
+- `EMP-linux-arm64-install.sh`
 - `EMP-macos-x86_64.dmg`
 - `EMP-macos-arm64.dmg`
 

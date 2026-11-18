@@ -84,6 +84,7 @@ fn start_server(
     );
     let mut config = json!({
         "codex_base_url":base_url,
+        "native_catalog_path":root.join("native.json"),
         "providers":[],
         "models":[],
         "accounts":[{

@@ -71,10 +71,10 @@ fn run(
     .map_err(|_| "login_storage_failed")?;
     write_private(&dir.path().join("config.toml"), b"cli_auth_credentials_store = \"file\"\nmodel_catalog_json = \"quota-models.json\"\n[features]\nplugins = false\n").map_err(|_| "login_storage_failed")?;
     let mut command =
-        app_server_command(binary, dir.path()).map_err(|_| "login_engine_unavailable")?;
+        app_server_command(binary, dir.path()).map_err(|_| "login_engine_start_failed")?;
     // Login errors may contain sensitive upstream details; expose only mapped codes.
     command.stderr(Stdio::null());
-    let mut child = QuotaChild::spawn(&mut command).map_err(|_| "login_engine_unavailable")?;
+    let mut child = QuotaChild::spawn(&mut command).map_err(|_| "login_engine_start_failed")?;
     let stop = Arc::new(AtomicBool::new(false));
     let stdout = CancellablePipe::new(
         child.process.stdout.take().ok_or("login_protocol_error")?,
@@ -118,26 +118,35 @@ fn conversation(
     send(
         stdin,
         json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"easy-multi-provider","version":env!("CARGO_PKG_VERSION")},"capabilities":{}}}),
-    )?;
+    ).map_err(|_| "login_engine_start_failed")?;
     let mut deadline = Instant::now() + Duration::from_secs(45);
+    let mut initialized = false;
     let mut login_id = None;
     loop {
         if cancel.load(Ordering::Acquire) {
             return Err("login_cancelled");
         }
         if Instant::now() >= deadline {
-            return Err("login_expired");
+            return Err(if initialized {
+                "login_expired"
+            } else {
+                "login_engine_handshake_failed"
+            });
         }
         let line = match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(ProcessLine::Line(line)) => line,
             Err(RecvTimeoutError::Timeout) => continue,
+            Ok(ProcessLine::End) | Err(RecvTimeoutError::Disconnected) if !initialized => {
+                return Err("login_engine_start_failed");
+            }
             _ => return Err("login_protocol_error"),
         };
         let value: Value = serde_json::from_str(&line).map_err(|_| "login_protocol_error")?;
         if value["id"] == 1 {
-            if value.get("error").is_some() {
-                return Err("login_engine_unavailable");
+            if value.get("error").is_some() || value.get("result").is_none() {
+                return Err("login_engine_handshake_failed");
             }
+            initialized = true;
             send(stdin, json!({"method":"initialized"}))?;
             send(
                 stdin,

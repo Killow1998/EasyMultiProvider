@@ -2,6 +2,7 @@
 import argparse
 import contextlib
 import json
+import platform
 import re
 import shutil
 import subprocess
@@ -38,7 +39,8 @@ class Releases(BaseHTTPRequestHandler):
             'body': f'## 简体中文\n本地更新说明 {self.revision}\n## English\nCached release notes {self.revision}',
         }
         if self.history:
-            name = 'EMP-linux-x86_64.tar.gz'
+            arch = 'arm64' if platform.machine() in ('aarch64', 'arm64') else 'x86_64'
+            name = f'EMP-linux-{arch}.tar.gz'
             latest = {**release, 'tag_name': 'v9.0.2',
                 'body': '## 简体中文\n- 修复最新版本问题\n## English\n- Fix latest issue',
                 'assets': [{'name': name, 'digest': 'sha256:' + 'a' * 64, 'size': 8,

@@ -248,11 +248,11 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
         digest: "a".repeat(64),
     });
     manager.start("install").unwrap();
+    assert_eq!(server.join().unwrap(), 4);
     let deadline = Instant::now() + Duration::from_secs(12);
     while manager.snapshot().state != "error" && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(server.join().unwrap(), 4);
     let snapshot = manager.snapshot();
     assert_eq!(snapshot.error, "update_failed");
     let receipt = snapshot.failure.unwrap();
@@ -306,7 +306,7 @@ fn failed_candidate_launch_preserves_the_original_system_error_code() {
     assert_eq!(receipt.os_error, Some(libc::ENOENT));
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn dpkg_owned_install_requires_manual_migration_before_any_download() {
     use std::fs;
@@ -324,10 +324,11 @@ fn dpkg_owned_install_requires_manual_migration_before_any_download() {
 
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
+    let name = crate::update::release::current_asset_name().unwrap();
     let release = serde_json::json!({
         "tag_name":"v9.0.0", "draft":false, "prerelease":false,
-        "assets":[{"name":"EMP-linux-x86_64.tar.gz", "digest":format!("sha256:{}", "a".repeat(64)),
-            "size":7, "browser_download_url":format!("{base}/releases/download/v9.0.0/EMP-linux-x86_64.tar.gz") }]
+        "assets":[{"name":name, "digest":format!("sha256:{}", "a".repeat(64)),
+            "size":7, "browser_download_url":format!("{base}/releases/download/v9.0.0/{name}") }]
     })
     .to_string();
     let server = thread::spawn(move || {

@@ -153,6 +153,7 @@ mod tests {
             name: "ChatGPT App (Codex)",
             path: resource.clone(),
             unavailable: false,
+            running: false,
             host_version: Some("26.915.4065.0".into()),
             fallbacks: verified_candidates(&resource, &cache),
         };

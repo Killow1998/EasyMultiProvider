@@ -5,9 +5,9 @@ use sha2::{Digest, Sha256};
 
 pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) -> usize {
     listener.set_nonblocking(true).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(12);
     let mut requests = 0;
     for response in responses {
+        let deadline = Instant::now() + Duration::from_secs(12);
         let mut stream = loop {
             match listener.accept() {
                 Ok((stream, _)) => break stream,

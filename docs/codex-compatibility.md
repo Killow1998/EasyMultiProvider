@@ -8,6 +8,66 @@ independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 Older series leave routine maintenance; their dated acceptance records remain.
 
+## Runtime selection and account catalogs (2026-11-18 UTC)
+
+An available explicitly configured runtime takes precedence. Automatic selection
+prefers a confirmed running Codex runtime that passes the existing executable
+trust checks, then the highest engine version among equally ranked candidates.
+Without a confirmed running candidate, it selects the newest trusted installation
+found by the inventory. Known desktop installations remain separate candidates;
+an idle plugin copy cannot outrank a newer running managed app-server.
+
+Subscription discovery sends the selected helper's actual version in both
+`client_version` and its User-Agent. Helper selection also serves isolated quota
+and login operations; it does not select, replace or restart the working
+app-server. Cached version reads remain independent of process enumeration.
+
+EMP refreshes each eligible subscription catalog at startup and after 24 hours
+of freshness during normal operation. Source changes and manual refresh can
+trigger an earlier fetch. After an upstream error, EMP keeps the last successful
+catalog and retries with backoff.
+
+The picker and model settings show the account's current catalog. Missing models
+stay in the client catalog with `visibility: hide` to preserve existing routes
+and saved context settings. Native reference metadata can resolve historical
+routes for imported accounts waiting on their first catalog. Refreshing an
+account restores visibility for models that upstream lists again.
+
+Catalog listing is distinct from successful inference authorization. Upstream
+refusals retain their HTTP status, specific message and diagnostic cause.
+Plan guidance is matched to concrete model IDs: official pages describe
+[GPT-6.2 Sol/Astra](https://openai.com/index/introducing-gpt-6-2-astra-sol/),
+[GPT-6.1 Sol](https://openai.com/index/introducing-gpt-6-1-sol/), and
+[GPT-6 Sol](https://openai.com/index/introducing-gpt-6-sol-and-luna/) as paid-plan
+models, while the last page explicitly includes Free/Go for GPT-6 Luna.
+[Work/Codex guidance](https://help.openai.com/en/articles/20001275-chatgpt-work-and-codex)
+and the [model availability table](https://help.openai.com/en/articles/20001354-gpt-6-and-other-models-in-chatgpt)
+distinguish GPT-6 Astra, GPT-6.1 Terra and older GPT-5.6 variants by product and
+plan. API Free-tier limits do not establish ChatGPT subscription access.
+
+## Unicode route identifiers and WebSocket (2026-11-17 UTC)
+
+Client catalog IDs percent-encode non-ASCII bytes and literal percent signs.
+Chinese, emoji and other Unicode display names remain unchanged. Configuration,
+credential ownership, persisted model IDs and billing identities retain their
+original values. Route resolution accepts both the encoded IDs and existing
+readable aliases, including retained names after a rename. Native routing hints
+use the selected upstream model instead of the gateway alias.
+
+Codex 0.169 builds `x-codex-routing-hint` before connecting to EMP. A raw Unicode
+model ID fails its WebSocket header conversion and triggers client retries before
+HTTP fallback. The ASCII-safe catalog IDs avoid that failure; EMP does not disable
+WebSocket or introduce a retry. The installed-engine regression requires the
+selected Chinese model to return its answer over WebSocket.
+
+The stock Codex CLI uses model IDs directly in some model-switch messages; those
+messages show percent escapes. Its model picker and EMP keep readable display
+names. A runtime that already fell back to HTTP retains that decision in memory;
+reselecting a model does not clear it. After updating EMP, restart that runtime,
+resume the original thread and select the same model from the refreshed picker.
+The installed-engine recovery test preserves the thread ID and history and
+completes its next request over WebSocket.
+
 ## External WebSocket continuation (2026-11-04 UTC)
 
 The development candidate based on v0.13.25 removes repeated history resends

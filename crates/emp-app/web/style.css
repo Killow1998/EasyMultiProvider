@@ -332,6 +332,16 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .account-value small{display:block;color:var(--muted)}
 .account-value-row button{height:36px;margin:0;flex:none}
 .account-usage .usage-table{overflow:auto}
+.gateway-usage-table table{min-width:420px}
+.gateway-usage-table tbody td,.gateway-usage-table tbody th{vertical-align:middle}
+.gateway-usage-table tbody th{color:var(--text);overflow-wrap:anywhere}
+.gateway-device-toggle{border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;text-align:left;margin:0;padding:5px 4px;max-width:100%}
+.gateway-device-toggle:hover{background:var(--secondary-hover)}
+.gateway-device-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.gateway-device-toggle[aria-expanded="true"]::before{transform:rotate(90deg)}
+.gateway-device-name{display:block;padding:5px 0 5px 25px}
+.gateway-device-models{background:var(--panel-soft)}
+.gateway-device-models th[scope="row"]{padding-inline-start:45px;font-weight:400}
 .settings-list{min-width:0}
 .settings-choices{grid-template-columns:repeat(3,minmax(0,1fr))}
 .settings-choices .choice{height:auto;margin:0}

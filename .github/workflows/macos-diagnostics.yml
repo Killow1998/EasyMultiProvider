@@ -1,0 +1,99 @@
+name: macOS Codex diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_runner:
+        description: Runner matching the optional official DMG
+        type: choice
+        options: [macos-15, macos-15-intel]
+        default: macos-15
+      app_dmg_url:
+        description: Optional direct HTTPS URL on an official OpenAI download host
+        type: string
+      app_dmg_sha256:
+        description: SHA-256 of the optional DMG
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      RUST_TEST_THREADS: 1
+      CODEX_HOME: ${{ runner.temp }}/emp-diagnostic-codex-home
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "22"
+      - name: Test discovery, executable trust, browser login and shutdown
+        run: |
+          sw_vers
+          uname -m
+          mkdir -m 700 "$CODEX_HOME"
+          cargo +1.93.1 test --locked -p emp-codex --lib runtime_inventory::
+          cargo +1.93.1 test --locked -p emp-codex --lib executable_trust::
+          cargo +1.93.1 test --locked -p emp-app --lib browser_login_classifies_engine_failures
+          cargo +1.93.1 test --locked -p emp-app --lib tray::actions::tests
+          cargo +1.93.1 test --locked -p emp-app --test desktop_startup --test exit_process
+      - name: Probe the official standalone CLI
+        run: |
+          prefix="$RUNNER_TEMP/emp-official-cli"
+          npm install --prefix "$prefix" --no-audit --no-fund @openai/codex@0.169.0
+          printf 'EMP_MACOS_DIAGNOSTIC_CLI=%s\n' "$prefix/node_modules/.bin/codex" >> "$GITHUB_ENV"
+          EMP_MACOS_DIAGNOSTIC_CLI="$prefix/node_modules/.bin/codex" \
+            cargo +1.93.1 test --locked -p emp-codex --lib installed_macos_cli_discovery -- --ignored --nocapture
+      - name: Inspect and probe the official desktop bundle
+        if: matrix.runner == inputs.app_runner && (inputs.app_dmg_url != '' || inputs.app_dmg_sha256 != '')
+        env:
+          EMP_APP_DMG_URL: ${{ inputs.app_dmg_url }}
+          EMP_APP_DMG_SHA256: ${{ inputs.app_dmg_sha256 }}
+        run: |
+          case "$EMP_APP_DMG_URL" in
+            https://*.oaistatic.com/*|https://cdn.openai.com/*) ;;
+            *) echo 'Supply an official OpenAI download URL'; exit 2 ;;
+          esac
+          [[ "$EMP_APP_DMG_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
+          fixture="$(mktemp -d "$RUNNER_TEMP/emp-codex-app.XXXXXX")"
+          mkdir -p "$fixture/mount" "$fixture/Applications"
+          curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
+            --output "$fixture/source.dmg" "$EMP_APP_DMG_URL"
+          printf '%s  %s\n' "$EMP_APP_DMG_SHA256" "$fixture/source.dmg" | shasum -a 256 --check
+          hdiutil attach "$fixture/source.dmg" -readonly -nobrowse -mountpoint "$fixture/mount"
+          trap 'hdiutil detach "$fixture/mount"' EXIT
+          for name in Codex.app ChatGPT.app; do
+            if [ -d "$fixture/mount/$name" ]; then
+              app="$fixture/Applications/$name"
+              ditto --rsrc --extattr --qtn "$fixture/mount/$name" "$app"
+              break
+            fi
+          done
+          test -n "${app:-}"
+          /usr/bin/codesign --display -vv "$app"
+          /usr/bin/codesign --verify --deep --strict --all-architectures "$app"
+          /usr/sbin/spctl --assess --type execute --verbose=4 "$app" || echo "spctl assessment exit: $?"
+          for file in "$app" "$app/Contents/Resources/codex" \
+              "$app/Contents/Resources/codex-cli/CodexCLI.app" \
+              "$app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"; do
+            [ -e "$file" ] || continue
+            ls -ld "$file"
+            file "$file"
+            if xattr -p com.apple.quarantine "$file" >/dev/null 2>&1; then
+              echo 'com.apple.quarantine present'
+            else
+              echo 'com.apple.quarantine absent'
+            fi
+          done
+          export EMP_MACOS_DIAGNOSTIC_APP="$app"
+          cargo +1.93.1 test --locked -p emp-codex --lib installed_macos_ -- --ignored --nocapture

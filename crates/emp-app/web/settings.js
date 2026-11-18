@@ -1,6 +1,6 @@
 // Feature state is private; the page supplies current data and UI operations.
-function createSettings({getState, cloneState, persistState, openModal, api, notice, $, esc, t, tr, modelName, serviceName, quotaDisplay, help, contextHelp, openAppIcon, addService, presentationOptions = () => '', collaborationHelp = () => ''}) {
-  const gatewaySettings = createGatewaySettings({api, openModal, notice, $, esc, tr, modelName, serviceName, help});
+function createSettings({getState, cloneState, persistState, openModal, api, notice, $, esc, t, tr, modelName, quotaDisplay, help, contextHelp, openAppIcon, addService, presentationOptions = () => '', collaborationHelp = () => ''}) {
+  const gatewaySettings = createGatewaySettings({api, openModal, notice, $, esc, tr, help});
   const decisions = createDecisionSettings({getState, cloneState, persistState, openModal, api, $, esc, tr, help, addService, openGateway:gatewaySettings.open});
   const aggregates = createAggregateSettings({getState, cloneState, persistState, openModal, $, esc, tr, modelName, help});
   function openSettings(section) {
@@ -27,8 +27,9 @@ function createSettings({getState, cloneState, persistState, openModal, api, not
     const ultra = `<div class="setting-row"><div class="setting-title">${tr('models.ultra_actual_effort')}</div><button type="button" class="secondary" data-icon="chevron-right" data-ui-action="ultra-settings" aria-label="${tr('models.ultra_actual_effort')}"></button></div>`;
     const gateway = `<div class="setting-row"><div class="setting-title">${tr('core.gateway_connection')}</div><button type="button" class="secondary" data-icon="chevron-right" data-gateway-open aria-label="${tr('core.gateway_connection')}"></button></div>`;
     const decision = `<div class="setting-row"><div><div class="setting-title">${tr('core.decision_models')}</div><p class="setting-help">${esc(state.providers.find(provider => provider.id === state.decision_provider)?.decision_api?.model || tr('core.decision_unconfigured'))}</p></div><button type="button" class="secondary" data-icon="chevron-right" data-decision-open aria-label="${tr('core.decision_models')}"></button></div>`;
+    const quit = window.EMP_PREVIEW ? '' : `<div class="setting-row"><div class="setting-title">${t('quit_emp')}</div><button type="button" class="secondary" data-icon="chevron-right" data-quit-open aria-label="${t('quit_emp')}"></button></div>`;
     const rows = {
-      general:presentation + `<div class="setting-row"><div class="setting-title">${tr('icons.title')}</div><button type="button" class="secondary" data-icon="chevron-right" data-app-icon-open aria-label="${tr('icons.title')}"></button></div>` + toggle('auto_enable_on_start', state.auto_enable_on_start !== false, 'models.start_emp_automatically', 'models.enable_emp_when_the_app_opens') + gateway,
+      general:presentation + `<div class="setting-row"><div class="setting-title">${tr('icons.title')}</div><button type="button" class="secondary" data-icon="chevron-right" data-app-icon-open aria-label="${tr('icons.title')}"></button></div>` + toggle('auto_enable_on_start', state.auto_enable_on_start !== false, 'models.start_emp_automatically', 'models.enable_emp_when_the_app_opens') + gateway + quit,
       external:collaboration + toggle('subscription_search', state.subscription_search?.enabled !== false, 'models.codex_web_search_for_external_models', 'models.use_a_codex_subscription_for_external_model_web_searches') + decision,
       native:background + ultra + routing
     };
@@ -38,6 +39,11 @@ function createSettings({getState, cloneState, persistState, openModal, api, not
     if (iconButton) iconButton.onclick = () => openAppIcon(reopen);
     if (decisionButton) decisionButton.onclick = () => decisions.open(reopen);
     const gatewayButton = $('modal_body').querySelector('[data-gateway-open]');
+    const quitButton = $('modal_body').querySelector('[data-quit-open]');
+    if (quitButton) quitButton.onclick = () => openModal(t('quit_emp'), `<p>${tr('core.quit_confirm')}</p>`, t('quit_emp'), async () => {
+      await api('/api/quit', {method:'POST', body:'{}'});
+      notice(tr('core.quitting'));
+    }, null, {back:reopen});
     if (!gatewayButton) return;
     gatewayButton.onclick = async () => {
       gatewayButton.disabled = true;

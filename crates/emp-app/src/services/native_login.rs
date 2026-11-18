@@ -22,7 +22,7 @@ enum LoginState {
 }
 struct Pending {
     helper: SubscriptionLogin,
-    _engine: Option<crate::services::runtime::HelperBinary>,
+    _engine: crate::services::runtime::HelperBinary,
     expected: Option<Value>,
     account_name: Option<String>,
     started: Instant,
@@ -150,12 +150,24 @@ pub(crate) fn execute(
                     None,
                 )
             };
-            let engine = crate::services::runtime::helper_binary(state).ok();
-            let selector = engine
-                .as_deref()
-                .unwrap_or(&state.backend.accounts.codex_binary);
-            let helper = SubscriptionLogin::start(selector, method)
-                .map_err(|_| "login_engine_unavailable")?;
+            let (engine, helper) = (|| {
+                let engine = crate::services::runtime::helper_binary(state)?;
+                let helper = SubscriptionLogin::start(&engine, method)?;
+                Ok::<_, emp_codex::quota::QuotaError>((engine, helper))
+            })()
+            .map_err(|error| {
+                let code = match error.code() {
+                    "quota_runtime_missing" => "login_engine_missing",
+                    "quota_runtime_untrusted" => "login_engine_untrusted",
+                    _ => "login_engine_probe_failed",
+                };
+                state.backend.diagnostics.journal.event(
+                    "warning",
+                    "codex_login_start_failed",
+                    &json!({"phase":"engine_selection","code":code}),
+                );
+                code
+            })?;
             *login = LoginState::Pending(Pending {
                 helper,
                 _engine: engine,
@@ -200,7 +212,14 @@ pub(crate) fn execute(
             });
             *login = match result {
                 Ok(value) => LoginState::Completed(value),
-                Err(code) => LoginState::Failed(code),
+                Err(code) => {
+                    state.backend.diagnostics.journal.event(
+                        "warning",
+                        "codex_login_failed",
+                        &json!({"code":code}),
+                    );
+                    LoginState::Failed(code)
+                }
             };
         }
     }

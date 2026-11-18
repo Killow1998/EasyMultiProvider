@@ -109,18 +109,19 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
       const result=await api('/api/accounts/'+encodeURIComponent(candidate.account.id)+'/models'+(refresh?'/refresh':''),{...(refresh?{method:'POST',body:'{}'}:{}),signal:controller.signal});
       if(!current(candidate)||controller.signal.aborted)return;
       capture(candidate);candidate.models=result.models;render(candidate);
-      if(refresh)$('modal_status').textContent=tr("models.model_limits_refreshed");
+      if(refresh)$('modal_status').textContent=tr("models.model_list_refreshed");
     }catch(error){if(current(candidate)&&!controller.signal.aborted)$('modal_status').textContent=error.message;}
     finally{if(current(candidate)&&refresh)button.disabled=false;}
   }
   function open(id,navigation={}){
     const state=getState(),account=state.native_account?.id===id?state.native_account:(state.accounts||[]).find(a=>a.id===id);if(!account)return;
     if(account.duplicate&&account.duplicate_of==='当前 Codex 登录')return notice(tr("models.adjust_model_visibility_from_the_native_account"),true);
-    const candidate={account,native:account.native===true,models:state.subscription_models||[],hidden:new Set(account.hidden_models||[]),windows:{...(account.model_context_windows||{})},syncModels:new Set(),controller:new AbortController()};
+    const native=account.native===true;
+    const candidate={account,native,models:native?(state.subscription_models||[]):[],hidden:new Set(account.hidden_models||[]),windows:{...(account.model_context_windows||{})},syncModels:new Set(),controller:new AbortController()};
     candidate.sources=[account,...subscriptionPeers(state,id,candidate.native)].map(source=>({label:source.native?'Native':source.name||tr("models.imported_settings"),hidden:new Set(source.hidden_models||[]),windows:source.model_context_windows||{}}));
     candidate.resolved=new Set();
     const body=`<p class="muted">${tr("models.leave_blank_for_the_default_context_rename_models_in")}</p>
-      <div class="toolbar"><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh">${tr("models.refresh_model_limits")}</button></div>
+      <div class="toolbar"><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh">${tr("models.refresh_model_list")}</button></div>
       <div class="subscription-list-head"><span>${tr("models.visible_in_codex_model")}</span><span>${tr("models.maximum_context_window_tokens")} ${help(tr("models.settings_cannot_exceed_the_online_catalog_limit_leave_blank"))}</span></div>
       <div id="subscription_model_list" class="model-selection"></div>`;
     services.open(id,'account','edit',body,tr("models.save_changes"),async()=>{

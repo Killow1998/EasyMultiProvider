@@ -35,7 +35,7 @@ pub fn run(args: &[String]) -> Result {
     if target.os == Os::Linux && !is_root()? {
         native_user_install(&artifacts.join(format!("{}.tar.gz", target.artifact_base())))?;
         println!("Linux archive install smoke passed");
-        launcher_preserves_arguments_config_and_update_target()?;
+        launcher_preserves_arguments_config_and_update_target(target)?;
         println!("Linux launcher smoke passed");
     }
     Ok(())
@@ -381,7 +381,7 @@ fn native_user_install(archive: &Path) -> Result {
     Ok(())
 }
 
-fn launcher_preserves_arguments_config_and_update_target() -> Result {
+fn launcher_preserves_arguments_config_and_update_target(target: Target) -> Result {
     let temporary = temporary_directory("emp-user-install-")?;
     let root = temporary.path();
     let source = root.join("archive");
@@ -449,7 +449,7 @@ fn launcher_preserves_arguments_config_and_update_target() -> Result {
         }
         let job = root.join(format!("update-{custom_xdg}"));
         fs::create_dir(&job).map_err(|error| error.to_string())?;
-        let archive = job.join("EMP-linux-x86_64.tar.gz");
+        let archive = job.join(target.update_package());
         let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
             fs::File::create(&archive).map_err(|error| error.to_string())?,
             flate2::Compression::default(),

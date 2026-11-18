@@ -173,7 +173,7 @@ pub(crate) fn wait(state: Arc<ServerState>) -> bool {
             state.backend.diagnostics.journal.event(
                 "warning",
                 "desktop_tray_unavailable",
-                &serde_json::json!({}),
+                &serde_json::json!({"stage":"create","pid":std::process::id()}),
             );
             return false;
         }
@@ -192,14 +192,19 @@ pub(crate) fn wait(state: Arc<ServerState>) -> bool {
                 initial.copy().failure_title,
                 initial.copy().tray_unavailable,
             );
+            state.backend.diagnostics.journal.event(
+                "warning",
+                "desktop_tray_unavailable",
+                &serde_json::json!({"stage":"action_worker","pid":std::process::id()}),
+            );
             return false;
         }
     };
-    state
-        .backend
-        .diagnostics
-        .journal
-        .event("info", "desktop_tray_started", &serde_json::json!({}));
+    state.backend.diagnostics.journal.event(
+        "info",
+        "desktop_tray_started",
+        &serde_json::json!({"pid":std::process::id()}),
+    );
     #[cfg(windows)]
     crate::cli::desktop::hide_owned_console();
     let mut current = initial;
@@ -222,6 +227,11 @@ pub(crate) fn wait(state: Arc<ServerState>) -> bool {
         }
     }
     drop(tray);
+    state.backend.diagnostics.journal.event(
+        "info",
+        "desktop_tray_stopped",
+        &serde_json::json!({"pid":std::process::id()}),
+    );
     let _ = worker.join();
     true
 }

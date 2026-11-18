@@ -10,6 +10,7 @@ use crate::{
 };
 use emp_state::usage::ledger::UsageLedger;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::net::TcpStream;
 
 pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
@@ -28,8 +29,54 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
             return json_error_response(400, status_text(400), "Invalid report period", None, &[]);
         }
     };
-    match state.backend.usage.ledger.query_callers(start, end) {
-        Ok(report) => json_response(&report),
+    let by_device = query_values(request.target, "group")
+        .first()
+        .map(String::as_str)
+        == Some("device");
+    let devices = by_device.then(|| state.backend.gateway_clients.devices());
+    let device_ids = devices.as_ref().map(|devices| {
+        devices
+            .iter()
+            .map(|device| device.id.as_str())
+            .collect::<Vec<_>>()
+    });
+    match state
+        .backend
+        .usage
+        .ledger
+        .query_callers(start, end, device_ids.as_deref())
+    {
+        Ok(mut report) => {
+            if let Some(devices) = devices {
+                let rows = report["rows"].as_array_mut().expect("caller usage rows");
+                let mut recorded: BTreeMap<_, _> = std::mem::take(rows)
+                    .into_iter()
+                    .map(|row| {
+                        (
+                            row["caller_id"].as_str().expect("caller ID").to_owned(),
+                            row,
+                        )
+                    })
+                    .collect();
+                for device in devices {
+                    let mut row = recorded.remove(&device.id).unwrap_or_else(|| {
+                        json!({
+                            "caller_id": device.id,
+                            "calls": 0,
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "cost_nanos": 0,
+                            "reported_calls": 0,
+                            "priced_calls": 0,
+                            "models": []
+                        })
+                    });
+                    row["caller_name"] = json!(device.name);
+                    rows.push(row);
+                }
+            }
+            json_response(&report)
+        }
         Err(_) => json_error_response(
             503,
             status_text(503),

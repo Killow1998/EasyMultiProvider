@@ -4,7 +4,6 @@ set -eu
 
 REPOSITORY=Killow1998/EasyMultiProvider
 LATEST_URL=https://github.com/$REPOSITORY/releases/latest
-ARCHIVE_NAME=EMP-linux-x86_64.tar.gz
 TTY=/dev/tty
 
 if [ ! -r "$TTY" ] || [ ! -w "$TTY" ]; then
@@ -12,12 +11,13 @@ if [ ! -r "$TTY" ] || [ ! -w "$TTY" ]; then
     exit 1
 fi
 if [ "$(uname -s)" != Linux ]; then
-    echo 'This installer supports Linux x86_64 only.' >&2
+    echo 'This installer supports Linux only.' >&2
     exit 1
 fi
 case "$(uname -m)" in
-    x86_64|amd64) ;;
-    *) echo 'This release currently supports Linux x86_64 only.' >&2; exit 1 ;;
+    x86_64|amd64) ARCHIVE_NAME=EMP-linux-x86_64.tar.gz ;;
+    aarch64|arm64) ARCHIVE_NAME=EMP-linux-arm64.tar.gz ;;
+    *) echo 'This release supports Linux x86_64 and ARM64.' >&2; exit 1 ;;
 esac
 if [ "$(id -u)" = 0 ]; then
     echo 'Run EMP as your desktop user. Do not use sudo for this installer.' >&2

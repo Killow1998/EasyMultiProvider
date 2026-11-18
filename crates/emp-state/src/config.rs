@@ -101,7 +101,9 @@ use model_provider::{
 };
 pub use model_provider::{normalize_model, normalize_model_capability_sources, normalize_provider};
 mod route_aliases;
-pub use route_aliases::{client_catalog, client_route_aliases, resolve_client_model};
+pub use route_aliases::{
+    client_catalog, client_model_id, client_route_aliases, resolve_client_model,
+};
 mod service_names;
 pub use service_names::{preserve_service_route_names, validate_service_names};
 

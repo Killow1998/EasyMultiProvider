@@ -146,7 +146,7 @@ Unix 上还会查找 `NVM_DIR`、`$XDG_CONFIG_HOME/nvm`、`~/.config/nvm` 和 `~
 中的安装。即使桌面启动器的 `PATH` 不含 nvm，npm 安装的 Codex 也可以使用同一安装中
 受信任的 Node，无需手动创建 `codex` 或 `node` 链接。
 
-路径检测覆盖 Windows x64、Linux x64、macOS Intel 和 macOS Apple Silicon，
+路径检测覆盖 Windows x64、Linux x64 和 ARM64、macOS Intel 与 macOS Apple Silicon，
 支持这些平台上 CLI、IDE 插件和桌面 App 的已知安装布局。
 
 EMP 不会停止或重启你正在使用的 Codex 后端。余量查询使用独立的 CLI 辅助进程，
@@ -214,7 +214,7 @@ Native、Subscription 和 External Provider 上下文标签。左侧模型列表
 最简单的桌面启动方式是：
 
 - **Windows：**双击 `EMP.exe`。
-- **Linux `.tar.gz`：**在下载目录运行以下命令，再从应用菜单打开 **EMP**：
+- **Linux `.tar.gz`：**在下载目录解压对应架构的包，再从应用菜单打开 **EMP**。以下以 x64 为例。正式打包的 ARM64 产物为 `EMP-linux-arm64.tar.gz`。
 
   ```bash
   tar -xzf EMP-linux-x86_64.tar.gz

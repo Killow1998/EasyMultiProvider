@@ -100,8 +100,15 @@ pub(crate) fn resolve_headers(
     } else {
         NativeAuth::Forward
     };
-    let headers = request_headers(auth, incoming, stream)
+    let mut headers = request_headers(auth, incoming, stream)
         .map_err(|error| NativeHttpError::router(error.status(), error.to_string()))?;
+    if let Some(hint) = headers.get_mut("x-codex-routing-hint") {
+        let suffix = hint.find(';').map(|index| &hint[index..]).unwrap_or("");
+        *hint = format!(
+            "model={}{suffix}",
+            emp_state::config::client_model_id(&route.upstream_model)
+        );
+    }
     crate::services::usage::identities::remember(state, route, &headers);
     Ok(headers)
 }

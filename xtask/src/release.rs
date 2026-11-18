@@ -5,12 +5,15 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const PRIMARY_ARTIFACTS: [&str; 11] = [
+const PRIMARY_ARTIFACTS: [&str; 14] = [
     "EMP.exe",
     "EMP.zip",
     "EMP-linux-x86_64",
     "EMP-linux-x86_64.tar.gz",
     "EMP-linux-x86_64-install.sh",
+    "EMP-linux-arm64",
+    "EMP-linux-arm64.tar.gz",
+    "EMP-linux-arm64-install.sh",
     "EMP-macos-x86_64",
     "EMP-macos-x86_64.tar.gz",
     "EMP-macos-x86_64.dmg",
@@ -21,10 +24,13 @@ const PRIMARY_ARTIFACTS: [&str; 11] = [
 
 /// The downloads shown on the release page. The Linux installer reads the
 /// archive's checksum sidecar.
-const PUBLIC_ARTIFACTS: [&str; 6] = [
+const PUBLIC_ARTIFACTS: [&str; 9] = [
     "EMP-linux-x86_64-install.sh",
     "EMP-linux-x86_64.tar.gz",
     "EMP-linux-x86_64.tar.gz.sha256",
+    "EMP-linux-arm64-install.sh",
+    "EMP-linux-arm64.tar.gz",
+    "EMP-linux-arm64.tar.gz.sha256",
     "EMP-macos-arm64.dmg",
     "EMP-macos-x86_64.dmg",
     "EMP.exe",

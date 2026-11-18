@@ -215,23 +215,39 @@ pub(crate) fn helper_binary(
             _prepared: None,
         });
     }
-    state
+    use emp_codex::runtime_inventory::HelperUnavailable;
+    let prepared = state
         .backend
         .integration
         .inventory
         .prepared_executable()
-        .and_then(|prepared| {
-            Some(HelperBinary {
-                selector: prepared.quota_selector().to_str()?.to_owned(),
-                _prepared: Some(prepared),
-            })
-        })
-        .ok_or_else(|| {
-            emp_codex::quota::QuotaError::new(
-                "No trusted executable Codex engine is available for this operation",
-                "quota_runtime_unavailable",
-            )
-        })
+        .map_err(|failure| {
+            let (message, code) = match failure {
+                HelperUnavailable::NotFound => (
+                    "No Codex CLI installation was found",
+                    "quota_runtime_missing",
+                ),
+                HelperUnavailable::Untrusted => (
+                    "Discovered Codex CLI installations did not pass trust checks",
+                    "quota_runtime_untrusted",
+                ),
+                HelperUnavailable::ProbeFailed => (
+                    "Codex CLI could not complete its version probe",
+                    "quota_runtime_probe_failed",
+                ),
+            };
+            emp_codex::quota::QuotaError::new(message, code)
+        })?;
+    let selector = prepared.quota_selector().to_str().ok_or_else(|| {
+        emp_codex::quota::QuotaError::new(
+            "The Codex CLI path cannot be read",
+            "quota_runtime_probe_failed",
+        )
+    })?;
+    Ok(HelperBinary {
+        selector: selector.to_owned(),
+        _prepared: Some(prepared),
+    })
 }
 
 pub(crate) fn mark_pending(state: &ServerState, target: &str, detail: &str) -> Result<(), ()> {

@@ -101,8 +101,6 @@ fn refresh_sources(state: &ServerState) -> Vec<RefreshSource> {
         }
         Err(_) => return Vec::new(),
     };
-    // ServerState configuration is normalized on load and after every save;
-    // validate_codex_base_url applies the HTTPS/loopback and credential rules.
     let Some(base) = config
         .get("codex_base_url")
         .and_then(Value::as_str)
@@ -110,14 +108,11 @@ fn refresh_sources(state: &ServerState) -> Vec<RefreshSource> {
     else {
         return Vec::new();
     };
-    // Populate/refresh observations outside the configuration lock. The
-    // persistence path must never prepare or launch an executable.
-    state.backend.integration.inventory.snapshot(false);
     let Some(client_version) = state
         .backend
         .integration
         .inventory
-        .selected_trusted_version()
+        .observe_selected_version()
     else {
         return Vec::new();
     };
@@ -131,15 +126,11 @@ fn refresh_sources(state: &ServerState) -> Vec<RefreshSource> {
         &state.backend.configuration.vault,
         &state.backend.accounts.native_auth_path,
     );
-    let accounts = config
-        .get("accounts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut counts = BTreeMap::<String, usize>::new();
-    for account in &accounts {
+    let accounts = config["accounts"].as_array().map_or(&[][..], Vec::as_slice);
+    let mut counts = BTreeMap::new();
+    for account in accounts {
         if let Some(id) = account.get("id").and_then(Value::as_str) {
-            *counts.entry(id.to_owned()).or_default() += 1;
+            *counts.entry(id).or_insert(0) += 1;
         }
     }
     for account in accounts {
@@ -156,7 +147,7 @@ fn refresh_sources(state: &ServerState) -> Vec<RefreshSource> {
         if let Some(source) = RefreshSource::account(
             state,
             &config,
-            &account,
+            account,
             base,
             client_version.clone(),
             generation,

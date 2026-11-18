@@ -100,6 +100,7 @@ pub(crate) fn asset_name(os: &str, arch: &str) -> Result<String> {
     match (os, arch) {
         ("windows", "x86_64") => Ok("EMP.exe".to_owned()),
         ("linux", "x86_64") => Ok("EMP-linux-x86_64.tar.gz".to_owned()),
+        ("linux", "aarch64") => Ok("EMP-linux-arm64.tar.gz".to_owned()),
         ("macos", "x86_64") => Ok("EMP-macos-x86_64.dmg".to_owned()),
         ("macos", "aarch64") => Ok("EMP-macos-arm64.dmg".to_owned()),
         _ => Err(UpdateError("unsupported_platform")),
@@ -220,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn release_asset_names_match_the_python_platform_contract() {
+    fn release_asset_names_match_supported_platforms() {
         assert_eq!(asset_name("windows", "x86_64").unwrap(), "EMP.exe");
         assert_eq!(
             asset_name("linux", "x86_64").unwrap(),
@@ -235,7 +236,11 @@ mod tests {
             "EMP-macos-arm64.dmg"
         );
         assert_eq!(
-            asset_name("linux", "aarch64"),
+            asset_name("linux", "aarch64").unwrap(),
+            "EMP-linux-arm64.tar.gz"
+        );
+        assert_eq!(
+            asset_name("linux", "arm"),
             Err(super::UpdateError("unsupported_platform"))
         );
     }
