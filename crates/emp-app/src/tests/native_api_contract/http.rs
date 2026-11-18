@@ -103,16 +103,13 @@ impl Drop for RefreshUpstream {
 }
 
 #[cfg_attr(windows, allow(dead_code))]
-fn account_server(
-    upstream: &RefreshUpstream,
-    codex_binary: &str,
-) -> (TempDir, ServerHandle, PathBuf) {
+fn account_server(base_url: &str, codex_binary: &str) -> (TempDir, ServerHandle, PathBuf) {
     let directory = tempfile::tempdir().expect("account temp dir");
     let root = crate::tests::credential_root(&directory);
     let config_path = root.join("config.json");
     let native_auth_path = root.join("codex/auth.json");
     std::fs::create_dir_all(native_auth_path.parent().unwrap()).unwrap();
-    let mut config = json!({"codex_base_url":upstream.base_url(),"providers":[],"models":[],
+    let mut config = json!({"codex_base_url":base_url,"providers":[],"models":[],
         "accounts":[{"id":"demo","name":"Demo","prefix":"demo","enabled":true,"hidden_models":[]}]});
     let auth_path = emp_state::account_auth_path(&config, "demo", &config_path).unwrap();
     config["accounts"][0]["auth_file"] = Value::String(auth_path.to_string_lossy().into_owned());
@@ -218,7 +215,7 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
             "protocol":"responses","auth_mode":"forward"
         }],
         "accounts":[{
-            "id":"demo","name":"Demo","prefix":"demo",
+            "id":"demo","name":"工作","prefix":"demo",
             "enabled":true,"hidden_models":[]
         }],
         "models":[]
@@ -267,6 +264,7 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
         "chatgpt-account-id: caller-owner",
         "thread-id: thread-fixture",
         "x-openai-subagent: subagent-fixture",
+        "x-codex-routing-hint: model=NativeName/upstream;tier=priority",
         &cookie,
     ];
     let forward = post(&server, "/v1/responses", &body("upstream"), &context);
@@ -274,12 +272,13 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
     let account = post(
         &server,
         "/v1/responses",
-        &body("demo/upstream"),
+        &body("%E5%B7%A5%E4%BD%9C/upstream"),
         &[
             &gateway,
             "Host: localhost:14200",
             "thread-id: thread-fixture",
             "x-openai-subagent: subagent-fixture",
+            "x-codex-routing-hint: model=%E5%B7%A5%E4%BD%9C/upstream;tier=priority",
         ],
     );
 
@@ -316,6 +315,10 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
         assert_eq!(observed.headers["content-encoding"], "zstd");
         assert_eq!(observed.headers["thread-id"], "thread-fixture");
         assert_eq!(observed.headers["x-openai-subagent"], "subagent-fixture");
+        assert_eq!(
+            observed.headers["x-codex-routing-hint"],
+            "model=upstream;tier=priority"
+        );
         assert_eq!(observed.body["model"], "upstream");
         assert_eq!(observed.body["future_request_field"]["opaque"], true);
         let original: Value = serde_json::from_slice(&body("upstream")).unwrap();
@@ -339,7 +342,7 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
         .expect("selected owner label");
     assert_eq!(label["category"], "subscription");
     assert_eq!(label["local_id"], "demo");
-    assert_eq!(label["name"], "Demo");
+    assert_eq!(label["name"], "工作");
     assert_eq!(label["email"], "s***@fixture.invalid");
     assert!(
         !serde_json::to_string(&saved)
@@ -477,7 +480,8 @@ for line in sys.stdin:
         print(json.dumps({'id':request['id'],'result':{'rateLimits':{'limitId':'codex','primary':{'usedPercent':7}}}}),flush=True)
 "#).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let (directory, server, auth_path) = account_server(&successful, script.to_str().unwrap());
+    let (directory, server, auth_path) =
+        account_server(&successful.base_url(), script.to_str().unwrap());
     let cookie = session_header(&server);
     let body = serde_json::to_vec(&json!({"model":"demo/upstream","input":"hello","stream":false}))
         .unwrap();
@@ -516,7 +520,7 @@ for line in sys.stdin:
     assert_eq!(decisions.len(), 1);
     assert_eq!(decisions[0]["fields"]["reason"], "account_refresh");
     assert_eq!(decisions[0]["fields"]["retry"], true);
-    let (directory, server, _) = account_server(&failed, "missing-test-codex");
+    let (directory, server, _) = account_server(&failed.base_url(), "missing-test-codex");
     let cookie = session_header(&server);
     let response = post(
         &server,
@@ -729,4 +733,34 @@ fn native_rejections_preserve_specific_cause_and_matching_diagnostics() {
             finished["fields"]["request_id"]
         );
     }
+}
+
+#[test]
+fn imported_account_model_refusal_keeps_the_upstream_status_and_diagnostics() {
+    let upstream = OneShotUpstream::start_wire(403, "application/json", None, vec![serde_json::to_vec(&json!({"error":{"type":"invalid_request_error","code":"model_not_allowed","message":"This account cannot use gpt-6.1-sol."}})).unwrap()]);
+    let (directory, server, _) = account_server(&upstream.base_url(), "missing-test-codex");
+    let wire = post(
+        &server,
+        "/v1/responses",
+        &serde_json::to_vec(&json!({"model":"demo/gpt-6.1-sol","input":"hello","stream":false}))
+            .unwrap(),
+        &[&session_header(&server)],
+    );
+    assert!(wire.starts_with("HTTP/1.1 403"), "{wire}");
+    let body: Value = serde_json::from_slice(response_parts(&wire).1).unwrap();
+    assert_eq!(body["error"]["code"], "auth_rejected");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("This account cannot use gpt-6.1-sol.")
+    );
+    server.shutdown().unwrap();
+    let records = crate::tests::internal_events_contract::journal(directory.path());
+    let rejection = records
+        .iter()
+        .find(|row| row["event"] == "upstream_request_rejected")
+        .unwrap();
+    assert_eq!(rejection["fields"]["status"], 403);
+    assert_eq!(rejection["fields"]["error_code"], "model_not_allowed");
 }

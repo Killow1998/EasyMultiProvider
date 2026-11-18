@@ -1,4 +1,4 @@
-//! Bounded version observations; raw process output never reaches the UI.
+use crate::executable_trust::TrustFailure;
 use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::io::{Read, Seek, SeekFrom};
@@ -8,6 +8,22 @@ use std::time::{Duration, Instant};
 
 pub(super) fn public(installed: Option<String>, status: &str) -> Value {
     json!({"installed":installed,"status":status})
+}
+
+pub(super) fn failed(reason: &str) -> Value {
+    json!({"installed":null,"status":if reason == "not_found" { "unavailable" } else { "unknown" },"failure":reason})
+}
+
+pub(super) fn trust_failure(error: TrustFailure) -> &'static str {
+    match error {
+        TrustFailure::Unavailable => "not_found",
+        TrustFailure::NotTrusted => "untrusted_path",
+        TrustFailure::Writable => "writable_path",
+        #[cfg(any(target_os = "macos", all(test, unix)))]
+        TrustFailure::SnapshotFailed => "bundle_snapshot_failed",
+        #[cfg(any(target_os = "macos", all(test, unix)))]
+        TrustFailure::BundleVerificationFailed => "bundle_verification_failed",
+    }
 }
 
 fn word(byte: u8) -> bool {
@@ -40,7 +56,7 @@ fn suffix(bytes: &[u8], position: &mut usize, prefix: u8) -> Option<String> {
     }
     (*position > start + 1).then(|| String::from_utf8_lossy(&bytes[start..*position]).into_owned())
 }
-fn parse(bytes: &[u8], start: usize) -> Option<(String, &'static str)> {
+fn parse(bytes: &[u8], start: usize) -> Option<String> {
     let mut position = start + usize::from(bytes.get(start) == Some(&b'v'));
     let major = number(bytes, &mut position, 4)?;
     if bytes.get(position) != Some(&b'.') {
@@ -61,10 +77,7 @@ fn parse(bytes: &[u8], start: usize) -> Option<(String, &'static str)> {
     {
         return None;
     }
-    Some((
-        format!("{major}.{minor}.{patch}{prerelease}{build}"),
-        "available",
-    ))
+    Some(format!("{major}.{minor}.{patch}{prerelease}{build}"))
 }
 fn classify(output: &str) -> Value {
     let bytes = output.as_bytes();
@@ -72,11 +85,11 @@ fn classify(output: &str) -> Value {
         if start > 0 && word(bytes[start - 1]) {
             continue;
         }
-        if let Some((version, status)) = parse(bytes, start) {
-            return public(Some(version), status);
+        if let Some(version) = parse(bytes, start) {
+            return public(Some(version), "available");
         }
     }
-    public(None, "unknown")
+    failed("unrecognized_version")
 }
 
 pub(super) fn observe(path: &Path) -> Value {
@@ -84,26 +97,28 @@ pub(super) fn observe(path: &Path) -> Value {
 }
 
 fn observe_with_path(path: &Path, inherited_path: Option<OsString>) -> Value {
-    observe_inner(path, inherited_path).unwrap_or_else(|error| {
-        public(
-            None,
-            if error.kind() == std::io::ErrorKind::NotFound {
-                "unavailable"
-            } else {
-                "unknown"
-            },
-        )
-    })
-}
-fn observe_inner(path: &Path, inherited_path: Option<OsString>) -> std::io::Result<Value> {
-    // Never execute a candidate that fails the executable trust policy
-    // (relative path, foreign owner, or writable ancestor directory).
-    let launch_directory = super::launcher::launcher_directory(path);
-    let Ok(prepared) = crate::executable_trust::PreparedExecutable::prepare(path) else {
-        return Ok(public(None, "unknown"));
+    let prepared = match crate::executable_trust::PreparedExecutable::prepare(path) {
+        Ok(prepared) => prepared,
+        Err(error) => return failed(trust_failure(error)),
     };
+    let mut observation =
+        probe(&prepared, path, inherited_path).unwrap_or_else(|_| failed("probe_io"));
+    observation["launch_source"] = json!(if prepared.is_snapshot() {
+        "private_bundle"
+    } else {
+        "original"
+    });
+    observation
+}
+
+fn probe(
+    prepared: &crate::PreparedExecutable,
+    selector: &Path,
+    inherited_path: Option<OsString>,
+) -> std::io::Result<Value> {
+    let launch_directory = super::launcher::launcher_directory(selector);
     let mut output = tempfile::tempfile()?;
-    let mut errors = tempfile::tempfile()?;
+    let errors = tempfile::tempfile()?;
     let mut command = Command::new(prepared.path());
     #[cfg(windows)]
     {
@@ -121,36 +136,49 @@ fn observe_inner(path: &Path, inherited_path: Option<OsString>) -> std::io::Resu
                 }
             }
             super::launcher::PathAdjustment::Refuse => {
-                return Ok(public(None, "unknown"));
+                return Ok(failed("untrusted_launcher"));
             }
         }
     } else if let Some(inherited_path) = inherited_path {
         command.env("PATH", inherited_path);
     }
-    let mut child = command
+    let mut child = match command
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
         .stderr(errors.try_clone()?)
-        .spawn()?;
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let mut result = failed("spawn_failed");
+            result["os_error"] = json!(error.raw_os_error());
+            return Ok(result);
+        }
+    };
     let deadline = Instant::now() + Duration::from_secs(2);
     let observed = (|| -> std::io::Result<_> {
         Ok(loop {
             if let Some(status) = child.try_wait()? {
-                break Some(status);
+                break Ok(status);
             }
-            if Instant::now() >= deadline
-                || output.metadata()?.len() > 2 * 1024 * 1024
+            let failure = if Instant::now() >= deadline {
+                Some("probe_timeout")
+            } else if output.metadata()?.len() > 2 * 1024 * 1024
                 || errors.metadata()?.len() > 32 * 1024
             {
+                Some("probe_output_limit")
+            } else {
+                None
+            };
+            if let Some(failure) = failure {
                 let _ = child.kill();
                 let _ = child.wait();
-                break None;
+                break Err(failure);
             }
             std::thread::sleep(Duration::from_millis(10));
         })
     })();
-    // Preserve the snapshot until even an I/O-error path has reaped its child.
     let status = match observed {
         Ok(status) => status,
         Err(error) => {
@@ -159,28 +187,24 @@ fn observe_inner(path: &Path, inherited_path: Option<OsString>) -> std::io::Resu
             return Err(error);
         }
     };
-    let Some(status) = status else {
-        return Ok(public(None, "unknown"));
+    let status = match status {
+        Ok(status) => status,
+        Err(failure) => return Ok(failed(failure)),
     };
+    if !status.success() {
+        let mut result = failed("process_failed");
+        result["exit_code"] = json!(status.code());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            result["signal"] = json!(status.signal());
+        }
+        return Ok(result);
+    }
     output.seek(SeekFrom::Start(0))?;
-    errors.seek(SeekFrom::Start(0))?;
     let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
     output.take(2 * 1024 * 1024).read_to_end(&mut stdout)?;
-    errors.take(32 * 1024).read_to_end(&mut stderr)?;
-    let stdout = String::from_utf8_lossy(&stdout);
-    let stderr = String::from_utf8_lossy(&stderr);
-    Ok(if status.success() {
-        classify(&stdout)
-    } else if status.code() == Some(127)
-        || format!("{stdout} {stderr}")
-            .to_lowercase()
-            .contains("not found")
-    {
-        public(None, "unavailable")
-    } else {
-        public(None, "unknown")
-    })
+    Ok(classify(&String::from_utf8_lossy(&stdout)))
 }
 
 #[cfg(test)]

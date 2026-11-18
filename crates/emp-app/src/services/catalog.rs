@@ -88,7 +88,7 @@ pub(crate) fn subscription_options(
     id: &str,
 ) -> Result<Vec<Value>, &'static str> {
     let catalog = if id == "@native" {
-        emp_codex::load_native_catalog(config)
+        Some(emp_codex::load_native_catalog(config))
     } else {
         let account = config["accounts"]
             .as_array()
@@ -100,15 +100,15 @@ pub(crate) fn subscription_options(
             })
             .and_then(Value::as_object)
             .ok_or("Subscription account is unavailable")?;
-        emp_codex::account_catalog(
+        emp_codex::cached_account_catalog(
             config.as_object().expect("config"),
             account,
             &mut |account| account_catalog_headers(account, &state.backend.configuration.vault),
         )
     };
-    Ok(emp_codex::management_views::subscription_model_options(
-        &catalog,
-    ))
+    Ok(catalog.as_ref().map_or_else(Vec::new, |catalog| {
+        emp_codex::management_views::subscription_model_options(catalog, false)
+    }))
 }
 
 pub(crate) fn subscription_model(

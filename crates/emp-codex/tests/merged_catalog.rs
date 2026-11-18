@@ -553,7 +553,7 @@ fn global_context_preference_changes_only_labels_for_every_catalog_source() {
 
     for (route, alias) in [
         ("native-model", "Native alias"),
-        ("sub/chat", "Account alias"),
+        ("sub/chat", "Account · Account alias"),
         ("demo/model", "Provider alias"),
     ] {
         assert!(
@@ -641,4 +641,43 @@ fn claude_46_picker_recovers_legal_efforts_and_default_from_unknown_saved_capabi
         assert!(levels.contains(&model["default_reasoning_level"].as_str().unwrap()));
     }
     assert_eq!(catalog["models"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn retained_and_reference_models_keep_history_metadata_without_picker_recommendations() {
+    let config = json!({"accounts":[
+        {"id":"free","name":"Free","prefix":"free","auth_file":"fixture.json","quota":{"plan_type":"free"}},
+        {"id":"reference","name":"Reference","prefix":"reference","auth_file":"reference.json"}
+    ]});
+    let native =
+        json!({"models":[{"slug":"gpt-6.2-sol","visibility":"list","supported_in_api":true}]});
+    let account = json!({"models":[
+        {"slug":"gpt-6.1-sol","visibility":"list","supported_in_api":true},
+        {"slug":"gpt-6-astra","visibility":"list","supported_in_api":true,"_emp_catalog_retained":true}
+    ]});
+    let mut reference = native.clone();
+    reference["_emp_catalog_origin"] = json!("reference");
+    let catalog = build_catalog(
+        &config,
+        &native,
+        &BTreeMap::from([("free".into(), account), ("reference".into(), reference)]),
+        &BTreeMap::new(),
+    );
+    let models = catalog["models"].as_array().unwrap();
+    assert_eq!(
+        models
+            .iter()
+            .find(|model| model["slug"] == "free/gpt-6.1-sol")
+            .unwrap()["visibility"],
+        "list",
+        "the actual account catalog wins over assumptions about the Free plan"
+    );
+    for route in ["free/gpt-6-astra", "reference/gpt-6.2-sol"] {
+        let retained = models
+            .iter()
+            .find(|model| model["slug"] == route)
+            .expect("existing sessions retain model metadata");
+        assert_eq!(retained["visibility"], "hide");
+        assert_eq!(retained["supported_in_api"], true);
+    }
 }

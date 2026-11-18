@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 pub struct PreparedExecutable {
     path: PathBuf,
     selection: PathBuf,
-    #[allow(dead_code)] // Owned for its cleanup, not read after preparation.
     snapshot: Option<tempfile::TempDir>,
 }
 
@@ -18,7 +17,13 @@ impl PreparedExecutable {
         if !path.is_absolute() {
             return Err(TrustFailure::NotTrusted);
         }
-        let canonical = path.canonicalize().map_err(|_| TrustFailure::Unavailable)?;
+        let canonical = path.canonicalize().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                TrustFailure::Unavailable
+            } else {
+                TrustFailure::NotTrusted
+            }
+        })?;
         match validate_executable(&canonical) {
             Ok(()) => Ok(Self {
                 path: canonical,
@@ -37,6 +42,10 @@ impl PreparedExecutable {
     /// The only path to execute. The snapshot owner must outlive the child.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn is_snapshot(&self) -> bool {
+        self.snapshot.is_some()
     }
 
     /// A selector for quota's independent resolver, preserving npm's original

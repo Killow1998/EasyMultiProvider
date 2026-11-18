@@ -83,22 +83,22 @@ fn snapshot_with_verifier(
         Some(parent) => builder.tempdir_in(parent),
         None => builder.tempdir(),
     }
-    .map_err(|_| TrustFailure::Unavailable)?;
+    .map_err(|_| TrustFailure::SnapshotFailed)?;
     let destination = directory.path().join("CodexCLI.app");
     let mut budget = CopyBudget {
         entries: 0,
         bytes: 0,
     };
-    copy_bundle(source, &destination, 0, &mut budget).map_err(|_| TrustFailure::NotTrusted)?;
+    copy_bundle(source, &destination, 0, &mut budget).map_err(|_| TrustFailure::SnapshotFailed)?;
     let executable = destination
         .join(ENGINE_RELATIVE)
         .canonicalize()
-        .map_err(|_| TrustFailure::Unavailable)?;
+        .map_err(|_| TrustFailure::SnapshotFailed)?;
     // The new owner and ALL destination ancestors must satisfy the unchanged
     // strict validator before we run even the signature verifier.
     validate_executable(&executable)?;
     if !verify(&destination, &executable) {
-        return Err(TrustFailure::NotTrusted);
+        return Err(TrustFailure::BundleVerificationFailed);
     }
     Ok((directory, executable))
 }

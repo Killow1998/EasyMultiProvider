@@ -49,16 +49,13 @@ pub(in crate::runtime_inventory) fn path_cli_in(path_var: &std::ffi::OsStr) -> O
 #[cfg(test)]
 pub(super) fn path_cli_in_for(path_var: &OsStr, platform: RuntimePlatform) -> Option<PathBuf> {
     let path_extensions = std::env::var_os("PATHEXT");
-    path_cli_in_with_extensions(path_var, platform, path_extensions.as_deref())
-}
-
-pub(super) fn path_cli_in_with_extensions(
-    path_var: &OsStr,
-    platform: RuntimePlatform,
-    path_extensions: Option<&OsStr>,
-) -> Option<PathBuf> {
-    let names = cli_command_names(platform, path_extensions);
-    path_cli_in_roots(std::env::split_paths(path_var), &names, platform)
+    let names = cli_command_names(platform, path_extensions.as_deref());
+    path_cli_in_roots_with_trust(
+        std::env::split_paths(path_var),
+        &names,
+        platform,
+        super::super::trust::trusted_binary,
+    )
 }
 
 pub(super) fn cli_command_names(
@@ -79,40 +76,43 @@ pub(super) fn cli_command_names(
     }
 }
 
-pub(super) fn path_cli_in_roots(
+pub(super) fn path_cli_candidates(
     roots: impl IntoIterator<Item = PathBuf>,
     names: &[String],
     platform: RuntimePlatform,
-) -> Option<PathBuf> {
-    path_cli_in_roots_with_trust(roots, names, platform, super::super::trust::trusted_binary)
+) -> impl Iterator<Item = PathBuf> {
+    roots
+        .into_iter()
+        .filter(|root| root.is_absolute())
+        .flat_map(move |root| {
+            names.iter().filter_map(move |name| {
+                let launcher = root.join(name);
+                launcher
+                    .is_file()
+                    .then(|| cli_runtime_candidate_for_launcher(&launcher, platform))
+                    .flatten()
+            })
+        })
 }
 
+#[cfg(test)]
 pub(super) fn path_cli_in_roots_with_trust(
     roots: impl IntoIterator<Item = PathBuf>,
     names: &[String],
     platform: RuntimePlatform,
     mut trusted_path: impl FnMut(&Path) -> Option<PathBuf>,
 ) -> Option<PathBuf> {
-    roots
-        .into_iter()
-        .filter(|root| !root.as_os_str().is_empty() && root.is_absolute())
-        .find_map(|root| {
-            names.iter().find_map(|name| {
-                let launcher = root.join(name);
-                if !executable(&launcher) {
-                    return None;
-                }
-                let candidate = cli_runtime_candidate_for_launcher(&launcher, platform)?;
-                let trusted = trusted_path(&candidate)?;
-                // Unix npm launchers are often symlinks; preserve their parent
-                // so version probing can locate the sibling Node executable.
-                Some(if platform.os == RuntimeOs::Windows {
-                    trusted
-                } else {
-                    candidate
-                })
-            })
+    path_cli_candidates(roots, names, platform).find_map(|candidate| {
+        if !executable(&candidate) {
+            return None;
+        }
+        let trusted = trusted_path(&candidate)?;
+        Some(if platform.os == RuntimeOs::Windows {
+            trusted
+        } else {
+            candidate
         })
+    })
 }
 fn newest(paths: impl Iterator<Item = PathBuf>) -> Option<PathBuf> {
     paths
@@ -201,17 +201,22 @@ fn desktop_app_candidates(
     paths
 }
 
-pub(super) fn app(
+pub(super) fn apps(
     home: &Path,
     user_home: &Path,
     platform: RuntimePlatform,
     system_root: &Path,
     package_roots: &[PathBuf],
-) -> Option<PathBuf> {
+) -> Vec<PathBuf> {
     desktop_app_candidates(home, user_home, platform, system_root, package_roots)
         .into_iter()
-        .find_map(|path| {
-            let canonical = runtime_file(&path)?;
+        .filter_map(|path| {
+            let canonical =
+                if platform.os == RuntimeOs::Macos && !path.is_symlink() && path.is_file() {
+                    path.canonicalize().ok()
+                } else {
+                    runtime_file(&path)
+                }?;
             let boundary = if platform.os == RuntimeOs::Macos {
                 path.ancestors()
                     .filter(|p| p.extension().is_some_and(|s| s == "app"))
@@ -232,6 +237,20 @@ pub(super) fn app(
             }
             Some(canonical)
         })
+        .collect()
+}
+
+#[cfg(test)]
+pub(super) fn app(
+    home: &Path,
+    user_home: &Path,
+    platform: RuntimePlatform,
+    system_root: &Path,
+    package_roots: &[PathBuf],
+) -> Option<PathBuf> {
+    apps(home, user_home, platform, system_root, package_roots)
+        .into_iter()
+        .next()
 }
 /// Known nvm roots only. This reads their direct Node-version children and
 /// never sources shell startup files or walks the user's home recursively.

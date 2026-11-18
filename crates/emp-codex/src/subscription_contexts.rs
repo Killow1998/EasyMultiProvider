@@ -105,7 +105,7 @@ fn subscription_limits(
     let Some(catalog) = catalog else {
         return BTreeMap::new();
     };
-    crate::management_views::subscription_model_options(catalog)
+    crate::management_views::subscription_model_options(catalog, true)
         .into_iter()
         .filter_map(|option| {
             let id = option.get("id")?.as_str()?.to_owned();

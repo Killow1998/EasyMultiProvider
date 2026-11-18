@@ -97,7 +97,8 @@ that checksum checks outside the privileged boundary cannot close. A detected
 `/usr/bin/EMP` or dpkg installation therefore shows two explicit choices:
 
 1. Recommended: restore native Codex and exit EMP, open the latest Release,
-   download `EMP-linux-x86_64.tar.gz`, then run:
+   download the archive for your machine (`EMP-linux-x86_64.tar.gz` or
+   `EMP-linux-arm64.tar.gz`), then extract it and run the installer. For x64:
 
    ```sh
    sudo apt remove easy-multi-provider

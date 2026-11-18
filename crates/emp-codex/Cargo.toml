@@ -14,7 +14,9 @@ emp-transport = { path = "../emp-transport" }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde_json = { workspace = true }
 serde = { workspace = true }
+semver = "1.0"
 sha2 = "0.10.9"
+sysinfo = { version = "0.37.2", default-features = false, features = ["system"] }
 plist = { version = "1.9", default-features = false }
 tempfile = "3.27"
 time = { version = "0.3.55", features = ["parsing"] }

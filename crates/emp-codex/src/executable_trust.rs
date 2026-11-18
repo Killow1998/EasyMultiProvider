@@ -33,6 +33,10 @@ pub(crate) enum TrustFailure {
     /// The target or an ancestor can be modified by another user.
     #[cfg_attr(not(unix), allow(dead_code))]
     Writable,
+    #[cfg(any(target_os = "macos", all(test, unix)))]
+    SnapshotFailed,
+    #[cfg(any(target_os = "macos", all(test, unix)))]
+    BundleVerificationFailed,
 }
 
 /// Validate a canonical absolute executable path.

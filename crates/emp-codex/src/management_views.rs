@@ -54,17 +54,18 @@ pub fn model_views(
     let models = catalog_models(config, native, &catalog, &baseline);
     let families = catalog_families(config, &models);
     json!({
-        "subscription_models":subscription_model_options(native),
+        "subscription_models":subscription_model_options(native, false),
         "catalog_models":models, "catalog_families":families,
     })
 }
 
 /// Subscription edit controls use the owner's unmodified catalog limits, not
 /// context overrides or display visibility from EMP configuration.
-pub fn subscription_model_options(catalog: &Value) -> Vec<Value> {
+pub fn subscription_model_options(catalog: &Value, include_retained: bool) -> Vec<Value> {
     array(catalog, "models").iter().filter(|model| {
         model.is_object() && !text(model, "slug").trim().is_empty()
             && visible(model) && model.get("supported_in_api") != Some(&Value::Bool(false))
+            && (include_retained || model["_emp_catalog_retained"] != true)
     }).map(|model| {
         let percentage = model.get("effective_context_window_percent")
             .filter(|value| truthy(value)).cloned().unwrap_or(json!(95));

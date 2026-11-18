@@ -21,7 +21,7 @@ struct Target {
     cli_package: &'static str,
 }
 
-fn matrix() -> [Target; 4] {
+fn matrix() -> [Target; 5] {
     [
         Target {
             name: "Windows x64",
@@ -44,6 +44,17 @@ fn matrix() -> [Target; 4] {
             executable: "codex",
             cli_triple: "x86_64-unknown-linux-musl",
             cli_package: "codex-linux-x64",
+        },
+        Target {
+            name: "Linux ARM64",
+            platform: RuntimePlatform {
+                os: RuntimeOs::Linux,
+                arch: RuntimeArch::Arm64,
+            },
+            editor_directory: "linux-aarch64",
+            executable: "codex",
+            cli_triple: "aarch64-unknown-linux-musl",
+            cli_package: "codex-linux-arm64",
         },
         Target {
             name: "macOS Intel",
@@ -106,10 +117,11 @@ fn canonical(path: &Path) -> PathBuf {
 }
 
 #[test]
-fn runtime_source_paths_cover_the_four_by_three_installation_matrix() {
+fn runtime_source_paths_cover_supported_platforms() {
     let all_editor_directories = [
         "windows-x86_64",
         "linux-x86_64",
+        "linux-aarch64",
         "macos-x86_64",
         "macos-aarch64",
     ];
@@ -403,7 +415,7 @@ fn runtime_source_paths_cover_the_four_by_three_installation_matrix() {
 }
 
 #[test]
-fn helper_selection_prefers_configured_available_then_first_available() {
+fn helper_selection_preserves_explicit_override() {
     let unavailable = json!({"source": "configured", "available": false});
     let configured = json!({"source": "configured", "available": true});
     let first_available = json!({"source": "app_server_daemon", "available": true});
@@ -421,6 +433,111 @@ fn helper_selection_prefers_configured_available_then_first_available() {
         Some(1),
         "configured available runtime retains precedence"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn broken_path_cli_does_not_hide_the_next_installation() {
+    use crate::runtime_inventory::{observe_candidate, trust::tests::script};
+
+    let root = fixture_root();
+    let broken = root.path().join("broken");
+    let healthy = root.path().join("opt/homebrew/bin");
+    let shared = root.path().join("shared");
+    for directory in [&broken, &healthy, &shared] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    let invalid = script(&broken, "codex", "exit 126", 0o700);
+    let untrusted = script(&shared, "codex", "echo codex-cli 99.0.0", 0o777);
+    let usable = script(&healthy, "codex", "echo codex-cli 0.169.1", 0o700);
+    let path = std::env::join_paths([broken, shared]).unwrap();
+    let candidates = discover_with_platform(
+        &root.path().join("codex-home"),
+        &root.path().join("user-home"),
+        None,
+        Some(&path),
+        &[],
+        DiscoveryEnvironment {
+            platform: Some(RuntimePlatform {
+                os: RuntimeOs::Macos,
+                arch: RuntimeArch::Arm64,
+            }),
+            path_extensions: None,
+            system_root: root.path(),
+            package_roots: &[],
+        },
+    );
+    assert_eq!(
+        candidates.iter().map(|item| &item.path).collect::<Vec<_>>(),
+        [&invalid, &untrusted, &usable],
+    );
+    let runtimes = candidates
+        .iter()
+        .map(|item| {
+            let mut observed = observe_candidate(item);
+            observed["available"] = json!(observed["status"] == "available");
+            observed
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(runtimes[0]["failure"], "process_failed");
+    assert_eq!(runtimes[0]["exit_code"], 126);
+    assert_eq!(runtimes[1]["failure"], "writable_path");
+    assert_eq!(choose_helper(&runtimes), Some(2));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires an official Codex CLI or desktop app fixture"]
+fn installed_macos_cli_discovery() {
+    use crate::runtime_inventory::observe_candidate;
+
+    let root = fixture_root();
+    let cli = PathBuf::from(std::env::var_os("EMP_MACOS_DIAGNOSTIC_CLI").unwrap());
+    let app = std::env::var_os("EMP_MACOS_DIAGNOSTIC_APP").map(PathBuf::from);
+    let user_home = app
+        .as_deref()
+        .map_or(root.path(), |path| path.parent().unwrap().parent().unwrap());
+    let candidates = discover_with_platform(
+        &root.path().join("codex"),
+        user_home,
+        None,
+        Some(cli.parent().unwrap().as_os_str()),
+        &[],
+        DiscoveryEnvironment {
+            platform: RuntimePlatform::current(),
+            path_extensions: None,
+            system_root: root.path(),
+            package_roots: &[],
+        },
+    );
+    let cli = candidates
+        .iter()
+        .find(|candidate| candidate.path == cli)
+        .unwrap();
+    let observation = observe_candidate(cli);
+    println!("Standalone Codex CLI: {observation}");
+    assert_eq!(observation["status"], "available");
+    if app.is_some() {
+        let bundled = candidates
+            .iter()
+            .filter(|candidate| candidate.source == "codex_app");
+        let observations = bundled
+            .map(|candidate| {
+                let observation = observe_candidate(candidate);
+                println!(
+                    "Bundled Codex CLI ({}): {observation}",
+                    candidate.path.display()
+                );
+                observation
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            observations
+                .iter()
+                .any(|item| item["status"] == "available"),
+            "{observations:?}"
+        );
+    }
 }
 
 #[test]
@@ -580,4 +697,46 @@ fn mac_intel_nested_chatgpt_engine_stays_inside_outer_bundle() {
             .is_none()
         );
     }
+}
+
+#[test]
+fn helper_selection_prefers_running_then_newest_trusted_runtime() {
+    let plugin = json!({"source":"codex_app", "available":true, "installed":"0.163.0-alpha.11.1"});
+    let daemon = json!({"source":"app_server_daemon", "available":true, "installed":"0.169.1", "running":true});
+    let newest = json!({"source":"cli", "available":true, "installed":"0.170.0"});
+    assert_eq!(
+        choose_helper(&[plugin.clone(), daemon.clone(), newest.clone()]),
+        Some(1)
+    );
+    assert_eq!(choose_helper(&[plugin.clone(), newest.clone()]), Some(1));
+    assert_eq!(
+        choose_helper(&[
+            daemon.clone(),
+            json!({"source":"cli", "available":true, "installed":"0.170.0", "running":true})
+        ]),
+        Some(1)
+    );
+    assert_eq!(
+        choose_helper(&[
+            plugin,
+            json!({"source":"running", "available":false, "installed":"0.171.0", "running":true}),
+            newest
+        ]),
+        Some(2)
+    );
+    assert_eq!(
+        choose_helper(&[
+            json!({"source":"configured", "available":true, "installed":"0.163.0-alpha.11.1"}),
+            daemon
+        ]),
+        Some(0)
+    );
+    assert_eq!(
+        choose_helper(&[
+            json!({"available":true, "installed":"0.169.0-alpha.9"}),
+            json!({"available":true, "installed":"0.169.0-alpha.11"}),
+            json!({"available":true, "installed":"0.169.0"})
+        ]),
+        Some(2)
+    );
 }

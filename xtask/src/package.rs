@@ -43,7 +43,7 @@ impl Target {
         };
         let os = match (std::env::consts::OS, arch) {
             ("windows", "x86_64") => Os::Windows,
-            ("linux", "x86_64") => Os::Linux,
+            ("linux", _) => Os::Linux,
             ("macos", _) => Os::Macos,
             (os, arch) => return Err(format!("unsupported packaging target: {os}/{arch}")),
         };
@@ -988,6 +988,10 @@ echo created"#,
                 arch: "x86_64",
             },
             Target {
+                os: Os::Linux,
+                arch: "arm64",
+            },
+            Target {
                 os: Os::Macos,
                 arch: "x86_64",
             },
@@ -1005,6 +1009,7 @@ echo created"#,
             [
                 "EMP.exe",
                 "EMP-linux-x86_64.tar.gz",
+                "EMP-linux-arm64.tar.gz",
                 "EMP-macos-x86_64.dmg",
                 "EMP-macos-arm64.dmg"
             ]

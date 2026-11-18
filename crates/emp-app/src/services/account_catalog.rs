@@ -63,15 +63,11 @@ pub(crate) fn refresh(
                 .ok_or(CatalogRefreshError::Invalid(
                     "Subscription backend is unavailable",
                 ))?;
-            // Version probing may prepare a signed desktop-engine snapshot. Do it
-            // explicitly here, after releasing the configuration mutex; persistence
-            // only reads the already verified observation and checks its identity.
-            state.backend.integration.inventory.snapshot(false);
             let client_version = state
                 .backend
                 .integration
                 .inventory
-                .selected_trusted_version()
+                .observe_selected_version()
                 .ok_or(CatalogRefreshError::Invalid(
                     "Codex engine version is unavailable; model refresh was not started",
                 ))?;
@@ -127,7 +123,7 @@ pub(crate) fn refresh(
                 .map_err(|_| CatalogRefreshError::Internal)?;
             receipt.check("catalog_published", Some(true));
             Ok(
-                json!({"models":emp_codex::management_views::subscription_model_options(&persisted.catalog)}),
+                json!({"models":emp_codex::management_views::subscription_model_options(&persisted.catalog, false)}),
             )
         },
     )

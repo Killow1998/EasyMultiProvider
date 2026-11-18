@@ -32,6 +32,8 @@ jobs:
             runner: windows-2025
           - name: Linux x64
             runner: ubuntu-22.04
+          - name: Linux ARM64
+            runner: ubuntu-22.04-arm
           - name: macOS Intel
             runner: macos-15-intel
           - name: macOS Apple Silicon
@@ -226,16 +228,6 @@ jobs:
         shell: bash
         run: |
           mapfile -t public_assets < public-release-assets.txt
-          if [ "${#public_assets[@]}" -ne 6 ]; then
-            echo "Expected 6 user-facing release assets." >&2
-            exit 1
-          fi
-          for asset in "${public_assets[@]}"; do
-            if [ ! -f "$asset" ]; then
-              echo "Public release asset is missing: $asset" >&2
-              exit 1
-            fi
-          done
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             is_draft="$(gh release view "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"

@@ -42,6 +42,9 @@ pub fn build_catalog(
         );
         let family = family_identity(model, text(model, "slug"));
         metadata(model, &family, true, 0, index, 0);
+        if model["_emp_catalog_retained"] == true {
+            model["visibility"] = json!("hide");
+        }
     }
     let template = result.first().cloned().unwrap_or_else(|| json!({
         "base_instructions":"You are a helpful coding assistant.", "model_messages":{}, "shell_type":"shell_command"
@@ -96,6 +99,12 @@ pub fn build_catalog(
             entry["description"] = json!(format!("ChatGPT subscription: {label}"));
             entry["_emp_source_label"] = json!(label);
             entry["visibility"] = model.get("visibility").cloned().unwrap_or(json!("list"));
+            if model["_emp_catalog_retained"] == true
+                || catalog["_emp_catalog_origin"] == "reference"
+                || !account_catalogs.contains_key(text(account, "id"))
+            {
+                entry["visibility"] = json!("hide");
+            }
             entry["supported_in_api"] = model
                 .get("supported_in_api")
                 .cloned()
@@ -214,6 +223,7 @@ pub fn build_catalog(
             "_emp_source_order",
             "_emp_order",
             "_emp_source_label",
+            "_emp_catalog_retained",
         ] {
             entry.as_object_mut().expect("model object").remove(field);
         }
@@ -280,25 +290,26 @@ fn apply_presentation(config: &Value, entry: &mut Value) {
         .and_then(|values| values.get(text(entry, "_emp_family")))
         .filter(|value| value.as_object().is_some_and(|value| !value.is_empty()))
         .filter(|_| entry.get("_emp_family_verified") == Some(&Value::Bool(true)));
-    let mut presentation = family
+    let presentation = family
         .or_else(|| {
             config
                 .get("catalog_presentations")
                 .and_then(|values| values.get(text(entry, "slug")))
         })
         .filter(|value| value.is_object())
-        .unwrap_or(&empty)
-        .clone();
-    if family.is_some() {
-        presentation["_family_scoped"] = true.into();
-    }
+        .unwrap_or(&empty);
     let show_context = config
         .get("catalog_show_context")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    entry["display_name"] = json!(display_name(entry, &presentation, show_context));
-    entry["description"] = json!(description_with_context(entry, &presentation, show_context));
-    let policy = text(&presentation, "reasoning_summary");
+    let source = if family.is_some() || entry["_emp_source_rank"] == 1 {
+        text(entry, "_emp_source_label")
+    } else {
+        ""
+    };
+    entry["display_name"] = json!(display_name(entry, presentation, show_context, source));
+    entry["description"] = json!(description_with_context(entry, presentation, show_context));
+    let policy = text(presentation, "reasoning_summary");
     let supports = entry
         .get("supports_reasoning_summary_parameter")
         .and_then(Value::as_bool)
@@ -323,18 +334,14 @@ fn apply_presentation(config: &Value, entry: &mut Value) {
         entry["multi_agent_reasoning_effort"] = json!(effort);
     }
 }
-fn display_name(model: &Value, presentation: &Value, show_context: bool) -> String {
+fn display_name(model: &Value, presentation: &Value, show_context: bool, source: &str) -> String {
     let alias = text(presentation, "catalog_alias");
     let name = if !alias.is_empty() {
-        let source = if presentation.get("_family_scoped") == Some(&Value::Bool(true)) {
-            text(model, "_emp_source_label")
-        } else {
-            ""
-        };
         if source.is_empty() {
             alias.to_owned()
         } else {
-            format!("{source} · {alias}")
+            let prefix = format!("{source} · ");
+            format!("{prefix}{}", alias.strip_prefix(&prefix).unwrap_or(alias))
         }
     } else {
         strip_context(

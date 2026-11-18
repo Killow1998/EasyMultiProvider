@@ -25,11 +25,12 @@ Named keys authenticate model APIs and
 cannot manage EMP. Revocation rejects subsequent HTTP calls and the next
 generation on an existing WebSocket; it does not replay an in-flight request.
 
-**Caller usage** groups calls by key, operation, service/account and model. The
-peer address comes from the socket, not caller-supplied forwarding headers. Use
-different keys for different devices: a tunnel can give several clients the
-same visible peer address, while a shared key combines their usage. Tokens use
-reported counters, retaining unknown and reported zero as different values.
+**Device usage** shows one row for each configured device key, in the same order
+as **Device connections**. It totals that key's requests across clients and
+models, with zero calls for unused devices. **Calls** retains individual requests,
+including shared-key traffic and historical records for revoked keys. Use a
+separate key for each device behind a tunnel. Tokens use reported counters and
+keep unknown values distinct from reported zero.
 USD is an API-price estimate for calls with known pricing, not subscription
 quota. Decision calls have their own operation and do not enter conversation
 bills or generation TPS. A Decision disconnect cancels its upstream request.
@@ -40,9 +41,8 @@ Calls display the named device key or the client's supplied name instead of
 an unlinked-session label. `X-EMP-Client` supplies a client label, such as
 `Python nightly`, `Pi` or `OMP`. Otherwise EMP uses `originator`, then the first
 product in `User-Agent`. Client labels describe software; the authenticated key
-still determines device ownership. Device usage separates clients using the same
-key, and Calls shows both names when available. A shared key alone cannot identify
-which device sent a request.
+still determines device ownership. Device usage combines clients using the same
+named key. Calls shows both names when available.
 
 To group an external agent's requests into a session bill, send a stable,
 unique session ID in `session-id`, `x-session-id`, `session_id`, or JSON
@@ -68,7 +68,7 @@ headers = {
 ```
 
 Calls without a session ID retain their client/device label and contribute to
-total usage and device usage. Session details state that no session ID was
+total usage and the matching named device's usage. Session details state that no session ID was
 provided. EMP does not infer a conversation from an IP address, cache key or
 request ID. Older records retain only the source information originally recorded.
 

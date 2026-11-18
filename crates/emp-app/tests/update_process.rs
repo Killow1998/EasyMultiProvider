@@ -142,7 +142,7 @@ exec sleep 90
     )
     .unwrap();
     std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let archive = root.join("EMP-linux-x86_64.tar.gz");
+    let archive = root.join("candidate.tar.gz");
     let status = Command::new("tar")
         .args(["-czf"])
         .arg(&archive)
@@ -162,7 +162,7 @@ fn create_symlink_package(root: &Path) -> Vec<u8> {
     let app = stage.join("EMP");
     std::fs::create_dir_all(&app).unwrap();
     symlink("/bin/sh", app.join("EMP")).unwrap();
-    let archive = root.join("EMP-linux-x86_64.tar.gz");
+    let archive = root.join("candidate.tar.gz");
     let status = Command::new("tar")
         .args(["-czf"])
         .arg(&archive)
@@ -198,7 +198,11 @@ fn release_server_with_mode(
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
     let base = format!("http://{address}");
-    let name = "EMP-linux-x86_64.tar.gz";
+    let name = if cfg!(target_arch = "aarch64") {
+        "EMP-linux-arm64.tar.gz"
+    } else {
+        "EMP-linux-x86_64.tar.gz"
+    };
     let version = candidate_version();
     let asset_url = format!("{base}/releases/download/v{version}/{name}");
     let metadata = serde_json::json!({

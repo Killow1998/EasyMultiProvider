@@ -34,8 +34,7 @@ impl TrustedBinary {
             find_in_path(name).ok_or_else(binary_unavailable)?
         };
         let launcher_directory = crate::runtime_inventory::launcher::launcher_directory(&candidate);
-        let path = candidate.canonicalize().map_err(|_| binary_unavailable())?;
-        let executable = crate::PreparedExecutable::prepare(&path).map_err(trust_error)?;
+        let executable = crate::PreparedExecutable::prepare(&candidate).map_err(trust_error)?;
         Ok(Self {
             identity: binary_identity(executable.path())?,
             executable,
@@ -59,7 +58,7 @@ impl TrustedBinary {
 }
 
 fn binary_unavailable() -> QuotaError {
-    QuotaError::new("Codex executable is unavailable", "quota_error")
+    QuotaError::new("Codex executable is unavailable", "quota_runtime_missing")
 }
 
 fn find_in_path(name: &str) -> Option<PathBuf> {
@@ -98,11 +97,22 @@ fn trust_error(failure: crate::executable_trust::TrustFailure) -> QuotaError {
     match failure {
         TrustFailure::Unavailable => binary_unavailable(),
         TrustFailure::NotTrusted => {
-            QuotaError::new("Codex executable is not trusted", "quota_error")
+            QuotaError::new("Codex executable is not trusted", "quota_runtime_untrusted")
         }
-        TrustFailure::Writable => {
-            QuotaError::new("Codex executable path is writable", "quota_error")
-        }
+        TrustFailure::Writable => QuotaError::new(
+            "Codex executable path is writable",
+            "quota_runtime_untrusted",
+        ),
+        #[cfg(any(target_os = "macos", all(test, unix)))]
+        TrustFailure::BundleVerificationFailed => QuotaError::new(
+            "Codex app bundle did not pass verification",
+            "quota_runtime_untrusted",
+        ),
+        #[cfg(any(target_os = "macos", all(test, unix)))]
+        TrustFailure::SnapshotFailed => QuotaError::new(
+            "Codex app bundle could not be prepared",
+            "quota_runtime_probe_failed",
+        ),
     }
 }
 

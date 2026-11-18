@@ -5,30 +5,32 @@ use super::*;
 #[test]
 #[ignore = "requires an explicitly selected Codex and isolated loopback access"]
 fn installed_codex_refreshes_online_catalog_without_process_restart() {
-    online_catalog(false, "online_catalog_fixture", true);
+    online_catalog(false, "online_catalog_fixture", true, "示例服务");
 }
 
 #[test]
 #[ignore = "requires an explicitly selected Codex and isolated loopback access"]
 fn installed_codex_displays_service_name_with_stable_route() {
-    online_catalog(false, "online_catalog_fixture", false);
+    for name in ["Example", "床", "示例服务⭐", "模型%服务"] {
+        online_catalog(false, "online_catalog_fixture", false, name);
+    }
 }
 
 #[test]
 #[ignore = "requires an explicitly selected Codex and isolated loopback access"]
 fn installed_codex_uses_localhost_with_a_localhost_only_proxy_exception() {
-    online_catalog(true, "online_catalog_fixture", true);
+    online_catalog(true, "online_catalog_fixture", true, "示例服务");
 }
 
 #[test]
 #[ignore = "requires Codex 0.165 or later and isolated loopback access"]
 fn installed_codex_refreshes_originator_scoped_catalogs() {
     for originator in ["codex_work_cca", "chatgpt_cca"] {
-        online_catalog(false, originator, true);
+        online_catalog(false, originator, true, "示例服务");
     }
 }
 
-fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool) {
+fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool, service_name: &str) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("codex");
@@ -46,11 +48,11 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool) {
         serde_json::to_vec(&json!({
         "auth_mode":"chatgpt", "tokens":{"id_token":token,"access_token":"fixture-only",
         "refresh_token":"","account_id":"fixture-account"},
-        "last_refresh":"2026-10-12T00:00:00Z"}))
+        "last_refresh":emp_state::observed_at_now()}))
         .unwrap(),
     )
     .unwrap();
-    std::fs::write(home.join("config.toml"), "model = \"demo/model\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\nweb_search = \"disabled\"\n[features]\nplugins = false\nresponses_websockets = true\nresponses_websockets_v2 = true\n").unwrap();
+    std::fs::write(home.join("config.toml"), "model = \"demo/model\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\nweb_search = \"disabled\"\n[features]\nplugins = false\napps = false\nmemories = false\nresponses_websockets = true\nresponses_websockets_v2 = true\n").unwrap();
     let upstream = OneShotUpstream::start(
         json!({"id":"online-catalog","object":"response","status":"completed","model":"upstream",
         "output":[{"id":"msg_online","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],
@@ -58,7 +60,7 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool) {
     );
     let config_path = root.join("config.json");
     std::fs::write(&config_path, serde_json::to_vec(&json!({
-        "providers":[{"id":"demo","name":"示例服务","base_url":upstream.base_url(),"protocol":"responses","api_key":"fixture-only"}],
+        "providers":[{"id":"demo","name":service_name,"base_url":upstream.base_url(),"protocol":"responses","api_key":"external-fixture"}],
         "models":[{"id":"demo/model","provider":"demo","upstream_id":"upstream","context_window":100000,"enabled":true}]
     })).unwrap()).unwrap();
     let binary = std::env::var("EMP_TEST_CODEX_CLI").expect("explicit installed engine");
@@ -112,12 +114,21 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool) {
         .as_array()
         .unwrap()
         .iter()
-        .find(|model| model["id"] == "demo/model")
-        .unwrap_or_else(|| panic!("missing stable route: {first}"));
+        .find(|model| {
+            model["displayName"]
+                .as_str()
+                .is_some_and(|name| name.ends_with(&format!("{service_name} · model")))
+        })
+        .expect("readable service name in the installed Codex picker");
+    let selected = model["id"].as_str().unwrap();
+    assert!(selected.is_ascii(), "WebSocket routing hint: {selected}");
     assert!(
-        model["displayName"]
-            .as_str()
-            .is_some_and(|name| name.ends_with("示例服务 · model")),
+        emp_state::config::resolve_client_model(
+            &server.state.backend.configuration.snapshot().unwrap(),
+            selected,
+        )
+        .as_deref()
+            == Some("demo/model"),
         "{model}"
     );
     {
@@ -136,20 +147,39 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool) {
         assert!(updated.starts_with("HTTP/1.1 200"), "{updated}");
     }
     crate::services::catalog::refresh_catalog(&server.state).unwrap();
-    let thread = codex.rpc(3,"thread/start",json!({"model":"demo/model","cwd":home,"approvalPolicy":"never","sandbox":"read-only","ephemeral":true}));
+    let thread = codex.rpc(3,"thread/start",json!({"model":selected,"cwd":home,"approvalPolicy":"never","sandbox":"read-only","ephemeral":true}));
     let id = thread["thread"]["id"].as_str().unwrap();
     codex.rpc(
         4,
         "turn/start",
         json!({"threadId":id,"input":[{"type":"text","text":"Return ok."}]}),
     );
-    codex.wait(|event| event["method"] == "turn/completed");
+    let message = codex.wait(|event| event["method"] == "item/agentMessage/delta");
+    assert_eq!(message["params"]["delta"], "ok");
+    let completed = codex.wait(|event| event["method"] == "turn/completed");
+    assert_eq!(completed["params"]["turn"]["status"], "completed");
+    let (path, headers, body) = upstream.observed();
+    assert_eq!(path, "/v1/responses");
+    assert_eq!(headers["authorization"], "Bearer external-fixture");
+    assert_eq!(body["model"], "upstream");
+    let requests = crate::tests::internal_events_contract::journal(&root)
+        .into_iter()
+        .filter(|event| event["event"] == "request_started")
+        .collect::<Vec<_>>();
+    assert!(!requests.is_empty(), "the selected model must reach EMP");
+    assert!(
+        requests
+            .iter()
+            .all(|event| event["fields"]["transport"] == "websocket"),
+        "{service_name} route must complete without falling back to HTTP: {requests:?}"
+    );
+    eprintln!("{service_name}: completed using WebSocket");
     if !check_refresh {
         drop(codex);
         server.shutdown().unwrap();
         return;
     }
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(300);
     let mut rpc_id = 5;
     loop {
         let models = if originator == "online_catalog_fixture" {
@@ -166,17 +196,30 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool) {
                     "id"
                 } else {
                     "slug"
-                }] == "demo/new-model"
+                }]
+                .as_str()
+                .is_some_and(|id| {
+                    emp_state::config::resolve_client_model(
+                        &server.state.backend.configuration.snapshot().unwrap(),
+                        id,
+                    )
+                    .as_deref()
+                        == Some("demo/new-model")
+                })
             })
         }) {
             break;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "running engine did not refresh catalog {originator}"
+            "running engine did not refresh catalog {originator}; model IDs: {:?}; stderr: {}",
+            models
+                .as_array()
+                .map(|entries| entries.iter().map(|model| &model["id"]).collect::<Vec<_>>()),
+            std::fs::read_to_string(home.join("stderr.log")).unwrap(),
         );
         rpc_id += 1;
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(500));
     }
     drop(codex);
     server.shutdown().unwrap();

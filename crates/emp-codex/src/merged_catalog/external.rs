@@ -166,7 +166,7 @@ pub(super) fn entry(model: &Value, template: &Value, provider: &Value) -> Value 
             .unwrap_or(json!(DEFAULT_EFFECTIVE_CONTEXT_PERCENT));
     }
     // Keep default labels stable before applying family and route overrides.
-    entry["display_name"] = json!(display_name(&entry, &json!({}), true));
+    entry["display_name"] = json!(display_name(&entry, &json!({}), true, ""));
     entry["description"] = json!(description_with_context(&entry, &json!({}), true));
     entry
 }

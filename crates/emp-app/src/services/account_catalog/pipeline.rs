@@ -222,18 +222,15 @@ pub(crate) fn persist_fetched_catalog(
         let Some(accounts) = current.get("accounts").and_then(Value::as_array) else {
             return Err(PersistError::SourceChanged);
         };
-        let matching = accounts
+        let mut matching = accounts
             .iter()
-            .filter(|account| account.get("id").and_then(Value::as_str) == Some(&source.id))
-            .collect::<Vec<_>>();
+            .filter(|account| account.get("id").and_then(Value::as_str) == Some(&source.id));
+        let account = matching.next().ok_or(PersistError::SourceChanged)?;
         if source.worker_eligible
-            && (matching.len() != 1 || matching[0]["enabled"] == Value::Bool(false))
+            && (account["enabled"] == Value::Bool(false) || matching.next().is_some())
         {
             return Err(PersistError::SourceChanged);
         }
-        let Some(account) = matching.first().copied() else {
-            return Err(PersistError::SourceChanged);
-        };
         let current_path = managed_account_catalog_path(state, &current, account);
         let current_headers = account.as_object().and_then(|account| {
             account_catalog_headers(account, &state.backend.configuration.vault)
@@ -330,7 +327,9 @@ fn retain_known_models(catalog: &mut Value, previous: &Value, source: &RefreshSo
         if let Some(slug) = model.get("slug").and_then(Value::as_str)
             && !models.iter().any(|fresh| fresh["slug"] == slug)
         {
-            models.push(model.clone());
+            let mut retained = model.clone();
+            retained["_emp_catalog_retained"] = json!(true);
+            models.push(retained);
         }
     }
     models.len() - fresh_count
@@ -404,6 +403,16 @@ mod tests {
                 if retain { 2 } else { 1 }
             );
             assert_eq!(fresh["models"][0]["supported_in_api"], false);
+            if retain {
+                assert_eq!(fresh["models"][1]["_emp_catalog_retained"], true);
+            }
+            let mut reappeared = json!({"models":[{"slug":"known", "visibility":"list"}]});
+            retain_known_models(&mut reappeared, &fresh, &source);
+            assert!(
+                reappeared["models"][0]
+                    .get("_emp_catalog_retained")
+                    .is_none()
+            );
         }
     }
 }

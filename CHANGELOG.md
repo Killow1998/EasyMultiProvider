@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.14.3 (2026-11-18)
+
+### 中文
+
+- Codex 自动选择优先采用正在运行且通过信任检查的引擎，同级按版本排序。保留显式配置优先级。
+- 订阅模型目录每 24 小时后台刷新，也可手动刷新。模型选择器显示当前账号目录，保留旧会话的历史路由。修复迁移导入后多个账号的模型显示名重复。
+- 修复包含中文、特殊符号的路由标识在 Codex WebSocket 请求头中导致连接错误。保留模型显示名、旧路由和调用归属。
+- 网关设备用量按设备统计，可展开查看该设备各模型的用量。
+- 新增 Linux ARM64 正式安装包和安装脚本，自动更新按架构选择并校验归档。
+- Codex 登录区分找不到 CLI、信任检查失败、版本探测失败、启动和初始化失败，并在脱敏诊断报告中记录探测结果。WebUI 的「设置 → 通用」提供退出入口。
+
+### English
+
+- Prefer trusted running Codex engines when selecting a runtime automatically. Rank comparable candidates by version and honor an explicit override.
+- Refresh subscription catalogs every 24 hours and on demand. Show current account models in the picker while preserving routes for existing sessions. Fix duplicate display names after importing subscriptions.
+- Fix Codex WebSocket connections for route identifiers containing Unicode or special characters. Preserve model display names, historical routes, and usage attribution.
+- Group gateway usage by device and expand each device to inspect its per-model usage.
+- Add stable Linux ARM64 packages and install scripts. Automatic updates select and verify the archive for the current architecture.
+- Distinguish missing CLI, failed trust checks, failed version probes, and sign-in helper startup or initialization failures. Include probe results in the redacted support report and add a quit action under Settings → General.
+
 ## 0.14.2 (2026-11-15)
 
 ### 中文

@@ -125,10 +125,20 @@ fn agent_calls_keep_client_and_session_attribution_through_http_and_billing() {
         "Authorization: Bearer {}",
         device["api_key"].as_str().unwrap()
     );
+    let unused_device = server
+        .state
+        .backend
+        .gateway_clients
+        .issue(
+            "Spare device",
+            None,
+            &server.state.backend.configuration.vault,
+        )
+        .unwrap();
     let shared_auth = format!("Authorization: Bearer {}", server.state.backend.gateway_key);
     for (index, (headers, fields, _, _)) in cases.iter().enumerate() {
         let mut headers = headers.clone();
-        headers.push(if index == 6 {
+        headers.push(if matches!(index, 6 | 7) {
             &device_auth
         } else {
             &shared_auth
@@ -206,5 +216,25 @@ fn agent_calls_keep_client_and_session_attribution_through_http_and_billing() {
             .iter()
             .any(|row| row["caller_name"] == "Temporary tools" && row["calls"] == 1)
     );
+    let usage = read("/api/gateway/usage?group=device&start=0");
+    let rows = usage["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["caller_id"], device["id"]);
+    assert_eq!(rows[0]["caller_name"], "Temporary tools");
+    assert_eq!(rows[0]["calls"], 2);
+    assert_eq!(rows[0]["input_tokens"], 14);
+    assert_eq!(rows[0]["output_tokens"], 6);
+    assert_eq!(rows[0]["reported_calls"], 2);
+    let models = rows[0]["models"].as_array().unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0]["model"], "upstream-model");
+    assert_eq!(models[0]["calls"], 2);
+    assert_eq!(models[0]["input_tokens"], 14);
+    assert_eq!(models[0]["output_tokens"], 6);
+    assert_eq!(models[0]["reported_calls"], 2);
+    assert_eq!(rows[1]["caller_id"], unused_device["id"]);
+    assert_eq!(rows[1]["calls"], 0);
+    assert_eq!(rows[1]["models"], json!([]));
+    assert!(rows.iter().all(|row| row.get("api_key").is_none()));
     server.shutdown().unwrap();
 }

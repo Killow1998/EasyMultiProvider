@@ -1,6 +1,12 @@
-//! Client-facing route names resolve to the original persisted model IDs.
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+
+pub fn client_model_id(model: &str) -> Cow<'_, str> {
+    const HEADER_MODEL: &AsciiSet = &CONTROLS.add(b'%');
+    utf8_percent_encode(model, HEADER_MODEL).into()
+}
 
 pub(super) fn aggregate_alias(config: &Value, group: &Value) -> Option<String> {
     let prefix = group["name_prefix"]
@@ -26,17 +32,23 @@ fn register_alias(
     alias: String,
     route: &str,
 ) {
-    if canonical.contains(alias.as_str()) && alias != route {
-        return;
+    let encoded = match client_model_id(&alias) {
+        Cow::Borrowed(_) => None,
+        Cow::Owned(encoded) => Some(encoded),
+    };
+    for alias in std::iter::once(alias).chain(encoded) {
+        if canonical.contains(alias.as_str()) && alias != route {
+            continue;
+        }
+        aliases
+            .entry(alias)
+            .and_modify(|owner| {
+                if owner.as_deref() != Some(route) {
+                    *owner = None;
+                }
+            })
+            .or_insert_with(|| Some(route.to_owned()));
     }
-    aliases
-        .entry(alias)
-        .and_modify(|owner| {
-            if owner.as_deref() != Some(route) {
-                *owner = None;
-            }
-        })
-        .or_insert_with(|| Some(route.to_owned()));
 }
 
 pub fn client_route_aliases(config: &Value) -> BTreeMap<String, String> {
@@ -56,6 +68,11 @@ pub fn client_route_aliases(config: &Value) -> BTreeMap<String, String> {
         .filter_map(|account| account["prefix"].as_str())
         .collect();
     let mut aliases: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for route in &canonical {
+        if client_model_id(route) != *route {
+            register_alias(&mut aliases, &canonical, (*route).to_owned(), route);
+        }
+    }
     for group in config["model_groups"].as_array().into_iter().flatten() {
         let Some(route) = group["id"].as_str() else {
             continue;
@@ -125,7 +142,6 @@ pub fn client_route_aliases(config: &Value) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Resolve a readable subscription name without changing its persisted prefix.
 pub fn resolve_client_model(config: &Value, model: &str) -> Option<String> {
     resolve_with_aliases(config, &client_route_aliases(config), model)
 }
@@ -169,9 +185,9 @@ fn resolve_with_aliases(
             .flatten()
             .filter_map(Value::as_str)
             .chain(account["name"].as_str());
-        for name in names {
+        for name in names.flat_map(|name| [Cow::Borrowed(name), client_model_id(name)]) {
             let Some(suffix) = model
-                .strip_prefix(name)
+                .strip_prefix(name.as_ref())
                 .and_then(|suffix| suffix.strip_prefix('/'))
             else {
                 continue;
@@ -235,10 +251,12 @@ pub fn client_catalog(config: &Value, mut catalog: Value) -> Value {
                         .map(|suffix| format!("{name}/{suffix}"))
                 })
         };
-        if let Some(alias) = alias
+        if let Some(alias) = alias.map(|alias| client_model_id(&alias).into_owned())
             && resolve_with_aliases(config, &aliases, &alias).as_deref() == Some(route)
         {
             model["slug"] = alias.into();
+        } else {
+            model["slug"] = client_model_id(route).as_ref().into();
         }
     }
     catalog

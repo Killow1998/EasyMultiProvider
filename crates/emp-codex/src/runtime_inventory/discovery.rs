@@ -1,4 +1,3 @@
-//! Known installation layouts only; no recursive search of user directories.
 #[cfg(any(windows, test))]
 mod cache;
 mod metadata;
@@ -13,13 +12,17 @@ mod matrix_tests;
 #[path = "discovery/tests.rs"]
 mod tests;
 
+#[cfg(test)]
+use paths::app;
 pub(super) use paths::nvm_roots;
 #[cfg(test)]
 pub(super) use paths::path_cli_in;
-use paths::{app, editor, executable, nvm_installations, path_cli_in_with_extensions};
+use paths::{apps, cli_command_names, editor, executable, nvm_installations, path_cli_candidates};
 use platform::{RuntimeOs, RuntimePlatform};
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use windows::cli_runtime_for_launcher;
 #[cfg(windows)]
 use windows::registered_windows_codex_package_root;
@@ -29,6 +32,7 @@ pub(super) struct Candidate {
     pub(super) name: &'static str,
     pub(super) path: PathBuf,
     pub(super) unavailable: bool,
+    pub(super) running: bool,
     pub(super) host_version: Option<String>,
     pub(super) fallbacks: Vec<PathBuf>,
 }
@@ -63,7 +67,40 @@ pub(super) fn discover(
             package_roots: &package_roots,
         },
     );
-    for candidate in &mut candidates {
+    let installed_paths = candidates
+        .iter()
+        .map(|candidate| candidate.path.canonicalize().ok())
+        .collect::<Vec<_>>();
+    let installed = installed_paths
+        .iter()
+        .filter_map(Option::as_deref)
+        .collect::<BTreeSet<_>>();
+    let mut processes = System::new();
+    processes.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing()
+            .without_tasks()
+            .with_exe(UpdateKind::OnlyIfNotSet)
+            .with_cmd(UpdateKind::OnlyIfNotSet),
+    );
+    let running = processes
+        .processes()
+        .values()
+        .filter_map(|process| {
+            let path = process.exe()?;
+            let name = path.file_name()?;
+            if !(name.eq_ignore_ascii_case("codex") || name.eq_ignore_ascii_case("codex.exe")) {
+                return None;
+            }
+            (installed.contains(path)
+                || process.cmd().iter().skip(1).any(|arg| arg == "app-server"))
+            .then(|| path.canonicalize().ok())
+            .flatten()
+        })
+        .collect::<BTreeSet<_>>();
+    for (candidate, path) in candidates.iter_mut().zip(&installed_paths) {
+        candidate.running = path.as_ref().is_some_and(|path| running.contains(path));
         if candidate.source == "codex_app"
             && let Some((_, version)) = packages.iter().find(|(root, _)| {
                 root.canonicalize()
@@ -81,6 +118,20 @@ pub(super) fn discover(
             }
         }
     }
+    candidates.extend(
+        running
+            .into_iter()
+            .filter(|path| !installed.contains(path.as_path()))
+            .map(|path| Candidate {
+                source: "running",
+                name: "Running Codex",
+                path,
+                unavailable: false,
+                running: true,
+                host_version: None,
+                fallbacks: Vec::new(),
+            }),
+    );
     candidates
 }
 
@@ -137,6 +188,7 @@ fn discover_with_platform(
                 name,
                 path: path.clone(),
                 unavailable,
+                running: false,
                 host_version: metadata::host_version(source, &path),
                 fallbacks: Vec::new(),
             });
@@ -146,7 +198,7 @@ fn discover_with_platform(
         let path = platform
             .and_then(|platform| cli_runtime_for_launcher(configured, platform))
             .unwrap_or_else(|| configured.to_owned());
-        let unavailable = !path.exists()
+        let unavailable = matches!(path.try_exists(), Ok(false))
             || platform.is_some_and(|platform| {
                 platform.os == RuntimeOs::Windows && path == configured && {
                     configured
@@ -162,10 +214,10 @@ fn discover_with_platform(
             });
         add("configured", "Configured Codex", path, unavailable);
     }
-    if let Some(platform) = platform
-        && let Some(path) = app(home, user_home, platform, system_root, package_roots)
-    {
-        add("codex_app", "ChatGPT App (Codex)", path, false);
+    if let Some(platform) = platform {
+        for path in apps(home, user_home, platform, system_root, package_roots) {
+            add("codex_app", "ChatGPT App (Codex)", path, false);
+        }
     }
     let binary_name = platform.map_or_else(
         || if cfg!(windows) { "codex.exe" } else { "codex" },
@@ -206,12 +258,20 @@ fn discover_with_platform(
         }
     }
 
-    if let Some(path) = path_var.and_then(|value| {
-        platform.and_then(|platform| path_cli_in_with_extensions(value, platform, path_extensions))
-    }) {
-        add("path_cli", "PATH Codex CLI", path, false);
-    }
     if let Some(platform) = platform {
+        let desktop_cli_roots = (platform.os == RuntimeOs::Macos)
+            .then_some(["opt/homebrew/bin", "usr/local/bin"])
+            .into_iter()
+            .flatten()
+            .map(|path| system_root.join(path));
+        let roots = path_var
+            .into_iter()
+            .flat_map(std::env::split_paths)
+            .chain(desktop_cli_roots);
+        let command_names = cli_command_names(platform, path_extensions);
+        for path in path_cli_candidates(roots, &command_names, platform) {
+            add("path_cli", "Local Codex CLI", path, false);
+        }
         for root in nvm_roots {
             for path in nvm_installations(root, platform) {
                 add("nvm", "nvm Node Codex CLI", path, false);

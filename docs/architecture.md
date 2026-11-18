@@ -1470,7 +1470,8 @@ for attribution, old-history indexing and missing-price semantics.
 `request_facts.rs` normalizes explicit external session IDs and bounded client labels
 at the accounting entry. Non-Codex conversation receipts mark these sessions directly;
 they do not require local Codex index entries. The call ledger retains `client_kind`
-alongside authenticated caller identity, and device usage groups by both fields.
+alongside authenticated caller identity. The device usage view groups by the
+authenticated device key and follows the device connection list.
 Missing session IDs remain unassigned in bills; call details display available
 client/device names without inferring sessions from addresses or request IDs.
 

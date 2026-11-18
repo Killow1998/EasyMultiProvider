@@ -135,7 +135,11 @@ function openLatestRelease() {
   if (url === 'https://github.com/Killow1998/EasyMultiProvider/releases/latest') openLink(url);
 }
 async function copyLinuxMigrationCommands() {
-  const commands = `curl -fL -o EMP-linux-x86_64-install.sh https://github.com/Killow1998/EasyMultiProvider/releases/latest/download/EMP-linux-x86_64-install.sh\nsh EMP-linux-x86_64-install.sh`;
+  const commands = `case "$(uname -m)" in
+  aarch64|arm64) installer=EMP-linux-arm64-install.sh ;;
+  *) installer=EMP-linux-x86_64-install.sh ;;
+esac
+curl -fL -o "$installer" "https://github.com/Killow1998/EasyMultiProvider/releases/latest/download/$installer" && sh "$installer"`;
   try { await copyText(commands); notice(tr("transfers.migration_commands_copied")); }
   catch (_) { $('update_status').textContent = commands; }
 }

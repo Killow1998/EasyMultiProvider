@@ -163,3 +163,38 @@ fn authenticated_info_must_bind_the_exact_codex_engine() {
         "oversized plist"
     );
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires a verified official macOS App Bundle"]
+fn installed_macos_signed_bundle_snapshot() {
+    let app = PathBuf::from(std::env::var_os("EMP_MACOS_DIAGNOSTIC_APP").unwrap());
+    let source = app.join("Contents/Resources/codex-cli/CodexCLI.app");
+    if !source.exists() {
+        assert!(app.join("Contents/Resources/codex").is_file());
+        return;
+    }
+
+    let (directory, executable) = snapshot_with_verifier(&source, None, verify_snapshot).unwrap();
+    let mut command = Command::new(&executable);
+    command.arg("--version");
+    assert!(run_verifier(&mut command, Duration::from_secs(5)));
+    drop(directory);
+    assert!(!executable.exists());
+
+    let result = snapshot_with_verifier(&source, None, |bundle, engine| {
+        let info = bundle.join("Contents/Info.plist");
+        fs::set_permissions(&info, fs::Permissions::from_mode(0o600)).unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(&info)
+            .unwrap()
+            .write_all(b"\n")
+            .unwrap();
+        verify_snapshot(bundle, engine)
+    });
+    assert!(matches!(
+        result,
+        Err(TrustFailure::BundleVerificationFailed)
+    ));
+}

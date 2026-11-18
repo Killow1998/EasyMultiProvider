@@ -138,27 +138,49 @@ fn facts(event: &Value) -> Value {
 }
 
 impl UsageLedger {
-    pub fn query_callers(&self, start: f64, end: f64) -> Result<Value> {
+    pub fn query_callers(
+        &self,
+        start: f64,
+        end: f64,
+        device_ids: Option<&[&str]>,
+    ) -> Result<Value> {
         if !Self::valid_period(start, end, "all") {
             return Err(UsageError);
+        }
+        if device_ids.is_some_and(<[_]>::is_empty) {
+            return Ok(json!({"start":start,"end":end,"rows":[]}));
         }
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let connection = self.connect()?;
         let probes = crate::diagnostics::MODEL_TEST_OPERATIONS
             .map(|_| "?")
             .join(",");
-        let args = [SqlValue::Real(start), SqlValue::Real(end)]
+        let mut args = [SqlValue::Real(start), SqlValue::Real(end)]
             .into_iter()
             .chain(
                 crate::diagnostics::MODEL_TEST_OPERATIONS.map(|name| SqlValue::Text(name.into())),
             )
             .collect::<Vec<_>>();
-        let rows = rows(&connection, &format!("SELECT
+        let (detail, group, selection) = if let Some(ids) = device_ids {
+            args.push(SqlValue::Text(json!(ids).to_string()));
+            (
+                "COALESCE(NULLIF(json_extract(c.facts,'$.upstream_model'),''),NULLIF(c.model_id,'')) AS usage_model,",
+                "caller_id,usage_model",
+                "AND json_extract(c.facts,'$.caller_id') IN (SELECT value FROM json_each(?))",
+            )
+        } else {
+            (
+                "json_extract(c.facts,'$.caller_name') AS caller_name,
+                json_extract(c.facts,'$.client_kind') AS client_kind,
+                GROUP_CONCAT(DISTINCT json_extract(c.facts,'$.peer_ip')) AS peer_ips,
+                c.operation,c.provider_id,c.account_id,c.model_id,",
+                "caller_id,caller_name,client_kind,c.operation,c.provider_id,c.account_id,c.model_id",
+                "",
+            )
+        };
+        let grouped = format!("SELECT
             COALESCE(json_extract(c.facts,'$.caller_id'),'unknown') AS caller_id,
-            json_extract(c.facts,'$.caller_name') AS caller_name,
-            json_extract(c.facts,'$.client_kind') AS client_kind,
-            GROUP_CONCAT(DISTINCT json_extract(c.facts,'$.peer_ip')) AS peer_ips,
-            c.operation,c.provider_id,c.account_id,c.model_id,
+            {detail}
             COUNT(*) AS calls,SUM(c.state='completed') AS completed,
             SUM(json_extract(c.facts,'$.input_tokens')) AS input_tokens,
             SUM(json_extract(c.facts,'$.output_tokens')) AS output_tokens,
@@ -170,11 +192,30 @@ impl UsageLedger {
             COUNT(CASE WHEN u.price_issue IS NULL THEN u.cost_nanos END) AS priced_calls
             FROM ({}) AS c LEFT JOIN accounted_usage u ON u.id=json_extract(c.facts,'$.usage_event_id')
             WHERE c.started_at>=? AND c.started_at<?
-            AND c.operation NOT IN ({probes})
-            GROUP BY caller_id,caller_name,client_kind,c.operation,c.provider_id,c.account_id,c.model_id
-            ORDER BY caller_id,client_kind,c.operation,c.provider_id,c.model_id", crate::usage::call_outcome::REPORT_CALLS),
-            &args)?;
-        Ok(json!({"start":start,"end":end,"rows":rows}))
+            AND c.operation NOT IN ({probes}) {selection}
+            GROUP BY {group}", crate::usage::call_outcome::REPORT_CALLS);
+        let report = if device_ids.is_some() {
+            let mut device_rows = rows(&connection, &format!(
+                "WITH model_usage AS ({grouped})
+                SELECT caller_id,SUM(calls) AS calls,SUM(completed) AS completed,
+                    SUM(input_tokens) AS input_tokens,SUM(output_tokens) AS output_tokens,
+                    SUM(cached_input_tokens) AS cached_input_tokens,SUM(reported_calls) AS reported_calls,
+                    SUM(duration_ms) AS duration_ms,SUM(cost_nanos) AS cost_nanos,SUM(priced_calls) AS priced_calls,
+                    json_group_array(json_object(
+                        'model',usage_model,'calls',calls,'input_tokens',input_tokens,'output_tokens',output_tokens,
+                        'reported_calls',reported_calls,'cost_nanos',cost_nanos,'priced_calls',priced_calls
+                    ) ORDER BY calls DESC,usage_model) AS models
+                FROM model_usage GROUP BY caller_id"
+            ), &args)?;
+            for row in &mut device_rows {
+                row["models"] = serde_json::from_str(row["models"].as_str().ok_or(UsageError)?)
+                    .map_err(|_| UsageError)?;
+            }
+            device_rows
+        } else {
+            rows(&connection, &format!("{grouped} ORDER BY {group}"), &args)?
+        };
+        Ok(json!({"start":start,"end":end,"rows":report}))
     }
 
     /// The last completed conversation turn identifies its account across restarts.
