@@ -511,18 +511,29 @@ impl<'a> NativeRouter<'a> {
             if is_explicit_context_error(status, &content_type, &raw) {
                 return Err(NativeHttpError::context(BTreeMap::new()));
             }
-            let body = if plaintext_collaboration && !compact {
-                let value: Value = serde_json::from_slice(&raw).map_err(|error| {
-                    NativeHttpError::plain(400, python_json_error_message(&raw, &error))
-                })?;
-                let restored = restore_collaboration(&value).map_err(collaboration_error)?;
-                serde_json::to_vec(&restored)
-                    .map_err(|_| NativeHttpError::plain(500, "internal server error"))?
-            } else {
-                raw
-            };
-            if let Ok(value) = serde_json::from_slice::<Value>(&body) {
-                observation.observe(&value, false);
+            let restore_tools = plaintext_collaboration && !compact;
+            let mut body = raw;
+            match serde_json::from_slice::<Value>(&body) {
+                Ok(mut value) => {
+                    if restore_tools {
+                        let restored =
+                            restore_collaboration(&value).map_err(collaboration_error)?;
+                        if restored != value {
+                            body = serde_json::to_vec(&restored).map_err(|_| {
+                                NativeHttpError::plain(500, "internal server error")
+                            })?;
+                            value = restored;
+                        }
+                    }
+                    observation.observe(&value, false);
+                }
+                Err(error) if restore_tools => {
+                    return Err(NativeHttpError::plain(
+                        400,
+                        python_json_error_message(&body, &error),
+                    ));
+                }
+                Err(_) => {}
             }
             return Ok(NativeCompleteResponse {
                 observation,
