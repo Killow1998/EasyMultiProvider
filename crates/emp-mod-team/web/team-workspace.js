@@ -97,7 +97,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         const workspace = current.identity?.workspace?.name || tr('modules.team_workspace');
         for (const member of waiting) if (!approvals.has(member.id)) {
           const name = member.nickname || member.name;
-          approvals.set(member.id, notifications.show(tr('modules.join_request',{name,workspace}), false, {persist:true, actions:[
+          approvals.set(member.id, notifications.show(tr('modules.join_request',{name,workspace}), false, {persist:true, group:'team-join', actions:[
             {label:tr('modules.accept_member'), primary:true, attributes:{'data-island-member-approve':member.id}, run:() => decide(member,true)},
             {label:tr('modules.decline_member'), attributes:{'data-island-member-decline':member.id}, run:() => decide(member,false)}]}));
         }
@@ -176,7 +176,13 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
           ${summaryCell('modules.lifetime_tokens','<span data-team-lifetime-tokens>—</span>')}
           ${summaryCell('modules.lifetime_spend','<span data-team-lifetime-usd>—</span>')}
         </dl>
-        <div id="team_usage_detail" class="team-usage-detail" hidden>${periodBar('today')}<div data-team-breakdown aria-live="polite"></div></div>
+        ${manage ? `<div class="team-usage-mine"><h4>${tr('modules.my_usage')}</h4><dl class="team-usage-summary" data-team-mine aria-busy="true">
+          ${summaryCell('modules.today_spend_limit','<span data-team-mine-today>—</span>')}
+          ${summaryCell('modules.today_tokens','<span data-team-mine-today-tokens>—</span>')}
+          ${summaryCell('modules.lifetime_tokens','<span data-team-mine-lifetime-tokens>—</span>')}
+          ${summaryCell('modules.lifetime_spend','<span data-team-mine-lifetime-usd>—</span>')}
+        </dl></div>` : ''}
+        <div id="team_usage_detail" class="team-usage-detail" hidden><div class="team-usage-toolbar">${periodBar('today')}${manage ? `<div class="period-presets team-usage-scope" role="group" aria-label="${esc(tr('modules.usage_scope'))}"><button class="secondary active" type="button" data-team-scope="team" aria-pressed="true">${esc(tr('modules.scope_team'))}</button><button class="secondary" type="button" data-team-scope="mine" aria-pressed="false">${esc(tr('modules.scope_mine'))}</button></div>` : ''}</div><div data-team-breakdown aria-live="polite"></div></div>
       </section>
     </div>`, '', null, null, {back,reopen:() => open(back)});
     const home = () => open(back);
@@ -235,15 +241,28 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       view.querySelector('[data-team-today-tokens]').innerHTML = compact(today);
       view.querySelector('[data-team-lifetime-tokens]').innerHTML = compact(lifetime);
       view.querySelector('[data-team-lifetime-usd]').innerHTML = compactSpend(lifetime);
+      // Administrators see the team totals above and their own share here, from the same per-member ledger.
+      if (member.role !== 'member') {
+        const [day, all] = await Promise.all([action('usage',{period:'today'}), action('usage',{period:'lifetime'})]);
+        if (!view.isConnected) return;
+        const mine = report => report.rows.find(row => row.member === member.id) || idle;
+        const myDay = view.querySelector('[data-team-mine-today]');
+        myDay.innerHTML = `${esc(money(spend(mine(day))))} / ${budgetDisplay(budget_nanos)}`;
+        if (mine(day).unknown_cost_requests) myDay.title = tr('modules.unknown_count',{count:number(mine(day).unknown_cost_requests)});
+        view.querySelector('[data-team-mine-today-tokens]').innerHTML = compact(mine(day));
+        view.querySelector('[data-team-mine-lifetime-tokens]').innerHTML = compact(mine(all));
+        view.querySelector('[data-team-mine-lifetime-usd]').innerHTML = compactSpend(mine(all));
+      }
     } catch (error) {
       showError(view,error);
     } finally {
-      view.querySelector('.team-usage-summary').removeAttribute('aria-busy');
+      view.querySelectorAll('.team-usage-summary').forEach(list => list.removeAttribute('aria-busy'));
     }
   }
 
-  function usageFor(rows, member) {
-    if (member.role === 'member') return rows.find(row => row.member === member.id);
+  const idle = {requests:0,input_tokens:0,output_tokens:0,spend_nanos:0,unknown_cost_requests:0,models:[]};
+  function usageFor(rows, member, only = false) {
+    if (member.role === 'member' || only) return rows.find(row => row.member === member.id) || idle;
     const totals = {member:'workspace',models:[]};
     const models = new Map();
     const fields = ['input_tokens','output_tokens','spend_nanos','unknown_cost_requests'];
@@ -266,7 +285,13 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     const detail = $('team_usage_detail');
     const data = detail.querySelector('[data-team-breakdown]');
     const filters = [...detail.querySelectorAll('[data-team-period]')];
-    let selected = 'today';
+    const scopes = [...detail.querySelectorAll('[data-team-scope]')];
+    let selected = 'today', mineOnly = false;
+    scopes.forEach(control => control.onclick = () => {
+      mineOnly = control.dataset.teamScope === 'mine';
+      scopes.forEach(other => { const on = other === control; other.classList.toggle('active',on); other.setAttribute('aria-pressed',String(on)); });
+      void load(selected);
+    });
     async function load(period) {
       selected = period;
       pressPeriod(filters,period);
@@ -274,7 +299,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       try {
         const report = await action('usage',{period});
         if (!data.isConnected || selected !== period) return;
-        const row = usageFor(report.rows,member);
+        const row = usageFor(report.rows,member,mineOnly);
         data.innerHTML = row?.models.length ? modelUsage(row) : esc(tr('modules.no_usage'));
       } catch (error) {
         if (data.isConnected && selected === period) data.textContent = failure(error);

@@ -34,6 +34,9 @@
 .team-usage-summary dd{margin:4px 0 0;font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .team-usage-detail{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
 .team-usage-detail .period-presets{margin:0}
+.team-usage-mine{margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)}
+.team-usage-mine h4{margin:0;font-size:12px;font-weight:600;color:var(--text)}
+.team-usage-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .team-usage-detail [data-team-breakdown]{margin-top:10px;min-height:24px}
 @media(max-width:640px){.team-usage-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:420px){.team-identity{flex-wrap:wrap}.team-meta{margin:2px 0 0;flex-basis:100%}}

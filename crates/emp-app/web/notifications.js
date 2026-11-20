@@ -79,7 +79,9 @@ function createNotifications({$, tr, getLanguage}) {
     return button;
   });
   // Several persistent notices share one island: the oldest three show as rows with their own actions,
-  // and each resolved row lets the next waiting notice slide in.
+  // and each resolved row lets the next waiting notice slide in. Grouped notices (join requests) keep this
+  // layout even when only one is left, so the island does not change shape between requests.
+  const stacked = () => stickies.length > 1 || stickies.some(item => item.group);
   function displayStack() {
     const fresh = island.dataset.stack !== 'true' || island.hidden;
     if (fresh) hide();
@@ -136,7 +138,7 @@ function createNotifications({$, tr, getLanguage}) {
     if (paused) countdown.pause(); else countdown.play();
   }
   function display(item) {
-    if (item.persist && stickies.length > 1) return displayStack();
+    if (item.persist && stacked()) return displayStack();
     hide();
     currentId = item.id;
     island.dataset.kind = item.error ? 'error' : 'message';
@@ -157,11 +159,11 @@ function createNotifications({$, tr, getLanguage}) {
     pauseWhenReading();
   }
   // `quiet` is for text another live region (the dialog status) already announces.
-  function show(message, error = false, {quiet = false, actions = null, persist = false} = {}) {
+  function show(message, error = false, {quiet = false, actions = null, persist = false, group = null} = {}) {
     if (!message) return null;
     const item = {id:`${Date.now()}-${Math.random().toString(36).slice(2)}`, message:String(message).slice(0,10000), time:Date.now(), error:Boolean(error), read:isOpen()};
     if (persist) {
-      const entry = {...item, quiet, actions, persist:true};
+      const entry = {...item, quiet, actions, persist:true, group};
       stickies.push(entry);
       if (currentId && !showingSticky()) return item.id;  // a passing notice finishes first, then restore() shows it
       display(entry);
@@ -182,7 +184,7 @@ function createNotifications({$, tr, getLanguage}) {
     if (!id) return;
     const known = stickies.some(item => item.id === id);
     stickies = stickies.filter(item => item.id !== id);
-    if (island.dataset.stack === 'true' && known) { if (stickies.length > 1) displayStack(); else { hide(); restore(); } }
+    if (island.dataset.stack === 'true' && known) { if (stickies.length && stacked()) displayStack(); else { hide(); restore(); } }
     else if (currentId === id) { hide(); restore(); }
   }
   $('notification_close').onclick = dismiss;
