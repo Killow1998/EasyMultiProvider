@@ -111,6 +111,13 @@ fn discover_inner(
                 DiscoveryError::Invalid("Update the model list before saving a selection".into())
             })
         })?
+    } else if provider["auth_mode"] == "vertex_api_key"
+        && provider["vertex"]["project"] == ""
+        && let Some(saved) = super::provider_models::load(state, &provider)
+            .filter(super::provider_models::SavedModels::fresh_vertex_verification)
+    {
+        receipt.check("reuse_verified_models", Some(true));
+        saved
     } else {
         match receipt.step("discover_models", || {
             if provider["execution_backend"] == "claude_cli"
@@ -119,6 +126,11 @@ fn discover_inner(
                 crate::services::claude_cli::model_query::discover(state)
                     .map_err(DiscoveryError::LocalCli)
             } else {
+                let vertex_models = if provider["auth_mode"] == "vertex_api_key" {
+                    state.backend.usage.ledger.prices.vertex_models()
+                } else {
+                    Vec::new()
+                };
                 state
                     .backend
                     .transport
@@ -126,6 +138,7 @@ fn discover_inner(
                     .block_on(discover_models(
                         &state.backend.transport.client,
                         provider.as_object().expect("normalized provider"),
+                        &vertex_models,
                     ))
                     .map_err(DiscoveryError::Upstream)
             }

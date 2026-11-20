@@ -5,12 +5,27 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct SavedModels {
     identity: String,
     pub(super) updated_at: String,
     pub(super) models: Vec<Value>,
+}
+
+impl SavedModels {
+    pub(super) fn fresh_vertex_verification(&self) -> bool {
+        !self.models.is_empty()
+            && self
+                .models
+                .iter()
+                .all(|model| model["availability"] == "count_tokens_verified")
+            && OffsetDateTime::parse(&self.updated_at, &Rfc3339).is_ok_and(|checked| {
+                let age = OffsetDateTime::now_utc() - checked;
+                age >= time::Duration::ZERO && age < time::Duration::hours(24)
+            })
+    }
 }
 
 pub(super) fn provider(state: &ServerState, config: &Value, id: &str) -> Option<Value> {
