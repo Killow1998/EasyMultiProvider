@@ -4,6 +4,8 @@ mod backup;
 mod enrollment;
 mod profiles;
 mod shares;
+#[cfg(test)]
+mod tests;
 mod usage;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
@@ -44,6 +46,9 @@ CREATE TABLE IF NOT EXISTS login_limits (
 );
 CREATE TABLE IF NOT EXISTS enrollment (
     member TEXT PRIMARY KEY REFERENCES members(id), nickname TEXT NOT NULL, pending INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rejected_enrollments (
+    name TEXT PRIMARY KEY, salt BLOB NOT NULL, password_hash BLOB NOT NULL, expires INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS member_tiers (
     member TEXT PRIMARY KEY REFERENCES members(id), fast INTEGER NOT NULL, ultrafast INTEGER NOT NULL
@@ -256,6 +261,7 @@ impl Workspace {
             (Method::Get, "members") => self.members(&identity),
             (Method::Post, "members") => self.add_member(&identity, parse(body)?),
             (Method::Post, "member-access") => self.member_access(&identity, parse(body)?),
+            (Method::Post, "reject-member") => self.reject_member(&identity, parse(body)?),
             (Method::Post, "member-tiers") => self.member_tiers(&identity, parse(body)?),
             (Method::Post, "budget") => self.budget(&identity, parse(body)?),
             (Method::Get, "budget-status") => self.budget_status(&identity),

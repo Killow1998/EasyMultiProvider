@@ -2,6 +2,7 @@ use super::*;
 
 const LOGIN_WINDOW: i64 = 300;
 const SESSION_TTL: i64 = 7 * 86400;
+const REJECTION_TTL: i64 = 86400;
 
 #[derive(Deserialize)]
 pub(super) struct Login {
@@ -29,6 +30,11 @@ pub(super) struct Access {
 }
 
 #[derive(Deserialize)]
+pub(super) struct RejectMember {
+    id: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct Tiers {
     id: String,
     fast: bool,
@@ -41,7 +47,7 @@ pub(super) struct Handover {
 }
 
 struct Account {
-    id: String,
+    id: Option<String>,
     salt: Vec<u8>,
     hash: Vec<u8>,
     enabled: bool,
@@ -85,6 +91,7 @@ pub(super) fn create(
     if inserted == 0 {
         return Err(Failure(409, "workspace_member_exists"));
     }
+    db.execute("DELETE FROM rejected_enrollments WHERE name=?", [name])?;
     Ok(id)
 }
 
@@ -93,7 +100,8 @@ impl Workspace {
         if !valid_name(&login.name) || login.password.len() > 256 || !identifier(&login.device) {
             return Err(invalid());
         }
-        let window = now().div_euclid(LOGIN_WINDOW);
+        let at = now();
+        let window = at.div_euclid(LOGIN_WINDOW);
         self.db
             .execute("DELETE FROM login_limits WHERE window<?", [window])?;
         let limits: (i64, i64) = self.db.query_row(
@@ -108,8 +116,10 @@ impl Workspace {
         let account = self
             .db
             .query_row(
-                "SELECT id,salt,password_hash,enabled FROM members WHERE name=?",
-                [&login.name],
+                "SELECT id,salt,password_hash,enabled FROM members WHERE name=?1
+                 UNION ALL
+                 SELECT NULL,salt,password_hash,0 FROM rejected_enrollments WHERE name=?1 AND expires>?2",
+                params![login.name, at],
                 |row| {
                     Ok(Account {
                         id: row.get(0)?,
@@ -133,12 +143,15 @@ impl Workspace {
             )?;
             return Err(Failure(401, "workspace_login_failed"));
         };
+        let Some(account_id) = account.id else {
+            return Err(Failure(403, "workspace_join_rejected"));
+        };
         if !account.enabled {
             let pending = self
                 .db
                 .query_row(
                     "SELECT pending FROM enrollment WHERE member=?",
-                    [&account.id],
+                    [&account_id],
                     |row| row.get::<_, bool>(0),
                 )
                 .optional()?
@@ -154,12 +167,12 @@ impl Workspace {
         let tx = self.db.transaction()?;
         tx.execute(
             "DELETE FROM sessions WHERE expires<=? OR (member=? AND device=?)",
-            params![now(), account.id, login.device],
+            params![now(), account_id, login.device],
         )?;
         tx.execute("DELETE FROM login_limits WHERE name=?", [&login.name])?;
         tx.execute(
             "INSERT INTO sessions VALUES (?,?,?,?)",
-            params![digest(&token), account.id, login.device, expires],
+            params![digest(&token), account_id, login.device, expires],
         )?;
         tx.commit()?;
         let identity = self.authenticate(Some(&token))?;
@@ -320,6 +333,49 @@ impl Workspace {
             )?;
         }
         transaction.commit()?;
+        Ok(json!({"ok":true}))
+    }
+
+    pub(super) fn reject_member(&mut self, who: &Identity, body: RejectMember) -> Result<Value> {
+        if !who.role.can_manage() {
+            return Err(forbidden());
+        }
+        if !identifier(&body.id) {
+            return Err(invalid());
+        }
+        let tx = self.db.transaction()?;
+        let (role, name, nickname) = tx
+            .query_row(
+                "SELECT m.role,m.name,CASE WHEN e.pending=1 AND m.enabled=0 THEN e.nickname END
+                 FROM members m LEFT JOIN enrollment e ON e.member=m.id WHERE m.id=?",
+                [&body.id],
+                |row| {
+                    Ok((
+                        role(&row.get::<_, String>(0)?)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(Failure(404, "workspace_member_not_found"))?;
+        if !who.role.manages(role) {
+            return Err(forbidden());
+        }
+        let nickname = nickname.ok_or(Failure(409, "workspace_member_not_pending"))?;
+        let at = now();
+        tx.execute("DELETE FROM rejected_enrollments WHERE expires<=?", [at])?;
+        tx.execute(
+            "INSERT INTO rejected_enrollments(name,salt,password_hash,expires)
+             SELECT name,salt,password_hash,? FROM members WHERE id=?",
+            params![at + REJECTION_TTL, body.id],
+        )?;
+        audit::record(&tx, who, Some(&body.id), "member_rejected", json!({}))?;
+        audit::detach_target(&tx, &body.id, &name, &nickname)?;
+        tx.execute("DELETE FROM member_tiers WHERE member=?", [&body.id])?;
+        tx.execute("DELETE FROM enrollment WHERE member=?", [&body.id])?;
+        tx.execute("DELETE FROM members WHERE id=?", [&body.id])?;
+        tx.commit()?;
         Ok(json!({"ok":true}))
     }
 

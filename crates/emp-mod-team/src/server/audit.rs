@@ -21,14 +21,26 @@ pub(super) fn record(
     Ok(())
 }
 
+pub(super) fn detach_target(db: &Connection, id: &str, name: &str, nickname: &str) -> Result<()> {
+    db.execute(
+        "UPDATE workspace_audit SET target=NULL,
+             details=json_set(details,'$.former_target',json_object('name',?2,'nickname',?3))
+         WHERE target=?1",
+        params![id, name, nickname],
+    )?;
+    Ok(())
+}
+
 impl Workspace {
     pub(super) fn audit(&self, who: &Identity, page: Page) -> Result<Value> {
         if !who.role.can_manage() {
             return Err(forbidden());
         }
         let mut query = self.db.prepare(
-            "SELECT a.id,a.at,COALESCE(ea.nickname,ma.name),COALESCE(et.nickname,mt.name),a.kind,a.details,
-                    ma.name,mt.name
+            "SELECT a.id,a.at,COALESCE(ea.nickname,ma.name),
+                    COALESCE(et.nickname,mt.name,json_extract(a.details,'$.former_target.nickname')),
+                    a.kind,json_remove(a.details,'$.former_target'),
+                    ma.name,COALESCE(mt.name,json_extract(a.details,'$.former_target.name'))
              FROM workspace_audit a
              JOIN members ma ON ma.id=a.actor LEFT JOIN members mt ON mt.id=a.target
              LEFT JOIN enrollment ea ON ea.member=ma.id LEFT JOIN enrollment et ON et.member=mt.id

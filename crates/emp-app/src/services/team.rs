@@ -323,6 +323,7 @@ impl TeamState {
             }
             "members" => request(state, base, token, Operation::Members, Some(body))?,
             "member_access" => request(state, base, token, Operation::MemberAccess, Some(body))?,
+            "reject_member" => request(state, base, token, Operation::RejectMember, Some(body))?,
             "budget" => request(state, base, token, Operation::Budget, Some(body))?,
             "review_service" => request(state, base, token, Operation::ReviewService, Some(body))?,
             "member_tiers" => request(state, base, token, Operation::MemberTiers, Some(body))?,

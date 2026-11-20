@@ -44,6 +44,7 @@ pub enum Operation {
     Members,
     ListMembers,
     MemberAccess,
+    RejectMember,
     MemberTiers,
     Budget,
     BudgetStatus,

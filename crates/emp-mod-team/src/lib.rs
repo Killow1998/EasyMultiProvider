@@ -117,6 +117,7 @@ fn endpoint(mut origin: Url, operation: Operation) -> Endpoint {
         Members => ("members", Post),
         ListMembers => ("members", Get),
         MemberAccess => ("member-access", Post),
+        RejectMember => ("reject-member", Post),
         MemberTiers => ("member-tiers", Post),
         Budget => ("budget", Post),
         BudgetStatus => ("budget-status", Get),

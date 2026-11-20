@@ -845,12 +845,28 @@ def main():
             wait_for(lambda: join_browser.execute('return !!document.getElementById("team_pending");'))
             _, screenshot = request(join_browser.base + '/screenshot')
             (args.output / 'team-join-pending.png').write_bytes(base64.b64decode(screenshot['value']))
-        member.team('login', application, 403)
+        assert member.team('login', application, 403)['error']['code']=='workspace_join_pending'
         enrolled = next(row for row in admin.team('list_members')['members'] if row['name']=='researcher')
         assert enrolled['nickname'] == application['nickname'] and enrolled['pending'] and not enrolled['enabled']
         member_id = enrolled['id']
         if args.no_browser:
+            assert admin.team('reject_member',{'id':member_id}) == {'ok':True}
+            assert member.team('login',application,403)['error']['code']=='workspace_join_rejected'
+            assert member.team('login',{**application,'password':'wrong-password'},401)['error']['code']=='workspace_login_failed'
+            assert not any(row['id']==member_id for row in admin.team('list_members')['members'])
+            rejected = next(row for row in admin.team('audit')['entries'] if row['kind']=='member_rejected')
+            assert (rejected['actor'],rejected['target'],rejected['target_login']) == ('lab-admin',application['nickname'],application['name'])
+            with sqlite3.connect(root/'vps/workspace.sqlite3') as db:
+                assert db.execute('UPDATE join_invites SET expires=0 WHERE code=?',(code,)).rowcount==1
+            next_code = vps.team('issue_invite')['code']
+            assert member.team('join',{**application,'code':next_code})['pending']
+            assert member.team('login',application,403)['error']['code']=='workspace_join_pending'
+            new_id = next(row['id'] for row in admin.team('list_members')['members'] if row['name']==application['name'])
+            assert new_id != member_id
+            member_id = new_id
             admin.team('member_access',{'id':member_id,'role':'member','publish':False,'sync':True,'enabled':True})
+            assert admin.team('reject_member',{'id':member_id},409)['error']['code']=='workspace_member_not_pending'
+            checks.append('Authenticated rejection removes the pending member, preserves its audit identity and permits a fresh application')
         else:
             join_browser.navigate(admin.url)
             wait_for(lambda: join_browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
