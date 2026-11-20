@@ -2,6 +2,7 @@
 use crate::{
     PRODUCT_NAME, Result, VERSION, copy, make_executable, project_root, run_command, windows,
 };
+use emp_state::update::worker::{MACOS_BUNDLE_BINARY, MACOS_LEGACY_BINARY};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::collections::BTreeSet;
@@ -818,23 +819,17 @@ fn write_macos_app(destination: &Path, executable: &Path, icon: &Path) -> Result
     for directory in [&launchers, &resources] {
         fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     }
-    copy(executable, &resources.join(PRODUCT_NAME))?;
-    make_executable(&resources.join(PRODUCT_NAME))?;
+    let main = destination.join(MACOS_BUNDLE_BINARY);
+    copy(executable, &main)?;
+    make_executable(&main)?;
     copy(icon, &resources.join("easy-multi-provider.icns"))?;
-    let scripts = [
-        (
-            launchers.join(PRODUCT_NAME),
-            "#!/bin/sh\nset -eu\ncontents_dir=$(CDPATH= cd \"$(dirname \"$0\")/..\" && pwd)\nexec \"$contents_dir/Resources/launch.command\"\n",
-        ),
-        (
-            resources.join("launch.command"),
-            "#!/bin/sh\nset -eu\nresources_dir=$(CDPATH= cd \"$(dirname \"$0\")\" && pwd)\nconfig_path=\"$HOME/Library/Application Support/EasyMultiProvider/config.json\"\nexec \"$resources_dir/EMP\" serve --config \"$config_path\" --open-browser\n",
-        ),
-    ];
-    for (path, body) in scripts {
-        fs::write(&path, body).map_err(|error| error.to_string())?;
-        make_executable(&path)?;
-    }
+    let legacy = destination.join(MACOS_LEGACY_BINARY);
+    fs::write(
+        &legacy,
+        "#!/bin/sh\nset -eu\ncontents_dir=$(CDPATH= cd \"$(dirname \"$0\")/..\" && pwd)\nexec \"$contents_dir/MacOS/EMP\" \"$@\"\n",
+    )
+    .map_err(|error| error.to_string())?;
+    make_executable(&legacy)?;
     fs::write(contents.join("Info.plist"), info_plist(VERSION)).map_err(|error| error.to_string())
 }
 

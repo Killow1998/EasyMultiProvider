@@ -19,9 +19,7 @@ pub(super) fn trust_failure(error: TrustFailure) -> &'static str {
         TrustFailure::Unavailable => "not_found",
         TrustFailure::NotTrusted => "untrusted_path",
         TrustFailure::Writable => "writable_path",
-        #[cfg(any(target_os = "macos", all(test, unix)))]
-        TrustFailure::SnapshotFailed => "bundle_snapshot_failed",
-        #[cfg(any(target_os = "macos", all(test, unix)))]
+        #[cfg(target_os = "macos")]
         TrustFailure::BundleVerificationFailed => "bundle_verification_failed",
     }
 }
@@ -103,11 +101,7 @@ fn observe_with_path(path: &Path, inherited_path: Option<OsString>) -> Value {
     };
     let mut observation =
         probe(&prepared, path, inherited_path).unwrap_or_else(|_| failed("probe_io"));
-    observation["launch_source"] = json!(if prepared.is_snapshot() {
-        "private_bundle"
-    } else {
-        "original"
-    });
+    observation["launch_source"] = json!("original");
     observation
 }
 

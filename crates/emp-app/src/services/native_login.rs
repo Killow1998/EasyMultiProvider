@@ -22,7 +22,6 @@ enum LoginState {
 }
 struct Pending {
     helper: SubscriptionLogin,
-    _engine: crate::services::runtime::HelperBinary,
     expected: Option<Value>,
     account_name: Option<String>,
     started: Instant,
@@ -150,10 +149,9 @@ pub(crate) fn execute(
                     None,
                 )
             };
-            let (engine, helper) = (|| {
+            let helper = (|| {
                 let engine = crate::services::runtime::helper_binary(state)?;
-                let helper = SubscriptionLogin::start(&engine, method)?;
-                Ok::<_, emp_codex::quota::QuotaError>((engine, helper))
+                SubscriptionLogin::start(&engine, method)
             })()
             .map_err(|error| {
                 let code = match error.code() {
@@ -170,7 +168,6 @@ pub(crate) fn execute(
             })?;
             *login = LoginState::Pending(Pending {
                 helper,
-                _engine: engine,
                 expected,
                 account_name,
                 started: Instant::now(),

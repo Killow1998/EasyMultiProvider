@@ -44,7 +44,7 @@ impl TrustedBinary {
 
     fn verify(&self) -> Result<(), QuotaError> {
         let path = self.executable.path();
-        validate_binary_path(path)?;
+        self.executable.validate_path().map_err(trust_error)?;
         if path.canonicalize().map_err(|_| binary_unavailable())? != path
             || binary_identity(path)? != self.identity
         {
@@ -88,10 +88,6 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
         })
 }
 
-fn validate_binary_path(path: &Path) -> Result<(), QuotaError> {
-    crate::executable_trust::validate_executable(path).map_err(trust_error)
-}
-
 fn trust_error(failure: crate::executable_trust::TrustFailure) -> QuotaError {
     use crate::executable_trust::TrustFailure;
     match failure {
@@ -103,15 +99,10 @@ fn trust_error(failure: crate::executable_trust::TrustFailure) -> QuotaError {
             "Codex executable path is writable",
             "quota_runtime_untrusted",
         ),
-        #[cfg(any(target_os = "macos", all(test, unix)))]
+        #[cfg(target_os = "macos")]
         TrustFailure::BundleVerificationFailed => QuotaError::new(
             "Codex app bundle did not pass verification",
             "quota_runtime_untrusted",
-        ),
-        #[cfg(any(target_os = "macos", all(test, unix)))]
-        TrustFailure::SnapshotFailed => QuotaError::new(
-            "Codex app bundle could not be prepared",
-            "quota_runtime_probe_failed",
         ),
     }
 }

@@ -191,29 +191,9 @@ pub(crate) fn compatibility_snapshot(state: &ServerState, refresh: bool) -> Valu
     snapshot
 }
 
-pub(crate) struct HelperBinary {
-    selector: String,
-    // Temporary return values live until the surrounding quota call ends.
-    // This retains the private executable even after quota resolves its path.
-    _prepared: Option<emp_codex::PreparedExecutable>,
-}
-
-impl std::ops::Deref for HelperBinary {
-    type Target = str;
-    fn deref(&self) -> &str {
-        &self.selector
-    }
-}
-
-pub(crate) fn helper_binary(
-    state: &ServerState,
-) -> Result<HelperBinary, emp_codex::quota::QuotaError> {
-    // Explicit process injection is used by isolated quota fixtures.
+pub(crate) fn helper_binary(state: &ServerState) -> Result<String, emp_codex::quota::QuotaError> {
     if state.backend.accounts.codex_binary != "codex" {
-        return Ok(HelperBinary {
-            selector: state.backend.accounts.codex_binary.clone(),
-            _prepared: None,
-        });
+        return Ok(state.backend.accounts.codex_binary.clone());
     }
     use emp_codex::runtime_inventory::HelperUnavailable;
     let prepared = state
@@ -244,10 +224,7 @@ pub(crate) fn helper_binary(
             "quota_runtime_probe_failed",
         )
     })?;
-    Ok(HelperBinary {
-        selector: selector.to_owned(),
-        _prepared: Some(prepared),
-    })
+    Ok(selector.to_owned())
 }
 
 pub(crate) fn mark_pending(state: &ServerState, target: &str, detail: &str) -> Result<(), ()> {

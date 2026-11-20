@@ -33,14 +33,22 @@ pub(crate) enum TrustFailure {
     /// The target or an ancestor can be modified by another user.
     #[cfg_attr(not(unix), allow(dead_code))]
     Writable,
-    #[cfg(any(target_os = "macos", all(test, unix)))]
-    SnapshotFailed,
-    #[cfg(any(target_os = "macos", all(test, unix)))]
+    #[cfg(target_os = "macos")]
     BundleVerificationFailed,
 }
 
 /// Validate a canonical absolute executable path.
 pub(crate) fn validate_executable(path: &Path) -> Result<(), TrustFailure> {
+    validate_executable_with(path, |_, _| false)
+}
+
+fn validate_executable_with(
+    path: &Path,
+    #[cfg_attr(not(unix), allow(unused_variables))] permit_writable_parent: impl Fn(
+        &Path,
+        &fs::Metadata,
+    ) -> bool,
+) -> Result<(), TrustFailure> {
     let metadata = fs::metadata(path).map_err(|_| TrustFailure::Unavailable)?;
     if !metadata.is_file() {
         return Err(TrustFailure::NotTrusted);
@@ -63,7 +71,9 @@ pub(crate) fn validate_executable(path: &Path) -> Result<(), TrustFailure> {
         let mut entry_uid = metadata.uid();
         for parent in path.ancestors().skip(1) {
             let info = fs::metadata(parent).map_err(|_| TrustFailure::Unavailable)?;
-            if foreign_writable(&info, Some(entry_uid), current_uid, &private_groups) {
+            if foreign_writable(&info, Some(entry_uid), current_uid, &private_groups)
+                && !permit_writable_parent(parent, &info)
+            {
                 return Err(TrustFailure::Writable);
             }
             entry_uid = info.uid();

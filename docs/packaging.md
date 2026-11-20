@@ -48,9 +48,10 @@ entries set `Terminal=false` and `StartupNotify=false`; argument-free GUI launch
 starts the service in its own session so an older terminal-based launcher can
 close safely. Explicit `serve` remains foreground. Linux uses the desktop's
 StatusNotifier/D-Bus support without a GTK runtime dependency. macOS sets
-`LSUIElement` and executes `Resources/launch.command` directly from the bundle
-launcher, keeping AppKit on the original thread. The existing bundle paths and
-updater arguments are preserved.
+`LSUIElement` and launches the native executable at `Contents/MacOS/EMP`,
+so AppKit associates the menu bar item with the application bundle.
+`Contents/Resources/EMP` forwards the original arguments to the native executable
+for existing installations that still update through that path.
 
 Runtime icon selection is stored as device-local `state/appearance.json`,
 separately from provider configuration and migration bundles. The browser
@@ -99,6 +100,14 @@ Chinese rendering in the UI; no remote release body is changed by a local edit.
 ### Release note writing rules
 
 - Describe concrete changes, their effect on users, and any required upgrade actions.
+- Group each language section by new features, workflow changes, fixes, or
+  compatibility and upgrade steps. Use only the categories the release needs,
+  with plain category labels so they also work in the in-app updater.
+- Give a new or moved control's visible label and location. Describe an existing
+  feature's change under the version where it happened. Put platform-specific
+  changes next to the platform name.
+- When editing a GitHub Release title, keep the version first and use a short
+  summary of the main user-facing change.
 - Omit generic validation caveats and defensive wording such as "acceptance
   remains pending", "validation scope and limits", or "no complete compatibility
   claim". Keep test coverage, pending acceptance and prerelease compatibility

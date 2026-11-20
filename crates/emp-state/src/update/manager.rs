@@ -12,6 +12,7 @@ use super::download::download_package;
 use super::extract::extract_candidate;
 use super::process::{created, spawn};
 use super::release::{Asset, MAX_RELEASE_BYTES, UpdateEndpoints, current_asset_name, latest_asset};
+use super::worker::installation_target;
 use super::{Result, UpdateError};
 use reqwest::Url;
 use reqwest::blocking::{Client, Response};
@@ -311,31 +312,6 @@ fn is_loopback_host(host: &str) -> bool {
         || host
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback())
-}
-
-pub fn installation_target(executable: &Path) -> Result<(PathBuf, String)> {
-    if executable.is_symlink() {
-        return Err(UpdateError("unsupported_installation"));
-    }
-    let executable = std::path::absolute(executable)?;
-    #[cfg(target_os = "macos")]
-    {
-        let app = executable
-            .parent()
-            .and_then(Path::parent)
-            .and_then(Path::parent)
-            .ok_or(UpdateError("unsupported_installation"))?;
-        if app.extension().is_none_or(|extension| extension != "app")
-            || executable.strip_prefix(app).ok() != Some(Path::new("Contents/Resources/EMP"))
-        {
-            return Err(UpdateError("unsupported_installation"));
-        }
-        Ok((app.to_owned(), "Contents/Resources/EMP".to_owned()))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok((executable, String::new()))
-    }
 }
 
 fn create_job(parent: &Path, manager: &UpdateManager) -> Result<PathBuf> {

@@ -6,7 +6,7 @@ mod parent;
 use crate::package::{KillOnDrop, Os, Target, http, reserve_loopback_port};
 use crate::{PRODUCT_NAME, Result, copy, physical, project_root, sha256_file, temporary_directory};
 use emp_state::update::extract::extract_candidate;
-use emp_state::update::worker::installation_target;
+use emp_state::update::worker::{MACOS_BUNDLE_BINARY, MACOS_LEGACY_BINARY, installation_target};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -99,7 +99,7 @@ fn update_in(
     fs::create_dir(&job).map_err(error)?;
     let package_name = target.update_package();
     let relative = if target.os == Os::Macos {
-        "Contents/Resources/EMP"
+        MACOS_BUNDLE_BINARY
     } else {
         ""
     };
@@ -121,8 +121,8 @@ fn update_in(
         fs::create_dir(&initial).map_err(error)?;
         let initial_package = initial.join(&package_name);
         copy(package, &initial_package)?;
-        let app = extract_candidate(&initial_package, &initial, relative)
-            .map_err(|error| error.to_string())?;
+        let app =
+            extract_candidate(&initial_package, &initial).map_err(|error| error.to_string())?;
         fs::rename(app, &installed_target).map_err(error)?;
         fs::remove_dir_all(&initial).map_err(error)?;
     }
@@ -135,8 +135,7 @@ fn update_in(
 
     let copied_package = job.join(&package_name);
     copy(package, &copied_package)?;
-    let candidate =
-        extract_candidate(&copied_package, &job, relative).map_err(|error| error.to_string())?;
+    let candidate = extract_candidate(&copied_package, &job).map_err(|error| error.to_string())?;
     let candidate_binary = if relative.is_empty() {
         candidate.clone()
     } else {
@@ -289,13 +288,25 @@ fn update_in(
         return Err("installed binary differs from the packaged binary".to_owned());
     }
     if !relative.is_empty() {
+        if original != sha256_file(binary)? {
+            return Err("macOS bundle entry must be the native EMP binary".to_owned());
+        }
         if hash_tree(&installed_target)? != bundle {
             return Err("installed app bundle differs from the packaged bundle".to_owned());
         }
-        for launcher in ["Contents/MacOS/EMP", "Contents/Resources/launch.command"] {
+        for launcher in [MACOS_BUNDLE_BINARY, MACOS_LEGACY_BINARY] {
             if !is_executable(&installed_target.join(launcher)) {
                 return Err(format!("{launcher} is not executable after the update"));
             }
+        }
+        let legacy_version = Command::new(installed_target.join(MACOS_LEGACY_BINARY))
+            .arg("--version")
+            .output()
+            .map_err(error)?;
+        if !legacy_version.status.success()
+            || String::from_utf8_lossy(&legacy_version.stdout).trim() != format!("EMP {version}")
+        {
+            return Err("macOS legacy updater entry did not run the native EMP binary".to_owned());
         }
     }
     if fails_startup {
@@ -507,7 +518,7 @@ fn launcher_preserves_arguments_config_and_update_target(target: Target) -> Resu
             .and_then(|()| builder.into_inner())
             .and_then(flate2::write::GzEncoder::finish)
             .map_err(|error| error.to_string())?;
-        let candidate = extract_candidate(&archive, &job, "").map_err(|error| error.to_string())?;
+        let candidate = extract_candidate(&archive, &job).map_err(|error| error.to_string())?;
         if fs::read(&candidate).ok() != fs::read(&binary).ok() {
             return Err("update candidate differs from the installed binary".to_owned());
         }
