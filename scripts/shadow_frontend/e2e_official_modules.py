@@ -4,7 +4,7 @@ import base64
 import contextlib
 from http.client import HTTPConnection
 import hashlib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 import itertools
 import json
 import os
@@ -16,7 +16,6 @@ import ssl
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from urllib.error import URLError
 from urllib.parse import unquote
@@ -25,6 +24,7 @@ from candidate_web import candidate_frontend
 from e2e import Browser
 from e2e_request_modes import websocket_request
 from local_backend import free_port, request, stop, wait_for
+from module_release_fixture import Release, http_server
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.codex_feature_acceptance import fixture
@@ -42,52 +42,6 @@ NO_NETWORK = {
 LOCAL_KEY = 'fixture-local-key'
 PROVIDER_KEY = 'fixture-team-upstream-secret'
 PASSWORD = 'only-for-this-workspace-test'
-
-
-class Release(BaseHTTPRequestHandler):
-    def log_message(self, *_args):
-        pass
-
-    def do_GET(self):
-        if getattr(self.server, 'delay_download', False) and self.path.startswith('/releases/download/'):
-            self.server.delayed_requests += 1
-            time.sleep(65)
-        tag = 'v' + self.server.version
-        releases = {tag: self.server.assets, **getattr(self.server, 'module_releases', {})}
-
-        def metadata(release_tag, assets):
-            return dict(tag_name=release_tag, draft=False, prerelease='-beta' in release_tag, assets=[
-                dict(name=name, size=len(data), digest='sha256:' + hashlib.sha256(data).hexdigest(),
-                     browser_download_url=f'http://127.0.0.1:{self.server.server_port}/releases/download/{release_tag}/{name}')
-                for name, data in assets.items()
-            ])
-
-        paginated = getattr(self.server, 'paginate_modules', False) and self.path.startswith('/releases?')
-        second_page = paginated and 'page=2' in self.path
-        if self.path == '/releases/tags/' + tag:
-            body = json.dumps(metadata(tag, self.server.assets)).encode()
-        elif self.path.split('?', 1)[0] == '/releases':
-            entries = releases.items()
-            if paginated:
-                entries = [(key, value) for key, value in entries if (key != tag) == second_page]
-            body = json.dumps([metadata(release_tag, assets) for release_tag, assets in entries]).encode()
-        elif self.path.startswith('/releases/download/'):
-            release_tag, name = self.path.rsplit('/', 2)[-2:]
-            if name not in releases.get(release_tag, {}):
-                self.send_error(404)
-                return
-            body = releases[release_tag][name]
-            if self.server.corrupt == name:
-                body = bytes([body[0] ^ 1]) + body[1:]
-        else:
-            self.send_error(404)
-            return
-        self.send_response(200)
-        if paginated and not second_page:
-            self.send_header('Link', f'<http://127.0.0.1:{self.server.server_port}/releases?per_page=100&page=2>; rel="next"')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
 
 class Upstream(fixture.Upstream):
@@ -113,16 +67,6 @@ class Upstream(fixture.Upstream):
             self.wfile.write(payload)
             return
         return super().do_POST()
-
-
-def http_server(stack, handler, tls=None):
-    server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
-    if tls:
-        server.socket = tls.wrap_socket(server.socket, server_side=True)
-    stack.callback(server.server_close)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    stack.callback(server.shutdown)
-    return server
 
 
 def https_workspace(stack, root, upstream_port):

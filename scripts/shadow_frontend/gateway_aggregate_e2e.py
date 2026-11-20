@@ -13,7 +13,7 @@ from local_backend import request, start_backend, wait_for
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary',type=Path,required=True)
+    parser.add_argument('--binary',type=Path,required=True,help='EMP binary beside the matching Gateway and Aggregate modules')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--web',type=Path)
     args = parser.parse_args()
@@ -27,7 +27,7 @@ def main():
                 'context_window':100000,'enabled':True} for alias,family in [('alias','shared-upstream'),('other','other-upstream')] for name in ['first','second']],
             'catalog_family_presentations':{'shared-upstream':{'catalog_alias':'Shared upstream'}},
             'codex_base_url':'http://127.0.0.1:9/v1','auto_enable_on_start':False}
-        backend,url,_,_ = start_backend(stack,args.binary.resolve(),root,config)
+        backend,url,_,_ = start_backend(stack,args.binary.resolve(),root,config,modules=('gateway','aggregate'))
         if args.web:
             frontend,_ = candidate_frontend(stack,backend,args.web)
             url = url.replace(backend,frontend)
