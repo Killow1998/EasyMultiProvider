@@ -1,6 +1,6 @@
 use super::*;
 use emp_modules::workspace::NATIVE_SHARE;
-use emp_modules::workspace::{Publish, SharePayload, SharedService};
+use emp_modules::workspace::{Publish, SharePayload, SharedService, SubscriptionSnapshot};
 
 #[derive(Deserialize)]
 pub(super) struct Review {
@@ -18,6 +18,14 @@ pub(super) struct ResetAuthority {
 #[derive(Deserialize)]
 pub(super) struct SubscriptionReminder {
     share: String,
+}
+
+fn subscription_identity(subscription: &SubscriptionSnapshot) -> Value {
+    json!({"tokens":{
+        "account_id":subscription.account_id,
+        "access_token":subscription.access_token,
+        "id_token":subscription.id_token,
+    }})
 }
 
 impl Workspace {
@@ -71,6 +79,10 @@ impl Workspace {
                 && let (Some(prior), Some(incoming)) =
                     (prior.subscription, &body.payload.subscription)
                 && prior.account_id == incoming.account_id
+                && emp_state::same_account_auth(
+                    &subscription_identity(&prior),
+                    &subscription_identity(incoming),
+                )
             {
                 if prior.expires_at > incoming.expires_at {
                     return Err(Failure(409, "workspace_share_version_conflict"));

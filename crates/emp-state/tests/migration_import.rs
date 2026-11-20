@@ -519,4 +519,19 @@ fn preview_reuses_an_in_memory_account_without_touching_the_filesystem() {
     assert_eq!(preview["providers"][0]["name"], "Edited locally");
     assert_eq!(summary.renamed_accounts, 0);
     assert!(!path.parent().unwrap().exists());
+
+    let mut shared = current;
+    shared["accounts"][0]["workspace_shared"] = Value::Bool(true);
+    let mut package = package;
+    package["accounts"][0]["metadata"]["workspace_shared"] = Value::Bool(true);
+    let (preview, pending, _) =
+        emp_state::migration::preview_migration_import(&shared, &package, &path, &vault, &known)
+            .unwrap();
+    assert_eq!(preview["accounts"][0]["workspace_shared"], true);
+    assert_eq!(preview["accounts"][1]["id"], "draft-2");
+    assert!(preview["accounts"][1].get("workspace_shared").is_none());
+    assert_eq!(
+        pending.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["draft-2"]
+    );
 }

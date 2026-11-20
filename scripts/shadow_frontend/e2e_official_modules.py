@@ -894,9 +894,20 @@ def main():
         collision.login(workspace,'researcher')
         collision.team('sync',expected=409)
         collision.team('logout')
+        confirmation = collision.api('/api/migration/export/confirm',{})['confirmation']
+        password = 'fixture-migration-password'
+        exported = collision.api('/api/migration/export',{'confirmation':confirmation,
+                                 'password':password,'selections':[{'kind':'provider','id':account_id,
+                                 'name':'Personal collision fixture','models':[{'id':'collision/model','selected':True}]}]})
+        assert exported['summary']['providers'] == exported['summary']['models'] == 1
+        restored = Emp(stack,emppy,root/'team-id-restored',{},release_url,ca)
+        restored.api('/api/migration/import',{'bundle':exported['bundle'],'password':password})
+        websocket_request(restored.base,local,{'model':'collision/model','input':'restored fixture '*6})
+        assert {key.lower():value for key,value in upstream.requests[-1]['headers'].items()}['authorization']=='Bearer unrelated-personal-key'
+        stop(restored.process)
         websocket_request(collision.base,local,{'model':'collision/model','input':'personal fixture '*6})
         assert {key.lower():value for key,value in upstream.requests[-1]['headers'].items()}['authorization']=='Bearer unrelated-personal-key'
-        checks.append('An exact team share ID collision preserves the private service, model and key through sync and sign-out')
+        checks.append('An exact team share ID collision preserves the private service, model and key through sync, sign-out and export/import')
         stop(collision.process)
         member.api('/api/accounts/'+account_id+'/models/refresh',{})
         reset_request = {'idempotency_key':'e714453f-d623-4c0a-b81e-918fa0d99409'}
@@ -982,6 +993,26 @@ def main():
         rows = member.team('usage')['rows']
         assert len(rows)==1 and rows[0]['budget_reached'] and rows[0]['actual_usd_nanos']==2_000_000_001
         checks.append('The USD threshold is calculated for each member; an acknowledged event replay remains one bill')
+        second = Emp(stack,emppy,root/'second-member-device',{'codex_base_url':mock},release_url,ca)
+        second.install('team')
+        second.restart()
+        assert second.login(workspace,'researcher')['id'] == member_id
+        assert second.team('sync')['synced'] == 1
+        assert second.team('sync')['synced'] == 0
+        before_usage = member.team('usage')['rows'][0]
+        websocket_request(second.base,local,{'model':'lab-admin/gpt-6.1-sol','input':'Second device fixture '*8})
+        def combined_usage():
+            row = member.team('usage')['rows'][0]
+            return row if row['requests'] == before_usage['requests'] + 1 else None
+        merged = wait_for(combined_usage)
+        assert merged['budget_nanos'] == before_usage['budget_nanos']
+        assert second.team('usage')['rows'][0] == merged
+        assert (second.root/'state/team-device-id').read_text() != (member.root/'state/team-device-id').read_text()
+        assert second.team('logout')['joined'] is False
+        assert member.team('status')['joined'] is True
+        member.team('sync')
+        stop(second.process)
+        checks.append('One member signs in and syncs on two independent EMP devices, sees combined billing and keeps the first device signed in when the second signs out')
 
         long_model = {**billable,'id':'long-model-fixture','model':'a'*300}
         paired_model = {**billable,'id':'short-model-fixture','model':'paired-fixture'}
@@ -1134,20 +1165,50 @@ def main():
             assert member.team('usage',{'period':'1d'},502)['error']['code']=='invalid_workspace_reply'
             overrides.clear()
             checks.append('Malformed member identifiers and non-numeric request counts from the synthetic HTTPS workspace are rejected at the HTTP boundary')
+            result_id = 'unconfirmed-report-fixture'
+            overrides['/workspace/v1/report'] = {}
+            with sqlite3.connect(member_ledger) as db:
+                db.execute('insert into team_outbox values (?,?,?)',
+                           (scope,result_id,json.dumps({**event,'id':result_id})))
+            member.team('usage')
+            time.sleep(1)
+            with sqlite3.connect(member_ledger) as db:
+                assert db.execute('select 1 from team_outbox where event_id=?',(result_id,)).fetchone()
+            overrides.clear()
+            def unconfirmed_usage_retried():
+                with sqlite3.connect(store) as db:
+                    return db.execute('select count(*) from usage where id=?',(result_id,)).fetchone()[0]==1
+            wait_for(unconfirmed_usage_retried,25)
+            checks.append('Unconfirmed VPS report keeps the device outbox until a valid reply acknowledges its retry')
 
         stop(member.process)
         team_path = member.root/'state/team-profile.json'
-        profile = team_path.read_bytes()
         team_path.write_text('invalid synthetic membership file')
         member.start()
         member.api('/api/accounts/'+account_id+'/quota-reset',reset_request,403)
+        member.api('/api/migration/export/confirm',{},403)
         assert not any(unquote(row['slug']).startswith('lab-admin/')
                        for row in member.api('/v1/models?client_version=0.170.0')['models'])
         assert request(member.base+'/v1/responses',payload,local)[0] in (400,403,404)
+        assert member.api('/api/team')['recovery_required']
+        member.login(workspace,'researcher')
+        assert member.team('sync')['synced'] >= 1
+        assert request(member.base+'/v1/responses',payload,local)[0] == 200
+        checks.append('A damaged workspace ownership file blocks shared routes and Banked Reset until signing in and syncing')
+
         stop(member.process)
-        team_path.write_bytes(profile)
+        team_path.unlink()
         member.start()
-        checks.append('A missing or damaged workspace ownership file denies team routing and Banked Reset')
+        assert member.api('/api/team')['recovery_required']
+        member.api('/api/migration/export/confirm',{},403)
+        member.api('/api/accounts/'+account_id+'/quota-reset',reset_request,403)
+        assert request(member.base+'/v1/responses',payload,local)[0] in (400,403,404)
+        member.login(workspace,'researcher')
+        assert member.team('sync')['synced'] >= 1
+        assert member.team('sync')['synced'] == 0
+        assert len([row for row in member.api('/api/config')['accounts'] if row['id']==account_id])==1
+        assert request(member.base+'/v1/responses',payload,local)[0] == 200
+        checks.append('A missing workspace ownership file denies team access until signing in and syncing restores the original shared route without duplicates')
 
         vps.team('member_access',{'id':member_id,'role':'member','publish':False,'sync':False,'enabled':True})
         member.team('sync',expected=403)
@@ -1372,19 +1433,29 @@ def main():
         checks.append('A synced subscription uses the owner name, and an existing conversation can still send the previous workspace-suffixed route')
         imported = team_credentials()
         member.api('/api/modules',{'id':'team','action':'disable'})
-        member.restart()
+        stop(member.process)
+        team_path.unlink()
+        member.start()
         assert not member.api('/api/modules')['migration_allowed']
         member.api('/api/modules',{'id':'team','action':'uninstall'})
         assert member.api('/api/modules')['migration_allowed']
         assert all(not path.exists() for path in imported)
         assert Path(personal_auth).read_bytes()==personal_saved and member.auth.read_bytes()==original_auth
-        checks.append('Signing out and uninstalling each delete local team credential files and preserve personal credentials')
+        checks.append('Signing out and uninstalling each delete team credential files and preserve personal credentials, even when the ownership file is missing during uninstall')
         verify_workspace_backup(stack,root,binaries/'empmod-team',vps,admin,join_browser if not args.no_browser else None,downloads)
         checks.append('Only the VPS maintainer can download the encrypted backup; a fresh VPS preserves identity, ledger and subscriptions and rejects a wrong password or existing destination')
         successor = next(row for row in vps.team('list_members')['members'] if row['name']=='mei')
         prior = admin.team('status')['identity']['member']['id']
+        other_admin_login = request(vps_url+'/workspace/v1/login',
+            {'name':'lab-admin','password':PASSWORD,'device':'f'*32})[1]
+        other_admin_bearer = {'Authorization':'Bearer '+other_admin_login['token']}
+        assert other_admin_login['member']['id'] == prior
         vps.team('logout',expected=403)
-        admin.team('logout',expected=403)
+        assert admin.team('logout')['joined'] is False
+        status, other_member = request(vps_url+'/workspace/v1/status',headers=other_admin_bearer)
+        assert status == 200 and other_member['member']['role'] == 'team_admin'
+        admin.login(workspace,'lab-admin')
+        checks.append('A team administrator signs out on one device while another device keeps its session and administrator role')
         admin.team('handover',{'successor':prior},409)
         vps.team('handover',{'successor':successor['id']},403)
         if args.no_browser:
@@ -1393,8 +1464,10 @@ def main():
             join_browser.navigate(admin.url)
             wait_for(lambda: join_browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
             join_browser.execute('document.getElementById("team_workspace_open").click();')
-            wait_for(lambda: join_browser.execute('return !!document.querySelector("[data-team-leave]");'))
-            join_browser.execute('document.querySelector("[data-team-leave]").click();')
+            wait_for(lambda: join_browser.execute('return !!document.querySelector("[data-team-choice=manage]");'))
+            join_browser.execute('document.querySelector("[data-team-choice=manage]").click();')
+            wait_for(lambda: join_browser.execute('return !!document.querySelector("[data-team-handover]");'))
+            join_browser.execute('document.querySelector("[data-team-handover]").click();')
             wait_for(lambda: join_browser.execute('return !!document.querySelector("#team_successor:enabled");'))
             assert join_browser.execute('return document.getElementById("modal_submit").disabled;')
             join_browser.execute('const input=document.getElementById("team_successor");input.value=arguments[0];input.dispatchEvent(new Event("change"));document.getElementById("modal_submit").click();',successor['id'])
@@ -1404,7 +1477,9 @@ def main():
         status, successor_auth = request(vps_url+'/workspace/v1/login',
             {'name':'mei','password':PASSWORD,'device':'d'*32})
         assert status==200 and successor_auth['member']['role']=='team_admin'
-        checks.append('An administrator must hand over to an active member before signing out, and the successor acquires the administrator role')
+        status, other_member = request(vps_url+'/workspace/v1/status',headers=other_admin_bearer)
+        assert status == 200 and other_member['member']['role'] == 'member'
+        checks.append('Role handover gives an active member the administrator role across devices and signs out the initiating device')
         report = {'checks':checks,'codex_version':version,'real_provider_calls':0,'browser':not args.no_browser}
         (args.output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
         print(json.dumps(report))

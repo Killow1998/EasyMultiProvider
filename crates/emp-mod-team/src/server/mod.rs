@@ -291,8 +291,8 @@ impl Workspace {
             }
             (Method::Post, "report") => self.report(&identity, parse(body)?),
             (Method::Post, "logout") => {
-                if identity.role != Role::Member {
-                    return Err(Failure(403, "workspace_handover_required"));
+                if identity.role == Role::VpsAdmin {
+                    return Err(forbidden());
                 }
                 self.db.execute(
                     "DELETE FROM sessions WHERE token=?",

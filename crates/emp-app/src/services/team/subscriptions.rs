@@ -71,6 +71,13 @@ fn document(auth: &SubscriptionSnapshot) -> Value {
     }})
 }
 
+pub(super) fn owns_credential(account: &Value, path: &std::path::Path) -> bool {
+    account["workspace_shared"] == true
+        && account["auth_file"]
+            .as_str()
+            .is_some_and(|configured| std::path::Path::new(configured) == path)
+}
+
 pub(super) fn stage(
     state: &ServerState,
     updated: &mut Value,
@@ -98,14 +105,13 @@ pub(super) fn stage(
     let index = accounts
         .iter()
         .position(|account| account["id"] == local_id);
-    if existing.is_none()
-        && (index.is_some()
-            || path.exists()
-            || updated["providers"]
-                .as_array()
-                .expect("normalized providers")
-                .iter()
-                .any(|provider| provider["id"] == local_id))
+    if updated["providers"]
+        .as_array()
+        .expect("normalized providers")
+        .iter()
+        .any(|provider| provider["id"] == local_id)
+        || index.is_some_and(|index| !owns_credential(&accounts[index], &path))
+        || (index.is_none() && existing.is_none() && path.exists())
     {
         return Err(Failure(409, "workspace_share_collision".into()));
     }
@@ -173,10 +179,7 @@ pub(super) fn stage(
             return Err(Failure(409, "workspace_share_version_conflict".into()));
         }
         if record.version == share.version
-            && index.is_some_and(|index| {
-                accounts[index]["credential_status"] != "invalid"
-                    && accounts[index]["workspace_shared"] == true
-            })
+            && index.is_some_and(|index| accounts[index]["credential_status"] != "invalid")
             && state
                 .backend
                 .configuration

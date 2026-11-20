@@ -218,16 +218,18 @@ fn remove_team_entries(
         });
     if subscriptions {
         for entry in config["accounts"].as_array().expect("normalized accounts") {
-            let Some(id) = entry["id"].as_str().filter(|id| {
-                imported
-                    .get(*id)
-                    .is_some_and(|record| record.expires_at.is_some())
-            }) else {
+            let Some(id) = entry["id"]
+                .as_str()
+                .filter(|id| entry["workspace_shared"] == true && is_team_service_id(id))
+            else {
                 continue;
             };
             let auth =
                 emp_state::account_auth_path(config, id, &state.backend.configuration.config_path)
                     .map_err(|_| Failure::unavailable())?;
+            if !super::subscriptions::owns_credential(entry, &auth) {
+                continue;
+            }
             paths.push(auth.with_file_name("config.toml"));
             paths.push(auth);
             removed.insert(id.to_owned());

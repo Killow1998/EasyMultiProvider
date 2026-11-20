@@ -41,8 +41,12 @@ fn validate_import_payload(payload: &Value) -> MigrationResult<ValidatedImport> 
         let record = record
             .as_object()
             .ok_or(MigrationError::InvalidAccountRecord)?;
-        let metadata = normalize_account(record.get("metadata").unwrap_or(&Value::Null))
+        let mut metadata = normalize_account(record.get("metadata").unwrap_or(&Value::Null))
             .map_err(|_| MigrationError::InvalidAccountRecord)?;
+        metadata
+            .as_object_mut()
+            .expect("normalized account")
+            .remove("workspace_shared");
         let auth = validate_auth_json(record.get("auth").unwrap_or(&Value::Null))
             .map_err(|_| MigrationError::InvalidAccountRecord)?;
         let id = metadata
@@ -331,6 +335,9 @@ fn merge_import(
             .position(|account| id_of(account) == original_id);
         let mut same_index = None;
         for (candidate, existing) in accounts.iter().enumerate() {
+            if existing["workspace_shared"] == true {
+                continue;
+            }
             let Some(existing_auth) = imported_auth
                 .get(id_of(existing))
                 .cloned()

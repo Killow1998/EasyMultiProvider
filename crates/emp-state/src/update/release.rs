@@ -151,16 +151,16 @@ type ModuleVersion = (u64, u64, u64, bool, u64);
 
 pub fn module_version(version: &str) -> Option<ModuleVersion> {
     let (base, suffix) = version.split_once('-').unwrap_or((version, ""));
-    let (major, minor, patch) = parse_stable_version(base).ok().or_else(|| {
-        (suffix == "beta" && base.split('.').count() == 2)
-            .then(|| parse_stable_version(&format!("{base}.0")).ok())
-            .flatten()
-    })?;
     let (stable, beta) = match suffix {
         "" => (true, 0),
         "beta" => (false, 0),
         suffix => (false, suffix.strip_prefix("beta.")?.parse().ok()?),
     };
+    let (major, minor, patch) = parse_stable_version(base).ok().or_else(|| {
+        (!stable && base.split('.').count() == 2)
+            .then(|| parse_stable_version(&format!("{base}.0")).ok())
+            .flatten()
+    })?;
     Some((major, minor, patch, stable, beta))
 }
 

@@ -13,22 +13,7 @@ use serde_json::Value;
 use std::net::TcpStream;
 
 pub(crate) fn read(state: &ServerState) -> Vec<u8> {
-    render(state.backend.team.local_status().map(|mut status| {
-        if status["joined"] == false
-            && let Ok(config) = state.backend.configuration.read()
-        {
-            status["recovery_required"] = ["accounts", "providers"]
-                .into_iter()
-                .flat_map(|kind| config[kind].as_array().expect("normalized services"))
-                .any(|entry| {
-                    entry["id"]
-                        .as_str()
-                        .is_some_and(|id| state.backend.team.shared_subscription(id))
-                })
-                .into();
-        }
-        status
-    }))
+    render(state.backend.team.local_status())
 }
 
 pub(crate) fn notices(state: &ServerState) -> Vec<u8> {

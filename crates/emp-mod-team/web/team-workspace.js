@@ -192,13 +192,13 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     if (vps) {
       view.querySelector('[data-team-backup]').onclick = event => downloadBackup(event.currentTarget);
     } else {
-      const leave = async successor => {
-        current = successor ? await action('handover',{successor}) : await action('logout');
+      const leave = async () => {
+        current = await action('logout');
         changed();
         await onSync();
         if ($('team_leave_confirm')) join(back);
       };
-      view.querySelector('[data-team-leave]').onclick = () => confirmLeave(home,manage,leave);
+      view.querySelector('[data-team-leave]').onclick = () => confirmLeave(home,false,leave);
       view.querySelector('[data-team-choice=publish]').onclick = () => publish(home);
       view.querySelector('[data-team-choice=sync]').onclick = event => sync(event.currentTarget);
     }
@@ -334,7 +334,8 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
 
   async function confirmLeave(home, manage, leave) {
     const select = manage ? `<div class="team-handover"><label for="team_successor">${tr('modules.workspace_successor')}</label><select id="team_successor" disabled></select></div>` : '';
-    openModal(tr('modules.sign_out_of_the_workspace'), `<div id="team_leave_confirm"><p>${tr(manage ? 'modules.workspace_handover_required' : 'modules.leave_removes_credentials')}</p>${select}</div>`, tr('modules.sign_out'), async () => {
+    const title = manage ? 'modules.workspace_handover' : 'modules.sign_out';
+    openModal(tr(title), `<div id="team_leave_confirm"><p>${tr(manage ? 'modules.workspace_handover_required' : 'modules.leave_removes_credentials')}</p>${select}</div>`, tr(title), async () => {
       const successor = manage ? $('team_successor').value : '';
       if (manage && !successor) return;
       await leave(successor);
@@ -671,9 +672,16 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     let selected = initial, generation = 0, members;
     const reopen = () => openMembers(home,selected);
     management(home, 'members', `<div id="team_manage">
-      <div class="team-members-toolbar">${periodBar(selected)}<button type="button" data-member-add>${tr('modules.add_member')}</button></div>
+      <div class="team-members-toolbar">${periodBar(selected)}${scope().role === 'team_admin' ? `<button type="button" class="secondary" data-team-handover>${tr('modules.workspace_handover')}</button>` : ''}<button type="button" data-member-add>${tr('modules.add_member')}</button></div>
       <div data-team-usage-table>${tr('modules.loading')}</div></div>`, reopen);
     const panel = $('team_manage');
+    const handover = panel.querySelector('[data-team-handover]');
+    if (handover) handover.onclick = () => confirmLeave(reopen, true, async successor => {
+      current = await action('handover',{successor});
+      changed();
+      await onSync();
+      if ($('team_leave_confirm')) home();
+    });
     // An island decision refreshes this table if it is still the open view.
     // A quiet refresh (a new request arrived) waits while the administrator is typing a limit.
     membersView = ({quiet = false} = {}) => { if (panel.isConnected && !(quiet && panel.contains(document.activeElement) && document.activeElement.matches('input,textarea'))) reopen(); };

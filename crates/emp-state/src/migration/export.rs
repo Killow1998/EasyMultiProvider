@@ -494,13 +494,16 @@ pub fn prepare_migration_export(
 ) -> MigrationResult<(Value, MigrationExportSummary)> {
     let selected = groups.copied().unwrap_or_else(ExportGroups::all);
     let selected_list = selected.as_btree();
+    let shared: BTreeSet<_> = config["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|account| account["workspace_shared"] == true)
+        .map(|account| id_of(account).to_owned())
+        .collect();
     let mut config = select_export_config(config, groups)?;
-    use crate::config::is_team_service_id;
-    if let Some(providers) = config["providers"].as_array_mut() {
-        providers.retain(|provider| !is_team_service_id(id_of(provider)));
-    }
-    if let Some(models) = config["models"].as_array_mut() {
-        models.retain(|model| !model["provider"].as_str().is_some_and(is_team_service_id));
+    if let Some(accounts) = config["accounts"].as_array_mut() {
+        accounts.retain(|account| !shared.contains(id_of(account)));
     }
     if let Some(groups) = config["model_groups"].as_array_mut() {
         groups.retain(|group| {
@@ -512,7 +515,7 @@ pub fn prepare_migration_export(
                 .any(|source| {
                     source
                         .split_once('/')
-                        .is_some_and(|(service, _)| is_team_service_id(service))
+                        .is_some_and(|(service, _)| shared.contains(service))
                 })
         });
     }
@@ -524,9 +527,6 @@ pub fn prepare_migration_export(
         .into_iter()
         .flatten()
     {
-        if is_team_service_id(id_of(raw)) {
-            continue;
-        }
         let metadata =
             normalize_account(raw).map_err(|_| MigrationError::AccountCredentialsUnavailable)?;
         let auth_file = metadata

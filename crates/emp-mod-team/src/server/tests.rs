@@ -65,7 +65,19 @@ fn refreshing_a_subscription_carries_only_current_approval_for_the_same_account(
     let reader = reader["token"].as_str().unwrap();
     let source = emp_modules::workspace::NATIVE_SHARE;
     let expiry = now() + 3600;
-    let publish = |workspace: &mut Workspace, version: i64, account: &str| {
+    let upload = |workspace: &mut Workspace, version: i64, account: &str, user: Option<&str>| {
+        let token = user.map_or_else(
+            || format!("fixture-{version}"),
+            |user| {
+                let claims = json!({"https://api.openai.com/auth":{
+                    "chatgpt_account_id":account,"chatgpt_user_id":user,
+                }});
+                format!(
+                    "fixture.{}.signature",
+                    URL_SAFE.encode(serde_json::to_vec(&claims).unwrap())
+                )
+            },
+        );
         post(
             workspace,
             "publish",
@@ -73,10 +85,13 @@ fn refreshing_a_subscription_carries_only_current_approval_for_the_same_account(
             json!({"source":source,"expected_version":version,"payload":{
                 "provider":{"id":source,"name":"Native","auth_mode":"codex_subscription"},
                 "models":[],"subscription":{"account_id":account,
-                    "access_token":format!("fixture-{version}"),"expires_at":expiry+version}
+                    "access_token":token,"expires_at":expiry+version}
             }}),
         )
         .unwrap()
+    };
+    let publish = |workspace: &mut Workspace, version, account: &str| {
+        upload(workspace, version, account, None)
     };
     let sync = |workspace: &mut Workspace| {
         workspace
@@ -154,6 +169,22 @@ fn refreshing_a_subscription_carries_only_current_approval_for_the_same_account(
         .unwrap();
     assert_eq!(
         publish(&mut workspace, 5, "other-account")["review_required"],
+        true
+    );
+    assert!(sync(&mut workspace).is_empty());
+
+    assert_eq!(
+        upload(&mut workspace, 6, "business", Some("first-user"))["review_required"],
+        true
+    );
+    review(&mut workspace, 7, true);
+    assert_eq!(
+        upload(&mut workspace, 7, "business", Some("first-user"))["review_required"],
+        false
+    );
+    assert_eq!(sync(&mut workspace).len(), 1);
+    assert_eq!(
+        upload(&mut workspace, 8, "business", Some("other-user"))["review_required"],
         true
     );
     assert!(sync(&mut workspace).is_empty());

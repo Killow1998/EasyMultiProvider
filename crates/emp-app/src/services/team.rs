@@ -10,8 +10,8 @@ use emp_modules::{
     team::{BudgetStatus, IdentityKey, IdentityPlan, Operation, ReportPlan, Request},
     workspace::Role,
 };
-use emp_state::VaultStore;
 use emp_state::config::is_team_service_id;
+use emp_state::{FilesystemError, VaultStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
@@ -58,6 +58,14 @@ struct Store {
     device: String,
     session: Option<Session>,
     imported: BTreeMap<String, Imported>,
+    #[serde(skip)]
+    recovery_required: bool,
+}
+
+#[derive(Deserialize)]
+struct ReportReceipt {
+    inserted: usize,
+    budget: BudgetStatus,
 }
 
 pub(crate) struct TeamState {
@@ -90,12 +98,31 @@ impl Failure {
 
 impl TeamState {
     pub(crate) fn open(path: PathBuf, vault: &VaultStore, config: &Value) -> Self {
+        let configured_shares: std::collections::BTreeSet<String> = config["accounts"]
+            .as_array()
+            .expect("normalized accounts")
+            .iter()
+            .filter(|entry| entry["workspace_shared"] == true)
+            .filter_map(|entry| entry["id"].as_str().map(str::to_owned))
+            .collect();
+        let damaged_store = || Store {
+            recovery_required: true,
+            ..Store::default()
+        };
         let mut store: Option<Store> = match path.symlink_metadata() {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Store::default()),
-            _ => vault
-                .read_encrypted_json(&path)
-                .ok()
-                .and_then(|raw| serde_json::from_value(raw).ok()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Store {
+                recovery_required: !configured_shares.is_empty(),
+                ..Store::default()
+            }),
+            _ => match vault.read_encrypted_json(&path) {
+                Ok(raw) => Some(serde_json::from_value(raw).unwrap_or_else(|_| damaged_store())),
+                Err(
+                    FilesystemError::UnsupportedCredentialFormat
+                    | FilesystemError::CredentialDecryptFailed
+                    | FilesystemError::InvalidJson,
+                ) => Some(damaged_store()),
+                Err(_) => None,
+            },
         };
         if let Some(store) = &mut store
             && store.device.is_empty()
@@ -115,19 +142,14 @@ impl TeamState {
             })
         {
             store.session = None;
+            store.recovery_required = true;
         }
         let budget_notices =
             budget_notices::Notices::open(path.with_file_name("team-budget-notices.json"));
         Self {
             path,
             store: Mutex::new(store),
-            configured_shares: config["accounts"]
-                .as_array()
-                .expect("normalized accounts")
-                .iter()
-                .filter(|entry| entry["workspace_shared"] == true)
-                .filter_map(|entry| entry["id"].as_str().map(str::to_owned))
-                .collect(),
+            configured_shares,
             operations: Mutex::new(()),
             events: Default::default(),
             discovery: Default::default(),
@@ -178,10 +200,10 @@ impl TeamState {
     pub(crate) fn migration_restricted(&self) -> bool {
         self.store.lock().map_or(true, |store| {
             store.as_ref().is_none_or(|store| {
-                store
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| !can_migrate(&session.identity))
+                store.session.as_ref().map_or(
+                    store.recovery_required || !store.imported.is_empty(),
+                    |session| !can_migrate(&session.identity),
+                )
             })
         })
     }
@@ -210,14 +232,15 @@ impl TeamState {
 
     pub(crate) fn local_status(&self) -> Result<Value> {
         let store = self.store.lock().map_err(|_| Failure::unavailable())?;
-        Ok(
-            match store.as_ref().and_then(|store| store.session.as_ref()) {
-                Some(session) => {
-                    json!({"joined":true,"base":session.base,"identity":session.identity})
-                }
-                None => json!({"joined":false}),
-            },
-        )
+        let Some(store) = store.as_ref() else {
+            return Err(Failure::unavailable());
+        };
+        Ok(match &store.session {
+            Some(session) => json!({"joined":true,"base":session.base,"identity":session.identity}),
+            None => {
+                json!({"joined":false,"recovery_required":store.recovery_required || !store.imported.is_empty()})
+            }
+        })
     }
 
     pub(crate) fn notices(&self) -> Value {
@@ -277,6 +300,7 @@ impl TeamState {
                 token,
                 identity,
             });
+            store.recovery_required = false;
             self.save_store(state, store)?;
             self.events.notify_one();
             super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
@@ -293,8 +317,8 @@ impl TeamState {
             "logout" | "handover" => {
                 if operation == "handover" {
                     request(state, base, token, Operation::Handover, Some(body))?;
-                } else if session.identity["member"]["role"] != "member" {
-                    return Err(Failure(403, "workspace_handover_required".into()));
+                } else if session.identity["member"]["role"] == "vps_admin" {
+                    return Err(Failure(403, "workspace_permission_required".into()));
                 }
                 if let Err(error) = request(state, base, token, Operation::Logout, Some(&json!({})))
                     && error.0 < 500
@@ -455,6 +479,37 @@ impl TeamState {
                 }))
     }
 
+    pub(crate) fn exclude_shared_migration_providers(&self, config: &mut Value) -> Result<()> {
+        let store = self.snapshot()?;
+        let shared = |id: &str| {
+            store
+                .imported
+                .get(id)
+                .is_some_and(|record| record.expires_at.is_none())
+        };
+        config["providers"]
+            .as_array_mut()
+            .expect("normalized providers")
+            .retain(|provider| !provider["id"].as_str().is_some_and(shared));
+        config["models"]
+            .as_array_mut()
+            .expect("normalized models")
+            .retain(|model| !model["provider"].as_str().is_some_and(shared));
+        config["model_groups"]
+            .as_array_mut()
+            .expect("normalized model groups")
+            .retain(|group| {
+                !group["sources"]
+                    .as_array()
+                    .expect("normalized sources")
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter_map(|source| source.split_once('/'))
+                    .any(|(provider, _)| shared(provider))
+            });
+        Ok(())
+    }
+
     pub(crate) fn label_subscription_permissions(&self, accounts: &mut Value) {
         let Ok(store) = self.store.lock() else {
             return;
@@ -537,13 +592,14 @@ impl TeamState {
                 next_budget_check = std::time::Instant::now() + Duration::from_secs(60);
                 if let Ok(store) = team.snapshot()
                     && let Some(session) = store.session
-                    && let Ok(budget) = request(
+                    && let Ok(reply) = request(
                         state,
                         &session.base,
                         Some(&session.token),
                         Operation::BudgetStatus,
                         None,
                     )
+                    && let Ok(budget) = serde_json::from_value(reply)
                 {
                     team.observe_budget(state, &session, budget);
                     let _ = request(
@@ -586,17 +642,19 @@ impl TeamState {
         )?;
         let report = serde_json::to_vec(&plan.report).expect("workspace report");
         let reply = send(state, &plan.endpoint, Some(&session.token), Some(report))?;
-        self.observe_budget(state, &session, reply["budget"].clone());
+        let receipt: ReportReceipt = serde_json::from_value(reply)
+            .map_err(|_| Failure(502, "invalid_workspace_reply".into()))?;
+        if receipt.inserted > events.len() {
+            return Err(Failure(502, "invalid_workspace_reply".into()));
+        }
+        self.observe_budget(state, &session, receipt.budget);
         let ids: Vec<_> = events.iter().map(|(id, _)| id.as_str()).collect();
         ledger
             .ack_team_events(&scope, &ids)
             .map_err(|_| Failure::unavailable())
     }
 
-    fn observe_budget(&self, state: &ServerState, session: &Session, budget: Value) {
-        let Ok(budget) = serde_json::from_value::<BudgetStatus>(budget) else {
-            return;
-        };
+    fn observe_budget(&self, state: &ServerState, session: &Session, budget: BudgetStatus) {
         let english = state
             .backend
             .configuration
