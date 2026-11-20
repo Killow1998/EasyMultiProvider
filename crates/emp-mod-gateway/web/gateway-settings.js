@@ -38,7 +38,7 @@ function createGatewaySettings({api, openModal, notice, $, esc, tr, help}) {
       const owner=$('modal_body').firstElementChild;
       await api('/api/gateway/clients', {method:'DELETE', body:JSON.stringify({id:button.dataset.gatewayRemove})});
       if(owner.isConnected)await devices(back);
-    }, null, {back:() => devices(back)}));
+    }, null, {back:() => devices(back),tone:'danger'}));
   }
   function showKey(client,back) {
     const key=client.api_key;
@@ -74,7 +74,7 @@ function createGatewaySettings({api, openModal, notice, $, esc, tr, help}) {
       const models = device.models.map(model => `<tr><th scope="row">${esc(model.model || tr('reports.unknown_model'))}</th>${metrics(model)}</tr>`).join('');
       return summary + `<tbody id="${detailsId}" class="gateway-device-models" ${open ? '' : 'hidden'}>${models}</tbody>`;
     }).join('');
-    openModal(tr('gateway.usage'), `<div class="call-toolbar"><div class="period-presets" id="gateway_usage_days" role="group" aria-label="${esc(tr('gateway.period'))}">${[1,7,15,30].map(value => `<button type="button" class="secondary${value === days ? ' active' : ''}" data-gateway-days="${value}" aria-pressed="${value === days}">${tr('gateway.days',{days:value})}</button>`).join('')}</div>${help(tr('gateway.usage_help'))}</div><div class="usage-table gateway-usage-table"><table><thead><tr>${['gateway.device_or_model','reports.count','gateway.tokens','gateway.estimated_cost'].map(key => `<th scope="col">${tr(key)}</th>`).join('')}</tr></thead>${rows || `<tbody><tr><td colspan="4">${tr('gateway.no_clients')}</td></tr></tbody>`}</table></div>`, '', null, null, {back, reopen:() => usage(back,days,expanded)});
+    openModal(tr('gateway.usage'), `<div class="call-toolbar"><div class="period-presets" id="gateway_usage_days" role="group" aria-label="${esc(tr('gateway.period'))}">${[1,7,15,30].map(value => `<button type="button" class="secondary${value === days ? ' active' : ''}" data-gateway-days="${value}" aria-pressed="${value === days}">${esc(periodPresetLabel(value + 'd'))}</button>`).join('')}</div>${help(tr('gateway.usage_help'))}</div><div class="usage-table gateway-usage-table"><table><thead><tr>${['gateway.device_or_model','reports.count','gateway.tokens','gateway.estimated_cost'].map(key => `<th scope="col">${tr(key)}</th>`).join('')}</tr></thead>${rows || `<tbody><tr><td colspan="4">${tr('gateway.no_clients')}</td></tr></tbody>`}</table></div>`, '', null, null, {back, reopen:() => usage(back,days,expanded)});
     $('gateway_usage_days').querySelectorAll('[data-gateway-days]').forEach(button => button.onclick = () => usage(back,Number(button.dataset.gatewayDays),expanded));
     $('modal_body').querySelectorAll('.gateway-device-toggle').forEach(button => button.onclick = () => {
       const details = $(button.getAttribute('aria-controls'));

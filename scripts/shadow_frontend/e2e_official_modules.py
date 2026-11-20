@@ -392,7 +392,6 @@ def browser_roles(browser, output, emps):
             browser.execute('document.querySelector("[data-team-choice=manage]").click();')
             browser.execute('document.querySelector("[data-team-manage-subscriptions]").click();')
             wait_for(lambda: browser.execute('return !!document.querySelector("[data-review-service]");'))
-            browser.execute('document.getElementById("modal_back").click();')
             open_member_management(browser)
             _, screenshot = request(browser.base + '/screenshot')
             (output / (role + '-management.png')).write_bytes(base64.b64decode(screenshot['value']))
@@ -842,7 +841,9 @@ def main():
                 'team_name':application['name'], 'team_password':PASSWORD
             })
             join_browser.execute('document.getElementById("modal_submit").click();')
-            wait_for(lambda: join_browser.execute('return !!document.getElementById("team_login") && !document.getElementById("team_nickname");'))
+            wait_for(lambda: join_browser.execute('return !!document.getElementById("team_pending");'))
+            _, screenshot = request(join_browser.base + '/screenshot')
+            (args.output / 'team-join-pending.png').write_bytes(base64.b64decode(screenshot['value']))
         member.team('login', application, 403)
         enrolled = next(row for row in admin.team('list_members')['members'] if row['name']=='researcher')
         assert enrolled['nickname'] == application['nickname'] and enrolled['pending'] and not enrolled['enabled']

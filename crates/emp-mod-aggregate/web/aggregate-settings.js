@@ -11,7 +11,7 @@ function createAggregateSettings({getState, cloneState, persistState, openModal,
   }
   function open(back) {
     const groups = getState().model_groups || [];
-    openModal(tr('aggregate.title'), `<div class="section-tools"><button type="button" data-icon="plus" data-aggregate-add>${tr('aggregate.add')}</button></div><div class="settings-list">${groups.map((group,index) => {
+    openModal(tr('aggregate.title'), `<div class="section-tools"><span class="spacer"></span><button type="button" data-icon="plus" data-aggregate-add>${tr('aggregate.add')}</button></div><div class="settings-list">${groups.map((group,index) => {
       const name = getState().catalog_models.find(model => model.id === group.id)?.display_name || group.name || tr('aggregate.unavailable');
       return `<div class="setting-row"><div class="aggregate-info"><strong>${esc(name)}</strong><p class="setting-help">${tr('aggregate.' + group.policy)} · ${tr('aggregate.source_count',{count:group.sources.length})}</p></div><div class="aggregate-actions"><button type="button" class="secondary danger" data-icon="trash" data-aggregate-remove="${index}" title="${esc(tr('services.remove'))}" aria-label="${esc(tr('services.remove'))} ${esc(name)}"></button><button type="button" class="secondary" data-icon="chevron-right" data-aggregate-edit="${index}" title="${esc(tr('aggregate.edit'))}" aria-label="${esc(tr('aggregate.edit'))}"></button></div></div>`;
     }).join('') || `<p class="muted">${tr('aggregate.no_groups')}</p>`}</div>`, '', null, null, {back, reopen:() => open(back)});

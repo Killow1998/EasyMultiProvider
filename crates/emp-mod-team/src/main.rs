@@ -8,6 +8,9 @@ fn main() -> std::process::ExitCode {
             env!("CARGO_PKG_VERSION"),
             option_env!("EMP_LEGACY_CORE_VERSION"),
             concat!(
+                "(()=>{const style=document.getElementById('emp_team_style')||document.head.appendChild(Object.assign(document.createElement('style'),{id:'emp_team_style'}));style.textContent=String.raw`",
+                include_str!("../web/team.css"),
+                "`;})();\n",
                 include_str!("../web/team-profile.js"),
                 "\n",
                 include_str!("../web/team-workspace.js")

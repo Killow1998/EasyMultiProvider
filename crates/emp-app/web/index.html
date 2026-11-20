@@ -1087,6 +1087,7 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
   $('modal_status').textContent = '';
   const button = $('modal_submit'), label = submitLabel || tr("core.confirm");
   button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false;
+  button.classList.toggle('danger', navigation.tone === 'danger');
   const handler = async () => {
     button.disabled = true; button.textContent = tr("core.working"); $('modal_status').textContent = '';
     try { await submit(); } catch (error) { if (button.onclick === handler) $('modal_status').textContent = error.message; }

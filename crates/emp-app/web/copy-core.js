@@ -39,7 +39,6 @@ registerUiCopy({
   'gateway.usage':['设备用量','Device usage'],
   'gateway.device_or_model':['设备 / 模型','Device / model'],
   'gateway.period':['时间范围','Period'],
-  'gateway.days':['近 {days} 天','Last {days} days'],
   'gateway.tokens':['输入 / 输出 token','Input / output tokens'],
   'gateway.estimated_cost':['API 估算 · USD','API estimate · USD'],
   'gateway.priced_calls':['已估价 {priced}/{calls} 次调用','{priced}/{calls} calls priced'],

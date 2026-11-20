@@ -37,7 +37,7 @@ function createRoutingSettings({api, getState, cloneState, persistState, openMod
     const provider = getState().providers.find(item => item.id === current?.provider && isCreditService(item) && /^openai-image-credit(?:-\d+)?$/.test(item.id));
     const reopen = () => connectCredit(back);
     openModal(tr('models.credit_service'), `<div class="settings-list" id="credit_connect_form">
-      <div class="team-menu-actions"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">${tr('models.credit_create_key')}</a>
+      <div class="form-links"><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">${tr('models.credit_create_key')}</a>
       <button type="button" class="secondary" id="credit_copy_prompt">${tr('models.credit_copy_prompt')}</button></div>
       <div class="setting-row routing-mode"><label for="credit_key">API Key</label><input id="credit_key" type="password" autocomplete="off" ${provider?.api_key_set ? '' : 'required'}></div>
       <div class="setting-row routing-mode"><label for="credit_connect_budget">${tr('models.credit_budget')}</label><input type="number" id="credit_connect_budget" min="0.01" max="1000000" step="0.01" value="${current?.budget_cents ? current.budget_cents/100 : ''}" required></div>

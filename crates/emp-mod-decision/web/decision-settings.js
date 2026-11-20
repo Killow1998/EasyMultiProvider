@@ -73,7 +73,7 @@ function createDecisionSettings({getState, cloneState, persistState, openModal, 
         if (current()) $('decision_catalog_status').textContent = models.length ? '' : tr('core.decision_empty');
       } catch (error) {
         models = catalogs.get(key) || [];
-        if (current()) $('decision_catalog_status').textContent = tr('core.decision_load_failed', {error:error.message});
+        if (current()) $('decision_catalog_status').textContent = tr('core.decision_load_failed', {error:error.message.replace(/[。.]\s*$/u,'')});
       }
       if (!current()) return;
       $('decision_model').innerHTML += models.map(model => `<option value="${esc(model.id)}">${esc(model.name)}</option>`).join('') + `<option value="@custom">${tr('core.decision_custom')}</option>`;

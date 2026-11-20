@@ -1,5 +1,5 @@
 function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onChange, onSync}) {
-  let current = {joined:false}, inviteTick;
+  let current = {joined:false}, inviteTick, pendingTick, pendingAccount = null;
   const title = () => tr('modules.team_workspace');
   const roleName = role => ({
     member:tr('modules.member'),
@@ -12,6 +12,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     vps_admin:'<rect x="4" y="5" width="16" height="5.5" rx="1.6"/><rect x="4" y="13.5" width="16" height="5.5" rx="1.6"/><path d="M7.5 7.75h.5m-.5 8.5h.5m7-8.5h2m-2 8.5h2"/>'
   };
   const roleSvg = role => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${roleIcons[role] || ''}</svg>`;
+  const roleBadge = role => `<span class="team-role-icon team-role-${esc(role)}" role="img" aria-label="${esc(roleName(role))}" title="${esc(roleName(role))}">${roleSvg(role)}</span>`;
   const action = (name, body = {}) => api('/api/team/' + name, {method:'POST',body:JSON.stringify(body)});
   const failure = error => {
     const code = error.payload?.error?.code;
@@ -19,29 +20,37 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       'workspace_member_exists', 'workspace_discovery_unavailable', 'workspace_discovery_requires_https',
       'workspace_share_version_conflict','workspace_subscription_sign_in_required',
       'workspace_only_native_subscription', 'workspace_handover_required',
-      'workspace_handover_successor_required','workspace_backup_too_large'].includes(code)
+      'workspace_handover_successor_required','workspace_backup_too_large',
+      'workspace_login_failed','workspace_login_limited'].includes(code)
       ? tr('modules.' + code) : error.message;
   };
+  const showError = (owner, error) => { if (owner.isConnected) $('modal_status').textContent = failure(error); };
   const locale = () => document.documentElement.lang || 'zh-CN';
-  const money = nanos => nanos == null ? '—' : new Intl.NumberFormat(locale(), {
+  const finite = value => Number.isFinite(value) ? value : null;
+  const money = nanos => finite(nanos) == null ? '—' : new Intl.NumberFormat(locale(), {
     style:'currency',currency:'USD',maximumFractionDigits:4
   }).format(nanos / 1e9);
-  const budgetDisplay = nanos => nanos == null ? `<span class="team-unlimited" role="img" aria-label="${esc(tr('modules.no_daily_limit'))}" title="${esc(tr('modules.no_daily_limit'))}">∞</span>` : esc(money(nanos));
+  const budgetDisplay = nanos => finite(nanos) == null ? `<span class="team-unlimited" role="img" aria-label="${esc(tr('modules.no_daily_limit'))}" title="${esc(tr('modules.no_daily_limit'))}">∞</span>` : esc(money(nanos));
   const number = value => Number.isFinite(value) ? value.toLocaleString(locale()) : '—';
-  const periods = ['today','1h','1d','7d','30d'];
-  const periodBar = (period, choices = periods) => `<div class="period-presets" role="group" aria-label="${tr('core.period')}">${choices.map(id =>
-    `<button class="secondary ${id === period ? 'active' : ''}" type="button" data-team-period="${id}" aria-pressed="${id === period}">${esc(id === 'lifetime' ? tr('modules.all_time') : id === 'today' ? tr('modules.today_utc') : periodPresetLabel(id))}</button>`).join('')}</div>`;
+  const periods = ['today','1d','7d','30d','lifetime'];
+  const periodLabel = id => id === 'lifetime' ? periodPresetLabel('all') : id === 'today' ? tr('modules.today_utc') : periodPresetLabel(id);
+  const periodBar = period => `<div class="period-presets" role="group" aria-label="${esc(tr('core.period'))}">${periods.map(id =>
+    `<button class="secondary ${id === period ? 'active' : ''}" type="button" data-team-period="${id}" aria-pressed="${id === period}">${esc(periodLabel(id))}</button>`).join('')}</div>`;
+  const pressPeriod = (buttons, period) => buttons.forEach(button => {
+    const active = button.dataset.teamPeriod === period;
+    button.classList.toggle('active',active);
+    button.setAttribute('aria-pressed',String(active));
+  });
   const scope = () => current.identity?.member;
-  const date = seconds => seconds == null ? '—' : new Date((seconds - 8 * 3600) * 1000).toISOString().slice(0,10);
+  const date = seconds => finite(seconds) == null ? '—' : new Date((seconds - 8 * 3600) * 1000).toISOString().slice(0,10);
   const compact = row => compactUsage(tokens(row)).html;
-  const spend = row => row?.spend_nanos ?? (row?.requests === 0 ? 0 : null);
-  const spendDisplay = row => {
+  const spend = row => finite(row?.spend_nanos) ?? (row?.requests === 0 ? 0 : null);
+  const compactSpend = row => {
     const value = spend(row);
-    return compactUsage(value == null ? null : value / 1e9,true);
+    return compactUsage(value == null ? null : value / 1e9,true).html;
   };
-  const compactSpend = row => spendDisplay(row).html;
-  const profiles = createTeamProfiles({action,openModal,$,esc,tr,scope,number,tokens,roleName,date,compact,compactSpend});
-  const field = (id, label, options = '') => `<div class="setting-row routing-mode"><label for="${id}">${label}</label><input id="${id}" ${options}></div>`;
+  const planTag = plan => plan ? `<span class="team-plan">${esc(subscriptionPlanLabel(plan))}</span>` : '';
+  const profiles = createTeamProfiles({action,openModal,$,esc,tr,scope,number,tokens,roleName,roleBadge,date,compact,compactSpend,planTag,failure});
   const summaryCell = (label, value) => `<div><dt>${tr(label)}</dt><dd>${value}</dd></div>`;
 
   async function refresh() {
@@ -50,11 +59,21 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
   }
 
   function open(back) {
-    if (!current.joined) return join(back);
+    stopPending();
+    if (!current.joined) return pendingAccount ? pending(back, pendingAccount) : join(back);
     const member = scope();
     const manage = member.role !== 'member';
     const vps = member.role === 'vps_admin';
-    const toolbarButton = (attributes, text, disabled = false) => `<button type="button" class="secondary" ${attributes} ${disabled ? 'disabled' : ''}>${tr(text)}</button>`;
+    const button = (attributes, label, hint = '') => {
+      const html = `<button type="button" class="secondary" ${attributes} ${hint ? 'disabled' : ''}>${esc(tr(label))}</button>`;
+      return hint ? `<span class="team-disabled-hint" title="${esc(hint)}">${html}</span>` : html;
+    };
+    const actions = manage ? [button('data-team-choice="manage"','modules.manage')] : [button('data-team-subscriptions','modules.workspace_subscriptions')];
+    if (vps) actions.push(button('data-team-backup','modules.backup'));
+    else actions.push(
+      button('data-team-choice="publish"','modules.upload',member.publish ? '' : tr('modules.upload_requires_permission')),
+      button('data-team-choice="sync"','modules.sync',member.sync ? '' : tr('modules.sync_requires_permission')),
+      `<button type="button" class="danger team-leave" data-team-leave>${esc(tr('modules.sign_out'))}</button>`);
     openModal(title(), `<div id="team_home">
       <div class="team-overview-row">
         <div class="team-identity">
@@ -66,18 +85,12 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
             <div><dt>${tr('modules.joined_at')}</dt><dd data-team-joined>—</dd></div>
           </dl>
         </div>
-        <div class="team-overview-actions">
-          ${manage ? toolbarButton('data-team-choice="manage"','modules.manage') : toolbarButton('data-team-subscriptions','modules.workspace_subscriptions')}
-          ${vps ? toolbarButton('data-team-backup','modules.backup')
-            : toolbarButton('data-team-choice="publish"','modules.upload',!member.publish) +
-              toolbarButton('data-team-choice="sync"','modules.sync',!member.sync) +
-              toolbarButton('data-team-leave','modules.sign_out')}
-        </div>
+        <div class="team-overview-actions">${actions.join('')}</div>
       </div>
-      <section class="team-home-usage" aria-labelledby="team_usage_title">
-        <div class="team-usage-heading">
+      <section class="team-card team-home-usage" aria-labelledby="team_usage_title">
+        <div class="team-card-heading">
           <h3 id="team_usage_title">${tr(manage ? 'modules.team_usage' : 'modules.my_usage')}</h3>
-          <div class="team-usage-actions">
+          <div class="team-card-actions">
             <button type="button" class="secondary" data-team-profiles>${tr('modules.member_profiles')}</button>
             <button type="button" class="secondary team-usage-toggle" data-team-usage-toggle data-icon="chevron-right" aria-expanded="false" aria-controls="team_usage_detail" title="${esc(tr('modules.expand_usage'))}" aria-label="${esc(tr('modules.expand_usage'))}"></button>
           </div>
@@ -88,7 +101,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
           ${summaryCell('modules.lifetime_tokens','<span data-team-lifetime-tokens>—</span>')}
           ${summaryCell('modules.lifetime_spend','<span data-team-lifetime-usd>—</span>')}
         </dl>
-        <div id="team_usage_detail" class="team-usage-detail" hidden>${periodBar('today',['today','1d','7d','30d','lifetime'])}<div data-team-breakdown aria-live="polite"></div></div>
+        <div id="team_usage_detail" class="team-usage-detail" hidden>${periodBar('today')}<div data-team-breakdown aria-live="polite"></div></div>
       </section>
     </div>`, '', null, null, {back,reopen:() => open(back)});
     const home = () => open(back);
@@ -127,8 +140,8 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       if (error.status === 401 || error.payload?.error?.code === 'workspace_authentication_required') {
         current = {joined:false,base:current.base};
         onChange();
-        join(back);
-      } else $('modal_status').textContent = failure(error);
+        join(back, true);
+      } else showError(view,error);
     });
     void loadSummary(view,member);
   }
@@ -148,7 +161,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       view.querySelector('[data-team-lifetime-tokens]').innerHTML = compact(lifetime);
       view.querySelector('[data-team-lifetime-usd]').innerHTML = compactSpend(lifetime);
     } catch (error) {
-      if (view.isConnected) $('modal_status').textContent = failure(error);
+      showError(view,error);
     } finally {
       view.querySelector('.team-usage-summary').removeAttribute('aria-busy');
     }
@@ -177,21 +190,17 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     const button = view.querySelector('[data-team-usage-toggle]');
     const detail = $('team_usage_detail');
     const data = detail.querySelector('[data-team-breakdown]');
-    const filters = detail.querySelectorAll('[data-team-period]');
+    const filters = [...detail.querySelectorAll('[data-team-period]')];
     let selected = 'today';
     async function load(period) {
       selected = period;
-      filters.forEach(control => {
-        const pressed = control.dataset.teamPeriod === period;
-        control.classList.toggle('active',pressed);
-        control.setAttribute('aria-pressed',String(pressed));
-      });
+      pressPeriod(filters,period);
       data.textContent = tr('modules.loading');
       try {
         const report = await action('usage',{period});
         if (!data.isConnected || selected !== period) return;
         const row = usageFor(report.rows,member);
-        data.innerHTML = row?.models.length ? `<div class="team-breakdown-total">${compact(row)} / ${compactSpend(row)}</div>${modelUsage(row)}` : esc(tr('modules.no_usage'));
+        data.innerHTML = row?.models.length ? modelUsage(row) : esc(tr('modules.no_usage'));
       } catch (error) {
         if (data.isConnected && selected === period) data.textContent = failure(error);
       }
@@ -203,6 +212,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       button.ariaLabel = button.title = tr(detail.hidden ? 'modules.expand_usage' : 'modules.collapse_usage');
       if (!detail.hidden) void load(selected);
     };
+    view.querySelector('#team_usage_title').onclick = () => button.click();
   }
 
   async function downloadBackup(button) {
@@ -216,7 +226,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       link.click();
       setTimeout(() => URL.revokeObjectURL(url),1000);
     } catch (error) {
-      if (button.isConnected) $('modal_status').textContent = failure(error);
+      showError(button,error);
     } finally {
       button.disabled = false;
     }
@@ -228,7 +238,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       const successor = manage ? $('team_successor').value : '';
       if (manage && !successor) return;
       await leave(successor);
-    }, null, {back:home});
+    }, null, {back:home,tone:'danger'});
     if (!manage) return;
     const input = $('team_successor');
     const submit = $('modal_submit');
@@ -242,84 +252,181 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       input.disabled = !eligible.length;
       input.onchange = () => {submit.disabled = !input.value;};
     } catch (error) {
-      if (input.isConnected) $('modal_status').textContent = failure(error);
+      showError(input,error);
     }
   }
 
+  // Joining: the team code comes first; a nearby workspace fills in its address automatically.
   function join(back, signingIn = false, preset = {}) {
-    openModal(tr(signingIn ? 'modules.sign_in' : 'modules.join_workspace'), `<div id="team_login" class="settings-list">
-      ${current.recovery_required ? `<p class="muted">${tr('modules.recover_team_services')}</p>` : ''}
-      <div class="team-menu-actions">
-        <button type="button" class="secondary" id="team_switch_entry">${tr(signingIn ? 'modules.join_workspace' : 'modules.existing_member')}</button>
-        ${signingIn ? '' : `<button type="button" class="secondary" id="team_discover">${tr('modules.find_nearby_workspace')}</button>`}
+    stopPending();
+    const known = preset.base || current.base || '';
+    const field = (id, label, input, help = '') => `<div class="team-field"><label for="${id}">${label}</label>${input}${help ? `<p class="setting-help">${help}</p>` : ''}</div>`;
+    openModal(tr(signingIn ? 'modules.sign_in' : 'modules.join_workspace'), `<form id="team_login" class="team-form" novalidate>
+      ${current.recovery_required ? `<p class="setting-help">${tr('modules.recover_team_services')}</p>` : ''}
+      <div class="team-origin">
+        <div class="team-origin-head"><span>${tr('modules.workspace')}</span>
+          <span><button type="button" id="team_manual" hidden>${tr('modules.enter_address')}</button><button type="button" id="team_discover">${tr('modules.find_nearby_workspace')}</button></span></div>
+        <div id="team_nearby" class="team-origin-choices"></div>
+        <div id="team_base_field"><input id="team_base" type="url" inputmode="url" placeholder="https://workspace.example.org" value="${esc(known)}" required aria-label="${esc(tr('modules.workspace_url'))}"></div>
+        <p id="team_origin_status" class="team-origin-status" role="status" aria-live="polite"></p>
       </div>
-      ${field('team_base', tr('modules.workspace_url'), `inputmode="url" placeholder="https://workspace.example.org" value="${esc(preset.base || current.base || '')}" required`)}
-      <div id="team_nearby" class="settings-list" aria-live="polite"></div>
-      ${signingIn ? '' : field('team_nickname', tr('modules.nickname'), 'autocomplete="nickname" maxlength="48" required')}
-      ${signingIn ? '' : field('team_join_code', tr('modules.join_code'), 'inputmode="numeric" pattern="[0-9]{7}" maxlength="7" autocomplete="off" required')}
-      ${field('team_name', tr('modules.username'), `autocomplete="username" value="${esc(preset.name || '')}" maxlength="64" required`)}
-      ${field('team_password', tr('modules.password'), signingIn ? 'type="password" autocomplete="current-password" required' : 'type="password" minlength="12" maxlength="256" autocomplete="new-password" required')}
-    </div>`, tr(signingIn ? 'modules.sign_in' : 'modules.request_to_join'), async () => {
+      ${signingIn ? '' : `<div class="team-form-pair">
+        ${field('team_join_code',tr('modules.join_code'),'<input id="team_join_code" class="team-code-input" inputmode="numeric" pattern="[0-9]{7}" maxlength="7" autocomplete="one-time-code" placeholder="0000000" required>',tr('modules.join_code_help'))}
+        ${field('team_nickname',tr('modules.nickname'),'<input id="team_nickname" autocomplete="nickname" maxlength="48" required>',tr('modules.nickname_help'))}
+      </div>`}
+      <div class="team-form-pair">
+        ${field('team_name',tr('modules.username'),`<input id="team_name" autocomplete="username" value="${esc(preset.name || '')}" maxlength="64" required>`)}
+        ${field('team_password',tr(signingIn ? 'modules.password' : 'modules.set_password'),
+          signingIn ? '<input id="team_password" type="password" autocomplete="current-password" required>' : '<input id="team_password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>',
+          signingIn ? '' : tr('modules.password_help'))}
+      </div>
+      <p class="team-form-switch">${tr(signingIn ? 'modules.no_account_yet' : 'modules.already_member')}<button type="button" id="team_switch_entry">${tr(signingIn ? 'modules.join_workspace' : 'modules.sign_in')}</button></p>
+      <button type="submit" hidden></button>
+    </form>`, tr(signingIn ? 'modules.sign_in' : 'modules.request_to_join'), async () => {
       const form = $('team_login');
       const invalid = [...form.querySelectorAll('input')].find(input => !input.checkValidity());
-      if (invalid) { invalid.reportValidity(); return; }
+      if (invalid) {
+        if (invalid.id === 'team_base') manual();
+        invalid.reportValidity();
+        return;
+      }
       const account = {base:$('team_base').value.trim(),name:$('team_name').value.trim(),password:$('team_password').value};
+      const nickname = signingIn ? preset.nickname : $('team_nickname').value.trim();
       try {
         if (signingIn) {
           current = await action('login', account);
+          pendingAccount = null;
           onChange();
           if (form.isConnected) open(back);
         } else {
-          await action('join', {...account,nickname:$('team_nickname').value.trim(),code:$('team_join_code').value});
-          if (form.isConnected) {
-            join(back, true, {base:account.base,name:account.name});
-            $('modal_status').textContent = tr('modules.workspace_join_pending');
-          }
+          await action('join', {...account,nickname,code:$('team_join_code').value});
+          if (form.isConnected) pending(back, {...account,nickname});
         }
       } catch (error) {
-        if (form.isConnected) $('modal_status').textContent = failure(error);
+        if (!form.isConnected) return;
+        if (signingIn && error.payload?.error?.code === 'workspace_join_pending') return pending(back, {...account,nickname});
+        $('modal_status').textContent = failure(error);
       }
     }, null, {back,reopen:() => join(back, signingIn, preset)});
-    $('team_switch_entry').onclick = () => join(back, !signingIn, {base:$('team_base').value});
-    if (!signingIn) $('team_discover').onclick = async event => {
-      const button = event.currentTarget;
-      const panel = $('team_nearby');
-      panel.textContent = tr('modules.loading');
-      button.disabled = true;
+    const form = $('team_login');
+    const input = $('team_base');
+    const baseField = $('team_base_field');
+    const choices = $('team_nearby');
+    const status = $('team_origin_status');
+    const discoverButton = $('team_discover');
+    const manualButton = $('team_manual');
+    form.onsubmit = event => { event.preventDefault(); $('modal_submit').click(); };
+    $('team_switch_entry').onclick = () => join(back, !signingIn, {base:input.value.trim(),name:$('team_name').value.trim()});
+    function manual() {
+      baseField.hidden = false;
+      manualButton.hidden = true;
+      choices.querySelectorAll('[data-team-origin]').forEach(choice => choice.setAttribute('aria-pressed','false'));
+      status.textContent = '';
+    }
+    function choose(origin) {
+      input.value = origin;
+      baseField.hidden = true;
+      manualButton.hidden = false;
+      choices.querySelectorAll('[data-team-origin]').forEach(choice => choice.setAttribute('aria-pressed',String(choice.dataset.teamOrigin === origin)));
+      status.textContent = '';
+    }
+    async function discover(automatic) {
+      status.dataset.busy = '';
+      status.textContent = tr('modules.searching_nearby');
+      discoverButton.disabled = true;
       try {
         const {workspaces} = await action('discover');
-        if (!panel.isConnected) return;
-        panel.innerHTML = workspaces.length ? workspaces.map(({name,base}) => `<button type="button" class="secondary" data-team-origin="${esc(base)}">${esc(name)} · ${esc(base)}</button>`).join('')
-          : esc(tr('modules.no_nearby_workspace'));
-        panel.querySelectorAll('[data-team-origin]').forEach(workspace => workspace.onclick = () => {
-          $('team_base').value = workspace.dataset.teamOrigin;
-          panel.replaceChildren();
-          $('team_nickname').focus();
+        if (!form.isConnected) return;
+        choices.innerHTML = workspaces.map(({name,base}) => `<button type="button" class="team-origin-choice" data-team-origin="${esc(base)}" aria-pressed="false"><strong>${esc(name)}</strong><small>${esc(base)}</small></button>`).join('');
+        choices.querySelectorAll('[data-team-origin]').forEach(choice => choice.onclick = () => {
+          choose(choice.dataset.teamOrigin);
+          (signingIn ? $('team_name') : $('team_join_code')).focus();
         });
+        if (workspaces.length && (!automatic || !input.value.trim())) choose(workspaces[0].base);
+        else {
+          baseField.hidden = false;
+          status.textContent = workspaces.length ? '' : tr(automatic ? 'modules.no_nearby_workspace_auto' : 'modules.no_nearby_workspace');
+        }
       } catch (error) {
-        if (panel.isConnected) panel.textContent = failure(error);
+        if (!form.isConnected) return;
+        baseField.hidden = false;
+        status.textContent = automatic ? tr('modules.no_nearby_workspace_auto') : failure(error);
       } finally {
-        button.disabled = false;
+        delete status.dataset.busy;
+        discoverButton.disabled = false;
+      }
+    }
+    discoverButton.onclick = () => discover(false);
+    manualButton.onclick = () => { manual(); input.focus(); };
+    if (!signingIn && !known) {
+      baseField.hidden = true;
+      void discover(true);
+    }
+    (signingIn ? (known ? $('team_name') : input) : $('team_join_code')).focus({preventScroll:true});
+  }
+
+  // After a join request the member waits here; approval signs them in without retyping the password.
+  function pending(back, account) {
+    stopPending();
+    pendingAccount = account;
+    const signIn = () => join(back, true, {base:account.base,name:account.name,nickname:account.nickname});
+    openModal(tr('modules.join_workspace'), `<div id="team_pending" class="team-pending" role="status">
+      <span class="team-pending-spinner" aria-hidden="true"></span>
+      <h3>${tr('modules.waiting_for_approval')}</h3>
+      <p>${tr('modules.waiting_for_approval_detail',{name:`<span class="team-pending-name">${esc(account.nickname || account.name)}</span>`})}</p>
+      <p class="setting-help">${tr('modules.waiting_auto_sign_in')}</p>
+      <p class="team-form-switch"><button type="button" id="team_pending_cancel">${tr('modules.cancel_waiting')}</button></p>
+    </div>`, '', null, null, {back,reopen:() => pending(back, account)});
+    const view = $('team_pending');
+    $('team_pending_cancel').onclick = () => { pendingAccount = null; signIn(); };
+    const poll = async () => {
+      if (!view.isConnected) return;
+      try {
+        const signedIn = await action('login', account);
+        if (!view.isConnected) return;
+        current = signedIn;
+        pendingAccount = null;
+        onChange();
+        open(back);
+        notice(tr('modules.join_approved'));
+      } catch (error) {
+        if (!view.isConnected) return;
+        const code = error.payload?.error?.code;
+        if (code === 'workspace_join_pending' || code === 'workspace_login_limited' || !error.status || error.status >= 500) {
+          pendingTick = setTimeout(poll, 5000);
+        } else {
+          pendingAccount = null;
+          signIn();
+          $('modal_status').textContent = failure(error);
+        }
       }
     };
+    pendingTick = setTimeout(poll, 4000);
+  }
+
+  function stopPending() {
+    clearTimeout(pendingTick);
   }
 
   function publish(home) {
     const native = getState().native_account;
     const ready = native?.auth_mode === 'subscription' && native.credential_set;
-    openModal(tr('modules.upload_a_service'), `<div class="settings-list" id="team_upload_form">
-      <div class="setting-row"><strong>Native · Codex</strong></div>
-      <p class="muted">${tr(ready ? 'modules.authorized_teammates_can_sync_native' : 'modules.workspace_subscription_sign_in_required')}</p>
+    const plan = native?.quota?.plan_type;
+    const label = native?.quota?.account_label;
+    openModal(tr('modules.upload_a_service'), `<div id="team_upload_form" class="team-form">
+      <div class="team-upload"><span class="team-role-icon" aria-hidden="true">${roleSvg('member')}</span>
+        <div><strong>Native · Codex</strong> ${planTag(plan)}${label ? `<p class="setting-help">${esc(label)}</p>` : ''}</div></div>
+      <p class="setting-help" style="white-space:normal">${tr(ready ? 'modules.authorized_teammates_can_sync_native' : 'modules.workspace_subscription_sign_in_required')}</p>
       </div>`, tr('modules.upload'), async () => {
         const form = $('team_upload_form');
         try {
           await action('publish');
           if (form.isConnected) {
             home();
-            $('modal_status').textContent = tr('modules.uploaded_for_review');
+            notice(tr('modules.uploaded_for_review'));
           }
         } catch (error) {
-          if (form.isConnected) $('modal_status').textContent = failure(error);
+          showError(form,error);
         }
       }, null, {back:home});
     $('modal_submit').disabled = !ready;
@@ -334,12 +441,12 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       const result = await action('sync');
       await onSync();
       if (button.isConnected) {
-        const message = tr('modules.synced_count',{count:result.synced}) +
-          (result.skipped_native ? ' ' + tr('modules.synced_skipped_native',{count:result.skipped_native}) : '');
+        const message = tr('modules.synced_count',{count:number(result.synced)}) +
+          (result.skipped_native ? ' ' + tr('modules.synced_skipped_native',{count:number(result.skipped_native)}) : '');
         notice(message);
       }
     } catch (error) {
-      if (button.isConnected) $('modal_status').textContent = failure(error);
+      showError(button,error);
     } finally {
       button.textContent = label;
       button.disabled = false;
@@ -347,12 +454,13 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
   }
 
   function tokens(row) {
-    return row?.input_tokens == null && row?.output_tokens == null ? null : (row.input_tokens ?? 0) + (row.output_tokens ?? 0);
+    const input = finite(row?.input_tokens), output = finite(row?.output_tokens);
+    return input == null && output == null ? null : (input ?? 0) + (output ?? 0);
   }
 
-  function tokenDetails(row, includeSpend = false) {
+  function tokenDetails(row) {
     const total = compactUsage(tokens(row));
-    const cost = includeSpend ? ` / ${compactSpend(row)}` : '';
+    const cost = ` / ${compactSpend(row)}`;
     if (!row?.models?.length) return total.html + cost;
     const id = esc('team_models_' + row.member);
     const text = `${number(row.input_tokens)} / ${number(row.output_tokens)}`;
@@ -361,44 +469,60 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
   }
 
   function modelUsage(row) {
-    return `<dl class="team-model-usage">${row.models.map(model => `<dt title="${esc(model.model)}">${esc(model.model)}</dt><dd>${esc(number(tokens(model)))} / ${esc(money(spend(model)))}
-        ${model.unknown_cost_requests ? `<small>${tr('modules.unknown_count',{count:number(model.unknown_cost_requests)})}</small>` : ''}
-      </dd>`).join('')}</dl>`;
+    const models = [...row.models].sort((left, right) => (tokens(right) ?? 0) - (tokens(left) ?? 0));
+    const unknown = value => value ? `<small>${esc(tr('modules.unknown_count',{count:number(value)}))}</small>` : '';
+    return `<dl class="team-model-usage">
+      <dt class="team-model-head">${tr('modules.model')}</dt><dd class="team-model-head">Token</dd><dd class="team-model-head">${tr('modules.spend')}</dd>
+      ${models.map(model => `<dt title="${esc(model.model)}">${esc(model.model)}</dt><dd>${esc(number(tokens(model)))}</dd><dd>${esc(money(spend(model)))}${unknown(model.unknown_cost_requests)}</dd>`).join('')}
+      <dt class="team-breakdown-total">${tr('modules.total')}</dt><dd class="team-breakdown-total">${esc(number(tokens(row)))}</dd><dd class="team-breakdown-total">${esc(money(spend(row)))}</dd>
+    </dl>`;
   }
 
-  function usageTable(columns, rows) {
-    return `<div class="model-table-wrap"><table class="model-table team-usage-table">
-      <thead><tr>${columns.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead>
-      <tbody>${rows}</tbody></table></div><p class="setting-help">${tr('modules.resets_daily_in_utc_budget_alerts')}</p>`;
+  // Management is one dialog with tabs, so members, subscriptions and the log are one click apart.
+  const managementTabs = [['members','data-team-manage-members','modules.manage_members'],
+    ['subscriptions','data-team-manage-subscriptions','modules.manage_subscriptions'],
+    ['audit','data-team-audit','modules.audit']];
+
+  function openManagement(home, tab = 'members') {
+    stopInvite();
+    if (tab === 'subscriptions') return reviewServices(home);
+    if (tab === 'audit') return openAudit(home);
+    return openMembers(home);
   }
 
-  function openManagement(home) {
-    const reopen = () => openManagement(home);
-    openModal(tr('modules.workspace_management'), `<div class="choice-grid settings-choices team-management-choices" id="team_management">
-      <button type="button" class="choice" data-team-manage-members><strong>${tr('modules.manage_members')}</strong></button>
-      <button type="button" class="choice" data-team-manage-subscriptions><strong>${tr('modules.manage_subscriptions')}</strong></button>
-    </div>`, '', null, null, {back:home,reopen});
-    $('team_management').querySelector('[data-team-manage-members]').onclick = () => openMembers(reopen);
-    $('team_management').querySelector('[data-team-manage-subscriptions]').onclick = () => reviewServices(reopen);
+  function management(home, tab, body, reopen) {
+    openModal(tr('modules.workspace_management'), `<div class="team-tabs" role="tablist" aria-label="${esc(tr('modules.workspace_management'))}">${managementTabs.map(([id,attribute,label]) =>
+      `<button type="button" role="tab" ${attribute} aria-selected="${id === tab}" tabindex="${id === tab ? 0 : -1}">${esc(tr(label))}</button>`).join('')}</div>
+      <div role="tabpanel">${body}</div>`, '', null, null, {back:home,reopen});
+    const tabs = [...$('modal_body').querySelectorAll('.team-tabs [role=tab]')];
+    tabs.forEach((button, index) => {
+      const id = managementTabs[index][0];
+      button.onclick = () => { if (id !== tab) openManagement(home, id); };
+      button.onkeydown = event => {
+        const step = {ArrowRight:1,ArrowLeft:-1}[event.key];
+        if (!step) return;
+        event.preventDefault();
+        const next = managementTabs[(index + step + tabs.length) % tabs.length][0];
+        openManagement(home, next);
+        $('modal_body').querySelector(`.team-tabs [${managementTabs.find(([key]) => key === next)[1]}]`)?.focus();
+      };
+    });
   }
 
-  function openMembers(back, initial = 'today') {
+  function openMembers(home, initial = 'today') {
     let selected = initial, generation = 0, members;
-    const reopen = () => openMembers(back,selected);
-    openModal(tr('modules.manage_members'), `<div id="team_manage" class="settings-list">
-      <div class="team-members-toolbar">${periodBar(selected)}<div class="team-member-actions"><button type="button" class="secondary" data-team-audit>${tr('modules.audit')}</button><button type="button" data-member-add>${tr('modules.add_member')}</button></div></div>
-      <div data-team-usage-table>${tr('modules.loading')}</div></div>`,'',null,null,{back,reopen});
+    const reopen = () => openMembers(home,selected);
+    management(home, 'members', `<div id="team_manage">
+      <div class="team-members-toolbar">${periodBar(selected)}<button type="button" data-member-add>${tr('modules.add_member')}</button></div>
+      <div data-team-usage-table>${tr('modules.loading')}</div></div>`, reopen);
     const panel = $('team_manage');
     const table = panel.querySelector('[data-team-usage-table]');
     const periodButtons = [...panel.querySelectorAll('[data-team-period]')];
+    const chip = (member, id, label, editable) => `<label class="team-chip"><input type="checkbox" data-team-permission="${id}" ${member[id] ? 'checked' : ''} ${editable ? '' : 'disabled'}>${esc(label)}</label>`;
     async function load(period) {
       const request = ++generation;
       selected = period;
-      for (const button of periodButtons) {
-        const active = button.dataset.teamPeriod === selected;
-        button.classList.toggle('active',active);
-        button.setAttribute('aria-pressed',String(active));
-      }
+      pressPeriod(periodButtons,period);
       table.setAttribute('aria-busy','true');
       try {
         const [list,report] = await Promise.all([members ?? action('list_members').then(reply => reply.members),action('usage',{period})]);
@@ -406,33 +530,45 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         const byId = new Map(report.rows.map(row => [row.member,row]));
         if (members) {
           for (const row of table.querySelectorAll('[data-team-member]')) {
-            row.lastElementChild.innerHTML = tokenDetails(byId.get(row.dataset.teamMember),true);
+            row.lastElementChild.innerHTML = tokenDetails(byId.get(row.dataset.teamMember));
           }
           return;
         }
         members = list;
         const columns = [tr('modules.member'),tr('modules.daily_usd_limit'),
-          tr('modules.permissions') + ' ' + shadowHelp(tr('modules.member_permissions_help')),tr('modules.token_spend')];
+          tr('modules.permissions') + ' ' + shadowHelp(tr('modules.member_permissions_help')),tr('modules.account_enabled'),tr('modules.token_spend')];
         const rows = members.map(member => {
-          const usage = byId.get(member.id);
           const name = member.nickname || member.name;
           const editable = member.can_manage && !member.pending;
-          const permissions = [['fast','Fast'],['ultrafast','Ultrafast'],['publish',tr('modules.upload')],['sync',tr('modules.sync')],['enabled',tr('modules.account_enabled')]];
-          const settings = permissions.map(([id,label]) => `<label><input type="checkbox" data-team-permission="${id}" ${member[id] ? 'checked' : ''} ${editable ? '' : 'disabled'}><span>${label}</span></label>`).join('');
           const editRole = editable && scope().role === 'vps_admin';
           const role = member.pending ? tr('modules.pending_approval') : roleName(member.role);
           const changeRole = editRole ? tr('modules.change_role') + ' · ' + role : role;
           const rolePicker = editRole
-            ? `<select class="team-role-select" data-team-member-role title="${esc(changeRole)}" aria-label="${esc(tr('modules.change_role') + ' · ' + name)}">${['member','team_admin'].map(role => `<option value="${role}" ${role === member.role ? 'selected' : ''}>${roleName(role)}</option>`).join('')}</select>` : '';
-          return `<tr data-team-member="${esc(member.id)}"><th scope="row"><div class="team-member-name"><span class="team-role-icon team-role-${esc(member.role)}" title="${esc(changeRole)}" ${editRole ? 'data-editable-role' : `role="img" aria-label="${esc(role)}"`}>${roleSvg(member.role)}${rolePicker}</span><span>${esc(name)}</span></div></th>
-            <td>${member.can_budget && !member.pending ? `<label class="team-budget"><span aria-hidden="true">$</span><input data-member-budget type="number" min="0" max="1000000" step="any" value="${member.budget_nanos == null ? '' : esc(member.budget_nanos/1e9)}" placeholder="∞" title="${esc(tr('modules.budget_input_help'))}" aria-label="${esc(tr('modules.daily_usd_limit') + ' · ' + name)}"></label>` : budgetDisplay(member.budget_nanos)}</td>
-            <td>${member.pending ? `<button type="button" data-member-approve="${esc(member.id)}">${tr('modules.approve_member')}</button>` : `<div class="team-tier-controls">${settings}<span class="setting-help team-reset-permission" tabindex="0" title="${esc(tr('modules.reset_policy'))}">${tr('modules.reset_permission')} · ${tr(member.role === 'member' ? 'modules.reset_view_only' : 'modules.reset_can_use')}</span></div>`}</td>
-            <td>${tokenDetails(usage,true)}</td></tr>`;
+            ? `<select class="team-role-select" data-team-member-role title="${esc(changeRole)}" aria-label="${esc(tr('modules.change_role') + ' · ' + name)}">${['member','team_admin'].map(option => `<option value="${option}" ${option === member.role ? 'selected' : ''}>${roleName(option)}</option>`).join('')}</select>` : '';
+          const identity = `<div class="team-member-name"><span class="team-role-icon team-role-${esc(member.role)}" title="${esc(changeRole)}" ${editRole ? 'data-editable-role' : `role="img" aria-label="${esc(role)}"`}>${roleSvg(member.role)}${rolePicker}</span><span>${esc(name)}</span>${member.pending ? `<span class="team-pending-tag">${tr('modules.pending_approval')}</span>` : ''}</div>`;
+          if (member.pending) {
+            return `<tr data-team-member="${esc(member.id)}"><th scope="row">${identity}</th><td></td>
+              <td><button type="button" data-member-approve="${esc(member.id)}">${tr('modules.approve_member')}</button></td><td></td><td>—</td></tr>`;
+          }
+          const budget = member.can_budget
+            ? `<label class="team-budget"><span aria-hidden="true">$</span><input data-member-budget type="number" min="0" max="1000000" step="any" value="${finite(member.budget_nanos) == null ? '' : esc(member.budget_nanos/1e9)}" placeholder="∞" title="${esc(tr('modules.budget_input_help'))}" aria-label="${esc(tr('modules.daily_usd_limit') + ' · ' + name)}"></label>`
+            : budgetDisplay(member.budget_nanos);
+          const reset = member.role !== 'member';
+          const chips = [chip(member,'fast','Fast',editable),chip(member,'ultrafast','Ultrafast',editable),
+            chip(member,'publish',tr('modules.upload'),editable),chip(member,'sync',tr('modules.sync'),editable),
+            `<label class="team-chip team-chip-static" title="${esc(tr('modules.reset_policy'))}"><input type="checkbox" ${reset ? 'checked' : ''} disabled aria-label="${esc(tr('modules.reset_permission') + ' · ' + tr(reset ? 'modules.reset_can_use' : 'modules.reset_view_only'))}">${tr('modules.reset_short')}</label>`].join('');
+          return `<tr data-team-member="${esc(member.id)}"><th scope="row">${identity}</th>
+            <td>${budget}</td>
+            <td><div class="team-chips">${chips}</div></td>
+            <td><label class="team-switch" title="${esc(tr('modules.account_enabled_help'))}"><input type="checkbox" role="switch" data-team-permission="enabled" ${member.enabled ? 'checked' : ''} ${editable ? '' : 'disabled'} aria-label="${esc(tr('modules.account_enabled') + ' · ' + name)}"><span></span></label></td>
+            <td>${tokenDetails(byId.get(member.id))}</td></tr>`;
         }).join('');
-        table.innerHTML = usageTable(columns,rows);
+        table.innerHTML = `<div class="model-table-wrap"><table class="model-table team-usage-table">
+          <thead><tr>${columns.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead>
+          <tbody>${rows}</tbody></table></div><p class="setting-help team-table-note">${tr('modules.resets_daily_in_utc_budget_alerts')}</p>`;
       } catch (error) {
         if (table.isConnected && request === generation) {
-          if (members) $('modal_status').textContent = failure(error);
+          if (members) showError(table,error);
           else table.textContent = failure(error);
         }
       } finally {
@@ -442,18 +578,16 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     for (const button of periodButtons) button.onclick = () => load(button.dataset.teamPeriod);
     void load(selected);
     bindInvitation(panel.querySelector('[data-member-add]'));
-    panel.querySelector('[data-team-audit]').onclick = () => openAudit(reopen);
     table.onclick = async event => {
-      const member = members.find(item => item.id === event.target.closest('tr')?.dataset.teamMember);
-      const button = event.target.closest('button');
-      if (!member || !button) return;
-      if (!button.hasAttribute('data-member-approve')) return;
+      const button = event.target.closest('[data-member-approve]');
+      const member = members?.find(item => item.id === button?.dataset.memberApprove);
+      if (!member) return;
       button.disabled = true;
       try {
         await action('member_access',{id:member.id,role:'member',publish:false,sync:true,enabled:true});
         if (panel.isConnected) reopen();
       } catch (error) {
-        if (panel.isConnected) $('modal_status').textContent = failure(error);
+        showError(panel,error);
         button.disabled = false;
       }
     };
@@ -494,21 +628,20 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
           if (isRole && panel.isConnected) reopen();
         }
       } catch (error) {
-        if (isBudget) control.value = member.budget_nanos == null ? '' : member.budget_nanos/1e9;
+        if (isBudget) control.value = finite(member.budget_nanos) == null ? '' : member.budget_nanos/1e9;
         else if (isRole) control.value = member.role;
         else control.checked = member[permission];
-        if (panel.isConnected) $('modal_status').textContent = failure(error);
+        showError(panel,error);
       } finally {
         controls.forEach(input => input.disabled = false);
       }
     };
   }
 
-  function openAudit(back) {
-    const reopen = () => openAudit(back);
+  function openAudit(home) {
     const columns = ['time','actor','action','target'].map(key => `<th scope="col">${tr('modules.audit_' + key)}</th>`).join('');
-    openModal(tr('modules.audit'), `<div id="team_audit"><div class="model-table-wrap"><table class="model-table team-audit-table" hidden><thead><tr>${columns}</tr></thead><tbody></tbody></table></div>
-      <p class="setting-help" data-audit-status role="status"></p><button type="button" class="secondary" data-audit-more hidden>${tr('modules.audit_more')}</button></div>`,'',null,null,{back,reopen});
+    management(home, 'audit', `<div id="team_audit"><div class="model-table-wrap"><table class="model-table team-audit-table" hidden><thead><tr>${columns}</tr></thead><tbody></tbody></table></div>
+      <p class="setting-help" data-audit-status role="status"></p><button type="button" class="secondary" data-audit-more hidden>${tr('modules.audit_more')}</button></div>`, () => openAudit(home));
     const panel = $('team_audit');
     const table = panel.querySelector('table');
     const status = panel.querySelector('[data-audit-status]');
@@ -518,7 +651,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       if (kind === 'share_review') return tr(details.shared ? 'modules.audit_share_started' : 'modules.audit_share_stopped');
       if (kind === 'profile_visibility') return tr(details.visible ? 'modules.audit_profiles_visible' : 'modules.audit_profiles_private');
       const label = tr('modules.audit_' + kind);
-      if (kind === 'budget') return label + ' · ' + (details.daily_usd_nanos == null ? tr('modules.no_daily_limit') : money(details.daily_usd_nanos));
+      if (kind === 'budget') return label + ' · ' + (finite(details.daily_usd_nanos) == null ? tr('modules.no_daily_limit') : money(details.daily_usd_nanos));
       const changes = Object.entries(details).filter(([key]) => Object.hasOwn(labels,key)).map(([key,value]) =>
         key === 'role' ? roleName(value) : labels[key] + ' ' + tr(value ? 'modules.audit_on' : 'modules.audit_off'));
       return [label,...changes].join(' · ');
@@ -557,30 +690,29 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     void load();
   }
 
-  async function reviewServices(back) {
-    const reopen = () => reviewServices(back);
-    openModal(tr('modules.manage_subscriptions'), `<div class="settings-list" id="team_shared_services">${tr('modules.loading')}</div>`,'',null,null,{back,reopen});
+  async function reviewServices(home) {
+    management(home, 'subscriptions', `<div class="team-subscription-list" id="team_shared_services">${tr('modules.loading')}</div>`, () => reviewServices(home));
     const panel = $('team_shared_services');
     try {
       const {services} = await action('shared_services');
       if (!panel.isConnected) return;
       panel.innerHTML = services.length ? services.map(service => {
         const status = esc(tr(service.valid ? 'modules.share_valid' : 'modules.share_invalid'));
+        const usable = service.shared || service.available;
         return `<div class="setting-row team-subscription-row">
-        <div class="team-subscription-owner"><span class="team-subscription-dot" data-valid="${service.valid === true}" role="img" aria-label="${status}" title="${status}"></span><strong>${esc(service.owner)}</strong>${service.plan ? `<span class="pill">${esc(subscriptionPlanLabel(service.plan))}</span>` : ''}</div>
-        <span class="setting-help">${tr(service.shared ? 'modules.service_shared' : 'modules.service_pending_review')}</span>
-        <span class="team-subscription-usage">${compact(service.usage)} / ${compactSpend(service.usage)}</span>
-        <button type="button" class="secondary" data-review-service="${esc(service.id)}" ${service.shared || service.available ? '' : 'disabled'}>${tr(service.shared ? 'modules.stop_sharing' : 'modules.share_service')}</button></div>`;
+        <div class="team-subscription-owner"><span class="team-subscription-dot" data-valid="${service.valid === true}" role="img" aria-label="${status}" title="${status}"></span><strong>${esc(service.owner)}</strong>${planTag(service.plan)}${service.shared ? '' : `<span class="team-pending-tag">${tr('modules.share_review')}</span>`}</div>
+        <span class="team-subscription-usage" title="${esc(tr('modules.token_spend'))}">${compact(service.usage)} / ${compactSpend(service.usage)}</span>
+        <button type="button" class="${service.shared ? 'secondary' : ''}" data-review-service="${esc(service.id)}" ${usable ? '' : 'disabled'}>${tr(service.shared ? 'modules.stop_sharing' : 'modules.share_service')}</button></div>`;
       }).join('')
-        : esc(tr('modules.no_uploaded_services'));
+        : `<p class="setting-help">${esc(tr('modules.no_uploaded_services'))}</p>`;
       panel.querySelectorAll('[data-review-service]').forEach(button => button.onclick = async () => {
         const service = services.find(row => row.id === button.dataset.reviewService);
         button.disabled = true;
         try {
           await action('review_service',{id:service.id,version:service.version,shared:!service.shared});
-          if (panel.isConnected) reviewServices(back);
+          if (panel.isConnected) reviewServices(home);
         } catch (error) {
-          if (panel.isConnected) $('modal_status').textContent = failure(error);
+          showError(panel,error);
           button.disabled = false;
         }
       });
@@ -589,8 +721,10 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     }
   }
 
+  // Core calls this whenever the dialog closes; both the invite countdown and approval polling stop with it.
   function stopInvite() {
     clearTimeout(inviteTick);
+    stopPending();
   }
 
   function bindInvitation(button) {
@@ -636,15 +770,13 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       try {
         show(await action('issue_invite'));
       } catch (error) {
-        if (button.isConnected) $('modal_status').textContent = failure(error);
+        showError(button,error);
       } finally {
         button.disabled = false;
       }
     };
     button.disabled = true;
-    action('join_code').then(show).catch(error => {
-      if (button.isConnected) $('modal_status').textContent = failure(error);
-    }).finally(() => {button.disabled = false;});
+    action('join_code').then(show).catch(error => showError(button,error)).finally(() => {button.disabled = false;});
   }
 
   return {open,refresh,stopInvite};
