@@ -79,7 +79,8 @@ impl Notices {
                 previous,
                 english,
             },
-        ) else {
+        )
+        else {
             return;
         };
         history.push(Notice {

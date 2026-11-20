@@ -9,11 +9,12 @@ use url::Url;
 pub fn handle(command: Command) -> Result<Value, &'static str> {
     Ok(match command {
         Command::DecisionEndpoint { base, protocol } => {
-            let (_, endpoint) = decision_endpoint(&base, protocol.as_deref().into())
-                .map_err(|error| match error {
+            let (_, endpoint) = decision_endpoint(&base, protocol.as_deref().into()).map_err(
+                |error| match error {
                     PlanError::InvalidProtocol => "invalid_decision_protocol",
                     _ => "invalid_decision_url",
-                })?;
+                },
+            )?;
             json!(endpoint.as_str())
         }
         Command::Decision { request } => match request {
@@ -22,14 +23,22 @@ pub fn handle(command: Command) -> Result<Value, &'static str> {
                 override_service,
                 model,
                 context,
-            } => json!(plan_request(override_service.or(default_service), model, &context)),
+            } => json!(plan_request(
+                override_service.or(default_service),
+                model,
+                &context
+            )),
             Request::Discover { base, protocol } => json!(plan_discovery(&base, protocol)),
         },
         _ => return Err("invalid_module_command"),
     })
 }
 
-fn plan_request(service: Option<Service>, model: ModelInput, context: &[ContextHeader]) -> PlanReply {
+fn plan_request(
+    service: Option<Service>,
+    model: ModelInput,
+    context: &[ContextHeader],
+) -> PlanReply {
     let Service { id, access } = service.ok_or(PlanError::ProviderRequired)?;
     let (base, protocol, default_model) = match access {
         ServiceAccess::Workspace => return Err(PlanError::WorkspaceProvider),
@@ -63,7 +72,10 @@ fn plan_request(service: Option<Service>, model: ModelInput, context: &[ContextH
     })
 }
 
-fn decision_endpoint(base: &str, protocol: ProtocolPreference) -> Result<(Protocol, Url), PlanError> {
+fn decision_endpoint(
+    base: &str,
+    protocol: ProtocolPreference,
+) -> Result<(Protocol, Url), PlanError> {
     let base = Url::parse(&format!("{}/", base.trim_end_matches('/')))
         .map_err(|_| PlanError::InvalidUrl)?;
     let protocol = match protocol {
