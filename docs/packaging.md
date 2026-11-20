@@ -100,6 +100,14 @@ Chinese rendering in the UI; no remote release body is changed by a local edit.
 ### Release note writing rules
 
 - Describe concrete changes, their effect on users, and any required upgrade actions.
+- Group each language section by new features, workflow changes, fixes, or
+  compatibility and upgrade steps. Use only the categories the release needs,
+  with plain category labels so they also work in the in-app updater.
+- Give a new or moved control's visible label and location. Describe an existing
+  feature's change under the version where it happened. Put platform-specific
+  changes next to the platform name.
+- When editing a GitHub Release title, keep the version first and use a short
+  summary of the main user-facing change.
 - Omit generic validation caveats and defensive wording such as "acceptance
   remains pending", "validation scope and limits", or "no complete compatibility
   claim". Keep test coverage, pending acceptance and prerelease compatibility

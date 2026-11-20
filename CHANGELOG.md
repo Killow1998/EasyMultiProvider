@@ -6,269 +6,361 @@
 
 ### 中文
 
-- macOS 从官方 ChatGPT 或 Codex App 的原路径启动内置 Codex CLI，修复临时副本引起的版本探测和订阅登录失败。
-- macOS 安装包直接启动 EMP，修复菜单栏图标不可见的问题，并兼容旧版应用内更新。
-- Codex 维护窗口推进到 0.167–0.171。WebUI 在检测到低于 0.167 的引擎时显示更新入口。
+问题修复
+
+- macOS 浏览器登录。已安装官方 ChatGPT 或 Codex App 时，EMP 从 App 原位置验证并启动内置 CLI，修复有可用 CLI 却报「未找到」或探测失败的问题。仍从 WebUI 的 Native 账号登录入口发起。
+- macOS 菜单栏。修复部分安装方式下 WebUI 能打开、菜单栏却没有 EMP 图标的问题。旧版 EMP 可继续通过应用内更新安装。
+
+兼容性
+
+- Codex 维护范围更新至 0.167–0.171。WebUI 左上角在检测到低于 0.167 的运行时时提供更新入口。
 
 ### English
 
-- Launch the embedded Codex CLI from the installed official ChatGPT or Codex app on macOS, fixing version probes and subscription sign-in failures caused by the temporary copy.
-- Launch EMP directly from the macOS app bundle to restore the menu bar icon and support in-app upgrades from older versions.
-- Move the Codex maintenance window to 0.167–0.171. The WebUI links to Codex updates when the detected runtime is older than 0.167.
+Fixes
+
+- macOS browser sign-in. EMP verifies and runs the CLI from the installed official ChatGPT or Codex app, fixing cases where sign-in reported a missing CLI or failed its version check. Start sign-in from the Native account in the WebUI.
+- macOS menu bar. Fix a launch issue that could leave the EMP icon missing while the WebUI was available. In-app updates from older EMP versions continue to work.
+
+Compatibility
+
+- The Codex maintenance window is now 0.167–0.171. The WebUI header offers an update link for runtimes older than 0.167.
 
 ## 0.15.0 (2026-11-19)
 
 ### 中文
 
-- Decision API、多设备网关、聚合路由和团队空间可按需安装和卸载。内置版通过应用内更新切换到分包时，先校验原有模块再确认升级。
-- 团队空间仅同步经审批的 Native Codex 订阅。退出团队或卸载团队模组时清除本机共享凭据，保留个人登录和用量记录。
-- 共享订阅按持有者显示 VPS 上的快照及有效期。同一 Native 会跳过导入，单机副本失效可重新同步。VPS 快照到期后可提醒持有者更新。
-- 成员资料显示团队成立、加入日期、累计 Token、费用和近 30 天的 PST 活动。管理员可决定成员能否查看其他人的用量。
-- 团队空间与服务迁移使用独立入口。普通成员加入后，导入、导出和隧道只对管理员开放。管理员按需生成七位团队码，3 分 22 秒内可复制并用于提交申请，再按昵称审批。
-- 修复个人凭据保留、团队路由和 Decision 撤权、同级管理员预算权限、长模型名补报、换机续传及内置版回滚后重试升级。
-- 团队管理表并排显示每日 USD 上限、倍速与重置许可。悬停或聚焦 Token 数字可查看所选时间区间的模型用量。成员可查看共享订阅的重置次数和到期日，管理员可执行重置。
-- 成员用量接近和达到每日上限时，由 EMP 后台发出系统通知，并在 WebUI 通知中心保留记录。
-- 「添加服务」可直接连接个人 OpenAI 生图赠金项目。支持本机预算按月重置和赠金到期时间。赠金在派发前不可用时，Codex 生图可使用合适的订阅账号。
-- 跨服务子代理保留打开和关闭。默认打开，原先显式关闭的设置继续生效。
-- 在服务气泡中以黄色显示仍在重试或等待历史补发的调用，终止失败保留红色提示。
-- Codex 维护窗口推进到 0.166–0.170。检测到低于 0.166 的引擎时，WebUI 左上角显示更新入口。
-- 管理员可在顶部提示中直接同意或拒绝加入申请。多条申请合并显示，处理后其余条目位置不变。成员表也可拒绝申请。
-- 管理员的团队首页同时显示团队总用量和自己的用量。
-- 同一账号重新上传共享订阅时只更新凭据，已批准的订阅无需再次审核，成员可继续同步。更换账号仍需审核。
-- 同一成员或管理员可在多台设备登录和同步，团队账本合并各台设备的用量。退出本机保持其他设备登录，管理员可在成员管理中移交权限。团队状态文件损坏或缺失后可重新登录并同步。
-- 保留个人迁移备份中与团队共享 ID 格式相同的服务。用量上报经 VPS 确认后才移出本机待报队列。
-- Vertex AI API Key 模式从每日更新的 LiteLLM 目录获取候选模型，再用 Token 计数接口确认这把 Key 可用的模型。Google 发布新模型后无需等待 EMP 更新。
-- 统一团队空间、模组和迁移对话框的样式，提示统一显示在顶部。窄窗口下顶栏按钮收起为图标。EMP 标志改为一整块连续点阵。
-- 教程新增团队空间、共享订阅、审批和成员管理四节动画，仅在加入团队后显示。导入、导出和隧道动画已按新流程重录。
-- Native 非流式响应在无需修改工具内容时原样转发。减少长请求的协议转换开销与团队 WebUI 启动时的重复请求。
+新增功能与入口
+
+- 按需安装模组。在 WebUI 顶栏「设置」旁打开「模组」，可安装、停用或移除决策 API、多设备网关、聚合路由和团队空间。各模组有自己的「设置」入口。
+- 加入团队。在团队空间填写昵称和七位团队码，等待管理员审批。团队码由管理员生成，有效期 3 分 22 秒。管理员可在顶部提示或成员管理中同意或拒绝。
+- 共享 Codex 订阅。团队空间的「上传」发布自己的 Native Codex 订阅，获批后其他成员点击「同步」即可在 Codex 选择器使用。共享列表按持有者展示状态。VPS 上仍有效的凭据可以重新同步，同一账号更新凭据沿用已获批准的状态。
+- 查看团队用量。团队首页显示个人用量，管理员还可看团队总量、成员资料和各模型明细，并设置每日 USD 上限、Fast／Ultrafast 和重置许可。成员在多台设备上的已上报用量汇总到同一人，接近或达到每日上限时会收到桌面通知。管理员可设置成员之间是否可查看用量。
+- 接入个人 OpenAI 生图赠金。从「添加服务」连接项目，可填写赠金到期日和每月预算。派发前赠金不可用时，生图可使用合适的订阅额度。
+
+使用变化
+
+- 「团队空间」和「服务迁移」是独立入口。加入团队后，只有管理员使用导入、导出和隧道。现在可在「使用教程」查看团队、订阅共享、入组审批和成员管理的动画。
+- Vertex AI 用 API Key 添加 Gemini 时，从每日更新的 LiteLLM 目录发现候选，再检查该 Key 是否可用。Google 发布新模型后可随目录更新获取。
+- 跨服务子代理默认开启，已手动关闭的设置继续生效。服务图标旁的黄色提示表示仍在重试或等待重发历史，红色表示调用已经失败。
+
+问题修复
+
+- 更新订阅凭据、换设备和断网补报不再打断团队的正常同步与记账。退出或卸载团队模组会清理本机共享凭据，保留个人登录和用量。撤权后团队账号停止用于模型路由与决策请求。
+- Native 非流式响应在无需转换工具内容时逐字节转发。长请求的转换与团队首页加载减少了重复处理。
+
+升级与兼容性
+
+- 从旧版应用内升级时，EMP 会检查原先使用的模组并在必要时回滚。Codex 维护范围为 0.166–0.170。
 
 ### English
 
-- Install and uninstall Decision API, Device Gateway, Aggregate Routing and Team Workspace separately. In-app upgrades from the bundled release validate modules before confirming the upgrade.
-- Team Workspace syncs approved Native Codex subscriptions. Signing out or uninstalling removes synced workspace credentials from the device and keeps personal sign-ins and usage history.
-- View shared subscriptions by owner and VPS credential expiry. Sync restores a stale local copy and skips any account already used by Native. Remind an owner when a VPS snapshot expires.
-- Member profiles show membership dates, lifetime tokens and cost, and 30 days of PST activity. Administrators control whether members can view each other's usage.
-- Team Workspace and Service Migration have separate entries. Team administrators retain import, export and tunnel access. Administrators issue a copyable seven-digit invitation that lasts 3 minutes and 22 seconds and approve requests by nickname.
-- Fix personal credential preservation, team routing and Decision permissions, peer administrator budgets, usage uploads with long model names, sharing from a replacement device, and bundled upgrades after a rollback.
-- The team management table shows daily USD limits, speed permissions and reset eligibility. Hover over or focus the token total to inspect models in the selected period. Members can view shared reset credits and expiries. Administrators can use them.
-- EMP sends a desktop notice when a member approaches or reaches their daily budget and keeps it in the WebUI notification center.
-- Set up personal OpenAI image credits from Add Service, with an optional monthly local budget and a credit expiry date. Codex image tools can select an eligible subscription if credits are unavailable before dispatch.
-- Cross-service subagents default to on. An explicit off setting stays off.
-- Show retrying and history recovery in yellow in service bubbles. Failed requests retain their red status.
-- Move the Codex maintenance window to 0.166–0.170. The WebUI header links to Codex updates when the detected runtime is older than 0.166.
-- Administrators can approve or decline join requests directly from the top notice. Multiple requests are grouped, and the remaining rows stay in place after one is handled. The member table can also decline requests.
-- The administrator's team home shows both team usage and their own usage.
-- Re-uploading the same shared subscription account refreshes its credentials without another review, so teammates keep syncing. A different account still requires review.
-- Members and administrators can sign in and sync on multiple devices. The workspace combines their usage across devices. Signing out affects the current device, and administrators can transfer their role from member management. Sign in and sync again to recover a damaged or missing workspace state file.
-- Keep personal services in migration backups even when their IDs match the shape of a workspace share ID. Keep pending usage reports on the device until the VPS acknowledges them.
-- Vertex AI API-key mode takes candidate models from the daily LiteLLM catalog and confirms which ones the key can use with the token-count endpoint, so new Google models no longer wait for an EMP release.
-- Team Workspace, module and migration dialogs share one style, and notices appear at the top. Header buttons collapse to icons in narrow windows. The EMP logo is drawn as one continuous dot matrix.
-- Tutorials add four Team Workspace lessons (overview, sharing, approvals and members) that appear only after joining a team. The import, export and tunnel animations are re-recorded for the new flows.
-- Forward non-streaming Native responses unchanged when tool content needs no conversion. Reduce protocol conversion overhead on long requests and duplicate requests when opening the team WebUI.
+New features and where to find them
+
+- Install modules on demand. Open Modules next to Settings in the WebUI header to install, disable, or remove Decision API, Device Gateway, Aggregate Routing, and Team Workspace. Each has its own Settings button.
+- Join a workspace. Enter a nickname and a seven-digit invitation code in Team Workspace, then wait for approval. Codes last 3 minutes and 22 seconds. Administrators can approve or decline requests from the top notice or the members table.
+- Share Codex subscriptions. Upload publishes your Native Codex subscription for approval. Once approved, teammates can select Sync and use it from the Codex picker. The shared list shows availability by owner. A fresh sync recovers a stale local copy when the VPS copy is valid, and a credential refresh for the same approved account needs no new review.
+- Track team usage. Workspace home shows your usage. Administrators can also view team totals, member profiles, and per-model breakdowns, and set daily USD limits, Fast/Ultrafast permissions, and reset permission. Reported usage rolls up across a member's devices. Desktop notifications appear when the daily limit is near or reached. Administrators control whether members can see one another's usage.
+- Connect personal OpenAI image credits from Add Service. Set a monthly budget and credit expiration. If credits are unavailable before dispatch, image generation can use an eligible subscription.
+
+Workflow changes
+
+- Team Workspace and Service Migration have separate entries. After joining a workspace, only administrators can import, export, or transfer through a tunnel. Tutorials include walkthroughs for joining, sharing, approvals, and member management.
+- Vertex AI discovers Gemini candidates for API-key connections through the daily LiteLLM catalog, then checks availability for the key. New Google models can appear without waiting for an EMP release.
+- Cross-service subagents default to on. An explicitly disabled setting stays off. Yellow service notices indicate a retry or history recovery in progress. Red indicates a failed call.
+
+Fixes
+
+- Keep team sync and usage reporting working through credential refreshes, device changes, and temporary connectivity loss. Leaving or uninstalling the workspace module removes synced credentials from the current device and keeps personal sign-in and usage. Revoked shared subscriptions can no longer serve conversation or Decision requests.
+- Forward Native non-streaming responses byte for byte when tool content needs no conversion. Reduce duplicate processing for long requests and the team home page.
+
+Upgrade and compatibility
+
+- In-app upgrades check previously used modules and roll back if required. The Codex maintenance window is 0.166–0.170.
 
 ## 0.14.3 (2026-11-18)
 
 ### 中文
 
-- Codex 自动选择优先采用正在运行且通过信任检查的引擎，同级按版本排序。保留显式配置优先级。
-- 订阅模型目录每 24 小时后台刷新，也可手动刷新。模型选择器显示当前账号目录，保留旧会话的历史路由。修复迁移导入后多个账号的模型显示名重复。
-- 修复包含中文、特殊符号的路由标识在 Codex WebSocket 请求头中导致连接错误。保留模型显示名、旧路由和调用归属。
-- 网关设备用量按设备统计，可展开查看该设备各模型的用量。
-- 新增 Linux ARM64 正式安装包和安装脚本，自动更新按架构选择并校验归档。
-- Codex 登录区分找不到 CLI、信任检查失败、版本探测失败、启动和初始化失败，并在脱敏诊断报告中记录探测结果。WebUI 的「设置 → 通用」提供退出入口。
+新增功能与入口
+
+- 新增 Linux ARM64 安装包。安装脚本和自动更新会按设备架构选包并校验。
+- 网关设备用量可以逐台展开，查看每台设备的模型用量。
+- 需要手动更新订阅模型时，可在对应订阅的模型设置中点「刷新模型列表」。EMP 也会每天后台刷新。
+- 菜单栏图标不可用时，从「设置 → 通用」可以退出 EMP。
+
+问题修复
+
+- 修复 Codex 已运行新版、EMP 却优先选中闲置旧版的问题。自动选择优先采用可信的运行中引擎，同等候选优先选新版，继续尊重显式配置。
+- 修复导入订阅后模型名称重复。模型选择器跟随当前账号目录，旧会话仍可使用历史路由。
+- 修复中文和特殊符号的路由名在 Codex WebSocket 中引发断流。
+- 登录失败会区分 CLI 缺失、信任失败、版本探测失败、启动或初始化失败。
 
 ### English
 
-- Prefer trusted running Codex engines when selecting a runtime automatically. Rank comparable candidates by version and honor an explicit override.
-- Refresh subscription catalogs every 24 hours and on demand. Show current account models in the picker while preserving routes for existing sessions. Fix duplicate display names after importing subscriptions.
-- Fix Codex WebSocket connections for route identifiers containing Unicode or special characters. Preserve model display names, historical routes, and usage attribution.
-- Group gateway usage by device and expand each device to inspect its per-model usage.
-- Add stable Linux ARM64 packages and install scripts. Automatic updates select and verify the archive for the current architecture.
-- Distinguish missing CLI, failed trust checks, failed version probes, and sign-in helper startup or initialization failures. Include probe results in the redacted support report and add a quit action under Settings → General.
+New features and where to find them
+
+- Linux ARM64 packages are available. The installer and automatic updater select and verify the package for the current architecture.
+- Expand a device in gateway usage to see its per-model totals.
+- Select Refresh model list in the subscription's model settings to pull its latest catalog on demand. EMP also refreshes it daily.
+- If the tray is unavailable, quit EMP from Settings → General.
+
+Fixes
+
+- Prefer the trusted, running Codex runtime over an idle old copy. Prefer newer versions among comparable candidates and honor explicit overrides.
+- Fix duplicate model names after subscription import. The picker follows current catalogs and existing sessions retain their historical routes.
+- Fix dropped Codex WebSocket connections for routes containing Chinese or special characters.
+- Sign-in now distinguishes a missing CLI, failed trust or version checks, and startup or initialization failure.
 
 ## 0.14.2 (2026-11-15)
 
 ### 中文
 
-- 修复 Windows 关闭窗口或结束会话时，原生配置已恢复却返回退出失败的问题；串行执行本进程的退出恢复，避免系统回调与主退出流程互相争抢文件锁。
-- 网关统计保留 Python、Pi、OMP 等客户端名称，识别外部会话头和 `metadata.session_id`，无需本机 Codex 历史即可生成会话账单；未提供会话 ID 时显示客户端或设备名称，设备用量按客户端细分，保留用量总数和 Codex 原有归属。
-- 精简后台迁移、历史准备与代理状态，统一未完成回合校验和上游错误解码；协议服务各自构造鉴权头，移除无用参数、单次包装和过时注释。复用验收配置，保持路由、凭据、取消与计量行为。
-- 运行时静默、逐个转换空闲旧会话的 EMP 压缩点，不弹通知或要求手动检查；扫描不占用 Codex 写入协调锁，提交前重新检查活动会话与历史快照。保留原始历史、工具结果和原生密文，支持已结束的失败回合；退出时取消扫描。
-- 修复含内联图片的 Native 请求因 Zstd 压缩被上游返回 400：HTTP、SSE 和远程压缩直接发送原始 JSON，保留完整图片、加密历史和工具结果；纯文本仍使用压缩，不新增失败重试。
-- 保留上游拒绝请求的 HTTP 状态、错误码、参数和具体原因，兼容 `error` 与 `detail` 包络；提取后的说明沿用现有凭据脱敏并限制长度，不再统一替换为笼统的无输出提示。
-- 在诊断日志中记录可按请求 ID 关联的上游拒绝原因；保留已有重试提示、重试次数和已开始输出后不重放的行为。
-- 修复 App 页面上下文让 Native 长历史分批预填充被误判为未配对工具结果的问题，保留原始内容、顺序和标识；错误提示显示所选服务与实际上游模型名，避免混入内部路由 ID。
+使用变化
+
+- 统计可识别通过 EMP 网关调用的 Python、Pi、OMP 等客户端。有会话 ID 的调用可按会话查看，其余按客户端或设备归属。
+- EMP 在后台逐个转换空闲旧会话的压缩记录，方便以后关闭 EMP 继续使用原会话。任务会在退出时取消，并保留原始历史、工具结果和 Codex 密文。
+
+问题修复
+
+- 修复 Windows 关闭窗口或结束会话时，已经恢复原生配置却提示退出失败。
+- 修复 Native 长会话发送内联图片时遇到的 400，也修复 App 页面上下文被误判为未配对工具结果的问题。纯文本请求仍使用压缩。
+- 调用失败时显示上游状态码、错误参数和具体原因，并可用请求 ID 在诊断中查找。提示显示服务及实际上游模型名。
 
 ### English
 
-- Fix Windows window-close and session-end exits reporting failure after Native settings were restored. Serialize this process's exit restoration so OS callbacks and the main shutdown path do not contend for the same file lock.
-- Retain Python, Pi, OMP and other gateway client names, and recognize external session headers and `metadata.session_id`. Produce session bills without local Codex history, show client/device names when no session ID is supplied, and separate device usage by client while preserving totals and existing Codex attribution.
-- Simplify background migration, history preparation and proxy state, and centralize unfinished-turn checks and upstream error decoding. Keep authentication headers with their protocol adapters; remove unused arguments, single-use wrappers and stale comments. Share acceptance fixtures while preserving routing, credentials, cancellation and accounting behavior.
-- Quietly migrate idle legacy EMP checkpoints one conversation at a time while running, without notifications or manual checks. Scan outside Codex's writer coordination lock and recheck active writers and snapshots before commit. Preserve original history, tool results and native ciphertext, including closed failed turns; cancel scanning on shutdown.
-- Avoid upstream HTTP 400 rejections of Zstd Native requests containing inline images. HTTP, SSE and remote compaction send uncompressed JSON while preserving all image bytes, encrypted history and tool results; text-only requests retain compression, with no new failure retry.
-- Preserve the HTTP status, error code, parameter and specific cause of upstream rejections, including `error` and `detail` envelopes. Reuse credential redaction and bound extracted messages instead of replacing every cause with generic no-output advice.
-- Correlate rejection details with request IDs in diagnostics while retaining retry advice, attempt counts and the existing prohibition on replay after output starts.
-- Keep Native large-history prefill available when App page context is injected without a client tool call, preserving original contents, order and IDs. Show the selected service and upstream model in errors instead of internal route IDs.
+Workflow changes
+
+- Statistics identifies Python, Pi, OMP, and other clients using the EMP gateway. Calls with a session ID can be viewed by session. Other calls are attributed to the client or device.
+- EMP migrates old compaction records in idle sessions in the background, so those sessions can continue after EMP is turned off. Migration stops on exit and preserves the original history, tool results, and Codex encrypted state.
+
+Fixes
+
+- Fix Windows reporting a failed exit after restoring Native settings when closing a window or ending a session.
+- Fix HTTP 400 on Native requests with inline images, and fix App page context being mistaken for an unmatched tool result in long histories. Text-only requests still use compression.
+- Failed calls show the upstream status, parameter, and reason when reported. Look up the request ID in diagnostics. The error names the service and upstream model.
 
 ## 0.14.1 (2026-11-14)
 
 ### 中文
 
-- 跟进 Codex 0.168／0.169 的认证、Code Mode、增量工具与历史恢复，维护范围推进至 0.165–0.169；保持已有连接和权限设置。
-- 补齐新版 Codex 录音输入：外部 Responses 保留音频地址和文件引用，Chat／Vertex Gemini 接收内联录音；音频可随工具结果、后续对话及恢复历史保留。按客户端版本发布音频能力，兼容旧版目录。
-- 补充 Gemini 4 Hydrogen 参考目录与官方能力记录；Vertex 参考列表保留已知窗口、输出上限和推理档位，不重置已保存的手动设定。请求保留 Hydrogen 的 `xhigh`，其他 Gemini 模型继续按其支持范围映射。
-- 说明 Vertex API Key 使用参考模型目录，ADC／服务账号读取 Google 云端目录；区分迁移凭据与迁移本机登录配置。
-- 修复 API 服务生图未读取加密密钥导致的 503；覆盖正常保存服务后的生成和编辑路径。验证现有 Free／EMP Local Key 轻量生图 MCP 的 Image 2.6 GIF 参数、默认值、编辑与动画原样保存，保持单个工具和本地文件结果。
-- 账号累计用量、服务用量、统计图例和模型汇总使用上游原始模型名；修复当前路由同名时覆盖历史模型名的问题。模型选择器继续使用用户别名。
-- 修复累计用量与 Calls 把未知价格显示为零费用；保留已知零价，部分估算显示已知小计。定价优先使用实际上游名，不再去掉任意私有前缀猜价；已有有价历史保留记录时的费率。
-- 精简用量展示与目录之间的依赖，分离账本查询和外部目录转换，移除重复筛选和只用一次的简单包装；清理过时说明，校正统计分桶与 Vertex 参考目录文档。
+新增支持
+
+- Codex 的录音和音频附件可转发到支持的外部服务，覆盖 Responses、Chat 和 Vertex Gemini，恢复历史时也会保留音频引用。
+- Vertex AI 参考目录收录 Gemini 4 Hydrogen 的能力信息，保留已设置的强度；该模型的 `xhigh` 会按原值发送。
+
+问题修复
+
+- 修复保存 API 服务后，图片生成或编辑因未读到密钥报 503。现有轻量图片工具也已验证 Image 2.6 的 GIF 生成、编辑和保存。
+- 累计用量和统计显示调用当时的上游模型名。模型选择器继续用你设定的别名。无价格记录显示未知，已有价格的部分仍会计算小计。
+
+兼容性
+
+- Codex 维护范围为 0.165–0.169。已覆盖认证、Code Mode、增量工具和历史恢复的相关变化。
 
 ### English
 
-- Review Codex 0.168/0.169 authentication, Code Mode, incremental tools and history recovery; advance the maintenance window to 0.165–0.169 while preserving existing connections and permissions.
-- Support current Codex audio inputs: retain audio URLs and file references for external Responses, and project inline recordings for Chat/Vertex Gemini, including tool results and restored history. Publish audio capabilities by client version while retaining older catalog compatibility.
-- Add Gemini 4 Hydrogen reference metadata. Vertex reference lists retain published windows, output limits and reasoning levels without resetting saved user settings; preserve Hydrogen's `xhigh` effort without changing other Gemini mappings.
-- Clarify Vertex reference versus cloud catalogs and which credentials migrate between computers.
-- Load encrypted saved API-service keys for image generation and edits, fixing 503 failures after normal configuration saves. Verify Image 2.6 GIF parameters, defaults, edits and unchanged animated bytes through the existing lightweight Free/EMP Local Key image MCP, retaining one tool and local-file results.
-- Show recorded upstream model names in account/service usage, statistics legends and model summaries; prevent colliding current route IDs from renaming history. Model pickers retain user aliases.
-- Distinguish unknown prices from known zero rates in lifetime usage and Calls, retaining known subtotals. Price authoritative upstream IDs instead of stripping private prefixes to guess public rates; retain recorded rates for previously priced history.
-- Decouple usage presentation from live catalog naming, isolate ledger queries and external-model projection, and remove repeated filtering and trivial single-use wrappers. Clean up stale comments and correct chart-bucket and Vertex-reference documentation.
+New support
+
+- Codex recordings and audio attachments can reach compatible external Responses, Chat, and Vertex Gemini services, including when history is restored.
+- The Vertex reference catalog includes Gemini 4 Hydrogen capability information. Saved effort settings stay in place, and Hydrogen's `xhigh` is passed through.
+
+Fixes
+
+- Fix HTTP 503 on image generation and editing after saving an API service. The existing lightweight image tool was also verified for Image 2.6 GIF generation, editing, and saving.
+- Usage and statistics display the upstream model name recorded at the time of the call. The picker keeps your aliases. Missing prices appear as unknown, with subtotals for calls that have known prices.
+
+Compatibility
+
+- The Codex maintenance window is 0.165–0.169, including checks for authentication, Code Mode, incremental tools, and history restoration.
 
 ## 0.14.0 (2026-11-12)
 
 ### 中文
 
-- 新增 Vertex AI 服务：使用 Google Cloud API Key 连接 Gemini，或使用默认凭据／服务账号连接 Gemini 和 Claude；保留 Gemini 工具签名以支持后续工具轮次和重启恢复。API Key 支持 Express 和项目模式，使用参考模型目录，修复带项目 ID 时误报 Key 无效。
-- 整理模型目录与服务名称的职责，移除重复渲染、重复兜底、无调用方的参数和过时说明；统一 Gemini 流式协议状态，保留搜索、改名、迁移与旧会话路由行为。
-- 修复省略账号字段的配置更新报错、历史名称冲突导致旧路由失效，以及首次加载模型列表时刷新结果丢失的问题。添加、导入或改名时禁止账号和服务名称包含 `/`；既有配置仍可读取。
-- 修复 Vertex 迁移误合并不同项目、区域或认证方式的连接；重新导入外部服务时保留旧名称和历史路由。
-- 运行时校验使用 Codex 实际接收的模型目录，修复持续提示重新加载的问题；支持带 `@` 的版本化模型显示设置；切换或关闭 Vertex 表单后，未完成的凭据文件读取不再写入其他表单。
-- 修复内置 GLM 预设无法添加，以及无 Key 的 Vertex ADC 连接重复导入失败；相同 ADC 配置复用连接，不同项目或区域仍保持独立。
-- 保留 Gemini 返回的实际模型版本；只有思考 token 时也计入输出用量，并区分未报告用量与明确零值，覆盖完整响应和流式响应。
-- 使用 EMP 本地 Key 时隐藏无法调用的 Native 模型，保留其他订阅、外部模型及聚合路由；切回订阅或 OpenAI API Key 后恢复显示。
-- Codex 切换其他订阅、外部或聚合模型时使用可读名称，原调用 ID 和改名前的名称继续可用；模型、会话和用量归属保持不变。添加、导入或改名时提示服务名称冲突。
-- 设备 Key 加密保存，可在设备管理中持续查看、复制和移除；旧摘要 Key 可显式重新生成，保留设备用量归属。
-- 修复登录、网关查询与聚合路由的弹窗晚返回问题；保留当前页面和最后选择的查询区间，删除失败时显示错误并恢复操作。
-- 服务列表上方可直接打开聚合路由；路由设置改名为生图、审查与记忆路由。
-- 普通模型保持“模型名称＋来源列表”的原有样式；聚合模型紧跟对应原模型，以“前缀 · 模型名”显示，并标明来源池。Codex 的模型目录使用相同名称和顺序。
-- 自动审查排除 Native 和导入订阅中的 Free／Go 账号；额度尚未查询时读取登录信息中的等级，没有合格订阅时明确报错，不回落到被排除的账号。
-- 跟进 Codex 0.167.2：验证 GCP 增量工具声明、外部协议转换、工具调用和输入 ID 错误恢复；维护范围保持 0.163–0.167。
-- 同一账号或 CPA 号池的 5h、7d、30d 额度趋势同图显示，固定颜色区分，保留账号和查看日期范围选择。
-- CPA 账号周额度用尽时，5h 号池汇总按 0 计入该账号；个人额度保留上游原值，周额度恢复后重新计入。
-- 决策模型改名为决策 API：由调用方指定服务时只显示调用地址；选择服务时可直接添加并返回；表单内可打开网关连接，返回后保留已选内容。
+新增功能与入口
+
+- 「添加服务 → Vertex AI」支持用 Google Cloud API Key 连接 Gemini，或用应用默认凭据（ADC）和服务账号连接 Gemini、Claude。API Key 支持 Express 和指定项目，使用参考模型目录。
+- 网关设备 Key 可持续查看、复制和撤销。老的仅摘要 Key 可重新生成，原设备用量继续归属到该设备。
+- 额度趋势同图显示适用的 5h、7d、30d 曲线，可继续选择账号和时间范围。
+
+使用变化
+
+- 服务列表上方新增「聚合路由」入口。普通模型保留原样，聚合选项挨着对应模型，以「前缀 · 模型名」区分。WebUI 和 Codex 采用同一命名顺序。
+- 原「路由设置」改为「生图、审查与记忆路由」，「决策模型」改为「决策 API」。配置决策服务时也可以就地添加服务。
+- 自动审查只选用合适的订阅，排除 Free 和 Go。EMP 本地 Key 模式下，选择器只展示可调用的模型，仍可选其他订阅、外部模型和聚合路由。
+- Codex 切换模型时显示可读的账号或服务名称。旧名称和既有会话仍能使用。添加、导入或改名时会检查重名和斜杠。
+
+问题修复
+
+- 修复 Vertex 项目模式误报 Key 无效、迁移合并不同项目或认证、重复导入 ADC 失败，以及切换表单后凭据文件被写入错误表单。
+- 修复内置 GLM 添加失败、带 `@` 的版本化模型无法保存显示设置，以及目录同步后持续提示重载。重新导入外部服务会保留历史名称。
+- 记录 Gemini 实际执行的模型版本和已报告的思考 Token。CPA 周额度耗尽的账号对号池 5h 可用额度按零计算，单账号数值仍按上游显示。
+- 修复登录、网关和聚合路由的请求晚返回时打开旧页面或清空查询范围。
 
 ### English
 
-- Add Vertex AI with Google Cloud API keys for Gemini or default/service-account credentials for Gemini and Claude. Preserve Gemini tool signatures across later tool turns and EMP restarts. API keys support Express and project modes with reference catalogs; fix project IDs causing false invalid-key errors.
-- Separate model-directory presentation and service-name validation, removing duplicate renders, repeated fallbacks, unused parameters and stale commentary. Unify Gemini streaming protocol state while retaining search, renames, migration and existing conversation routes.
-- Fix partial configuration updates that omit accounts, historical-name conflicts that break existing routes, and refresh results lost during initial model loading. Reject `/` in new or renamed account/service names while retaining existing configuration compatibility.
-- Keep Vertex connections with different projects, locations or authentication modes separate during migration. Preserve external services' former names and historical routes when importing the same connection again.
-- Verify runtime state against the model catalog actually published to Codex, fixing persistent reload prompts. Support display settings for versioned model IDs containing `@`, and prevent pending credential-file reads from writing into another Vertex form after navigation or closure.
-- Fix adding the built-in GLM preset and reimporting keyless Vertex ADC connections. Reuse identical ADC configurations while keeping different projects or locations separate.
-- Preserve Gemini's reported model version and count thought-only output. Keep unreported usage distinct from explicit zero in both complete and streaming responses.
-- Hide unavailable Native models when using the EMP local key, while retaining other subscriptions, external models and aggregate routes. Restore Native entries after switching back to a subscription or OpenAI API key.
-- Use readable names for other subscriptions, external models and aggregate Codex routes while preserving original IDs, former names, conversations and accounting. Report service name conflicts when adding, importing or renaming.
-- Encrypt saved device keys and keep them available to view, copy and revoke in device management. Explicitly replace legacy digest-only keys while retaining device attribution.
-- Preserve the current dialog during delayed sign-in, gateway and aggregate operations. Keep the latest queried period, and restore controls with an error after failed deletion.
-- Open aggregate routing from the service toolbar. Routing settings become Image, Auto Review and memory routing.
-- Keep the original ordinary-model layout: model name with its source list. Place each aggregate after its source model, show “prefix · model name” and identify its source pool; Codex receives the same names and ordering.
-- Exclude Free and Go Native/imported subscriptions from Auto Review. Use sign-in plan metadata before quotas are available, and report missing eligible subscriptions without falling back to excluded accounts.
-- Track Codex 0.167.2 with targeted checks for GCP incremental tools, external protocol conversion, tool calls and inline-ID recovery. The maintenance window remains 0.163–0.167.
-- Show the selected account or CPA pool's 5h, 7d and 30d quota curves together with fixed colors, retaining account and date-range selection.
-- Count weekly-exhausted CPA accounts as zero in the usable 5h pool. Keep individual upstream observations and restore their contributions when weekly quota recovers.
-- Rename Decision models to Decision API. Client-chosen services show only the request URLs; Add service beside the provider selector returns to the form after setup, and Gateway connection opens from the form while retaining selections.
+New features and where to find them
+
+- Add Service → Vertex AI supports a Google Cloud API key for Gemini, or Application Default Credentials (ADC) and service accounts for Gemini and Claude. API keys support Express and project modes using a reference catalog.
+- View, copy, and revoke saved gateway device keys. You can regenerate legacy digest-only keys without losing past usage attribution.
+- View the applicable 5h, 7d, and 30d quota lines together and continue to select the account and time range.
+
+Workflow changes
+
+- Open Aggregate Routing from the service toolbar. Aggregate options follow their original model and use “prefix · model name.” Individual models keep their usual format. The WebUI and Codex use the same names and order.
+- Routing Settings becomes Image, Auto Review and memory routing. Decision models becomes Decision API. Add a service without leaving Decision API setup.
+- Auto Review skips Free and Go subscriptions. With an EMP Local Key, the picker hides unavailable Native entries and keeps other subscriptions, external models, and aggregate routes.
+- Codex model switches show readable account and service names. Existing names and sessions still work. Add, import, and rename check for duplicate names and slashes.
+
+Fixes
+
+- Fix false invalid-key errors in Vertex project mode, merging distinct connections on import, repeated ADC import failures, and credential-file reads writing to the wrong form.
+- Fix adding the GLM preset, saving display names for versioned model IDs containing `@`, and repeated catalog reload prompts. Reimports preserve external service names used by existing sessions.
+- Preserve the model version reported by Gemini and its reported reasoning tokens. A CPA account with no weekly quota left contributes zero to the pool's usable 5h quota. Individual readings keep the upstream values.
+- Fix late sign-in, gateway, and aggregate responses that reopened an old view or lost the selected period.
 
 ## 0.13.29 (2026-11-10)
 
 ### 中文
 
-- Claude CPA 的公开文字实时显示，减少持续等待；工具参数完整后再交给 Codex，保留取消与错误处理。
-- 修复 macOS Claude 调用一直等待：统一临时目录信任路径，待上下文命令就绪后再提交。
-- 关闭统计与用量查询时终止后台扫描，减少服务用量查询的内存占用；Fast 和 Ultrafast 分开显示。
-- 统计复用已读取的明细：查看 30 天后切换较短周期或筛选条件，按缓存明细重新统计；账单变化后自动更新。
-- 服务用量按当前账号查询，显示加载进度并支持原地重试；明确标记部分用量与估算，修复弹窗键盘焦点越界。
-- 修复服务详情返回后无法关闭的问题；外部模型默认显示服务名称，保留原有调用 ID。
-- 修复取消生图后请求仍继续等待的问题；MCP 取消或关闭会断开图片上游连接。
-- 普通 Responses 客户端过滤 Codex 专用事件，保持 Codex 客户端的事件与用量处理。
-- 扩展 Image 2.6：支持选择 API 服务，透传复杂度、SVG 和 GIF 参数；MCP 图片工具支持新模型及对应文件格式。
+新增支持
+
+- Image 2.6 可选用指定 API 服务，并支持复杂度参数和 SVG／GIF。轻量图片工具也支持这些输出格式。
+
+使用变化
+
+- Claude CPA 的公开文字会边生成边显示。Codex 在工具参数完整后接收工具调用。
+- 看过 30 天统计后，可用已读取明细切换到较短区间或修改筛选。各服务用量显示加载进度，可在原处重试。Fast 和 Ultrafast 分开统计。
+
+问题修复
+
+- 修复 macOS 上 Claude 长时间停在等待状态，以及离开统计页面后后台仍在扫描的问题。
+- 修复服务详情返回后只能继续返回、无法关闭的问题。外部模型默认显示服务名称，原调用 ID 继续可用。
+- 取消生图会一并关闭上游连接。通用 Responses 客户端收到适用于自身的事件，Codex 的专用事件保留。
 
 ### English
 
-- Stream public Claude CPA text while the turn is running. Deliver tools after their arguments are complete, preserving cancellation and error handling.
-- Fix Claude calls waiting on macOS by canonicalizing the trusted workspace and submitting context only after the CLI command is ready.
-- Stop statistics and usage scans on disconnect, reduce service-usage query memory, and distinguish Fast from Ultrafast.
-- Reuse timestamped report facts across shorter periods and filters. Refresh cached facts when accounting data changes, preserving exact range and performance metrics.
-- Scope lifetime usage reads to the selected owner, show query progress and retry, label partial totals, and keep keyboard focus inside dialogs.
-- Fix returning to a service detail without a close button. External models show the service name while retaining their existing route IDs.
-- Cancel image requests when the MCP caller cancels or disconnects, closing the upstream connection.
-- Filter Codex-only events for generic Responses clients while preserving Codex events and upstream accounting.
-- Extend Image 2.6 support with explicit API-service selection, complexity and SVG/GIF options, and matching MCP output formats.
+New support
+
+- Image 2.6 supports explicit API-service selection, complexity, and SVG/GIF options. The lightweight image tool supports those output formats as well.
+
+Workflow changes
+
+- Claude CPA streams its visible text as it arrives. Codex receives tool calls after their arguments are complete.
+- After loading 30 days of statistics, switch to a shorter period or change a filter using the records already read. Service usage shows progress and an inline retry. Fast and Ultrafast are shown separately.
+
+Fixes
+
+- Fix Claude waiting indefinitely on macOS and report scans continuing after the view is closed.
+- Fix service details losing their Close control after going back. External models use the service name by default and retain their original route IDs.
+- Cancelling an image request closes its upstream connection. Generic Responses clients receive compatible events, while Codex keeps its dedicated events.
 
 ## 0.13.28 (2026-11-07)
 
 ### 中文
 
-- Free Native 与 EMP 本地 Key 通过一个 MCP 工具生成、编辑图片，沿用图片订阅路由和用量记录。保留原登录、Provider 和会话，无需 Fork；付费 Native 沿用原生生图工具。图片保存到本机，工具只返回文件路径。图片路由问号说明账号额度、授权与 Runtime 重启步骤。
+新增功能
+
+- Free Native 和 EMP 本地 Key 可用同一个图片工具生成、编辑图片。图片保存到本机，Codex 收到文件路径，原会话和登录可以继续使用。付费 Native 继续使用原生图片工具。
+- 先在「路由设置」配置有额度的生图订阅，再按问号里的说明完成授权和运行时重启。
 
 ### English
 
-- Generate and edit images through one MCP tool for Free Native and EMP Local Key, using the existing subscription route and usage records. Preserve sign-in, provider and original chats without forking; paid Native keeps its native image tools. Save images locally and return only their file paths. Image-routing help covers quota, authorization and the Runtime restart.
+New feature
+
+- Free Native and EMP Local Key users can generate and edit images with a single image tool. Images are saved locally and Codex receives the file path. Keep your existing chats and sign-in. Paid Native continues to use its native image tools.
+- Choose an eligible subscription in Routing Settings. The image help explains authorization and when to restart the Codex runtime.
 
 ## 0.13.27 (2026-11-07)
 
 ### 中文
 
-- 修复后台记忆提取和整理的用量漏记，自动补齐已有调用记录，保留原账号、时间和用量，并防止重启或扫描历史后重复计入。
-- CPA 趋势支持查看整个号池或单个账号的 5h／7d 余量，保留十五天历史；关闭 Web UI 后仍会采样。额度百分比统一向上取整，连接设置提供号池余量接口说明与对接示例；未提供接口时隐藏额度刷新、趋势和圆环。
-- 更新 Codex 0.167 适配，维护最近五个正式系列 0.163–0.167。补齐请求取消、失败或缺失用量响应的压缩、分页历史和动态工具目录验收。默认记忆模型随运行时显示，保留用户原有选择。
-- 记忆提取和整理可分别调整思考强度，默认保留 Low／Medium，主对话强度不变。两个问号说明加入 24 小时实测的 token、缓存命中率和 USD 对比，并说明账号归属、启用与生效方式。
-- 网关支持为设备创建独立连接 Key，分别查看调用、token 和已知价格的 USD 估算；端口转发后的请求按 Key 归属，撤销后停止接收该 Key 的新请求。连接设置、设备管理和用量分区展示。
-- Decision API 调用纳入统一计量，保留原始响应、上游错误、交付状态和已报告用量，区分未知与真实零值；独立于对话账单和生成 TPS，取消时终止上游请求。
-- Claude CPA 改由真实 Claude Code TUI 推理，Codex 保留历史并执行工具。当前回合内临时复用工具状态，新回合重新建立 CLI；完整转发长上下文、原图和 PDF，保留思考强度与已报告用量，结束或取消后清理临时进程和文件。上游流式错误立即返回，避免 CLI 隐藏重试。
-- 新增可选的聚合路由，内部 ID 自动生成，用户只设置显示前缀，不额外插入分隔符；原模型名称保持不变并跟随改名更新。同一模型拒绝重复前缀，不同模型可共用前缀，保存失败时保留表单。通过三张策略卡片选择优先级、相同订阅等级的额度均衡或新会话轮询，问号内分行说明。已有会话保持实际账号，额度不足或来源不可用后切换；保留手动来源，按共同能力和最小上下文发布聚合模型。
+新增功能与入口
+
+- 聚合路由把同一模型的多个来源合成一个 Codex 选项。可设显示前缀，并按优先级、同等级额度均衡或新会话轮询分配。已开始的会话优先沿用原账号。
+- 网关可为每台设备创建连接 Key。在设备管理可查看调用量、Token 与已知价格的 USD 估算，也可撤销 Key。经端口转发的请求仍按 Key 归属。
+- CPA 额度趋势可查看整个号池或单账号的 5h／7d 余量，保留 15 天历史。服务接入说明在连接设置中，未提供号池接口的服务隐藏相关控件。
+- 「路由设置」可分别调整记忆提取和整理的思考强度。问号内可查看 24 小时的 Token、缓存命中率和费用对比。主对话强度不受影响。
+
+使用变化
+
+- Claude CPA 由 Claude Code 执行推理，历史和工具继续在 Codex 中处理。转发保留长上下文、原图、PDF、思考强度和已报告用量。
+- Decision API 调用单独计量。统计区分未报告数据和真实的零值，并保留上游错误与交付状态。
+
+问题修复与兼容性
+
+- 补齐后台记忆提取和整理漏掉的历史用量，避免重启或扫描后重复入账。
+- 验证 Codex 0.167 的取消、压缩、分页历史和动态工具目录，维护范围为 0.163–0.167。
 
 ### English
 
-- Fix missing usage for background memory extraction and consolidation. Restore saved call receipts with their original account, time and tokens, without duplicate totals after restart or history scans.
-- View CPA pool or individual-account 5h/7d remaining-quota trends with fifteen days of history. Sampling continues while the Web UI is closed. Quota percentages consistently round upward. Connection settings link quota API requirements and an integration example. Hide quota refresh, trends and meters when the service has no quota endpoint.
-- Update Codex 0.167 compatibility and maintain the latest five stable series, 0.163–0.167. Verify cancellation, compaction after failed or usage-less responses, paginated history and dynamic tool catalogs. Default memory-model hints follow the runtime while retaining existing choices.
-- Set extraction and consolidation effort independently, retaining the default Low/Medium and the main conversation's effort. Both help panels include measured 24-hour token, cache-hit and USD comparisons, with account routing, activation and application guidance.
-- Create separate gateway keys for devices and view their calls, tokens and USD estimates with known pricing. Forwarded requests retain key-based attribution; revocation rejects subsequent requests. Connection settings, device management and usage have separate views.
-- Account for Decision API calls in the shared ledger while retaining native responses, upstream errors, delivery status and reported usage. Distinguish unknown from reported zero, keep Decision calls separate from conversation bills and generation TPS, and cancel their upstream work on disconnect.
-- Run Claude CPA through the real Claude Code TUI while Codex owns history and executes tools. Reuse temporary tool state within a user turn and start a fresh CLI for the next turn. Forward complete long contexts, original images and PDFs; retain effort and reported usage; and clean up temporary processes and files after completion or cancellation. Return upstream stream errors immediately to prevent hidden CLI retries.
-- Add opt-in aggregate routing with automatic internal IDs and user-defined display prefixes without an added separator. Preserve original model names and reflect their later renames. Reject duplicate prefixes for the same model, allow shared prefixes across different models and retain the form after a failed save. Three strategy cards select priority order, same-plan quota balance or new-conversation round robin, with line-separated help. Keep existing conversations on their actual account until quota or availability requires a change. Retain manual sources and expose common capabilities and the smallest context window.
+New features and where to find them
+
+- Aggregate Routing combines several sources for one model into one Codex option. Set a display prefix and allocate new sessions by priority, same-plan quota balance, or round robin. Existing sessions prefer their current account.
+- Create a gateway key for each device. Device management shows calls, tokens, and USD estimates with known pricing, and lets you revoke a key. Forwarded requests remain attributed to their key.
+- CPA trends show 5h and 7d quota for the pool or an individual account, with 15 days of history. Connection settings explain the quota API. Services without that API hide the quota controls.
+- Routing Settings has separate reasoning-effort selections for memory extraction and consolidation. The help shows a 24-hour comparison of tokens, cache hits, and cost. Main conversation effort stays unchanged.
+
+Workflow changes
+
+- Claude CPA runs inference through Claude Code while Codex handles history and tools. The integration preserves long context, original images, PDFs, effort, and reported usage.
+- Decision API calls are metered separately. Statistics distinguishes missing data from reported zero and retains upstream errors and delivery status.
+
+Fixes and compatibility
+
+- Recover missing historical usage for background memory extraction and consolidation, without counting it twice after a restart or scan.
+- Verify cancellation, compaction, paginated history, and dynamic tool catalogs in Codex 0.167. The maintenance window is 0.163–0.167.
 
 ## 0.13.26 (2026-11-04)
 
 ### 中文
 
-- 修复外部模型工具交互中反复要求重发历史的问题，直接发送完整上下文，保留工具结果、原生增量续传和用量记录。
-- 调用记录关联历史重发后的完成结果，避免把已恢复的请求一直显示为等待重发。
-- CPA 服务显示 5h／7d 剩余额度和最近重置时间，悬停查看各账号明细；支持缓存、手动刷新以及额度接口恢复后的立即重试。
-- 按当前界面更新全部 11 项使用教程，修正模型设置、连接设置和移除入口，保留中英字幕、固定视角和并排隧道演示。
+新增功能与入口
+
+- CPA 服务行显示号池的 5h／7d 剩余额度和最近重置时间，悬停可查看各账号。
+- 「使用教程」的 11 段动画更新到当前界面，包括模型设置、连接设置、移除服务和隧道迁移。
+
+问题修复
+
+- 修复外部模型在工具往返中反复要求重发历史的问题，保留工具结果与调用记录。
+- 补发完成后，统计会把结果关联到原调用，避免继续标为等待重发。
 
 ### English
 
-- Stop repeated history resends during external-model tool interactions. Send full context directly while preserving tool results, native incremental continuation and usage records.
-- Link completed follow-ups to their history-resend records instead of leaving recovered requests waiting for another resend.
-- Show CPA 5h/7d remaining quotas and the nearest reset, with individual accounts on hover. Support cached reads, manual refresh and immediate retry when a quota endpoint becomes available.
-- Refresh all 11 tutorials for the current interface. Correct model settings, connection settings and removal entry points while retaining bilingual captions, a fixed camera and side-by-side tunnel transfer.
+New features and where to find them
+
+- CPA service rows show the pool's remaining 5h and 7d quota and closest reset time. Hover to see individual accounts.
+- All 11 tutorial animations reflect the current interface, including model settings, connection settings, removal, and tunnel migration.
+
+Fixes
+
+- Fix repeated history-resend prompts during external-model tool exchanges while preserving tool results and usage records.
+- A completed resend is now linked to the original call and no longer appears to be waiting for history.
 
 ## 0.13.25 (2026-11-03)
 
 ### 中文
 
-- 修复外部 Chat 模型的进度说明与最终回答混淆的问题；完整和流式响应统一保留消息阶段、工具调用关系和用量。
-- 识别混入正文的 DeepSeek 原生工具控制标记并明确报错，避免工具参数作为最终回答显示；保留代码示例和正常文字。
-- 服务余额仅显示 DeepSeek 和 Kimi 的账户余额，移除 Key 预算及其他服务的余额入口。
-- 合并工具参数和正文解析，减少流式响应的重复复制，整理余额适配与预览配置的职责边界。
+使用变化
+
+- 服务列表显示 DeepSeek 和 Kimi 的账户余额。其他服务的 Key 预算不再当作余额显示。
+
+问题修复
+
+- 外部 Chat 模型的进度和最终回答分开展示。完整与流式响应都保留工具调用和用量。
+- DeepSeek 响应混入工具控制指令时显示明确的协议错误。正常文字和代码示例照常显示。
 
 ### English
 
-- Keep external Chat model progress separate from final answers. Complete and streamed responses retain consistent message phases, tool-call relationships and usage.
-- Report native DeepSeek tool-control markers in answer text as protocol errors instead of displaying tool parameters as a final answer. Preserve quoted code examples and ordinary text.
-- Show account balances only for DeepSeek and Kimi. Remove key budgets and balance controls for other services.
-- Share tool-argument and text parsing, reduce duplicate streaming-response copies, and clarify balance-adapter and preview-configuration ownership.
+Workflow changes
+
+- Service rows show account balances for DeepSeek and Kimi. Other services' key budgets are no longer shown as balances.
+
+Fixes
+
+- Keep external Chat model progress separate from the final answer, preserving tool calls and usage in both complete and streamed responses.
+- Report DeepSeek tool-control instructions in the answer as a protocol error while preserving ordinary text and code examples.
 
 ## 0.13.24 (2026-11-02)
 
