@@ -198,7 +198,6 @@ registerUiCopy({
   "core.unlinked_service": ["未关联服务","Unlinked service"],
   "core.edit_model_display": ["修改模型显示","Edit model display"],
   "core.display_name": ["显示名称","Display name"],
-  "core.the_new_name_takes_effect_immediately_after_saving": ["更改名称后立即应用。","The new name takes effect immediately after saving."],
   "core.done": ["完成","Done"],
   "core.model_display_saved": ["模型显示已保存","Model display saved"],
   "core.reopen_codex": ["请重新打开 Codex","Reopen Codex"],

@@ -1,4 +1,4 @@
-function createTeamProfiles({action, openModal, $, esc, tr, scope, number, tokens, roleName, roleBadge, date, compact, compactSpend, planTag, failure}) {
+function createTeamProfiles({action, openModal, $, esc, tr, scope, number, tokens, roleName, roleBadge, date, compact, compactSpend, planTag, failure, subscriptionHead}) {
   const error = (panel, reason) => {
     if (panel.isConnected) $('modal_status').textContent = failure(reason);
   };
@@ -73,7 +73,7 @@ function createTeamProfiles({action, openModal, $, esc, tr, scope, number, token
       const data = await action('subscriptions');
       if (!panel.isConnected) return;
       const state = row => row.status === 'available' ? 'share_valid' : row.status === 'review' ? 'share_review' : 'share_invalid';
-      panel.innerHTML = data.subscriptions.length ? data.subscriptions.map(row => `<div class="setting-row team-subscription-row" data-workspace-subscription="${esc(row.share)}">
+      panel.innerHTML = data.subscriptions.length ? subscriptionHead('modules.status_column') + data.subscriptions.map(row => `<div class="setting-row team-subscription-row" data-workspace-subscription="${esc(row.share)}">
         <div class="team-subscription-owner"><span class="team-subscription-dot" data-valid="${row.status === 'available'}" aria-hidden="true"></span><strong>${esc(row.owner)}</strong>${planTag(row.plan)}</div>
         <span class="team-subscription-usage" title="${esc(tr('modules.token_spend'))}">${compact(row.usage)} / ${compactSpend(row.usage)}</span>
         <span class="team-subscription-status" data-valid="${row.status === 'available'}" data-status="${esc(row.status)}">${tr('modules.' + state(row))}</span></div>`).join('')

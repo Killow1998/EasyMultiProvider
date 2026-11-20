@@ -120,8 +120,7 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
     const candidate={account,native,models:native?(state.subscription_models||[]):[],hidden:new Set(account.hidden_models||[]),windows:{...(account.model_context_windows||{})},syncModels:new Set(),controller:new AbortController()};
     candidate.sources=[account,...subscriptionPeers(state,id,candidate.native)].map(source=>({label:source.native?'Native':source.name||tr("models.imported_settings"),hidden:new Set(source.hidden_models||[]),windows:source.model_context_windows||{}}));
     candidate.resolved=new Set();
-    const body=`<p class="muted">${tr("models.leave_blank_for_the_default_context_rename_models_in")}</p>
-      <div class="toolbar"><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh">${tr("models.refresh_model_list")}</button></div>
+    const body=`<div class="toolbar"><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh">${tr("models.refresh_model_list")}</button></div>
       <div class="subscription-list-head"><span>${tr("models.visible_in_codex_model")}</span><span>${tr("models.maximum_context_window_tokens")} ${help(tr("models.settings_cannot_exceed_the_online_catalog_limit_leave_blank"))}</span></div>
       <div id="subscription_model_list" class="model-selection"></div>`;
     services.open(id,'account','edit',body,tr("models.save_changes"),async()=>{

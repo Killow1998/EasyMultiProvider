@@ -1,10 +1,6 @@
 /* Migration owns its layout; structural containers are not page panel sections. */
 .modal:has(#shadow_migration){max-height:100%}
 .modal:has(#migration_chooser,#lan_code,#shadow_migration_file)>.modal-actions{display:none}
-#migration_chooser{grid-template-columns:repeat(3,minmax(0,1fr));padding:4px 0;animation:migration-reveal 250ms ease-out}
-#migration_chooser button::before{width:24px;height:24px}
-#migration_chooser .service-choice:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-@media(max-width:650px){#migration_chooser{grid-template-columns:minmax(0,1fr)}}
 .migration-import-form{max-width:520px;margin:0 auto;padding:4px 0}
 .migration-import-form>label{margin:20px 0;font-size:13px;color:var(--text)}
 .migration-import-form input{display:block;margin-top:8px}
@@ -14,37 +10,9 @@
 .migration-import-actions button{margin:0}
 .migration-import-actions [data-migration-demo]{border-color:transparent;background:transparent;color:var(--muted)}
 .migration-panel{padding:0 4px 4px 0;animation:migration-reveal 250ms ease-out}
-.modal:has(#shadow_migration) #modal_submit,#lan_share_block,#lan_receiver_confirm{animation:migration-reveal 250ms ease-out}
+.modal:has(#shadow_migration) #modal_submit,#lan_share_block,.tunnel-send,.tunnel-receive{animation:migration-reveal 250ms ease-out}
 @keyframes migration-reveal{from{opacity:0}to{opacity:1}}
-.migration-tunnel-intro{display:flex;align-items:center;gap:8px;margin:0 0 18px;color:var(--muted);font-size:12px}
-.migration-tunnel,.tunnel-transfer{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:start}
-.migration-tunnel>section{display:block;min-width:0;margin:0;padding:0;border:0;border-radius:0;background:transparent}
-.migration-tunnel h3{font-size:14px;margin:0 0 14px}
-.migration-tunnel>.tunnel-receive{border-left:1px solid var(--border);padding-left:24px}
-.tunnel-receive>p.muted{font-size:12px;margin:0 0 16px;line-height:1.6}
-.migration-tunnel details>summary{cursor:pointer;font-size:12px;color:var(--text);margin-bottom:10px}
-.migration-tunnel .migration-services{height:192px}
-#lan_selected_count{margin-left:6px;font-size:11px}
-.migration-tunnel .migration-options{font-size:11px}
-.tunnel-transfer{grid-column:1/-1;border-top:1px solid var(--border);padding-top:16px;min-height:152px}
-.tunnel-transfer>div{min-width:0}
-.tunnel-create{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.tunnel-create[hidden],.tunnel-meta[hidden]{display:none}
-.tunnel-create button,.tunnel-actions button{min-height:34px;margin:0}
-.tunnel-code{display:flex;gap:8px;align-items:start}
-.migration-tunnel textarea{font:13px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:0;resize:none;min-height:0;overflow-wrap:anywhere;word-break:break-all}
-.tunnel-code textarea{flex:1;min-width:0;background:var(--panel-soft)}
-.tunnel-code button{width:34px;height:34px;min-width:34px;padding:0;margin:0;display:inline-flex;align-items:center;justify-content:center}
-.tunnel-meta{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:11px;margin-top:8px}
-.tunnel-meta button{margin:0;font-size:12px}
-.tunnel-confirm{padding-left:24px}
-.tunnel-confirm p{font-size:12px;line-height:1.6;margin:0 0 12px}
-.tunnel-confirm button{margin:0}
-.tunnel-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-#lan_send_status,#lan_receive_status{font-size:12px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere;margin:10px 0 0}
-#lan_send_status:empty,#lan_receive_status:empty{display:none}
-@media(prefers-reduced-motion:reduce){#migration_chooser,.migration-panel,.modal:has(#shadow_migration) #modal_submit,#lan_share_block,#lan_receiver_confirm{animation:none}}
-@media(max-width:650px){.migration-tunnel,.tunnel-transfer{grid-template-columns:minmax(0,1fr)}.migration-tunnel>.tunnel-receive{border-left:0;border-top:1px solid var(--border);padding:20px 0 0}.tunnel-create{flex-wrap:wrap}.tunnel-transfer{min-height:0}.tunnel-confirm{padding-left:0}}
+@media(prefers-reduced-motion:reduce){#migration_chooser,.migration-panel,.modal:has(#shadow_migration) #modal_submit,#lan_share_block,.tunnel-send,.tunnel-receive{animation:none}}
 #shadow_migration .migration-options{display:flex;align-items:center;flex-wrap:wrap;gap:8px 20px;margin:12px 0}
 #shadow_migration .migration-options label{display:flex;align-items:center;gap:7px;margin:0}
 #shadow_migration input[type=checkbox]{width:14px;height:14px;margin:0;flex:none}
@@ -75,7 +43,6 @@
 .migration-preview-models>summary{cursor:pointer;color:var(--muted)}
 .migration-preview-models .migration-model{display:flex;align-items:center;gap:7px;margin:0;padding:7px 0;border:0}
 .migration-demo-note{color:var(--warning);margin:12px 0}
-.migration-open-hint{color:var(--muted);font-size:13px;line-height:1.6;margin:0 0 16px}
 .shadow-help[data-shadow-tone=warning]{border-color:var(--warning);color:var(--warning);margin-left:7px;width:17px;height:17px;min-height:17px}
 .shadow-feedback[data-tone=warning]{border-color:var(--warning);background:var(--warning-soft)}
 
@@ -92,3 +59,37 @@
 .migration-preference-conflict {margin:12px 0;padding:12px;border-left:3px solid var(--warning,#b88928);background:rgba(184,137,40,.1);border-radius:4px;}
 .migration-preference-choices {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px;margin-top:10px;}
 .migration-preference-choices select {width:100%;min-width:0;}
+
+/* Method chooser: one card per transport. The file card hosts both directions; the LAN card is one button. */
+#migration_chooser{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:4px 0;animation:migration-reveal 250ms ease-out}
+.migration-method{display:flex;flex-direction:column;align-items:flex-start;gap:6px;height:auto;min-height:0;margin:0;padding:16px;text-align:left;white-space:normal;font-weight:400;line-height:1.45;color:var(--text);background:transparent;border:1px solid var(--border);border-radius:6px;transition:border-color 160ms ease,background-color 160ms ease}
+button.migration-method:hover,.migration-method:has(button:hover){border-color:var(--border-strong);background:var(--panel-soft)}
+button.migration-method:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.migration-method-icon{display:inline-flex;width:34px;height:34px;align-items:center;justify-content:center;border-radius:8px;background:var(--panel-soft);color:var(--accent);margin-bottom:4px}
+.migration-method-icon svg{width:20px;height:20px}
+.migration-method strong{font-size:14px}
+.migration-method small{color:var(--muted);font-size:12px;line-height:1.55;flex:1}
+.migration-method-actions{display:flex;gap:8px;margin-top:10px}
+.migration-method-actions button{margin:0;min-height:32px}
+.migration-method-cta{display:inline-flex;align-items:center;min-height:32px;padding:0 12px;border:1px solid var(--border-strong);border-radius:4px;font-size:13px}
+button.migration-method:hover .migration-method-cta{border-color:var(--accent);color:var(--accent)}
+@media(max-width:650px){#migration_chooser{grid-template-columns:minmax(0,1fr)}}
+/* Tunnel: send and receive share one window as tabs; prompts and decisions live in the notification island. */
+.migration-tabs{margin:0 0 14px}
+.tunnel-send,.tunnel-receive{margin:0;padding:0;border:0;border-radius:0;background:transparent}
+.tunnel-send[hidden],.tunnel-receive[hidden],.tunnel-meta[hidden],.tunnel-create[hidden]{display:none}
+.tunnel-selection-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 8px;font-size:13px}
+#lan_selected_count{font-size:12px}
+.tunnel-send .migration-services{max-height:min(260px,34dvh)}
+.tunnel-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:14px;margin-top:4px}
+.tunnel-send .tunnel-footer{flex-direction:row-reverse}
+.tunnel-create button,.tunnel-actions button,.tunnel-meta button{min-height:34px;margin:0}
+.tunnel-share{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.tunnel-meta{display:flex;align-items:center;gap:12px;font-size:12px;font-variant-numeric:tabular-nums}
+#lan_receiver_confirm:empty,#lan_remaining{display:none}
+.tunnel-actions{display:flex;gap:8px;flex-wrap:wrap}
+.tunnel-field-label{display:flex;align-items:center;gap:6px;margin:0 0 8px;font-size:13px}
+#lan_code{font:14px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.02em;resize:none;min-height:0;word-break:break-all;margin:0 0 14px}
+#lan_code::placeholder{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:0}
+.tunnel-status{font-size:12px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere;margin:0;flex:1;min-width:0}
+.tunnel-status:empty{display:none}

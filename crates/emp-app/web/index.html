@@ -96,7 +96,7 @@
 
 </main>
 
-<div id="notification" popover="manual" hidden><span id="notification_symbol" aria-hidden="true"></span><span id="status" role="status" aria-live="polite" aria-atomic="true"></span><button id="notification_close" type="button" class="notification-close" data-i18n-aria-label="core.close_notification">&times;</button><div class="notification-track" aria-hidden="true"><span id="notification_progress"></span></div></div>
+<div id="notification" popover="manual" hidden><span id="notification_symbol" aria-hidden="true"></span><span id="status" role="status" aria-live="polite" aria-atomic="true"></span><span id="notification_actions"></span><button id="notification_close" type="button" class="notification-close" data-i18n-aria-label="core.close_notification">&times;</button><div class="notification-track" aria-hidden="true"><span id="notification_progress"></span></div></div>
 <button id="notification_mailbox" type="button" popovertarget="notification_inbox" aria-haspopup="dialog" aria-expanded="false" data-i18n-aria-label="notifications.inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span id="notification_unread" hidden aria-hidden="true"></span></button>
 <div id="notification_inbox" popover="auto" role="dialog" aria-labelledby="notification_inbox_title">
   <div class="notification-inbox-header"><h2 id="notification_inbox_title" data-i18n="notifications.title"></h2><span id="notification_count"></span><button id="notification_clear" type="button" class="secondary" data-icon="trash" data-i18n-aria-label="notifications.clear"></button><button type="button" class="modal-close" popovertarget="notification_inbox" popovertargetaction="hide" data-i18n-aria-label="notifications.close">&times;</button></div>
@@ -200,6 +200,18 @@ const diagnostics = createDiagnostics({callReports, api, getLanguage:() => langu
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
 let language = 'zh-CN';
 const notifications = createNotifications({$,tr,getLanguage:()=>language});
+// Dialog feedback surfaces in the notification island at the top, like every other notice. #modal_status keeps
+// the text (and the dialog's own live region) so callers and assistive technology still read it in place.
+(() => {
+  const status = $('modal_status');
+  let shown = null;
+  new MutationObserver(() => {
+    const text = status.textContent.trim();
+    if (!text) { notifications.withdraw(shown); shown = null; return; }
+    const tone = status.dataset.tone || (/(…|\.\.\.)$/.test(text) ? 'info' : 'error');
+    shown = notifications.show(text, tone === 'error', {quiet:true});
+  }).observe(status, {childList:true, characterData:true, subtree:true});
+})();
 async function refreshTeamNotices() {
   if (!moduleSettings.active('team')) return;
   try {

@@ -49,8 +49,9 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     const value = spend(row);
     return compactUsage(value == null ? null : value / 1e9,true).html;
   };
+  const subscriptionHead = last => `<div class="team-subscription-head"><span>${tr('modules.subscription_column')}</span><span>${tr('modules.subscription_usage')} ${shadowHelp(tr('modules.subscription_usage_help'))}</span><span>${tr(last)}</span></div>`;
   const planTag = plan => plan ? `<span class="team-plan">${esc(subscriptionPlanLabel(plan))}</span>` : '';
-  const profiles = createTeamProfiles({action,openModal,$,esc,tr,scope,number,tokens,roleName,roleBadge,date,compact,compactSpend,planTag,failure});
+  const profiles = createTeamProfiles({action,openModal,$,esc,tr,scope,number,tokens,roleName,roleBadge,date,compact,compactSpend,planTag,failure,subscriptionHead});
   const summaryCell = (label, value) => `<div><dt>${tr(label)}</dt><dd>${value}</dd></div>`;
 
   async function refresh() {
@@ -61,6 +62,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
   function open(back) {
     stopPending();
     if (!current.joined) return pendingAccount ? pending(back, pendingAccount) : join(back);
+    remember(current.base, current.identity?.workspace?.name);
     const member = scope();
     const manage = member.role !== 'member';
     const vps = member.role === 'vps_admin';
@@ -256,19 +258,40 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     }
   }
 
-  // Joining: the team code comes first; a nearby workspace fills in its address automatically.
+  // Members never need to know the workspace address: nearby discovery, a remembered workspace or a pasted
+  // invitation supplies it. Typing it by hand stays available behind the settings button as a last resort.
+  const rememberKey = 'emp.team.workspace';
+  const remembered = () => { try { return JSON.parse(localStorage.getItem(rememberKey)) || {}; } catch { return {}; } };
+  const remember = (base, name) => {
+    if (!base) return;
+    const prior = remembered();
+    try { localStorage.setItem(rememberKey, JSON.stringify({base, name:name || (prior.base === base ? prior.name : '')})); } catch {}
+  };
+  const parseInvitation = text => {
+    const code = text.match(/(?<!\d)\d{7}(?!\d)/)?.[0];
+    const base = text.match(/https?:\/\/[^\s，。、」”)]+/)?.[0];
+    const name = text.match(/[「“]([^」”]{1,80})[」”]/)?.[1];
+    return {code, base, name};
+  };
+
   function join(back, signingIn = false, preset = {}) {
     stopPending();
-    const known = preset.base || current.base || '';
-    const field = (id, label, input, help = '') => `<div class="team-field"><label for="${id}">${label}</label>${input}${help ? `<p class="setting-help">${help}</p>` : ''}</div>`;
+    const saved = remembered();
+    const known = preset.base || current.base || saved.base || '';
+    const knownName = preset.workspace || (known === saved.base ? saved.name : '') || current.identity?.workspace?.name || '';
+    const field = (id, label, input, help = '') => `<div class="team-field"><div class="team-field-label"><label for="${id}">${label}</label>${help ? shadowHelp(help) : ''}</div>${input}</div>`;
+    const iconButton = (id, icon, label, extra = '') => `<button type="button" class="secondary team-icon-button" id="${id}" data-icon="${icon}" title="${esc(label)}" aria-label="${esc(label)}" ${extra}></button>`;
     openModal(tr(signingIn ? 'modules.sign_in' : 'modules.join_workspace'), `<form id="team_login" class="team-form" novalidate>
       ${current.recovery_required ? `<p class="setting-help">${tr('modules.recover_team_services')}</p>` : ''}
       <div class="team-origin">
         <div class="team-origin-head"><span>${tr('modules.workspace')}</span>
-          <span><button type="button" id="team_manual" hidden>${tr('modules.enter_address')}</button><button type="button" id="team_discover">${tr('modules.find_nearby_workspace')}</button></span></div>
+          <span class="team-origin-tools">${iconButton('team_discover','refresh',tr('modules.find_nearby_workspace'))}${iconButton('team_origin_settings','settings',tr('modules.enter_address'),'aria-expanded="false" aria-controls="team_base_field"')}</span></div>
         <div id="team_nearby" class="team-origin-choices"></div>
-        <div id="team_base_field"><input id="team_base" type="url" inputmode="url" placeholder="https://workspace.example.org" value="${esc(known)}" required aria-label="${esc(tr('modules.workspace_url'))}"></div>
         <p id="team_origin_status" class="team-origin-status" role="status" aria-live="polite"></p>
+        <div id="team_base_field" class="team-base-field" hidden>
+          <div class="team-field-label"><label for="team_base">${tr('modules.workspace_url')}</label>${shadowHelp(tr('modules.workspace_url_help'))}</div>
+          <input id="team_base" type="url" inputmode="url" placeholder="https://workspace.example.org" value="${esc(known)}" required>
+        </div>
       </div>
       ${signingIn ? '' : `<div class="team-form-pair">
         ${field('team_join_code',tr('modules.join_code'),'<input id="team_join_code" class="team-code-input" inputmode="numeric" pattern="[0-9]{7}" maxlength="7" autocomplete="one-time-code" placeholder="0000000" required>',tr('modules.join_code_help'))}
@@ -286,25 +309,28 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       const form = $('team_login');
       const invalid = [...form.querySelectorAll('input')].find(input => !input.checkValidity());
       if (invalid) {
-        if (invalid.id === 'team_base') manual();
+        if (invalid.id === 'team_base') manual(true);
         invalid.reportValidity();
         return;
       }
       const account = {base:$('team_base').value.trim(),name:$('team_name').value.trim(),password:$('team_password').value};
       const nickname = signingIn ? preset.nickname : $('team_nickname').value.trim();
+      const workspace = selectedName();
       try {
         if (signingIn) {
           current = await action('login', account);
           pendingAccount = null;
+          remember(account.base, current.identity?.workspace?.name || workspace);
           onChange();
           if (form.isConnected) open(back);
         } else {
           await action('join', {...account,nickname,code:$('team_join_code').value});
-          if (form.isConnected) pending(back, {...account,nickname});
+          remember(account.base, workspace);
+          if (form.isConnected) pending(back, {...account,nickname,workspace});
         }
       } catch (error) {
         if (!form.isConnected) return;
-        if (signingIn && error.payload?.error?.code === 'workspace_join_pending') return pending(back, {...account,nickname});
+        if (signingIn && error.payload?.error?.code === 'workspace_join_pending') return pending(back, {...account,nickname,workspace});
         $('modal_status').textContent = failure(error);
       }
     }, null, {back,reopen:() => join(back, signingIn, preset)});
@@ -314,19 +340,31 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     const choices = $('team_nearby');
     const status = $('team_origin_status');
     const discoverButton = $('team_discover');
-    const manualButton = $('team_manual');
+    const settingsButton = $('team_origin_settings');
     form.onsubmit = event => { event.preventDefault(); $('modal_submit').click(); };
-    $('team_switch_entry').onclick = () => join(back, !signingIn, {base:input.value.trim(),name:$('team_name').value.trim()});
-    function manual() {
-      baseField.hidden = false;
-      manualButton.hidden = true;
-      choices.querySelectorAll('[data-team-origin]').forEach(choice => choice.setAttribute('aria-pressed','false'));
-      status.textContent = '';
+    $('team_switch_entry').onclick = () => join(back, !signingIn, {base:input.value.trim(),workspace:selectedName(),name:$('team_name').value.trim()});
+    function selectedName() {
+      return choices.querySelector('[data-team-origin][aria-pressed=true]')?.dataset.teamName || '';
+    }
+    function manual(open) {
+      baseField.hidden = !open;
+      settingsButton.setAttribute('aria-expanded',String(open));
+      if (open) status.textContent = '';
+    }
+    function render(workspaces, selected) {
+      choices.innerHTML = workspaces.map(({name,base,source}) => `<button type="button" class="team-origin-choice" data-team-origin="${esc(base)}" data-team-name="${esc(name || '')}" aria-pressed="${base === selected}" title="${esc(base)}">
+        <strong>${esc(name || tr('modules.workspace_unnamed'))}</strong><small>${tr('modules.workspace_source_' + source)}</small></button>`).join('');
+      choices.querySelectorAll('[data-team-origin]').forEach(choice => choice.onclick = () => {
+        choose(choice.dataset.teamOrigin);
+        (signingIn ? $('team_name') : $('team_join_code')).focus();
+      });
+    }
+    // Nothing nearby: one short line, with the invitation and manual-address routes behind the help mark.
+    function missing() {
+      status.innerHTML = `<span>${tr('modules.no_nearby_workspace')}</span>${shadowHelp(tr('modules.no_nearby_workspace_auto'))}`;
     }
     function choose(origin) {
       input.value = origin;
-      baseField.hidden = true;
-      manualButton.hidden = false;
       choices.querySelectorAll('[data-team-origin]').forEach(choice => choice.setAttribute('aria-pressed',String(choice.dataset.teamOrigin === origin)));
       status.textContent = '';
     }
@@ -337,39 +375,56 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       try {
         const {workspaces} = await action('discover');
         if (!form.isConnected) return;
-        choices.innerHTML = workspaces.map(({name,base}) => `<button type="button" class="team-origin-choice" data-team-origin="${esc(base)}" aria-pressed="false"><strong>${esc(name)}</strong><small>${esc(base)}</small></button>`).join('');
-        choices.querySelectorAll('[data-team-origin]').forEach(choice => choice.onclick = () => {
-          choose(choice.dataset.teamOrigin);
-          (signingIn ? $('team_name') : $('team_join_code')).focus();
-        });
-        if (workspaces.length && (!automatic || !input.value.trim())) choose(workspaces[0].base);
-        else {
-          baseField.hidden = false;
-          status.textContent = workspaces.length ? '' : tr(automatic ? 'modules.no_nearby_workspace_auto' : 'modules.no_nearby_workspace');
+        if (!workspaces.length) {
+          if (!choices.children.length) missing();
+          else if (automatic) status.textContent = ''; else missing();
+          return;
         }
+        const keep = [...choices.querySelectorAll('[data-team-origin]')].map(choice => ({base:choice.dataset.teamOrigin,name:choice.dataset.teamName,source:'saved'}))
+          .filter(item => !workspaces.some(found => found.base === item.base));
+        render([...workspaces.map(item => ({...item,source:'nearby'})),...keep], input.value.trim());
+        if (!automatic || !input.value.trim()) choose(workspaces[0].base);
+        status.textContent = '';
       } catch (error) {
         if (!form.isConnected) return;
-        baseField.hidden = false;
-        status.textContent = automatic ? tr('modules.no_nearby_workspace_auto') : failure(error);
+        if (choices.children.length && automatic) status.textContent = ''; else if (automatic) missing(); else status.textContent = failure(error);
       } finally {
         delete status.dataset.busy;
         discoverButton.disabled = false;
       }
     }
     discoverButton.onclick = () => discover(false);
-    manualButton.onclick = () => { manual(); input.focus(); };
-    if (!signingIn && !known) {
-      baseField.hidden = true;
-      void discover(true);
-    }
-    (signingIn ? (known ? $('team_name') : input) : $('team_join_code')).focus({preventScroll:true});
+    settingsButton.onclick = () => {
+      const open = baseField.hidden;
+      manual(open);
+      if (open) input.focus();
+    };
+    input.oninput = () => choices.querySelectorAll('[data-team-origin]').forEach(choice => choice.setAttribute('aria-pressed',String(choice.dataset.teamOrigin === input.value.trim())));
+    const code = $('team_join_code');
+    if (code) code.onpaste = event => {
+      const invitation = parseInvitation(event.clipboardData?.getData('text') || '');
+      if (!invitation.code && !invitation.base) return;
+      event.preventDefault();
+      if (invitation.code) code.value = invitation.code;
+      if (invitation.base) {
+        render([{base:invitation.base,name:invitation.name,source:'invite'}], invitation.base);
+        choose(invitation.base);
+        manual(false);
+      }
+      $('team_nickname').focus();
+    };
+    if (known) {
+      render([{base:known,name:knownName,source:'saved'}], known);
+      if (!signingIn) void discover(true);
+    } else void discover(true);
+    (signingIn ? $('team_name') : code).focus({preventScroll:true});
   }
 
   // After a join request the member waits here; approval signs them in without retyping the password.
   function pending(back, account) {
     stopPending();
     pendingAccount = account;
-    const signIn = () => join(back, true, {base:account.base,name:account.name,nickname:account.nickname});
+    const signIn = () => join(back, true, {base:account.base,workspace:account.workspace,name:account.name,nickname:account.nickname});
     openModal(tr('modules.join_workspace'), `<div id="team_pending" class="team-pending" role="status">
       <span class="team-pending-spinner" aria-hidden="true"></span>
       <h3>${tr('modules.waiting_for_approval')}</h3>
@@ -415,8 +470,8 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     const label = native?.quota?.account_label;
     openModal(tr('modules.upload_a_service'), `<div id="team_upload_form" class="team-form">
       <div class="team-upload"><span class="team-role-icon" aria-hidden="true">${roleSvg('member')}</span>
-        <div><strong>Native · Codex</strong> ${planTag(plan)}${label ? `<p class="setting-help">${esc(label)}</p>` : ''}</div></div>
-      <p class="setting-help" style="white-space:normal">${tr(ready ? 'modules.authorized_teammates_can_sync_native' : 'modules.workspace_subscription_sign_in_required')}</p>
+        <div><strong>Native · Codex</strong> ${planTag(plan)} ${shadowHelp(tr('modules.authorized_teammates_can_sync_native'))}${label ? `<p class="setting-help">${esc(label)}</p>` : ''}</div></div>
+      ${ready ? '' : `<p class="team-form-warning">${tr('modules.workspace_subscription_sign_in_required')}</p>`}
       </div>`, tr('modules.upload'), async () => {
         const form = $('team_upload_form');
         try {
@@ -491,10 +546,10 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
   }
 
   function management(home, tab, body, reopen) {
-    openModal(tr('modules.workspace_management'), `<div class="team-tabs" role="tablist" aria-label="${esc(tr('modules.workspace_management'))}">${managementTabs.map(([id,attribute,label]) =>
+    openModal(tr('modules.workspace_management'), `<div class="tabs" role="tablist" aria-label="${esc(tr('modules.workspace_management'))}">${managementTabs.map(([id,attribute,label]) =>
       `<button type="button" role="tab" ${attribute} aria-selected="${id === tab}" tabindex="${id === tab ? 0 : -1}">${esc(tr(label))}</button>`).join('')}</div>
       <div role="tabpanel">${body}</div>`, '', null, null, {back:home,reopen});
-    const tabs = [...$('modal_body').querySelectorAll('.team-tabs [role=tab]')];
+    const tabs = [...$('modal_body').querySelectorAll('.tabs [role=tab]')];
     tabs.forEach((button, index) => {
       const id = managementTabs[index][0];
       button.onclick = () => { if (id !== tab) openManagement(home, id); };
@@ -504,7 +559,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         event.preventDefault();
         const next = managementTabs[(index + step + tabs.length) % tabs.length][0];
         openManagement(home, next);
-        $('modal_body').querySelector(`.team-tabs [${managementTabs.find(([key]) => key === next)[1]}]`)?.focus();
+        $('modal_body').querySelector(`.tabs [${managementTabs.find(([key]) => key === next)[1]}]`)?.focus();
       };
     });
   }
@@ -535,8 +590,8 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
           return;
         }
         members = list;
-        const columns = [tr('modules.member'),tr('modules.daily_usd_limit'),
-          tr('modules.permissions') + ' ' + shadowHelp(tr('modules.member_permissions_help')),tr('modules.account_enabled'),tr('modules.token_spend')];
+        const columns = [tr('modules.member'),tr('modules.daily_usd_limit') + ' ' + shadowHelp(tr('modules.resets_daily_in_utc_budget_alerts')),
+          tr('modules.permissions') + ' ' + shadowHelp(tr('modules.member_permissions_help')),tr('modules.account_enabled') + ' ' + shadowHelp(tr('modules.account_enabled_help')),tr('modules.token_spend')];
         const rows = members.map(member => {
           const name = member.nickname || member.name;
           const editable = member.can_manage && !member.pending;
@@ -565,7 +620,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         }).join('');
         table.innerHTML = `<div class="model-table-wrap"><table class="model-table team-usage-table">
           <thead><tr>${columns.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead>
-          <tbody>${rows}</tbody></table></div><p class="setting-help team-table-note">${tr('modules.resets_daily_in_utc_budget_alerts')}</p>`;
+          <tbody>${rows}</tbody></table></div>`;
       } catch (error) {
         if (table.isConnected && request === generation) {
           if (members) showError(table,error);
@@ -696,7 +751,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     try {
       const {services} = await action('shared_services');
       if (!panel.isConnected) return;
-      panel.innerHTML = services.length ? services.map(service => {
+      panel.innerHTML = services.length ? subscriptionHead('modules.action_column') + services.map(service => {
         const status = esc(tr(service.valid ? 'modules.share_valid' : 'modules.share_invalid'));
         const usable = service.shared || service.available;
         return `<div class="setting-row team-subscription-row">
@@ -759,7 +814,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     button.onclick = async () => {
       if (invite && performance.now() < invite.deadline) {
         try {
-          await navigator.clipboard.writeText(invite.code);
+          await navigator.clipboard.writeText(current.base ? tr('modules.invite_text',{name:current.identity?.workspace?.name || '',code:invite.code,base:current.base}) : invite.code);
           if (button.isConnected) notice(tr('modules.team_code_copied'));
         } catch (error) {
           if (button.isConnected) notice(error.message, true);

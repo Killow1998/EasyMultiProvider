@@ -64,17 +64,22 @@ function createNotifications({$, tr, getLanguage}) {
       body.append(text,time); row.append(symbol,body); list.append(row);
     }
   }
+  // A persistent notice carries actions (copy, approve, decline) and stays until its owner withdraws it;
+  // ordinary notices pass over it briefly and then give the island back.
+  let sticky = null;
   function hide() {
     countdown?.cancel(); entrance?.cancel(); countdown = entrance = null;
     if (island.contains(document.activeElement)) mailbox.focus({preventScroll:true});
     if (island.matches(':popover-open')) island.hidePopover();
-    island.hidden = true; $('status').textContent = ''; currentId = null;
+    island.hidden = true; $('status').textContent = ''; $('notification_actions').replaceChildren(); currentId = null;
   }
+  function restore() { if (sticky && !currentId) display(sticky); }
   function dismiss() {
+    if (sticky && currentId === sticky.id) return;
     items = read();
     const item = items.find(item => item.id === currentId);
     if (item) { item.read = true; save(); refresh(); }
-    hide();
+    hide(); restore();
   }
   function pauseWhenReading() {
     if (!countdown) return;
@@ -82,29 +87,61 @@ function createNotifications({$, tr, getLanguage}) {
     island.dataset.paused = String(paused);
     if (paused) countdown.pause(); else countdown.play();
   }
-  function show(message, error = false) {
+  function display(item) {
     hide();
-    if (!message) return;
-    const item = {id:`${Date.now()}-${Math.random().toString(36).slice(2)}`, message:String(message).slice(0,10000), time:Date.now(), error:Boolean(error), read:isOpen()};
-    items = [...read(),item].slice(-limit); currentId = item.id; save(); refresh();
-    island.dataset.kind = error ? 'error' : 'message';
-    $('notification_symbol').innerHTML = icon(error);
-    $('status').setAttribute('role', error ? 'alert' : 'status');
-    $('status').setAttribute('aria-live', error ? 'assertive' : 'polite');
+    currentId = item.id;
+    island.dataset.kind = item.error ? 'error' : 'message';
+    island.dataset.persist = String(Boolean(item.persist));
+    $('notification_symbol').innerHTML = icon(item.error);
+    $('status').setAttribute('role', item.quiet ? 'none' : item.error ? 'alert' : 'status');
+    $('status').setAttribute('aria-live', item.quiet ? 'off' : item.error ? 'assertive' : 'polite');
+    $('notification_close').hidden = Boolean(item.persist);
+    for (const action of item.actions || []) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.textContent = action.label;
+      button.className = action.primary ? 'notification-action primary' : 'notification-action';
+      for (const [name,value] of Object.entries(action.attributes || {})) button.setAttribute(name, value);
+      button.onclick = () => action.run?.();
+      $('notification_actions').append(button);
+    }
     island.hidden = false; island.showPopover(); $('status').textContent = item.message;
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
       entrance = island.animate([{opacity:0,transform:'translate(-50%, -8px) scale(.97)'},{opacity:1,transform:'translate(-50%, 0) scale(1)'}],{duration:250,easing:'ease-out'});
     }
+    if (item.persist) return;
     // The bar is the timer: pausing it also pauses dismissal, without a second clock.
-    countdown = $('notification_progress').animate([{transform:'scaleX(1)'},{transform:'scaleX(0)'}],{duration:error ? 10000 : 5000,fill:'forwards'});
-    countdown.onfinish = hide;
+    countdown = $('notification_progress').animate([{transform:'scaleX(1)'},{transform:'scaleX(0)'}],{duration:item.error ? 10000 : 5000,fill:'forwards'});
+    countdown.onfinish = () => { hide(); restore(); };
     pauseWhenReading();
   }
+  // `quiet` is for text another live region (the dialog status) already announces.
+  function show(message, error = false, {quiet = false, actions = null, persist = false} = {}) {
+    if (!message) return null;
+    const item = {id:`${Date.now()}-${Math.random().toString(36).slice(2)}`, message:String(message).slice(0,10000), time:Date.now(), error:Boolean(error), read:isOpen()};
+    if (persist) {
+      sticky = {...item, quiet, actions, persist:true};
+      display(sticky);
+      return item.id;
+    }
+    items = [...read(),item].slice(-limit); save(); refresh();
+    display({...item, quiet, actions});
+    return item.id;
+  }
+  function update(id, message) {
+    if (!sticky || sticky.id !== id) return;
+    sticky.message = String(message);
+    if (currentId === id) $('status').textContent = sticky.message;
+  }
+  function withdraw(id) {
+    if (!id) return;
+    if (sticky?.id === id) sticky = null;
+    if (currentId === id) { hide(); restore(); }
+  }
   $('notification_close').onclick = dismiss;
-  $('notification_clear').onclick = () => { items = []; save(); hide(); refresh(); };
+  $('notification_clear').onclick = () => { items = []; save(); if (!sticky || currentId !== sticky.id) { hide(); restore(); } refresh(); };
   inbox.addEventListener('beforetoggle', event => {
     if (event.newState === 'open') {
-      items = read().map(item => ({...item,read:true})); save(); hide(); refresh(); renderHistory();
+      items = read().map(item => ({...item,read:true})); save(); if (!sticky || currentId !== sticky.id) hide(); refresh(); renderHistory();
     }
   });
   inbox.addEventListener('toggle', () => mailbox.setAttribute('aria-expanded',String(isOpen())));
@@ -114,8 +151,8 @@ function createNotifications({$, tr, getLanguage}) {
   for (const event of ['pointerenter','pointerleave','focusin','focusout']) island.addEventListener(event, () => queueMicrotask(pauseWhenReading));
   document.addEventListener('visibilitychange',pauseWhenReading);
   window.addEventListener('blur',pauseWhenReading); window.addEventListener('focus',pauseWhenReading);
-  window.addEventListener('pagehide',hide);
+  window.addEventListener('pagehide',() => { sticky = null; hide(); });
   window.addEventListener('storage', event => { if (event.key === storageKey) { items = read(); refresh(); } });
   items = read(); refresh();
-  return {show,dismiss,refresh,isOpen,remember};
+  return {show,update,withdraw,dismiss,refresh,isOpen,remember};
 }

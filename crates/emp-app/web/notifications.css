@@ -33,3 +33,12 @@
 #notification button:focus-visible{outline-offset:0}
 @media(max-width:650px){#notification{top:10px}#notification_mailbox{right:16px;bottom:16px}#notification_inbox{right:16px;bottom:74px}}
 @media(prefers-reduced-motion:reduce){#notification_mailbox{transition:none}}
+#notification_actions{display:flex;align-items:center;gap:6px;flex:none}
+#notification_actions:empty{display:none}
+#notification .notification-action{height:30px;min-height:30px;margin:0;padding:0 12px;border-radius:999px;border:1px solid var(--border-strong);background:var(--panel);color:var(--text);font-size:13px;font-weight:500;white-space:nowrap}
+#notification .notification-action:hover{background:var(--secondary-hover)}
+#notification .notification-action.primary{border-color:var(--accent);background:var(--accent);color:#fff}
+#notification .notification-action.primary:hover{filter:brightness(1.06)}
+#notification[data-persist=true]{padding-bottom:12px}
+#notification[data-persist=true] .notification-track{display:none}
+#notification_close[hidden]{display:none}

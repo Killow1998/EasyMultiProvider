@@ -524,7 +524,7 @@ def ten_member_demo(admin, vps, member, vps_url, browser, output, keep_available
                              for row in member.team('subscriptions')['subscriptions']),seconds=40)
             browser.execute('document.getElementById("modal_back").click();document.querySelector("[data-team-subscriptions]").click();')
             wait_for(lambda: browser.execute('return document.querySelectorAll(".team-subscription-status[data-valid=false]").length===1;'))
-            assert browser.execute('return !document.querySelector("#team_subscriptions button");')
+            assert browser.execute('return !document.querySelector("#team_subscriptions button:not(.shadow-help)");')
             browser.navigate(admin.url)
             wait_for(lambda: browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
             browser.execute('document.getElementById("team_workspace_open").click();')
@@ -815,7 +815,8 @@ def main():
                     value:{writeText:async text => window.fixtureTeamClipboard=text}});
             """)
             join_browser.execute('document.querySelector(arguments[0]).click();','[data-member-add]')
-            assert join_browser.execute('return window.fixtureTeamClipboard;') == code
+            invitation = wait_for(lambda: join_browser.execute('return window.fixtureTeamClipboard;'))
+            assert code in invitation and workspace in invitation, invitation
             join_browser.execute('const now=performance.now.bind(performance); Object.defineProperty(performance,"now",{value:()=>now()+203000});')
             wait_for(lambda: join_browser.execute('return !document.querySelector(".team-invite-timer");'))
         if args.lan:

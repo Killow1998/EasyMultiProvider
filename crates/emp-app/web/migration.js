@@ -36,8 +36,9 @@ function createMigration() {
       ['choose','tunnel'].includes(candidate.mode)||importing&&!candidate.token?null:()=>candidate.previewError?schedulePreview(candidate):submit(candidate),null,{back:candidate.parent?()=>back(candidate):candidate.back});
     if(savedBody)$('modal_body').append(savedBody);
     const title=candidate.mode==='choose'?'data_migration':candidate.mode==='tunnel'?'lan.tunnel':'transfers.'+candidate.mode;
-    $('modal_title').innerHTML=`<span>${esc(tr(title))}</span>${shadowHelp(mergeRules())}`;
-    const help=$('modal_title').querySelector('.shadow-help');help.dataset.migrationRulesHelp='';help.setAttribute('aria-label',tr("transfers.import_merge_rules"));
+    // The tunnel explains its own steps; every other view explains how imports merge.
+    $('modal_title').innerHTML=`<span>${esc(tr(title))}</span>${shadowHelp(candidate.mode==='tunnel'?tr('lan.help'):mergeRules())}`;
+    const help=$('modal_title').querySelector('.shadow-help');if(candidate.mode!=='tunnel'){help.dataset.migrationRulesHelp='';help.setAttribute('aria-label',tr("transfers.import_merge_rules"));}
     const node=$('shadow_migration');
     node.onclick=event=>{
       if(candidate.committing)return;
