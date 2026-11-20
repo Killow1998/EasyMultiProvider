@@ -125,9 +125,8 @@ run does not establish compatibility with every installed desktop App or IDE
 extension, which requires checking the actual runtime and existing user state.
 
 The **Package** workflow builds on five native runners, merges the outputs,
-checks the exact 28-file manifest and each SHA-256 sidecar with
-`cargo xtask validate-release`, and publishes nine
-user-facing assets:
+checks the exact 68-file manifest and each SHA-256 sidecar with
+`cargo xtask validate-release`, and publishes 29 assets. The core downloads are
 
 - `EMP.exe`
 - `EMP-linux-x86_64.tar.gz`
@@ -138,6 +137,9 @@ user-facing assets:
 - `EMP-linux-arm64-install.sh`
 - `EMP-macos-x86_64.dmg`
 - `EMP-macos-arm64.dmg`
+
+The other 20 assets are the four official modules for the five supported
+platforms.
 
 The release tag must be `v` plus the Cargo workspace version. The workflow
 rejects missing or unexpected artifacts, bad checksums, and an existing tag
