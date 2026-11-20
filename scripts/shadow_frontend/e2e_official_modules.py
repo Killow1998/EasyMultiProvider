@@ -471,7 +471,7 @@ def ten_member_demo(admin, vps, member, vps_url, browser, output, keep_available
             'provider':{'id':'subscription:@native','name':'Native','auth_mode':'codex_subscription'},
             'subscription':auth}}
         status, published = request(vps_url+'/workspace/v1/publish',upload,headers)
-        assert status==200, published
+        assert status==200 and published['review_required'] is True, published
         assert request(vps_url+'/workspace/v1/publish',upload,headers)[1]==published
         vps.team('review_service',{**published,'shared':True})
         if plan=='prolite':
@@ -548,9 +548,8 @@ def ten_member_demo(admin, vps, member, vps_url, browser, output, keep_available
         'subscription':{'account_id':'ning','plan':'prolite','expires_at':new_expiry,
                         'access_token':subscription_token('ning','prolite',new_expiry)}}}
     status, renewed = request(vps_url+'/workspace/v1/publish',update,expired[1])
-    assert status==200 and renewed=={'id':expired[0],'version':2}
-    assert any(row['share']==expired[0] and row['status']=='review' for row in member.team('subscriptions')['subscriptions'])
-    vps.team('review_service',{**renewed,'shared':True})
+    assert status==200 and renewed=={'id':expired[0],'version':2,'review_required':False}
+    assert any(row['share']==expired[0] and row['status']=='available' for row in member.team('subscriptions')['subscriptions'])
     assert member.team('sync')['synced']==1
     roster = member.api('/api/config')['accounts']
     assert len([row for row in roster if row['id']=='team-'+expired[0]])==1
@@ -918,7 +917,7 @@ def main():
             'access_token':access,'refresh_token':'not-shared-refresh-token','id_token':'not-shared-id-token'}}
         admin.auth.write_text(json.dumps(owner_auth))
         published = admin.team('publish')
-        assert published['version']==1
+        assert published['version']==1 and published['review_required'] is True
         assert member.team('sync')['synced']==0
         member.team('shared_services',expected=403)
         review = {'id':published['id'],'version':published['version'],'shared':True}
@@ -1298,10 +1297,11 @@ def main():
         owner_auth['tokens']['access_token'] = subscription_token('synthetic-subscription','pro',owner_expiry)
         fresh_owner.auth.write_text(json.dumps(owner_auth))
         renewed = fresh_owner.team('publish')
-        assert renewed == {'id':published['id'],'version':2}
-        vps.team('review_service',{**renewed,'shared':True})
+        assert renewed == {'id':published['id'],'version':2,'review_required':False}
         assert member.team('sync')['synced'] == 1
-        checks.append('A clean second device can publish a new Native snapshot without losing the existing share ID')
+        assert next(row for row in vps.team('audit')['entries'] if row['kind']=='share_refreshed')['details'] == {
+            'share':published['id'],'version':2,'review_required':False}
+        checks.append('A second device renews the same Native subscription and members sync it without another approval')
 
         stop(admin.process)
         legacy_id = 'team-' + '9'*32
@@ -1335,7 +1335,7 @@ def main():
             except KeyboardInterrupt:
                 pass
             return
-        checks.append('Ten-person workspace exposes three Pro and one Pro Lite, controls profile visibility and records only online PST days; members can remind the owner and sync a renewed, approved version')
+        checks.append('Ten-person workspace exposes three Pro and one Pro Lite, controls profile visibility and records only online PST days; members can remind the owner and sync renewed credentials without another approval')
 
         team_role = vps.team('list_members')['members']
         row = next(row for row in team_role if row['id']==member_id)

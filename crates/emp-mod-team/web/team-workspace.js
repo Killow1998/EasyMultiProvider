@@ -577,10 +577,11 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       </div>`, tr('modules.upload'), async () => {
         const form = $('team_upload_form');
         try {
-          await action('publish');
+          const result = await action('publish');
           if (form.isConnected) {
             home();
-            notice(tr('modules.uploaded_for_review'));
+            // Re-uploading an already approved account only refreshes its credentials, so members keep syncing it.
+            notice(tr(result?.review_required === false ? 'modules.share_refreshed' : 'modules.uploaded_for_review'));
           }
         } catch (error) {
           showError(form,error);
@@ -814,6 +815,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     const labels = {role:tr('modules.role'),publish:tr('modules.upload'),sync:tr('modules.sync'),enabled:tr('modules.account_enabled'),fast:'Fast',ultrafast:'Ultrafast'};
     const description = ({kind,details}) => {
       if (kind === 'share_review') return tr(details.shared ? 'modules.audit_share_started' : 'modules.audit_share_stopped');
+      if (kind === 'share_refreshed') return tr(details.review_required === false ? 'modules.audit_share_refreshed' : 'modules.audit_share_resubmitted');
       if (kind === 'profile_visibility') return tr(details.visible ? 'modules.audit_profiles_visible' : 'modules.audit_profiles_private');
       const label = tr('modules.audit_' + kind);
       if (kind === 'budget') return label + ' · ' + (finite(details.daily_usd_nanos) == null ? tr('modules.no_daily_limit') : money(details.daily_usd_nanos));

@@ -51,29 +51,34 @@ impl Workspace {
             return Err(invalid());
         }
         let tx = self.db.transaction()?;
-        let existing: Option<(String, i64, Vec<u8>)> = tx
+        let existing: Option<(String, i64, Vec<u8>, bool)> = tx
             .query_row(
-                "SELECT id,version,encrypted FROM shares WHERE owner=? AND source=?",
+                "SELECT s.id,s.version,s.encrypted,r.approved_version=s.version
+                 FROM shares s JOIN share_reviews r ON r.share=s.id WHERE s.owner=? AND s.source=?",
                 params![who.member, body.source],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
         let mut plaintext = serde_json::to_vec(&body.payload)?;
-        if let Some((id, version, encrypted)) = &existing
+        let mut same_account = false;
+        if let Some((id, version, encrypted, approved)) = &existing
             && let Ok(previous) = decode_vault(&self.key, encrypted)
         {
             if body.expected_version <= *version && *previous == plaintext {
-                return Ok(json!({"id":id,"version":version}));
+                return Ok(json!({"id":id,"version":version,"review_required":!approved}));
             }
-            let prior: SharePayload = parse(&previous)?;
-            if let (Some(prior), Some(incoming)) = (prior.subscription, &body.payload.subscription)
+            if let Ok(prior) = parse::<SharePayload>(&previous)
+                && let (Some(prior), Some(incoming)) =
+                    (prior.subscription, &body.payload.subscription)
                 && prior.account_id == incoming.account_id
-                && prior.expires_at > incoming.expires_at
             {
-                return Err(Failure(409, "workspace_share_version_conflict"));
+                if prior.expires_at > incoming.expires_at {
+                    return Err(Failure(409, "workspace_share_version_conflict"));
+                }
+                same_account = true;
             }
         }
-        if existing.as_ref().map_or(0, |(_, version, _)| *version) != body.expected_version {
+        if existing.as_ref().map_or(0, |(_, version, _, _)| *version) != body.expected_version {
             return Err(Failure(409, "workspace_share_version_conflict"));
         }
         if plaintext.len() > MAX_BODY / 8 {
@@ -82,11 +87,28 @@ impl Workspace {
         let encrypted = encode_vault(&self.key, &plaintext);
         plaintext.fill(0);
         let version = body.expected_version + 1;
-        let id = if let Some((id, _, _)) = existing {
+        let mut review_required = true;
+        let id = if let Some((id, _, _, approved)) = existing {
             tx.execute(
                 "UPDATE shares SET version=?,encrypted=? WHERE id=?",
                 params![version, encrypted, id],
             )?;
+            if same_account {
+                review_required = !approved;
+                if approved {
+                    tx.execute(
+                        "UPDATE share_reviews SET approved_version=? WHERE share=?",
+                        params![version, id],
+                    )?;
+                }
+                audit::record(
+                    &tx,
+                    who,
+                    Some(&who.member),
+                    "share_refreshed",
+                    json!({"share":id,"version":version,"review_required":review_required}),
+                )?;
+            }
             id
         } else {
             let count: i64 = tx.query_row("SELECT COUNT(*) FROM shares", [], |row| row.get(0))?;
@@ -102,7 +124,7 @@ impl Workspace {
             id
         };
         tx.commit()?;
-        Ok(json!({"id":id,"version":version}))
+        Ok(json!({"id":id,"version":version,"review_required":review_required}))
     }
 
     pub(super) fn shares(&self, who: &Identity) -> Result<Value> {

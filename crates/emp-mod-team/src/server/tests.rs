@@ -48,6 +48,118 @@ fn assert_failure(result: Result<Value>, status: u16, code: &str) {
 }
 
 #[test]
+fn refreshing_a_subscription_carries_only_current_approval_for_the_same_account() {
+    let mut workspace = workspace();
+    for (name, role, publish) in [
+        ("admin", Role::TeamAdmin, false),
+        ("publisher", Role::Member, true),
+        ("reader", Role::Member, false),
+    ] {
+        accounts::create(&workspace.db, name, PASSWORD, role, publish, true).unwrap();
+    }
+    let admin = sign_in(&mut workspace, "admin", PASSWORD).unwrap();
+    let publisher = sign_in(&mut workspace, "publisher", PASSWORD).unwrap();
+    let reader = sign_in(&mut workspace, "reader", PASSWORD).unwrap();
+    let admin = admin["token"].as_str().unwrap();
+    let publisher = publisher["token"].as_str().unwrap();
+    let reader = reader["token"].as_str().unwrap();
+    let source = emp_modules::workspace::NATIVE_SHARE;
+    let expiry = now() + 3600;
+    let publish = |workspace: &mut Workspace, version: i64, account: &str| {
+        post(
+            workspace,
+            "publish",
+            Some(publisher),
+            json!({"source":source,"expected_version":version,"payload":{
+                "provider":{"id":source,"name":"Native","auth_mode":"codex_subscription"},
+                "models":[],"subscription":{"account_id":account,
+                    "access_token":format!("fixture-{version}"),"expires_at":expiry+version}
+            }}),
+        )
+        .unwrap()
+    };
+    let sync = |workspace: &mut Workspace| {
+        workspace
+            .request(&Method::Get, "/workspace/v1/shares", Some(reader), b"")
+            .unwrap()["shares"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let first = publish(&mut workspace, 0, "first-account");
+    let share = &first["id"];
+    let review = |workspace: &mut Workspace, version, shared| {
+        post(
+            workspace,
+            "review-service",
+            Some(admin),
+            json!({"id":share,"version":version,"shared":shared}),
+        )
+        .unwrap()
+    };
+    assert_eq!(first["review_required"], true);
+    assert!(sync(&mut workspace).is_empty());
+    assert_eq!(
+        publish(&mut workspace, 1, "first-account")["review_required"],
+        true
+    );
+    assert!(sync(&mut workspace).is_empty());
+    review(&mut workspace, 2, true);
+    let refreshed = publish(&mut workspace, 2, "first-account");
+    assert_eq!(
+        refreshed,
+        json!({"id":share,"version":3,"review_required":false})
+    );
+    assert_eq!(publish(&mut workspace, 2, "first-account"), refreshed);
+    let synced = sync(&mut workspace);
+    assert_eq!(synced.len(), 1);
+    assert_eq!(synced[0]["version"], 3);
+    assert_eq!(
+        synced[0]["payload"]["subscription"]["access_token"],
+        "fixture-2"
+    );
+    let audit = post(&mut workspace, "audit", Some(admin), json!({})).unwrap();
+    let events = audit["entries"].as_array().unwrap();
+    assert_eq!(events[0]["actor"], "publisher");
+    assert_eq!(events[0]["kind"], "share_refreshed");
+    assert_eq!(
+        events[0]["details"],
+        json!({"share":share,"version":3,"review_required":false})
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|entry| entry["details"]["version"] == 3)
+            .count(),
+        1
+    );
+
+    assert_eq!(
+        publish(&mut workspace, 3, "other-account")["review_required"],
+        true
+    );
+    assert!(sync(&mut workspace).is_empty());
+    review(&mut workspace, 4, true);
+    review(&mut workspace, 4, false);
+    assert_eq!(
+        publish(&mut workspace, 4, "other-account")["review_required"],
+        true
+    );
+    assert!(sync(&mut workspace).is_empty());
+
+    review(&mut workspace, 5, true);
+    workspace
+        .db
+        .execute("UPDATE shares SET encrypted=x'00'", [])
+        .unwrap();
+    assert_eq!(
+        publish(&mut workspace, 5, "other-account")["review_required"],
+        true
+    );
+    assert!(sync(&mut workspace).is_empty());
+}
+
+#[test]
 fn rejecting_enrollment_releases_name_and_preserves_audit() {
     let mut workspace = workspace();
     let admin = accounts::create(
