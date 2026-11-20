@@ -62,6 +62,16 @@ def main():
         assert all(path.read_bytes() == content for path, content in before)
         checks.append('Viewing tutorials does not change stored configuration')
 
+        team_ids = ['team_overview','team_share','team_approve','team_members']
+        assert not set(team_ids) & set(ids), ids
+        browser.execute('closeModal();tutorials.setTeam(true);tutorials.open();document.querySelector("[data-tutorial=team_approve]").click();')
+        assert browser.execute('return [...document.querySelectorAll("[data-tutorial]")].map(button=>button.dataset.tutorial).slice(-4);') == team_ids
+        assert browser.execute('return document.getElementById("tutorial_full_size").getAttribute("href");') == '/assets/tutorial-11-team-approve.gif'
+        browser.execute('closeModal();tutorials.setTeam(false);tutorials.open();')
+        assert not browser.execute('return document.querySelector("[data-tutorial^=team_]");')
+        assert browser.execute('return document.querySelector("[data-tutorial][aria-pressed=true]").dataset.tutorial;') == 'native_context'
+        checks.append('Team workspace lessons appear only while a team is joined and fall back cleanly after leaving')
+
         for lang, width, height, theme in [('zh-CN',1440,1000,'light'),('en',1280,900,'dark'),('zh-CN',1280,600,'light'),('zh-CN',560,800,'light')]:
             request(browser.base+'/window/rect', {'width':width,'height':height})
             browser.execute('closeModal();setLanguage(arguments[0]);setTheme(arguments[1]);tutorials.open();', lang, theme)

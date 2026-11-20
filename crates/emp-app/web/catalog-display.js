@@ -165,7 +165,7 @@ function createCatalogDisplay({getState, $, tr, t, esc, api, notice, cloneState,
     const group = getState().catalog_families.find(item => item.id === family); if (!group) return;
     const presentation = familyPresentationFor(family);
     const routes = [...new Set(group.routes.flatMap(catalogSourceLabels))].join(' · ');
-    openModal(tr("core.edit_model_display"), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr("core.display_name"))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><p class="muted">${esc(tr("core.the_new_name_takes_effect_immediately_after_saving"))}</p>`, tr("core.done"), async () => {
+    openModal(tr("core.edit_model_display"), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr("core.display_name"))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label>`, tr("core.done"), async () => {
       const owner = $('modal_body').firstElementChild;
       const candidate = cloneState();
       const current = familyPresentationFor(family);

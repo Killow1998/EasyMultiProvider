@@ -146,6 +146,8 @@ html[data-input-modality=pointer] body :is(button,a.repo-link):focus-visible{out
 .presentation-service-error{position:fixed;z-index:1100;width:320px;max-width:calc(100vw - 16px);max-height:min(240px,calc(100vh - 16px));overflow:auto;padding:10px 12px;border:1px solid var(--danger);border-radius:8px;background:var(--panel);color:var(--text);box-shadow:0 5px 20px #0003;font-size:12px;line-height:1.5;overflow-wrap:anywhere;white-space:pre-wrap}
 .presentation-service-error>strong{display:block;color:var(--danger-text);font-size:12px;margin-bottom:4px}
 .presentation-service-error>span{display:block}
+.presentation-service-icon[data-error-severity=warning] .presentation-service-error-badge{background:var(--warning);color:var(--panel)}
+.presentation-service-error[data-severity=warning]>strong{color:var(--warning)}
 
 .presentation-error-demo{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:1200;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 24px);padding:8px 12px;border:1px solid var(--border-strong);border-radius:8px;background:var(--panel);color:var(--text);box-shadow:0 4px 16px #0002;font-size:12px;white-space:nowrap}
 .presentation-error-demo button{height:30px;min-height:30px;font-size:12px}
@@ -153,8 +155,9 @@ html[data-input-modality=pointer] body :is(button,a.repo-link):focus-visible{out
 .presentation-logo-shell{position:relative;display:inline-flex;vertical-align:middle}
 .presentation-logo-wave{position:absolute;inset:0;overflow:hidden;mask:var(--logo-mask) center/100% 100% no-repeat;pointer-events:none;display:none}
 .presentation-logo-shell:has(.emp-live) .presentation-logo-wave{display:block}
-.presentation-logo-wave>span{position:absolute;inset:0;width:300%;left:-100%;background:linear-gradient(90deg,transparent 0%,#22c76a 25%,transparent 50%,#22c76a 75%,transparent 100%)}
-.presentation-logo-shell .dot-logo.emp-live circle.on{animation:none;fill:var(--muted);opacity:.5}
+.presentation-logo-wave>span{position:absolute;inset:0;width:300%;left:-100%;background:linear-gradient(90deg,transparent 0%,#b8ffd3 25%,transparent 50%,#b8ffd3 75%,transparent 100%);opacity:.75}
+.presentation-logo-shell .dot-logo.emp-live circle.on{animation:none;fill:#22c76a;opacity:.92}
+.presentation-logo-shell:has(.emp-live){filter:drop-shadow(0 0 3px color-mix(in srgb,#22c76a 45%,transparent))}
 
 .presentation-motion-paused *, .presentation-motion-paused::before,.presentation-motion-paused *::before,.presentation-motion-paused *::after,
 .presentation-page-hidden .presentation-logo-wave>span,.presentation-page-hidden :is(.service-card,.model-card,.display-row) *,.presentation-page-hidden :is(.service-card,.model-card,.display-row) *::before,.presentation-page-hidden :is(.service-card,.model-card,.display-row) *::after{animation-play-state:paused!important}
@@ -166,4 +169,3 @@ html[data-input-modality=pointer] body :is(button,a.repo-link):focus-visible{out
 .presentation-service-icon[data-error-message]>.presentation-activity-halo{display:none}
 .presentation-service-icon[data-error-message]::before{box-shadow:0 0 0 2px color-mix(in srgb,var(--danger) 50%,transparent),0 0 9px color-mix(in srgb,var(--danger) 28%,transparent)}
 /* The published top-bar rule used 3px above / 7px below the text. */
-.page-header-controls .header-preference select{padding-top:5px;padding-bottom:5px;line-height:18px}

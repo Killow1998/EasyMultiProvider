@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+## 0.15.0 (2026-11-19)
+
+### 中文
+
+- Decision API、多设备网关、聚合路由和团队空间可按需安装和卸载。内置版通过应用内更新切换到分包时，先校验原有模块再确认升级。
+- 团队空间仅同步经审批的 Native Codex 订阅。退出团队或卸载团队模组时清除本机共享凭据，保留个人登录和用量记录。
+- 共享订阅按持有者显示 VPS 上的快照及有效期。同一 Native 会跳过导入，单机副本失效可重新同步。VPS 快照到期后可提醒持有者更新。
+- 成员资料显示团队成立、加入日期、累计 Token、费用和近 30 天的 PST 活动。管理员可决定成员能否查看其他人的用量。
+- 团队空间与服务迁移使用独立入口。普通成员加入后，导入、导出和隧道只对管理员开放。管理员按需生成七位团队码，3 分 22 秒内可复制并用于提交申请，再按昵称审批。
+- 修复个人凭据保留、团队路由和 Decision 撤权、同级管理员预算权限、长模型名补报、换机续传及内置版回滚后重试升级。
+- 团队管理表并排显示每日 USD 上限、倍速与重置许可。悬停或聚焦 Token 数字可查看所选时间区间的模型用量。成员可查看共享订阅的重置次数和到期日，管理员可执行重置。
+- 成员用量接近和达到每日上限时，由 EMP 后台发出系统通知，并在 WebUI 通知中心保留记录。
+- 「添加服务」可直接连接个人 OpenAI 生图赠金项目。支持本机预算按月重置和赠金到期时间。赠金在派发前不可用时，Codex 生图可使用合适的订阅账号。
+- 跨服务子代理保留打开和关闭。默认打开，原先显式关闭的设置继续生效。
+- 在服务气泡中以黄色显示仍在重试或等待历史补发的调用，终止失败保留红色提示。
+- Codex 维护窗口推进到 0.166–0.170。检测到低于 0.166 的引擎时，WebUI 左上角显示更新入口。
+- 管理员可在顶部提示中直接同意或拒绝加入申请。多条申请合并显示，处理后其余条目位置不变。成员表也可拒绝申请。
+- 管理员的团队首页同时显示团队总用量和自己的用量。
+- 同一账号重新上传共享订阅时只更新凭据，已批准的订阅无需再次审核，成员可继续同步。更换账号仍需审核。
+- 同一成员或管理员可在多台设备登录和同步，团队账本合并各台设备的用量。退出本机保持其他设备登录，管理员可在成员管理中移交权限。团队状态文件损坏或缺失后可重新登录并同步。
+- 保留个人迁移备份中与团队共享 ID 格式相同的服务。用量上报经 VPS 确认后才移出本机待报队列。
+- Vertex AI API Key 模式从每日更新的 LiteLLM 目录获取候选模型，再用 Token 计数接口确认这把 Key 可用的模型。Google 发布新模型后无需等待 EMP 更新。
+- 统一团队空间、模组和迁移对话框的样式，提示统一显示在顶部。窄窗口下顶栏按钮收起为图标。EMP 标志改为一整块连续点阵。
+- 教程新增团队空间、共享订阅、审批和成员管理四节动画，仅在加入团队后显示。导入、导出和隧道动画已按新流程重录。
+- Native 非流式响应在无需修改工具内容时原样转发。减少长请求的协议转换开销与团队 WebUI 启动时的重复请求。
+
+### English
+
+- Install and uninstall Decision API, Device Gateway, Aggregate Routing and Team Workspace separately. In-app upgrades from the bundled release validate modules before confirming the upgrade.
+- Team Workspace syncs approved Native Codex subscriptions. Signing out or uninstalling removes synced workspace credentials from the device and keeps personal sign-ins and usage history.
+- View shared subscriptions by owner and VPS credential expiry. Sync restores a stale local copy and skips any account already used by Native. Remind an owner when a VPS snapshot expires.
+- Member profiles show membership dates, lifetime tokens and cost, and 30 days of PST activity. Administrators control whether members can view each other's usage.
+- Team Workspace and Service Migration have separate entries. Team administrators retain import, export and tunnel access. Administrators issue a copyable seven-digit invitation that lasts 3 minutes and 22 seconds and approve requests by nickname.
+- Fix personal credential preservation, team routing and Decision permissions, peer administrator budgets, usage uploads with long model names, sharing from a replacement device, and bundled upgrades after a rollback.
+- The team management table shows daily USD limits, speed permissions and reset eligibility. Hover over or focus the token total to inspect models in the selected period. Members can view shared reset credits and expiries. Administrators can use them.
+- EMP sends a desktop notice when a member approaches or reaches their daily budget and keeps it in the WebUI notification center.
+- Set up personal OpenAI image credits from Add Service, with an optional monthly local budget and a credit expiry date. Codex image tools can select an eligible subscription if credits are unavailable before dispatch.
+- Cross-service subagents default to on. An explicit off setting stays off.
+- Show retrying and history recovery in yellow in service bubbles. Failed requests retain their red status.
+- Move the Codex maintenance window to 0.166–0.170. The WebUI header links to Codex updates when the detected runtime is older than 0.166.
+- Administrators can approve or decline join requests directly from the top notice. Multiple requests are grouped, and the remaining rows stay in place after one is handled. The member table can also decline requests.
+- The administrator's team home shows both team usage and their own usage.
+- Re-uploading the same shared subscription account refreshes its credentials without another review, so teammates keep syncing. A different account still requires review.
+- Members and administrators can sign in and sync on multiple devices. The workspace combines their usage across devices. Signing out affects the current device, and administrators can transfer their role from member management. Sign in and sync again to recover a damaged or missing workspace state file.
+- Keep personal services in migration backups even when their IDs match the shape of a workspace share ID. Keep pending usage reports on the device until the VPS acknowledges them.
+- Vertex AI API-key mode takes candidate models from the daily LiteLLM catalog and confirms which ones the key can use with the token-count endpoint, so new Google models no longer wait for an EMP release.
+- Team Workspace, module and migration dialogs share one style, and notices appear at the top. Header buttons collapse to icons in narrow windows. The EMP logo is drawn as one continuous dot matrix.
+- Tutorials add four Team Workspace lessons (overview, sharing, approvals and members) that appear only after joining a team. The import, export and tunnel animations are re-recorded for the new flows.
+- Forward non-streaming Native responses unchanged when tool content needs no conversion. Reduce protocol conversion overhead on long requests and duplicate requests when opening the team WebUI.
+
 ## 0.14.3 (2026-11-18)
 
 ### 中文

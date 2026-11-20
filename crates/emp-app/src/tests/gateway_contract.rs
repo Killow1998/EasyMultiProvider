@@ -14,9 +14,10 @@ fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_ident
     let issued = value(&post(
         &server,
         "/api/gateway/clients",
-        br#"{"name":"Test PC"}"#,
+        br#"{"name":" Test PC "}"#,
         &[&session_header(&server)],
     ));
+    assert_eq!(issued["name"], "Test PC");
     let key = issued["api_key"].as_str().unwrap();
     let id = issued["id"].as_str().unwrap();
     let persisted = std::fs::read(&path).unwrap();
@@ -48,7 +49,7 @@ fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_ident
             .state
             .backend
             .gateway_clients
-            .identify(key)
+            .identify(key, &server.state.backend.modules)
             .unwrap()
             .id,
         id
@@ -70,7 +71,7 @@ fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_ident
             .state
             .backend
             .gateway_clients
-            .identify(key)
+            .identify(key, &server.state.backend.modules)
             .unwrap()
             .id,
         id
@@ -82,15 +83,23 @@ fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_ident
         &[&session_header(&server)],
     ));
     assert_eq!(replaced["id"], id);
+    assert_eq!(replaced["name"], "Test PC");
     let replacement = replaced["api_key"].as_str().unwrap();
     assert_ne!(key, replacement);
-    assert!(server.state.backend.gateway_clients.identify(key).is_none());
+    assert!(
+        server
+            .state
+            .backend
+            .gateway_clients
+            .identify(key, &server.state.backend.modules)
+            .is_none()
+    );
     assert_eq!(
         server
             .state
             .backend
             .gateway_clients
-            .identify(replacement)
+            .identify(replacement, &server.state.backend.modules)
             .unwrap()
             .id,
         id
@@ -98,37 +107,51 @@ fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_ident
     server.shutdown().unwrap();
     let server =
         ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();
-    assert_eq!(
-        value(&request(
-            &server,
-            "/api/gateway/clients",
-            &[&session_header(&server)]
-        ))["clients"][0]["api_key"],
-        replacement
-    );
-    server
-        .state
-        .backend
-        .gateway_clients
-        .remove(id, &server.state.backend.configuration.vault)
+    let management = session_header(&server);
+    let listed = value(&request(&server, "/api/gateway/clients", &[&management]));
+    assert_eq!(listed["clients"][0]["api_key"], replacement);
+    assert_eq!(listed["clients"][0]["created_at"], 1.0);
+
+    let timeout = Duration::from_secs(5);
+    let mut websocket = emp_transport::ClientWebSocket::connect(
+        &format!("ws://{}/v1/responses", server.local_addr()),
+        &BTreeMap::from([("Authorization".into(), format!("Bearer {replacement}"))]),
+        timeout,
+    )
+    .unwrap();
+    websocket
+        .readiness_stream()
+        .unwrap()
+        .set_read_timeout(Some(timeout))
         .unwrap();
+    let body = json!({"id":id}).to_string();
+    let mut removal = TcpStream::connect(server.local_addr()).unwrap();
+    write!(
+        removal,
+        "DELETE /api/gateway/clients HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{management}\r\nConnection: close\r\n\r\n{body}",
+        server.local_addr(),
+        body.len(),
+    )
+    .unwrap();
+    assert_eq!(value(&complete_response(&mut removal)), json!({"ok":true}));
+    websocket
+        .send_json(&json!({"type":"response.create","model":"missing"}))
+        .unwrap();
+    assert_eq!(
+        websocket.poll_receive_text().unwrap(),
+        emp_transport::WebSocketPoll::Closed { code: Some(1008) }
+    );
     assert!(
         server
             .state
             .backend
             .gateway_clients
-            .identify(replacement)
+            .identify(replacement, &server.state.backend.modules)
             .is_none()
     );
-    assert!(
-        server
-            .state
-            .backend
-            .gateway_clients
-            .list()
-            .as_array()
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        value(&request(&server, "/api/gateway/clients", &[&management]))["clients"],
+        json!([])
     );
     server.shutdown().unwrap();
 }
@@ -258,7 +281,15 @@ fn jev_decisions_forward_the_body_and_provider_key_without_entering_the_model_ca
     })).unwrap()).unwrap();
     let server =
         ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();
-    let key = &server.state.backend.gateway_key;
+    let issued = post(
+        &server,
+        "/api/gateway/clients",
+        br#"{"name":"Decision test"}"#,
+        &[&session_header(&server)],
+    );
+    assert!(issued.starts_with("HTTP/1.1 200"), "{issued}");
+    let issued: Value = serde_json::from_str(issued.split_once("\r\n\r\n").unwrap().1).unwrap();
+    let key = issued["api_key"].as_str().unwrap();
     let authorization = format!("Authorization: Bearer {key}");
     let headers = [
         &authorization[..],

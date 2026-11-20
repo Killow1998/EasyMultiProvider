@@ -1,0 +1,15 @@
+[package]
+name = "emp-mod-decision"
+version = "0.10.0-beta"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "empmod-decision"
+path = "src/main.rs"
+
+[dependencies]
+emp-modules = { path = "../emp-modules" }
+serde_json.workspace = true
+url = "2.5.7"

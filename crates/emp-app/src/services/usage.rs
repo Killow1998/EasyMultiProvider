@@ -6,7 +6,7 @@ use crate::util::system_now;
 use emp_codex::usage_history::UsageHistoryScanner;
 use emp_state::usage::{
     ledger::UsageLedger,
-    pricing::{PRICE_INTERVAL, PRICE_URL, PriceCatalog, normalize_prices},
+    pricing::{PRICE_INTERVAL, PRICE_URL, PriceCatalog},
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -260,22 +260,17 @@ fn fetch_prices(state: &ServerState) -> Result<usize, &'static str> {
                 return Err("upstream_rejected");
             }
             let raw = response.read_limited(16 * 1024 * 1024).await.map_err(|_| "read_failed")?;
-            normalize_prices(&serde_json::from_slice::<Value>(&raw).map_err(|_| "invalid_json")?).map_err(|_| "invalid_prices")
+            serde_json::from_slice::<Value>(&raw).map_err(|_| "invalid_json")
         };
         tokio::select! {
             result=tokio::time::timeout(Duration::from_secs(20),operation)=>result.map_err(|_| "timeout")?,
             _=state.wait_for_shutdown()=>Err("cancelled"),
         }
     });
-    let prices = fetched?;
-    let now = system_now();
-    let catalog = &state.backend.usage.ledger.prices;
-    emp_state::filesystem::atomic_write_private_state(
-        catalog.path(),
-        &serde_json::to_vec(&json!({"prices":prices,"fetched_at":now})).expect("price JSON"),
-    )
-    .map_err(|_| "storage_error")?;
-    let count = prices.as_object().map_or(0, |prices| prices.len());
-    catalog.replace(prices, now);
-    Ok(count)
+    state
+        .backend
+        .usage
+        .ledger
+        .prices
+        .save_litellm_snapshot(&fetched?, system_now())
 }

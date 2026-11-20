@@ -74,6 +74,8 @@ impl ServerState {
 }
 
 pub(crate) struct BackendState {
+    pub(crate) modules: Arc<crate::services::modules::Modules>,
+    pub(crate) team: crate::services::team::TeamState,
     pub(crate) gateway_key: String,
     pub(crate) gateway_clients: crate::services::gateway_clients::GatewayClients,
     pub(crate) claude_turns: crate::services::claude_cli::tui::TurnPool,
@@ -99,7 +101,6 @@ pub(crate) struct BackendState {
 }
 
 pub(crate) struct TransportState {
-    pub(crate) collaboration: crate::services::collaboration::CollaborationState,
     pub(crate) client: Arc<HttpClient>,
     pub(crate) support_network: crate::services::network_evidence::NetworkSnapshot,
     pub(crate) runtime: Runtime,
@@ -116,6 +117,7 @@ impl BackendState {
         native_auth_path: PathBuf,
         http_client_override: Option<HttpClient>,
         diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+        updating: crate::services::modules::Startup,
     ) -> Result<Self, AppError> {
         crate::startup_recovery::check_pending(config_path)?;
         let mut config = load_configuration(Some(config_path))?;
@@ -177,12 +179,30 @@ impl BackendState {
         .with_lock_path(codex_home.join("easy-multi-provider/integration/lease.lock"));
         let management_events =
             Arc::new(crate::services::management_events::ManagementEvents::default());
+        let mut modules =
+            crate::services::modules::Modules::open(state_root.join("modules"), updating)
+                .map_err(std::io::Error::other)?;
+        let gateway_path = state_root.join("gateway-clients.json");
+        let gateway_clients = match crate::services::gateway_clients::GatewayClients::open(
+            gateway_path.clone(),
+            &vault,
+        ) {
+            Ok(clients) => clients,
+            Err(AppError::Filesystem(emp_state::FilesystemError::InvalidJson)) => {
+                modules.mark_unavailable(emp_modules::Module::Gateway, "invalid_gateway_clients");
+                crate::services::gateway_clients::GatewayClients::empty(gateway_path)
+            }
+            Err(error) => return Err(error),
+        };
         Ok(Self {
-            gateway_key: emp_state::gateway_key::load_or_create(&state_root.join("gateway-key"))?,
-            gateway_clients: crate::services::gateway_clients::GatewayClients::open(
-                state_root.join("gateway-clients.json"),
+            modules: Arc::new(modules),
+            team: crate::services::team::TeamState::open(
+                state_root.join("team-profile.json"),
                 &vault,
-            )?,
+                &config,
+            ),
+            gateway_key: emp_state::gateway_key::load_or_create(&state_root.join("gateway-key"))?,
+            gateway_clients,
             claude_turns: Default::default(),
             usage: crate::services::usage::UsageState::new(
                 &state_root,
@@ -191,7 +211,6 @@ impl BackendState {
             diagnostics,
             configuration: ConfigurationState::new(config, config_path.to_path_buf(), vault),
             transport: TransportState {
-                collaboration: Default::default(),
                 client: Arc::new(client),
                 support_network,
                 runtime,

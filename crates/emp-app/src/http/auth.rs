@@ -297,7 +297,7 @@ pub(crate) fn valid_caller_authorization(value: Option<&str>, auth_path: &Path) 
 
 pub(crate) fn proxy_allowed(request: Request<'_>, state: &ServerState, now: f64) -> bool {
     request.source.map_or_else(
-        || proxy_identity(request, state, now).is_some(),
+        || proxy_identity(request, state, now, None).is_some(),
         |source| source.caller.is_some(),
     )
 }
@@ -306,6 +306,7 @@ pub(crate) fn proxy_identity(
     request: Request<'_>,
     state: &ServerState,
     now: f64,
+    peer: Option<std::net::IpAddr>,
 ) -> Option<crate::services::gateway_clients::Caller> {
     use crate::services::gateway_clients::Caller;
     if request.header_count("Authorization") > 1 {
@@ -314,16 +315,21 @@ pub(crate) fn proxy_identity(
     let token = request
         .header("Authorization")
         .and_then(|value| value.strip_prefix("Bearer "));
-    let gateway = token.and_then(|value| {
-        if constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes()) {
-            Some(Caller {
-                id: "shared".into(),
-                name: String::new(),
-            })
-        } else {
-            state.backend.gateway_clients.identify(value)
-        }
-    });
+    let gateway = token
+        .filter(|_| state.backend.modules.active(emp_modules::Module::Gateway))
+        .and_then(|value| {
+            if constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes()) {
+                Some(Caller {
+                    id: "shared".into(),
+                    name: String::new(),
+                })
+            } else {
+                state
+                    .backend
+                    .gateway_clients
+                    .identify(value, &state.backend.modules)
+            }
+        });
     // Forwarded API clients have their own Host/port. Browser management remains
     // origin-scoped and never accepts this credential in place of its session.
     if gateway.is_some() && request.header("Origin").is_none() {
@@ -336,7 +342,24 @@ pub(crate) fn proxy_identity(
     if gateway.is_some() {
         return gateway;
     }
-    (state.sessions.contains(supplied_session.as_deref(), now)
+    let local_decision = matches!(request.raw_path(), "/v1/decisions" | "/v1/systemone")
+        && state.backend.modules.active(emp_modules::Module::Decision)
+        && token.is_some_and(|value| {
+            constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes())
+        });
+    let local_image = request.method == super::request::RequestMethod::Post
+        && matches!(
+            request.raw_path(),
+            "/v1/images/generations" | "/v1/images/edits"
+        )
+        && peer.is_some_and(|peer| peer.is_loopback())
+        && request.header("Origin").is_none()
+        && token.is_some_and(|value| {
+            constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes())
+        });
+    (local_decision
+        || local_image
+        || state.sessions.contains(supplied_session.as_deref(), now)
         || valid_caller_authorization(
             request.header("Authorization"),
             &state.backend.accounts.native_auth_path,

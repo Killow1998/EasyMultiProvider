@@ -1,15 +1,19 @@
 // Static glyph mask + one moving green layer, rather than a fill animation per dot.
 function enhanceLogo(svg) {
-  if (!svg?.childElementCount || svg.parentElement.classList.contains('presentation-logo-shell')) return;
+  if (!svg?.childElementCount) return;
   const mask=svg.cloneNode(true); mask.removeAttribute('id'); mask.removeAttribute('class');
   mask.setAttribute('xmlns','http://www.w3.org/2000/svg');
   for (const dot of [...mask.children]) {
     if (!dot.hasAttribute('data-lit')) dot.remove();
     else {dot.removeAttribute('class');dot.removeAttribute('style');dot.setAttribute('fill','white');}
   }
+  const image=`url("data:image/svg+xml,${encodeURIComponent(mask.outerHTML)}")`;
+  // A redrawn wordmark (EMP ↔ EMPT) keeps its shell and only refreshes the mask.
+  const existing=svg.parentElement.classList.contains('presentation-logo-shell')&&svg.parentElement.querySelector('.presentation-logo-wave');
+  if(existing){existing.style.setProperty('--logo-mask',image);return;}
   const shell=document.createElement('span'); shell.className='presentation-logo-shell';
   const wave=document.createElement('span'); wave.className='presentation-logo-wave'; wave.setAttribute('aria-hidden','true');
-  wave.style.setProperty('--logo-mask',`url("data:image/svg+xml,${encodeURIComponent(mask.outerHTML)}")`);
+  wave.style.setProperty('--logo-mask',image);
   const color=document.createElement('span');color.dataset.presentationMotion='logo';wave.append(color);
   svg.replaceWith(shell); shell.append(svg,wave);
 }

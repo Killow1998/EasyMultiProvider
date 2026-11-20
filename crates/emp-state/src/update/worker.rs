@@ -19,6 +19,8 @@ pub struct Plan {
     pub args: Vec<String>,
     pub version: String,
     pub nonce: String,
+    #[serde(default)]
+    pub modules_prepared: bool,
 }
 fn load(path: &Path) -> Result<Plan> {
     if path.is_symlink() || fs::metadata(path)?.len() > 1024 * 1024 {
@@ -221,26 +223,7 @@ pub fn mark_ready(version: &str, marker: Option<PathBuf>) -> Result<()> {
     mark_ready_for_executable(version, marker, &std::env::current_exe()?)
 }
 fn mark_ready_for_executable(version: &str, marker: PathBuf, executable: &Path) -> Result<()> {
-    let ready = marker;
-    let job = ready
-        .parent()
-        .ok_or(UpdateError("invalid_update_plan"))?
-        .canonicalize()?;
-    let plan = load(&job.join("plan.json"))?;
-    let (target, _) = installation_target(executable)?;
-    let target_parent = target
-        .parent()
-        .ok_or(UpdateError("invalid_update_plan"))?
-        .canonicalize()?;
-    if ready.file_name().is_none_or(|name| name != "ready.json")
-        || plan.target.canonicalize()? != target.canonicalize()?
-        || job.parent() != Some(target_parent.as_path())
-        || !job
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().starts_with(".emp-update-"))
-    {
-        return Err(UpdateError("invalid_update_plan"));
-    }
+    let (job, plan) = startup_plan(version, &marker, executable)?;
     write(
         &job.join("ready.json"),
         &json!({"version":version,"nonce":plan.nonce}),
@@ -256,6 +239,34 @@ fn mark_ready_for_executable(version: &str, marker: PathBuf, executable: &Path) 
             }
         })?;
     Ok(())
+}
+
+pub fn validate_startup_marker(version: &str, marker: &Path) -> Result<bool> {
+    startup_plan(version, marker, &std::env::current_exe()?).map(|(_, plan)| plan.modules_prepared)
+}
+
+fn startup_plan(version: &str, ready: &Path, executable: &Path) -> Result<(PathBuf, Plan)> {
+    let job = ready
+        .parent()
+        .ok_or(UpdateError("invalid_update_plan"))?
+        .canonicalize()?;
+    let plan = load(&job.join("plan.json"))?;
+    let (target, _) = installation_target(executable)?;
+    let target_parent = target
+        .parent()
+        .ok_or(UpdateError("invalid_update_plan"))?
+        .canonicalize()?;
+    if version != plan.version
+        || ready.file_name().is_none_or(|name| name != "ready.json")
+        || plan.target.canonicalize()? != target.canonicalize()?
+        || job.parent() != Some(target_parent.as_path())
+        || !job
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(".emp-update-"))
+    {
+        return Err(UpdateError("invalid_update_plan"));
+    }
+    Ok((job, plan))
 }
 
 #[cfg(all(test, windows))]

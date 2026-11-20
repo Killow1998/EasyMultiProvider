@@ -30,6 +30,21 @@ pub(crate) fn management_migration_request(
     else {
         return unauthorized_response();
     };
+    if let Err(crate::services::team::Failure(status, code)) =
+        state.backend.team.check_migration(state)
+    {
+        return json_error_response(
+            status,
+            status_text(status),
+            if code == "workspace_migration_permission_required" {
+                "Service migration requires a team administrator"
+            } else {
+                "Could not confirm team permissions for service migration"
+            },
+            Some(&code),
+            &[],
+        );
+    }
     let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,
         Err(error) => return body_error_response(error),

@@ -215,7 +215,6 @@ impl NativeStream {
         self.observation.observe(&event, original_frame.is_some());
         let mut projected =
             rewrite_native_model_event(&event, &self.requested_model, &self.upstream_model);
-        let event_changed = normalized || projected != event;
         if self.plaintext_collaboration {
             projected = restore_collaboration(&projected).map_err(|error| match error {
                 CollaborationError::UnexpectedEncryptedArguments => native_stream_error(
@@ -262,7 +261,7 @@ impl NativeStream {
             self.response.take();
             self.generated.take();
         }
-        let frame = if !event_changed && !self.plaintext_collaboration {
+        let frame = if !normalized && projected == event {
             match original_frame {
                 Some(frame) => frame,
                 None => native_sse_frame(&event_type, &projected)?,

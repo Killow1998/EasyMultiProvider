@@ -1,6 +1,116 @@
 use super::*;
 
 impl UpdateManager {
+    pub fn download_official_module(
+        &self,
+        channel: &str,
+        core_version: &str,
+        asset_name: &str,
+        destination: &Path,
+    ) -> Result<(String, Option<String>)> {
+        use super::super::release::{module_asset, module_version};
+        let mut url = Url::parse(&self.0.endpoints.release_api_url)
+            .map_err(|_| UpdateError("invalid_download_url"))?;
+        let query: Vec<_> = url
+            .query_pairs()
+            .into_owned()
+            .filter(|(key, _)| key != "page")
+            .collect();
+        let mut page = 1;
+        let mut best: Option<(Asset, String)> = None;
+        loop {
+            let response = self.get(
+                url.as_str(),
+                "application/vnd.github+json",
+                Duration::from_secs(25),
+                "check_release",
+                None,
+            )?;
+            if response.status() == reqwest::StatusCode::NOT_FOUND && page == 1 {
+                break;
+            }
+            if !response.status().is_success() {
+                return Err(UpdateError("check_failed"));
+            }
+            let has_next = response
+                .headers()
+                .get(reqwest::header::LINK)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|links| {
+                    links
+                        .split(',')
+                        .any(|link| link.trim_end().ends_with("; rel=\"next\""))
+                });
+            let mut raw = Vec::new();
+            response
+                .take(MAX_RELEASE_BYTES as u64 + 1)
+                .read_to_end(&mut raw)?;
+            if raw.len() > MAX_RELEASE_BYTES {
+                return Err(UpdateError("invalid_release"));
+            }
+            if let Some((asset, version)) =
+                module_asset(&raw, asset_name, channel, &self.0.endpoints)?
+                && best
+                    .as_ref()
+                    .is_none_or(|(_, current)| module_version(&version) > module_version(current))
+            {
+                best = Some((asset, version));
+            }
+            if !has_next {
+                break;
+            }
+            page += 1;
+            url.query_pairs_mut()
+                .clear()
+                .extend_pairs(&query)
+                .append_pair("page", &page.to_string());
+        }
+        if let Some((asset, version)) = best {
+            download_package(self, &asset, destination, |_| {})?;
+            return Ok((asset.digest, Some(version)));
+        }
+        self.download_matching_module(core_version, asset_name, destination)
+            .map(|digest| (digest, None))
+    }
+
+    pub fn download_matching_module(
+        &self,
+        version: &str,
+        asset_name: &str,
+        destination: &Path,
+    ) -> Result<String> {
+        let tag = format!("v{version}");
+        let list = self
+            .0
+            .endpoints
+            .release_api_url
+            .split('?')
+            .next()
+            .unwrap_or_default();
+        let release_url = format!("{list}/tags/{tag}");
+        let response = self.get(
+            &release_url,
+            "application/vnd.github+json",
+            Duration::from_secs(25),
+            "check_release",
+            None,
+        )?;
+        if !response.status().is_success() {
+            return Err(UpdateError("package_missing"));
+        }
+        let mut bytes = Vec::new();
+        response
+            .take(MAX_RELEASE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > MAX_RELEASE_BYTES {
+            return Err(UpdateError("invalid_release"));
+        }
+        let asset =
+            super::super::release::exact_asset(&bytes, asset_name, &tag, &self.0.endpoints)?;
+        download_package(self, &asset, destination, |_| {})?;
+        Ok(asset.digest)
+    }
+
     pub fn start(&self, operation: &str) -> Result<Snapshot> {
         let _transition = self
             .0
@@ -129,6 +239,8 @@ impl UpdateManager {
             Some(self),
         )?;
 
+        (self.0.prepare_modules)(self, &asset.version)?;
+
         let worker = job.join(if cfg!(windows) {
             "worker.exe"
         } else {
@@ -150,6 +262,7 @@ impl UpdateManager {
             "args": self.0.restart_args,
             "version": asset.version,
             "nonce": update_nonce,
+            "modules_prepared": true,
         });
         self.stage("write_plan");
         crate::filesystem::atomic_write_private_state(

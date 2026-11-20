@@ -210,6 +210,10 @@ pub(crate) fn wait(state: Arc<ServerState>) -> bool {
     let mut current = initial;
     while !state.shutdown.load(Ordering::Acquire) {
         tray.pump();
+        #[cfg(windows)]
+        if let Some((title, message)) = state.backend.team.take_desktop_notice() {
+            tray.notify_budget(&title, &message);
+        }
         let revision = state.backend.app_icon.revision.load(Ordering::Acquire);
         if revision != icon_revision {
             if let Err(error) = tray.set_icon(&state.backend.app_icon.snapshot()) {

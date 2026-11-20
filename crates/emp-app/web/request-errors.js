@@ -9,8 +9,9 @@ function presentationObserveRequestErrors(snapshot) {
   const next=new Map();
   const records=[...(snapshot?.requests || [])].reverse().sort((a,b)=>(a.finished_at || a.updated_at || 0)-(b.finished_at || b.updated_at || 0));
   for(const record of records) {
-    if(!record.request_id || !['failed','completed'].includes(record.state))continue;
-    const signature=JSON.stringify([record.state,record.finished_at,record.http_status,record.error_class,record.failure_reason,record.error_origin,record.error_code,record.model_id,record.provider_id,record.account_id]);
+    const retry=record.state==='active' ? record.retries?.at(-1) : null;
+    if(!record.request_id || (!retry && !['failed','completed','recovery_required'].includes(record.state)))continue;
+    const signature=JSON.stringify([record.state,record.finished_at,record.http_status,record.error_class,record.failure_reason,record.error_origin,record.error_code,record.model_id,record.provider_id,record.account_id,retry]);
     const previous=presentationRequestReceipts.get(record.request_id);
     next.set(record.request_id,{record,signature,order:previous?.signature===signature?previous.order:++presentationRequestOrder});
   }
@@ -26,7 +27,7 @@ function presentationRequestError(record) {
     :[401,403].includes(status)?tr("services.authentication_or_access_denied")
     :status>=500?tr("services.the_service_is_unavailable")
     :tr("services.the_model_request_did_not_complete");
-  return {title:tr("services.latest_model_request_failed"),message:[reason,record.model_id ? modelDisplayName(record.model_id) : '',status?'HTTP '+status:'',({emp:'EMP',upstream:tr("reports.upstream_service"),transport:tr("reports.connection"),client:tr("reports.codex_client"),claude_cli:'Claude Code'})[record.error_origin],record.failure_reason || record.error_code || record.error_class].filter(Boolean).join('\n')};
+  return {severity:'error',title:tr("services.latest_model_request_failed"),message:[reason,record.model_id ? modelDisplayName(record.model_id) : '',status?'HTTP '+status:'',({emp:'EMP',upstream:tr("reports.upstream_service"),transport:tr("reports.connection"),client:tr("reports.codex_client"),claude_cli:'Claude Code'})[record.error_origin],record.failure_reason || record.error_code || record.error_class].filter(Boolean).join('\n')};
 }
 function presentationUpdateServiceRequestErrors() {
   for(const button of document.querySelectorAll('#services .presentation-service-icon')) {
@@ -34,17 +35,22 @@ function presentationUpdateServiceRequestErrors() {
     if(button.hasAttribute('data-error-message') && !button.hasAttribute('data-request-error'))continue;
     const key=button.dataset.activityKind+':'+button.dataset.activityId;
     const record=presentationRequestOutcomes.get(key)?.record;
-    const error=record?.state==='failed'?presentationRequestError(record):null;
-    if(error && button.dataset.requestError===record.request_id && button.dataset.errorTitle===error.title && button.dataset.errorMessage===error.message)continue;
+    const retry=record?.state==='active' ? record.retries?.at(-1) : null;
+    const warning=retry || record?.state==='recovery_required';
+    const error=record?.state==='failed' ? presentationRequestError(record) : warning ? {
+      severity:'warning',title:tr('services.request_recovering'),
+      message:[tr(retry ? 'services.request_retrying' : 'reports.history_resend_requested'),retry?.status ? 'HTTP '+retry.status : ''].filter(Boolean).join(' · ')
+    } : null;
+    if(error && button.dataset.requestError===record.request_id && button.dataset.errorTitle===error.title && button.dataset.errorMessage===error.message && button.dataset.errorSeverity===error.severity)continue;
     if(button.hasAttribute('data-request-error')) {
-      delete button.dataset.requestError;delete button.dataset.errorTitle;delete button.dataset.errorMessage;
+      delete button.dataset.requestError;delete button.dataset.errorTitle;delete button.dataset.errorMessage;delete button.dataset.errorSeverity;
       button.querySelector('.presentation-service-error-badge')?.remove();
       button.removeAttribute('aria-describedby');
       const description=activityDescription(button.dataset.activityLabel,activitySummaryForIndicator(button));
       button.setAttribute('aria-label',description);button.title=description;
     }
     if(!error)continue;
-    button.dataset.requestError=record.request_id;button.dataset.errorTitle=error.title;button.dataset.errorMessage=error.message;
+    button.dataset.requestError=record.request_id;button.dataset.errorTitle=error.title;button.dataset.errorMessage=error.message;button.dataset.errorSeverity=error.severity;
     const badge=document.createElement('span');badge.className='presentation-service-error-badge';badge.setAttribute('aria-hidden','true');badge.textContent='!';button.append(badge);
   }
   presentationUpdateServiceErrorLabels();

@@ -21,6 +21,7 @@ pub(crate) enum RequestPreparationError {
     Route(RouteResolutionError),
     ModelSnapshotTooLarge,
     MemoryUnavailable(&'static str),
+    TeamPermission(&'static str),
 }
 
 #[derive(Clone, Copy)]
@@ -108,6 +109,15 @@ pub(super) fn prepare_with_config(
             })
         })
         .map_err(RequestPreparationError::Route)?;
+    state
+        .backend
+        .team
+        .check_route(
+            &route.provider_id,
+            state.backend.modules.active(emp_modules::Module::Team),
+            request.get("service_tier").and_then(Value::as_str),
+        )
+        .map_err(RequestPreparationError::TeamPermission)?;
     prepare_external_request(&config, &mut route, request)?;
     Ok(PreparedRequest {
         config,

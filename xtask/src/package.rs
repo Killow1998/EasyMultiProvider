@@ -99,10 +99,15 @@ pub fn run(args: &[String]) -> Result {
     Ok(())
 }
 
+pub(crate) fn artifacts(root: &Path) -> PathBuf {
+    std::env::var_os("EMP_PACKAGE_OUTPUT_DIR")
+        .map_or_else(|| root.join("artifacts"), |path| root.join(path))
+}
+
 fn build(root: &Path, skip_service_smoke: bool) -> Result<Vec<PathBuf>> {
     let target = Target::current()?;
     let build_root = root.join("build/standalone").join(target.identity());
-    let artifacts = root.join("artifacts");
+    let artifacts = artifacts(root);
     if build_root.exists() {
         fs::remove_dir_all(&build_root).map_err(|error| format!("clean build root: {error}"))?;
     }
@@ -138,7 +143,19 @@ fn build(root: &Path, skip_service_smoke: bool) -> Result<Vec<PathBuf>> {
     } else {
         None
     };
-    let executable = build_binary(root, target, resource.as_deref())?;
+    let modules = build_modules(root, &artifacts, &emp_modules::Module::ALL, Some(VERSION))?;
+    let manifest = build_root.join("transition.rs");
+    let mut entries = Vec::new();
+    use emp_modules::Module;
+    for module in [Module::Gateway, Module::Aggregate, Module::Decision] {
+        let path = artifacts.join(module.asset());
+        entries.push(format!(
+            "(Module::{module:?}, include_bytes!({path:?}), {:?})",
+            crate::sha256_file(&path)?
+        ));
+    }
+    fs::write(&manifest, format!("&[{}]", entries.join(","))).map_err(|error| error.to_string())?;
+    let executable = build_binary(root, target, resource.as_deref(), &manifest)?;
     if target.os == Os::Windows {
         windows::validate_executable(&executable, VERSION)?;
     }
@@ -180,6 +197,7 @@ fn build(root: &Path, skip_service_smoke: bool) -> Result<Vec<PathBuf>> {
         )?;
         outputs.push(dmg);
     }
+    outputs.extend(modules);
     let mut checksums = Vec::new();
     for artifact in &outputs {
         checksums.push(write_checksum(artifact)?);
@@ -188,7 +206,91 @@ fn build(root: &Path, skip_service_smoke: bool) -> Result<Vec<PathBuf>> {
     Ok(outputs)
 }
 
-fn build_binary(root: &Path, target: Target, resource: Option<&Path>) -> Result<PathBuf> {
+pub fn run_module(args: &[String]) -> Result {
+    let usage = || {
+        "usage: cargo xtask package-module <decision|gateway|aggregate|team> [--output DIR]"
+            .to_owned()
+    };
+    let (id, output) = match args {
+        [id] => (id, project_root().join("artifacts")),
+        [id, flag, path] if flag == "--output" => (id, PathBuf::from(path)),
+        _ => return Err(usage()),
+    };
+    let module = emp_modules::Module::ALL
+        .into_iter()
+        .find(|module| module.id() == id)
+        .ok_or_else(usage)?;
+    fs::create_dir_all(&output).map_err(|error| format!("create {}: {error}", output.display()))?;
+    let asset = build_modules(&project_root(), &output, &[module], None)?.remove(0);
+    let checksum = write_checksum(&asset)?;
+    println!("{}\n{}", asset.display(), checksum.display());
+    Ok(())
+}
+
+fn build_modules(
+    root: &Path,
+    artifacts: &Path,
+    modules: &[emp_modules::Module],
+    legacy_core: Option<&str>,
+) -> Result<Vec<PathBuf>> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = Command::new(cargo);
+    command
+        .current_dir(root)
+        .args(["build", "--locked", "--release", "--bins"]);
+    for module in modules {
+        command.arg("-p").arg(format!("emp-mod-{}", module.id()));
+    }
+    match legacy_core {
+        Some(version) => {
+            command.env("EMP_LEGACY_CORE_VERSION", version);
+        }
+        None => {
+            command.env_remove("EMP_LEGACY_CORE_VERSION");
+        }
+    }
+    append_package_path_remaps(&mut command, root)?;
+    run_command(&mut command)?;
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| root.join("target"), |path| root.join(path))
+        .join("release");
+    modules
+        .iter()
+        .map(|module| {
+            let binary = target.join(format!(
+                "empmod-{}{}",
+                module.id(),
+                std::env::consts::EXE_SUFFIX
+            ));
+            let handshake = Command::new(&binary)
+                .stdin(Stdio::null())
+                .output()
+                .map_err(|error| error.to_string())?;
+            let hello: emp_modules::Hello = serde_json::from_slice(&handshake.stdout)
+                .map_err(|_| format!("Invalid module handshake for {}", module.id()))?;
+            if !handshake.status.success()
+                || hello.module != *module
+                || hello.protocol != emp_modules::PROTOCOL
+                || hello.host_api != Some(emp_modules::HOST_API)
+                || hello.module_version.as_deref().is_none_or(str::is_empty)
+                || legacy_core.is_some_and(|version| hello.version != version)
+            {
+                return Err(format!("Invalid version for module {}", module.id()));
+            }
+            let artifact = artifacts.join(module.asset());
+            copy(&binary, &artifact)?;
+            make_executable(&artifact)?;
+            Ok(artifact)
+        })
+        .collect()
+}
+
+fn build_binary(
+    root: &Path,
+    target: Target,
+    resource: Option<&Path>,
+    transition: &Path,
+) -> Result<PathBuf> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let version = Command::new(&cargo)
         .arg("--version")
@@ -200,7 +302,9 @@ fn build_binary(root: &Path, target: Target, resource: Option<&Path>) -> Result<
         ));
     }
     let mut command = Command::new(&cargo);
-    command.current_dir(root);
+    command
+        .current_dir(root)
+        .env("EMP_TRANSITION_MANIFEST", transition);
     if std::env::var("CARGO_NET_OFFLINE")
         .is_ok_and(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
     {

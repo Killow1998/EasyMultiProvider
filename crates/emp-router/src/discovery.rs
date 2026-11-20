@@ -26,7 +26,7 @@ mod metadata;
 mod vertex;
 
 pub use anthropic::{discover_anthropic_models, project_anthropic_models};
-pub use decisions::discover_decision_models;
+pub use decisions::discover_decision_models_with_plan;
 pub use gemini::{discover_gemini_models, project_gemini_models};
 pub use generic::{discover_generic_models, project_generic_models};
 pub use metadata::model_metadata;
@@ -85,9 +85,10 @@ impl DiscoveryBudget {
 pub async fn discover_models(
     client: &HttpClient,
     provider: &Map<String, Value>,
+    vertex_models: &[emp_state::usage::pricing::VertexModelMetadata],
 ) -> Result<Vec<Value>, RouterError> {
     if provider.contains_key("vertex") {
-        return vertex::discover(client, provider).await;
+        return vertex::discover(client, provider, vertex_models).await;
     }
     let protocol = provider
         .get("protocol")
@@ -487,9 +488,20 @@ async fn get_json(
     headers: BTreeMap<String, String>,
     budget: &mut DiscoveryBudget,
 ) -> Result<Map<String, Value>, RouterError> {
+    discovery_json(client, HttpMethod::Get, url, headers, None, budget).await
+}
+
+async fn discovery_json(
+    client: &HttpClient,
+    method: HttpMethod,
+    url: &str,
+    headers: BTreeMap<String, String>,
+    body: Option<Vec<u8>>,
+    budget: &mut DiscoveryBudget,
+) -> Result<Map<String, Value>, RouterError> {
     let response = tokio::time::timeout(
         budget.remaining()?,
-        client.open(HttpMethod::Get, url, headers, None, false),
+        client.open(method, url, headers, body, false),
     )
     .await
     .map_err(|_| discovery_timeout())?

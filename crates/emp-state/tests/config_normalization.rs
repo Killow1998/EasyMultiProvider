@@ -146,7 +146,7 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
         let defaults = normalize_configuration(input.as_ref()).unwrap();
         assert_eq!(defaults["auto_enable_on_start"], true);
         assert_eq!(defaults["auto_review_fallback"], true);
-        assert_eq!(defaults["external_collaboration"], "off");
+        assert_eq!(defaults["external_collaboration"], "on");
         assert_eq!(defaults["memory_model"], "");
         assert_eq!(defaults["memory_extraction_model"], "");
         assert_eq!(defaults["background_compaction"], Value::Null);
@@ -182,7 +182,7 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
     let saved = emp_state::merge_web_update(&current, &public).unwrap();
     assert_eq!(saved["auto_enable_on_start"], true);
     assert_eq!(saved["auto_review_fallback"], false);
-    assert_eq!(saved["external_collaboration"], "on_demand");
+    assert_eq!(saved["external_collaboration"], "on");
     assert_eq!(saved["memory_model"], "gpt-6-luna");
     assert_eq!(saved["memory_extraction_model"], "gpt-6-luna");
     assert_eq!(saved["background_compaction"], true);
@@ -193,7 +193,7 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
         .remove("external_collaboration");
     assert_eq!(
         emp_state::merge_web_update(&current, &old_client).unwrap()["external_collaboration"],
-        "on_demand"
+        "on"
     );
     for key in [
         "memory_model",
@@ -214,10 +214,10 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
     ] {
         assert!(normalize_configuration(Some(&json!({key: "false"}))).is_err());
     }
-    for mode in ["off", "on_demand", "on"] {
+    for (mode, expected) in [("off", "off"), ("on_demand", "on"), ("on", "on")] {
         assert_eq!(
             normalize_configuration(Some(&json!({"external_collaboration":mode}))).unwrap()["external_collaboration"],
-            mode
+            expected
         );
     }
     for invalid in [json!(false), json!(true), json!(null), json!("auto")] {

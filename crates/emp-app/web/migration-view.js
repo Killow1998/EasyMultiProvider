@@ -68,6 +68,7 @@ function createMigrationView(getState) {
       credential_set:importing ? record.native&&record.credential_set || (credentials.accounts || []).includes(record.id) : record.credential_set,
     }));
     for (const record of config.providers || []) {
+      if (!importing && /^team-[\da-f]{32}$/i.test(record.id)) continue;
       rows.push({id:record.id, kind:'provider', selected:true, record,
         name:record.name || record.id,
         brand:record.execution_backend === 'claude_cli' ? 'claudecode' :
@@ -162,15 +163,18 @@ function createMigrationView(getState) {
         <span class="migration-service-label"><strong>${esc(row.name)}</strong><small>${serviceType(row)}</small></span></span></label>`;
   }
   function bodyHtml(candidate) {
-    if(candidate.mode==='choose')return `<div id="shadow_migration"><div id="migration_chooser" class="choice-grid">${[
-      ['import','upload','transfers.import','transfers.import_entry'],
-      ['export','download','transfers.export','transfers.export_entry'],
-      ['tunnel','sync','lan.tunnel','transfers.tunnel_entry'],
-    ].map(([mode,icon,label,description])=>`<button type="button" class="choice service-choice" data-icon="${icon}" data-migration-mode="${mode}"><span><strong>${tr(label)}</strong><small>${tr(description)}</small></span></button>`).join('')}</div></div>`;
+    // Two transports: a file (export or import) and the LAN tunnel. Every mode button keeps data-migration-mode.
+    if(candidate.mode==='choose')return `<div id="shadow_migration"><div id="migration_chooser" class="migration-methods">
+      <div class="migration-method" role="group" aria-labelledby="migration_method_file"><span class="migration-method-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><rect x="9" y="12" width="6" height="5" rx="1"/><path d="M10.5 12v-1.2a1.5 1.5 0 0 1 3 0V12"/></svg></span>
+        <strong id="migration_method_file">${tr('transfers.file_method')}</strong><small>${tr('transfers.file_entry')}</small>
+        <span class="migration-method-actions"><button type="button" class="secondary" data-icon="download" data-migration-mode="export">${tr('transfers.export')}</button><button type="button" class="secondary" data-icon="upload" data-migration-mode="import">${tr('transfers.import')}</button></span></div>
+      <button type="button" class="migration-method" data-migration-mode="tunnel"><span class="migration-method-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 9a14 14 0 0 1 19 0"/><path d="M5.8 12.5a9 9 0 0 1 12.4 0"/><path d="M9.2 16a4 4 0 0 1 5.6 0"/><circle cx="12" cy="19.2" r=".9" fill="currentColor"/></svg></span>
+        <strong>${tr('transfers.lan_method')}</strong><small>${tr('transfers.lan_entry')}</small>
+        <span class="migration-method-actions"><span class="migration-method-cta">${tr('transfers.lan_start')}</span></span></button>
+    </div></div>`;
     const importing = candidate.mode === 'import';
     const chooser = importing && !candidate.token ? `<div class="migration-import-form">
-      <p class="migration-open-hint">${tr("transfers.choose_a_emp_file_and_enter_its_export_password")}</p>
-      <label>${tr("transfers.migration_file")}<input type="file" id="shadow_migration_file" accept=".emp"></label>
+      <label><span class="migration-field-label">${tr("transfers.migration_file")}${shadowHelp(tr("transfers.choose_a_emp_file_and_enter_its_export_password"))}</span><input type="file" id="shadow_migration_file" accept=".emp"></label>
       <label><span class="migration-field-label">${tr("core.migration_password")}${shadowHelp(tr("transfers.use_the_export_password_legacy_8_byte_passwords_remain"))}</span><input id="shadow_import_password" type="password" autocomplete="current-password"></label>
       <div class="migration-import-actions"><button type="button" class="primary" data-migration-decode>${tr("transfers.open_package")}</button><button type="button" class="secondary" data-migration-demo>${tr("transfers.preview_an_example_import")}</button></div></div>` : '';
     const list = `<div class="migration-workspace"><div class="migration-choices">

@@ -17,11 +17,11 @@ function createNativeLogin({onImported}) {
     $('modal_body').querySelector('[data-native-method=subscription]').onclick=()=>open({back:parent});
     $('modal_body').querySelector('[data-native-method=local_key]').onclick=()=>openLocalKey({back:parent});
     $('modal_body').querySelector('[data-native-method=api_key]').onclick=()=>{
-      openModal(tr('login.api_key'),`<p>${tr('login.api_key_help')}</p><label>${tr('login.api_key')}<input id="native_api_key" type="password" autocomplete="new-password" required></label><p class="muted">${tr('login.native_help')}</p>`,tr('login.apply_method'),()=>saveCredential('use-api-key',{api_key:$('native_api_key').value},$('native_api_key')),null,{back:parent});
+      openModal(tr('login.api_key'),`<p>${tr('login.api_key_help')}</p><label><span class="form-label">${tr('login.api_key')}${shadowHelp(tr('login.native_help'))}</span><input id="native_api_key" type="password" autocomplete="new-password" required></label>`,tr('login.apply_method'),()=>saveCredential('use-api-key',{api_key:$('native_api_key').value},$('native_api_key')),null,{back:parent});
       $('native_api_key').focus();
     };
     $('modal_body').querySelector('[data-native-method=other]').onclick=()=>{
-      openModal(tr('login.existing_other'),`<p>${tr('login.existing_other_help')}</p><label>${tr('login.select_other')}<select id="native_other_account">${other.map(account=>`<option value="${esc(account.id)}">${esc(account.name||account.id)}</option>`).join('')}</select></label><p class="muted">${tr('login.native_help')}</p>`,tr('login.apply_method'),()=>saveCredential('use-account',{account_id:$('native_other_account').value},$('native_other_account')),null,{back:parent});
+      openModal(tr('login.existing_other'),`<p>${tr('login.existing_other_help')}</p><label><span class="form-label">${tr('login.select_other')}${shadowHelp(tr('login.native_help'))}</span><select id="native_other_account">${other.map(account=>`<option value="${esc(account.id)}">${esc(account.name||account.id)}</option>`).join('')}</select></label>`,tr('login.apply_method'),()=>saveCredential('use-account',{account_id:$('native_other_account').value},$('native_other_account')),null,{back:parent});
     };
   }
   async function saveCredential(operation,body,owner) {
@@ -52,16 +52,15 @@ function createNativeLogin({onImported}) {
   function open({importing=false,back=openServiceChooser}={}) {
     const mode=state.native_account?.auth_mode || 'missing';
     const nativeLabel=mode==='local_key'?'replace_local_key':mode==='api_key'?'replace_api_key':mode==='missing'?'use_native':'replace_native';
-    const description=`<p>${tr('login.mode_'+mode)}</p><fieldset id="device_login_target" class="login-choice-group"><legend>${tr('login.destination')}</legend><div class="choice-grid">${[['other','use_other'],['native',nativeLabel]].map(([value,label])=>`<label class="choice native-key-choice"><input type="radio" name="device_login_target" value="${value}" ${(value==='other')===importing?'checked':''}><span><strong>${tr('login.'+label)}</strong></span></label>`).join('')}</div></fieldset><p id="device_login_help" class="muted"></p><label id="device_account_fields">${tr('services.name')}<input id="device_account_name" maxlength="256" autocomplete="off" placeholder="${tr('services.for_example_work_account')}"></label>`;
-    const methods=`<fieldset id="native_login_method" class="login-choice-group"><legend>${tr('login.method')}</legend><div class="choice-grid">${['device','browser'].map(method=>`<label class="choice native-key-choice"><input type="radio" name="native_login_method" value="${method}" ${method==='device'?'checked':''}><span><strong>${tr('login.'+(method==='device'?'device_sign_in':'browser_sign_in'))}</strong></span></label>`).join('')}</div></fieldset><p class="muted" id="native_browser_help" hidden>${tr('login.browser_help')}</p>`;
+    const description=`<p>${tr('login.mode_'+mode)}</p><fieldset id="device_login_target" class="login-choice-group"><legend><span class="form-label">${tr('login.destination')}${shadowHelp('').replace('class="shadow-help"','id="device_login_help" class="shadow-help"')}</span></legend><div class="choice-grid">${[['other','use_other'],['native',nativeLabel]].map(([value,label])=>`<label class="choice native-key-choice"><input type="radio" name="device_login_target" value="${value}" ${(value==='other')===importing?'checked':''}><span><strong>${tr('login.'+label)}</strong></span></label>`).join('')}</div></fieldset><label id="device_account_fields">${tr('services.name')}<input id="device_account_name" maxlength="256" autocomplete="off" placeholder="${tr('services.for_example_work_account')}"></label>`;
+    const methods=`<fieldset id="native_login_method" class="login-choice-group"><legend><span class="form-label">${tr('login.method')}${shadowHelp(tr('login.browser_help'))}</span></legend><div class="choice-grid">${['device','browser'].map(method=>`<label class="choice native-key-choice"><input type="radio" name="native_login_method" value="${method}" ${method==='device'?'checked':''}><span><strong>${tr('login.'+(method==='device'?'device_sign_in':'browser_sign_in'))}</strong></span></label>`).join('')}</div></fieldset>`;
     openModal(tr('login.subscription'),`<div id="native_login">${description}${methods}<div class="form-actions"><button type="button" data-native-login-start>${tr('login.sign_in')}</button>${!importing&&mode==='local_key'?`<button type="button" class="danger" data-native-key-remove>${tr('login.remove_key')}</button>`:''}</div><div id="native_login_progress" role="status" aria-live="polite"></div></div>`,'',null,null,{back});
     const owner={node:$('native_login')};view=owner;
-    $('native_login_method').onchange=()=>{$('native_browser_help').hidden=$('native_login_method').querySelector(':checked').value!=='browser';};
     function selectDestination() {
       owner.importing=$('device_login_target').querySelector(':checked').value==='other';owner.signature=null;
       $('device_account_fields').hidden=!owner.importing;
       const remove=owner.node.querySelector('[data-native-key-remove]');if(remove)remove.hidden=owner.importing;
-      $('device_login_help').textContent=tr(owner.importing?'login.other_help':'login.native_help');
+      {const hint=$('device_login_help'),text=tr(owner.importing?'login.other_help':'login.native_help');hint.dataset.shadowHelp=text;hint.setAttribute('aria-label',text);}
       $('native_login_progress').replaceChildren();
       void run(owner,'status');
     }

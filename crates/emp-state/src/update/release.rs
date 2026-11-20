@@ -130,6 +130,76 @@ pub(crate) fn latest_asset(
         return Ok(None);
     }
 
+    select_asset(&release, desired_name, endpoints).map(Some)
+}
+
+pub(super) fn exact_asset(
+    raw: &[u8],
+    desired_name: &str,
+    tag: &str,
+    endpoints: &UpdateEndpoints,
+) -> Result<Asset> {
+    let release: Release =
+        serde_json::from_slice(raw).map_err(|_| UpdateError("invalid_release"))?;
+    if release.tag_name != tag || release.draft || release.prerelease {
+        return Err(UpdateError("invalid_release"));
+    }
+    select_asset(&release, desired_name, endpoints)
+}
+
+type ModuleVersion = (u64, u64, u64, bool, u64);
+
+pub fn module_version(version: &str) -> Option<ModuleVersion> {
+    let (base, suffix) = version.split_once('-').unwrap_or((version, ""));
+    let (stable, beta) = match suffix {
+        "" => (true, 0),
+        "beta" => (false, 0),
+        suffix => (false, suffix.strip_prefix("beta.")?.parse().ok()?),
+    };
+    let (major, minor, patch) = parse_stable_version(base).ok().or_else(|| {
+        (!stable && base.split('.').count() == 2)
+            .then(|| parse_stable_version(&format!("{base}.0")).ok())
+            .flatten()
+    })?;
+    Some((major, minor, patch, stable, beta))
+}
+
+pub(super) fn module_asset(
+    raw: &[u8],
+    desired_name: &str,
+    channel: &str,
+    endpoints: &UpdateEndpoints,
+) -> Result<Option<(Asset, String)>> {
+    let releases: Vec<Release> =
+        serde_json::from_slice(raw).map_err(|_| UpdateError("invalid_release"))?;
+    let selected = releases
+        .iter()
+        .filter(|release| !release.draft)
+        .filter_map(|release| {
+            let version = release.tag_name.strip_prefix(channel)?;
+            let rank = module_version(version)?;
+            if release.prerelease == rank.3 {
+                return None;
+            }
+            release
+                .assets
+                .iter()
+                .any(|asset| asset.name == desired_name)
+                .then_some((rank, release, version))
+        })
+        .max_by_key(|(rank, _, _)| *rank);
+    selected
+        .map(|(_, release, version)| {
+            select_asset(release, desired_name, endpoints).map(|asset| (asset, version.to_owned()))
+        })
+        .transpose()
+}
+
+fn select_asset(
+    release: &Release,
+    desired_name: &str,
+    endpoints: &UpdateEndpoints,
+) -> Result<Asset> {
     let mut matches = release
         .assets
         .iter()
@@ -159,13 +229,13 @@ pub(crate) fn latest_asset(
     if size == 0 || size > MAX_PACKAGE_BYTES {
         return Err(UpdateError("invalid_package_size"));
     }
-    Ok(Some(Asset {
+    Ok(Asset {
         version: release.tag_name.trim_start_matches('v').to_owned(),
         name: desired_name.to_owned(),
         url: asset.browser_download_url.clone(),
         digest: digest.to_owned(),
         size,
-    }))
+    })
 }
 
 #[cfg(test)]

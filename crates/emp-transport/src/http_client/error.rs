@@ -19,11 +19,25 @@ pub enum HttpTransportErrorKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HttpTransportError {
     kind: HttpTransportErrorKind,
+    may_have_dispatched: bool,
 }
 
 impl HttpTransportError {
     pub(super) const fn new(kind: HttpTransportErrorKind) -> Self {
-        Self { kind }
+        Self {
+            kind,
+            may_have_dispatched: matches!(
+                kind,
+                HttpTransportErrorKind::ConnectTimeout
+                    | HttpTransportErrorKind::ReadTimeout
+                    | HttpTransportErrorKind::Network
+                    | HttpTransportErrorKind::ResponseTooLarge
+            ),
+        }
+    }
+
+    pub const fn may_have_dispatched(self) -> bool {
+        self.may_have_dispatched
     }
 
     pub const fn kind(self) -> HttpTransportErrorKind {
@@ -64,7 +78,10 @@ pub(super) fn map_send_error(error: reqwest::Error, proxied: bool) -> HttpTransp
     } else {
         classify_source(&error, proxied && error.is_connect())
     };
-    HttpTransportError::new(kind)
+    HttpTransportError {
+        kind,
+        may_have_dispatched: !error.is_connect() && !error.is_builder(),
+    }
 }
 
 fn classify_source(error: &(dyn Error + 'static), proxy_connect: bool) -> HttpTransportErrorKind {

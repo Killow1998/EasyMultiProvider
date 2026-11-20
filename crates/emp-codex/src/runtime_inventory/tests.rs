@@ -24,6 +24,10 @@ fn prepared_executable_reprobes_when_a_cached_runtime_is_replaced_or_removed() {
 
     assert_eq!(inventory.prepared_executable().unwrap().path(), binary);
     assert_eq!(inventory.snapshot(false)["helper_source"], "configured");
+    assert_eq!(
+        inventory.snapshot(false)["outside_maintenance_window"],
+        true
+    );
 
     let replacement = root.path().join("replacement");
     script(root.path(), "replacement", "echo codex-cli 0.148.0", 0o700);
@@ -34,9 +38,19 @@ fn prepared_executable_reprobes_when_a_cached_runtime_is_replaced_or_removed() {
         Some("0.148.0")
     );
 
-    script(root.path(), "replacement", "echo codex-cli 0.158.0", 0o700);
-    std::fs::rename(&replacement, &binary).unwrap();
-    assert_eq!(inventory.prepared_executable().unwrap().path(), binary);
+    for version in ["0.166.0", "0.169.1", "0.170.0"] {
+        script(
+            root.path(),
+            "replacement",
+            &format!("echo codex-cli {version}"),
+            0o700,
+        );
+        std::fs::rename(&replacement, &binary).unwrap();
+        assert_eq!(inventory.prepared_executable().unwrap().path(), binary);
+        let snapshot = inventory.snapshot(false);
+        assert_eq!(snapshot["installed"], version);
+        assert_eq!(snapshot["outside_maintenance_window"], false);
+    }
 
     std::fs::remove_file(&binary).unwrap();
     assert!(

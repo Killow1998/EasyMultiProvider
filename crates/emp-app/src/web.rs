@@ -53,6 +53,18 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/tutorial-08-tunnel-migration.gif" => {
             include_bytes!("../../../docs/assets/tutorials/08-tunnel-migration.gif")
         }
+        "/assets/tutorial-09-team-workspace.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/09-team-workspace.gif")
+        }
+        "/assets/tutorial-10-team-share.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/10-team-share.gif")
+        }
+        "/assets/tutorial-11-team-approve.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/11-team-approve.gif")
+        }
+        "/assets/tutorial-12-team-members.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/12-team-members.gif")
+        }
         "/assets/copy-recovery.js" => include_bytes!("../web/copy-recovery.js"),
         "/assets/service-presentation.js" => include_bytes!("../web/service-presentation.js"),
         "/assets/service-presentation.css" => include_bytes!("../web/service-presentation.css"),
@@ -91,10 +103,9 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/management-client.js" => include_bytes!("../web/management-client.js"),
         "/assets/quota-history.js" => include_bytes!("../web/quota-history.js"),
         "/assets/quota-display.js" => include_bytes!("../web/quota-display.js"),
+        "/assets/copy-modules.js" => include_bytes!("../web/copy-modules.js"),
+        "/assets/module-settings.js" => include_bytes!("../web/module-settings.js"),
         "/assets/settings.js" => include_bytes!("../web/settings.js"),
-        "/assets/gateway-settings.js" => include_bytes!("../web/gateway-settings.js"),
-        "/assets/aggregate-settings.js" => include_bytes!("../web/aggregate-settings.js"),
-        "/assets/decision-settings.js" => include_bytes!("../web/decision-settings.js"),
         "/assets/collaboration-comparison.js" => {
             include_bytes!("../web/collaboration-comparison.js")
         }
@@ -136,6 +147,25 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         bytes,
         &[("Cache-Control", "no-store")],
     ))
+}
+
+pub(crate) fn module_asset_response(
+    path: &str,
+    state: &crate::app::ServerState,
+) -> Option<Vec<u8>> {
+    use emp_modules::Module;
+    let id = path.strip_prefix("/assets/module-")?.strip_suffix(".js")?;
+    let module = Module::ALL.into_iter().find(|module| module.id() == id)?;
+    let panel = state.backend.modules.panel(module);
+    Some(match panel {
+        Some(source) => response(
+            "HTTP/1.1 200 OK",
+            "text/javascript; charset=utf-8",
+            source.as_bytes(),
+            &[("Cache-Control", "no-store")],
+        ),
+        None => response("HTTP/1.1 404 Not Found", "text/plain", b"", &[]),
+    })
 }
 
 /// Serve the UI without authentication. It contains no secrets: the script

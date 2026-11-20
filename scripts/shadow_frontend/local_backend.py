@@ -13,6 +13,8 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
+from module_release_fixture import local_module_release
+
 
 def request(url, payload=None, headers=None, method=None, *, timeout=15):
     if urlsplit(url).hostname != '127.0.0.1':
@@ -60,7 +62,8 @@ def stop(process, process_group=False):
             process.wait()
 
 
-def start_backend(stack, binary, root, configuration, env_overrides=None, *, device_fixture=False):
+def start_backend(stack, binary, root, configuration, env_overrides=None, *, device_fixture=False,
+                  modules=()):
     config = root / 'config.json'
     config.write_text(json.dumps(configuration))
     env = {key: value for key, value in os.environ.items() if key not in {
@@ -70,37 +73,62 @@ def start_backend(stack, binary, root, configuration, env_overrides=None, *, dev
         env[key] = str(root / key.lower())
         Path(env[key]).mkdir()
     env.update(env_overrides or {})
+    if modules:
+        env.update(local_module_release(stack, binary, modules))
     command = []
     if device_fixture:
         env.pop('NVM_DIR', None)
-        if sys.platform == 'linux' and Path('/usr/lib/chatgpt/resources/codex').exists():
+        if sys.platform == 'linux':
             bwrap = shutil.which('bwrap')
             if not bwrap:
-                raise RuntimeError('Device-login fixture requires bwrap to hide the installed ChatGPT runtime')
+                raise RuntimeError('Device-login fixture requires bwrap to isolate installed and running Codex runtimes')
             fixture_bin = env['PATH'].split(os.pathsep)[0]
             env['PATH'] = '/fixture:/usr/bin:/bin'
-            command = [bwrap, '--ro-bind', '/usr', '/usr', '--ro-bind', '/bin', '/bin',
+            command = [bwrap, '--unshare-pid', '--die-with-parent',
+                       '--ro-bind', '/usr', '/usr', '--ro-bind', '/bin', '/bin',
                        '--ro-bind', '/lib', '/lib', '--ro-bind', '/lib64', '/lib64',
                        '--ro-bind', '/etc', '/etc', '--ro-bind', '/home', '/home',
                        '--dev', '/dev', '--proc', '/proc', '--bind', '/tmp', '/tmp',
                        '--bind', str(root.parent), str(root.parent), '--ro-bind', fixture_bin,
-                       '/fixture', '--tmpfs', '/usr/lib/chatgpt', '--']
-    log_path = root / 'backend.log'
-    log = stack.enter_context(log_path.open('w'))
-    process = subprocess.Popen([*command, str(binary), 'serve', '--config', str(config), '--port', '0'],
-                               env=env, cwd=root, stdout=log, stderr=log,
-                               start_new_session=bool(command))
-    stack.callback(stop, process, bool(command))
-    def ready():
-        output = log_path.read_text(encoding='utf-8')
-        if 'Recovery page:' in output:
-            raise RuntimeError(output.splitlines()[0])
-        if process.poll() is not None:
-            raise RuntimeError(re.sub(r'([?&](?:token|bootstrap|session)=)[^&\s]+',r'\1[redacted]',output[-4000:]))
-        return re.search(r'Open in browser: (http://[^\s]+)',output)
-    url = wait_for(ready)[1]
-    base = url.split('/?')[0]
+                       '/fixture']
+            if Path('/usr/lib/chatgpt/resources/codex').exists():
+                command.extend(['--tmpfs', '/usr/lib/chatgpt'])
+            command.append('--')
     state = root / 'state'
-    token = wait_for(lambda: json.loads((state / 'web-session.json').read_text(encoding='utf-8'))['token']
-                     if (state / 'web-session.json').exists() else None)
-    return base, url, state, {'X-EMP-Session': token}
+
+    def launch(log_name):
+        log_path = root / log_name
+        log = stack.enter_context(log_path.open('w'))
+        process = subprocess.Popen([*command, str(binary), 'serve', '--config', str(config), '--port', '0'],
+                                   env=env, cwd=root, stdout=log, stderr=log,
+                                   start_new_session=bool(command))
+        stack.callback(stop, process, bool(command))
+
+        def ready():
+            output = log_path.read_text(encoding='utf-8')
+            if 'Recovery page:' in output:
+                raise RuntimeError(output.splitlines()[0])
+            if process.poll() is not None:
+                raise RuntimeError(re.sub(r'([?&](?:token|bootstrap|session)=)[^&\s]+',r'\1[redacted]',output[-4000:]))
+            return re.search(r'Open in browser: (http://[^\s]+)',output)
+
+        url = wait_for(ready)[1]
+        token = wait_for(lambda: json.loads((state / 'web-session.json').read_text(encoding='utf-8'))['token']
+                         if (state / 'web-session.json').exists() else None)
+        return process, url.split('/?')[0], url, {'X-EMP-Session': token}
+
+    process, base, url, headers = launch('backend.log')
+    if modules:
+        for module in modules:
+            status, result = request(base + '/api/modules', {'id': module, 'action': 'install'},
+                                     headers, timeout=45)
+            assert status == 200, (module, status, result)
+            row = next(row for row in result['modules'] if row['id'] == module)
+            assert row['installed_version'] and row['enabled'] and row['restart_required'], row
+        stop(process, bool(command))
+        _, base, url, headers = launch('backend-restarted.log')
+        status, result = request(base + '/api/modules', headers=headers)
+        assert status == 200 and set(modules) <= {
+            row['id'] for row in result['modules'] if row['active']
+        }, result
+    return base, url, state, headers

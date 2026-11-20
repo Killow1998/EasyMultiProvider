@@ -20,6 +20,7 @@ const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
   package [--skip-service-smoke]   build and smoke-test this platform's native package
+  package-module ID [--output DIR] build one official module and its checksum
   package-smoke                    run update/install smoke tests against artifacts/
   validate-release --tag TAG --artifacts DIR [--public-manifest FILE]
   release-notes TAG                print this version's CHANGELOG section";
@@ -29,6 +30,7 @@ fn main() -> ExitCode {
     let rest = args.get(1..).unwrap_or_default();
     let result = match args.first().map(String::as_str) {
         Some("package") => package::run(rest),
+        Some("package-module") => package::run_module(rest),
         Some("package-smoke") => smoke::run(rest),
         Some("validate-release") => release::validate_command(rest),
         Some("release-notes") => release::notes_command(rest),

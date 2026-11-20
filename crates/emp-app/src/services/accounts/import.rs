@@ -96,10 +96,11 @@ pub(crate) fn matching_account<'a>(
         .into_iter()
         .flatten()
         .find(|account| {
-            account["auth_file"]
-                .as_str()
-                .and_then(|path| vault.read_encrypted_json(Path::new(path)).ok())
-                .is_some_and(|old| emp_state::same_account_auth(&old, auth))
+            account["workspace_shared"] != true
+                && account["auth_file"]
+                    .as_str()
+                    .and_then(|path| vault.read_encrypted_json(Path::new(path)).ok())
+                    .is_some_and(|old| emp_state::same_account_auth(&old, auth))
         })
 }
 
@@ -132,13 +133,17 @@ pub(crate) fn import_account_state(
                 .configuration
                 .edit()
                 .map_err(|_| "internal server error".to_owned())?;
-            if identity_only
-                && let Some(existing) = config["accounts"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|record| record["id"] == account_id)
-            {
+            let previous_account = config["accounts"]
+                .as_array()
+                .expect("normalized accounts")
+                .iter()
+                .find(|record| record["id"] == account_id);
+            if previous_account.is_some_and(|record| record["workspace_shared"] == true) {
+                return Err(
+                    "team subscription credentials are managed by workspace sync".to_owned(),
+                );
+            }
+            if identity_only && let Some(existing) = previous_account {
                 let same = existing["auth_file"]
                     .as_str()
                     .and_then(|path| {

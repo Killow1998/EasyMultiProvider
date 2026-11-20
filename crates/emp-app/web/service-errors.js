@@ -67,6 +67,7 @@ function installServiceErrors() {
     clearTimeout(dismiss);
     if (!button) return;
     target?.removeAttribute('aria-describedby'); target = button;
+    bubble.dataset.severity = button.dataset.errorSeverity || 'error';
     heading.textContent = button.dataset.errorTitle; message.textContent = button.dataset.errorMessage;
     button.setAttribute('aria-describedby',bubble.id); bubble.hidden = false; place();
   }
@@ -88,7 +89,7 @@ function installServiceErrors() {
   new MutationObserver(() => {
     if(target && (!target.isConnected || !target.hasAttribute('data-error-message')))hide();
     else if(target)show(target);
-  }).observe($('services'),{childList:true,subtree:true,attributes:true,attributeFilter:['data-error-message','data-error-title']});
+  }).observe($('services'),{childList:true,subtree:true,attributes:true,attributeFilter:['data-error-message','data-error-title','data-error-severity']});
   const update = updateActivityDots;
   updateActivityDots = function() {
     update();

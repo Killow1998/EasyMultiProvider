@@ -64,7 +64,7 @@ pub(crate) fn management_request(
     }
     let metadata = request.raw_path() == "/api/models/metadata";
     let result = if request.raw_path() == "/api/decisions/models" {
-        crate::services::catalog::discovery::decisions(state, &body)
+        crate::api::decisions::discover(state, &body)
     } else if metadata {
         crate::services::catalog::discovery::metadata(request.observation_id, state, &body)
     } else {

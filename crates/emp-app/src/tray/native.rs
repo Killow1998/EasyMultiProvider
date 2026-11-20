@@ -5,6 +5,9 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 #[cfg(windows)]
+const TRAY_GUID: u128 = 0xbdb25138_6964_46a0_bb80_2d4c96ca020a;
+
+#[cfg(windows)]
 #[path = "windows.rs"]
 mod events;
 #[cfg(target_os = "macos")]
@@ -62,7 +65,7 @@ impl Tray {
         #[cfg(target_os = "macos")]
         let builder = builder.with_icon_templated(image);
         #[cfg(windows)]
-        let builder = builder.with_icon(image);
+        let builder = builder.with_icon(image).with_guid(TRAY_GUID);
         let icon = builder
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(true)
@@ -123,5 +126,10 @@ impl Tray {
                 let _ = self.actions.try_send(action);
             }
         }
+    }
+
+    #[cfg(windows)]
+    pub(super) fn notify_budget(&self, title: &str, message: &str) {
+        events::notify_budget(self.icon.window_handle(), TRAY_GUID, title, message);
     }
 }

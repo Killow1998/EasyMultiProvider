@@ -12,7 +12,8 @@ use rustls::{
 };
 use std::process::{Child, Command, Stdio};
 
-struct VertexFixture {
+pub(super) struct VertexFixture {
+    host: String,
     address: SocketAddr,
     root: Vec<u8>,
     requests: mpsc::Receiver<Value>,
@@ -22,6 +23,10 @@ struct VertexFixture {
 
 impl VertexFixture {
     fn start() -> Self {
+        Self::start_for("aiplatform.googleapis.com")
+    }
+
+    pub(super) fn start_for(host: &str) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
         ca.not_before = date_time_ymd(2025, 1, 1);
@@ -34,13 +39,11 @@ impl VertexFixture {
         let ca_key = KeyPair::generate().unwrap();
         let ca_cert = ca.self_signed(&ca_key).unwrap();
         let issuer = Issuer::new(ca, ca_key);
-        let mut leaf =
-            CertificateParams::new(vec!["aiplatform.googleapis.com".to_owned()]).unwrap();
+        let mut leaf = CertificateParams::new(vec![host.to_owned()]).unwrap();
         leaf.not_before = date_time_ymd(2025, 1, 1);
         leaf.not_after = date_time_ymd(2030, 1, 1);
         leaf.distinguished_name = DistinguishedName::new();
-        leaf.distinguished_name
-            .push(DnType::CommonName, "aiplatform.googleapis.com");
+        leaf.distinguished_name.push(DnType::CommonName, host);
         leaf.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         leaf.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         leaf.use_authority_key_identifier_extension = true;
@@ -98,7 +101,21 @@ impl VertexFixture {
                 } else {
                     serde_json::from_slice(&bytes).unwrap()
                 };
-                let result = if first.contains("/v1beta1/publishers/google/models") {
+                let mut status = "200 OK";
+                let result = if first.contains(":countTokens") {
+                    if ["gemini-2.5-flash", "gemini-future-fixture"]
+                        .iter()
+                        .any(|model| first.contains(&format!("/{model}:countTokens")))
+                    {
+                        json!({"totalTokens":1})
+                    } else {
+                        status = "404 Not Found";
+                        json!({"error":{"status":"NOT_FOUND"}})
+                    }
+                } else if first.starts_with("POST /v1/images/") {
+                    json!({"data":[{"b64_json":"ZmFrZQ=="}],"usage":{"input_tokens":10,"output_tokens":400,
+                        "input_tokens_details":{"text_tokens":4,"image_tokens":6}}})
+                } else if first.contains("/v1beta1/publishers/google/models") {
                     if first.contains("pageToken=") {
                         json!({"publisherModels":[{"name":"publishers/google/models/gemini-3-flash", "versionId":"gemini-3-flash-preview"}]})
                     } else {
@@ -166,12 +183,19 @@ impl VertexFixture {
                     result.to_string()
                 };
                 let mut output = input.into_inner();
-                write!(output, "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                if first.starts_with("POST /v1/images/") && body["prompt"] == "truncate-response" {
+                    write!(output, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nConnection: close\r\n\r\n{{").unwrap();
+                    output.flush().unwrap();
+                    continue;
+                }
+
+                write!(output, "HTTP/1.1 {status}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     if stream { "text/event-stream" } else { "application/json" }, payload.len(), payload).unwrap();
                 output.flush().unwrap();
             }
         });
         Self {
+            host: host.to_owned(),
             address,
             root: ca_cert.der().to_vec(),
             requests,
@@ -180,20 +204,18 @@ impl VertexFixture {
         }
     }
 
-    fn client(&self) -> HttpClient {
+    pub(super) fn client(&self) -> HttpClient {
         let mut config = HttpClientConfig::default();
         config.add_root_certificate_der(&self.root).unwrap();
         config.use_only_configured_root_certificates().unwrap();
-        config
-            .add_dns_override("aiplatform.googleapis.com", self.address)
-            .unwrap();
+        config.add_dns_override(&self.host, self.address).unwrap();
         HttpClient::with_config(HttpClientPolicy::default(), config).unwrap()
     }
 
-    fn received(&self) -> Value {
+    pub(super) fn received(&self) -> Value {
         self.requests
             .recv_timeout(Duration::from_secs(15))
-            .expect("Vertex request")
+            .expect("TLS fixture request")
     }
 }
 
@@ -253,6 +275,101 @@ fn assert_signature(body: &Value) {
             .into_iter()
             .any(|part| part["thoughtSignature"] == "fixture-signature")
     );
+}
+
+#[test]
+fn vertex_key_discovers_litellm_models_and_caches_express_count_tokens() {
+    let directory = TempDir::new().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    setup(&root);
+    let config_path = root.join("config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    let mut regional = config["providers"][0].clone();
+    regional["id"] = json!("vertex-project");
+    regional["name"] = json!("Vertex project");
+    regional["vertex"]["project"] = json!("fixture-project");
+    config["providers"].as_array_mut().unwrap().push(regional);
+    std::fs::write(&config_path, config.to_string()).unwrap();
+
+    let now = crate::util::system_now();
+    let prices =
+        emp_state::usage::pricing::PriceCatalog::new(root.join("state/api_prices.json"), now);
+    prices
+        .save_litellm_snapshot(
+            &json!({
+                "vertex_ai/gemini-future-fixture":{"litellm_provider":"vertex_ai","mode":"chat",
+                    "input_cost_per_token":0.001,"output_cost_per_token":0.002,
+                    "max_input_tokens":123456,"max_output_tokens":4096,
+                    "supports_vision":true,"supports_reasoning":true},
+                "gemini-2.5-flash":{"litellm_provider":"vertex_ai-language-models","mode":"chat",
+                    "max_input_tokens":123,"max_output_tokens":456,"supports_vision":false},
+                "gemini-unsupported-fixture":{"litellm_provider":"vertex_ai-language-models","mode":"chat"},
+                "gemini-image-fixture":{"litellm_provider":"vertex_ai","mode":"image_generation"},
+                "gemini/gemini-developer-fixture":{"litellm_provider":"gemini","mode":"chat"},
+            }),
+            now - 1.0,
+        )
+        .unwrap();
+    let upstream = VertexFixture::start();
+    let server = server(&root, &upstream);
+    let token = format!("X-EMP-Session: {}", server.session_token());
+    let origin = format!("Origin: http://{}", server.local_addr());
+    let discover = |body: Value| {
+        let wire = post(
+            &server,
+            "/api/providers/discover",
+            body.to_string().as_bytes(),
+            &[&token, &origin],
+        );
+        assert!(wire.starts_with("HTTP/1.1 200"), "{wire}");
+        serde_json::from_str::<Value>(wire.split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    let reference = discover(json!({"provider":"vertex-project"}));
+    assert!(upstream.requests.try_recv().is_err());
+    let reference = reference["models"].as_array().unwrap();
+    assert!(
+        reference
+            .iter()
+            .any(|model| model["upstream_id"] == "gemini-unsupported-fixture")
+    );
+    assert!(!reference.iter().any(|model| matches!(
+        model["upstream_id"].as_str(),
+        Some("gemini-image-fixture" | "gemini-developer-fixture")
+    )));
+    let express = discover(json!({"provider":"vertex"}));
+    let models = express["models"].as_array().unwrap();
+    assert_eq!(models.len(), 2);
+    let known = &models[0];
+    assert_eq!(known["upstream_id"], "gemini-2.5-flash");
+    assert_eq!(known["catalog_source"], "official");
+    assert!(known["context_window"].as_u64().unwrap() > 123);
+    assert_eq!(known["max_input_tokens"], 123);
+    let future = &models[1];
+    assert_eq!(future["upstream_id"], "gemini-future-fixture");
+    assert_eq!(future["catalog_source"], "litellm");
+    assert_eq!(future["availability"], "count_tokens_verified");
+    assert_eq!(future["context_window"], 123456);
+    assert_eq!(future["output_limit"], 4096);
+    assert_eq!(future["supports_reasoning"], true);
+    assert_eq!(future["input_modalities"], json!(["text", "image"]));
+    let probes: Vec<_> = upstream.requests.try_iter().collect();
+    assert!(probes.iter().any(|probe| probe["path"]
+        == "/v1/publishers/google/models/gemini-unsupported-fixture:countTokens"));
+    for probe in probes {
+        assert_eq!(probe["headers"]["x-goog-api-key"], "fixture-only");
+        assert!(probe["headers"]["authorization"].is_null());
+        assert_eq!(probe["body"]["contents"][0]["parts"][0]["text"], "Hello");
+    }
+    assert_eq!(
+        discover(json!({"provider":"vertex"}))["updated_at"],
+        express["updated_at"]
+    );
+    assert_eq!(
+        discover(json!({"provider":"vertex","cached":true,"selected":["gemini-future-fixture"]}))["added"],
+        1
+    );
+    assert!(upstream.requests.try_recv().is_err());
+    server.shutdown().unwrap();
 }
 
 #[test]

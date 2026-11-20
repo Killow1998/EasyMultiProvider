@@ -18,6 +18,17 @@ Provider summaries include only that provider's records. Input, output and
 priced costs are summed; missing usage remains missing and known zero-cost
 usage remains zero. Use **Statistics** for date and category breakdowns.
 
+## Personal OpenAI image credits
+
+Add an OpenAI API service with your project Key, then select it under image
+routing with the credit period, expiry and budget. EMP prioritizes that project
+for Codex image generation and editing while its local estimate is within the
+chosen threshold. Up to ten image requests can be in flight on one EMP. When
+credits are unavailable before dispatch, Codex image tools can use an eligible
+configured subscription. Check the actual balance and rate limits on the
+OpenAI Platform. [Credit coverage](https://developers.openai.com/api/docs/guides/chatgpt-api-credits#what-the-credits-cover) ·
+[Organization limits](https://platform.openai.com/settings/organization/limits)
+
 ## Official provider balances
 
 The service summary's Credits position displays DeepSeek and Moonshot/Kimi balances.

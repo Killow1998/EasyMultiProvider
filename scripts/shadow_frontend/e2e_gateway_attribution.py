@@ -14,7 +14,7 @@ from local_backend import request, start_backend, wait_for
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, required=True)
+    parser.add_argument('--binary', type=Path, required=True, help='EMP binary beside the matching Gateway module')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -48,7 +48,8 @@ def main():
                 'protocol': 'chat_completions', 'base_url': f'http://127.0.0.1:{upstream.server_port}/v1'}],
             'models': [{'id': 'fixture/' + alias, 'provider': 'fixture', 'upstream_id': model, 'enabled': True}
                 for alias, model in [('model', 'upstream-one'), ('second', 'upstream-two')]]}
-        backend, url, _, management = start_backend(stack, args.binary.resolve(), root, config)
+        backend, url, _, management = start_backend(stack, args.binary.resolve(), root, config,
+                                                    modules=('gateway',))
         _, connection = request(backend + '/api/gateway', headers=management)
         _, device = request(backend + '/api/gateway/clients', {'name': 'Pi workstation'}, management)
         assert request(backend + '/api/gateway/clients', {'name': 'Spare device'}, management)[0] == 200

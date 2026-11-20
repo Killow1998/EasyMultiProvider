@@ -46,7 +46,10 @@ fn saved_device_keys_use_credential_recovery_without_rotating_the_master_key() {
     let vault = open_vault_with(&config, &state, false).unwrap();
     let clients =
         crate::services::gateway_clients::GatewayClients::open(path.clone(), &vault).unwrap();
-    let saved = clients.issue("Test PC", None, &vault).unwrap();
+    use crate::services::modules::{Modules, Startup};
+    let modules = Modules::open(state.join("modules"), Startup::Normal).unwrap();
+    let saved =
+        serde_json::to_value(clients.issue("Test PC", None, &vault, &modules).unwrap()).unwrap();
     fs::remove_file(state.join("master.key")).unwrap();
     assert!(matches!(
         open_vault_with(&config, &state, false),
@@ -65,7 +68,10 @@ fn saved_device_keys_use_credential_recovery_without_rotating_the_master_key() {
         .unwrap();
     assert!(recoverable(&error));
     let restored = crate::services::gateway_clients::GatewayClients::open(path, &vault).unwrap();
-    assert_eq!(restored.list()[0]["api_key"], saved["api_key"]);
+    assert_eq!(
+        serde_json::to_value(restored.list()).unwrap()[0]["api_key"],
+        saved["api_key"]
+    );
 }
 
 #[test]

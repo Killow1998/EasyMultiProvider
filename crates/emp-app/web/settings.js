@@ -1,8 +1,29 @@
 // Feature state is private; the page supplies current data and UI operations.
-function createSettings({getState, cloneState, persistState, openModal, api, notice, $, esc, t, tr, modelName, quotaDisplay, help, contextHelp, openAppIcon, addService, presentationOptions = () => '', collaborationHelp = () => ''}) {
-  const gatewaySettings = createGatewaySettings({api, openModal, notice, $, esc, tr, help});
-  const decisions = createDecisionSettings({getState, cloneState, persistState, openModal, api, $, esc, tr, help, addService, openGateway:gatewaySettings.open});
-  const aggregates = createAggregateSettings({getState, cloneState, persistState, openModal, $, esc, tr, modelName, help});
+function createSettings({getState, cloneState, persistState, openModal, api, notice, modules = null, $, esc, t, tr, modelName, quotaDisplay, help, contextHelp, openAppIcon, addService, presentationOptions = () => '', collaborationHelp = () => ''}) {
+  async function openGateway(back) {
+    await modules?.loadPanel('gateway');
+    return createGatewaySettings({api, openModal, notice, $, esc, tr, help}).open(back);
+  }
+  async function openDecision(back) {
+    await modules?.loadPanel('decision');
+    return createDecisionSettings({getState, cloneState, persistState, openModal, api, $, esc, tr, help, addService, openGateway:openDecisionConnection}).open(back);
+  }
+  async function openAggregates(back) {
+    await modules?.loadPanel('aggregate');
+    return createAggregateSettings({getState, cloneState, persistState, openModal, $, esc, tr, modelName, help}).open(back);
+  }
+  async function openDecisionConnection(back) {
+    if (modules?.active('gateway') !== false) return openGateway(back);
+    const data = await api('/api/decisions/connection');
+    openModal(tr('modules.decision_api'), `<div class="setting-row routing-mode"><label for="decision_local_key">${tr('modules.decision_key')}</label><div class="input-action">
+      <input id="decision_local_key" type="password" value="${esc(data.api_key)}" readonly>
+      <button type="button" class="secondary" data-copy-decision>${tr('modules.copy_key')}</button></div></div>`,
+      '',null,null,{back});
+    $('modal_body').querySelector('[data-copy-decision]').onclick = async () => {
+      try { await navigator.clipboard.writeText(data.api_key); notice(tr('modules.key_copied')); }
+      catch(error) { notice(error.message,true); }
+    };
+  }
   function openSettings(section) {
     const categories = [
       ['general', 'models.settings_general', 'models.settings_general_help'],
@@ -16,17 +37,17 @@ function createSettings({getState, cloneState, persistState, openModal, api, not
     }
     const reopen = () => openSettings(section);
     const state = getState();
-    const toggle = (id, enabled, label, description) => `<div class="setting-row"><div><div class="setting-title" id="setting-${id}-label">${esc(tr(label))}</div><p class="setting-help" id="setting-${id}-help" title="${esc(tr(description))}">${esc(tr(description))}</p></div><button type="button" class="setting-switch" role="switch" aria-checked="${enabled}" aria-labelledby="setting-${id}-label" aria-describedby="setting-${id}-help" data-ui-action="setting-toggle" data-id="${id}"></button></div>`;
+    const toggle = (id, enabled, label, description) => `<div class="setting-row"><div class="setting-title collaboration-title"><span id="setting-${id}-label">${esc(tr(label))}</span>${help(tr(description))}</div><button type="button" class="setting-switch" role="switch" aria-checked="${enabled}" aria-labelledby="setting-${id}-label" data-ui-action="setting-toggle" data-id="${id}"></button></div>`;
     const quotaChoice = `<div class="setting-row"><div class="setting-title" id="quota-display-label">${tr("models.quota_display")}</div><div class="quota-display-choice" role="group" aria-labelledby="quota-display-label">${['remaining','used'].map(mode => `<button type="button" class="secondary" data-ui-action="quota-display" data-mode="${mode}" aria-pressed="${quotaDisplay.mode() === mode}">${mode === 'remaining' ? tr("core.remaining") : tr("core.used")}</button>`).join('')}</div></div>`;
     const backgroundEnabled = typeof state.background_compaction === 'boolean' ? state.background_compaction : state.codex_context_settings?.background_enabled === true;
-    const background = `<div class="setting-row"><div><div class="setting-title collaboration-title"><span id="background-compaction-label">${tr('models.background_compaction')}</span>${help(contextHelp.background())}</div><p class="setting-help">${tr('models.background_compaction_hint')}</p></div><button type="button" class="setting-switch" role="switch" aria-checked="${backgroundEnabled}" aria-labelledby="background-compaction-label" data-ui-action="setting-toggle" data-id="background_compaction"></button></div>`;
+    const background = `<div class="setting-row"><div><div class="setting-title collaboration-title"><span id="background-compaction-label">${tr('models.background_compaction')}</span>${help(tr('models.background_compaction_hint') + '\n\n' + contextHelp.background())}</div></div><button type="button" class="setting-switch" role="switch" aria-checked="${backgroundEnabled}" aria-labelledby="background-compaction-label" data-ui-action="setting-toggle" data-id="background_compaction"></button></div>`;
     const presentation = presentationOptions(quotaChoice) || quotaChoice;
-    const mode = state.external_collaboration || 'off';
-    const collaboration = `<div class="setting-row collaboration-setting"><div><div class="setting-title collaboration-title"><span id="collaboration-label">${tr("models.external_collaboration")}</span>${collaborationHelp()}</div><p class="setting-help" id="collaboration-help">${esc(tr('models.collaboration_' + mode + '_help'))}</p></div><div class="quota-display-choice" role="group" aria-labelledby="collaboration-label" aria-describedby="collaboration-help">${['off','on_demand','on'].map(value => `<button type="button" class="secondary" data-ui-action="setting-toggle" data-id="external_collaboration" data-mode="${value}" aria-pressed="${mode === value}">${tr('models.collaboration_' + value)}</button>`).join('')}</div></div>`;
+    const mode = state.external_collaboration === 'off' ? 'off' : 'on';
+    const collaboration = `<div class="setting-row collaboration-setting"><div><div class="setting-title collaboration-title"><span id="collaboration-label">${tr("models.external_collaboration")}</span>${collaborationHelp()}</div></div><div class="quota-display-choice" role="group" aria-labelledby="collaboration-label">${['off','on'].map(value => `<button type="button" class="secondary" data-ui-action="setting-toggle" data-id="external_collaboration" data-mode="${value}" aria-pressed="${mode === value}">${tr('models.collaboration_' + value)}</button>`).join('')}</div></div>`;
     const routing = `<div class="setting-row"><div class="setting-title">${tr("models.routing_settings")}</div><button type="button" class="secondary" data-icon="chevron-right" data-ui-action="routing-settings" aria-label="${tr("models.open_routing_settings")}"></button></div>`;
     const ultra = `<div class="setting-row"><div class="setting-title">${tr('models.ultra_actual_effort')}</div><button type="button" class="secondary" data-icon="chevron-right" data-ui-action="ultra-settings" aria-label="${tr('models.ultra_actual_effort')}"></button></div>`;
-    const gateway = `<div class="setting-row"><div class="setting-title">${tr('core.gateway_connection')}</div><button type="button" class="secondary" data-icon="chevron-right" data-gateway-open aria-label="${tr('core.gateway_connection')}"></button></div>`;
-    const decision = `<div class="setting-row"><div><div class="setting-title">${tr('core.decision_models')}</div><p class="setting-help">${esc(state.providers.find(provider => provider.id === state.decision_provider)?.decision_api?.model || tr('core.decision_unconfigured'))}</p></div><button type="button" class="secondary" data-icon="chevron-right" data-decision-open aria-label="${tr('core.decision_models')}"></button></div>`;
+    const gateway = modules?.active('gateway') === false ? '' : `<div class="setting-row"><div class="setting-title">${tr('core.gateway_connection')}</div><button type="button" class="secondary" data-icon="chevron-right" data-gateway-open aria-label="${tr('core.gateway_connection')}"></button></div>`;
+    const decision = modules?.active('decision') === false ? '' : `<div class="setting-row"><div><div class="setting-title">${tr('core.decision_models')}</div><p class="setting-help">${esc(state.providers.find(provider => provider.id === state.decision_provider)?.decision_api?.model || tr('core.decision_unconfigured'))}</p></div><button type="button" class="secondary" data-icon="chevron-right" data-decision-open aria-label="${tr('core.decision_models')}"></button></div>`;
     const quit = window.EMP_PREVIEW ? '' : `<div class="setting-row"><div class="setting-title">${t('quit_emp')}</div><button type="button" class="secondary" data-icon="chevron-right" data-quit-open aria-label="${t('quit_emp')}"></button></div>`;
     const rows = {
       general:presentation + `<div class="setting-row"><div class="setting-title">${tr('icons.title')}</div><button type="button" class="secondary" data-icon="chevron-right" data-app-icon-open aria-label="${tr('icons.title')}"></button></div>` + toggle('auto_enable_on_start', state.auto_enable_on_start !== false, 'models.start_emp_automatically', 'models.enable_emp_when_the_app_opens') + gateway + quit,
@@ -37,7 +58,7 @@ function createSettings({getState, cloneState, persistState, openModal, api, not
     const decisionButton = $('modal_body').querySelector('[data-decision-open]');
     const iconButton = $('modal_body').querySelector('[data-app-icon-open]');
     if (iconButton) iconButton.onclick = () => openAppIcon(reopen);
-    if (decisionButton) decisionButton.onclick = () => decisions.open(reopen);
+    if (decisionButton) decisionButton.onclick = () => openDecision(reopen).catch(error => notice(error.message, true));
     const gatewayButton = $('modal_body').querySelector('[data-gateway-open]');
     const quitButton = $('modal_body').querySelector('[data-quit-open]');
     if (quitButton) quitButton.onclick = () => openModal(t('quit_emp'), `<p>${tr('core.quit_confirm')}</p>`, t('quit_emp'), async () => {
@@ -48,7 +69,7 @@ function createSettings({getState, cloneState, persistState, openModal, api, not
     gatewayButton.onclick = async () => {
       gatewayButton.disabled = true;
       try {
-        await gatewaySettings.open(reopen);
+        await openGateway(reopen);
       } catch (error) { notice(error.message, true); }
       finally { gatewayButton.disabled = false; }
     };
@@ -59,7 +80,7 @@ function createSettings({getState, cloneState, persistState, openModal, api, not
     const candidate = cloneState(), key = element.dataset.id;
     if (key === 'subscription_search') candidate.subscription_search = {enabled, account_id:''};
     else if (key === 'auto_enable_on_start' || key === 'background_compaction') candidate[key] = enabled;
-    else if (key === 'external_collaboration' && ['off','on_demand','on'].includes(element.dataset.mode)) candidate[key] = element.dataset.mode;
+    else if (key === 'external_collaboration' && ['off','on'].includes(element.dataset.mode)) candidate[key] = element.dataset.mode;
     else return;
     const controls = [...$('modal_body').querySelectorAll('[data-ui-action="setting-toggle"]')].map(button => ({button,disabled:button.disabled}));
     controls.forEach(({button}) => button.disabled = true);
@@ -67,11 +88,10 @@ function createSettings({getState, cloneState, persistState, openModal, api, not
       await persistState(tr("models.settings_saved"), candidate);
       if (key === 'external_collaboration' && element.isConnected) {
         controls.filter(({button}) => button.dataset.id === key).forEach(({button}) => button.setAttribute('aria-pressed', String(button.dataset.mode === candidate[key])));
-        $('collaboration-help').textContent = tr('models.collaboration_' + candidate[key] + '_help');
       } else element.setAttribute('aria-checked', String(enabled));
     } catch (error) { if (element.isConnected) $('modal_status').textContent = error.message; }
     finally { controls.forEach(({button,disabled}) => button.disabled = disabled); }
   }
 
-  return {open:openSettings, toggle:toggleSetting, openAggregates:() => aggregates.open(null)};
+  return {open:openSettings, toggle:toggleSetting, openDecision, openGateway, openAggregates};
 }

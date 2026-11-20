@@ -494,7 +494,31 @@ pub fn prepare_migration_export(
 ) -> MigrationResult<(Value, MigrationExportSummary)> {
     let selected = groups.copied().unwrap_or_else(ExportGroups::all);
     let selected_list = selected.as_btree();
+    let shared: BTreeSet<_> = config["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|account| account["workspace_shared"] == true)
+        .map(|account| id_of(account).to_owned())
+        .collect();
     let mut config = select_export_config(config, groups)?;
+    if let Some(accounts) = config["accounts"].as_array_mut() {
+        accounts.retain(|account| !shared.contains(id_of(account)));
+    }
+    if let Some(groups) = config["model_groups"].as_array_mut() {
+        groups.retain(|group| {
+            !group["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .any(|source| {
+                    source
+                        .split_once('/')
+                        .is_some_and(|(service, _)| shared.contains(service))
+                })
+        });
+    }
 
     let mut accounts = Vec::new();
     for raw in config

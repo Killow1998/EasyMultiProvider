@@ -48,7 +48,7 @@ function collaborationComparison() {
     const [min, max] = values.map(value => value.toFixed(2));
     return esc(tr('models.collaboration_ratio', {ratio:min === max ? min : `${min}–${max}`}));
   };
-  const descriptions = modes.map(mode => `<dt>${tr('models.collaboration_' + mode)}</dt><dd>${tr('models.collaboration_' + mode + '_help')}</dd>`).join('');
+  const descriptions = ['off','on'].map(mode => `<dt>${tr('models.collaboration_' + mode)}</dt><dd>${tr('models.collaboration_' + mode + '_help')}</dd>`).join('');
   const tables = ['tps','time'].map(metric => {
     const rows = collaborationMeasurements.map(row => `<tr><th scope="row">${esc(row.model)}</th>${modes.map(mode => {
       const value = row[mode];

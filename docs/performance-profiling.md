@@ -71,6 +71,90 @@ credential identity and externally updated Codex catalogs; replacing reads with
 a stale snapshot is not an acceptable speed improvement. Preserve byte-level
 wire contracts when changing serialization and count semantics.
 
+## Release candidate comparison (2026-11-19 Pacific)
+
+Linux x86_64 tests compared `v0.14.3`, `c6c85f3` and the performance
+patch with the same Rust toolchain and repository Release profile. Each
+load case used a fresh EMP, disposable configuration and a loopback
+provider. The provider checked full history hashes and continuation IDs.
+All 468 responses completed.
+
+| Case | v0.14.3 RSS / CPU | Before patch RSS / CPU | After patch RSS / CPU |
+| --- | ---: | ---: | ---: |
+| Core idle | 18.9 MiB / <0.1% | 19.4 MiB / <0.1% | 20.3 MiB / <0.1% |
+| Four 256 KiB WebSocket clients | 29 MiB / 0.29% | 30 MiB / 0.33% | 29 MiB / 0.25% |
+| Four 16 MiB WebSocket clients | 218 MiB / 1.74% | 203 MiB / 1.73% | 211 MiB / 1.76% |
+| Eight 16 MiB WebSocket clients | 381 MiB / 3.51% | 381 MiB / 3.33% | 397 MiB / 3.37% |
+| Four 16 MiB HTTP/SSE clients | 245 MiB / 7.04% | 244 MiB / 7.90% | 246 MiB / 7.06% |
+
+CPU is an average across eight logical CPUs, including the same simulated
+upstream waits in every load case. Idle RSS is the median over 24 seconds.
+Load RSS takes the larger of the sampled peak and Linux `VmHWM`. The
+eight-client cases returned to about 29 MiB RSS three seconds after
+disconnect. After the patch, Core with all four workers running used
+21.8 MiB combined PSS while idle and signed out of the workspace, compared
+with 17.3 MiB PSS for Core alone.
+
+Native collaboration preparation now edits the projected request's tool
+metadata in place. This removes a complete request clone. The measured
+gain was in HTTP/SSE CPU. The highest WebSocket peak was on the patched
+candidate, and the three-second recovery readings were similar.
+
+In headless Firefox, two fresh sessions per version rendered the same 80
+model rows. Median foreground content-process PSS went from 45.4 MiB to
+46.9 MiB before the patch and 47.1 MiB after it. The content process used
+about 3.3–3.5% of one core in the foreground and at most 0.08% in the
+background. Median script time for a full dashboard redraw was 7.8, 9.3
+and 8.8 ms respectively. Initial HTML, JavaScript and CSS transfer size
+increased by about 40 KiB. Browser-wide CPU samples include Firefox's
+parent and compositor processes.
+
+With the Team module active, dashboard startup now reads the local team
+status once instead of twice and reads the module list twice instead of
+three times. Both versions load the panel script and budget notices once.
+These dashboard reads use the member's local EMP.
+
+### Workspace traffic
+
+A disposable HTTPS workspace held ten members plus a deployment
+administrator and four approved subscriptions, each with a synthetic
+5.5 KiB access token. Two member EMPs independently synchronized their
+accounts and sent inference to a loopback provider. One member continued
+inference with the workspace stopped. On restart, its queued report
+produced exactly 100 records. Retransmission of report events retained
+the original count. The member saw its own USD total and daily limit,
+the administrator saw the aggregate, and the second member could read
+the first member's profile only while sharing was enabled.
+
+| Operation | TLS bytes in both directions |
+| --- | ---: |
+| Sync identity and four subscriptions | 31.0 KiB |
+| Read shared subscription status | 4.5 KiB |
+| Read the ten-member profile directory | 5.0 KiB |
+| Read a member's usage or profile | 4.2–5.0 KiB |
+| Read the administrator's 30-day usage table | 8.2 KiB |
+| Read the approval roster | 6.0 KiB |
+| Report 1 / 10 / 100 usage records | 4.1 / 7.3 / 28.2 KiB |
+| Budget status and heartbeat together | 7.5 KiB per minute |
+
+The HTTPS fixture closed each HTTP connection. The measurements count
+TLS handshakes and records at the TCP payload boundary. A deployed proxy
+with connection reuse can use fewer bytes. Model traffic is direct to
+the upstream and is outside these workspace figures. An unchanged sync
+and a one-subscription renewal transferred the same four-subscription
+snapshot. EMP applied only the changed local record after renewal.
+
+Assuming 22 days per month, 8 hours of online time per day, 100 shared
+model turns reported individually, one account sync and four usage views
+per day, one member uses about 92 MB per month, including 43 MB sent by
+the VPS. Ten members and two hours per day of visible administrator
+approval polling use about 1.02 GB total, including 495 MB sent by the
+VPS. A device online continuously for 30 days uses about 333 MB from
+budget status and heartbeat alone. The tested idle average was 1.03 kbps
+per online device. Simultaneous sync for ten members sends about 270 KiB
+from the VPS. These estimates use decimal MB and GB. Profile activity
+history and the number of model groups affect report sizes.
+
 ## Published 0.13.23 process resources (2026-11-01 UTC)
 
 Two runs used the published Linux x86_64 binary on an i5-10310U (four cores,

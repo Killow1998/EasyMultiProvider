@@ -18,7 +18,7 @@ pub fn run(args: &[String]) -> Result {
         return Err("usage: cargo xtask package-smoke".to_owned());
     }
     let target = Target::current()?;
-    let artifacts = project_root().join("artifacts");
+    let artifacts = crate::package::artifacts(&project_root());
     let package = artifacts.join(target.update_package());
     let binary = artifacts.join(format!(
         "{}{}",
@@ -156,6 +156,28 @@ fn update_in(
         serde_json::json!({"host": "127.0.0.1", "port": port}).to_string(),
     )
     .map_err(error)?;
+    let modules = root.join("state/modules");
+    fs::create_dir_all(&modules).map_err(error)?;
+    let mut installs = serde_json::Map::new();
+    for module in emp_modules::Module::ALL {
+        let asset = package.with_file_name(module.asset());
+        let digest = sha256_file(&asset)?;
+        let destination = modules.join(format!(
+            "{}-{digest}{}",
+            module.id(),
+            target.executable_suffix()
+        ));
+        copy(&asset, &destination)?;
+        crate::make_executable(&destination)?;
+        installs.insert(module.id().into(), serde_json::json!({
+            "enabled": true, "versions": {}, "artifact": {"digest":digest, "version":module.version()},
+        }));
+    }
+    fs::write(
+        modules.join("modules.json"),
+        serde_json::to_vec(&installs).map_err(|e| e.to_string())?,
+    )
+    .map_err(error)?;
     let mut parent = parent::Parent::start(&installed, root, &config, port)?;
     let plan = serde_json::json!({
         "target": installed_target,
@@ -165,6 +187,7 @@ fn update_in(
         "args": ["serve", "--config", config, "--port", port.to_string()],
         "version": version,
         "nonce": "packaged-smoke",
+        "modules_prepared": true,
     });
     let plan_path = job.join("plan.json");
     fs::write(&plan_path, plan.to_string()).map_err(error)?;
@@ -236,6 +259,31 @@ fn update_in(
             return Err("replacement/rollback service did not become healthy".to_owned());
         }
         std::thread::sleep(Duration::from_millis(200));
+    }
+    let session = fs::read(root.join("state/web-session.json")).map_err(error)?;
+    let session: serde_json::Value = serde_json::from_slice(&session).map_err(|e| e.to_string())?;
+    let token = session["token"]
+        .as_str()
+        .ok_or("updated session is unavailable")?;
+    let (status, result) = http(port, "GET", "/api/modules", &[("X-EMP-Session", token)])?;
+    let result: serde_json::Value = serde_json::from_slice(&result).map_err(|e| e.to_string())?;
+    if status != 200
+        || !result["modules"].as_array().is_some_and(|modules| {
+            modules.len() == installs.len()
+                && modules.iter().all(|row| {
+                    row["active"] == true
+                        && row["id"]
+                            .as_str()
+                            .and_then(|id| installs.get(id))
+                            .is_some_and(|install| {
+                                row["active_revision"] == install["artifact"]["digest"]
+                            })
+                })
+        })
+    {
+        return Err(format!(
+            "updated EMP did not start all packaged modules: {result}"
+        ));
     }
     if sha256_file(&installed)? != original {
         return Err("installed binary differs from the packaged binary".to_owned());

@@ -264,12 +264,26 @@ impl ServerHandle {
         let session_path = web_session_path(config_path)?;
         let session =
             load_or_create_web_session(&session_path, now).map_err(AppError::WebSession)?;
+        use crate::services::modules::Startup;
+        let update = match &markers.ready_path {
+            None => Startup::Normal,
+            Some(marker) => {
+                if emp_state::update::worker::validate_startup_marker(crate::VERSION, marker)
+                    .map_err(std::io::Error::other)?
+                {
+                    Startup::PreparedUpdate
+                } else {
+                    Startup::BundledUpdate
+                }
+            }
+        };
         let backend = BackendState::new(
             config_path,
             codex_binary,
             native_auth_path,
             http_client_override,
             diagnostics,
+            update,
         )?;
         let listener = TcpListener::bind((host, port))?;
         let local_addr = listener.local_addr()?;
@@ -287,6 +301,7 @@ impl ServerHandle {
             Arc::clone(&shutdown),
             Arc::clone(&shutdown_wake),
             Arc::clone(&backend.diagnostics),
+            Arc::clone(&backend.modules),
         );
         let state = Arc::new(ServerState {
             shutdown,
@@ -328,6 +343,16 @@ impl ServerHandle {
                     crate::services::account_catalog::run_refresh_worker(&state);
                 })?;
                 crate::services::account_catalog::request_refresh(&handle.state, false);
+            }
+            if handle
+                .state
+                .backend
+                .modules
+                .active(emp_modules::Module::Team)
+            {
+                handle.spawn_worker("emp-team-usage", |state| {
+                    crate::services::team::TeamState::run(&state);
+                })?;
             }
             handle.spawn_worker("emp-quota-sampler", |state| {
                 crate::services::quota::run_sampler(&state);

@@ -71,6 +71,7 @@ pub(crate) fn native_search_request(
         ("Accept".to_owned(), "application/json".to_owned()),
         ("User-Agent".to_owned(), format!("EMP/{VERSION}")),
     ]);
+    let mut denied = false;
     let credentials = native_subscription_headers(&state.backend.accounts.native_auth_path)
         .or_else(|| {
             config
@@ -80,6 +81,19 @@ pub(crate) fn native_search_request(
                 .flatten()
                 .filter(|account| account.get("enabled") != Some(&Value::Bool(false)))
                 .find_map(|account| {
+                    if state
+                        .backend
+                        .team
+                        .check_route(
+                            account["id"].as_str()?,
+                            state.backend.modules.active(emp_modules::Module::Team),
+                            None,
+                        )
+                        .is_err()
+                    {
+                        denied = true;
+                        return None;
+                    }
                     let path = account.get("auth_file")?.as_str()?;
                     let auth = state
                         .backend
@@ -92,8 +106,9 @@ pub(crate) fn native_search_request(
         });
     if let Some(credentials) = credentials {
         headers.extend(credentials);
-    } else if emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path)
-        == "local_key"
+    } else if denied
+        || emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path)
+            == "local_key"
     {
         return json_error_response(
             503,

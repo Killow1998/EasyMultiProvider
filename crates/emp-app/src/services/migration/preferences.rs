@@ -39,6 +39,8 @@ pub(super) fn resolve(
                 .map(|id| (id.to_owned(), account.clone()))
         })
         .collect();
+    owners.retain(|_, account| account["workspace_shared"] != true);
+    credentials.retain(|(id, _)| id == "@native" || owners.contains_key(id));
     owners.insert("@native".into(),json!({"name":"Native","hidden_models":current["native_hidden_models"],"model_context_windows":current["native_model_context_windows"]}));
     let mut result = Resolution {
         payload: payload.clone(),

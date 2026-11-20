@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+const FIRST_MAINTAINED_SERIES: u64 = 166;
+
 struct Cached {
     checked: Instant,
     value: Value,
@@ -238,6 +240,14 @@ impl RuntimeInventory {
         value["helper_source"] = chosen
             .map(|index| runtimes[index]["source"].clone())
             .unwrap_or(Value::Null);
+        value["outside_maintenance_window"] = json!(
+            value["installed"]
+                .as_str()
+                .and_then(|version| semver::Version::parse(version).ok())
+                .is_some_and(
+                    |version| version.major == 0 && version.minor < FIRST_MAINTAINED_SERIES
+                )
+        );
         value["runtimes"] = json!(runtimes);
         let cached = Arc::new(Cached {
             checked: Instant::now(),

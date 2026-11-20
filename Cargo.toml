@@ -6,6 +6,11 @@ members = [
     "crates/emp-core",
     "crates/emp-history",
     "crates/emp-integration",
+    "crates/emp-mod-aggregate",
+    "crates/emp-mod-decision",
+    "crates/emp-mod-gateway",
+    "crates/emp-mod-team",
+    "crates/emp-modules",
     "crates/emp-protocol",
     "crates/emp-router",
     "crates/emp-state",
@@ -14,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.14.3"
+version = "0.15.0"
 edition = "2024"
 license = "MIT"
 

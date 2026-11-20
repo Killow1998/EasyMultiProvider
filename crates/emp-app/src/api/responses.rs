@@ -98,6 +98,9 @@ pub(crate) fn responses_request(
         Err(RequestPreparationError::Route(error)) => {
             return ResponsesRequestResult::Buffered(route_resolution_response(error));
         }
+        Err(RequestPreparationError::TeamPermission(message)) => {
+            return ResponsesRequestResult::Buffered(request_router_error_response(403, message));
+        }
         Err(RequestPreparationError::MemoryUnavailable(reason)) => {
             return ResponsesRequestResult::Buffered(request_router_error_response(
                 503,

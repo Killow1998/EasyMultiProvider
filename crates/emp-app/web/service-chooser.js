@@ -17,6 +17,7 @@ function createServiceChooser({tr, esc, presets, icon, openModal, getState}) {
     const vertex = !navigation.presets || navigation.presets.includes('vertex')
       ? card('vertex-provider-choose', 'Vertex AI', 'gemini', tr('services.vertex_models')) : '';
     const api = apiKeys.filter(key => presets[key] && (!navigation.presets || navigation.presets.includes(key))).map(key => card('official-provider-choose', esc(presets[key].name), key, tr("services.connect_an_api_service"), `data-provider="${esc(key)}"`)).join('') + vertex
+      + (!navigation.presets ? card('openai-image-credit-choose', tr('models.credit_service'), 'openai', tr('models.credit_service_hint')) : '')
       + card('service-custom-api', tr("services.custom_api"), 'custom', tr("services.enter_address_and_api_key"));
     const groups = navigation.presets ? group('API', api) : group(tr("services.codex_subscriptions"), codexChoices()) + group('Claude Code', claude) + group('API', api);
     openModal(tr("add_provider"), groups, '', null, null, {back:navigation.back, done:navigation.done, reopen:() => open(navigation)});

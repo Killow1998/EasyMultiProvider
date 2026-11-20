@@ -22,6 +22,9 @@ pub(super) fn switch(
             let id = body["account_id"]
                 .as_str()
                 .ok_or("login_account_required")?;
+            if state.backend.team.shared_subscription(id) {
+                return Err("login_account_required");
+            }
             let config = state
                 .backend
                 .configuration

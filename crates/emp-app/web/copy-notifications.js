@@ -7,5 +7,7 @@ registerUiCopy({
   'notifications.close':['关闭通知信箱','Close notification inbox'],
   'notifications.message':['消息','Message'],
   'notifications.error':['错误','Error'],
-  'notifications.storage':['保留此浏览器最近 50 条通知','Keeps the latest 50 notifications in this browser']
+  'notifications.storage':['保留此浏览器最近 50 条通知','Keeps the latest 50 notifications in this browser'],
+  'notifications.pending':['{count} 项待处理','{count} waiting for you'],
+  'notifications.more_waiting':['还有 {count} 项，处理后依次显示','{count} more will appear as you finish these']
 });

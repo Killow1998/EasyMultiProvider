@@ -366,6 +366,7 @@ async fn discovery_requests_carry_auth_headers_and_follow_pagination() {
     let models = discover_models(
         &client,
         anthropic_provider.as_object().expect("Anthropic provider"),
+        &[],
     )
     .await
     .expect("Anthropic discovery");

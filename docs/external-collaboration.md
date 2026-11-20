@@ -4,15 +4,16 @@ Codex 0.153.4 distinguishes plaintext collaboration calls using an explicitly
 empty `encrypted_function_args` list. Its V2 handler then emits a readable
 `agent_message`. An omitted list is not equivalent to an empty list.
 
-Native requests retain their official collaboration tools by default, including
-when external services are configured. **Settings > Cross-service subagents**
-has three modes, persisted as `external_collaboration`:
+As of EMP 0.15.0, **Settings > Cross-service subagents** has two modes, persisted
+as `external_collaboration`:
 
 | Mode | Value | Behavior |
 | --- | --- | --- |
-| Off (default) | `"off"` | Only Native GPT subscription subagents are allowed. External delegation returns an error explaining where to enable it. |
-| On-demand recovery | `"on_demand"` | Keep official collaboration tools and forward plaintext directly. Recover only encrypted subagent tasks or agent messages with GPT-6 Luna, low effort, on their original subscription. |
-| On | `"on"` | Rewrite native collaboration tools for plaintext compatibility, permitting external children without a recovery inference. The speed measurements below distinguish client versions and test scope. |
+| On (default) | `"on"` | Use plaintext collaboration tools with external subagents. |
+| Off | `"off"` | Only Native GPT subscription subagents are allowed. An explicit off setting carries forward. |
+
+Older releases offered On-demand recovery (`"on_demand"`), which used a separate
+inference to transcribe encrypted tasks on their original subscription.
 
 ### Measurements by date, client version and scope
 

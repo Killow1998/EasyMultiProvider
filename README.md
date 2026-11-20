@@ -67,9 +67,11 @@ own OpenAI API key, use an existing Other subscription, or switch to an EMP loca
 key. Restart Codex Runtime after switching. Removing the local key restores the
 native connection while EMP keeps running.
 
-For API clients and port forwarding, open **Settings → General → Gateway
-connection** to copy the separate, stable **EMP Gateway Key**. Changing Native
-sign-in keeps this key valid. [Gateway API and Jev](docs/gateway.md).
+Open **Modules** beside **Settings** to install Device Gateway, Decision API,
+Aggregate Routing or Team Workspace. For API clients and port forwarding, open
+the Device Gateway settings to copy the **EMP Gateway Key**. Changing Native
+sign-in keeps this key valid. [Official modules](docs/official-modules.md) ·
+[Gateway API](docs/gateway.md).
 
 To switch an existing Native subscription to a local key, open **Change sign-in
 method → EMP local key**. Keep the subscription as an Other account or
@@ -233,7 +235,7 @@ The recordings use a Chinese interface with Chinese and English captions.
   distinct recent state marks completed requests and expires automatically. A
   lost event stream clears active confidence.
 - Preserve text, image, reasoning, and structured tool capabilities when the destination reports or supports them.
-- Choose **Settings > Cross-service subagents** to allow external catalog models as children. The default **Off** keeps Native GPT subagents; **On-demand recovery** recovers encrypted tasks when needed, and **On** uses plaintext collaboration. Codex owns child tasks and permissions; the help compares speed and workflow time.
+- **Settings > Cross-service subagents** lets you allow or disable external catalog models as children. It defaults to on. Codex owns child tasks and permissions.
 - Let external models use Codex standalone web search. EMP prefers the current `.codex` login and can fall back to an available imported account without exposing Provider credentials.
 
 EMP refreshes the model list automatically. An already-open Codex model picker
@@ -272,11 +274,8 @@ This migrates only the selected conversation, backs up changed history, and
 preserves its parent and other conversations. It rejects migration while the
 selected conversation is being written. Reopen Codex to load native settings,
 then resume the same conversation. `CODEX_HOME` selects the Codex home as usual.
-This tool converts EMP-owned checkpoints; it cannot decrypt native encrypted
-agent messages. For those messages, the existing Cross-service subagents >
-On-demand recovery setting can transcribe them for the forwarded request using
-the original observed account, adding GPT usage without rewriting the saved
-conversation. No separate history-recovery control is needed.
+The tool converts EMP-owned checkpoints. Use the original Native Codex route
+to resume a turn that still needs encrypted agent messages.
 
 For details about external subagent delegation, follow-up tasks, and tool calls, see [external collaboration compatibility](docs/external-collaboration.md).
 

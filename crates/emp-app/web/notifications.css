@@ -33,3 +33,25 @@
 #notification button:focus-visible{outline-offset:0}
 @media(max-width:650px){#notification{top:10px}#notification_mailbox{right:16px;bottom:16px}#notification_inbox{right:16px;bottom:74px}}
 @media(prefers-reduced-motion:reduce){#notification_mailbox{transition:none}}
+#notification_actions{display:flex;align-items:center;gap:6px;flex:none}
+#notification_actions:empty{display:none}
+#notification .notification-action{height:30px;min-height:30px;margin:0;padding:0 12px;border-radius:999px;border:1px solid var(--border-strong);background:var(--panel);color:var(--text);font-size:13px;font-weight:500;white-space:nowrap}
+#notification .notification-action:hover{background:var(--secondary-hover)}
+#notification .notification-action.primary{border-color:var(--accent);background:var(--accent);color:#fff}
+#notification .notification-action.primary:hover{filter:brightness(1.06)}
+#notification[data-persist=true]{padding-bottom:12px}
+#notification[data-persist=true] .notification-track{display:none}
+#notification_close[hidden]{display:none}
+/* Stacked persistent notices: a header line, up to three action rows, then a waiting count. */
+#notification[data-stack=true]:popover-open{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px 10px;width:min(480px,calc(100vw - 32px));border-radius:20px;padding:12px 14px}
+#notification[data-stack=true] #status{color:var(--muted);font-size:12px}
+#notification_stack{grid-column:1/-1;list-style:none;margin:0;padding:0;display:grid;gap:0}
+#notification_stack[hidden]{display:none}
+#notification_stack li{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border)}
+#notification_stack p{flex:1;min-width:0;margin:0;color:var(--text);font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.notification-row-actions{display:flex;gap:6px;flex:none}
+#notification_stack .notification-stack-more{justify-content:center;color:var(--muted);font-size:12px;padding-bottom:0}
+/* Persistent notices (approvals, transfer codes) can stay for minutes, so they settle below the sticky header
+   instead of covering its buttons; inside a dialog the header is already behind the backdrop. */
+#notification[data-persist=true]{top:64px}
+body:has(#modal_backdrop:not(.hidden)) #notification[data-persist=true]{top:16px}

@@ -57,7 +57,7 @@ def main():
         for language in ['zh-CN', 'en']:
             for theme in ['light', 'dark']:
                 request(browser.base + '/window/rect', {'width': 640 if theme == 'dark' else 1280, 'height': 900})
-                browser.execute('for(const [id,value] of [["language_select",arguments[0]],["theme_select",arguments[1]]]){const select=document.getElementById(id);select.value=value;select.dispatchEvent(new Event("change",{bubbles:true}));}document.getElementById("shadow_migration_open").click();', language, theme)
+                browser.execute('setLanguage(arguments[0]);setTheme(arguments[1]);document.getElementById("shadow_migration_open").click();', language, theme)
                 # Language selection intentionally saves the error-language preference.
                 wait_for(lambda: json.loads((target / 'config.json').read_text()).get('language') == language)
                 before = (target / 'config.json').read_bytes()

@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 
 
 class Browser:
-    def __init__(self, stack, root, reduced_motion=1, system_access=False):
+    def __init__(self, stack, root, reduced_motion=1, system_access=False, download_dir=None):
         self.base = f'http://127.0.0.1:{free_port()}'
         log = stack.enter_context((root / 'geckodriver.log').open('w'))
         process = subprocess.Popen(['geckodriver', '--port', self.base.rsplit(':', 1)[1]] + (['--allow-system-access'] if system_access else []),
@@ -30,9 +30,14 @@ class Browser:
             except OSError:
                 return False
         wait_for(ready)
+        preferences = {'layout.css.devPixelsPerPx': '1.25', 'ui.prefersReducedMotion': reduced_motion, 'devtools.console.stdout.content': True}
+        if download_dir is not None:
+            download_dir.mkdir()
+            preferences.update({'browser.download.folderList': 2, 'browser.download.dir': str(download_dir),
+                                'browser.download.useDownloadDir': True})
         _, result = request(self.base + '/session', {'capabilities': {'alwaysMatch': {
             'browserName': 'firefox', 'moz:firefoxOptions': {'args': ['-headless'],
-            'prefs': {'layout.css.devPixelsPerPx': '1.25', 'ui.prefersReducedMotion': reduced_motion, 'devtools.console.stdout.content': True}}}}})
+            'prefs': preferences}}}})
         assert 'sessionId' in result['value'],result
         self.base += '/session/' + result['value']['sessionId']
         stack.callback(lambda: request(self.base, method='DELETE'))
@@ -216,6 +221,12 @@ def main():
         browser.execute('document.querySelector("#services .presentation-service-icon[data-request-error]").focus();')
         wait_for(lambda: browser.execute('return !document.querySelector(".presentation-service-error").hidden;'))
         assert browser.execute('return document.querySelector(".presentation-service-error").textContent.includes("401");')
+        assert browser.execute('return document.querySelector(".presentation-service-error").dataset.severity;') == 'error'
+        browser.execute("""presentationObserveRequestErrors({requests:[{request_id:'retry-fixture',
+            state:'active', provider_id:'demo', model_id:'demo/model', retries:[{status:502,reason:'network'}]}]});
+            updateActivityDots();""")
+        wait_for(lambda: browser.execute('return document.querySelector(".presentation-service-error").dataset.severity;') == 'warning')
+        assert browser.execute('return document.querySelector(".presentation-service-error").textContent.includes("502");')
         headers['X-EMP-Session']=json.loads((state/'web-session.json').read_text(encoding='utf-8'))['token']
         upstream.failed = False
         assert request(base + '/v1/responses', payload, headers)[0] == 200

@@ -5,6 +5,10 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+mod vertex;
+pub use vertex::{VertexModelMetadata, is_vertex_text_model};
+
 pub const PRICE_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 pub const PRICE_INTERVAL: f64 = 86400.0;
@@ -235,6 +239,7 @@ pub fn estimate_tokens(usage: &Value, rates: &Value, tier: &str) -> Result<Value
 const LOOKUP_RULES: u32 = 3;
 struct PriceData {
     prices: Value,
+    vertex_models: Vec<VertexModelMetadata>,
     aliases: Map<String, Value>,
     fetched: f64,
     revision: String,
@@ -285,6 +290,7 @@ impl PriceCatalog {
             path,
             data: Mutex::new(PriceData {
                 prices: json!({}),
+                vertex_models: Vec::new(),
                 aliases: Map::new(),
                 fetched: 0.0,
                 revision: String::new(),
@@ -298,7 +304,10 @@ impl PriceCatalog {
                 .filter(|stamp| *stamp > 0.0 && *stamp <= now)
             && let Ok(prices) = normalize_prices(&value["prices"])
         {
-            catalog.replace(prices, fetched);
+            let vertex_models =
+                serde_json::from_value::<Vec<VertexModelMetadata>>(value["vertex_models"].clone())
+                    .unwrap_or_default();
+            catalog.replace_snapshot(prices, vertex_models, fetched);
         }
         catalog
     }
@@ -306,11 +315,43 @@ impl PriceCatalog {
         &self.path
     }
     pub fn replace(&self, prices: Value, fetched: f64) {
+        self.replace_snapshot(prices, Vec::new(), fetched);
+    }
+    fn replace_snapshot(
+        &self,
+        prices: Value,
+        vertex_models: Vec<VertexModelMetadata>,
+        fetched: f64,
+    ) {
         let mut data = self.data.lock().expect("price catalog");
         data.prices = prices;
+        data.vertex_models = vertex_models;
         data.fetched = fetched;
         data.error = None;
         data.revise();
+    }
+    pub fn save_litellm_snapshot(
+        &self,
+        payload: &Value,
+        fetched: f64,
+    ) -> Result<usize, &'static str> {
+        let prices = normalize_prices(payload).map_err(|_| "invalid_prices")?;
+        let vertex_models = vertex::from_litellm(payload);
+        let count = prices.as_object().expect("normalized prices").len();
+        crate::filesystem::atomic_write_private_state(
+            self.path(),
+            &serde_json::to_vec(&json!({
+                "prices":prices,"fetched_at":fetched,"vertex_models":vertex_models,
+            }))
+            .expect("price JSON"),
+        )
+        .map_err(|_| "storage_error")?;
+        self.replace_snapshot(prices, vertex_models, fetched);
+        Ok(count)
+    }
+    pub fn vertex_models(&self) -> Vec<VertexModelMetadata> {
+        let data = self.data.lock().expect("price catalog");
+        data.vertex_models.clone()
     }
     /// Apply the configured `pricing_aliases`; returns whether they changed.
     pub fn set_aliases(&self, aliases: &Value) -> bool {

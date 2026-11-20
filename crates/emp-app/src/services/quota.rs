@@ -358,6 +358,16 @@ fn record_quota_snapshot(state: &ServerState, account_id: &str, quota: &Value) {
 }
 
 fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
+    let shared = state.backend.team.shared_subscription(account_id);
+    if shared
+        && let Err(message) = state.backend.team.check_route(
+            account_id,
+            state.backend.modules.active(emp_modules::Module::Team),
+            None,
+        )
+    {
+        return Err(QuotaError::new(message, "quota_auth_required"));
+    }
     let cancellation = quota_refresh_cancellation(state, account_id)
         .ok_or_else(|| QuotaError::new("Codex account quota check failed", "quota_error"))?;
     let control = QuotaControl {
@@ -409,8 +419,14 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
     }
     let quota = match query(&auth, false) {
         Ok(quota) => quota,
+        Err(error) if shared && error.code() == "quota_auth_required" => {
+            let _ = save_account_quota_state(state, account_id, &auth_file, "invalid", None);
+            return Err(error);
+        }
         Err(error)
-            if error.code() == "quota_auth_required" || error.should_retry_imported_refresh() =>
+            if !shared
+                && (error.code() == "quota_auth_required"
+                    || error.should_retry_imported_refresh()) =>
         {
             let refreshed = read_auth()?;
             match query(&refreshed, true) {
@@ -566,7 +582,12 @@ pub(crate) fn consume_quota_reset_for_account(
     };
     match query(&auth, false) {
         Ok(outcome) => Ok(outcome),
-        Err(error) if error.code() == "quota_auth_required" => query(&read_auth()?, true),
+        Err(error)
+            if error.code() == "quota_auth_required"
+                && !state.backend.team.shared_subscription(account_id) =>
+        {
+            query(&read_auth()?, true)
+        }
         Err(error) => Err(error),
     }
 }

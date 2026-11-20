@@ -30,8 +30,7 @@ function createAppIcon({getState,api,openModal,$,esc,tr,notice,presets}) {
     const styles=['color','mono'].map(mode=>`<button type="button" class="secondary" data-icon-style="${mode}" aria-pressed="false">${tr('icons.'+mode)}</button>`).join('');
     openModal(tr('icons.title'),`<div class="app-icon-heading"><img id="app_icon_preview" width="64" height="64" alt=""><div><strong id="app_icon_name"></strong><p class="muted">${tr('icons.applies_to')}</p></div></div>
       <div class="app-icon-grid">${choices}<button type="button" class="secondary app-icon-choice" data-app-icon="custom" aria-pressed="false"><span class="app-icon-upload" aria-hidden="true">＋</span><span>${tr('icons.custom')}</span></button></div>
-      <div class="app-icon-options"><div class="quota-display-choice" role="group" aria-label="${tr('icons.style')}">${styles}</div><button type="button" class="secondary" id="app_icon_import">${tr('icons.import_svg')}</button><input id="app_icon_file" type="file" accept=".svg,image/svg+xml" hidden></div>
-      <p class="muted">${tr('icons.svg_hint')}</p>`,tr('icons.save'),async()=>{
+      <div class="app-icon-options"><div class="quota-display-choice" role="group" aria-label="${tr('icons.style')}">${styles}</div><span class="form-label"><button type="button" class="secondary" id="app_icon_import">${tr('icons.import_svg')}</button>${shadowHelp(tr('icons.svg_hint'))}</span><input id="app_icon_file" type="file" accept=".svg,image/svg+xml" hidden></div>`,tr('icons.save'),async()=>{
       const chosen=selected,mono=monochrome;
       $('modal_submit').disabled=true;
       try {

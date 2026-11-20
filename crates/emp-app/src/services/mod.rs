@@ -18,6 +18,7 @@ pub(crate) mod history;
 pub(crate) mod integration;
 pub(crate) mod management_events;
 pub(crate) mod memory_routing;
+pub(crate) mod modules;
 pub(crate) mod native;
 pub(crate) mod native_login;
 pub(crate) mod provider_balance;
@@ -25,6 +26,7 @@ pub(crate) mod providers;
 pub(crate) mod quota;
 pub(crate) mod runtime;
 mod subscription_quota;
+pub(crate) mod team;
 
 pub(crate) mod native_connections;
 

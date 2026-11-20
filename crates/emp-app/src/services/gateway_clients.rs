@@ -1,13 +1,26 @@
 //! Named API callers with retrievable vault-encrypted credentials.
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use emp_modules::gateway::{CreatePlan, RemovePlan, ReplacePlan, Request};
+use emp_modules::{Command, GatewayIdentity, Module};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{io, path::PathBuf, sync::Mutex};
 
-#[derive(Clone)]
-pub(crate) struct Caller {
-    pub(crate) id: String,
-    pub(crate) name: String,
+use super::modules::Modules;
+pub(crate) use emp_modules::gateway::Caller;
+
+#[derive(Serialize)]
+pub(crate) struct ListedClient {
+    id: String,
+    name: String,
+    created_at: f64,
+    api_key: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct IssuedClient {
+    id: String,
+    name: String,
+    api_key: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -26,6 +39,13 @@ pub(crate) struct GatewayClients {
 }
 
 impl GatewayClients {
+    pub(crate) fn empty(path: PathBuf) -> Self {
+        Self {
+            path,
+            clients: Mutex::new(Vec::new()),
+        }
+    }
+
     pub(crate) fn open(
         path: PathBuf,
         vault: &emp_state::VaultStore,
@@ -50,30 +70,34 @@ impl GatewayClients {
         })
     }
 
-    pub(crate) fn identify(&self, key: &str) -> Option<Caller> {
+    pub(crate) fn identify(&self, key: &str, modules: &Modules) -> Option<Caller> {
         let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
-        self.clients
-            .lock()
-            .ok()?
+        let clients = self.clients.lock().ok()?;
+        let candidates = clients
             .iter()
-            .find(|client| client.digest == digest)
-            .map(|client| Caller {
+            .map(|client| GatewayIdentity {
                 id: client.id.clone(),
                 name: client.name.clone(),
+                digest: client.digest.clone(),
             })
+            .collect();
+        call(modules, Request::Identify { digest, candidates })
+            .ok()
+            .flatten()
     }
 
-    pub(crate) fn list(&self) -> Value {
-        json!(
-            self.clients
-                .lock()
-                .expect("gateway clients")
-                .iter()
-                .map(|client| {
-                    json!({"id":client.id,"name":client.name,"created_at":client.created_at,"api_key":client.api_key})
-                })
-                .collect::<Vec<_>>()
-        )
+    pub(crate) fn list(&self) -> Vec<ListedClient> {
+        self.clients
+            .lock()
+            .expect("gateway clients")
+            .iter()
+            .map(|client| ListedClient {
+                id: client.id.clone(),
+                name: client.name.clone(),
+                created_at: client.created_at,
+                api_key: client.api_key.clone(),
+            })
+            .collect()
     }
 
     pub(crate) fn devices(&self) -> Vec<Caller> {
@@ -93,32 +117,27 @@ impl GatewayClients {
         name: &str,
         replace: Option<&str>,
         vault: &emp_state::VaultStore,
-    ) -> io::Result<Value> {
+        modules: &Modules,
+    ) -> io::Result<IssuedClient> {
         let mut clients = self
             .clients
             .lock()
             .map_err(|_| io::Error::other("gateway clients"))?;
         let mut updated = clients.clone();
         let index = if let Some(id) = replace {
-            updated
-                .iter()
-                .position(|client| client.id == id)
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "Device key was not found")
-                })?
+            let plan: ReplacePlan = call(
+                modules,
+                Request::Replace {
+                    id: id.into(),
+                    device_ids: device_ids(&clients),
+                },
+            )?;
+            plan.index
         } else {
-            if name.trim().is_empty()
-                || name.chars().count() > 64
-                || name.chars().any(char::is_control)
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Caller name must contain 1–64 characters",
-                ));
-            }
+            let plan: CreatePlan = call(modules, Request::Create { name: name.into() })?;
             updated.push(Client {
                 id: crate::util::random_hex(16).map_err(io::Error::other)?,
-                name: name.trim().into(),
+                name: plan.name,
                 digest: String::new(),
                 created_at: crate::util::system_now(),
                 api_key: None,
@@ -129,31 +148,78 @@ impl GatewayClients {
             "emp-client-{}",
             crate::util::random_hex(32).map_err(io::Error::other)?
         );
-        let client = &mut updated[index];
+        let client = updated
+            .get_mut(index)
+            .ok_or_else(|| io::Error::other("invalid_gateway_plan"))?;
         client.digest = format!("{:x}", Sha256::digest(key.as_bytes()));
         client.api_key = Some(key.clone());
-        let result = json!({"id":client.id,"name":client.name,"api_key":key});
-        vault
-            .write_encrypted_json(&self.path, &serde_json::to_value(&updated)?)
-            .map_err(io::Error::other)?;
-        *clients = updated;
+        let result = IssuedClient {
+            id: client.id.clone(),
+            name: client.name.clone(),
+            api_key: key,
+        };
+        self.save(vault, &mut clients, updated)?;
         Ok(result)
     }
 
-    pub(crate) fn remove(&self, id: &str, vault: &emp_state::VaultStore) -> io::Result<()> {
+    pub(crate) fn remove(
+        &self,
+        id: &str,
+        vault: &emp_state::VaultStore,
+        modules: &Modules,
+    ) -> io::Result<()> {
         let mut clients = self
             .clients
             .lock()
             .map_err(|_| io::Error::other("gateway clients"))?;
-        let updated: Vec<_> = clients
-            .iter()
-            .filter(|client| client.id != id)
-            .cloned()
-            .collect();
+        let plan: RemovePlan = call(
+            modules,
+            Request::Remove {
+                id: id.into(),
+                device_ids: device_ids(&clients),
+            },
+        )?;
+        let updated = plan
+            .keep
+            .into_iter()
+            .map(|index| {
+                clients
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| io::Error::other("invalid_gateway_plan"))
+            })
+            .collect::<io::Result<_>>()?;
+        self.save(vault, &mut clients, updated)
+    }
+
+    fn save(
+        &self,
+        vault: &emp_state::VaultStore,
+        clients: &mut Vec<Client>,
+        updated: Vec<Client>,
+    ) -> io::Result<()> {
         vault
             .write_encrypted_json(&self.path, &serde_json::to_value(&updated)?)
             .map_err(io::Error::other)?;
         *clients = updated;
         Ok(())
     }
+}
+
+fn device_ids(clients: &[Client]) -> Vec<String> {
+    clients.iter().map(|client| client.id.clone()).collect()
+}
+
+fn call<T: DeserializeOwned>(modules: &Modules, request: Request) -> io::Result<T> {
+    modules
+        .call_typed(Module::Gateway, Command::Gateway { request })
+        .map_err(|error| {
+            let message = match error.as_str() {
+                "invalid_device_name" => "Caller name must contain 1–64 characters",
+                "missing_device_id" => "A device key ID is required",
+                "device_key_not_found" => "Device key was not found",
+                _ => return io::Error::other(error),
+            };
+            io::Error::new(io::ErrorKind::InvalidInput, message)
+        })
 }

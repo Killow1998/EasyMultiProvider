@@ -45,9 +45,16 @@ for line in sys.stdin:
         continue
     if method == 'account/read':
         result = {'account':None,'requiresOpenaiAuth':True}
+        auth_file = Path(os.environ['CODEX_HOME'], 'auth.json')
+        if auth_file.exists():
+            tokens = json.loads(auth_file.read_text()).get('tokens', {})
+            if tokens.get('access_token', '').startswith('fixture.'):
+                result['account'] = {'type':'chatgpt','email':'synthetic@example.invalid','planType':'pro'}
     elif method == 'model/list':
         result = {'data':[],'nextCursor':None}
     elif method == 'account/rateLimits/read':
         result = {'rateLimits':{'primary':{'usedPercent':0}}}
+    elif method == 'account/rateLimitResetCredit/consume':
+        result = {'outcome':'nothingToReset'}
     if 'id' in request:
         emit({'id':request['id'],'result':result})

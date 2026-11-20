@@ -1,7 +1,8 @@
 # EMP gateway API
 
-Open **Settings → General → Gateway connection** to copy the API base URL and
-EMP Gateway Key. API clients send `Authorization: Bearer <EMP_GATEWAY_KEY>`.
+Install and enable **Device Gateway** from **Modules**, then open its settings to
+copy the API base URL and EMP Gateway Key. API clients send
+`Authorization: Bearer <EMP_GATEWAY_KEY>`.
 For another computer, use the address exposed by your port forward.
 
 The gateway key belongs to the EMP instance and remains valid when Native
@@ -17,7 +18,7 @@ readable, including names saved before this rule.
 
 ### Devices and usage
 
-Create a named device key in **Gateway connection** and copy it once into the
+Create a named device key in the Device Gateway settings and copy it into the
 client's Bearer credential. EMP encrypts the secret so device management can show
 and copy it later. Older digest-only keys can be explicitly regenerated while
 retaining device usage attribution. The existing shared key remains available.

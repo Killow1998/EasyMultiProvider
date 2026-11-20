@@ -182,12 +182,10 @@ fn project_tools(container: &mut Map<String, Value>) -> Result<bool, Collaborati
 
 /// Change only plaintext-capable tool transport metadata. Generated additional
 /// tool IDs are deterministic UUID5 values and must match Python exactly.
-pub fn prepare_collaboration(
-    body: &Map<String, Value>,
-) -> Result<(Value, bool), CollaborationError> {
+pub fn prepare_collaboration(body: &mut Map<String, Value>) -> Result<(), CollaborationError> {
     // Collision detection covers every tool container before any projection.
     let mut collision = false;
-    for container in std::iter::once(body).chain(history_containers(body)) {
+    for container in std::iter::once(&*body).chain(history_containers(body)) {
         collision |= tools(container)?
             .iter()
             .any(|tool| tool.get("name").and_then(Value::as_str) == Some(NAMESPACE));
@@ -195,9 +193,8 @@ pub fn prepare_collaboration(
     if collision {
         return Err(CollaborationError::NamespaceCollision);
     }
-    let mut result = body.clone();
-    let mut changed = project_tools(&mut result)?;
-    if let Some(input) = result.get_mut("input").and_then(Value::as_array_mut) {
+    let mut changed = project_tools(body)?;
+    if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input
             .iter_mut()
             .filter(|item| item.get("type").and_then(Value::as_str) == Some("additional_tools"))
@@ -228,7 +225,7 @@ pub fn prepare_collaboration(
             }
         }
     }
-    Ok((Value::Object(result), changed))
+    Ok(())
 }
 
 fn restore_item(item: &mut Value) -> Result<(), CollaborationError> {

@@ -18,7 +18,6 @@ pub(crate) fn profile_request_bytes(body: &Value) -> usize {
 }
 
 pub(crate) struct RequestOutcome<'a> {
-    collaboration_route: Option<String>,
     state: &'a ServerState,
     identity: Option<crate::services::activity::ActivityIdentity>,
     started: Instant,
@@ -127,6 +126,9 @@ impl<'a> RequestOutcome<'a> {
                 body.get("client_metadata")
             }
         ));
+        if let Some(team) = state.backend.team.scope(&route.provider_id) {
+            event["team_usage"] = team;
+        }
         event["selected_name"] = route
             .model
             .value()
@@ -167,9 +169,6 @@ impl<'a> RequestOutcome<'a> {
                 .get("_emp_aggregate_owner")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            collaboration_route: (operation == "responses"
-                && route.dialect == emp_core::Dialect::CodexNative)
-                .then(|| route.requested_model.clone()),
             state,
             identity,
             started: Instant::now(),
@@ -186,19 +185,15 @@ impl<'a> RequestOutcome<'a> {
     pub(crate) fn observe(&mut self, event: &Value) {
         self.observe_event(event, None);
     }
+    pub(crate) fn image_credit(&mut self, cost_nanos: Option<i64>) {
+        self.event["image_credit_cost_nanos"] = json!(cost_nanos);
+    }
     pub(crate) fn observe_upstream(&mut self, event: &Value) {
         self.observe_event(event, Some("upstream"));
     }
     fn observe_event(&mut self, event: &Value, origin: Option<&str>) {
         if self.finalized {
             return;
-        }
-        if let Some(model) = &self.collaboration_route {
-            self.state.backend.transport.collaboration.observe(
-                model,
-                self.event["usage_owner"].as_str().unwrap_or_default(),
-                event,
-            );
         }
         let now = Instant::now();
         let response = event

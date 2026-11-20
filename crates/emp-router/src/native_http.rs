@@ -254,9 +254,8 @@ impl<'a> NativeRouter<'a> {
         let mut payload = project_request(body).map_err(projection_error)?;
         payload["model"] = route.upstream_model.clone().into();
         if plaintext_collaboration {
-            payload = prepare_collaboration(payload.as_object().expect("projected object"))
-                .map_err(collaboration_error)?
-                .0;
+            prepare_collaboration(payload.as_object_mut().expect("projected object"))
+                .map_err(collaboration_error)?;
         }
         payload["type"] = Value::String("response.create".to_owned());
         payload
@@ -359,9 +358,8 @@ impl<'a> NativeRouter<'a> {
         let mut payload = project_request(body).map_err(projection_error)?;
         payload["model"] = route.upstream_model.clone().into();
         if plaintext_collaboration {
-            payload = prepare_collaboration(payload.as_object().expect("projected object"))
-                .map_err(collaboration_error)?
-                .0;
+            prepare_collaboration(payload.as_object_mut().expect("projected object"))
+                .map_err(collaboration_error)?;
         }
         // Native Lite rejects some Zstd requests containing inline images.
         let compress = !has_inline_image(&payload["input"]);
@@ -511,18 +509,29 @@ impl<'a> NativeRouter<'a> {
             if is_explicit_context_error(status, &content_type, &raw) {
                 return Err(NativeHttpError::context(BTreeMap::new()));
             }
-            let body = if plaintext_collaboration && !compact {
-                let value: Value = serde_json::from_slice(&raw).map_err(|error| {
-                    NativeHttpError::plain(400, python_json_error_message(&raw, &error))
-                })?;
-                let restored = restore_collaboration(&value).map_err(collaboration_error)?;
-                serde_json::to_vec(&restored)
-                    .map_err(|_| NativeHttpError::plain(500, "internal server error"))?
-            } else {
-                raw
-            };
-            if let Ok(value) = serde_json::from_slice::<Value>(&body) {
-                observation.observe(&value, false);
+            let restore_tools = plaintext_collaboration && !compact;
+            let mut body = raw;
+            match serde_json::from_slice::<Value>(&body) {
+                Ok(mut value) => {
+                    if restore_tools {
+                        let restored =
+                            restore_collaboration(&value).map_err(collaboration_error)?;
+                        if restored != value {
+                            body = serde_json::to_vec(&restored).map_err(|_| {
+                                NativeHttpError::plain(500, "internal server error")
+                            })?;
+                            value = restored;
+                        }
+                    }
+                    observation.observe(&value, false);
+                }
+                Err(error) if restore_tools => {
+                    return Err(NativeHttpError::plain(
+                        400,
+                        python_json_error_message(&body, &error),
+                    ));
+                }
+                Err(_) => {}
             }
             return Ok(NativeCompleteResponse {
                 observation,
@@ -560,9 +569,8 @@ impl<'a> NativeRouter<'a> {
         let mut payload = project_request(body).map_err(projection_error)?;
         payload["model"] = route.upstream_model.clone().into();
         if plaintext_collaboration {
-            payload = prepare_collaboration(payload.as_object().expect("projected object"))
-                .map_err(collaboration_error)?
-                .0;
+            prepare_collaboration(payload.as_object_mut().expect("projected object"))
+                .map_err(collaboration_error)?;
         }
         let compress = !has_inline_image(&payload["input"]);
         let data = encoded(&payload, compress)?;

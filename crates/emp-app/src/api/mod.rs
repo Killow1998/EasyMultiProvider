@@ -9,6 +9,7 @@ pub(crate) mod inspection;
 pub(crate) mod integration;
 pub(crate) mod lifecycle;
 pub(crate) mod migration;
+pub(crate) mod modules;
 pub(crate) mod native_login;
 pub(crate) mod provider_balance;
 pub(crate) mod provider_quota;
@@ -18,6 +19,7 @@ pub(crate) mod responses;
 pub(crate) mod search;
 pub(crate) mod streaming;
 pub(crate) mod support_report;
+pub(crate) mod team;
 pub(crate) mod websocket;
 
 pub(crate) mod runtime;

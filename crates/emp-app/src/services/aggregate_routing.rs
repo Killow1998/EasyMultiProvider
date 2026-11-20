@@ -1,6 +1,10 @@
 //! Resolve a conversation's source before authentication or history preparation.
 use crate::app::ServerState;
 use emp_core::{ResolvedRoute, RouteResolutionError, RouteSource, resolve_route};
+use emp_modules::{
+    Command, Module,
+    aggregate::{BindingPlan, Candidate, Policy, Request, Source},
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,6 +19,11 @@ pub(super) fn resolve(
         .as_array()?
         .iter()
         .find(|group| group["id"] == requested)?;
+    if !state.backend.modules.active(Module::Aggregate) {
+        return Some(Err(RouteResolutionError::ProviderUnavailable(format!(
+            "{requested}: Aggregate Routing is disabled"
+        ))));
+    }
     Some((|| {
         let unavailable = || RouteResolutionError::ProviderUnavailable(requested.into());
         let header = |name: &str| {
@@ -34,8 +43,13 @@ pub(super) fn resolve(
                 ))
             })?;
         let caller = header("x-emp-caller-id").unwrap_or("local");
+        let policy = group["policy"]
+            .as_str()
+            .and_then(Policy::parse)
+            .ok_or_else(unavailable)?;
+        let mut routes = Vec::new();
         let mut candidates = Vec::new();
-        let mut owners = BTreeSet::new();
+        let mut owner_ids = BTreeMap::new();
         let cooling = state.backend.aggregate_availability.cooling();
         let native_quota = state
             .backend
@@ -44,6 +58,8 @@ pub(super) fn resolve(
             .lock()
             .ok()
             .and_then(|quota| quota.clone());
+        let team_active = state.backend.modules.active(Module::Team);
+        let tier = body.get("service_tier").and_then(Value::as_str);
         for source in group["sources"].as_array().expect("normalized sources") {
             let source = source.as_str().expect("normalized source");
             let Ok(route) = resolve_route(config, source, |config, slug, account| {
@@ -51,7 +67,15 @@ pub(super) fn resolve(
             }) else {
                 continue;
             };
-            let (owner, quota, plan) = match route.source {
+            if state
+                .backend
+                .team
+                .check_route(&route.provider_id, team_active, tier)
+                .is_err()
+            {
+                continue;
+            }
+            let (owner, quota, source) = match route.source {
                 RouteSource::ImplicitNative => {
                     let Some(auth) = super::accounts::native_auth_document(
                         &state.backend.accounts.native_auth_path,
@@ -62,15 +86,15 @@ pub(super) fn resolve(
                         .as_str()
                         .filter(|key| !key.is_empty())
                     {
-                        if emp_integration::local_auth::is_local(&auth)
-                            || group["policy"] == "balanced"
-                        {
-                            continue;
-                        }
+                        let source = if emp_integration::local_auth::is_local(&auth) {
+                            Source::LocalNativeApiKey
+                        } else {
+                            Source::NativeApiKey
+                        };
                         (
                             emp_state::usage::identity_hash(&json!({"native_api_key":key})),
                             None,
-                            None,
+                            source,
                         )
                     } else if emp_state::accounts::validate_auth_json(&auth)
                         .ok()
@@ -80,9 +104,7 @@ pub(super) fn resolve(
                         (
                             emp_state::accounts::account_auth_identity(&auth),
                             native_quota.as_ref(),
-                            native_quota
-                                .as_ref()
-                                .and_then(|quota| quota["plan_type"].as_str()),
+                            Source::Subscription,
                         )
                     } else {
                         continue;
@@ -116,52 +138,64 @@ pub(super) fn resolve(
                     (
                         emp_state::accounts::account_auth_identity(&auth),
                         quota,
-                        quota.and_then(|quota| quota["plan_type"].as_str()),
+                        Source::Subscription,
                     )
                 }
                 _ => (
                     format!("provider:{}:{}", route.provider_id, route.upstream_model),
                     None,
-                    None,
+                    Source::Provider,
                 ),
             };
-            let capacity = super::subscription_quota::current_headroom(quota);
-            if capacity.is_some_and(|value| value <= 0.0)
-                || cooling.contains(&owner)
-                || !owners.insert(owner.clone())
-            {
-                continue;
-            }
-            candidates.push((route, owner, capacity, plan.map(str::to_owned)));
+            let next_owner_id = owner_ids.len();
+            let owner_id = *owner_ids.entry(owner.clone()).or_insert(next_owner_id);
+            candidates.push(Candidate {
+                id: routes.len(),
+                owner_id,
+                source,
+                cooling_down: cooling.contains(&owner),
+                headroom: super::subscription_quota::current_headroom(quota),
+                subscription_plan: quota
+                    .and_then(|quota| quota["plan_type"].as_str())
+                    .map(str::to_owned),
+            });
+            routes.push((route, owner));
         }
-        if group["policy"] == "balanced" {
-            let plans = candidates
-                .iter()
-                .filter_map(|candidate| candidate.3.as_deref())
-                .collect::<BTreeSet<_>>();
-            if plans.len() > 1 {
-                return Err(RouteResolutionError::ProviderUnavailable(format!(
-                    "{requested}: quota balance requires accounts on the same subscription plan"
-                )));
-            }
-            candidates.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-        }
+        let plan: BindingPlan = state
+            .backend
+            .modules
+            .call_typed(
+                Module::Aggregate,
+                Command::Aggregate {
+                    request: Request { policy, candidates },
+                },
+            )
+            .map_err(|error| {
+                if error == "mixed_subscription_plans" {
+                    RouteResolutionError::ProviderUnavailable(format!(
+                        "{requested}: quota balance requires accounts on the same subscription plan"
+                    ))
+                } else {
+                    unavailable()
+                }
+            })?;
+        let mut seen_owners = BTreeSet::new();
+        let owners = plan
+            .candidate_ids
+            .iter()
+            .map(|&id| {
+                let (_, owner) = routes.get(id)?;
+                seen_owners.insert(owner.as_str()).then(|| owner.clone())
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(unavailable)?;
         let index = state
             .backend
             .usage
             .ledger
-            .bind_aggregate(
-                caller,
-                thread,
-                requested,
-                &candidates
-                    .iter()
-                    .map(|candidate| candidate.1.clone())
-                    .collect::<Vec<_>>(),
-                group["policy"] == "round_robin",
-            )
+            .bind_aggregate(caller, thread, requested, &owners, plan.rotate)
             .map_err(|_| unavailable())?;
-        let (mut route, owner, _, _) = candidates.swap_remove(index);
+        let (mut route, owner) = routes.swap_remove(plan.candidate_ids[index]);
         let source = route.requested_model.clone();
         route.requested_model = requested.into();
         let mut model = route.model.value().clone();

@@ -9,15 +9,14 @@ function createDecisionSettings({getState, cloneState, persistState, openModal, 
     const options = providers.map(provider => `<option value="${esc(provider.id)}" ${provider.id === selected ? 'selected' : ''}>${esc(provider.name || provider.id)}</option>`).join('');
     const missing = selected && !providers.some(provider => provider.id === selected);
     openModal(tr('core.decision_models'), `<div class="routing-settings" id="decision_settings">
-      <p class="muted">${tr('core.decision_hint')}</p>
-      <div class="setting-row routing-mode"><label class="setting-title" for="decision_provider">${tr('core.decision_service')}</label><div class="input-action"><select id="decision_provider"><option value="">${tr('core.decision_no_default')}</option>${missing ? `<option value="${esc(selected)}" selected disabled>${esc(selected)} · ${tr('core.unavailable')}</option>` : ''}${options}</select>${providers.length ? `<button type="button" class="secondary" data-icon="plus" data-decision-add-service title="${esc(tr('add_provider'))}" aria-label="${esc(tr('add_provider'))}"></button>` : ''}</div></div>
+      <div class="setting-row routing-mode"><div class="setting-title collaboration-title"><label for="decision_provider">${tr('core.decision_service')}</label>${help(tr('core.decision_hint'))}</div><div class="input-action"><select id="decision_provider"><option value="">${tr('core.decision_no_default')}</option>${missing ? `<option value="${esc(selected)}" selected disabled>${esc(selected)} · ${tr('core.unavailable')}</option>` : ''}${options}</select>${providers.length ? `<button type="button" class="secondary" data-icon="plus" data-decision-add-service title="${esc(tr('add_provider'))}" aria-label="${esc(tr('add_provider'))}"></button>` : ''}</div></div>
       <div class="setting-row routing-mode" id="decision_api_row"><div class="setting-title collaboration-title"><label for="decision_api">${tr('core.decision_api')}</label>${help(tr('core.decision_api_help'))}</div><select id="decision_api">${['openai','openrouter','systemone'].map(protocol => `<option value="${protocol}">${tr('core.decision_api_' + protocol)}</option>`).join('')}</select></div>
       <div class="setting-row routing-mode" id="decision_model_row"><label class="setting-title" for="decision_model">${tr('core.decision_model')}</label><div class="input-action"><select id="decision_model"></select><button type="button" class="secondary" data-icon="refresh" id="decision_refresh" title="${esc(tr('core.decision_refresh'))}" aria-label="${esc(tr('core.decision_refresh'))}"></button></div></div>
       <p class="muted" id="decision_catalog_status" role="status"></p>
       <div class="setting-row routing-mode" id="decision_custom_row" hidden><label class="setting-title" for="decision_custom_model">${tr('core.decision_custom_model')}</label><input id="decision_custom_model" autocomplete="off" placeholder="${tr('core.decision_custom_placeholder')}"></div>
       <p class="muted" id="decision_endpoint"></p>
       ${providers.length ? '' : `<div class="setting-row"><p class="muted">${tr('core.decision_add_service_hint')}</p><button type="button" data-icon="plus" data-decision-add-service>${tr('add_provider')}</button></div>`}
-      <div class="setting-row"><div><div class="setting-title">${tr('core.gateway_connection')}</div><p class="setting-help">${tr('core.decision_gateway_help')}</p></div><button type="button" class="secondary" data-icon="chevron-right" data-decision-gateway aria-label="${esc(tr('core.gateway_connection'))}"></button></div>
+      <div class="setting-row"><div class="setting-title collaboration-title"><span>${tr('core.gateway_connection')}</span>${help(tr('core.decision_gateway_help'))}</div><button type="button" class="secondary" data-icon="chevron-right" data-decision-gateway aria-label="${esc(tr('core.gateway_connection'))}"></button></div>
     </div>`, tr('save_display'), async () => {
       const selection = read(), candidate = cloneState();
       candidate.decision_provider = selection.providerId;
@@ -73,7 +72,7 @@ function createDecisionSettings({getState, cloneState, persistState, openModal, 
         if (current()) $('decision_catalog_status').textContent = models.length ? '' : tr('core.decision_empty');
       } catch (error) {
         models = catalogs.get(key) || [];
-        if (current()) $('decision_catalog_status').textContent = tr('core.decision_load_failed', {error:error.message});
+        if (current()) $('decision_catalog_status').textContent = tr('core.decision_load_failed', {error:error.message.replace(/[。.]\s*$/u,'')});
       }
       if (!current()) return;
       $('decision_model').innerHTML += models.map(model => `<option value="${esc(model.id)}">${esc(model.name)}</option>`).join('') + `<option value="@custom">${tr('core.decision_custom')}</option>`;

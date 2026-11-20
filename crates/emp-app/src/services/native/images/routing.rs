@@ -17,6 +17,7 @@ const RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 enum Target {
     Follow { model: String, provider: String },
     Account(String),
+    Credit,
 }
 
 struct Binding {
@@ -95,6 +96,20 @@ impl ImageRoutes {
             .get("X-EMP-Provider")
             .or_else(|| incoming.get("x-emp-provider"))
         {
+            state
+                .backend
+                .team
+                .check_route(
+                    provider_id,
+                    state.backend.modules.active(emp_modules::Module::Team),
+                    None,
+                )
+                .map_err(|message| NativeHttpError::router(403, message))?;
+            if config["image_routing"]["mode"] == "credit"
+                && config["image_routing"]["credit"]["provider"] == *provider_id
+            {
+                return super::credit::route(state, &config, body);
+            }
             let provider = config["providers"].as_array().and_then(|providers| {
                 providers.iter().find(|provider| {
                     provider["id"].as_str() == Some(provider_id)
@@ -113,6 +128,11 @@ impl ImageRoutes {
                 "Image API service not found or unavailable",
             ));
         }
+        if !incoming.contains_key("x-codex-image-turn-id")
+            && config["image_routing"]["mode"] == "credit"
+        {
+            return super::credit::route(state, &config, body);
+        }
         let turn = incoming
             .get("x-codex-image-turn-id")
             .filter(|turn| !turn.is_empty())
@@ -125,9 +145,13 @@ impl ImageRoutes {
             let index = routes.turns.iter().position(|entry| &entry.turn == turn && entry.updated.elapsed() < RETENTION)
                 .ok_or_else(|| NativeHttpError::router(409,
                     "The image tool's account could not be matched to its Codex turn. Retry in a new turn."))?;
-            let asset_account = routes
-                .assets
-                .account(body, config["image_routing"]["mode"] == "auto")?;
+            let asset_account = routes.assets.account(
+                body,
+                matches!(
+                    config["image_routing"]["mode"].as_str(),
+                    Some("auto" | "credit")
+                ),
+            )?;
             let target = match &routes.turns[index].target {
                 Some(target) => target.clone(),
                 None => {
@@ -143,6 +167,7 @@ impl ImageRoutes {
                             Some(account) => account.clone(),
                             None => selection::automatic(state, &config, &routes.limited)?,
                         }),
+                        "credit" => Target::Credit,
                         _ => Target::Follow {
                             model: routes.turns[index].model.clone(),
                             provider: routes.turns[index].provider.clone(),
@@ -155,6 +180,21 @@ impl ImageRoutes {
             (target, asset_account)
         };
         let route = match target {
+            Target::Credit => {
+                if let Some(account) = asset_account.as_deref() {
+                    selection::account_route(state, &config, account, model)
+                } else {
+                    match super::credit::route(state, &config, body) {
+                        Ok(route) => Ok(route),
+                        Err(credit_unavailable) => {
+                            let routes = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+                            let account = selection::automatic(state, &config, &routes.limited)
+                                .map_err(|_| credit_unavailable)?;
+                            selection::account_route(state, &config, &account, model)
+                        }
+                    }
+                }
+            }
             Target::Account(account) => selection::account_route(state, &config, &account, model),
             Target::Follow {
                 model: selected,

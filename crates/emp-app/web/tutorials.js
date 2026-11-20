@@ -1,15 +1,20 @@
 function createTutorials({openModal, $, tr, esc}) {
-  const groups = [
+  const base = [
     ['gpt', [['native_context','00-native-context'], ['native_name','00-native-name'], ['remove_subscription','00-remove-subscription']]],
     ['external', [['add','01-add-service'], ['context','05-change-context'], ['rename','06-rename'], ['remove','04-remove-service']]],
     ['shared', [['labels','07-context-label'], ['export','03-export-service'], ['import','02-import-service'], ['tunnel','08-tunnel-migration']]]
   ];
-  const entries = new Map(groups.flatMap(([, items]) => items));
+  // Team lessons only make sense inside a joined workspace; the team module toggles them.
+  const team = ['team', [['team_overview','09-team-workspace'], ['team_share','10-team-share'], ['team_approve','11-team-approve'], ['team_members','12-team-members']]];
+  let teamJoined = false;
+  const groups = () => teamJoined ? [...base, team] : base;
+  const entries = () => new Map(groups().flatMap(([, items]) => items));
   let selected = 'native_context';
+  function setTeam(joined) { teamJoined = Boolean(joined); }
   function select(id) {
-    if (!entries.has(id)) return;
+    if (!entries().has(id)) return;
     selected = id;
-    const name = tr(`tutorials.${id}`), url = `/assets/tutorial-${entries.get(id)}.gif`;
+    const name = tr(`tutorials.${id}`), url = `/assets/tutorial-${entries().get(id)}.gif`;
     $('tutorial_title').textContent = name;
     $('tutorial_full_size').href = url;
     $('tutorial_list').querySelectorAll('[data-tutorial]').forEach(button => {
@@ -45,8 +50,9 @@ function createTutorials({openModal, $, tr, esc}) {
     } else play();
   }
   function open(navigation = {}) {
-    const list = groups.map(([group, items]) => `<div class="tutorial-group"><h3>${esc(tr(`tutorials.${group}`))}</h3>${items.map(([id]) => `<button type="button" data-tutorial="${id}" aria-controls="tutorial_demo" aria-pressed="false">${esc(tr(`tutorials.${id}`))}</button>`).join('')}</div>`).join('');
-    openModal(tr('tutorials.title'), `<div id="tutorials"><nav id="tutorial_list" aria-label="${esc(tr('tutorials.title'))}">${list}</nav><div id="tutorial_demo"><div class="tutorial-heading"><h3 id="tutorial_title"></h3><a id="tutorial_full_size" target="_blank" rel="noopener">${esc(tr('tutorials.full_size'))}</a></div><div id="tutorial_media" aria-busy="true"></div></div></div>`, '', null, null, navigation);
+    if (!entries().has(selected)) selected = 'native_context';
+    const list = groups().map(([group, items]) => `<div class="tutorial-group"><h3>${esc(tr(`tutorials.${group}`))}</h3>${items.map(([id]) => `<button type="button" data-tutorial="${id}" aria-controls="tutorial_demo" aria-pressed="false">${esc(tr(`tutorials.${id}`))}</button>`).join('')}</div>`).join('');
+    openModal(tr('tutorials.title'), `<div id="tutorials"><nav id="tutorial_list" aria-label="${esc(tr('tutorials.title'))}">${list}</nav><div id="tutorial_demo"><div class="tutorial-heading"><h3 id="tutorial_title"></h3><a id="tutorial_full_size" target="_blank" rel="noopener">${esc(tr('tutorials.full_size'))}</a></div><div class="tutorial-stage"><div id="tutorial_media" aria-busy="true"></div></div></div></div>`, '', null, null, navigation);
     $('tutorial_list').onclick = event => {
       const button = event.target.closest('[data-tutorial]');
       if (button) select(button.dataset.tutorial);
@@ -62,5 +68,5 @@ function createTutorials({openModal, $, tr, esc}) {
     };
     select(selected);
   }
-  return {open};
+  return {open, setTeam};
 }

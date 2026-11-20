@@ -20,8 +20,8 @@ fn body() -> serde_json::Map<String, Value> {
 
 #[test]
 fn collaboration_tools_are_renamed_and_message_encryption_flag_removed() {
-    let (projected, changed) = prepare_collaboration(&body()).expect("projection");
-    assert!(changed);
+    let mut projected = body();
+    prepare_collaboration(&mut projected).expect("projection");
     let tool = &projected["tools"][0];
     assert_eq!(tool["name"], "emp_collaboration");
     assert_eq!(
@@ -35,13 +35,12 @@ fn collaboration_tools_are_renamed_and_message_encryption_flag_removed() {
     );
 
     // Diagnostics stay content-free and count both tool namespaces.
-    let summary = collaboration_summary(projected.as_object().unwrap());
+    let summary = collaboration_summary(&projected);
     assert_eq!(summary, json!({"native": 0, "emp": 1, "emp_in_history": 0}));
 }
 
 #[test]
 fn round_trip_restores_codex_facing_names_and_rejects_encrypted_arguments() {
-    prepare_collaboration(&body()).expect("projection");
     let call = json!({
         "type": "function_call",
         "call_id": "call_1",
@@ -76,7 +75,7 @@ fn history_tools_reuse_the_same_reserved_namespace_check() {
             {"type": "namespace", "name": "emp_collaboration"}
         ]}]),
     );
-    let error = prepare_collaboration(&with_history).expect_err("namespace collision");
+    let error = prepare_collaboration(&mut with_history).expect_err("namespace collision");
     assert_eq!(error, CollaborationError::NamespaceCollision);
     assert_eq!(error.status(), 422);
     assert_eq!(

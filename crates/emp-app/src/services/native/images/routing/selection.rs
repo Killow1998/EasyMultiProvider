@@ -1,6 +1,6 @@
 //! Image eligibility uses both shared subscription capacity and image limits.
 use super::*;
-use crate::services::accounts::{native_subscription_headers, regular_file};
+use crate::services::accounts::{native_auth_document, native_subscription_headers, regular_file};
 use crate::services::subscription_quota::image_headroom;
 use emp_core::RouteSource;
 
@@ -10,10 +10,6 @@ fn available(account: &Value) -> bool {
         && account["auth_file"]
             .as_str()
             .is_some_and(|path| regular_file(std::path::Path::new(path)))
-}
-
-fn native_available(state: &ServerState) -> bool {
-    native_subscription_headers(&state.backend.accounts.native_auth_path).is_some()
 }
 
 fn image_supported(quota: Option<&Value>) -> bool {
@@ -40,10 +36,22 @@ pub(super) fn automatic(
         .flatten()
         .filter(|account| available(account))
         .filter_map(|account| Some((account["id"].as_str()?, account.get("quota"))));
-    let native = native_available(state).then_some(("@native", native_quota.as_ref()));
+    let native = native_auth_document(&state.backend.accounts.native_auth_path)
+        .filter(|auth| !crate::services::integration::enable::image_mcp_required(auth))
+        .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
+        .and_then(|auth| emp_codex::account_auth_headers(&auth))
+        .map(|_| ("@native", native_quota.as_ref()));
+    let team_active = state.backend.modules.active(emp_modules::Module::Team);
     let mut best: Option<(&str, Option<f64>)> = None;
     for (id, quota) in native.into_iter().chain(imported) {
-        if limited.contains_key(id) || !image_supported(quota) {
+        if limited.contains_key(id)
+            || !image_supported(quota)
+            || state
+                .backend
+                .team
+                .check_route(id, team_active, None)
+                .is_err()
+        {
             continue;
         }
         let remaining = image_headroom(quota);
@@ -72,7 +80,7 @@ pub(super) fn account_route(
 ) -> Result<ResolvedRoute, NativeHttpError> {
     let base = config["codex_base_url"].as_str().unwrap_or_default();
     let (provider, source) = if id == "@native" {
-        if !native_available(state) {
+        if native_subscription_headers(&state.backend.accounts.native_auth_path).is_none() {
             return Err(NativeHttpError::router(
                 409,
                 "The configured Native image account is unavailable",
@@ -84,6 +92,15 @@ pub(super) fn account_route(
             RouteSource::ImplicitNative,
         )
     } else {
+        state
+            .backend
+            .team
+            .check_route(
+                id,
+                state.backend.modules.active(emp_modules::Module::Team),
+                None,
+            )
+            .map_err(|message| NativeHttpError::router(403, message))?;
         let account = config["accounts"]
             .as_array()
             .into_iter()

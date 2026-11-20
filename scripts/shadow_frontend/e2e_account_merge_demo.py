@@ -24,7 +24,7 @@ def main():
         for language,theme,width in [('zh-CN','light',1280),('en','dark',640)]:
             request(browser.base+'/window/rect',{'width':width,'height':900})
             browser.navigate(frontend+'/')
-            browser.execute('for(const [id,value] of [["language_select",arguments[0]],["theme_select",arguments[1]]]){const select=document.getElementById(id);select.value=value;select.dispatchEvent(new Event("change",{bubbles:true}));}',language,theme)
+            browser.execute('setLanguage(arguments[0]);setTheme(arguments[1]);',language,theme)
             wait_for(lambda:json.loads((target/'config.json').read_text()).get('language')==language)
             before=(target/'config.json').read_bytes()
             browser.execute('document.getElementById("shadow_demo_button").click();document.getElementById("demo_account_import").click();document.querySelector("[data-migration-decode]").click();')

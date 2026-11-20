@@ -1,35 +1,55 @@
-// Tunnel transport shares selection and import ownership with file migration.
+// Tunnel transport shares selection and import ownership with file migration. The window only holds the
+// choices; the code, the receiver request and its approve/decline actions surface in the notification island.
 function lanMigrationControls(rows, flags) {
-  return `<p class="migration-tunnel-intro">${tr('lan.intro')}${shadowHelp(tr('lan.help'))}</p>
-    <div class="migration-tunnel">
-      <section class="tunnel-send"><h3>${tr('lan.send_title')}</h3>
-        <details id="lan_selection" open><summary>${tr('lan.selection')} <span id="lan_selected_count" class="muted"></span></summary>
-          <div class="migration-services">${rows}</div>${flags}</details>
-      </section>
-      <section class="tunnel-receive"><h3>${tr('lan.receive_title')}</h3><p class="muted">${tr('lan.receive_help')}</p>
-        <label for="lan_code">${tr('lan.code')}</label><textarea id="lan_code" rows="3" maxlength="49" autocomplete="off" spellcheck="false" placeholder="${esc(tr('lan.code_placeholder'))}"></textarea>
-        <div class="tunnel-actions"><button type="button" data-lan-receive disabled>${tr('lan.receive')}</button><button type="button" class="secondary" data-lan-stop hidden>${tr('lan.stop_receive')}</button></div>
-        <p id="lan_receive_status" role="status"></p>
-      </section>
-      <div class="tunnel-transfer">
-          <div>
-            <div id="lan_create_block" class="tunnel-create"><button type="button" data-lan-create>${tr('lan.create')}</button><span class="muted">${tr('lan.lifetime')}</span></div>
-            <div id="lan_share_block" hidden><label for="lan_share_code">${tr('lan.code')}</label>
-              <div class="tunnel-code"><textarea id="lan_share_code" readonly rows="2" spellcheck="false"></textarea><button type="button" class="secondary" data-lan-copy title="${esc(tr('lan.copy'))}" aria-label="${esc(tr('lan.copy'))}">${uiIcon('copy')}</button></div>
-            </div>
-            <div id="lan_transfer_meta" class="tunnel-meta" hidden><span id="lan_remaining" class="muted"></span><button type="button" class="secondary" data-lan-cancel>${tr('lan.cancel')}</button></div>
-          </div>
-          <div class="tunnel-confirm">
-            <div id="lan_receiver_confirm" hidden><p id="lan_receiver"></p><button type="button" data-lan-approve>${tr('lan.approve')}</button></div>
-            <p id="lan_send_status" role="status"></p>
-          </div>
+  return `<div class="tabs migration-tabs" role="tablist" aria-label="${esc(tr('lan.tunnel'))}">
+      <button type="button" role="tab" id="lan_tab_send" aria-controls="lan_send_panel" aria-selected="true">${tr('lan.send_title')}</button>
+      <button type="button" role="tab" id="lan_tab_receive" aria-controls="lan_receive_panel" aria-selected="false" tabindex="-1">${tr('lan.receive_title')}</button>
+    </div>
+    <section id="lan_send_panel" class="tunnel-send" role="tabpanel" aria-labelledby="lan_tab_send">
+      <div id="lan_selection" class="tunnel-selection"><div class="tunnel-selection-head"><span>${tr('lan.selection')}</span><span id="lan_selected_count" class="muted"></span></div>
+        <div class="migration-services">${rows}</div>${flags}</div>
+      <div class="tunnel-footer">
+        <div id="lan_create_block" class="tunnel-create"><button type="button" class="primary" data-lan-create>${tr('lan.create')}</button></div>
+        <div id="lan_share_block" class="tunnel-share" hidden>
+          <textarea id="lan_share_code" readonly hidden tabindex="-1" aria-hidden="true"></textarea>
+          <div id="lan_receiver_confirm" hidden></div>
+          <div id="lan_transfer_meta" class="tunnel-meta" hidden><span id="lan_remaining" class="muted"></span><button type="button" class="secondary" data-lan-cancel>${tr('lan.cancel')}</button></div>
+        </div>
+        <p id="lan_send_status" class="tunnel-status" role="status"></p>
       </div>
-    </div>`;
+    </section>
+    <section id="lan_receive_panel" class="tunnel-receive" role="tabpanel" aria-labelledby="lan_tab_receive" hidden>
+      <div class="tunnel-field-label"><label for="lan_code">${tr('lan.code')}</label>${shadowHelp(tr('lan.receive_help'))}</div>
+      <textarea id="lan_code" rows="2" maxlength="49" autocomplete="off" spellcheck="false" placeholder="${esc(tr('lan.code_placeholder'))}"></textarea>
+      <div class="tunnel-footer"><div class="tunnel-actions"><button type="button" data-lan-receive disabled>${tr('lan.receive')}</button><button type="button" class="secondary" data-lan-stop hidden>${tr('lan.stop_receive')}</button></div>
+        <p id="lan_receive_status" class="tunnel-status" role="status"></p></div>
+    </section>`;
 }
 function createLanMigration({active,selections,options,openPreview}) {
   let sendTimer=null, receiveTimer=null, receiving=null;
   const pendingStates=['waiting','confirmation','sending'];
-  function stop(){clearTimeout(sendTimer);clearTimeout(receiveTimer);receiving?.abort();receiving=null;}
+  let island=null;
+  function stop(){clearTimeout(sendTimer);clearTimeout(receiveTimer);receiving?.abort();receiving=null;withdraw();}
+  function withdraw(){if(island)notifications.withdraw(island.id);island=null;}
+  const clock=seconds=>Math.floor(seconds/60)+':'+String(Math.max(0,seconds)%60).padStart(2,'0');
+  function copy(){navigator.clipboard.writeText($('lan_share_code').value).then(()=>notice(tr('lan.copied')),error=>notice(error.message,true));}
+  // One persistent island notice per transfer state; the remaining time ticks inside it.
+  function announce(candidate,result){
+    const kind=['waiting','confirmation','sending'].includes(result.status)?result.status:null;
+    if(!kind){
+      const finished=island&&['sent','failed','expired','cancelled'].includes(result.status);
+      withdraw();
+      if(finished)notice(tr('lan.'+result.status),result.status!=='sent');
+      return;
+    }
+    const message=kind==='waiting'?tr('lan.code_ready',{time:clock(result.remaining_seconds)}):kind==='confirmation'?tr('lan.receiver_request',{address:result.receiver}):tr('lan.sending');
+    if(island?.kind===kind){notifications.update(island.id,message);return;}
+    withdraw();
+    const actions=kind==='waiting'?[{label:tr('lan.copy'),primary:true,attributes:{'data-lan-copy':''},run:copy}]
+      :kind==='confirmation'?[{label:tr('lan.decline'),attributes:{'data-lan-decline':''},run:()=>status(candidate,'cancel')},
+        {label:tr('lan.approve'),primary:true,attributes:{'data-lan-approve':''},run:()=>status(candidate,'approve',{code:$('lan_share_code').value})}]:[];
+    island={kind,id:notifications.show(message,false,{persist:true,actions})};
+  }
   function errorText(error){const key='lan.'+error.message;return tr(key)===key?error.message:tr(key);}
   async function post(operation,body={},signal){return api('/api/migration/lan/'+operation,{method:'POST',body:JSON.stringify(body),signal});}
   function live(candidate){return active(candidate)&&candidate.mode==='tunnel';}
@@ -56,9 +76,12 @@ function createLanMigration({active,selections,options,openPreview}) {
       clearTimeout(receiveTimer);receiving?.abort();receiving=null;
       $('lan_receive_status').textContent=tr('lan.receive_stopped');update(candidate);
     };
-    document.querySelector('[data-lan-copy]').onclick=()=>navigator.clipboard.writeText($('lan_share_code').value).then(()=>notice(tr('lan.copied')),error=>notice(error.message,true));
+    const tabs=[['send',$('lan_tab_send'),$('lan_send_panel')],['receive',$('lan_tab_receive'),$('lan_receive_panel')]];
+    const select=name=>{candidate.lanTab=name;for(const [id,tab,panel] of tabs){const on=id===name;tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;panel.hidden=!on;}};
+    for(const [id,tab] of tabs){tab.onclick=()=>select(id);tab.onkeydown=event=>{if(event.key==='ArrowRight'||event.key==='ArrowLeft'){event.preventDefault();const next=id==='send'?'receive':'send';select(next);$('lan_tab_'+next).focus();}};}
+    select(candidate.lanTab||'send');
+    $('lan_code').onpaste=()=>setTimeout(()=>{update(candidate);if($('lan_code').value.trim().length===49)document.querySelector('[data-lan-receive]').focus();});
     document.querySelector('[data-lan-cancel]').onclick=()=>status(candidate,'cancel');
-    document.querySelector('[data-lan-approve]').onclick=()=>status(candidate,'approve',{code:$('lan_share_code').value});
     update(candidate);void status(candidate);
   }
   async function status(candidate,operation='status',body={}) {
@@ -72,9 +95,9 @@ function createLanMigration({active,selections,options,openPreview}) {
       $('lan_send_status').textContent=result.status==='idle'||!currentTransfer?(candidate.sending?tr('lan.preparing'):''):tr('lan.'+result.status);
       if(pending){
         $('lan_share_code').value=result.code;
-        $('lan_remaining').textContent=tr('lan.remaining',{seconds:result.remaining_seconds});
+        $('lan_remaining').textContent=tr('lan.remaining_clock',{time:clock(result.remaining_seconds)});
       }
-      if(result.status==='confirmation')$('lan_receiver').textContent=tr('lan.confirm_receiver',{address:result.receiver});
+      if(currentTransfer)announce(candidate,result);
       update(candidate);
       if(pending)sendTimer=setTimeout(()=>status(candidate),1000);
     } catch(error){if(live(candidate))$('lan_send_status').textContent=errorText(error);}

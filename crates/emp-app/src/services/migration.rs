@@ -68,10 +68,15 @@ pub(crate) fn export(
                 }
                 None => None,
             };
-            let config = state
+            let mut config = state
                 .backend
                 .configuration
                 .snapshot()
+                .map_err(|_| MigrationError::Internal)?;
+            state
+                .backend
+                .team
+                .exclude_shared_migration_providers(&mut config)
                 .map_err(|_| MigrationError::Internal)?;
             if let Some(selections) = body.get("selections").and_then(Value::as_array) {
                 let account_ids: std::collections::BTreeSet<_> = selections

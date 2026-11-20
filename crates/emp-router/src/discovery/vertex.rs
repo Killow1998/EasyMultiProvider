@@ -1,10 +1,12 @@
 //! Google Model Garden catalog; project access is checked by the model service.
 
 use super::*;
+use emp_state::usage::pricing::{VertexModelMetadata, is_vertex_text_model};
 
 pub(super) async fn discover(
     client: &HttpClient,
     provider: &Map<String, Value>,
+    vertex_models: &[VertexModelMetadata],
 ) -> Result<Vec<Value>, RouterError> {
     if provider["auth_mode"] == "vertex_api_key" {
         if provider["api_key"].as_str().is_none_or(str::is_empty) {
@@ -15,21 +17,10 @@ pub(super) async fn discover(
                 "Vertex API Key is not configured",
             ));
         }
-        // Model Garden requires OAuth; API keys use a published reference list.
-        let mut models = emp_state::official_registry::published_text_models("google_gemini");
-        models.retain(|model| {
-            let id = model["upstream_id"].as_str().expect("reference model ID");
-            id.starts_with("gemini-")
-                && (provider["vertex"]["project"] != ""
-                    || [
-                        "gemini-3.1-pro-preview",
-                        "gemini-3-flash-preview",
-                        "gemini-2.5-pro",
-                        "gemini-2.5-flash",
-                        "gemini-2.5-flash-lite",
-                    ]
-                    .contains(&id))
-        });
+        let models = api_key_candidates(vertex_models);
+        if provider["vertex"]["project"] == "" {
+            return verify_express_models(client, provider, models).await;
+        }
         return Ok(models);
     }
     let mut headers = crate::vertex::headers(provider, &BTreeMap::new()).await?;
@@ -100,4 +91,121 @@ pub(super) async fn discover(
         }
     }
     Ok(enrich_discovered_models(provider, result))
+}
+
+fn api_key_candidates(vertex_models: &[VertexModelMetadata]) -> Vec<Value> {
+    let mut models = BTreeMap::new();
+    for mut model in emp_state::official_registry::published_text_models("google_gemini") {
+        let id = model["upstream_id"].as_str().expect("reference model ID");
+        if is_vertex_text_model(id) {
+            let id = id.to_owned();
+            model["catalog_source"] = json!("official");
+            models.insert(id, model);
+        }
+    }
+    for metadata in vertex_models {
+        let id = &metadata.upstream_id;
+        if !is_vertex_text_model(id) {
+            continue;
+        }
+        let model = models.entry(id.clone()).or_insert_with(
+            || json!({"upstream_id":id,"display_name":id,"catalog_source":"litellm"}),
+        );
+        let modalities = (metadata.supports_vision.is_some()
+            || metadata.supports_audio_input.is_some())
+        .then(|| {
+            let mut modalities = vec!["text"];
+            if metadata.supports_vision == Some(true) {
+                modalities.push("image");
+            }
+            if metadata.supports_audio_input == Some(true) {
+                modalities.push("audio");
+            }
+            modalities
+        });
+        for (field, value) in [
+            ("context_window", json!(metadata.max_input_tokens)),
+            ("max_input_tokens", json!(metadata.max_input_tokens)),
+            ("output_limit", json!(metadata.max_output_tokens)),
+            ("supports_reasoning", json!(metadata.supports_reasoning)),
+            ("input_modalities", json!(modalities)),
+        ] {
+            if model[field].is_null() && !value.is_null() {
+                model[field] = value;
+                model["capability_sources"][field] = source("inferred");
+            }
+        }
+    }
+    models
+        .into_values()
+        .map(|mut model| {
+            model["availability"] = json!("reference");
+            model
+        })
+        .collect()
+}
+
+async fn verify_express_models(
+    client: &HttpClient,
+    provider: &Map<String, Value>,
+    models: Vec<Value>,
+) -> Result<Vec<Value>, RouterError> {
+    if models.len() > MAX_DISCOVERED_MODELS {
+        return Err(model_count_error());
+    }
+    let headers = crate::vertex::headers(provider, &common_discovery_headers()).await?;
+    let probe =
+        serde_json::to_vec(&json!({"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}))
+            .expect("token probe JSON");
+    let mut budget = DiscoveryBudget::new();
+    let mut available = Vec::new();
+    let mut rejection = None;
+    for mut model in models {
+        let id = model["upstream_id"].as_str().expect("Vertex candidate ID");
+        let url = format!(
+            "https://aiplatform.googleapis.com/v1/publishers/google/models/{id}:countTokens"
+        );
+        match discovery_json(
+            client,
+            HttpMethod::Post,
+            &url,
+            headers.clone(),
+            Some(probe.clone()),
+            &mut budget,
+        )
+        .await
+        {
+            Ok(response)
+                if response["totalTokens"]
+                    .as_u64()
+                    .is_some_and(|count| count > 0) =>
+            {
+                model["availability"] = json!("count_tokens_verified");
+                available.push(model);
+            }
+            Ok(_) => {
+                return Err(discovery_error(
+                    RouterErrorKind::Protocol,
+                    502,
+                    FailureClass::ProtocolError,
+                    "Vertex countTokens returned an invalid token count",
+                ));
+            }
+            Err(error) if matches!(error.status(), 400 | 403 | 404) => {
+                if rejection
+                    .as_ref()
+                    .is_none_or(|old: &RouterError| old.status() == 404)
+                {
+                    rejection = Some(error);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if available.is_empty()
+        && let Some(error) = rejection
+    {
+        return Err(error);
+    }
+    Ok(available)
 }

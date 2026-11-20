@@ -2,22 +2,21 @@
 
 use super::*;
 
-pub async fn discover_decision_models(
+pub async fn discover_decision_models_with_plan(
     client: &HttpClient,
     base: &str,
     key: &str,
     protocol: &str,
+    check_key: bool,
+    filter_decisions: bool,
 ) -> Result<Vec<Value>, RouterError> {
     let base = base.trim_end_matches('/');
-    let openrouter = Url::parse(base)
-        .ok()
-        .is_some_and(|url| url.host_str() == Some("openrouter.ai"));
     let headers = bearer_discovery_headers(key);
     let mut budget = DiscoveryBudget::new();
-    if openrouter {
+    if check_key {
         get_json(client, &format!("{base}/key"), headers.clone(), &mut budget).await?;
     }
-    let filter = if protocol == "openrouter" || openrouter {
+    let filter = if filter_decisions {
         "?output_modalities=decisions"
     } else {
         ""

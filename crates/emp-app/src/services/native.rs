@@ -19,7 +19,7 @@ pub(crate) use auth::resolve_headers;
 pub(crate) mod images;
 
 pub(crate) fn plaintext_collaboration(config: &Value) -> bool {
-    config["external_collaboration"] == "on"
+    config["external_collaboration"] != "off"
 }
 
 fn replace_catalog_etag(state: &ServerState, headers: &mut BTreeMap<String, String>) {
