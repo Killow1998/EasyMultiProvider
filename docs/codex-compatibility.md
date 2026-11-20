@@ -8,21 +8,28 @@ independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 Older series leave routine maintenance; their dated acceptance records remain.
 
-## Current target and acceptance (2026-11-18 UTC)
+## Current target and acceptance (2026-11-20 UTC)
 
-The maintenance window is **0.166–0.170** following the stable
-[0.170.0 release](https://github.com/openai/codex/releases/tag/rust-v0.170.0).
-[0.169.1](https://github.com/openai/codex/releases/tag/rust-v0.169.1)
-is a patch within the 0.169 series. The WebUI displays an update link beside the
-detected runtime for versions below 0.166. Older runtimes can still be selected
-using the existing runtime policy.
+The maintenance window is **0.167–0.171** following the stable
+[0.171.0 release](https://github.com/openai/codex/releases/tag/rust-v0.171.0).
+The WebUI displays an update link beside the detected runtime for versions
+below 0.167. Older runtimes can still be selected using the existing runtime
+policy.
 
-Official Linux x86_64 Codex 0.169.1 and 0.170.0 each passed all 55 assertions of
-the created-history restore contract against the local EMP 0.14.3-based modular
-candidate. The run used 15 synthetic upstream requests per engine and covered
-created sessions, tool history, compaction, forks, restoration and native
-resume. Other surfaces, including desktop integrations and Code Mode, retain
-their separately dated acceptance evidence below.
+Official Linux x86_64 Codex 0.171.0 passed all 55 created-history restore
+assertions against the local EMP 0.15.0-based candidate, with 15 synthetic
+upstream requests. The Native and imported-subscription catalog contract
+verified model metadata and completed 12 synthetic requests through those
+routes. Four online catalog tests also passed, covering background refresh,
+originator-scoped catalogs, Unicode route display over WebSocket, and a
+localhost-only proxy exception. These runs used disposable homes and loopback
+providers.
+
+On 2026-11-18 UTC, Codex 0.169.1 and 0.170.0 each passed the same 55
+created-history restore assertions against the EMP 0.14.3-based modular
+candidate, with 15 synthetic upstream requests per engine. Other surfaces,
+including desktop integrations and Code Mode, retain their separately dated
+acceptance evidence below.
 
 ## Runtime selection and account catalogs (2026-11-18 UTC)
 

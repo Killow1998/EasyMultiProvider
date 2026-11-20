@@ -48,9 +48,10 @@ entries set `Terminal=false` and `StartupNotify=false`; argument-free GUI launch
 starts the service in its own session so an older terminal-based launcher can
 close safely. Explicit `serve` remains foreground. Linux uses the desktop's
 StatusNotifier/D-Bus support without a GTK runtime dependency. macOS sets
-`LSUIElement` and executes `Resources/launch.command` directly from the bundle
-launcher, keeping AppKit on the original thread. The existing bundle paths and
-updater arguments are preserved.
+`LSUIElement` and launches the native executable at `Contents/MacOS/EMP`,
+so AppKit associates the menu bar item with the application bundle.
+`Contents/Resources/EMP` forwards the original arguments to the native executable
+for existing installations that still update through that path.
 
 Runtime icon selection is stored as device-local `state/appearance.json`,
 separately from provider configuration and migration bundles. The browser

@@ -1,5 +1,6 @@
 use super::*;
-use crate::executable_trust::PreparedExecutable;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 
 fn fixture(root: &Path) -> PathBuf {
     let bundle = root.join("source/CodexCLI.app");
@@ -9,79 +10,6 @@ fn fixture(root: &Path) -> PathBuf {
     fs::write(&engine, b"#!/bin/sh\necho safe\n").unwrap();
     fs::set_permissions(&engine, fs::Permissions::from_mode(0o700)).unwrap();
     bundle
-}
-
-#[test]
-fn snapshot_survives_source_swap_and_is_owned_until_child_finishes() {
-    let root = tempfile::tempdir().unwrap();
-    let source = fixture(root.path());
-    let (directory, executable) =
-        snapshot_with_verifier(&source, Some(root.path()), |bundle, engine| {
-            assert_ne!(engine, source.join(ENGINE_RELATIVE));
-            assert_eq!(
-                fs::read(bundle.join("Contents/Info.plist")).unwrap(),
-                b"sealed fixture"
-            );
-            assert_eq!(fs::read(engine).unwrap(), b"#!/bin/sh\necho safe\n");
-            fs::rename(&source, root.path().join("old.app")).unwrap();
-            fs::create_dir_all(source.join("Contents/MacOS")).unwrap();
-            fs::write(source.join(ENGINE_RELATIVE), b"#!/bin/sh\necho replaced\n").unwrap();
-            true
-        })
-        .unwrap();
-    let root_path = directory.path().to_owned();
-    assert_eq!(fs::metadata(&root_path).unwrap().mode() & 0o777, 0o700);
-    assert_ne!(
-        fs::metadata(&executable).unwrap().ino(),
-        fs::metadata(root.path().join("old.app").join(ENGINE_RELATIVE))
-            .unwrap()
-            .ino()
-    );
-    let prepared = PreparedExecutable::snapshot(directory, executable);
-    assert_eq!(prepared.path(), prepared.quota_selector());
-    let mut child = Command::new(prepared.path())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    assert!(prepared.path().exists());
-    let output = child.stdout.take().unwrap();
-    let mut text = String::new();
-    std::io::BufReader::new(output)
-        .read_to_string(&mut text)
-        .unwrap();
-    assert!(child.wait().unwrap().success());
-    assert_eq!(text, "safe\n");
-    drop(prepared);
-    assert!(!root_path.exists());
-}
-
-#[test]
-fn rejected_signature_or_link_leaves_no_snapshot() {
-    let root = tempfile::tempdir().unwrap();
-    let source = fixture(root.path());
-    let mut snapshot_root = None;
-    assert!(
-        snapshot_with_verifier(&source, Some(root.path()), |bundle, _| {
-            snapshot_root = Some(bundle.parent().unwrap().to_owned());
-            false
-        })
-        .is_err()
-    );
-    assert!(!snapshot_root.unwrap().exists());
-    std::os::unix::fs::symlink("/nonexistent", source.join("Contents/escape")).unwrap();
-    assert!(
-        snapshot_with_verifier(&source, Some(root.path()), |_, _| panic!(
-            "link reached verifier"
-        ))
-        .is_err()
-    );
-    assert!(fs::read_dir(root.path()).unwrap().all(|entry| {
-        !entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with("emp-codex-engine-")
-    }));
 }
 
 #[test]
@@ -103,7 +31,7 @@ fn only_nested_known_desktop_layouts_are_candidates() {
 
 #[test]
 fn signature_verifier_fails_closed_on_missing_tool_failure_and_timeout() {
-    assert!(!verify_snapshot(
+    assert!(!verify_bundle(
         Path::new("/nonexistent/app"),
         Path::new("/nonexistent/codex")
     ));
@@ -167,34 +95,27 @@ fn authenticated_info_must_bind_the_exact_codex_engine() {
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires a verified official macOS App Bundle"]
-fn installed_macos_signed_bundle_snapshot() {
+fn installed_macos_signed_bundle_launch() {
     let app = PathBuf::from(std::env::var_os("EMP_MACOS_DIAGNOSTIC_APP").unwrap());
-    let source = app.join("Contents/Resources/codex-cli/CodexCLI.app");
-    if !source.exists() {
+    let bundle = app.join("Contents/Resources/codex-cli/CodexCLI.app");
+    if !bundle.exists() {
         assert!(app.join("Contents/Resources/codex").is_file());
         return;
     }
 
-    let (directory, executable) = snapshot_with_verifier(&source, None, verify_snapshot).unwrap();
-    let mut command = Command::new(&executable);
+    let executable = bundle.join(ENGINE_RELATIVE).canonicalize().unwrap();
+    if known_bundle(&executable).is_some() {
+        let prepared = crate::PreparedExecutable::prepare(&executable).unwrap();
+        assert_eq!(prepared.path(), executable);
+        assert_eq!(prepared.quota_selector(), executable);
+    } else {
+        assert!(verify_bundle(&bundle, &executable));
+    }
+    let mut command = Command::new(executable);
     command.arg("--version");
     assert!(run_verifier(&mut command, Duration::from_secs(5)));
-    drop(directory);
-    assert!(!executable.exists());
 
-    let result = snapshot_with_verifier(&source, None, |bundle, engine| {
-        let info = bundle.join("Contents/Info.plist");
-        fs::set_permissions(&info, fs::Permissions::from_mode(0o600)).unwrap();
-        OpenOptions::new()
-            .append(true)
-            .open(&info)
-            .unwrap()
-            .write_all(b"\n")
-            .unwrap();
-        verify_snapshot(bundle, engine)
-    });
-    assert!(matches!(
-        result,
-        Err(TrustFailure::BundleVerificationFailed)
-    ));
+    let root = tempfile::tempdir().unwrap();
+    let unsigned = fixture(root.path());
+    assert!(!verify_bundle(&unsigned, &unsigned.join(ENGINE_RELATIVE)));
 }

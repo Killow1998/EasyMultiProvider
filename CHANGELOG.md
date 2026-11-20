@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.15.1 (2026-11-20)
+
+### 中文
+
+- macOS 从官方 ChatGPT 或 Codex App 的原路径启动内置 Codex CLI，修复临时副本引起的版本探测和订阅登录失败。
+- macOS 安装包直接启动 EMP，修复菜单栏图标不可见的问题，并兼容旧版应用内更新。
+- Codex 维护窗口推进到 0.167–0.171。WebUI 在检测到低于 0.167 的引擎时显示更新入口。
+
+### English
+
+- Launch the embedded Codex CLI from the installed official ChatGPT or Codex app on macOS, fixing version probes and subscription sign-in failures caused by the temporary copy.
+- Launch EMP directly from the macOS app bundle to restore the menu bar icon and support in-app upgrades from older versions.
+- Move the Codex maintenance window to 0.167–0.171. The WebUI links to Codex updates when the detected runtime is older than 0.167.
+
 ## 0.15.0 (2026-11-19)
 
 ### 中文

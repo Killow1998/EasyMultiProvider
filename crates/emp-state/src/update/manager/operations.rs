@@ -224,7 +224,7 @@ impl UpdateManager {
         })?;
         self.set("verifying", "", Some(asset.version.clone()), 100);
         self.stage("extract_package");
-        let candidate = extract_candidate(&package, job, relative)?;
+        let candidate = extract_candidate(&package, job)?;
         let binary = if relative.is_empty() {
             candidate.clone()
         } else {

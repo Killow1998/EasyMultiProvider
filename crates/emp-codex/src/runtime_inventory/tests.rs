@@ -38,7 +38,12 @@ fn prepared_executable_reprobes_when_a_cached_runtime_is_replaced_or_removed() {
         Some("0.148.0")
     );
 
-    for version in ["0.166.0", "0.169.1", "0.170.0"] {
+    for (version, outside_window) in [
+        ("0.166.0", true),
+        ("0.167.0", false),
+        ("0.169.1", false),
+        ("0.171.0", false),
+    ] {
         script(
             root.path(),
             "replacement",
@@ -49,7 +54,7 @@ fn prepared_executable_reprobes_when_a_cached_runtime_is_replaced_or_removed() {
         assert_eq!(inventory.prepared_executable().unwrap().path(), binary);
         let snapshot = inventory.snapshot(false);
         assert_eq!(snapshot["installed"], version);
-        assert_eq!(snapshot["outside_maintenance_window"], false);
+        assert_eq!(snapshot["outside_maintenance_window"], outside_window);
     }
 
     std::fs::remove_file(&binary).unwrap();

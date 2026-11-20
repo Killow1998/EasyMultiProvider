@@ -5,6 +5,10 @@ use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+pub const MACOS_BUNDLE_BINARY: &str = "Contents/MacOS/EMP";
+pub const MACOS_LEGACY_BINARY: &str = "Contents/Resources/EMP";
+
 #[derive(Deserialize)]
 pub struct ProcessIdentity {
     pub pid: u32,
@@ -40,12 +44,15 @@ pub fn installation_target(executable: &Path) -> Result<(PathBuf, String)> {
             .and_then(Path::parent)
             .and_then(Path::parent)
             .ok_or(UpdateError("unsupported_installation"))?;
-        if app.extension().is_none_or(|extension| extension != "app")
-            || executable.strip_prefix(app).ok() != Some(Path::new("Contents/Resources/EMP"))
-        {
+        if app.extension().is_none_or(|extension| extension != "app") {
             return Err(UpdateError("unsupported_installation"));
         }
-        Ok((app.to_owned(), "Contents/Resources/EMP".into()))
+        match executable.strip_prefix(app).ok().and_then(Path::to_str) {
+            Some(relative @ (MACOS_BUNDLE_BINARY | MACOS_LEGACY_BINARY)) => {
+                Ok((app.to_owned(), relative.to_owned()))
+            }
+            _ => Err(UpdateError("unsupported_installation")),
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -94,7 +101,10 @@ pub fn run(plan_path: &Path) -> Result<u8> {
         || candidate_parent.as_deref() != Some(job)
         || plan.target.is_symlink()
         || plan.candidate.is_symlink()
-        || !matches!(plan.relative_binary.as_str(), "" | "Contents/Resources/EMP")
+        || !matches!(
+            plan.relative_binary.as_str(),
+            "" | MACOS_BUNDLE_BINARY | MACOS_LEGACY_BINARY
+        )
     {
         return Err(UpdateError("invalid_update_plan"));
     }
