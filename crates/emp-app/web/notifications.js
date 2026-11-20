@@ -64,18 +64,66 @@ function createNotifications({$, tr, getLanguage}) {
       body.append(text,time); row.append(symbol,body); list.append(row);
     }
   }
-  // A persistent notice carries actions (copy, approve, decline) and stays until its owner withdraws it;
-  // ordinary notices pass over it briefly and then give the island back.
-  let sticky = null;
+  // Persistent notices carry actions (copy, approve, decline) and stay until their owner withdraws them.
+  // They stack: the newest shows, and resolving it reveals the next. Ordinary notices pass over briefly.
+  let stickies = [];
+  const top = () => stickies.at(-1) || null;
+  const showingSticky = () => stickies.some(item => item.id === currentId);
+  const STACK_LIMIT = 3;
+  const actionButtons = actions => (actions || []).map(action => {
+    const button = document.createElement('button');
+    button.type = 'button'; button.textContent = action.label;
+    button.className = action.primary ? 'notification-action primary' : 'notification-action';
+    for (const [name,value] of Object.entries(action.attributes || {})) button.setAttribute(name, value);
+    button.onclick = () => action.run?.();
+    return button;
+  });
+  // Several persistent notices share one island: the oldest three show as rows with their own actions,
+  // and each resolved row lets the next waiting notice slide in.
+  function displayStack() {
+    const fresh = island.dataset.stack !== 'true' || island.hidden;
+    if (fresh) hide();
+    const shown = stickies.slice(0, STACK_LIMIT), rest = stickies.length - shown.length;
+    const list = $('notification_stack'), before = new Set([...list.children].map(row => row.dataset.id));
+    currentId = shown[0].id;
+    island.dataset.kind = 'message'; island.dataset.persist = 'true'; island.dataset.stack = 'true';
+    $('notification_symbol').innerHTML = icon(false);
+    $('notification_close').hidden = true;
+    $('notification_actions').replaceChildren();
+    $('status').setAttribute('role','status'); $('status').setAttribute('aria-live','polite');
+    $('status').textContent = tr('notifications.pending', {count:stickies.length});
+    list.replaceChildren(...shown.map(item => {
+      const row = document.createElement('li'), text = document.createElement('p'), actions = document.createElement('span');
+      row.dataset.id = item.id; text.textContent = item.message; actions.className = 'notification-row-actions';
+      actions.append(...actionButtons(item.actions));
+      row.append(text, actions);
+      if (!before.has(item.id) && !fresh && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        row.animate([{opacity:0,transform:'translateY(-6px)'},{opacity:1,transform:'none'}],{duration:220,easing:'ease-out'});
+      }
+      return row;
+    }));
+    if (rest > 0) {
+      const more = document.createElement('li'); more.className = 'notification-stack-more';
+      more.textContent = tr('notifications.more_waiting', {count:rest}); list.append(more);
+    }
+    list.hidden = false;
+    if (fresh) {
+      island.hidden = false; island.showPopover();
+      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        entrance = island.animate([{opacity:0,transform:'translate(-50%, -8px) scale(.97)'},{opacity:1,transform:'translate(-50%, 0) scale(1)'}],{duration:250,easing:'ease-out'});
+      }
+    }
+  }
   function hide() {
     countdown?.cancel(); entrance?.cancel(); countdown = entrance = null;
+    island.dataset.stack = 'false'; $('notification_stack').replaceChildren(); $('notification_stack').hidden = true;
     if (island.contains(document.activeElement)) mailbox.focus({preventScroll:true});
     if (island.matches(':popover-open')) island.hidePopover();
     island.hidden = true; $('status').textContent = ''; $('notification_actions').replaceChildren(); currentId = null;
   }
-  function restore() { if (sticky && !currentId) display(sticky); }
+  function restore() { if (top() && !currentId) display(top()); }
   function dismiss() {
-    if (sticky && currentId === sticky.id) return;
+    if (showingSticky()) return;
     items = read();
     const item = items.find(item => item.id === currentId);
     if (item) { item.read = true; save(); refresh(); }
@@ -88,6 +136,7 @@ function createNotifications({$, tr, getLanguage}) {
     if (paused) countdown.pause(); else countdown.play();
   }
   function display(item) {
+    if (item.persist && stickies.length > 1) return displayStack();
     hide();
     currentId = item.id;
     island.dataset.kind = item.error ? 'error' : 'message';
@@ -96,14 +145,7 @@ function createNotifications({$, tr, getLanguage}) {
     $('status').setAttribute('role', item.quiet ? 'none' : item.error ? 'alert' : 'status');
     $('status').setAttribute('aria-live', item.quiet ? 'off' : item.error ? 'assertive' : 'polite');
     $('notification_close').hidden = Boolean(item.persist);
-    for (const action of item.actions || []) {
-      const button = document.createElement('button');
-      button.type = 'button'; button.textContent = action.label;
-      button.className = action.primary ? 'notification-action primary' : 'notification-action';
-      for (const [name,value] of Object.entries(action.attributes || {})) button.setAttribute(name, value);
-      button.onclick = () => action.run?.();
-      $('notification_actions').append(button);
-    }
+    $('notification_actions').append(...actionButtons(item.actions));
     island.hidden = false; island.showPopover(); $('status').textContent = item.message;
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
       entrance = island.animate([{opacity:0,transform:'translate(-50%, -8px) scale(.97)'},{opacity:1,transform:'translate(-50%, 0) scale(1)'}],{duration:250,easing:'ease-out'});
@@ -119,8 +161,10 @@ function createNotifications({$, tr, getLanguage}) {
     if (!message) return null;
     const item = {id:`${Date.now()}-${Math.random().toString(36).slice(2)}`, message:String(message).slice(0,10000), time:Date.now(), error:Boolean(error), read:isOpen()};
     if (persist) {
-      sticky = {...item, quiet, actions, persist:true};
-      display(sticky);
+      const entry = {...item, quiet, actions, persist:true};
+      stickies.push(entry);
+      if (currentId && !showingSticky()) return item.id;  // a passing notice finishes first, then restore() shows it
+      display(entry);
       return item.id;
     }
     items = [...read(),item].slice(-limit); save(); refresh();
@@ -128,20 +172,24 @@ function createNotifications({$, tr, getLanguage}) {
     return item.id;
   }
   function update(id, message) {
-    if (!sticky || sticky.id !== id) return;
-    sticky.message = String(message);
-    if (currentId === id) $('status').textContent = sticky.message;
+    const entry = stickies.find(item => item.id === id);
+    if (!entry) return;
+    entry.message = String(message);
+    if (island.dataset.stack === 'true') { const row = $('notification_stack').querySelector(`[data-id="${CSS.escape(id)}"] p`); if (row) row.textContent = entry.message; }
+    else if (currentId === id) $('status').textContent = entry.message;
   }
   function withdraw(id) {
     if (!id) return;
-    if (sticky?.id === id) sticky = null;
-    if (currentId === id) { hide(); restore(); }
+    const known = stickies.some(item => item.id === id);
+    stickies = stickies.filter(item => item.id !== id);
+    if (island.dataset.stack === 'true' && known) { if (stickies.length > 1) displayStack(); else { hide(); restore(); } }
+    else if (currentId === id) { hide(); restore(); }
   }
   $('notification_close').onclick = dismiss;
-  $('notification_clear').onclick = () => { items = []; save(); if (!sticky || currentId !== sticky.id) { hide(); restore(); } refresh(); };
+  $('notification_clear').onclick = () => { items = []; save(); if (!showingSticky()) { hide(); restore(); } refresh(); };
   inbox.addEventListener('beforetoggle', event => {
     if (event.newState === 'open') {
-      items = read().map(item => ({...item,read:true})); save(); if (!sticky || currentId !== sticky.id) hide(); refresh(); renderHistory();
+      items = read().map(item => ({...item,read:true})); save(); if (!showingSticky()) hide(); refresh(); renderHistory();
     }
   });
   inbox.addEventListener('toggle', () => mailbox.setAttribute('aria-expanded',String(isOpen())));
@@ -151,7 +199,7 @@ function createNotifications({$, tr, getLanguage}) {
   for (const event of ['pointerenter','pointerleave','focusin','focusout']) island.addEventListener(event, () => queueMicrotask(pauseWhenReading));
   document.addEventListener('visibilitychange',pauseWhenReading);
   window.addEventListener('blur',pauseWhenReading); window.addEventListener('focus',pauseWhenReading);
-  window.addEventListener('pagehide',() => { sticky = null; hide(); });
+  window.addEventListener('pagehide',() => { stickies = []; hide(); });
   window.addEventListener('storage', event => { if (event.key === storageKey) { items = read(); refresh(); } });
   items = read(); refresh();
   return {show,update,withdraw,dismiss,refresh,isOpen,remember};

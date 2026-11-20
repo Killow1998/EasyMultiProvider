@@ -53,6 +53,18 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/tutorial-08-tunnel-migration.gif" => {
             include_bytes!("../../../docs/assets/tutorials/08-tunnel-migration.gif")
         }
+        "/assets/tutorial-09-team-workspace.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/09-team-workspace.gif")
+        }
+        "/assets/tutorial-10-team-share.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/10-team-share.gif")
+        }
+        "/assets/tutorial-11-team-approve.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/11-team-approve.gif")
+        }
+        "/assets/tutorial-12-team-members.gif" => {
+            include_bytes!("../../../docs/assets/tutorials/12-team-members.gif")
+        }
         "/assets/copy-recovery.js" => include_bytes!("../web/copy-recovery.js"),
         "/assets/service-presentation.js" => include_bytes!("../web/service-presentation.js"),
         "/assets/service-presentation.css" => include_bytes!("../web/service-presentation.css"),

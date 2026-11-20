@@ -37,14 +37,10 @@
       <button id="check_update" type="button" class="secondary" data-icon="update" onclick="openUpdate()" data-i18n="check_update"></button>
     </div>
     <div class="header-group">
-      <label class="header-preference" for="language_select"><span data-i18n="language_label"></span>
-        <select id="language_select" data-i18n-aria-label="language_label" onchange="setLanguage(this.value)"><option value="zh-CN" data-i18n="core.language_chinese"></option><option value="en" data-i18n="core.language_english"></option></select>
-      </label>
-      <label class="header-preference" for="theme_select"><span data-i18n="theme_label"></span>
-        <select id="theme_select" data-i18n-aria-label="theme_label" onchange="setTheme(this.value)"><option value="system" data-i18n="theme_system"></option><option value="light" data-i18n="theme_light"></option><option value="dark" data-i18n="theme_dark"></option></select>
-      </label>
+      <button id="language_toggle" type="button" class="secondary header-icon-button" onclick="setLanguage(language === 'en' ? 'zh-CN' : 'en')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h8M8 3v2m2.5 0c-.8 4.2-3.3 7.4-6.5 9"/><path d="M5.5 9.5c1.2 1.8 3 3.3 5 4.3"/><path d="m12.5 21 4-9.5 4 9.5m-6.6-3h5.2"/></svg></button>
+      <button id="theme_toggle" type="button" class="secondary header-icon-button" onclick="setTheme({system:'light',light:'dark',dark:'system'}[document.documentElement.dataset.theme] || 'system')"><svg id="theme_icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"></svg></button>
     </div>
-    <button id="tutorials_open" type="button" class="secondary" onclick="tutorials.open()" data-i18n="tutorials.title"></button>
+    <button id="tutorials_open" type="button" class="secondary" data-icon="book" onclick="tutorials.open()" data-i18n="tutorials.title"></button>
   </div>
 </header>
 
@@ -96,7 +92,7 @@
 
 </main>
 
-<div id="notification" popover="manual" hidden><span id="notification_symbol" aria-hidden="true"></span><span id="status" role="status" aria-live="polite" aria-atomic="true"></span><span id="notification_actions"></span><button id="notification_close" type="button" class="notification-close" data-i18n-aria-label="core.close_notification">&times;</button><div class="notification-track" aria-hidden="true"><span id="notification_progress"></span></div></div>
+<div id="notification" popover="manual" hidden><span id="notification_symbol" aria-hidden="true"></span><span id="status" role="status" aria-live="polite" aria-atomic="true"></span><span id="notification_actions"></span><ol id="notification_stack" hidden></ol><button id="notification_close" type="button" class="notification-close" data-i18n-aria-label="core.close_notification">&times;</button><div class="notification-track" aria-hidden="true"><span id="notification_progress"></span></div></div>
 <button id="notification_mailbox" type="button" popovertarget="notification_inbox" aria-haspopup="dialog" aria-expanded="false" data-i18n-aria-label="notifications.inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span id="notification_unread" hidden aria-hidden="true"></span></button>
 <div id="notification_inbox" popover="auto" role="dialog" aria-labelledby="notification_inbox_title">
   <div class="notification-inbox-header"><h2 id="notification_inbox_title" data-i18n="notifications.title"></h2><span id="notification_count"></span><button id="notification_clear" type="button" class="secondary" data-icon="trash" data-i18n-aria-label="notifications.clear"></button><button type="button" class="modal-close" popovertarget="notification_inbox" popovertargetaction="hide" data-i18n-aria-label="notifications.close">&times;</button></div>
@@ -182,7 +178,7 @@ let teamWorkspace, teamPanelRevision;
 async function getTeamWorkspace() {
   const revision = await moduleSettings.loadPanel('team');
   if (!teamWorkspace || teamPanelRevision !== revision) {
-    teamWorkspace?.stopInvite();
+    teamWorkspace?.stopInvite(); teamWorkspace?.dispose?.();
     teamPanelRevision = revision;
     teamWorkspace = createTeamWorkspace({api,openModal,notice,$,esc,tr,getState:() => state,onChange:() => {void moduleSettings.refresh().catch(() => {});},onSync:refreshImportedAccounts});
   }
@@ -230,7 +226,7 @@ function t(key, values) { return translateUiCopy(key, language, values); }
 function tr(key, values) { return typeof values === 'string' ? (language === 'en' ? values : key) : t(key, values); }
 function applyTranslations() {
   if (document.documentElement) document.documentElement.lang = language;
-  document.querySelectorAll('[data-i18n]').forEach(element => { if (element.dataset.i18n) element.textContent = t(element.dataset.i18n); });
+  document.querySelectorAll('[data-i18n]').forEach(element => { if (element.dataset.i18n) element.textContent = t(element.dataset.i18n); if (element.dataset.icon && element.closest('.page-header-controls')) element.title = element.textContent; });
   renderModuleEntries();
   document.querySelectorAll('[data-i18n-placeholder]').forEach(element => { element.placeholder = t(element.dataset.i18nPlaceholder); });
   document.querySelectorAll('[data-i18n-aria-label]').forEach(element => { element.setAttribute('aria-label', t(element.dataset.i18nAriaLabel)); });
@@ -247,9 +243,17 @@ async function syncLanguage() {
   } catch(error){notice(tr("core.could_not_save_error_language")+error.message,true);}
   finally{languageSaveBusy=false;}
 }
-function setLanguage(value) { language = value === 'en' ? 'en' : 'zh-CN'; savePreference('emp-language', language); if ($('language_select')) $('language_select').value = language; applyTranslations(); if (state) fill(); if ($('update_notes') && updates.info()) renderUpdate(updates.info()); if(state)void syncLanguage(); }
-function setTheme(value) { const theme = ['light','dark'].includes(value) ? value : 'system'; savePreference('emp-theme', theme); if (document.documentElement) document.documentElement.dataset.theme = theme; if ($('theme_select')) $('theme_select').value = theme; }
-function applyPreferences() { language = storedPreference('emp-language', 'zh-CN') === 'en' ? 'en' : 'zh-CN'; setTheme(storedPreference('emp-theme', 'system')); if ($('language_select')) $('language_select').value = language; applyTranslations(); }
+function setLanguage(value) { language = value === 'en' ? 'en' : 'zh-CN'; savePreference('emp-language', language); applyTranslations(); renderPreferenceButtons(); if (state) fill(); if ($('update_notes') && updates.info()) renderUpdate(updates.info()); if(state)void syncLanguage(); }
+function setTheme(value) { const theme = ['light','dark'].includes(value) ? value : 'system'; savePreference('emp-theme', theme); if (document.documentElement) document.documentElement.dataset.theme = theme; renderPreferenceButtons(); }
+// Language and appearance are one-click icon toggles; the title names the current state and the next one.
+const THEME_ICONS = {system:'<rect x="3.5" y="4.5" width="17" height="12" rx="2"/><path d="M9 20h6m-3-3.5V20"/>', light:'<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2m0 15v2M4.6 4.6 6 6m12 12 1.4 1.4M2.5 12h2m15 0h2M4.6 19.4 6 18M18 6l1.4-1.4"/>', dark:'<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/>'};
+function renderPreferenceButtons() {
+  const theme = document.documentElement?.dataset.theme || 'system', next = {system:'light',light:'dark',dark:'system'}[theme];
+  const themeButton = $('theme_toggle'), languageButton = $('language_toggle');
+  if (themeButton) { $('theme_icon').innerHTML = THEME_ICONS[theme]; const label = tr('core.theme_toggle',{current:tr('theme_' + theme),next:tr('theme_' + next)}); themeButton.title = label; themeButton.setAttribute('aria-label', label); }
+  if (languageButton) { const label = tr('core.language_toggle'); languageButton.title = label; languageButton.setAttribute('aria-label', label); }
+}
+function applyPreferences() { language = storedPreference('emp-language', 'zh-CN') === 'en' ? 'en' : 'zh-CN'; setTheme(storedPreference('emp-theme', 'system')); applyTranslations(); renderPreferenceButtons(); }
 
 const officialProviders = {
   chatgpt: {id:'chatgpt-subscription', name:'ChatGPT Subscription', base_url:'https://chatgpt.com/backend-api/codex', protocol:'responses', auth_mode:'forward', hint:'转发当前 Codex 登录态，不需要 API Key'},
@@ -366,6 +370,16 @@ function renderModuleEntries() {
   $('catalog_aggregate_open').hidden = !moduleSettings.active('aggregate');
   $('shadow_migration_open').hidden = !moduleSettings.migrationAllowed();
   $('team_workspace_open').hidden = !moduleSettings.active('team');
+  bootTeamWorkspace();
+}
+// A joined EMP shows EMPT and, for administrators, raises join requests in the island without the
+// team panel being open. One status read on startup; the module keeps itself current afterwards.
+let teamBooted = false;
+function bootTeamWorkspace() {
+  if (!moduleSettings.active('team')) { teamBooted = false; teamWorkspace?.dispose?.(); setLogoWord('EMP'); tutorials.setTeam(false); return; }
+  if (teamBooted) return;
+  teamBooted = true;
+  getTeamWorkspace().then(workspace => workspace.refresh()).catch(() => { teamBooted = false; });
 }
 
 function fill() {
@@ -402,22 +416,32 @@ function renderIntegrationToggle() {
   button.dataset.action = restore ? 'restore' : 'enable';
   button.dataset.i18n = restore ? 'restore_codex' : 'enable_codex';
   button.dataset.icon = restore ? 'restore' : 'check';
-  button.textContent = t(button.dataset.i18n);
+  button.textContent = button.title = t(button.dataset.i18n);
   button.classList.toggle('secondary', restore);
   button.disabled = integrationBusy || (!restore && mode !== 'native');
   $('native_history_retry').disabled = integrationBusy;
 }
 // 5x7 dot-matrix glyphs for the header logo, drawn like a small OLED panel.
-const LOGO_GLYPHS = {E:['11111','10000','10000','11110','10000','10000','11111'], M:['10001','11011','10101','10101','10001','10001','10001'], P:['11110','10001','10001','11110','10000','10000','10000']};
+const LOGO_GLYPHS = {E:['11111','10000','10000','11110','10000','10000','11111'], M:['10001','11011','10101','10101','10001','10001','10001'], P:['11110','10001','10001','11110','10000','10000','10000'], T:['11111','00100','00100','00100','00100','00100','00100']};
+// The team module switches the wordmark to EMPT while this EMP belongs to a workspace.
+let logoWord = 'EMP';
+function setLogoWord(word) {
+  const next = word === 'EMPT' ? 'EMPT' : 'EMP', svg = $('emp_logo');
+  if (next === logoWord) return;
+  logoWord = next;
+  if (!svg) return;
+  svg.replaceChildren(); drawLogo(); enhanceLogo(svg);
+  svg.closest('h1')?.setAttribute('aria-label', logoWord);
+}
 function drawLogo() {
   const svg = $('emp_logo'); if (!svg || svg.childElementCount) return;
   const pitch = 3.4, dots = [];
-  [...'EMP'].forEach((letter, index) => LOGO_GLYPHS[letter].forEach((row, y) => [...row].forEach((bit, x) => {
+  [...logoWord].forEach((letter, index) => LOGO_GLYPHS[letter].forEach((row, y) => [...row].forEach((bit, x) => {
     const column = index * 6 + x;
     const twinkleDelay = -(column * .18 + y * .13);
-    dots.push(`<circle cx="${(column * pitch + pitch / 2).toFixed(1)}" cy="${(y * pitch + pitch / 2).toFixed(1)}" r="1.25"${bit === '1' ? ` class="on" data-lit="1" style="--twinkle-delay:${twinkleDelay.toFixed(2)}s"` : ''}/>`);
+    dots.push(`<circle cx="${(column * pitch + pitch / 2).toFixed(1)}" cy="${(y * pitch + pitch / 2).toFixed(1)}" r="1.32"${bit === '1' ? ` class="on" data-lit="1" style="--twinkle-delay:${twinkleDelay.toFixed(2)}s"` : ''}/>`);
   })));
-  svg.setAttribute('viewBox', `0 0 ${(17 * pitch).toFixed(1)} ${(7 * pitch).toFixed(1)}`);
+  svg.setAttribute('viewBox', `0 0 ${((logoWord.length * 6 - 1) * pitch).toFixed(1)} ${(7 * pitch).toFixed(1)}`);
   svg.innerHTML = dots.join('');
 }
 function renderLogoState(live) { drawLogo(); enhanceLogo($('emp_logo')); $('emp_logo')?.classList.toggle('emp-live', live); }

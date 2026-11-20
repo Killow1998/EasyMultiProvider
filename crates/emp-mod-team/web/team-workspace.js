@@ -1,6 +1,13 @@
 function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onChange, onSync}) {
   let current = {joined:false}, inviteTick, pendingTick, pendingAccount = null;
   const title = () => tr('modules.team_workspace');
+  const changed = () => { watch(); onChange(); };
+  let membersView = null;
+  let approvalTimer = null;
+  const approvals = new Map();
+  // Requests answered here in the last 30 s; a poll that started before the answer must not bring them back.
+  const answered = new Map();
+  const recentlyAnswered = id => Date.now() - (answered.get(id) || 0) < 30000;
   const roleName = role => ({
     member:tr('modules.member'),
     team_admin:tr('modules.team_administrator'),
@@ -21,7 +28,8 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       'workspace_share_version_conflict','workspace_subscription_sign_in_required',
       'workspace_only_native_subscription', 'workspace_handover_required',
       'workspace_handover_successor_required','workspace_backup_too_large',
-      'workspace_login_failed','workspace_login_limited'].includes(code)
+      'workspace_login_failed','workspace_login_limited','workspace_join_rejected',
+      'workspace_member_not_pending','workspace_member_not_found'].includes(code)
       ? tr('modules.' + code) : error.message;
   };
   const showError = (owner, error) => { if (owner.isConnected) $('modal_status').textContent = failure(error); };
@@ -56,7 +64,72 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
 
   async function refresh() {
     current = await api('/api/team/status');
-    onChange();
+    changed();
+  }
+
+  // Background duties of a joined EMP: the EMPT wordmark, and for administrators, join requests that
+  // surface in the notification island with Decline / Approve, wherever the user is in the WebUI.
+  function watch() {
+    if (typeof setLogoWord === 'function') setLogoWord(current.joined ? 'EMPT' : 'EMP');
+    if (typeof tutorials === 'object') tutorials.setTeam?.(current.joined);
+    clearTimeout(approvalTimer);
+    approvalTimer = null;
+    if (canApprove()) approvalTimer = setTimeout(checkApprovals, 1500);
+    else clearApprovals();
+  }
+  function canApprove() {
+    return Boolean(current.joined && ['team_admin','vps_admin'].includes(scope()?.role));
+  }
+  function clearApprovals() {
+    for (const id of approvals.values()) notifications.withdraw(id);
+    approvals.clear();
+  }
+  async function checkApprovals() {
+    approvalTimer = null;
+    if (!canApprove()) return clearApprovals();
+    if (!document.hidden) {
+      try {
+        const {members} = await action('list_members');
+        const waiting = members.filter(member => member.pending && member.can_manage !== false && !recentlyAnswered(member.id));
+        for (const id of answered.keys()) if (!recentlyAnswered(id)) answered.delete(id);
+        for (const [id,notice] of approvals) if (!waiting.some(member => member.id === id)) { notifications.withdraw(notice); approvals.delete(id); }
+        const arrived = waiting.some(member => !approvals.has(member.id));
+        const workspace = current.identity?.workspace?.name || tr('modules.team_workspace');
+        for (const member of waiting) if (!approvals.has(member.id)) {
+          const name = member.nickname || member.name;
+          approvals.set(member.id, notifications.show(tr('modules.join_request',{name,workspace}), false, {persist:true, actions:[
+            {label:tr('modules.accept_member'), primary:true, attributes:{'data-island-member-approve':member.id}, run:() => decide(member,true)},
+            {label:tr('modules.decline_member'), attributes:{'data-island-member-decline':member.id}, run:() => decide(member,false)}]}));
+        }
+        if (arrived) membersView?.({quiet:true});
+      } catch {}
+    }
+    if (canApprove()) approvalTimer = setTimeout(checkApprovals, 10000);
+  }
+  async function decide(member, approve) {
+    const name = member.nickname || member.name;
+    try {
+      if (approve) await action('member_access',{id:member.id,role:'member',publish:false,sync:true,enabled:true});
+      else await action('reject_member',{id:member.id});
+      answered.set(member.id, Date.now());
+      notifications.withdraw(approvals.get(member.id));
+      approvals.delete(member.id);
+      // While other requests wait, the result goes to the inbox so it does not cover the remaining rows.
+      const message = tr(approve ? 'modules.member_accepted' : 'modules.member_declined',{name});
+      if (approvals.size) notifications.remember([{id:`team-${member.id}-${Date.now()}`, message, time:Date.now()}]);
+      else notice(message);
+      membersView?.();
+    } catch (error) {
+      // Someone else already decided: drop the stale request instead of keeping it in the island.
+      const code = error.payload?.error?.code;
+      if (code === 'workspace_member_not_pending' || code === 'workspace_member_not_found') {
+        answered.set(member.id, Date.now());
+        notifications.withdraw(approvals.get(member.id));
+        approvals.delete(member.id);
+        membersView?.();
+      }
+      notice(failure(error), true);
+    }
   }
 
   function open(back) {
@@ -93,7 +166,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         <div class="team-card-heading">
           <h3 id="team_usage_title">${tr(manage ? 'modules.team_usage' : 'modules.my_usage')}</h3>
           <div class="team-card-actions">
-            <button type="button" class="secondary" data-team-profiles>${tr('modules.member_profiles')}</button>
+            <button type="button" class="secondary" data-icon="user" data-team-profiles>${tr('modules.member_profiles')}</button>
             <button type="button" class="secondary team-usage-toggle" data-team-usage-toggle data-icon="chevron-right" aria-expanded="false" aria-controls="team_usage_detail" title="${esc(tr('modules.expand_usage'))}" aria-label="${esc(tr('modules.expand_usage'))}"></button>
           </div>
         </div>
@@ -115,7 +188,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     } else {
       const leave = async successor => {
         current = successor ? await action('handover',{successor}) : await action('logout');
-        onChange();
+        changed();
         await onSync();
         if ($('team_leave_confirm')) join(back);
       };
@@ -129,19 +202,19 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       const prior = scope();
       current = result;
       if (!current.joined) {
-        onChange();
+        changed();
         if (view.isConnected) join(back);
         return;
       }
       if (prior.role !== scope().role || prior.publish !== scope().publish || prior.sync !== scope().sync) {
-        onChange();
+        changed();
         if (view.isConnected) home();
       }
     }).catch(error => {
       if (!view.isConnected) return;
       if (error.status === 401 || error.payload?.error?.code === 'workspace_authentication_required') {
         current = {joined:false,base:current.base};
-        onChange();
+        changed();
         join(back, true);
       } else showError(view,error);
     });
@@ -321,7 +394,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
           current = await action('login', account);
           pendingAccount = null;
           remember(account.base, current.identity?.workspace?.name || workspace);
-          onChange();
+          changed();
           if (form.isConnected) open(back);
         } else {
           await action('join', {...account,nickname,code:$('team_join_code').value});
@@ -441,7 +514,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         if (!view.isConnected) return;
         current = signedIn;
         pendingAccount = null;
-        onChange();
+        changed();
         open(back);
         notice(tr('modules.join_approved'));
       } catch (error) {
@@ -449,6 +522,10 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         const code = error.payload?.error?.code;
         if (code === 'workspace_join_pending' || code === 'workspace_login_limited' || !error.status || error.status >= 500) {
           pendingTick = setTimeout(poll, 5000);
+        } else if (code === 'workspace_join_rejected') {
+          pendingAccount = null;
+          join(back, false, {base:account.base,workspace:account.workspace,name:account.name,nickname:account.nickname});
+          notice(failure(error), true);
         } else {
           pendingAccount = null;
           signIn();
@@ -571,6 +648,9 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       <div class="team-members-toolbar">${periodBar(selected)}<button type="button" data-member-add>${tr('modules.add_member')}</button></div>
       <div data-team-usage-table>${tr('modules.loading')}</div></div>`, reopen);
     const panel = $('team_manage');
+    // An island decision refreshes this table if it is still the open view.
+    // A quiet refresh (a new request arrived) waits while the administrator is typing a limit.
+    membersView = ({quiet = false} = {}) => { if (panel.isConnected && !(quiet && panel.contains(document.activeElement) && document.activeElement.matches('input,textarea'))) reopen(); };
     const table = panel.querySelector('[data-team-usage-table]');
     const periodButtons = [...panel.querySelectorAll('[data-team-period]')];
     const chip = (member, id, label, editable) => `<label class="team-chip"><input type="checkbox" data-team-permission="${id}" ${member[id] ? 'checked' : ''} ${editable ? '' : 'disabled'}>${esc(label)}</label>`;
@@ -600,10 +680,10 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
           const changeRole = editRole ? tr('modules.change_role') + ' · ' + role : role;
           const rolePicker = editRole
             ? `<select class="team-role-select" data-team-member-role title="${esc(changeRole)}" aria-label="${esc(tr('modules.change_role') + ' · ' + name)}">${['member','team_admin'].map(option => `<option value="${option}" ${option === member.role ? 'selected' : ''}>${roleName(option)}</option>`).join('')}</select>` : '';
-          const identity = `<div class="team-member-name"><span class="team-role-icon team-role-${esc(member.role)}" title="${esc(changeRole)}" ${editRole ? 'data-editable-role' : `role="img" aria-label="${esc(role)}"`}>${roleSvg(member.role)}${rolePicker}</span><span>${esc(name)}</span>${member.pending ? `<span class="team-pending-tag">${tr('modules.pending_approval')}</span>` : ''}</div>`;
+          const identity = `<div class="team-member-name"><span class="team-role-icon team-role-${esc(member.role)}" title="${esc(changeRole)}" ${editRole ? 'data-editable-role' : `role="img" aria-label="${esc(role)}"`}>${roleSvg(member.role)}${rolePicker}</span><span>${esc(name)}</span></div>`;
           if (member.pending) {
             return `<tr data-team-member="${esc(member.id)}"><th scope="row">${identity}</th><td></td>
-              <td><button type="button" data-member-approve="${esc(member.id)}">${tr('modules.approve_member')}</button></td><td></td><td>—</td></tr>`;
+              <td><span class="team-pending-actions"><span>${tr('modules.join_request_label')}</span><button type="button" data-member-approve="${esc(member.id)}">${tr('modules.accept_member')}</button><button type="button" class="secondary" data-member-decline="${esc(member.id)}">${tr('modules.decline_member')}</button></span></td><td></td><td>—</td></tr>`;
           }
           const budget = member.can_budget
             ? `<label class="team-budget"><span aria-hidden="true">$</span><input data-member-budget type="number" min="0" max="1000000" step="any" value="${finite(member.budget_nanos) == null ? '' : esc(member.budget_nanos/1e9)}" placeholder="∞" title="${esc(tr('modules.budget_input_help'))}" aria-label="${esc(tr('modules.daily_usd_limit') + ' · ' + name)}"></label>`
@@ -634,12 +714,17 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     void load(selected);
     bindInvitation(panel.querySelector('[data-member-add]'));
     table.onclick = async event => {
-      const button = event.target.closest('[data-member-approve]');
-      const member = members?.find(item => item.id === button?.dataset.memberApprove);
+      const button = event.target.closest('[data-member-approve],[data-member-decline]');
+      const approve = button?.hasAttribute('data-member-approve');
+      const member = members?.find(item => item.id === (approve ? button.dataset.memberApprove : button?.dataset.memberDecline));
       if (!member) return;
       button.disabled = true;
       try {
-        await action('member_access',{id:member.id,role:'member',publish:false,sync:true,enabled:true});
+        if (approve) await action('member_access',{id:member.id,role:'member',publish:false,sync:true,enabled:true});
+        else await action('reject_member',{id:member.id});
+        answered.set(member.id, Date.now());
+        notifications.withdraw(approvals.get(member.id));
+        approvals.delete(member.id);
         if (panel.isConnected) reopen();
       } catch (error) {
         showError(panel,error);
@@ -834,5 +919,11 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     action('join_code').then(show).catch(error => showError(button,error)).finally(() => {button.disabled = false;});
   }
 
-  return {open,refresh,stopInvite};
+  function dispose() {
+    clearTimeout(approvalTimer);
+    approvalTimer = null;
+    clearApprovals();
+  }
+
+  return {open,refresh,stopInvite,watch,dispose};
 }

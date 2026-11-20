@@ -23,9 +23,8 @@
 .team-card-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px}
 .team-card-heading>h3{flex:1;font-size:14px}
 .team-home-usage .team-card-heading>h3{cursor:pointer;user-select:none}
-.team-card-actions{display:flex;align-items:center;gap:2px;flex:none}
-.team-card-actions>button{margin:0;border-color:transparent;background:transparent;color:var(--muted);font-weight:500}
-.team-card-actions>button:hover{background:var(--secondary-hover);color:var(--text)}
+.team-card-actions{display:flex;align-items:center;gap:6px;flex:none}
+.team-card-actions>button{margin:0;height:32px;font-weight:500}
 .team-usage-toggle{width:32px;height:32px;padding:0;justify-content:center}
 .team-usage-toggle::before{transform:rotate(90deg);transition:transform .16s ease}
 .team-usage-toggle[aria-expanded="true"]::before{transform:rotate(-90deg)}
@@ -64,8 +63,9 @@
 .team-member-name .team-role-icon{position:relative;width:26px;height:26px}
 .team-member-name .team-role-icon svg{width:15px;height:15px}
 .team-member-name [data-editable-role]{cursor:pointer}
-.team-member-name [data-editable-role]::after{content:"";position:absolute;inset-inline-end:-2px;inset-block-end:0;width:5px;height:5px;border:solid var(--muted);border-width:0 1.5px 1.5px 0;transform:rotate(45deg);pointer-events:none}
-.team-member-name [data-editable-role]:hover{border-color:var(--accent)}
+/* Editable roles show no permanent marker; hover and focus reveal that the badge is a picker. */
+.team-member-name [data-editable-role]{transition:border-color 140ms ease,color 140ms ease,background-color 140ms ease}
+.team-member-name [data-editable-role]:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .team-member-name .team-role-icon:focus-within{outline:2px solid var(--accent);outline-offset:2px}
 .team-role-select{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
 .team-plan{padding:1px 7px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:600;white-space:nowrap}
@@ -201,3 +201,4 @@
 .team-token-activity .seen i{display:block;position:absolute;bottom:0;width:100%;height:var(--bar-height);background:var(--accent);border-radius:3px}
 .team-activity-axis{display:flex;justify-content:space-between}
 .team-handover{display:grid;gap:6px;margin-top:10px}
+.team-pending-actions{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}.team-pending-actions>span{color:var(--muted);font-size:12px}.team-pending-actions button{margin:0}

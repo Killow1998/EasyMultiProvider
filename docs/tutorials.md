@@ -2,16 +2,17 @@
 
 [English README](../README.md) · [中文 README](../README.zh-CN.md)
 
-These eleven GIFs are also available offline from **Tutorials** in the WebUI header:
+These GIFs are also available offline from **Tutorials** in the WebUI header:
 choose an operation on the left and watch it on the right. Open the larger view
-in a new window when you want to see the details.
+in a new window when you want to see the details. The four Team workspace
+lessons appear there after this EMP joins a team.
 
-也可在 WebUI 顶栏打开 **使用教程**：左侧选择操作，右侧观看演示；需要看清细节时，可在新窗口打开大图。十一支 GIF 均可离线观看。
+也可在 WebUI 顶栏打开 **使用教程**：左侧选择操作，右侧观看演示；需要看清细节时，可在新窗口打开大图。所有 GIF 均可离线观看；加入团队后，教程里会多出四支「团队空间」演示。
 
-Expand a task to view its GIF. These recordings use the EMP 0.13.26 interface with
+Expand a task to view its GIF. These recordings use the EMP 0.14.3 interface with
 sample data, a Chinese UI, and Chinese and English captions.
 
-展开需要的操作即可观看 GIF。录屏使用 EMP 0.13.26 界面与示例数据，界面为简体中文，附中英字幕。
+展开需要的操作即可观看 GIF。录屏使用 EMP 0.14.3 界面与示例数据，界面为简体中文，附中英字幕。
 
 ## GPT Models and Subscriptions / GPT 模型与订阅
 
@@ -140,11 +141,11 @@ GPT models and external models. It keeps the configured context windows.
 <details>
 <summary>9. Export subscriptions and external services / 一起导出订阅和外部服务</summary>
 
-Open **Data migration → Export**, select the services, set an export password,
-and download the `.emp` file. One package can contain both Codex subscriptions
+Open **Service migration**, choose the **File** card and **Export**, select the
+services, set an export password, and download the `.emp` file. One package can contain both Codex subscriptions
 and external API services. Keep the file and password together for importing.
 
-打开 **数据迁移 → 导出**，选择服务，设置迁移密码并下载 `.emp` 文件。同一个包可以包含 Codex 订阅与外部 API 服务；导入时需要该文件及密码。
+打开 **服务迁移**，在 **文件** 卡片中选择 **导出**，勾选服务，设置迁移密码并下载 `.emp` 文件。同一个包可以包含 Codex 订阅与外部 API 服务；导入时需要该文件及密码。
 
 ![Export subscriptions and external services / 一起导出订阅和外部服务](assets/tutorials/03-export-service.gif)
 
@@ -155,11 +156,11 @@ and external API services. Keep the file and password together for importing.
 <details>
 <summary>10. Import subscriptions and external services / 一起导入订阅和外部服务</summary>
 
-Open **Data migration → Import**, choose the `.emp` file, enter its password,
-and open the package. Review and select the subscriptions and external services,
+Open **Service migration**, choose the **File** card and **Import**, choose the
+`.emp` file, enter its password, and open the package. Review and select the subscriptions and external services,
 then select **Import**.
 
-打开 **数据迁移 → 导入**，选择 `.emp` 文件，输入迁移密码并打开迁移包。核对并勾选订阅与外部服务后，点击 **导入**。
+打开 **服务迁移**，在 **文件** 卡片中选择 **导入**，选择 `.emp` 文件，输入迁移密码并打开迁移包。核对并勾选订阅与外部服务后，点击 **导入**。
 
 ![Import subscriptions and external services / 一起导入订阅和外部服务](assets/tutorials/02-import-service.gif)
 
@@ -170,20 +171,86 @@ then select **Import**.
 <details>
 <summary>11. Transfer over LAN / 通过隧道迁移</summary>
 
-Connect both computers to the same LAN and open **Service migration → Tunnel**.
+Connect both computers to the same LAN and open **Service migration → Local network**.
 The demonstration shows the sender and receiver side by side.
-On the sender, select services, create a code and copy it to the receiver. Codes
-expire after five minutes. On the receiver, paste the code and choose **Receive
-and preview**. Approve the receiving computer on the sender, then review and
+On the sender, stay on **Send from this computer**, select services and choose
+**Create transfer code**. The code appears in the notification island at the top;
+copy it to the receiver. Codes expire after five minutes. On the receiver, open
+**Receive on this computer**, paste the code and choose **Receive and preview**.
+The sender's island then asks to **Approve transfer**; afterwards review and
 confirm the import on the receiver.
 
-演示将发送端和接收端并排显示。两台电脑连接同一局域网，打开 **服务迁移 → 隧道**。
-发送端选择服务，生成并复制代码；
-代码五分钟内有效。接收端粘贴代码，点击 **接收并预览**。发送端确认接收方并 **允许发送**，
+演示将发送端和接收端并排显示。两台电脑连接同一局域网，打开 **服务迁移 → 局域网**。
+发送端停留在 **从这台电脑发送**，勾选服务后点击 **生成迁移代码**，代码会出现在顶部灵动岛里，复制给接收端；
+代码五分钟内有效。接收端切到 **接收到这台电脑**，粘贴代码并点击 **接收并预览**。发送端的灵动岛会弹出接收请求，点击 **允许发送**；
 接收端核对预览后点击 **导入**，此时才会写入配置。
 
 ![Transfer over LAN / 通过隧道迁移](assets/tutorials/08-tunnel-migration.gif)
 
 [View full size / 查看大图](assets/tutorials/08-tunnel-migration.gif)
+
+</details>
+
+## Team Workspace / 团队空间
+
+These lessons appear in the WebUI tutorials after this EMP joins a team; the
+logo in the header then reads **EMPT**.
+
+加入团队后，WebUI 教程里才会显示这一组；此时左上角标志会变为 **EMPT**。
+
+<details>
+<summary>12. Explore the workspace and usage / 查看团队空间与用量</summary>
+
+Open the team workspace from the header to see today's usage. Expand the usage
+detail for each model, and open **Profiles** to see who is in the team.
+
+从顶栏打开团队空间，查看今天的用量；展开用量明细可看到各模型的消耗，点击 **成员资料** 查看团队成员。
+
+![Explore the workspace and usage / 查看团队空间与用量](assets/tutorials/09-team-workspace.gif)
+
+[View full size / 查看大图](assets/tutorials/09-team-workspace.gif)
+
+</details>
+
+<details>
+<summary>13. Upload and sync subscriptions / 上传与同步订阅</summary>
+
+With the matching permission, **Upload** shares one of your subscriptions with
+the team and **Sync** brings the team's shared subscriptions to this computer.
+
+拥有对应权限时，点击 **上传** 把自己的订阅共享给团队，点击 **同步** 把团队共享的订阅同步到这台电脑。
+
+![Upload and sync subscriptions / 上传与同步订阅](assets/tutorials/10-team-share.gif)
+
+[View full size / 查看大图](assets/tutorials/10-team-share.gif)
+
+</details>
+
+<details>
+<summary>14. Review join requests / 审批加入申请</summary>
+
+Team administrators see each request as "Name wants to join" in the notification
+island, with **Approve** and **Decline**. Up to three requests are shown at once;
+the rest follow as earlier ones are handled.
+
+团队管理员会在顶部灵动岛看到「某某 想要加入团队」，直接点击 **同意** 或 **拒绝**。灵动岛一次最多显示三条，处理后其余申请依次弹出。
+
+![Review join requests / 审批加入申请](assets/tutorials/11-team-approve.gif)
+
+[View full size / 查看大图](assets/tutorials/11-team-approve.gif)
+
+</details>
+
+<details>
+<summary>15. Manage member access and limits / 管理成员权限与额度</summary>
+
+Open **Manage → Manage members**. Pending requests can also be approved here. Set each
+member's daily USD limit and turn permissions such as Fast, Upload and Sync on or off.
+
+打开 **管理 → 成员管理**，待审批的申请也可在这里 **同意** 或 **拒绝**；为每位成员设置每日 USD 上限，并开关 Fast、上传、同步等权限。
+
+![Manage member access and limits / 管理成员权限与额度](assets/tutorials/12-team-members.gif)
+
+[View full size / 查看大图](assets/tutorials/12-team-members.gif)
 
 </details>

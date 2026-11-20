@@ -155,8 +155,9 @@ html[data-input-modality=pointer] body :is(button,a.repo-link):focus-visible{out
 .presentation-logo-shell{position:relative;display:inline-flex;vertical-align:middle}
 .presentation-logo-wave{position:absolute;inset:0;overflow:hidden;mask:var(--logo-mask) center/100% 100% no-repeat;pointer-events:none;display:none}
 .presentation-logo-shell:has(.emp-live) .presentation-logo-wave{display:block}
-.presentation-logo-wave>span{position:absolute;inset:0;width:300%;left:-100%;background:linear-gradient(90deg,transparent 0%,#22c76a 25%,transparent 50%,#22c76a 75%,transparent 100%)}
-.presentation-logo-shell .dot-logo.emp-live circle.on{animation:none;fill:var(--muted);opacity:.5}
+.presentation-logo-wave>span{position:absolute;inset:0;width:300%;left:-100%;background:linear-gradient(90deg,transparent 0%,#b8ffd3 25%,transparent 50%,#b8ffd3 75%,transparent 100%);opacity:.75}
+.presentation-logo-shell .dot-logo.emp-live circle.on{animation:none;fill:#22c76a;opacity:.92}
+.presentation-logo-shell:has(.emp-live){filter:drop-shadow(0 0 3px color-mix(in srgb,#22c76a 45%,transparent))}
 
 .presentation-motion-paused *, .presentation-motion-paused::before,.presentation-motion-paused *::before,.presentation-motion-paused *::after,
 .presentation-page-hidden .presentation-logo-wave>span,.presentation-page-hidden :is(.service-card,.model-card,.display-row) *,.presentation-page-hidden :is(.service-card,.model-card,.display-row) *::before,.presentation-page-hidden :is(.service-card,.model-card,.display-row) *::after{animation-play-state:paused!important}
@@ -168,4 +169,3 @@ html[data-input-modality=pointer] body :is(button,a.repo-link):focus-visible{out
 .presentation-service-icon[data-error-message]>.presentation-activity-halo{display:none}
 .presentation-service-icon[data-error-message]::before{box-shadow:0 0 0 2px color-mix(in srgb,var(--danger) 50%,transparent),0 0 9px color-mix(in srgb,var(--danger) 28%,transparent)}
 /* The published top-bar rule used 3px above / 7px below the text. */
-.page-header-controls .header-preference select{padding-top:5px;padding-bottom:5px;line-height:18px}
