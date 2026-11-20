@@ -16,6 +16,12 @@
 - 跨服务子代理保留打开和关闭。默认打开，原先显式关闭的设置继续生效。
 - 在服务气泡中以黄色显示仍在重试或等待历史补发的调用，终止失败保留红色提示。
 - Codex 维护窗口推进到 0.166–0.170。检测到低于 0.166 的引擎时，WebUI 左上角显示更新入口。
+- 管理员可在顶部提示中直接同意或拒绝加入申请。多条申请合并显示，处理后其余条目位置不变。成员表也可拒绝申请。
+- 管理员的团队首页同时显示团队总用量和自己的用量。
+- 同一账号重新上传共享订阅时只更新凭据，已批准的订阅无需再次审核，成员可继续同步。更换账号仍需审核。
+- Vertex AI API Key 模式从每日更新的 LiteLLM 目录获取候选模型，再用 Token 计数接口确认这把 Key 可用的模型。Google 发布新模型后无需等待 EMP 更新。
+- 统一团队空间、模组和迁移对话框的样式，提示统一显示在顶部。窄窗口下顶栏按钮收起为图标。EMP 标志改为一整块连续点阵。
+- 教程新增团队空间、共享订阅、审批和成员管理四节动画，仅在加入团队后显示。导入、导出和隧道动画已按新流程重录。
 
 ### English
 
@@ -31,6 +37,12 @@
 - Cross-service subagents default to on. An explicit off setting stays off.
 - Show retrying and history recovery in yellow in service bubbles. Failed requests retain their red status.
 - Move the Codex maintenance window to 0.166–0.170. The WebUI header links to Codex updates when the detected runtime is older than 0.166.
+- Administrators can approve or decline join requests directly from the top notice. Multiple requests are grouped, and the remaining rows stay in place after one is handled. The member table can also decline requests.
+- The administrator's team home shows both team usage and their own usage.
+- Re-uploading the same shared subscription account refreshes its credentials without another review, so teammates keep syncing. A different account still requires review.
+- Vertex AI API-key mode takes candidate models from the daily LiteLLM catalog and confirms which ones the key can use with the token-count endpoint, so new Google models no longer wait for an EMP release.
+- Team Workspace, module and migration dialogs share one style, and notices appear at the top. Header buttons collapse to icons in narrow windows. The EMP logo is drawn as one continuous dot matrix.
+- Tutorials add four Team Workspace lessons (overview, sharing, approvals and members) that appear only after joining a team. The import, export and tunnel animations are re-recorded for the new flows.
 
 ## 0.14.3 (2026-11-18)
 

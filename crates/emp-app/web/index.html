@@ -435,13 +435,16 @@ function setLogoWord(word) {
 }
 function drawLogo() {
   const svg = $('emp_logo'); if (!svg || svg.childElementCount) return;
-  const pitch = 3.4, dots = [];
-  [...logoWord].forEach((letter, index) => LOGO_GLYPHS[letter].forEach((row, y) => [...row].forEach((bit, x) => {
-    const column = index * 6 + x;
+  // One continuous LED panel: the spacer columns between letters carry unlit dots too, so the wordmark
+  // reads as a single matrix rather than separate letters.
+  const pitch = 3.4, dots = [], width = logoWord.length * 6 - 1;
+  for (let column = 0; column < width; column++) for (let y = 0; y < 7; y++) {
+    const letter = LOGO_GLYPHS[logoWord[Math.floor(column / 6)]], x = column % 6;
+    const lit = x < 5 && letter[y][x] === '1';
     const twinkleDelay = -(column * .18 + y * .13);
-    dots.push(`<circle cx="${(column * pitch + pitch / 2).toFixed(1)}" cy="${(y * pitch + pitch / 2).toFixed(1)}" r="1.32"${bit === '1' ? ` class="on" data-lit="1" style="--twinkle-delay:${twinkleDelay.toFixed(2)}s"` : ''}/>`);
-  })));
-  svg.setAttribute('viewBox', `0 0 ${((logoWord.length * 6 - 1) * pitch).toFixed(1)} ${(7 * pitch).toFixed(1)}`);
+    dots.push(`<circle cx="${(column * pitch + pitch / 2).toFixed(1)}" cy="${(y * pitch + pitch / 2).toFixed(1)}" r="1.32"${lit ? ` class="on" data-lit="1" style="--twinkle-delay:${twinkleDelay.toFixed(2)}s"` : ''}/>`);
+  }
+  svg.setAttribute('viewBox', `0 0 ${(width * pitch).toFixed(1)} ${(7 * pitch).toFixed(1)}`);
   svg.innerHTML = dots.join('');
 }
 function renderLogoState(live) { drawLogo(); enhanceLogo($('emp_logo')); $('emp_logo')?.classList.toggle('emp-live', live); }
