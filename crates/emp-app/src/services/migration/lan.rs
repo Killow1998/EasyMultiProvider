@@ -17,6 +17,14 @@ const CODE_LIFETIME: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Default)]
 pub(crate) struct LanMigration(Mutex<Option<Sender>>);
+
+impl LanMigration {
+    pub(crate) fn cancel(&self) {
+        if let Ok(mut sender) = self.0.lock() {
+            sender.take();
+        }
+    }
+}
 struct Sender {
     code: wire::Code,
     expires: Instant,

@@ -8,6 +8,22 @@ independent of the host application's version. This policy does not introduce a
 global version rejection: individual operations still check their interfaces.
 Older series leave routine maintenance; their dated acceptance records remain.
 
+## Current target and acceptance (2026-11-18 UTC)
+
+The maintenance window is **0.166–0.170** following the stable
+[0.170.0 release](https://github.com/openai/codex/releases/tag/rust-v0.170.0).
+[0.169.1](https://github.com/openai/codex/releases/tag/rust-v0.169.1)
+is a patch within the 0.169 series. The WebUI displays an update link beside the
+detected runtime for versions below 0.166. Older runtimes can still be selected
+using the existing runtime policy.
+
+Official Linux x86_64 Codex 0.169.1 and 0.170.0 each passed all 55 assertions of
+the created-history restore contract against the local EMP 0.14.3-based modular
+candidate. The run used 15 synthetic upstream requests per engine and covered
+created sessions, tool history, compaction, forks, restoration and native
+resume. Other surfaces, including desktop integrations and Code Mode, retain
+their separately dated acceptance evidence below.
+
 ## Runtime selection and account catalogs (2026-11-18 UTC)
 
 An available explicitly configured runtime takes precedence. Automatic selection
@@ -130,9 +146,9 @@ an executable command. Existing reasoning-field suppression remains unchanged.
   formatting and diff checks pass. Existing EMP instances were not restarted;
   installed login and encrypted credential files remain unchanged.
 
-## Current target and acceptance (2026-11-13 UTC)
+## Previous target and acceptance (2026-11-13 UTC)
 
-The maintenance target is **0.165–0.169**, following stable
+The maintenance target at that checkpoint was **0.165–0.169**, following stable
 [0.168.0](https://github.com/openai/codex/releases/tag/rust-v0.168.0)
 (2026-11-13 03:54:29 UTC) and
 [0.169.0](https://github.com/openai/codex/releases/tag/rust-v0.169.0)

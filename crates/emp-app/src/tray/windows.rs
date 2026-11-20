@@ -1,6 +1,36 @@
 //! Pump tray-icon's native window on the same thread that created it.
 pub(super) struct Events;
 
+pub(super) fn notify_budget(
+    window: windows_sys::Win32::Foundation::HWND,
+    guid: u128,
+    title: &str,
+    message: &str,
+) {
+    use windows_sys::Win32::UI::Shell::*;
+    let mut notification = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: window,
+        uFlags: NIF_GUID | NIF_INFO,
+        dwInfoFlags: NIIF_INFO | NIIF_NOSOUND,
+        guidItem: windows_sys::core::GUID::from_u128(guid),
+        ..Default::default()
+    };
+    for (target, source) in notification.szInfoTitle[..63]
+        .iter_mut()
+        .zip(title.encode_utf16())
+    {
+        *target = source;
+    }
+    for (target, source) in notification.szInfo[..255]
+        .iter_mut()
+        .zip(message.encode_utf16())
+    {
+        *target = source;
+    }
+    unsafe { Shell_NotifyIconW(NIM_MODIFY, &notification) };
+}
+
 impl Events {
     pub(super) fn new() -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self)

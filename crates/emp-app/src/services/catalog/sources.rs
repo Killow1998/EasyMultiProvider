@@ -94,6 +94,10 @@ impl CatalogSources {
             &self.duplicates,
             regular_file,
         )?;
+        state
+            .backend
+            .team
+            .label_subscription_permissions(&mut public["accounts"]);
         public["claude_quota"] = state
             .backend
             .claude_quota

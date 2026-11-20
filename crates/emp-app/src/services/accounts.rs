@@ -71,7 +71,12 @@ pub(crate) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
         &state.backend.configuration.vault,
         &state.backend.accounts.native_auth_path,
     );
-    let public = public_configuration_with_file_status(&config, &duplicates, regular_file).ok()?;
+    let mut public =
+        public_configuration_with_file_status(&config, &duplicates, regular_file).ok()?;
+    state
+        .backend
+        .team
+        .label_subscription_permissions(&mut public["accounts"]);
     let errors = state
         .backend
         .accounts

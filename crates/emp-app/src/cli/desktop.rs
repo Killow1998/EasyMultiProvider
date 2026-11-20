@@ -191,6 +191,27 @@ pub(crate) fn notify_error(title: &str, message: &str) {
         .spawn(move || show_error(&title, &message));
 }
 
+#[cfg(not(windows))]
+pub(crate) fn notify_budget(title: &str, message: String) {
+    #[cfg(target_os = "linux")]
+    let mut args = vec![
+        "/usr/bin/notify-send".into(),
+        "--app-name=EMP".into(),
+        "--".into(),
+    ];
+    #[cfg(target_os = "macos")]
+    let mut args = vec![
+        "/usr/bin/osascript".into(),
+        "-e".into(),
+        "on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run"
+            .into(),
+    ];
+    args.extend([title.to_owned(), message]);
+    let _ = std::thread::Builder::new()
+        .name("emp-budget-notice".into())
+        .spawn(move || launch(&args));
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn detach_service() -> std::io::Result<()> {
     use std::os::unix::process::CommandExt;

@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### 中文
+
+- Decision API、多设备网关、聚合路由和团队空间可按需安装和卸载。内置版通过应用内更新切换到分包时，先校验原有模块再确认升级。
+- 团队空间仅同步经审批的 Native Codex 订阅。退出团队或卸载团队模组时清除本机共享凭据，保留个人登录和用量记录。
+- 共享订阅按持有者显示 VPS 上的快照及有效期。同一 Native 会跳过导入，单机副本失效可重新同步。VPS 快照到期后可提醒持有者更新。
+- 成员资料显示团队成立、加入日期、累计 Token、费用和近 30 天的 PST 活动。管理员可决定成员能否查看其他人的用量。
+- 团队空间与服务迁移使用独立入口。普通成员加入后，导入、导出和隧道只对管理员开放。管理员按需生成七位团队码，3 分 22 秒内可复制并用于提交申请，再按昵称审批。
+- 修复个人凭据保留、团队路由和 Decision 撤权、同级管理员预算权限、长模型名补报、换机续传及内置版回滚后重试升级。
+- 团队管理表并排显示每日 USD 上限、倍速与重置许可。悬停或聚焦 Token 数字可查看所选时间区间的模型用量。成员可查看共享订阅的重置次数和到期日，管理员可执行重置。
+- 成员用量接近和达到每日上限时，由 EMP 后台发出系统通知，并在 WebUI 通知中心保留记录。
+- 「添加服务」可直接连接个人 OpenAI 生图赠金项目。支持本机预算按月重置和赠金到期时间。赠金在派发前不可用时，Codex 生图可使用合适的订阅账号。
+- 跨服务子代理保留打开和关闭。默认打开，原先显式关闭的设置继续生效。
+- 在服务气泡中以黄色显示仍在重试或等待历史补发的调用，终止失败保留红色提示。
+- Codex 维护窗口推进到 0.166–0.170。检测到低于 0.166 的引擎时，WebUI 左上角显示更新入口。
+
+### English
+
+- Install and uninstall Decision API, Device Gateway, Aggregate Routing and Team Workspace separately. In-app upgrades from the bundled release validate modules before confirming the upgrade.
+- Team Workspace syncs approved Native Codex subscriptions. Signing out or uninstalling removes synced workspace credentials from the device and keeps personal sign-ins and usage history.
+- View shared subscriptions by owner and VPS credential expiry. Sync restores a stale local copy and skips any account already used by Native. Remind an owner when a VPS snapshot expires.
+- Member profiles show membership dates, lifetime tokens and cost, and 30 days of PST activity. Administrators control whether members can view each other's usage.
+- Team Workspace and Service Migration have separate entries. Team administrators retain import, export and tunnel access. Administrators issue a copyable seven-digit invitation that lasts 3 minutes and 22 seconds and approve requests by nickname.
+- Fix personal credential preservation, team routing and Decision permissions, peer administrator budgets, usage uploads with long model names, sharing from a replacement device, and bundled upgrades after a rollback.
+- The team management table shows daily USD limits, speed permissions and reset eligibility. Hover over or focus the token total to inspect models in the selected period. Members can view shared reset credits and expiries. Administrators can use them.
+- EMP sends a desktop notice when a member approaches or reaches their daily budget and keeps it in the WebUI notification center.
+- Set up personal OpenAI image credits from Add Service, with an optional monthly local budget and a credit expiry date. Codex image tools can select an eligible subscription if credits are unavailable before dispatch.
+- Cross-service subagents default to on. An explicit off setting stays off.
+- Show retrying and history recovery in yellow in service bubbles. Failed requests retain their red status.
+- Move the Codex maintenance window to 0.166–0.170. The WebUI header links to Codex updates when the detected runtime is older than 0.166.
+
 ## 0.14.3 (2026-11-18)
 
 ### 中文

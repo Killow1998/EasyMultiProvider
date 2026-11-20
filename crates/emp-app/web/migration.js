@@ -33,7 +33,7 @@ function createMigration() {
     lan.stop();
     const submitLabel=candidate.previewError?tr("transfers.retry_preview"):candidate.demo?tr("transfers.finish_demo"):importing?tr("transfers.import"):tr("core.download_emp");
     openModal(tr("data_migration"),savedBody?'':bodyHtml(candidate),submitLabel,
-      ['choose','tunnel'].includes(candidate.mode)||importing&&!candidate.token?null:()=>candidate.previewError?schedulePreview(candidate):submit(candidate),null,{back:candidate.parent?()=>back(candidate):null});
+      ['choose','tunnel'].includes(candidate.mode)||importing&&!candidate.token?null:()=>candidate.previewError?schedulePreview(candidate):submit(candidate),null,{back:candidate.parent?()=>back(candidate):candidate.back});
     if(savedBody)$('modal_body').append(savedBody);
     const title=candidate.mode==='choose'?'data_migration':candidate.mode==='tunnel'?'lan.tunnel':'transfers.'+candidate.mode;
     $('modal_title').innerHTML=`<span>${esc(tr(title))}</span>${shadowHelp(mergeRules())}`;
@@ -182,5 +182,5 @@ function createMigration() {
     const link=document.createElement('a');link.href=url;link.download='EMP.emp';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     closeModal();notice(tr("transfers.selected_services_exported"));
   }
-  return {open(){if(window.EMP_PREVIEW && shadowServicesDemoActive){notice(tr("transfers.end_the_service_demo_to_migrate_data"));return;}stop();view={mode:'choose',drafts:new Map(),controller:new AbortController()};render();},stop};
+  return {open({back}={}){if(window.EMP_PREVIEW && shadowServicesDemoActive){notice(tr("transfers.end_the_service_demo_to_migrate_data"));return;}stop();view={mode:'choose',drafts:new Map(),back,controller:new AbortController()};render();},stop};
 }

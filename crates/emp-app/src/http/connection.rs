@@ -58,9 +58,10 @@ pub(crate) fn handle_connection(
         return;
     };
     request.observation_id = observation_id.as_deref();
+    let peer = stream.peer_addr().ok().map(|peer| peer.ip());
     let source = crate::http::request::RequestSource {
-        caller: crate::http::auth::proxy_identity(request, state, system_now()),
-        peer: stream.peer_addr().ok().map(|peer| peer.ip()),
+        caller: crate::http::auth::proxy_identity(request, state, system_now(), peer),
+        peer,
     };
     request.source = Some(&source);
     observation.received(request);
@@ -75,6 +76,11 @@ pub(crate) fn handle_connection(
         && request.session_token().is_none()
     {
         crate::services::runtime::codex_contacted(state);
+    }
+    if let Some(reply) = crate::api::modules::unavailable(path, state) {
+        observation.write_response(&mut stream, &reply);
+        let _ = stream.shutdown(Shutdown::Write);
+        return;
     }
     let update_request = path.starts_with("/api/updates/");
     let gated_mutation = (request.method == RequestMethod::Post && !update_request)
@@ -95,6 +101,16 @@ pub(crate) fn handle_connection(
     } else {
         let now = system_now();
         match (request.method, path) {
+            (RequestMethod::Post, path) if path.starts_with("/api/team/") => Some(
+                crate::api::team::mutate(&mut stream, request, raw.body_prefix, state, now),
+            ),
+            (RequestMethod::Post, "/api/modules") => Some(crate::api::modules::mutate(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                now,
+            )),
             (RequestMethod::Post | RequestMethod::Delete, "/api/gateway/clients") => Some(
                 crate::api::gateway::mutate(&mut stream, request, raw.body_prefix, state, now),
             ),

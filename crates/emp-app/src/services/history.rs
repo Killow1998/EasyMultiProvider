@@ -97,13 +97,7 @@ pub(crate) fn prepare_destination_context(
         }
         return Ok(body);
     }
-    let body = crate::services::collaboration::prepare(
-        state,
-        route,
-        body,
-        incoming,
-        monitor.as_deref_mut(),
-    )?;
+    crate::services::collaboration::validate(state, &body, incoming)?;
     let protocol =
         protocol_candidates(route)
             .into_iter()

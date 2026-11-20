@@ -1,0 +1,14 @@
+[package]
+name = "emp-mod-gateway"
+version = "0.10.0-beta"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+emp-modules = { path = "../emp-modules" }
+serde_json.workspace = true
+
+[[bin]]
+name = "empmod-gateway"
+path = "src/main.rs"

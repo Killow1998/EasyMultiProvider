@@ -6,6 +6,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 
+BACKEND_ASSETS = {
+    '/assets/app-icon.png', '/assets/app-icon-source.png',
+    '/assets/module-decision.js', '/assets/module-gateway.js',
+    '/assets/module-aggregate.js', '/assets/module-team.js',
+}
+
+
 def forward_stream(handler, response):
     try:
         handler.send_response(response.status)
@@ -49,7 +56,7 @@ def candidate_frontend(stack, backend, web, index_extra="", port=0, index_head="
             elif path.startswith('/api/recovery'):
                 # Recovery demos simulate requests in the page; never forward a reset.
                 status, content_type, body = 403, 'application/json', b'{"error":"preview_only"}'
-            elif self.command == 'GET' and (path == '/' or path.startswith('/assets/')) and path not in {'/assets/app-icon.png','/assets/app-icon-source.png'}:
+            elif self.command == 'GET' and (path == '/' or path.startswith('/assets/')) and path not in BACKEND_ASSETS:
                 name = 'index.html' if path == '/' else path.removeprefix('/assets/')
                 asset = asset_file(web, name)
                 if asset is None or not asset.is_file():

@@ -57,24 +57,25 @@ def main():
         checks.append('Product assets expose no Shadow adapters or preview state')
         browser.execute('setLanguage("en");openSettings("external");')
         collaboration = '[data-ui-action="setting-toggle"][data-id="external_collaboration"]'
-        assert browser.execute('return document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode;', collaboration) == 'off'
-        browser.execute('window.settingsFailures=0;window.settingsFetch=window.fetch;window.fetch=async(path,options)=>{if(String(path)==="/api/config"&&options?.method==="POST"){window.settingsFailures++;return new Response(JSON.stringify({error:{message:"Synthetic save failure"}}),{status:500,headers:{"Content-Type":"application/json"}});}return window.settingsFetch(path,options);};document.querySelector(arguments[0]+"[data-mode=on_demand]").click();', collaboration)
+        assert browser.execute('return document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode;', collaboration) == 'on'
+        assert browser.execute('return [...document.querySelectorAll(arguments[0])].map(item=>item.dataset.mode);', collaboration) == ['off','on']
+        browser.execute('window.settingsFailures=0;window.settingsFetch=window.fetch;window.fetch=async(path,options)=>{if(String(path)==="/api/config"&&options?.method==="POST"){window.settingsFailures++;return new Response(JSON.stringify({error:{message:"Synthetic save failure"}}),{status:500,headers:{"Content-Type":"application/json"}});}return window.settingsFetch(path,options);};document.querySelector(arguments[0]+"[data-mode=off]").click();', collaboration)
         wait_for(lambda: browser.execute('return window.settingsFailures===1 && !document.querySelector(arguments[0]).disabled;', collaboration))
-        assert browser.execute('return state.external_collaboration==="off" && document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode==="off";', collaboration)
+        assert browser.execute('return state.external_collaboration==="on" && document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode==="on";', collaboration)
         browser.execute('closeModal();openSettings("general");document.querySelector("[data-ui-action=setting-toggle][data-id=auto_enable_on_start]").click();')
         wait_for(lambda: browser.execute('return window.settingsFailures===2 && !document.querySelector("[data-id=auto_enable_on_start]").disabled;'))
         assert browser.execute('return state.auto_enable_on_start===false && document.querySelector("[data-id=auto_enable_on_start]").getAttribute("aria-checked")==="false";')
         stored = json.loads((root / 'config.json').read_text())
-        assert stored['auto_enable_on_start'] is False and stored['external_collaboration'] == 'off'
+        assert stored['auto_enable_on_start'] is False and stored['external_collaboration'] == 'on'
         browser.execute('window.fetch=window.settingsFetch;closeModal();openSettings("external");')
         checks.append('Failed General and External setting saves preserve the stored values, restore selected controls and allow retry')
-        for enabled in ['on_demand', 'on', 'off']:
+        for enabled in ['off', 'on']:
             browser.execute('document.querySelector(arguments[0]+"[data-mode="+arguments[1]+"]").click();', collaboration, enabled)
             wait_for(lambda: browser.execute('return state.external_collaboration===arguments[0] && document.querySelector(arguments[1]+"[aria-pressed=true]").dataset.mode===arguments[0] && !document.querySelector(arguments[1]).disabled;', enabled, collaboration))
             assert json.loads((root / 'config.json').read_text())['external_collaboration'] == enabled
             browser.execute('closeModal();openSettings("external");')
             assert browser.execute('return document.querySelector(arguments[0]+"[aria-pressed=true]").dataset.mode;', collaboration) == enabled
-        checks.append('Cross-service subagents defaults off despite a configured API provider; enabling/disabling persists and survives reopening Settings')
+        checks.append('Cross-service subagents defaults on; both settings persist and survive reopening')
         browser.execute('document.getElementById("modal_back").click();document.querySelector("[data-settings-category=native]").click();document.querySelector("[data-ui-action=routing-settings]").click();')
         assert browser.execute('return document.getElementById("routing_image_mode").value==="follow" && document.getElementById("routing_image_account_row").hidden;')
         assert browser.execute('return [...document.querySelectorAll("#routing_image_account option")].some(option=>option.textContent==="Image fixture <safe>") && !document.querySelector("#routing_image_account safe");')
@@ -157,7 +158,7 @@ def main():
                 browser.execute('document.getElementById("modal_back").click();document.querySelector("[data-settings-category=native]").click();document.querySelector("[data-ui-action=routing-settings]").click();')
                 change(browser, 'routing_image_mode', 'account')
                 assert browser.execute('return !!document.getElementById("routing_image_mode") && !document.getElementById("routing_image_account_row").hidden;')
-                assert browser.execute('const body=document.getElementById("modal_body"),bounds=body.getBoundingClientRect();return body.scrollWidth<=body.clientWidth+1 && [...document.querySelectorAll(".routing-settings select,.routing-settings label,#routing_review")].every(node=>{const box=node.getBoundingClientRect();return box.left>=bounds.left && box.right<=bounds.right+1;});')
+                assert browser.execute('const body=document.getElementById("modal_body"),bounds=body.getBoundingClientRect();return body.scrollWidth<=body.clientWidth+1 && [...document.querySelectorAll(".routing-settings select,.routing-settings label,#routing_review")].filter(node=>node.getClientRects().length).every(node=>{const box=node.getBoundingClientRect();return box.left>=bounds.left && box.right<=bounds.right+1;});')
                 if width == 1280:
                     status, png = request(browser.base + '/screenshot')
                     assert status == 200
@@ -180,23 +181,32 @@ def main():
             assert browser.execute('const container=document.createElement("div");container.innerHTML=callReports.recordHtml({request_id:"fixture",route:arguments[0],model_id:"gpt-image-2",state:"completed"});return container.querySelector("summary").textContent.includes(arguments[1]) && container.textContent.includes("Image model");', route, label)
         assert upstream.calls == 0
         checks.append('Image generation/edit labels appear in collapsed and expanded call records; no real model requests')
+        browser.execute('closeModal();openServiceChooser();document.querySelector("[data-ui-action=openai-image-credit-choose]").click();')
+        assert browser.execute('return document.getElementById("credit_key").type === "password";')
+        browser.execute('document.getElementById("credit_key").value="project-key-fixture";document.getElementById("credit_connect_budget").value="100";document.getElementById("credit_connect_expiry").value="2099-06-01T12:00";document.getElementById("credit_connect_monthly").checked=true;document.getElementById("modal_submit").click();')
+        wait_for(lambda: browser.execute('return state.image_routing.mode === "credit" && !!document.getElementById("routing_image_mode");'))
+        gift = json.loads((root / 'config.json').read_text())
+        assert gift['image_routing']['credit']['renew_monthly'] and gift['image_routing']['credit']['budget_cents']==10000
+        assert 'project-key-fixture' not in json.dumps(gift)
+        checks.append('Add Service saves a personal image credit project, expiry and monthly budget through the real config API')
         session = browser.execute('return localStorage.getItem("emp_management_session_v1");')
         shadow, _ = preview(stack, base, '', session)
         browser.navigate(shadow + '/?routing=1')
         wait_for(lambda: browser.execute('return !!document.getElementById("routing_image_mode");'))
-        assert browser.execute('return !!window.EMP_PREVIEW && !document.getElementById("shadow_routing_button") && document.querySelectorAll("#routing_image_mode option").length===3 && [...document.querySelectorAll("#routing_image_account option")].some(option=>option.value==="routing-demo");')
+        assert browser.execute('return !!window.EMP_PREVIEW && !document.getElementById("shadow_routing_button") && document.querySelectorAll("#routing_image_mode option").length===4 && [...document.querySelectorAll("#routing_image_account option")].some(option=>option.value==="routing-demo");')
         browser.execute('closeModal();setLanguage("en");openSettings();')
         wait_for(lambda: browser.execute('return !!document.querySelector("[data-settings-category=native]");'))
         browser.execute('document.querySelector("[data-settings-category=native]").click();document.querySelector("[data-ui-action=routing-settings]").click();')
         wait_for(lambda: browser.execute('return !!document.getElementById("routing_image_mode");'))
         save(browser, 'account', 'routing-demo')
-        assert json.loads((root / 'config.json').read_text())['image_routing'] == {'mode':'account','account_id':'routing-demo'}
+        routing = json.loads((root / 'config.json').read_text())['image_routing']
+        assert routing['mode']=='account' and routing['account_id']=='routing-demo' and routing['credit']==gift['image_routing']['credit']
         checks.append('Unified Shadow opens the same routing dialog directly and saves only to its disposable synthetic backend')
         browser.navigate(shadow + '/?collaboration=1')
         wait_for(lambda: browser.execute('return !!document.querySelector("[data-shadow-help-template=collaboration-comparison]") && !document.getElementById("shadow_feedback").hidden;'))
         browser.execute('closeModal();fill();')
         assert browser.execute('return document.getElementById("modal_backdrop").classList.contains("hidden");')
-        checks.append('Unified Shadow opens the production-owned three-mode settings once via the collaboration link; later renders preserve closure')
+        checks.append('Unified Shadow opens the two-mode settings once via the collaboration link; later renders preserve closure')
     args.output.write_text(json.dumps({'passed': True, 'checks': checks, 'viewports': viewports, 'real_model_requests': 0}, indent=2) + '\n')
     print(json.dumps({'passed': True, 'checks': checks}))
 

@@ -1,5 +1,7 @@
 // Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
+  "services.request_recovering": ["调用正在恢复", "Request recovering"],
+  "services.request_retrying": ["连接短暂中断，EMP 正在重试。", "The connection was interrupted. EMP is retrying."],
   'services.retry_usage':['重试','Retry'],
   'services.partial_usage':['部分用量','Partial usage'],
   'services.partial_estimate':['部分估算','Partial estimate'],

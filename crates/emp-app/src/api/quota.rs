@@ -164,6 +164,13 @@ pub(crate) fn management_quota_request(
             Some("quota_reset_invalid_request"),
             &[],
         ),
+        Err(CommandError::ResetForbidden) => json_error_response(
+            403,
+            status_text(403),
+            "A workspace administrator must reset this shared subscription",
+            Some("workspace_reset_forbidden"),
+            &[],
+        ),
         Err(CommandError::Reset(error)) => {
             let status = if error.code() == "quota_reset_invalid_request" {
                 400

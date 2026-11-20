@@ -73,6 +73,9 @@ pub(crate) fn compact_request(
             return request_router_error_response(400, "request.model is required");
         }
         Err(RequestPreparationError::Route(error)) => return route_resolution_response(error),
+        Err(RequestPreparationError::TeamPermission(message)) => {
+            return request_router_error_response(403, message);
+        }
         Err(RequestPreparationError::ConfigurationUnavailable) => {
             return json_error_response(
                 500,

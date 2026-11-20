@@ -812,6 +812,10 @@ dependencies = [
  "emp-core",
  "emp-history",
  "emp-integration",
+ "emp-mod-aggregate",
+ "emp-mod-decision",
+ "emp-mod-gateway",
+ "emp-modules",
  "emp-protocol",
  "emp-router",
  "emp-state",
@@ -903,6 +907,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "emp-mod-aggregate"
+version = "0.10.0-beta"
+dependencies = [
+ "emp-modules",
+ "serde_json",
+]
+
+[[package]]
+name = "emp-mod-decision"
+version = "0.10.0-beta"
+dependencies = [
+ "emp-modules",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "emp-mod-gateway"
+version = "0.10.0-beta"
+dependencies = [
+ "emp-modules",
+ "serde_json",
+]
+
+[[package]]
+name = "emp-mod-team"
+version = "0.10.0-beta"
+dependencies = [
+ "base64 0.22.1",
+ "emp-modules",
+ "emp-state",
+ "getrandom 0.2.17",
+ "rusqlite",
+ "scrypt",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tiny_http",
+ "url",
+]
+
+[[package]]
+name = "emp-modules"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "emp-protocol"
 version = "0.14.3"
 dependencies = [
@@ -939,6 +994,7 @@ dependencies = [
  "atomic-write-file",
  "base64 0.22.1",
  "emp-core",
+ "emp-modules",
  "fernet",
  "flate2",
  "getrandom 0.2.17",
@@ -4150,6 +4206,7 @@ dependencies = [
 name = "xtask"
 version = "0.14.3"
 dependencies = [
+ "emp-modules",
  "emp-state",
  "flate2",
  "serde_json",

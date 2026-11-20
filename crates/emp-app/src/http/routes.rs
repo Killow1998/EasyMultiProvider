@@ -46,7 +46,11 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         );
     }
     if request.method == RequestMethod::Get
-        && let Some(bytes) = crate::web::asset_response(path)
+        && let Some(bytes) = crate::web::asset_response(path).or_else(|| {
+            same_origin
+                .then(|| crate::web::module_asset_response(path, state))
+                .flatten()
+        })
     {
         return if same_origin {
             bytes
@@ -94,12 +98,26 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         }
         let supplied_session = request.session_token();
         if state.sessions.contains(supplied_session.as_deref(), now) {
+            if request.method == RequestMethod::Get && path == "/api/team/status" {
+                return crate::api::team::read(state);
+            }
+            if request.method == RequestMethod::Get && path == "/api/team/notices" {
+                return crate::api::team::notices(state);
+            }
+            if request.method == RequestMethod::Get && path == "/api/image-credit" {
+                return crate::api::images::credit_status(state);
+            }
+            if request.method == RequestMethod::Get && path == "/api/modules" {
+                return crate::api::modules::read(state);
+            }
             if request.method == RequestMethod::Get
                 && matches!(path, "/api/gateway/clients" | "/api/gateway/usage")
             {
                 return crate::api::gateway::read(request, state);
             }
-            if request.method == RequestMethod::Get && path == "/api/gateway" {
+            if request.method == RequestMethod::Get
+                && matches!(path, "/api/gateway" | "/api/decisions/connection")
+            {
                 return response(
                     "HTTP/1.1 200 OK",
                     "application/json",

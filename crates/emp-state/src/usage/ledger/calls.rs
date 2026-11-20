@@ -13,6 +13,9 @@ pub(super) fn initialize(connection: &Connection) -> Result<()> {
         finished_at REAL NOT NULL, provider_id TEXT NOT NULL, account_id TEXT NOT NULL,
         model_id TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL, facts TEXT NOT NULL,
         delivery TEXT, PRIMARY KEY(request_id, operation));
+        CREATE TABLE IF NOT EXISTS team_outbox (
+            scope TEXT NOT NULL, event_id TEXT NOT NULL, payload TEXT NOT NULL,
+            PRIMARY KEY(scope,event_id));
         CREATE INDEX IF NOT EXISTS call_period ON call_records(started_at);
         CREATE INDEX IF NOT EXISTS call_session ON call_records(session_id);",
     )?;
@@ -115,6 +118,7 @@ fn facts(event: &Value) -> Value {
         "reasoning_tokens",
         "usage_category",
         "usage_owner",
+        "image_credit_cost_nanos",
     ] {
         if let Some(value) = event.get(field) {
             let value = match value {
@@ -138,6 +142,16 @@ fn facts(event: &Value) -> Value {
 }
 
 impl UsageLedger {
+    pub fn image_credit_cost(&self, provider: &str, since: i64) -> Result<(i64, i64)> {
+        let _guard = self.lock.lock().map_err(|_| UsageError)?;
+        Ok(self.connect()?.query_row(
+            "SELECT COALESCE(SUM(json_extract(facts,'$.image_credit_cost_nanos')),0),
+                    COUNT(CASE WHEN json_type(facts,'$.image_credit_cost_nanos')='null' THEN 1 END)
+             FROM call_records WHERE provider_id=? AND started_at>=? AND operation IN ('image_generation','image_edit')",
+            params![provider, since],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?)
+    }
     pub fn query_callers(
         &self,
         start: f64,
@@ -255,8 +269,9 @@ impl UsageLedger {
         let session = text(&record, "thread_id", text(&record, "session_id", "")).to_owned();
         record["session_id"] = json!(session);
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
-        let connection = self.connect()?;
-        connection.execute("INSERT INTO call_records
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        transaction.execute("INSERT INTO call_records
             (request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,state,facts)
             VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id,operation) DO UPDATE SET
             started_at=excluded.started_at,finished_at=excluded.finished_at,provider_id=excluded.provider_id,
@@ -267,12 +282,24 @@ impl UsageLedger {
         if state == "completed"
             && let Some(prior) = event["continuation_recovery_from"].as_str()
         {
-            connection.execute(
+            transaction.execute(
                 "UPDATE call_records SET facts=json_set(facts,'$.recovery_request_id',?)
                  WHERE request_id=? AND operation=? AND state='recovery_required'",
                 params![id, prior, text(event, "route", "responses")],
             )?;
         }
+        if let (Some(scope), Some(share), Some(event_id)) = (
+            event["team_usage"]["scope"].as_str(),
+            event["team_usage"]["share"].as_str(),
+            record["usage_event_id"].as_str(),
+        ) && event["attempts"]
+            .as_u64()
+            .is_some_and(|attempts| attempts > 0)
+            && !crate::diagnostics::MODEL_TEST_OPERATIONS.contains(&text(event, "route", ""))
+        {
+            self.record_team_event(&transaction, scope, share, event_id, event, finished)?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 

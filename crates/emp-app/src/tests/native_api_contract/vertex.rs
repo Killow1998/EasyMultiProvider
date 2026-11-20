@@ -12,7 +12,8 @@ use rustls::{
 };
 use std::process::{Child, Command, Stdio};
 
-struct VertexFixture {
+pub(super) struct VertexFixture {
+    host: String,
     address: SocketAddr,
     root: Vec<u8>,
     requests: mpsc::Receiver<Value>,
@@ -22,6 +23,10 @@ struct VertexFixture {
 
 impl VertexFixture {
     fn start() -> Self {
+        Self::start_for("aiplatform.googleapis.com")
+    }
+
+    pub(super) fn start_for(host: &str) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
         ca.not_before = date_time_ymd(2025, 1, 1);
@@ -34,13 +39,11 @@ impl VertexFixture {
         let ca_key = KeyPair::generate().unwrap();
         let ca_cert = ca.self_signed(&ca_key).unwrap();
         let issuer = Issuer::new(ca, ca_key);
-        let mut leaf =
-            CertificateParams::new(vec!["aiplatform.googleapis.com".to_owned()]).unwrap();
+        let mut leaf = CertificateParams::new(vec![host.to_owned()]).unwrap();
         leaf.not_before = date_time_ymd(2025, 1, 1);
         leaf.not_after = date_time_ymd(2030, 1, 1);
         leaf.distinguished_name = DistinguishedName::new();
-        leaf.distinguished_name
-            .push(DnType::CommonName, "aiplatform.googleapis.com");
+        leaf.distinguished_name.push(DnType::CommonName, host);
         leaf.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         leaf.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         leaf.use_authority_key_identifier_extension = true;
@@ -98,7 +101,10 @@ impl VertexFixture {
                 } else {
                     serde_json::from_slice(&bytes).unwrap()
                 };
-                let result = if first.contains("/v1beta1/publishers/google/models") {
+                let result = if first.starts_with("POST /v1/images/") {
+                    json!({"data":[{"b64_json":"ZmFrZQ=="}],"usage":{"input_tokens":10,"output_tokens":400,
+                        "input_tokens_details":{"text_tokens":4,"image_tokens":6}}})
+                } else if first.contains("/v1beta1/publishers/google/models") {
                     if first.contains("pageToken=") {
                         json!({"publisherModels":[{"name":"publishers/google/models/gemini-3-flash", "versionId":"gemini-3-flash-preview"}]})
                     } else {
@@ -166,12 +172,19 @@ impl VertexFixture {
                     result.to_string()
                 };
                 let mut output = input.into_inner();
+                if first.starts_with("POST /v1/images/") && body["prompt"] == "truncate-response" {
+                    write!(output, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nConnection: close\r\n\r\n{{").unwrap();
+                    output.flush().unwrap();
+                    continue;
+                }
+
                 write!(output, "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     if stream { "text/event-stream" } else { "application/json" }, payload.len(), payload).unwrap();
                 output.flush().unwrap();
             }
         });
         Self {
+            host: host.to_owned(),
             address,
             root: ca_cert.der().to_vec(),
             requests,
@@ -180,20 +193,18 @@ impl VertexFixture {
         }
     }
 
-    fn client(&self) -> HttpClient {
+    pub(super) fn client(&self) -> HttpClient {
         let mut config = HttpClientConfig::default();
         config.add_root_certificate_der(&self.root).unwrap();
         config.use_only_configured_root_certificates().unwrap();
-        config
-            .add_dns_override("aiplatform.googleapis.com", self.address)
-            .unwrap();
+        config.add_dns_override(&self.host, self.address).unwrap();
         HttpClient::with_config(HttpClientPolicy::default(), config).unwrap()
     }
 
-    fn received(&self) -> Value {
+    pub(super) fn received(&self) -> Value {
         self.requests
             .recv_timeout(Duration::from_secs(15))
-            .expect("Vertex request")
+            .expect("TLS fixture request")
     }
 }
 

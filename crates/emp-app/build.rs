@@ -2,6 +2,18 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=EMP_TRANSITION_MANIFEST");
+    let manifest = env::var_os("EMP_TRANSITION_MANIFEST").map(PathBuf::from);
+    let source = match manifest {
+        Some(path) => {
+            println!("cargo:rerun-if-changed={}", path.display());
+            std::fs::read_to_string(path).expect("read transition manifest")
+        }
+        None => "&[]".to_owned(),
+    };
+    let output = PathBuf::from(env::var_os("OUT_DIR").expect("build output directory"));
+    std::fs::write(output.join("module-transition.rs"), source).expect("write transition manifest");
+
     println!("cargo:rerun-if-env-changed=EMP_PACKAGE_RESOURCE");
     println!("cargo:rerun-if-env-changed=EMP_REQUIRE_WINDOWS_RESOURCES");
 

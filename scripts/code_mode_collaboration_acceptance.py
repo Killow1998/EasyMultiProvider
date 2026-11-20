@@ -279,7 +279,7 @@ def main():
     parser.add_argument('--emp',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--protocol',choices=['responses','chat_completions','anthropic_messages'],action='append')
-    parser.add_argument('--mode',choices=['off','on_demand','on'],action='append')
+    parser.add_argument('--mode',choices=['off','on'],action='append')
     args=parser.parse_args()
     args.output.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='emp-code-mode-') as temp:
@@ -289,7 +289,7 @@ def main():
                                  for path in (args.codex,args.codex.with_name('codex-code-mode-host'),args.emp)},
                 'cases':[]}
         for protocol in args.protocol or ['responses','chat_completions','anthropic_messages']:
-            for mode in args.mode or ['on_demand','off','on']:
+            for mode in args.mode or ['off','on']:
                 result=case(args.emp.resolve(),args.codex.resolve(),Path(temp)/(protocol+'-'+mode),args.output,protocol,mode,report['codex_version'].split()[-1])
                 report['cases'].append(result)
                 (args.output/'result.json').write_text(json.dumps(report,indent=2))

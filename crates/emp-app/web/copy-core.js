@@ -361,4 +361,5 @@ registerUiCopy({
   "core.the_model_output_hit_its_limit": ["模型输出超过了上限。","The model output hit its limit."],
   "core.the_input_exceeds_the_model_context_window": ["内容超过了模型的上下文上限。","The input exceeds the model context window."],
   "core.the_model_service_blocked_the_content": ["内容被模型服务的安全策略拦截。","The model service blocked the content."],
+  "core.update_codex": ["请更新 Codex","Update Codex"],
 });

@@ -17,6 +17,7 @@ emp-codex = { path = "../emp-codex" }
 emp-core = { path = "../emp-core" }
 emp-history = { path = "../emp-history" }
 emp-integration = { path = "../emp-integration" }
+emp-modules = { path = "../emp-modules" }
 emp-protocol = { path = "../emp-protocol" }
 emp-router = { path = "../emp-router" }
 emp-state = { path = "../emp-state" }
@@ -34,7 +35,7 @@ sha2 = "0.10.9"
 shlex = "2.0.1"
 tempfile = "3.27"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 url = "2.5.7"
 
 [features]
@@ -45,13 +46,16 @@ hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 path = "src/lib.rs"
 
 [dev-dependencies]
+emp-mod-decision = { path = "../emp-mod-decision" }
+emp-mod-gateway = { path = "../emp-mod-gateway" }
+emp-mod-aggregate = { path = "../emp-mod-aggregate" }
 flate2 = "1.1"
 rcgen = "0.14.10"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustls = "0.23"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "=0.3.6", default-features = false, features = ["async-io", "blocking"] }

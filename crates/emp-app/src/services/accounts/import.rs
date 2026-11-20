@@ -31,6 +31,9 @@ fn resolve(state: &ServerState, body: &Value) -> Result<ResolvedImport, String> 
             .as_str()
             .ok_or("account.id must be a safe single path segment")?
             .to_owned();
+        if emp_state::config::is_team_service_id(&account_id) {
+            return Err("team subscription credentials are managed by workspace sync".to_owned());
+        }
         return Ok(ResolvedImport {
             metadata,
             auth,
@@ -96,10 +99,13 @@ pub(crate) fn matching_account<'a>(
         .into_iter()
         .flatten()
         .find(|account| {
-            account["auth_file"]
+            !account["id"]
                 .as_str()
-                .and_then(|path| vault.read_encrypted_json(Path::new(path)).ok())
-                .is_some_and(|old| emp_state::same_account_auth(&old, auth))
+                .is_some_and(emp_state::config::is_team_service_id)
+                && account["auth_file"]
+                    .as_str()
+                    .and_then(|path| vault.read_encrypted_json(Path::new(path)).ok())
+                    .is_some_and(|old| emp_state::same_account_auth(&old, auth))
         })
 }
 

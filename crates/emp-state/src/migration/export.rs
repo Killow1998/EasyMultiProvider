@@ -495,6 +495,27 @@ pub fn prepare_migration_export(
     let selected = groups.copied().unwrap_or_else(ExportGroups::all);
     let selected_list = selected.as_btree();
     let mut config = select_export_config(config, groups)?;
+    use crate::config::is_team_service_id;
+    if let Some(providers) = config["providers"].as_array_mut() {
+        providers.retain(|provider| !is_team_service_id(id_of(provider)));
+    }
+    if let Some(models) = config["models"].as_array_mut() {
+        models.retain(|model| !model["provider"].as_str().is_some_and(is_team_service_id));
+    }
+    if let Some(groups) = config["model_groups"].as_array_mut() {
+        groups.retain(|group| {
+            !group["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .any(|source| {
+                    source
+                        .split_once('/')
+                        .is_some_and(|(service, _)| is_team_service_id(service))
+                })
+        });
+    }
 
     let mut accounts = Vec::new();
     for raw in config
@@ -503,6 +524,9 @@ pub fn prepare_migration_export(
         .into_iter()
         .flatten()
     {
+        if is_team_service_id(id_of(raw)) {
+            continue;
+        }
         let metadata =
             normalize_account(raw).map_err(|_| MigrationError::AccountCredentialsUnavailable)?;
         let auth_file = metadata

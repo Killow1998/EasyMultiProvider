@@ -2,7 +2,7 @@
 use super::*;
 
 #[test]
-fn collaboration_is_opt_in_and_switching_policy_recovers_the_socket_catalog() {
+fn switching_collaboration_policy_recovers_the_socket_catalog() {
     let upstream = Upstream::start(1024 * 1024);
     let (_directory, server, model) = server(&upstream, false);
     server
@@ -35,7 +35,7 @@ fn collaboration_is_opt_in_and_switching_policy_recovers_the_socket_catalog() {
             "type":"response.create", "model":model, "input":input
         }),
     ));
-    for enabled in ["on", "on_demand"] {
+    for enabled in ["off", "on"] {
         server
             .state
             .backend
@@ -68,16 +68,10 @@ fn collaboration_is_opt_in_and_switching_policy_recovers_the_socket_catalog() {
         3,
         "policy recovery never generates a response"
     );
+    assert_ne!(stats.generated_hashes[0], native_hash);
+    assert_eq!(stats.generated_hashes[1], native_hash);
     assert_eq!(
-        stats.generated_hashes[0], native_hash,
-        "API providers must not alter native tools by default"
-    );
-    assert_ne!(
-        stats.generated_hashes[1], native_hash,
-        "explicit compatibility changes the upstream schema"
-    );
-    assert_eq!(
-        stats.generated_hashes[2], native_hash,
-        "turning compatibility off restores the exact native input"
+        stats.generated_hashes[2], stats.generated_hashes[0],
+        "restoring collaboration restores the plaintext compatibility catalog"
     );
 }

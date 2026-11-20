@@ -2,6 +2,24 @@ function createNotifications({$, tr, getLanguage}) {
   const storageKey = 'emp.notifications.v1', limit = 50;
   const island = $('notification'), inbox = $('notification_inbox'), mailbox = $('notification_mailbox');
   let items = [], currentId = null, countdown = null, entrance = null;
+  function remember(entries) {
+    items = read();
+    const seen = new Set([...items.map(item => item.id), ...readSeen()]);
+    const fresh = entries.filter(item => !seen.has(item.id));
+    if (!fresh.length) return;
+    items = [...items, ...fresh].sort((a,b) => a.time-b.time).slice(-limit);
+    try {
+      localStorage.setItem(storageKey + '.seen', JSON.stringify([...seen, ...fresh.map(item => item.id)].slice(-2 * limit)));
+    } catch (_) {}
+    save();
+    refresh();
+  }
+  function readSeen() {
+    try {
+      const ids = JSON.parse(localStorage.getItem(storageKey + '.seen') || '[]');
+      return Array.isArray(ids) ? ids : [];
+    } catch (_) { return []; }
+  }
   // Lucide info / circle-alert icons (ISC); the message itself is always plain text.
   function icon(error) {
     return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/>${error ? '<path d="M12 8v4M12 16h.01"/>' : '<path d="M12 16v-4M12 8h.01"/>'}</svg>`;
@@ -99,5 +117,5 @@ function createNotifications({$, tr, getLanguage}) {
   window.addEventListener('pagehide',hide);
   window.addEventListener('storage', event => { if (event.key === storageKey) { items = read(); refresh(); } });
   items = read(); refresh();
-  return {show,dismiss,refresh,isOpen};
+  return {show,dismiss,refresh,isOpen,remember};
 }

@@ -8,6 +8,165 @@ mod routing;
 use fixture::*;
 
 #[test]
+fn image_credit_uses_the_project_key_and_stops_dispatch_at_the_local_limit() {
+    let upstream = super::vertex::VertexFixture::start_for("api.openai.com");
+    let directory = tempfile::tempdir().unwrap();
+    let root = crate::tests::credential_root(&directory);
+    let home = root.join("codex");
+    std::fs::create_dir_all(&home).unwrap();
+    let path = root.join("config.json");
+    let now = crate::util::system_now() as i64;
+    let config = json!({"providers":[{"id":"team-openai","name":"Gift fixture","auth_mode":"api_key",
+        "protocol":"responses","base_url":"https://api.openai.com/v1","api_key":"fixture-project-key"}],
+        "image_routing":{"mode":"credit","credit":{"provider":"team-openai","model":"gpt-image-2.6-flare",
+            "cycle_started_at":now-60,"expires_at":now+3600,"budget_cents":1,"percent":95}}});
+    std::fs::write(&path, config.to_string()).unwrap();
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    std::fs::write(root.join("state/gateway-clients.json"), "{invalid fixture").unwrap();
+
+    let server = ServerHandle::start_with_config_options_and_http_client(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &path,
+        "missing-test-codex",
+        home.join("auth.json"),
+        upstream.client(),
+    )
+    .unwrap();
+    let image = br#"{"model":"gpt-image-2","prompt":"synthetic"}"#;
+    let url = "/v1/images/generations";
+    let access = session_header(&server);
+    assert!(
+        !server
+            .state
+            .backend
+            .modules
+            .active(emp_modules::Module::Gateway)
+    );
+    let timestamp = crate::util::system_now();
+    let peer = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
+    let head = format!(
+        "POST {url} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\n\r\n",
+        server.local_addr().port(),
+        server.state.backend.gateway_key,
+    );
+    let image_request = crate::http::request::parse_request(&head).unwrap();
+    assert!(
+        crate::http::auth::proxy_identity(image_request, &server.state, timestamp, Some(peer))
+            .is_none()
+    );
+
+    assert!(post(&server, url, image, &[]).starts_with("HTTP/1.1 401"));
+    let wire = post(&server, url, image, &[&access]);
+    assert!(wire.starts_with("HTTP/1.1 200"), "{wire}");
+    let dispatched = upstream.received();
+    assert_eq!(dispatched["path"], url);
+    assert_eq!(
+        dispatched["headers"]["authorization"],
+        "Bearer fixture-project-key"
+    );
+    assert_eq!(dispatched["body"]["model"], "gpt-image-2.6-flare");
+    let ledger = &server.state.backend.usage.ledger;
+    assert_eq!(
+        ledger.image_credit_cost("team-openai", now - 60).unwrap(),
+        (12_068_000, 0)
+    );
+    let wire = post(
+        &server,
+        url,
+        image,
+        &[&access, "X-EMP-Provider: team-openai"],
+    );
+    assert!(wire.starts_with("HTTP/1.1 429"), "{wire}");
+    let mut runtime_config = server
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap();
+    runtime_config["image_routing"]["credit"]["cycle_started_at"] = json!(now - 45 * 86400);
+    runtime_config["image_routing"]["credit"]["renew_monthly"] = json!(true);
+    drop(runtime_config);
+    let renewed = crate::services::native::images::credit_status(&server.state).unwrap();
+    assert_eq!(renewed["active"], true);
+    assert!(renewed["cycle_started_at"].as_i64().unwrap() > now - 45 * 86400);
+    assert_eq!(renewed["estimated_spent_nanos"], 12_068_000);
+    server
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap()["image_routing"]["credit"]["budget_cents"] = json!(100);
+    let interrupted = post(
+        &server,
+        url,
+        br#"{"model":"gpt-image-2","prompt":"truncate-response"}"#,
+        &[&access],
+    );
+    assert!(
+        interrupted.starts_with("HTTP/1.1 502") || interrupted.starts_with("HTTP/1.1 503"),
+        "{interrupted}"
+    );
+    assert_eq!(upstream.received()["path"], url);
+    assert_eq!(
+        ledger.image_credit_cost("team-openai", now - 60).unwrap(),
+        (12_068_000, 1)
+    );
+    let paused = post(&server, url, image, &[&access]);
+    assert!(
+        paused.starts_with("HTTP/1.1 409") && paused.contains("did not report billable usage"),
+        "{paused}"
+    );
+    let mut runtime_config = server
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap();
+    runtime_config["image_routing"]["credit"]["expires_at"] = json!(now - 1);
+    drop(runtime_config);
+    let wire = post(&server, url, image, &[&access]);
+    assert!(wire.starts_with("HTTP/1.1 409"), "{wire}");
+    assert!(wire.contains("period is inactive"));
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn codex_image_tool_uses_subscription_when_the_gift_period_has_expired() {
+    let upstream = ImageUpstream::start(200);
+    let (_directory, server) = image_server(&upstream.base_url());
+    let now = crate::util::system_now() as i64;
+    server
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap()["image_routing"] = json!({"mode":"credit", "credit":{"provider":"unused-credit", "model":"gpt-image-2.6-flare",
+            "cycle_started_at":now-3600,"expires_at":now-1,"budget_cents":1000,"percent":95}});
+    select_turn(&server, "selected/gpt-6.1-sol", "gift-fallback-turn", false);
+    upstream.next();
+    let response = post(
+        &server,
+        "/v1/images/generations",
+        br#"{"model":"gpt-image-2","prompt":"fixture"}"#,
+        &[
+            &session_header(&server),
+            "x-codex-image-turn-id: gift-fallback-turn",
+        ],
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let request = upstream.next();
+    assert_eq!(request.path, "/backend-api/codex/images/generations");
+    assert_eq!(request.body["model"], "gpt-image-2");
+    assert!(request.headers.contains_key("chatgpt-account-id"));
+    server.shutdown().unwrap();
+}
+
+#[test]
 fn image_tools_follow_their_own_http_and_websocket_turn_accounts() {
     for websocket in [false, true] {
         let upstream = ImageUpstream::start(200);

@@ -9,6 +9,7 @@ use crate::{
     },
 };
 use emp_state::usage::ledger::UsageLedger;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::net::TcpStream;
@@ -105,8 +106,9 @@ pub(crate) fn mutate(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
+    let backend = &state.backend;
     let result = if request.method == RequestMethod::Delete {
-        let Some(id) = body["id"].as_str().filter(|id| !id.is_empty()) else {
+        let Some(id) = body["id"].as_str() else {
             return json_error_response(
                 400,
                 status_text(400),
@@ -115,15 +117,14 @@ pub(crate) fn mutate(
                 &[],
             );
         };
-        state
-            .backend
+        backend
             .gateway_clients
-            .remove(id, &state.backend.configuration.vault)
-            .map(|()| json!({"ok":true}))
+            .remove(id, &backend.configuration.vault, &backend.modules)
+            .map(|()| json_response(&json!({"ok":true})))
     } else {
         let id = match body.get("id") {
             None => None,
-            Some(Value::String(id)) if !id.is_empty() => Some(id.as_str()),
+            Some(Value::String(id)) => Some(id.as_str()),
             Some(_) => {
                 return json_error_response(
                     400,
@@ -134,14 +135,18 @@ pub(crate) fn mutate(
                 );
             }
         };
-        state.backend.gateway_clients.issue(
-            body["name"].as_str().unwrap_or_default(),
-            id,
-            &state.backend.configuration.vault,
-        )
+        backend
+            .gateway_clients
+            .issue(
+                body["name"].as_str().unwrap_or_default(),
+                id,
+                &backend.configuration.vault,
+                &backend.modules,
+            )
+            .map(|client| json_response(&client))
     };
     match result {
-        Ok(value) => json_response(&value),
+        Ok(response) => response,
         Err(error) => {
             let (status, message) = if error.kind() == std::io::ErrorKind::InvalidInput {
                 (400, error.to_string())
@@ -153,7 +158,7 @@ pub(crate) fn mutate(
     }
 }
 
-fn json_response(value: &Value) -> Vec<u8> {
+fn json_response(value: &impl Serialize) -> Vec<u8> {
     response(
         "HTTP/1.1 200 OK",
         "application/json",

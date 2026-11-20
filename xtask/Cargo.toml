@@ -7,6 +7,7 @@ license.workspace = true
 description = "Native packaging, package smoke tests and release checks for EMP."
 
 [dependencies]
+emp-modules = { path = "../crates/emp-modules" }
 emp-state = { path = "../crates/emp-state" }
 flate2 = "1.1"
 serde_json = { workspace = true }

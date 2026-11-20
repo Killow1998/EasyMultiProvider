@@ -68,11 +68,19 @@ pub(crate) fn export(
                 }
                 None => None,
             };
-            let config = state
+            let mut config = state
                 .backend
                 .configuration
                 .snapshot()
                 .map_err(|_| MigrationError::Internal)?;
+            config["accounts"]
+                .as_array_mut()
+                .expect("normalized accounts")
+                .retain(|account| {
+                    !account["id"]
+                        .as_str()
+                        .is_some_and(|id| state.backend.team.shared_subscription(id))
+                });
             if let Some(selections) = body.get("selections").and_then(Value::as_array) {
                 let account_ids: std::collections::BTreeSet<_> = selections
                     .iter()

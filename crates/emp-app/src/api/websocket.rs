@@ -259,7 +259,7 @@ pub(crate) fn serve_responses_websocket(
             .source
             .and_then(|source| source.caller.as_ref())
             .is_some_and(|caller| !matches!(caller.id.as_str(), "local" | "shared"))
-            && crate::http::auth::proxy_identity(request, state, crate::util::system_now())
+            && crate::http::auth::proxy_identity(request, state, crate::util::system_now(), None)
                 .is_none()
         {
             websocket.close(1008, "device key was revoked");
@@ -392,6 +392,14 @@ pub(crate) fn serve_responses_websocket(
                     503,
                     "memory_routing_unavailable",
                     crate::services::memory_routing::error_message(reason),
+                ));
+                continue;
+            }
+            Err(RequestPreparationError::TeamPermission(message)) => {
+                let _ = websocket.send_json(&emp_websocket_error(
+                    403,
+                    "workspace_permission_required",
+                    message,
                 ));
                 continue;
             }

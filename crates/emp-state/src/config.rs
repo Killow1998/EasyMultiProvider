@@ -144,7 +144,7 @@ fn default_configuration() -> Value {
         "subscription_search": {"enabled": true, "account_id": ""},
         "auto_enable_on_start": true,
         "auto_review_fallback": true,
-        "external_collaboration": "off",
+        "external_collaboration": "on",
         "image_routing": {"mode":"follow", "account_id":""},
         "memory_model": "",
         "memory_extraction_model": "",
@@ -430,6 +430,12 @@ pub fn provider_api_key(provider: &Value, vault: &VaultStore) -> String {
         .unwrap_or_default()
 }
 
+pub fn is_team_service_id(id: &str) -> bool {
+    id.strip_prefix("team-").is_some_and(|suffix| {
+        suffix.len() == 32 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
+}
+
 /// Normalize the full top-level configuration without filesystem path canonicalization.
 ///
 /// Loading, saving, secret extraction, and canonical private paths are separate.
@@ -658,14 +664,14 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         };
     }
     normalized["external_collaboration"] = match raw.get("external_collaboration") {
-        None => Value::String("off".into()),
-        Some(Value::String(mode)) if matches!(mode.as_str(), "off" | "on_demand" | "on") => {
-            Value::String(mode.clone())
-        }
+        None => Value::String("on".into()),
+        Some(Value::String(mode)) => match mode.as_str() {
+            "on" | "on_demand" => Value::String("on".into()),
+            "off" => Value::String("off".into()),
+            _ => return Err(ConfigError::new("external_collaboration must be off or on")),
+        },
         _ => {
-            return Err(ConfigError::new(
-                "external_collaboration must be off, on_demand or on",
-            ));
+            return Err(ConfigError::new("external_collaboration must be off or on"));
         }
     };
     Ok(normalized)

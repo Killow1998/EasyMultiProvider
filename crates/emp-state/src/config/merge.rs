@@ -388,6 +388,10 @@ fn merge_web_update_at_time(
                 .get("id")
                 .and_then(Value::as_str)
                 .and_then(|id| old_accounts.get(id));
+            account.remove("workspace_shared");
+            if old.and_then(|value| value.get("workspace_shared")) == Some(&Value::Bool(true)) {
+                account.insert("workspace_shared".to_owned(), Value::Bool(true));
+            }
             let incoming_file = account.get("auth_file");
             let old_file = old.and_then(|value| value.get("auth_file"));
             if incoming_file.is_some_and(json_truthy) && incoming_file != old_file {

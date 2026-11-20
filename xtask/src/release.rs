@@ -36,6 +36,18 @@ const PUBLIC_ARTIFACTS: [&str; 9] = [
     "EMP.exe",
 ];
 
+fn module_artifacts() -> impl Iterator<Item = String> {
+    [
+        ("windows", "x86_64"),
+        ("linux", "x86_64"),
+        ("linux", "aarch64"),
+        ("macos", "x86_64"),
+        ("macos", "aarch64"),
+    ]
+    .into_iter()
+    .flat_map(|(os, arch)| emp_modules::Module::ALL.map(|module| module.asset_for(os, arch)))
+}
+
 pub fn validate_command(args: &[String]) -> Result {
     let usage = || {
         "usage: cargo xtask validate-release --tag TAG --artifacts DIR [--public-manifest FILE]"
@@ -57,7 +69,9 @@ pub fn validate_command(args: &[String]) -> Result {
         .map_err(|error| format!("release validation failed: {error}"))?;
     if let Some(manifest) = manifest {
         let lines: String = PUBLIC_ARTIFACTS
-            .iter()
+            .into_iter()
+            .map(str::to_owned)
+            .chain(module_artifacts())
             .map(|name| format!("{}\n", artifacts.join(name).display()))
             .collect();
         fs::write(&manifest, lines)
@@ -65,8 +79,8 @@ pub fn validate_command(args: &[String]) -> Result {
     }
     println!(
         "release assets verified: {} files; {} public downloads for v{VERSION}",
-        PRIMARY_ARTIFACTS.len() * 2,
-        PUBLIC_ARTIFACTS.len()
+        (PRIMARY_ARTIFACTS.len() + module_artifacts().count()) * 2,
+        PUBLIC_ARTIFACTS.len() + module_artifacts().count()
     );
     Ok(())
 }
@@ -87,8 +101,10 @@ fn validate(tag: &str, artifacts: &Path, version: &str) -> Result {
         }
     }
     let expected: BTreeSet<String> = PRIMARY_ARTIFACTS
-        .iter()
-        .flat_map(|name| [(*name).to_owned(), format!("{name}.sha256")])
+        .into_iter()
+        .map(str::to_owned)
+        .chain(module_artifacts())
+        .flat_map(|name| [format!("{name}.sha256"), name])
         .collect();
     if actual != expected {
         let list = |names: Vec<&String>| {
@@ -104,7 +120,11 @@ fn validate(tag: &str, artifacts: &Path, version: &str) -> Result {
             list(actual.difference(&expected).collect())
         ));
     }
-    for name in PRIMARY_ARTIFACTS {
+    for name in PRIMARY_ARTIFACTS
+        .into_iter()
+        .map(str::to_owned)
+        .chain(module_artifacts())
+    {
         let sidecar = format!("{name}.sha256");
         let text = fs::read_to_string(artifacts.join(&sidecar))
             .map_err(|error| format!("{sidecar}: {error}"))?;
@@ -121,7 +141,7 @@ fn validate(tag: &str, artifacts: &Path, version: &str) -> Result {
         if recorded.trim() != name {
             return Err(format!("checksum filename mismatch in {sidecar}"));
         }
-        if sha256_file(&artifacts.join(name))? != digest {
+        if sha256_file(&artifacts.join(&name))? != digest {
             return Err(format!("checksum mismatch: {name}"));
         }
     }
@@ -173,9 +193,13 @@ mod tests {
     }
 
     fn complete_set(directory: &Path) {
-        for name in PRIMARY_ARTIFACTS {
-            let path = directory.join(name);
-            fs::write(&path, name).unwrap();
+        for name in PRIMARY_ARTIFACTS
+            .into_iter()
+            .map(str::to_owned)
+            .chain(module_artifacts())
+        {
+            let path = directory.join(&name);
+            fs::write(&path, &name).unwrap();
             fs::write(
                 directory.join(format!("{name}.sha256")),
                 format!("{}  {name}\n", sha256_file(&path).unwrap()),

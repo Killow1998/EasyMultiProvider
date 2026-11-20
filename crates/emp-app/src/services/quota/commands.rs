@@ -3,13 +3,14 @@ use super::{consume_quota_reset_for_account, refresh_account_by_id};
 use crate::app::ServerState;
 use crate::services::accounts::quota_refresh_lock;
 use crate::services::observation::operation::{OperationObservation, observe};
-use emp_codex::quota::QuotaError;
+use emp_codex::quota::{QuotaError, validated_reset_credit_id, validated_reset_idempotency_key};
 use serde_json::Value;
 
 pub(crate) enum CommandError {
     Internal,
     UnknownAccount(String),
     InvalidCredit,
+    ResetForbidden,
     Reset(QuotaError),
     Refresh(QuotaError),
 }
@@ -53,6 +54,26 @@ fn execute_inner(
     if !known_account {
         return Err(CommandError::UnknownAccount(account.to_owned()));
     }
+    let reset = if reset {
+        let key = body
+            .get("idempotency_key")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let credit_id = match body.get("credit_id") {
+            None => None,
+            Some(Value::String(value)) => Some(value.as_str()),
+            _ => return Err(CommandError::InvalidCredit),
+        };
+        Some((
+            validated_reset_idempotency_key(key).map_err(CommandError::Reset)?,
+            validated_reset_credit_id(credit_id).map_err(CommandError::Reset)?,
+        ))
+    } else {
+        None
+    };
+    if reset.is_some() && !state.backend.team.shared_subscription_reset(state, account) {
+        return Err(CommandError::ResetForbidden);
+    }
     let refresh_lock = match quota_refresh_lock(state, account) {
         Some(lock) => lock,
         None => {
@@ -65,20 +86,9 @@ fn execute_inner(
             return Err(CommandError::Internal);
         }
     };
-    if reset {
-        let key = body
-            .get("idempotency_key")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let credit_id = match body.get("credit_id") {
-            None => None,
-            Some(Value::String(value)) => Some(value.as_str()),
-            _ => {
-                return Err(CommandError::InvalidCredit);
-            }
-        };
+    if let Some((key, credit_id)) = reset {
         let consumed = receipt.step("consume_reset", || {
-            consume_quota_reset_for_account(state, account, key, credit_id)
+            consume_quota_reset_for_account(state, account, &key, credit_id)
         });
         let journal = &state.backend.diagnostics.journal;
         journal.event(

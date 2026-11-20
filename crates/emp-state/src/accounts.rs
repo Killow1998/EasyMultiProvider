@@ -265,6 +265,9 @@ pub fn normalize_account(raw: &Value) -> AccountResult<Value> {
         "model_context_windows": model_context_windows,
         "quota": quota,
     });
+    if raw.get("workspace_shared") == Some(&Value::Bool(true)) {
+        account["workspace_shared"] = Value::Bool(true);
+    }
     if let Some(names) = raw.get("route_names") {
         let names = names
             .as_array()

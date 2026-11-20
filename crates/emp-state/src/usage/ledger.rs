@@ -34,6 +34,7 @@ impl From<std::io::Error> for UsageError {
 }
 mod affinity;
 mod calls;
+mod team;
 pub use calls::CallFilter;
 mod identities;
 mod query;

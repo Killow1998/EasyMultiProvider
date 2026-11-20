@@ -44,6 +44,7 @@ impl UpdateState {
         shutdown: Arc<AtomicBool>,
         shutdown_wake: Arc<tokio::sync::Notify>,
         diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+        modules: Arc<super::modules::Modules>,
     ) -> Self {
         let endpoints = test_endpoints().unwrap_or_default();
         let gate = Arc::new(Gate {
@@ -93,9 +94,13 @@ impl UpdateState {
             version,
             endpoints,
             installation_rolled_back,
-            UpdateHooks::new(begin_handoff, reopen_handoff, handoff).with_observer(
-                move |event, fields| diagnostics.journal.event("info", event, fields),
-            ),
+            UpdateHooks::new(begin_handoff, reopen_handoff, handoff)
+                .with_observer(move |event, fields| {
+                    diagnostics.journal.event("info", event, fields)
+                })
+                .with_module_preparation(move |updater, version| {
+                    modules.prepare_update(updater, version)
+                }),
         )
         .expect("release update client configuration is valid");
         Self { manager, gate }

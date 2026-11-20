@@ -67,6 +67,35 @@ pub(crate) fn client_catalog(state: &ServerState, config: &Value) -> Value {
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn server_catalog(state: &ServerState, config: &Value) -> Value {
+    let hide_aggregates = !state.backend.modules.active(emp_modules::Module::Aggregate)
+        && config["model_groups"]
+            .as_array()
+            .is_some_and(|groups| !groups.is_empty());
+    let unavailable = state.backend.team.unavailable_providers(
+        state.backend.modules.active(emp_modules::Module::Team),
+        config,
+    );
+    if hide_aggregates || !unavailable.is_empty() {
+        let mut visible = config.clone();
+        if hide_aggregates {
+            visible["model_groups"] = serde_json::json!([]);
+        }
+        if !unavailable.is_empty() {
+            visible["accounts"]
+                .as_array_mut()
+                .expect("normalized accounts")
+                .retain(|account| !unavailable.iter().any(|id| account["id"] == *id));
+            visible["models"]
+                .as_array_mut()
+                .expect("normalized models")
+                .retain(|model| {
+                    !unavailable
+                        .iter()
+                        .any(|provider| model["provider"] == *provider)
+                });
+        }
+        return catalog_sources(state, &visible).merged(&visible);
+    }
     catalog_sources(state, config).merged(config)
 }
 

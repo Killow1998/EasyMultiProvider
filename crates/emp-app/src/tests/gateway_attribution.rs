@@ -111,30 +111,18 @@ fn agent_calls_keep_client_and_session_attribution_through_http_and_billing() {
     });
     let (_directory, server) = configured_server(&endpoint);
     let management = session_header(&server);
-    let device = server
-        .state
-        .backend
-        .gateway_clients
-        .issue(
-            "Temporary tools",
-            None,
-            &server.state.backend.configuration.vault,
-        )
-        .unwrap();
+    let issue = |name: &str| -> Value {
+        let body = serde_json::to_vec(&json!({"name":name})).unwrap();
+        let response = post(&server, "/api/gateway/clients", &body, &[&management]);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    let device = issue("Temporary tools");
     let device_auth = format!(
         "Authorization: Bearer {}",
         device["api_key"].as_str().unwrap()
     );
-    let unused_device = server
-        .state
-        .backend
-        .gateway_clients
-        .issue(
-            "Spare device",
-            None,
-            &server.state.backend.configuration.vault,
-        )
-        .unwrap();
+    let unused_device = issue("Spare device");
     let shared_auth = format!("Authorization: Bearer {}", server.state.backend.gateway_key);
     for (index, (headers, fields, _, _)) in cases.iter().enumerate() {
         let mut headers = headers.clone();

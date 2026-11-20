@@ -18,7 +18,7 @@
   <div class="page-brand">
     <div class="brand-title"><h1 aria-label="EMP"><svg id="emp_logo" class="dot-logo" aria-hidden="true"></svg></h1><span id="emp_version" class="brand-version"></span></div>
     <div id="integration" class="header-integration" data-state="unknown">
-      <div class="integration-card-header" role="status"><span id="codex_version">Codex</span><span id="integration_badge"></span></div>
+      <div class="integration-card-header" role="status"><span id="codex_version">Codex</span><a id="codex_update_advice" href="https://github.com/openai/codex/releases/latest" target="_blank" rel="noopener" data-i18n="core.update_codex" hidden></a><span id="integration_badge"></span></div>
       <p id="integration_summary" class="muted" hidden></p>
     </div>
     <p data-i18n="subtitle"></p>
@@ -30,6 +30,7 @@
     </div>
     <div class="header-group">
       <button type="button" class="secondary" data-icon="settings" onclick="openSettings()" data-i18n="settings_menu"></button>
+      <button id="modules_open" type="button" class="secondary" data-icon="modules" onclick="moduleSettings.refresh().then(moduleSettings.open).catch(error => notice(error.message, true))" data-i18n="modules.modules"></button>
     </div>
     <div class="header-group">
       <a class="repo-link" href="https://github.com/Killow1998/EasyMultiProvider" target="_blank" rel="noopener noreferrer">GitHub</a>
@@ -59,9 +60,10 @@
   <h2 data-i18n="services_title"></h2>
   <div class="toolbar">
     <button id="refresh_all" class="secondary" data-icon="refresh" onclick="refreshAllAccounts()" data-i18n="refresh_quotas"></button>
-    <button id="catalog_aggregate_open" type="button" class="secondary" data-icon="aggregate" onclick="openAggregates()" data-i18n="aggregate.title"></button>
+    <button id="catalog_aggregate_open" type="button" class="secondary" data-icon="aggregate" onclick="openAggregates().catch(error=>notice(error.message,true))" data-i18n="aggregate.title" hidden></button>
     <button data-icon="plus" onclick="openServiceChooser()" data-i18n="add_provider"></button>
-    <button id="shadow_migration_open" type="button" class="secondary" data-icon="upload" onclick="migration.open()" data-i18n="data_migration"></button>
+    <button id="shadow_migration_open" type="button" class="secondary" data-icon="upload" onclick="migration.open()" data-i18n="data_migration" hidden></button>
+    <button id="team_workspace_open" type="button" class="secondary" data-icon="user" onclick="openTeamWorkspace().catch(error=>notice(error.message,true))" data-i18n="modules.team_workspace" hidden></button>
   </div>
 </div>
 <input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="codexAccountImport.fileChosen(this)">
@@ -128,7 +130,7 @@
 <script src="/assets/management-client.js"></script>
 <script src="/assets/management-events.js"></script>
 <script src="/assets/quota-display.js"></script>
-<script src="/assets/context-help.js"></script><script src="/assets/decision-settings.js"></script><script src="/assets/gateway-settings.js"></script><script src="/assets/aggregate-settings.js"></script><script src="/assets/settings.js"></script>
+<script src="/assets/context-help.js"></script><script src="/assets/settings.js"></script><script src="/assets/copy-modules.js"></script><script src="/assets/module-settings.js"></script>
 <script src="/assets/collaboration-comparison.js"></script>
 <script src="/assets/routing-settings.js"></script>
 <script src="/assets/ultra-settings.js"></script>
@@ -169,17 +171,46 @@ const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePrefere
 const contextHelp = createContextHelp({getState:() => state, tr});
 const catalogDisplay=createCatalogDisplay({getState:()=>state,$,tr,t,esc,api,notice,cloneState,persistState,syncSavedCatalog,openModal,closeModal,activityIndicatorHtml,updateActivityDots});
 const {render:renderCatalogDisplay,openEditor:openCatalogDisplayEditor,toggleContext:toggleCatalogContext,toggleSearch:toggleCatalogSearch,searchKeydown:catalogSearchKeydown,presentationName,modelName:modelDisplayName,serviceName:serviceDisplayName}=catalogDisplay;
-const routingSettings = createRoutingSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
+const routingSettings = createRoutingSettings({api, getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
 const ultraSettings = createUltraSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
 const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
 const tutorials = createTutorials({openModal, $, tr, esc});
-const settings = createSettings({api, notice, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, modelName:modelDisplayName, help:shadowHelp, contextHelp, openAppIcon:back=>appIcon.open(back), addService:navigation=>openServiceChooser(navigation), presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
+const moduleSettings = createModuleSettings({api,openModal,notice,$,esc,tr,icon:uiIcon,onChange:renderModuleEntries,
+  openOptions:(id, back) => ({decision:settings.openDecision,gateway:settings.openGateway,aggregate:openAggregates,team:openTeamWorkspace})[id](back),
+  onTeamRemoved:refreshImportedAccounts});
+let teamWorkspace, teamPanelRevision;
+async function getTeamWorkspace() {
+  const revision = await moduleSettings.loadPanel('team');
+  if (!teamWorkspace || teamPanelRevision !== revision) {
+    teamWorkspace?.stopInvite();
+    teamPanelRevision = revision;
+    teamWorkspace = createTeamWorkspace({api,openModal,notice,$,esc,tr,getState:() => state,onChange:() => {void moduleSettings.refresh().catch(() => {});},onSync:refreshImportedAccounts});
+  }
+  return teamWorkspace;
+}
+async function openTeamWorkspace(back) {
+  const workspace = await getTeamWorkspace();
+  await workspace.refresh();
+  workspace.open(back);
+}
+const settings = createSettings({api, notice, modules:moduleSettings, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, modelName:modelDisplayName, help:shadowHelp, contextHelp, openAppIcon:back=>appIcon.open(back), addService:navigation=>openServiceChooser(navigation), presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
 const {open:openSettings, toggle:toggleSetting, openAggregates} = settings;
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, modelDisplayName, serviceName:serviceDisplayName, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, localTimeText, notice});
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
 let language = 'zh-CN';
 const notifications = createNotifications({$,tr,getLanguage:()=>language});
+async function refreshTeamNotices() {
+  if (!moduleSettings.active('team')) return;
+  try {
+    const entries = await api('/api/team/notices');
+    notifications.remember(entries.map(entry => ({
+      id:entry.id, time:entry.at * 1000, error:false, read:false,
+      message:entry.reached ? tr('modules.budget_notice_reached') : tr('modules.budget_notice_near',{remaining:
+        new Intl.NumberFormat(language,{style:'currency',currency:'USD'}).format(Math.max(0, entry.limit-entry.used) / 1e9)})
+    })));
+  } catch (_) {}
+}
 function storedPreference(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch (_) { return fallback; } }
 function savePreference(key, value) { try { localStorage.setItem(key, value); } catch (_) {} }
 function t(key, values) { return translateUiCopy(key, language, values); }
@@ -187,7 +218,8 @@ function t(key, values) { return translateUiCopy(key, language, values); }
 function tr(key, values) { return typeof values === 'string' ? (language === 'en' ? values : key) : t(key, values); }
 function applyTranslations() {
   if (document.documentElement) document.documentElement.lang = language;
-  document.querySelectorAll('[data-i18n]').forEach(element => { element.textContent = t(element.dataset.i18n); });
+  document.querySelectorAll('[data-i18n]').forEach(element => { if (element.dataset.i18n) element.textContent = t(element.dataset.i18n); });
+  renderModuleEntries();
   document.querySelectorAll('[data-i18n-placeholder]').forEach(element => { element.placeholder = t(element.dataset.i18nPlaceholder); });
   document.querySelectorAll('[data-i18n-aria-label]').forEach(element => { element.setAttribute('aria-label', t(element.dataset.i18nAriaLabel)); });
   notifications.refresh();
@@ -318,11 +350,17 @@ function movePresentation(oldRoute, newRoute, target = state) {
   }
 }
 
+function renderModuleEntries() {
+  $('catalog_aggregate_open').hidden = !moduleSettings.active('aggregate');
+  $('shadow_migration_open').hidden = !moduleSettings.migrationAllowed();
+  $('team_workspace_open').hidden = !moduleSettings.active('team');
+}
+
 function fill() {
   appIcon.apply();
   providerBalances.sync();
   cpaQuotas.sync();
-  drawLogo(); enhanceLogo($('emp_logo')); presentationSyncMotion(); applyTranslations(); if (updates.info()) renderUpdateHint(updates.info()); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderCatalogDisplay(); renderServices();  updateActivityDots();
+  drawLogo(); enhanceLogo($('emp_logo')); presentationSyncMotion(); applyTranslations(); renderModuleEntries(); if (updates.info()) renderUpdateHint(updates.info()); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderCatalogDisplay(); renderServices();  updateActivityDots();
 }
 async function load() {
   applyPreferences(); drawLogo();
@@ -330,12 +368,15 @@ async function load() {
     state = await api('/api/config');
     void syncLanguage();
     const integration = loadIntegration();
+    void moduleSettings.refresh().then(() => {
+      if (moduleSettings.active('team')) { void getTeamWorkspace().then(workspace=>workspace.refresh()).catch(()=>{}); void refreshTeamNotices(); }
+    }).catch(() => {});
     let renderError = null;
     try {
       fill();
       managementEvents.start();
       void checkUpdateHint();
-      if (quotaStateTimer === null) quotaStateTimer = setInterval(() => { refreshResetCountdowns(); if (!managementEvents.connected()) { requestQuotaSync(); void integrationUpdated(); } }, 60 * 1000);
+      if (quotaStateTimer === null) quotaStateTimer = setInterval(() => { refreshResetCountdowns(); void refreshTeamNotices(); if (!managementEvents.connected()) { requestQuotaSync(); void integrationUpdated(); } }, 60 * 1000);
     } catch (error) { renderError = error; }
     await integration;
     if (renderError) { reportWebClientPhase('window_error', 'failed', renderError); throw renderError; }
@@ -411,8 +452,10 @@ function renderIntegration(info) {
   $('native_history_retry').hidden = !historyPending;
   $('native_history_message').textContent = historyMessage;
   $('native_history_retry').textContent = nativeHistoryAction(info.history_restore);
-  const version = info.codex_compatibility?.installed;
+  const compatibility = info.codex_compatibility || {};
+  const version = compatibility.installed;
   $('codex_version').textContent = version ? `Codex ${version}` : 'Codex';
+  $('codex_update_advice').hidden = !compatibility.outside_maintenance_window;
   $('integration').dataset.state = configuration.state || 'unknown';
   $('integration').dataset.runtime = (info.runtime || {}).state || 'not_checked';
   renderLogoState(configuration.state === 'emp_applied');
@@ -577,7 +620,11 @@ function uiIcon(name) {
     eye:'<path d="M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z"/><circle cx="10" cy="10" r="2.5"/>',
     'eye-off':'<path d="m3 3 14 14M7 4.5A9 9 0 0 1 10 4c5 0 8 6 8 6a14 14 0 0 1-2 3M4.3 6A17 17 0 0 0 2 10s3 6 8 6a9 9 0 0 0 4-1M8 8a2.8 2.8 0 0 0 4 4"/>',
     save:'<path d="M3 2h11l3 3v13H3zM6 2v5h7V2M6 18v-7h8v7"/>',
-    check:'<path d="m4 10 4 4 8-8"/>'
+    check:'<path d="m4 10 4 4 8-8"/>',
+    'module-decision':'<path d="M10 2v4m0 0-5 4v3m5-7 5 4v3"/><circle cx="10" cy="4" r="2" fill="currentColor" stroke="none"/><path d="m2.5 15.5 1.5 1.5 3-3M13 14l4 4m0-4-4 4"/>',
+    'module-gateway':'<rect x="3" y="3" width="14" height="9" rx="2"/><path d="M7 16h6m-3-4v4M6 7h1m3 0h4"/>',
+    'module-aggregate':'<circle cx="4" cy="4" r="2"/><circle cx="4" cy="16" r="2"/><circle cx="16" cy="10" r="2"/><path d="M6 4h1a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H6m4-6h4"/>',
+    'module-team':'<circle cx="8" cy="6" r="2.5"/><path d="M3 17v-1a5 5 0 0 1 10 0v1m0-13a2.5 2.5 0 0 1 0 5m2 3a4 4 0 0 1 2 3.5V17"/>'
   };
   return `<svg class="ui-icon" viewBox="0 0 20 20" aria-hidden="true">${paths[name] || ''}</svg>`;
 }
@@ -874,7 +921,8 @@ function openResetCredits(accountId, back = modalReturn()) {
   const account = [...(state.native_account ? [state.native_account] : []),...(state.accounts || [])].find(item => item.id === accountId);
   if (!account || resetCreditCount(account) <= 0) { notice(tr("core.this_account_has_no_available_reset_opportunities"),true); return; }
   const entries = resetCreditEntries(account);
-  const selectable = entries.filter(item => item.status === 'available' && typeof item.id === 'string' && item.id.length > 0);
+  const readOnly = account.team_reset_allowed === false;
+  const selectable = readOnly ? [] : entries.filter(item => item.status === 'available' && typeof item.id === 'string' && item.id.length > 0);
   const prior = resetAttempts.get(accountId);
   const selectedIndex = Math.max(0, prior ? selectable.findIndex(item => item.id === prior.creditId) : 0);
   const cards = entries.map(item => {
@@ -884,6 +932,11 @@ function openResetCredits(accountId, back = modalReturn()) {
     return `<label class="reset-credit-card reset-credit-choice">${choice}<span class="reset-credit-time"><time>${expires ? `${tr("core.expires")} · ${esc(expires)}` : tr("core.no_expiry_provided")}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</span></label>`;
   }).join('');
   const fallback = !selectable.length ? `<p class="muted">${entries.length ? tr("core.no_selectable_credit_details_were_returned_openai_will_choose") : tr("core.openai_returned_only_the_available_count_it_will_choose")}</p>` : '';
+  if (readOnly) {
+    openModal(tr("core.reset_quota_details"), `<div class="reset-credit-summary">${tr("core.available_opportunities")} <strong>${esc(resetCreditCount(account))}</strong></div><div class="reset-credit-list">${cards}</div><p class="muted">${tr('modules.reset_policy')}</p>`, '', null, null, {back,reopen:() => openResetCredits(accountId, back)});
+    refreshResetCountdowns();
+    return;
+  }
   const body = `<div class="reset-credit-note"><p><strong>${tr("core.what_happens_after_use")}</strong><br>${tr("core.using_one_opportunity_resets_the_eligible_codex_quota_windows")}</p></div><div class="reset-credit-summary">${tr("core.available_opportunities")} <strong>${esc(resetCreditCount(account))}</strong></div><div class="reset-credit-list">${cards}</div>${fallback}`;
   openModal(tr("core.reset_quota_details"),body,tr("core.continue_to_confirmation"),async () => {
     const selected = document.querySelectorAll('input[name="reset_credit_choice"]:checked')[0];
@@ -1002,6 +1055,7 @@ async function testModelAudio(id) {
 }
 
 function stopModalFeatures() {
+  teamWorkspace?.stopInvite();
   statistics.stop();
   callReports.stop(); usageReport.stop(); accountDetails.stop(); providerModelSettings.stop(); modelEditor.stop(); services.stop(); nativeLogin.stop();
   stopDiagnostics(); stopUpdatePoll(); quotaHistory.stop(); subscriptionSettings.stop();
@@ -1110,6 +1164,7 @@ function runDynamicUiAction(element) {
     case 'vertex-provider-choose': openVertexProvider({}, null, {back:modalReturn(), done:modalNavigation.done}); return true;
     case 'provider-remove': removeProvider(id); return true;
     case 'official-provider-choose': chooseOfficialProvider(element.dataset.provider || '', null, {back:modalReturn(), done:modalNavigation.done}); return true;
+    case 'openai-image-credit-choose': routingSettings.connectCredit(modalReturn()); return true;
     case 'claude-provider-choose': openClaudeConnectionChooser({}, {back:modalReturn()}); return true;
     case 'claude-local-choose': openLocalClaudeSubscriptionForm((state.providers || []).find(provider => provider.id === id) || {}, null, {back:modalReturn()}); return true;
     case 'claude-cpa-choose': openClaudeCpaForm((state.providers || []).find(provider => provider.id === id) || {}, null, {back:modalReturn()}); return true;

@@ -25,7 +25,11 @@ fn subscription_balance_keeps_affinity_and_follows_actual_account_after_native_l
     )
     .unwrap();
     for account in config["accounts"].as_array().unwrap() {
-        write_owned_account_catalog(&server, account, endpoint, models.clone());
+        let mut account_models = models.clone();
+        if account["id"] == "b" {
+            account_models[0]["context_window"] = json!(64000);
+        }
+        write_owned_account_catalog(&server, account, endpoint, account_models);
     }
     let quota = |used| json!({"plan_type":"pro","rate_limits":{"primary":{"usedPercent":used}}});
     *server.state.backend.accounts.native_quota.lock().unwrap() = Some(quota(80));
@@ -44,20 +48,31 @@ fn subscription_balance_keeps_affinity_and_follows_actual_account_after_native_l
             {"id":"auto/priority","name":"priority","policy":"priority","sources":["gpt-6-astra","a/gpt-6-astra","b/gpt-6-astra"]}
         ]);
     }
-    let prepare = |group: &str, thread: &str| {
+    let prepare_with_headers = |group: &str, session: &str, thread: Option<&str>| {
+        let mut incoming = BTreeMap::from([
+            ("session-id".into(), session.into()),
+            ("X-EMP-Caller-ID".into(), "desktop".into()),
+        ]);
+        if let Some(thread) = thread {
+            incoming.insert("Thread-Id".into(), thread.into());
+        }
         prepare_request(
             &server.state,
             json!({"model":group,"input":"public fixture"}),
             RequestOperation::Responses,
-            &BTreeMap::from([
-                ("session-id".into(), thread.into()),
-                ("X-EMP-Caller-ID".into(), "desktop".into()),
-            ]),
+            &incoming,
         )
         .unwrap()
         .route
     };
-    assert_eq!(prepare("auto/balanced", "first").provider_id, "a");
+    let prepare = |group, session| prepare_with_headers(group, session, None);
+    let first = prepare("auto/balanced", "first");
+    assert_eq!(first.provider_id, "a");
+    assert_eq!(first.model.value()["context_window"], 64000);
+    assert_eq!(
+        prepare_with_headers("auto/balanced", "window-1", Some("thread")).provider_id,
+        "a"
+    );
     {
         let mut preferences = server
             .state
@@ -71,6 +86,14 @@ fn subscription_balance_keeps_affinity_and_follows_actual_account_after_native_l
     }
     assert_eq!(prepare("auto/balanced", "first").provider_id, "a");
     assert_eq!(prepare("auto/balanced", "new").provider_id, "b");
+    assert_eq!(
+        prepare_with_headers("auto/balanced", "window-2", Some("thread")).provider_id,
+        "a"
+    );
+    assert_eq!(
+        prepare_with_headers("auto/balanced", "window-1", Some("another-thread")).provider_id,
+        "b"
+    );
     // Exhaustion moves the affected conversation, including its next tool result.
     server
         .state

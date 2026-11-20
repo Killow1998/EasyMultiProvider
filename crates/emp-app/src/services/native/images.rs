@@ -7,8 +7,12 @@ use emp_transport::{HttpMethod, HttpTransportErrorKind};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+mod credit;
 mod routing;
+pub(crate) use credit::status as credit_status;
 pub(crate) use routing::ImageRoutes;
+
+static CREDIT_IMAGE_REQUESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(10);
 
 pub(crate) fn execute(
     state: &ServerState,
@@ -31,7 +35,26 @@ pub(crate) fn execute(
         .trim_end_matches('/');
     let base = base.strip_suffix("/responses").unwrap_or(base);
     let endpoint = format!("{base}/images/{operation}");
-    let encoded = serde_json::to_vec(body)
+    let credit = route.provider.value().get("image_credit").is_some();
+    let _credit_slot = if credit {
+        Some(CREDIT_IMAGE_REQUESTS.try_acquire().map_err(|_| {
+            NativeHttpError::router(
+                429,
+                "Ten image credit requests are in progress. Retry when an image finishes.",
+            )
+        })?)
+    } else {
+        None
+    };
+    let mut upstream_body;
+    let routed_body = if credit {
+        upstream_body = body.clone();
+        upstream_body["model"] = json!(route.upstream_model);
+        &upstream_body
+    } else {
+        body
+    };
+    let encoded = serde_json::to_vec(routed_body)
         .map_err(|_| NativeHttpError::router(400, "image request is invalid"))?;
     let mut usage = RequestOutcome::new(
         state,
@@ -122,9 +145,17 @@ pub(crate) fn execute(
                 request,
             ) {
                 crate::services::disconnect::DisconnectRace::Ready(result) => {
-                    result.map_err(|error| transport_error(error.kind()))?
+                    result.map_err(|error| {
+                        if credit && error.may_have_dispatched() {
+                            usage.image_credit(None);
+                        }
+                        transport_error(error.kind())
+                    })?
                 }
                 crate::services::disconnect::DisconnectRace::Disconnected => {
+                    if credit {
+                        usage.image_credit(None);
+                    }
                     usage.disconnected();
                     return Err(NativeHttpError::router(499, "Image request cancelled"));
                 }
@@ -156,6 +187,9 @@ pub(crate) fn execute(
             }
             usage.http_status(status);
             let mut value = serde_json::from_slice::<Value>(&raw).ok();
+            if credit && (200..300).contains(&status) {
+                usage.image_credit(value.as_ref().and_then(credit::estimated_cost_nanos));
+            }
             state
                 .backend
                 .transport

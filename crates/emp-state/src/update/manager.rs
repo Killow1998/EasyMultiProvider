@@ -63,16 +63,19 @@ struct Inner {
     reopen_handoff: Arc<dyn Fn() + Send + Sync>,
     handoff: Arc<dyn Fn() -> Result<()> + Send + Sync>,
     observe: Arc<UpdateObserver>,
+    prepare_modules: Arc<PrepareModules>,
     trace: Mutex<Option<trace::UpdateTrace>>,
 }
 
 type UpdateObserver = dyn Fn(&str, &serde_json::Value) + Send + Sync;
+type PrepareModules = dyn Fn(&UpdateManager, &str) -> Result<()> + Send + Sync;
 
 pub struct UpdateHooks {
     begin_handoff: Arc<dyn Fn() -> Result<()> + Send + Sync>,
     reopen_handoff: Arc<dyn Fn() + Send + Sync>,
     handoff: Arc<dyn Fn() -> Result<()> + Send + Sync>,
     observe: Arc<UpdateObserver>,
+    prepare_modules: Arc<PrepareModules>,
 }
 
 impl UpdateHooks {
@@ -87,6 +90,7 @@ impl UpdateHooks {
             reopen_handoff: Arc::new(reopen_handoff),
             handoff: Arc::new(handoff),
             observe: Arc::new(|_, _| {}),
+            prepare_modules: Arc::new(|_, _| Ok(())),
         }
     }
 
@@ -96,6 +100,14 @@ impl UpdateHooks {
         F: Fn(&str, &serde_json::Value) + Send + Sync + 'static,
     {
         self.observe = Arc::new(observe);
+        self
+    }
+
+    pub fn with_module_preparation<F>(mut self, prepare: F) -> Self
+    where
+        F: Fn(&UpdateManager, &str) -> Result<()> + Send + Sync + 'static,
+    {
+        self.prepare_modules = Arc::new(prepare);
         self
     }
 
@@ -217,6 +229,7 @@ impl UpdateManager {
             reopen_handoff: hooks.reopen_handoff,
             handoff: hooks.handoff,
             observe: hooks.observe,
+            prepare_modules: hooks.prepare_modules,
             trace: Mutex::new(None),
         })))
     }

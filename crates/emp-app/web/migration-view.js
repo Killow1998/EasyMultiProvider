@@ -68,6 +68,7 @@ function createMigrationView(getState) {
       credential_set:importing ? record.native&&record.credential_set || (credentials.accounts || []).includes(record.id) : record.credential_set,
     }));
     for (const record of config.providers || []) {
+      if (!importing && /^team-[\da-f]{32}$/i.test(record.id)) continue;
       rows.push({id:record.id, kind:'provider', selected:true, record,
         name:record.name || record.id,
         brand:record.execution_backend === 'claude_cli' ? 'claudecode' :
