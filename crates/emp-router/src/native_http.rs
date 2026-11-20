@@ -254,9 +254,8 @@ impl<'a> NativeRouter<'a> {
         let mut payload = project_request(body).map_err(projection_error)?;
         payload["model"] = route.upstream_model.clone().into();
         if plaintext_collaboration {
-            payload = prepare_collaboration(payload.as_object().expect("projected object"))
-                .map_err(collaboration_error)?
-                .0;
+            prepare_collaboration(payload.as_object_mut().expect("projected object"))
+                .map_err(collaboration_error)?;
         }
         payload["type"] = Value::String("response.create".to_owned());
         payload
@@ -359,9 +358,8 @@ impl<'a> NativeRouter<'a> {
         let mut payload = project_request(body).map_err(projection_error)?;
         payload["model"] = route.upstream_model.clone().into();
         if plaintext_collaboration {
-            payload = prepare_collaboration(payload.as_object().expect("projected object"))
-                .map_err(collaboration_error)?
-                .0;
+            prepare_collaboration(payload.as_object_mut().expect("projected object"))
+                .map_err(collaboration_error)?;
         }
         // Native Lite rejects some Zstd requests containing inline images.
         let compress = !has_inline_image(&payload["input"]);
@@ -571,9 +569,8 @@ impl<'a> NativeRouter<'a> {
         let mut payload = project_request(body).map_err(projection_error)?;
         payload["model"] = route.upstream_model.clone().into();
         if plaintext_collaboration {
-            payload = prepare_collaboration(payload.as_object().expect("projected object"))
-                .map_err(collaboration_error)?
-                .0;
+            prepare_collaboration(payload.as_object_mut().expect("projected object"))
+                .map_err(collaboration_error)?;
         }
         let compress = !has_inline_image(&payload["input"]);
         let data = encoded(&payload, compress)?;

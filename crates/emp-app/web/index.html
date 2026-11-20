@@ -379,6 +379,7 @@ function bootTeamWorkspace() {
   if (!moduleSettings.active('team')) { teamBooted = false; teamWorkspace?.dispose?.(); setLogoWord('EMP'); tutorials.setTeam(false); return; }
   if (teamBooted) return;
   teamBooted = true;
+  void refreshTeamNotices();
   getTeamWorkspace().then(workspace => workspace.refresh()).catch(() => { teamBooted = false; });
 }
 
@@ -394,9 +395,7 @@ async function load() {
     state = await api('/api/config');
     void syncLanguage();
     const integration = loadIntegration();
-    void moduleSettings.refresh().then(() => {
-      if (moduleSettings.active('team')) { void getTeamWorkspace().then(workspace=>workspace.refresh()).catch(()=>{}); void refreshTeamNotices(); }
-    }).catch(() => {});
+    void moduleSettings.refresh().catch(() => {});
     let renderError = null;
     try {
       fill();
