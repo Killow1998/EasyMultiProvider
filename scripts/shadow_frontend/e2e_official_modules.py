@@ -16,6 +16,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from urllib.error import URLError
 from urllib.parse import unquote
@@ -89,8 +90,8 @@ def https_workspace(stack, root, upstream_port):
             pass
 
         def forward(self):
-            if self.path in overrides:
-                payload = json.dumps(overrides[self.path]).encode()
+            if (override := overrides.get(self.path)) is not None:
+                payload = json.dumps(override() if callable(override) else override).encode()
                 self.send_response(200)
                 self.send_header('Content-Type','application/json')
                 self.send_header('Content-Length',str(len(payload)))
@@ -1063,7 +1064,7 @@ def main():
         assert request(member.base+'/v1/responses',{**payload,'service_tier':'ultrafast'},local)[0]==403
         vps.team('member_tiers',permissions)
         member.team('sync')
-        checks.append('Codex 0.170 app-server turns through Other subscription carry Fast and Ultrafast to the authorized upstream account; disallowed tiers return 403')
+        checks.append(f'Codex {version} app-server turns through Other subscription carry Fast and Ultrafast to the authorized upstream account; disallowed tiers return 403')
         checks.append('Team per-model costs follow the selected period; UTC daily limits stay fixed and speed permissions block only the disallowed tier')
         admin_id = admin.team('status')['identity']['member']['id']
         assert next(row for row in admin.team('list_members')['members'] if row['id']==admin_id)['can_budget']
@@ -1166,12 +1167,18 @@ def main():
             overrides.clear()
             checks.append('Malformed member identifiers and non-numeric request counts from the synthetic HTTPS workspace are rejected at the HTTP boundary')
             result_id = 'unconfirmed-report-fixture'
-            overrides['/workspace/v1/report'] = {}
+            rejected_report = threading.Event()
+            report_attempt = itertools.count(1)
+            def unconfirmed_report():
+                if next(report_attempt) >= 2:
+                    rejected_report.set()
+                return {}
+            overrides['/workspace/v1/report'] = unconfirmed_report
             with sqlite3.connect(member_ledger) as db:
                 db.execute('insert into team_outbox values (?,?,?)',
                            (scope,result_id,json.dumps({**event,'id':result_id})))
             member.team('usage')
-            time.sleep(1)
+            assert rejected_report.wait(25)
             with sqlite3.connect(member_ledger) as db:
                 assert db.execute('select 1 from team_outbox where event_id=?',(result_id,)).fetchone()
             overrides.clear()
@@ -1190,16 +1197,16 @@ def main():
         assert not any(unquote(row['slug']).startswith('lab-admin/')
                        for row in member.api('/v1/models?client_version=0.170.0')['models'])
         assert request(member.base+'/v1/responses',payload,local)[0] in (400,403,404)
-        assert member.api('/api/team')['recovery_required']
+        assert member.api('/api/team/status')['recovery_required']
         member.login(workspace,'researcher')
         assert member.team('sync')['synced'] >= 1
-        assert request(member.base+'/v1/responses',payload,local)[0] == 200
+        websocket_request(member.base,local,payload)
         checks.append('A damaged workspace ownership file blocks shared routes and Banked Reset until signing in and syncing')
 
         stop(member.process)
         team_path.unlink()
         member.start()
-        assert member.api('/api/team')['recovery_required']
+        assert member.api('/api/team/status')['recovery_required']
         member.api('/api/migration/export/confirm',{},403)
         member.api('/api/accounts/'+account_id+'/quota-reset',reset_request,403)
         assert request(member.base+'/v1/responses',payload,local)[0] in (400,403,404)
@@ -1207,7 +1214,7 @@ def main():
         assert member.team('sync')['synced'] >= 1
         assert member.team('sync')['synced'] == 0
         assert len([row for row in member.api('/api/config')['accounts'] if row['id']==account_id])==1
-        assert request(member.base+'/v1/responses',payload,local)[0] == 200
+        websocket_request(member.base,local,payload)
         checks.append('A missing workspace ownership file denies team access until signing in and syncing restores the original shared route without duplicates')
 
         vps.team('member_access',{'id':member_id,'role':'member','publish':False,'sync':False,'enabled':True})
