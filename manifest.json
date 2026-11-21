@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "version": 1,
+  "files": {
+    "README.md": {
+      "sha256": "ceb34d35e1fcf65ddefa765e0116f8fc0688aa0d857b33bb84346c52d8e9fa48",
+      "size": 32868
+    },
+    "README.zh-CN.md": {
+      "sha256": "a1179e9252060e23eb692691ccf04f94c4834de7c177746d4a5d1d7f7d3d0dac",
+      "size": 29426
+    },
+    "docs/assets/tutorials/00-native-context.gif": {
+      "sha256": "afe4c0c6a652d0f3aaa3646ff090e400a8c2d956db3f5f6d28454dcd2c883aa6",
+      "size": 904527
+    },
+    "docs/assets/tutorials/00-native-name.gif": {
+      "sha256": "d4dafb0170557ef62b9787dcf2c6ba6c4ec62eec3c95b7dbaa87c786fd142591",
+      "size": 1806972
+    },
+    "docs/assets/tutorials/00-remove-subscription.gif": {
+      "sha256": "5f594043a282fbc8c8a27fd994466e60f9f3055a695abc740fc0b63070391092",
+      "size": 906225
+    },
+    "docs/assets/tutorials/01-add-service.gif": {
+      "sha256": "b6bc088eb12ad191d3f37179964d4c17af8b945ddff5718aa51f9e4c50403398",
+      "size": 1798987
+    },
+    "docs/assets/tutorials/02-import-service.gif": {
+      "sha256": "24fddd5241940b9f9332d50576e0c450779f22ce7d91ac4ad6154397d2b20475",
+      "size": 1131203
+    },
+    "docs/assets/tutorials/03-export-service.gif": {
+      "sha256": "0175bc6a67a763cf379367bbc73599b638af2bc923d3aebdeea54786320a62db",
+      "size": 1239969
+    },
+    "docs/assets/tutorials/04-remove-service.gif": {
+      "sha256": "e410cfb49300f30a83394db35c8177f1303626a43f5c4f75b87e6c6d39d4bfef",
+      "size": 942214
+    },
+    "docs/assets/tutorials/05-change-context.gif": {
+      "sha256": "ac5eb6c2b80a933851bdb262631e54eac8133e33667b4db7f338d13022ff5a09",
+      "size": 1158531
+    },
+    "docs/assets/tutorials/06-rename.gif": {
+      "sha256": "d0cee785dc7dd6ade76f739253bddaad2ed9d08efc9a0fe07686dbd8a2a74990",
+      "size": 1406747
+    },
+    "docs/assets/tutorials/07-context-label.gif": {
+      "sha256": "811c20c656911c580e348295f61c94d25510e7b013fb5ef9de66d1e8ada6552f",
+      "size": 495308
+    },
+    "docs/assets/tutorials/08-tunnel-migration.gif": {
+      "sha256": "8a4890fe206b7fd3e92ff97bfb05cd4199e24a26eddb89b8d8e8be71d8f59c6b",
+      "size": 1914643
+    },
+    "docs/assets/tutorials/09-team-workspace.gif": {
+      "sha256": "aa119dbacc1357de2c0b26d02c8e2ed9090558b298f4b25f1e5eaed2c9441fcc",
+      "size": 2149357
+    },
+    "docs/assets/tutorials/10-team-share.gif": {
+      "sha256": "2f068da881cc7a9afae3fc65bd3efc54ff6e2c1f10f534882d53741c3bfc681f",
+      "size": 969772
+    },
+    "docs/assets/tutorials/11-team-approve.gif": {
+      "sha256": "dbed50d6d5e2eadda537ade824f0fa60a2cef86de812f303834cb64ae5400c1b",
+      "size": 611031
+    },
+    "docs/assets/tutorials/12-team-members.gif": {
+      "sha256": "dfacc12c5d20983a2d57b6870ab77d6ccc28ece30eae0087532eb5f9806bdb30",
+      "size": 1534817
+    },
+    "docs/self-update.md": {
+      "sha256": "fe12fce5134ed8bf5f70462f0a9138df6140c5cab14586faafd85d3a7f49a561",
+      "size": 9870
+    },
+    "docs/tutorials.md": {
+      "sha256": "d552fb991d8677167d02e9dbd2cc598be7493bd1de91a462487dd727eabe9f03",
+      "size": 12078
+    },
+    "tutorials.json": {
+      "sha256": "99e92d5855686c43cf5619866a9b948ef18412c856c1b36fae64ef82ec5d6df5",
+      "size": 2893
+    }
+  }
+}

@@ -1,0 +1,164 @@
+# Background updates
+
+The management page checks the official repository's latest stable release.
+Checking or installing requires the authenticated local management session. The
+browser never downloads or executes release code itself.
+
+Release metadata and its ETag are cached in `state/update-release.json` beside
+the configuration. Opening the dialog shows the last good notes immediately,
+including after EMP restarts, while a background conditional request checks the
+official source. A `304 Not Modified` response reuses the cached body; changed
+notes replace it even when the version number stays the same. A failed check
+keeps the notes readable. The first successful fetch still needs network access.
+Cache entries are bounded, tied to their source and validated on load; invalid
+files are ignored. Cached metadata alone never enables installation after restart:
+the source must be checked first, and package verification remains unchanged.
+
+The release index supplies stable notes between the installed and target versions.
+The cache retains versioned notes; changing the installed version recalculates the
+visible range without another download. Drafts and previews are excluded. Flat
+bullet lists are grouped as improvements and fixes with their source versions;
+structured notes and migration instructions retain their original layout. Both
+languages use the maintained release text, rendered as text rather than HTML.
+Older pages are read only when needed, up to five 100-entry pages and a 4 MiB
+cache bound. A full page containing only previews does not end pagination. The
+serialized cache is also checked before writing: oversized metadata leaves the
+last durable cache intact while its valid network result remains usable. Missing
+older notes link to the release history and never prevent an otherwise valid
+update. A later check can complete a partial cache even when
+the first page returns 304. Old single-release caches remain readable; their ETag
+is not reused against the new index endpoint.
+
+When a different release is available, the update dialog shows the current and
+target versions together (`v0.13.4 → v0.13.5`). Update and rollback launches reuse
+the existing management session instead of opening another browser tab. The open
+update dialog tolerates temporary restart disconnections for up to three minutes
+and reloads the same tab when the running version changes. Rollback, session
+expiry or a longer outage leaves an actionable status instead of reloading in a
+loop. Closing the dialog stops its polling, not the background installation.
+Ordinary desktop starts still open the browser. An older, already-loaded update
+page does not gain the new reconnect logic retroactively; refresh it manually
+after its first upgrade to this behavior.
+
+Release checks and downloads use proxy environment variables first, then the
+Windows or macOS system proxy. Each network attempt reads the current settings,
+including a proxy enabled after EMP started. Linux also supports the existing
+GNOME system-proxy fallback. System reads have a one-second cache and a bounded
+750 ms query. One caller refreshes an expired cache while other warm readers use
+its last valid result; a failed query preserves that result. HTTPS validation and
+official GitHub download hosts remain enforced.
+
+For supported user-writable installations, **Update in background** downloads the
+platform asset, enforces a 512 MiB ceiling, verifies the exact size and
+GitHub-provided SHA-256 digest, and checks the packaged `--version` before any
+replacement. Redirects must remain HTTPS on GitHub's release asset hosts. No
+account credentials or conversation data are sent to GitHub.
+
+Release checks and package downloads retry temporary connection failures,
+timeouts, incomplete downloads, and HTTP 408/500/502/503/504 responses up to
+three additional times after the first attempt. Retries wait one, two, then
+four seconds; the update dialog displays the retry count. Each download starts
+from an empty staging file and must pass the same size and checksum checks.
+Permission failures, full disks, rejected requests, checksum failures and
+installation/replacement failures are not automatically retried.
+
+The updater stages beside the installed file or app. Windows replaces `EMP.exe`,
+Linux reads only the regular `EMP/EMP` member of the tar archive, and macOS mounts
+the DMG read-only and copies `EMP.app` without following symlinks. Source
+checkouts, standalone macOS binaries, mounted read-only disk images, and protected
+portable directories are not silently converted into installations.
+
+## Windows upgrades from Python releases
+
+The existing master key and encrypted account files are reused. A legacy key
+whose owner and sole FullControl grant are the current user can inherit that
+grant from its private state directory. On first load, EMP protects that key's
+DACL without changing the key bytes or its owner. A key granting another
+principal access is still rejected rather than silently treated as private.
+
+Private-state and updater writes preserve an already-correct owner. They request
+DACL changes without also requesting ownership changes, so an ordinary user's
+own installation does not need `WRITE_OWNER` merely to write the startup marker.
+The Windows regression tests cover inherited keys, existing encrypted credentials,
+an owner without `WRITE_OWNER`, and rejection of shared keys.
+
+## Linux installation and migration
+
+The recommended Linux installation uses `install-user.sh` from the extracted tar
+archive. It installs under `$XDG_DATA_HOME/easy-multi-provider` (normally
+`~/.local/share/easy-multi-provider`), with a launcher at `~/.local/bin/EMP` and a
+user desktop entry. Configuration stays under `$XDG_CONFIG_HOME` (normally
+`~/.config/easy-multi-provider/config.json`). The launcher executes the real
+user-owned binary, so later background updates need no root authorization.
+
+EMP does not overwrite a system-owned executable through `pkexec`. Reopening a
+user-owned download after an authorization delay creates a substitution window
+that checksum checks outside the privileged boundary cannot close. A detected
+`/usr/bin/EMP` or dpkg installation therefore shows two explicit choices:
+
+1. Recommended: restore native Codex and exit EMP, open the latest Release,
+   download the archive for your machine (`EMP-linux-x86_64.tar.gz` or
+   `EMP-linux-arm64.tar.gz`), then extract it and run the installer. For x64:
+
+   ```sh
+   sudo apt remove easy-multi-provider
+   tar -xzf EMP-linux-x86_64.tar.gz
+   cd EMP
+   ./install-user.sh
+   ~/.local/bin/EMP
+   ```
+
+   `apt remove` does not delete the per-user EMP configuration, so the new user
+   installation reuses it without a copy step.
+
+2. Remain system-managed: continue using the package manager that installed the
+   existing system package. The current release does not publish a `.deb` asset.
+
+The WebUI provides **Open latest Release** and **Copy migration commands** for a
+system installation. It never asks for a password and never starts a privileged
+replacement in the background.
+
+## Replacement and rollback
+
+After staging, new requests are temporarily rejected with a retryable status while
+accepted requests finish. Idle WebSocket connections do not count as running model
+requests. If requests do not finish within five minutes, installation is cancelled
+and the gate reopens. The helper waits for the old packaged process to exit, then
+replaces only the validated sibling installation and starts it in a visible window.
+
+An exited process no longer counts as running just because its launcher retains
+a Windows process handle. The native package check starts an old EMP, exits it
+through the management API, and retains that handle through replacement and
+rollback to exercise this handoff.
+
+The new process must acknowledge startup with the planned version and nonce. If it
+exits or does not acknowledge startup within one minute, only the updater-launched
+process tree is stopped and the previous binary or app is restored and relaunched.
+This is binary rollback, not rollback for future data migrations. The staging
+directory contains only fixed phase diagnostics, without exception text, account
+information, or request data.
+
+The most recent failed attempt is also saved as `state/update-last-error.json`
+beside the user configuration. This one small file is overwritten on the next
+failure and survives cleanup of a failed staging directory. It records the
+failed stage, retry count and available HTTP status, system error number or child exit code;
+it does not store exception text, URLs, arguments, account data or credentials.
+The update dialog shows the failure stage and suggests relevant next steps:
+check network/proxy access after a connection failure, free disk space when
+storage is full, or check folder permissions and system protection when writes
+are denied. Possible causes are suggestions, not a diagnosis of the network.
+If the receipt cannot be saved, the
+same fixed fields remain in the process console and current management state.
+
+The ordinary rotating journal also records update start, stage start/end,
+stage duration, download bytes and rate, retries, and the operation outcome.
+These records survive successful staging cleanup and process replacement.
+An `install` outcome of `handed_off` means the old process delegated replacement
+to the worker; startup acknowledgement or rollback is still owned by that worker.
+The journal contains no download URLs, proxy credentials or account data.
+
+The source tests cover release selection, URL boundaries, checksums, archive
+selection, drain behavior, management authorization, and binary rollback. Native
+packaged replacement must also be smoke-tested on each target OS before claiming
+that OS's automatic update path is validated. System-level Linux replacement is
+deliberately outside the in-app updater.
