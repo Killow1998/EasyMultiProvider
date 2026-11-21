@@ -115,7 +115,11 @@ impl Duplex {
                         continue;
                     }
                     Ok(WebSocketPoll::Pending) => self.downstream.pending()?,
-                    Ok(WebSocketPoll::Closed { .. }) | Err(_) => {
+                    Ok(WebSocketPoll::Closed { .. }) => {
+                        return Ok(Some(Message::DownstreamClosed));
+                    }
+                    Err(error) => {
+                        downstream.close(error.close_code(), &error.to_string());
                         return Ok(Some(Message::DownstreamClosed));
                     }
                 }

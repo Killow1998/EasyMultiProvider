@@ -76,6 +76,7 @@ impl ServerState {
 pub(crate) struct BackendState {
     pub(crate) modules: Arc<crate::services::modules::Modules>,
     pub(crate) team: crate::services::team::TeamState,
+    pub(crate) aero_callers: crate::services::modules::aero::Callers,
     pub(crate) gateway_key: String,
     pub(crate) gateway_clients: crate::services::gateway_clients::GatewayClients,
     pub(crate) claude_turns: crate::services::claude_cli::tui::TurnPool,
@@ -87,6 +88,7 @@ pub(crate) struct BackendState {
     pub(crate) provider_balances: crate::services::provider_balance::Balances,
     pub(crate) provider_quotas: crate::services::cpa_quota::PoolQuotas,
     pub(crate) app_icon: crate::services::app_icon::AppIcon,
+    pub(crate) guides: Arc<crate::services::hot_adapter::Guides>,
     pub(crate) auto_review: crate::services::auto_review::ReviewState,
     pub(crate) aggregate_availability: crate::services::auto_review::ReviewState,
     pub(crate) memory_status: crate::services::memory_routing::MemoryStatus,
@@ -179,9 +181,8 @@ impl BackendState {
         .with_lock_path(codex_home.join("easy-multi-provider/integration/lease.lock"));
         let management_events =
             Arc::new(crate::services::management_events::ManagementEvents::default());
-        let mut modules =
-            crate::services::modules::Modules::open(state_root.join("modules"), updating)
-                .map_err(std::io::Error::other)?;
+        let modules = crate::services::modules::Modules::open(state_root.join("modules"), updating)
+            .map_err(std::io::Error::other)?;
         let gateway_path = state_root.join("gateway-clients.json");
         let gateway_clients = match crate::services::gateway_clients::GatewayClients::open(
             gateway_path.clone(),
@@ -196,6 +197,10 @@ impl BackendState {
         };
         Ok(Self {
             modules: Arc::new(modules),
+            guides: Arc::new(crate::services::hot_adapter::Guides::open(
+                state_root.join("hot-adapter/guide"),
+            )),
+            aero_callers: Default::default(),
             team: crate::services::team::TeamState::open(
                 state_root.join("team-profile.json"),
                 &vault,

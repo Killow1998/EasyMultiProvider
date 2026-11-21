@@ -126,7 +126,16 @@ impl<'a> RequestOutcome<'a> {
                 body.get("client_metadata")
             }
         ));
-        if let Some(team) = state.backend.team.scope(&route.provider_id) {
+        let team_source = state.backend.team.subscription_source(
+            state,
+            &route.provider_id,
+            route
+                .provider
+                .value()
+                .get("account")
+                .unwrap_or(&Value::Null),
+        );
+        if let Some(team) = state.backend.team.scope(&team_source) {
             event["team_usage"] = team;
         }
         event["selected_name"] = route

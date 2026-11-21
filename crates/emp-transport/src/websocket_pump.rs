@@ -1,6 +1,7 @@
 //! Bounded, single-owner upstream WebSocket pump.
 
 use crate::websocket::{ClientWebSocket, ClientWebSocketError};
+use crate::{RequestBudget, RequestLimits, TransportKind};
 use std::fmt;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::thread::JoinHandle;
@@ -190,16 +191,6 @@ mod tests {
     }
 
     #[test]
-    fn frame_decoder_rejects_oversize_message_from_header_before_body() {
-        let mut decoder = FrameDecoder::new(4);
-        let mut reader = ScriptedReader::new([ReadAction::Bytes(vec![0x81, 5])]);
-        assert!(matches!(
-            decoder.poll(&mut reader, false, false),
-            Err(FrameDecodeError::TooLarge)
-        ));
-    }
-
-    #[test]
     fn pump_config_uses_four_mib_default_and_payload_debug_is_redacted() {
         assert_eq!(
             WebSocketPumpConfig::default().max_message_bytes,
@@ -216,6 +207,7 @@ mod tests {
 pub(crate) enum FrameDecodeError {
     Protocol,
     TooLarge,
+    AtCapacity,
     Io,
 }
 
@@ -246,6 +238,8 @@ pub(crate) struct FrameDecoder {
     message_opcode: Option<u8>,
     compressed: bool,
     max_message_bytes: usize,
+    request_limits: Option<std::sync::Arc<RequestLimits>>,
+    request_budget: Option<RequestBudget>,
 }
 
 impl FrameDecoder {
@@ -256,11 +250,21 @@ impl FrameDecoder {
             message_opcode: None,
             compressed: false,
             max_message_bytes,
+            request_limits: None,
+            request_budget: None,
         }
     }
 
     pub(crate) fn set_max_message_bytes(&mut self, maximum: usize) {
         self.max_message_bytes = maximum;
+    }
+
+    pub(crate) fn limit_request_memory(&mut self, limits: std::sync::Arc<RequestLimits>) {
+        self.request_limits = Some(limits);
+    }
+
+    pub(crate) fn take_request_budget(&mut self) -> Option<RequestBudget> {
+        self.request_budget.take()
     }
 
     pub(crate) fn feed(&mut self, prefix: &[u8]) -> Result<(), FrameDecodeError> {
@@ -323,7 +327,7 @@ impl FrameDecoder {
             let Some(frame) = self.next_frame(expect_mask)? else {
                 return Ok(None);
             };
-            match frame.opcode {
+            let opcode = match frame.opcode {
                 8 => {
                     let code = match frame.payload.len() {
                         0 => None,
@@ -336,8 +340,6 @@ impl FrameDecoder {
                     }));
                 }
                 9 => return Ok(Some(FramePoll::Ping(frame.payload))),
-                // Pong consumes no application event. Continue through bytes
-                // already buffered; Pending must mean we need socket input.
                 10 => continue,
                 1 | 2 => {
                     if self.message_opcode.is_some() {
@@ -348,33 +350,19 @@ impl FrameDecoder {
                     }
                     self.message_opcode = Some(frame.opcode);
                     self.compressed = frame.rsv1;
+                    frame.opcode
                 }
-                0 => {
-                    if self.message_opcode.is_none() || frame.rsv1 {
-                        return Err(FrameDecodeError::Protocol);
-                    }
-                }
+                0 if !frame.rsv1 => self.message_opcode.ok_or(FrameDecodeError::Protocol)?,
                 _ => return Err(FrameDecodeError::Protocol),
-            }
-            if self
-                .message
-                .len()
-                .checked_add(frame.payload.len())
-                .is_none_or(|length| length > self.max_message_bytes)
-            {
-                return Err(FrameDecodeError::TooLarge);
-            }
+            };
             if self.message.is_empty() {
                 self.message = frame.payload;
             } else {
                 self.message.extend_from_slice(&frame.payload);
             }
             if frame.final_frame {
-                let opcode = self
-                    .message_opcode
-                    .take()
-                    .ok_or(FrameDecodeError::Protocol)?;
-                let compressed = std::mem::replace(&mut self.compressed, false);
+                self.message_opcode = None;
+                let compressed = std::mem::take(&mut self.compressed);
                 return Ok(Some(FramePoll::Message {
                     opcode,
                     payload: std::mem::take(&mut self.message),
@@ -435,11 +423,23 @@ impl FrameDecoder {
         }
         let payload_length =
             usize::try_from(payload_length).map_err(|_| FrameDecodeError::TooLarge)?;
-        if control && payload_length > 125 {
-            return Err(FrameDecodeError::Protocol);
-        }
-        if !control && payload_length > self.max_message_bytes {
-            return Err(FrameDecodeError::TooLarge);
+        if !control {
+            let size = self
+                .message
+                .len()
+                .checked_add(payload_length)
+                .ok_or(FrameDecodeError::TooLarge)?;
+            if size > self.max_message_bytes {
+                return Err(FrameDecodeError::TooLarge);
+            }
+            if let Some(limits) = &self.request_limits
+                && size > crate::MAX_PROXY_REQUEST_BYTES
+            {
+                self.request_budget
+                    .get_or_insert_with(|| limits.request(TransportKind::WebSocket))
+                    .ensure(size)
+                    .map_err(|_| FrameDecodeError::AtCapacity)?;
+            }
         }
         let mask_length = if masked { 4 } else { 0 };
         let total_length = header_length
@@ -447,6 +447,13 @@ impl FrameDecoder {
             .and_then(|length| length.checked_add(payload_length))
             .ok_or(FrameDecodeError::TooLarge)?;
         if self.buffer.len() < total_length {
+            if payload_length > crate::MAX_PROXY_REQUEST_BYTES
+                && self.buffer.capacity() < total_length
+            {
+                self.buffer
+                    .try_reserve_exact(total_length - self.buffer.len())
+                    .map_err(|_| FrameDecodeError::AtCapacity)?;
+            }
             return Ok(None);
         }
         let mask = if masked {

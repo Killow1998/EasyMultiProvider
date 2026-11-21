@@ -30,7 +30,7 @@ pub(super) struct Access {
 }
 
 #[derive(Deserialize)]
-pub(super) struct RejectMember {
+pub(super) struct MemberTarget {
     id: String,
 }
 
@@ -231,24 +231,31 @@ impl Workspace {
         }
         let mut statement = self.db.prepare(
             "SELECT m.id,m.name,m.role,m.publish,m.sync,m.enabled,m.budget_nanos,e.nickname,COALESCE(e.pending,0),
-                    COALESCE(t.fast,m.role!='member'),COALESCE(t.ultrafast,m.role!='member')
+                    COALESCE(t.fast,m.role!='member'),COALESCE(t.ultrafast,m.role!='member'),w.usd_nanos
              FROM members m LEFT JOIN enrollment e ON e.member=m.id
              LEFT JOIN member_tiers t ON t.member=m.id
-             WHERE m.role!='vps_admin' OR m.id=? ORDER BY COALESCE(e.pending,0) DESC,m.name",
+             LEFT JOIN weekly_usd_limits w ON w.member=m.id
+             WHERE m.archived_name IS NULL AND (m.role!='vps_admin' OR m.id=?)
+             ORDER BY COALESCE(e.pending,0) DESC,m.name",
         )?;
         let rows = statement
             .query_map([&who.member], |row| {
                 let role = role(&row.get::<_, String>(2)?)?;
                 let id = row.get::<_, String>(0)?;
+                let pending: bool = row.get(8)?;
                 Ok(json!({"id":id,"name":row.get::<_,String>(1)?,
                 "role":role, "publish":row.get::<_,bool>(3)?,"sync":row.get::<_,bool>(4)?,
                 "enabled":row.get::<_,bool>(5)?,"budget_nanos":row.get::<_,Option<i64>>(6)?,
-                "nickname":row.get::<_,Option<String>>(7)?,"pending":row.get::<_,bool>(8)?,
+                "nickname":row.get::<_,Option<String>>(7)?,"pending":pending,
                 "fast":row.get::<_,bool>(9)?,"ultrafast":row.get::<_,bool>(10)?,
-                "can_manage":who.role.manages(role),"can_budget":who.may_set_budget(&id,role)}))
+                "weekly_usd_limit":row.get::<_,Option<i64>>(11)?,
+                "can_manage":who.role.manages(role),"can_budget":who.may_set_budget(&id,role),
+                "can_remove":!pending && who.role.manages(role)}))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(json!({"members":rows}))
+        Ok(
+            json!({"members":rows,"weekly_reset":self.weekly_reset()?,"budget_mode":self.budget_mode()?}),
+        )
     }
 
     pub(super) fn add_member(&mut self, who: &Identity, body: NewMember) -> Result<Value> {
@@ -336,7 +343,7 @@ impl Workspace {
         Ok(json!({"ok":true}))
     }
 
-    pub(super) fn reject_member(&mut self, who: &Identity, body: RejectMember) -> Result<Value> {
+    pub(super) fn reject_member(&mut self, who: &Identity, body: MemberTarget) -> Result<Value> {
         if !who.role.can_manage() {
             return Err(forbidden());
         }
@@ -347,7 +354,8 @@ impl Workspace {
         let (role, name, nickname) = tx
             .query_row(
                 "SELECT m.role,m.name,CASE WHEN e.pending=1 AND m.enabled=0 THEN e.nickname END
-                 FROM members m LEFT JOIN enrollment e ON e.member=m.id WHERE m.id=?",
+                 FROM members m LEFT JOIN enrollment e ON e.member=m.id
+                 WHERE m.id=? AND m.archived_name IS NULL",
                 [&body.id],
                 |row| {
                     Ok((
@@ -379,11 +387,38 @@ impl Workspace {
         Ok(json!({"ok":true}))
     }
 
+    pub(super) fn remove_member(&mut self, who: &Identity, target: MemberTarget) -> Result<Value> {
+        if !who.role.can_manage() || !who.role.manages(self.role_for(&target.id)?) {
+            return Err(forbidden());
+        }
+        let tx = self.db.transaction()?;
+        let changed = tx.execute(
+            "UPDATE members SET archived_name=name,name='#'||id,password_hash=X'',salt=X'',
+                enabled=0,publish=0,sync=0 WHERE id=? AND NOT EXISTS
+                (SELECT 1 FROM enrollment WHERE member=?1 AND pending=1)",
+            [&target.id],
+        )?;
+        if changed == 0 {
+            return Err(Failure(409, "workspace_member_pending"));
+        }
+        tx.execute("DELETE FROM sessions WHERE member=?", [&target.id])?;
+        tx.execute("DELETE FROM join_invites WHERE issuer=?", [&target.id])?;
+        tx.execute(
+            "UPDATE shares SET encrypted=X'',version=version+1,removed_at=? WHERE owner=? AND removed_at IS NULL",
+            params![now(), target.id],
+        )?;
+        audit::record(&tx, who, Some(&target.id), "member_removed", json!({}))?;
+        tx.commit()?;
+        Ok(json!({"ok":true}))
+    }
+
     pub(super) fn role_for(&self, id: &str) -> Result<Role> {
         self.db
-            .query_row("SELECT role FROM members WHERE id=?", [id], |row| {
-                role(&row.get::<_, String>(0)?)
-            })
+            .query_row(
+                "SELECT role FROM members WHERE id=? AND archived_name IS NULL",
+                [id],
+                |row| role(&row.get::<_, String>(0)?),
+            )
             .optional()?
             .ok_or(Failure(404, "workspace_member_not_found"))
     }

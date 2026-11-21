@@ -155,13 +155,11 @@ html[data-input-modality=pointer] body :is(button,a.repo-link):focus-visible{out
 .presentation-logo-shell{position:relative;display:inline-flex;vertical-align:middle}
 .presentation-logo-wave{position:absolute;inset:0;overflow:hidden;mask:var(--logo-mask) center/100% 100% no-repeat;pointer-events:none;display:none}
 .presentation-logo-shell:has(.emp-live) .presentation-logo-wave{display:block}
-.presentation-logo-wave>span{position:absolute;inset:0;width:300%;left:-100%;background:linear-gradient(90deg,transparent 0%,#b8ffd3 25%,transparent 50%,#b8ffd3 75%,transparent 100%);opacity:.75}
-.presentation-logo-shell .dot-logo.emp-live circle.on{animation:none;fill:#22c76a;opacity:.92}
-.presentation-logo-shell:has(.emp-live){filter:drop-shadow(0 0 3px color-mix(in srgb,#22c76a 45%,transparent))}
+.presentation-logo-wave>span{position:absolute;inset:0;width:300%;left:-100%;background:linear-gradient(90deg,transparent 0%,#b8ffd3 25%,transparent 50%,#b8ffd3 75%,transparent 100%);opacity:.5}
 
 .presentation-motion-paused *, .presentation-motion-paused::before,.presentation-motion-paused *::before,.presentation-motion-paused *::after,
 .presentation-page-hidden .presentation-logo-wave>span,.presentation-page-hidden :is(.service-card,.model-card,.display-row) *,.presentation-page-hidden :is(.service-card,.model-card,.display-row) *::before,.presentation-page-hidden :is(.service-card,.model-card,.display-row) *::after{animation-play-state:paused!important}
-@media(prefers-reduced-motion:reduce){.presentation-logo-wave>span{animation:none;transform:none}.presentation-logo-shell .dot-logo.emp-live circle.on{fill:#22c76a;opacity:1}}
+@media(prefers-reduced-motion:reduce){.presentation-logo-shell:has(.emp-live) .presentation-logo-wave{display:none}}
 
 .presentation-activity-halo{position:absolute;inset:1px;z-index:-1;border-radius:50%;display:none;pointer-events:none}
 .presentation-service-icon[data-activity-state=active]::before{animation:none;box-shadow:none;background:transparent}

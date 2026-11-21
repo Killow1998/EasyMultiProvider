@@ -1,4 +1,5 @@
 use super::*;
+use crate::update::release::{ModuleRelease, module_assets, module_version};
 
 impl UpdateManager {
     pub fn download_official_module(
@@ -7,8 +8,35 @@ impl UpdateManager {
         core_version: &str,
         asset_name: &str,
         destination: &Path,
+        expected_revision: Option<&str>,
     ) -> Result<(String, Option<String>)> {
-        use super::super::release::{module_asset, module_version};
+        let release = self
+            .official_module_releases(&[(channel, asset_name)])?
+            .pop()
+            .flatten();
+        if let Some(expected) = expected_revision
+            && release
+                .as_ref()
+                .is_none_or(|release| release.revision() != expected)
+        {
+            return Err(UpdateError("module_update_changed"));
+        }
+        if let Some(release) = release {
+            download_package(self, &release.asset, destination, |_| {})?;
+            return Ok((release.asset.digest, Some(release.version)));
+        }
+        self.download_matching_module(core_version, asset_name, destination)
+            .map(|digest| (digest, None))
+    }
+
+    pub fn official_module_releases(
+        &self,
+        targets: &[(&str, &str)],
+    ) -> Result<Vec<Option<ModuleRelease>>> {
+        let mut best: Vec<Option<ModuleRelease>> = targets.iter().map(|_| None).collect();
+        if best.is_empty() {
+            return Ok(best);
+        }
         let mut url = Url::parse(&self.0.endpoints.release_api_url)
             .map_err(|_| UpdateError("invalid_download_url"))?;
         let query: Vec<_> = url
@@ -17,7 +45,6 @@ impl UpdateManager {
             .filter(|(key, _)| key != "page")
             .collect();
         let mut page = 1;
-        let mut best: Option<(Asset, String)> = None;
         loop {
             let response = self.get(
                 url.as_str(),
@@ -48,13 +75,15 @@ impl UpdateManager {
             if raw.len() > MAX_RELEASE_BYTES {
                 return Err(UpdateError("invalid_release"));
             }
-            if let Some((asset, version)) =
-                module_asset(&raw, asset_name, channel, &self.0.endpoints)?
-                && best
-                    .as_ref()
-                    .is_none_or(|(_, current)| module_version(&version) > module_version(current))
-            {
-                best = Some((asset, version));
+            let candidates = module_assets(&raw, targets, &self.0.endpoints)?;
+            for (selected, candidate) in best.iter_mut().zip(candidates) {
+                if let Some(candidate) = candidate
+                    && selected.as_ref().is_none_or(|current| {
+                        module_version(&candidate.version) > module_version(&current.version)
+                    })
+                {
+                    *selected = Some(candidate);
+                }
             }
             if !has_next {
                 break;
@@ -65,12 +94,7 @@ impl UpdateManager {
                 .extend_pairs(&query)
                 .append_pair("page", &page.to_string());
         }
-        if let Some((asset, version)) = best {
-            download_package(self, &asset, destination, |_| {})?;
-            return Ok((asset.digest, Some(version)));
-        }
-        self.download_matching_module(core_version, asset_name, destination)
-            .map(|digest| (digest, None))
+        Ok(best)
     }
 
     pub fn download_matching_module(

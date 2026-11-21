@@ -112,9 +112,9 @@ pub(super) fn prepare_with_config(
     state
         .backend
         .team
-        .check_route(
-            &route.provider_id,
-            state.backend.modules.active(emp_modules::Module::Team),
+        .check_model_route(
+            state,
+            &route,
             request.get("service_tier").and_then(Value::as_str),
         )
         .map_err(RequestPreparationError::TeamPermission)?;

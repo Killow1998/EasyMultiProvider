@@ -1,4 +1,4 @@
-function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onChange, onSync}) {
+function createTeamWorkspace({api, openModal, notice, $, esc, tr, weeklyBudget, memberRemoval, getState, onChange, onSync}) {
   let current = {joined:false}, inviteTick, pendingTick, pendingAccount = null;
   const title = () => tr('modules.team_workspace');
   const changed = () => { watch(); onChange(); };
@@ -29,17 +29,27 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       'workspace_only_native_subscription', 'workspace_handover_required',
       'workspace_handover_successor_required','workspace_backup_too_large',
       'workspace_login_failed','workspace_login_limited','workspace_join_rejected',
-      'workspace_member_not_pending','workspace_member_not_found'].includes(code)
+      'workspace_member_not_pending','workspace_member_pending','workspace_member_not_found','workspace_weekly_reset_not_configured'].includes(code)
       ? tr('modules.' + code) : error.message;
   };
   const showError = (owner, error) => { if (owner.isConnected) $('modal_status').textContent = failure(error); };
   const locale = () => document.documentElement.lang || 'zh-CN';
   const finite = value => Number.isFinite(value) ? value : null;
-  const money = nanos => finite(nanos) == null ? '—' : new Intl.NumberFormat(locale(), {
-    style:'currency',currency:'USD',maximumFractionDigits:4
+  const money = (nanos, currency = true) => finite(nanos) == null ? '—' : new Intl.NumberFormat(locale(), {
+    style:currency ? 'currency' : 'decimal',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:2
   }).format(nanos / 1e9);
-  const budgetDisplay = nanos => finite(nanos) == null ? `<span class="team-unlimited" role="img" aria-label="${esc(tr('modules.no_daily_limit'))}" title="${esc(tr('modules.no_daily_limit'))}">∞</span>` : esc(money(nanos));
+  const budgetDisplay = (nanos, format = money) => finite(nanos) == null ? `<span class="team-unlimited" role="img" aria-label="${esc(tr('modules.no_daily_limit'))}" title="${esc(tr('modules.no_daily_limit'))}">∞</span>` : esc(format(nanos));
+  const dashboardMoney = nanos => money(nanos,false);
+  const spendLimit = (row, limit) => `${esc(dashboardMoney(spend(row)))} / ${budgetDisplay(limit,dashboardMoney)}`;
   const number = value => Number.isFinite(value) ? value.toLocaleString(locale()) : '—';
+  const weeklyResetDefault = () => action('weekly_budget', {
+    action:'initialize',timezone:Intl.DateTimeFormat().resolvedOptions().timeZone
+  });
+  const weekday = value => new Intl.DateTimeFormat(locale(),{weekday:'long',timeZone:'UTC'})
+    .format(Date.UTC(1970,0,4 + value));
+  const hour = value => `${String(value).padStart(2,'0')}:00`;
+  const utcOffset = (timeZone, at = Date.now()) => new Intl.DateTimeFormat('en-US',{timeZone,timeZoneName:'shortOffset'})
+    .formatToParts(at).find(part => part.type === 'timeZoneName').value.replace('GMT','UTC');
   const periods = ['today','1d','7d','30d','lifetime'];
   const periodLabel = id => id === 'lifetime' ? periodPresetLabel('all') : id === 'today' ? tr('modules.today_utc') : periodPresetLabel(id);
   const periodBar = period => `<div class="period-presets" role="group" aria-label="${esc(tr('core.period'))}">${periods.map(id =>
@@ -53,10 +63,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
   const date = seconds => finite(seconds) == null ? '—' : new Date((seconds - 8 * 3600) * 1000).toISOString().slice(0,10);
   const compact = row => compactUsage(tokens(row)).html;
   const spend = row => finite(row?.spend_nanos) ?? (row?.requests === 0 ? 0 : null);
-  const compactSpend = row => {
-    const value = spend(row);
-    return compactUsage(value == null ? null : value / 1e9,true).html;
-  };
+  const compactSpend = row => esc(money(spend(row)));
   const subscriptionHead = last => `<div class="team-subscription-head"><span>${tr('modules.subscription_column')}</span><span>${tr('modules.subscription_usage')} ${shadowHelp(tr('modules.subscription_usage_help'))}</span><span>${tr(last)}</span></div>`;
   const planTag = plan => plan ? `<span class="team-plan">${esc(subscriptionPlanLabel(plan))}</span>` : '';
   const profiles = createTeamProfiles({action,openModal,$,esc,tr,scope,number,tokens,roleName,roleBadge,date,compact,compactSpend,planTag,failure,subscriptionHead});
@@ -137,6 +144,8 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     if (!current.joined) return pendingAccount ? pending(back, pendingAccount) : join(back);
     remember(current.base, current.identity?.workspace?.name);
     const member = scope();
+    const workspace = current.identity.workspace.name;
+    const loginInfo = JSON.stringify({workspace,base:current.base,name:member.name});
     const manage = member.role !== 'member';
     const vps = member.role === 'vps_admin';
     const button = (attributes, label, hint = '') => {
@@ -147,7 +156,8 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     if (vps) actions.push(button('data-team-backup','modules.backup'));
     else actions.push(
       button('data-team-choice="publish"','modules.upload',member.publish ? '' : tr('modules.upload_requires_permission')),
-      button('data-team-choice="sync"','modules.sync',member.sync ? '' : tr('modules.sync_requires_permission')),
+      button('data-team-choice="sync"','modules.sync',member.sync ? '' : tr('modules.sync_requires_permission')));
+    actions.push(button('data-team-copy-login data-icon="copy"','modules.copy_team_login'),
       `<button type="button" class="danger team-leave" data-team-leave>${esc(tr('modules.sign_out'))}</button>`);
     openModal(title(), `<div id="team_home">
       <div class="team-overview-row">
@@ -155,7 +165,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
           <span class="team-role-icon team-role-${esc(member.role)}" aria-hidden="true">${roleSvg(member.role)}</span>
           <div><h3>${esc(member.nickname || member.name)}</h3><div class="setting-help">${roleName(member.role)}</div></div>
           <dl class="team-meta">
-            <div><dt>${tr('modules.workspace_name')}</dt><dd>${esc(current.identity.workspace.name)}</dd></div>
+            <div><dt>${tr('modules.workspace_name')}</dt><dd>${esc(workspace)}</dd></div>
             <div><dt>${tr('modules.workspace_created')}</dt><dd data-team-created>—</dd></div>
             <div><dt>${tr('modules.joined_at')}</dt><dd data-team-joined>—</dd></div>
           </dl>
@@ -182,23 +192,33 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
           ${summaryCell('modules.lifetime_tokens','<span data-team-mine-lifetime-tokens>—</span>')}
           ${summaryCell('modules.lifetime_spend','<span data-team-mine-lifetime-usd>—</span>')}
         </dl></div>` : ''}
+        <div class="team-weekly-usage" data-team-weekly hidden>
+          <span class="team-weekly-next" data-team-weekly-next></span>
+        </div>
         <div id="team_usage_detail" class="team-usage-detail" hidden><div class="team-usage-toolbar">${periodBar('today')}${manage ? `<div class="period-presets team-usage-scope" role="group" aria-label="${esc(tr('modules.usage_scope'))}"><button class="secondary active" type="button" data-team-scope="team" aria-pressed="true">${esc(tr('modules.scope_team'))}</button><button class="secondary" type="button" data-team-scope="mine" aria-pressed="false">${esc(tr('modules.scope_mine'))}</button></div>` : ''}</div><div data-team-breakdown aria-live="polite"></div></div>
       </section>
-    </div>`, '', null, null, {back,reopen:() => open(back)});
+    </div>`, '', null, null, {back,help:tr('modules.budget_mode_help'),reopen:() => open(back)});
     const home = () => open(back);
     const view = $('team_home');
+    view.querySelector('[data-team-copy-login]').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(loginInfo);
+        if (view.isConnected) notice(tr('modules.team_login_copied'));
+      } catch (error) {
+        showError(view,error);
+      }
+    };
+    view.querySelector('[data-team-leave]').onclick = () => confirmLeave(home,false,async () => {
+      current = await action('logout');
+      changed();
+      await onSync();
+      if ($('team_leave_confirm')) join(back,true);
+    });
     bindUsageDetails(view,member);
     view.querySelector('[data-team-profiles]').onclick = () => profiles.directory(home);
     if (vps) {
       view.querySelector('[data-team-backup]').onclick = event => downloadBackup(event.currentTarget);
     } else {
-      const leave = async () => {
-        current = await action('logout');
-        changed();
-        await onSync();
-        if ($('team_leave_confirm')) join(back);
-      };
-      view.querySelector('[data-team-leave]').onclick = () => confirmLeave(home,false,leave);
       view.querySelector('[data-team-choice=publish]').onclick = () => publish(home);
       view.querySelector('[data-team-choice=sync]').onclick = event => sync(event.currentTarget);
     }
@@ -224,31 +244,54 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         join(back, true);
       } else showError(view,error);
     });
-    void loadSummary(view,member);
+    const refreshSummary = async () => {
+      if (!view.isConnected) return;
+      if (!document.hidden) await loadSummary(view,member);
+      if (view.isConnected) setTimeout(refreshSummary,15000);
+    };
+    void refreshSummary();
   }
 
   async function loadSummary(view, member) {
     try {
-      const {joined_at,created_at,members,budget_nanos,today,lifetime} = await action('overview');
+      let summary = await action('overview');
+      if (weeklyBudget && view.isConnected && member.role !== 'member' && summary.weekly_reset === null) {
+        await weeklyResetDefault();
+        summary = await action('overview');
+      }
+      const {joined_at,created_at,members,budget_nanos,today,lifetime,weekly_budget} = summary;
       if (!view.isConnected) return;
+      const activeWeek = weeklyBudget ? weekly_budget : null;
+      const renderBudget = (target, day) => {
+        target.parentElement.previousElementSibling.textContent = tr(activeWeek ? 'modules.weekly_usd_usage' : 'modules.today_spend_limit');
+        target.innerHTML = activeWeek ? `${esc(money(activeWeek.used,false))} / ${budgetDisplay(activeWeek.limit,dashboardMoney)}` : spendLimit(day,budget_nanos);
+        target.title = !activeWeek && day.unknown_cost_requests ? tr('modules.unknown_count',{count:number(day.unknown_cost_requests)}) : '';
+      };
       view.querySelector('[data-team-created]').textContent = date(created_at);
       view.querySelector('[data-team-joined]').textContent = date(joined_at);
       if (member.role === 'member') {
-        const currentDay = view.querySelector('[data-team-today]');
-        currentDay.innerHTML = `${esc(money(spend(today)))} / ${budgetDisplay(budget_nanos)}`;
-        if (today.unknown_cost_requests) currentDay.title = tr('modules.unknown_count',{count:number(today.unknown_cost_requests)});
+        renderBudget(view.querySelector('[data-team-today]'),today);
       } else view.querySelector('[data-team-member-count]').textContent = number(members);
       view.querySelector('[data-team-today-tokens]').innerHTML = compact(today);
       view.querySelector('[data-team-lifetime-tokens]').innerHTML = compact(lifetime);
       view.querySelector('[data-team-lifetime-usd]').innerHTML = compactSpend(lifetime);
+      const weekly = view.querySelector('[data-team-weekly]');
+      weekly.hidden = !activeWeek;
+      if (!weekly.hidden) {
+        const {reset,reset_at} = activeWeek;
+        const instant = reset_at * 1000;
+        const when = new Intl.DateTimeFormat(locale(),{
+          timeZone:reset.timezone,weekday:'short',hour:'numeric',minute:'2-digit',hourCycle:'h23'
+        }).format(instant);
+        weekly.querySelector('[data-team-weekly-next]').textContent =
+          tr('modules.weekly_reset_at',{when:`${when} (${utcOffset(reset.timezone,instant)})`});
+      }
       // Administrators see the team totals above and their own share here, from the same per-member ledger.
       if (member.role !== 'member') {
         const [day, all] = await Promise.all([action('usage',{period:'today'}), action('usage',{period:'lifetime'})]);
         if (!view.isConnected) return;
         const mine = report => report.rows.find(row => row.member === member.id) || idle;
-        const myDay = view.querySelector('[data-team-mine-today]');
-        myDay.innerHTML = `${esc(money(spend(mine(day))))} / ${budgetDisplay(budget_nanos)}`;
-        if (mine(day).unknown_cost_requests) myDay.title = tr('modules.unknown_count',{count:number(mine(day).unknown_cost_requests)});
+        renderBudget(view.querySelector('[data-team-mine-today]'),mine(day));
         view.querySelector('[data-team-mine-today-tokens]').innerHTML = compact(mine(day));
         view.querySelector('[data-team-mine-lifetime-tokens]').innerHTML = compact(mine(all));
         view.querySelector('[data-team-mine-lifetime-usd]').innerHTML = compactSpend(mine(all));
@@ -373,6 +416,20 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     return {code, base, name};
   };
 
+  function parseLoginInfo(text) {
+    try {
+      const {workspace,base,name} = JSON.parse(text);
+      if (typeof workspace !== 'string' || typeof base !== 'string' || typeof name !== 'string' ||
+          !/^[a-zA-Z0-9_.@-]{1,64}$/.test(name)) return null;
+      const url = new URL(base.includes('://') ? base : 'https://' + base);
+      const local = url.protocol === 'http:' && ['127.0.0.1','[::1]'].includes(url.hostname);
+      if ((!local && url.protocol !== 'https:') || url.href !== url.origin + '/') return null;
+      return {name,base:url.origin,workspace};
+    } catch {
+      return null;
+    }
+  }
+
   function join(back, signingIn = false, preset = {}) {
     stopPending();
     const saved = remembered();
@@ -397,7 +454,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         ${field('team_nickname',tr('modules.nickname'),'<input id="team_nickname" autocomplete="nickname" maxlength="48" required>',tr('modules.nickname_help'))}
       </div>`}
       <div class="team-form-pair">
-        ${field('team_name',tr('modules.username'),`<input id="team_name" autocomplete="username" value="${esc(preset.name || '')}" maxlength="64" required>`)}
+        ${field('team_name',tr('modules.username'),`<input id="team_name" autocomplete="username" value="${esc(preset.name || '')}" maxlength="64" required>`, signingIn ? tr('modules.paste_team_login_at_username') : '')}
         ${field('team_password',tr(signingIn ? 'modules.password' : 'modules.set_password'),
           signingIn ? '<input id="team_password" type="password" autocomplete="current-password" required>' : '<input id="team_password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>',
           signingIn ? '' : tr('modules.password_help'))}
@@ -440,6 +497,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     const status = $('team_origin_status');
     const discoverButton = $('team_discover');
     const settingsButton = $('team_origin_settings');
+    let pastedLogin = false;
     form.onsubmit = event => { event.preventDefault(); $('modal_submit').click(); };
     $('team_switch_entry').onclick = () => join(back, !signingIn, {base:input.value.trim(),workspace:selectedName(),name:$('team_name').value.trim()});
     function selectedName() {
@@ -452,7 +510,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     }
     function render(workspaces, selected) {
       choices.innerHTML = workspaces.map(({name,base,source}) => `<button type="button" class="team-origin-choice" data-team-origin="${esc(base)}" data-team-name="${esc(name || '')}" aria-pressed="${base === selected}" title="${esc(base)}">
-        <strong>${esc(name || tr('modules.workspace_unnamed'))}</strong><small>${tr('modules.workspace_source_' + source)}</small></button>`).join('');
+        <strong>${esc(name || tr('modules.workspace_unnamed'))}</strong><small>${source === 'login' ? esc(base) : tr('modules.workspace_source_' + source)}</small></button>`).join('');
       choices.querySelectorAll('[data-team-origin]').forEach(choice => choice.onclick = () => {
         choose(choice.dataset.teamOrigin);
         (signingIn ? $('team_name') : $('team_join_code')).focus();
@@ -473,7 +531,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       discoverButton.disabled = true;
       try {
         const {workspaces} = await action('discover');
-        if (!form.isConnected) return;
+        if (!form.isConnected || (automatic && pastedLogin)) return;
         if (!workspaces.length) {
           if (!choices.children.length) missing();
           else if (automatic) status.textContent = ''; else missing();
@@ -485,7 +543,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         if (!automatic || !input.value.trim()) choose(workspaces[0].base);
         status.textContent = '';
       } catch (error) {
-        if (!form.isConnected) return;
+        if (!form.isConnected || (automatic && pastedLogin)) return;
         if (choices.children.length && automatic) status.textContent = ''; else if (automatic) missing(); else status.textContent = failure(error);
       } finally {
         delete status.dataset.busy;
@@ -499,6 +557,21 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       if (open) input.focus();
     };
     input.oninput = () => choices.querySelectorAll('[data-team-origin]').forEach(choice => choice.setAttribute('aria-pressed',String(choice.dataset.teamOrigin === input.value.trim())));
+    if (signingIn) $('team_name').onpaste = event => {
+      const info = parseLoginInfo(event.clipboardData?.getData('text/plain') || '');
+      if (!info) return;
+      event.preventDefault();
+      pastedLogin = true;
+      delete status.dataset.busy;
+      $('modal_status').textContent = '';
+      render([{base:info.base,name:info.workspace,source:'login'}], info.base);
+      choose(info.base);
+      manual(false);
+      $('team_name').value = info.name;
+      const password = $('team_password');
+      password.value = '';
+      password.focus();
+    };
     const code = $('team_join_code');
     if (code) code.onpaste = event => {
       const invitation = parseInvitation(event.clipboardData?.getData('text') || '');
@@ -669,10 +742,20 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
   }
 
   function openMembers(home, initial = 'today') {
-    let selected = initial, generation = 0, members;
+    let selected = initial, generation = 0, members, weeklyMode = false;
     const reopen = () => openMembers(home,selected);
     management(home, 'members', `<div id="team_manage">
-      <div class="team-members-toolbar">${periodBar(selected)}${scope().role === 'team_admin' ? `<button type="button" class="secondary" data-team-handover>${tr('modules.workspace_handover')}</button>` : ''}<button type="button" data-member-add>${tr('modules.add_member')}</button></div>
+      <div class="team-members-toolbar">
+        ${periodBar(selected)}
+        <div class="team-members-actions">
+          <select data-team-budget-mode hidden aria-label="${esc(tr('modules.budget_mode'))}" title="${esc(tr('modules.budget_mode_help'))}">
+            <option value="daily_usd">${tr('modules.budget_mode_daily')}</option><option value="weekly_usd">${tr('modules.budget_mode_weekly')}</option>
+          </select>
+          <button type="button" class="secondary" data-team-weekly-reset hidden>${tr('modules.weekly_reset')}</button>
+          ${scope().role === 'team_admin' ? `<button type="button" class="secondary" data-team-handover>${tr('modules.workspace_handover')}</button>` : ''}
+          <button type="button" data-member-add>${tr('modules.add_member')}</button>
+        </div>
+      </div>
       <div data-team-usage-table>${tr('modules.loading')}</div></div>`, reopen);
     const panel = $('team_manage');
     const handover = panel.querySelector('[data-team-handover]');
@@ -686,6 +769,8 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     // A quiet refresh (a new request arrived) waits while the administrator is typing a limit.
     membersView = ({quiet = false} = {}) => { if (panel.isConnected && !(quiet && panel.contains(document.activeElement) && document.activeElement.matches('input,textarea'))) reopen(); };
     const table = panel.querySelector('[data-team-usage-table]');
+    const modePicker = panel.querySelector('[data-team-budget-mode]');
+    const resetButton = panel.querySelector('[data-team-weekly-reset]');
     const periodButtons = [...panel.querySelectorAll('[data-team-period]')];
     const chip = (member, id, label, editable) => `<label class="team-chip"><input type="checkbox" data-team-permission="${id}" ${member[id] ? 'checked' : ''} ${editable ? '' : 'disabled'}>${esc(label)}</label>`;
     async function load(period) {
@@ -694,18 +779,51 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       pressPeriod(periodButtons,period);
       table.setAttribute('aria-busy','true');
       try {
-        const [list,report] = await Promise.all([members ?? action('list_members').then(reply => reply.members),action('usage',{period})]);
+        const [list,report] = await Promise.all([members ? null : action('list_members'),action('usage',{period})]);
         if (!table.isConnected || request !== generation) return;
         const byId = new Map(report.rows.map(row => [row.member,row]));
         if (members) {
           for (const row of table.querySelectorAll('[data-team-member]')) {
-            row.lastElementChild.innerHTML = tokenDetails(byId.get(row.dataset.teamMember));
+            row.querySelector('[data-member-usage]').innerHTML = tokenDetails(byId.get(row.dataset.teamMember));
           }
           return;
         }
-        members = list;
-        const columns = [tr('modules.member'),tr('modules.daily_usd_limit') + ' ' + shadowHelp(tr('modules.resets_daily_in_utc_budget_alerts')),
+        members = list.members;
+        const hasRemoval = memberRemoval && members.some(member => Object.hasOwn(member,'can_remove'));
+        const hasModes = weeklyBudget && Object.hasOwn(list,'budget_mode');
+        weeklyMode = hasModes && list.budget_mode === 'weekly_usd';
+        modePicker.hidden = !hasModes;
+        modePicker.value = list.budget_mode || 'daily_usd';
+        modePicker.onchange = async () => {
+          modePicker.disabled = true;
+          try {
+            if (modePicker.value === 'weekly_usd' && !list.weekly_reset) await weeklyResetDefault();
+            await action('weekly_budget',{action:'mode',mode:modePicker.value});
+            if (panel.isConnected) reopen();
+          } catch (error) {
+            modePicker.value = list.budget_mode;
+            showError(panel,error);
+          } finally {
+            modePicker.disabled = false;
+          }
+        };
+        resetButton.hidden = !weeklyMode;
+        resetButton.onclick = async () => {
+          resetButton.disabled = true;
+          try {
+            const reset = list.weekly_reset ?? (await weeklyResetDefault()).weekly_reset;
+            if (panel.isConnected) openWeeklyReset(reopen,reset);
+          } catch (error) {
+            showError(panel,error);
+          } finally {
+            resetButton.disabled = false;
+          }
+        };
+        const budgetLabel = tr(weeklyMode ? 'modules.weekly_usd_limit' : 'modules.daily_usd_limit');
+        const budgetHelp = tr(weeklyMode ? 'modules.weekly_usd_limit_help' : 'modules.resets_daily_in_utc_budget_alerts');
+        const columns = [tr('modules.member'),budgetLabel + ' ' + shadowHelp(budgetHelp),
           tr('modules.permissions') + ' ' + shadowHelp(tr('modules.member_permissions_help')),tr('modules.account_enabled') + ' ' + shadowHelp(tr('modules.account_enabled_help')),tr('modules.token_spend')];
+        if (hasRemoval) columns.push(tr('modules.action_column'));
         const rows = members.map(member => {
           const name = member.nickname || member.name;
           const editable = member.can_manage && !member.pending;
@@ -717,11 +835,12 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
           const identity = `<div class="team-member-name"><span class="team-role-icon team-role-${esc(member.role)}" title="${esc(changeRole)}" ${editRole ? 'data-editable-role' : `role="img" aria-label="${esc(role)}"`}>${roleSvg(member.role)}${rolePicker}</span><span>${esc(name)}</span></div>`;
           if (member.pending) {
             return `<tr data-team-member="${esc(member.id)}"><th scope="row">${identity}</th><td></td>
-              <td><span class="team-pending-actions"><span>${tr('modules.join_request_label')}</span><button type="button" data-member-approve="${esc(member.id)}">${tr('modules.accept_member')}</button><button type="button" class="secondary" data-member-decline="${esc(member.id)}">${tr('modules.decline_member')}</button></span></td><td></td><td>—</td></tr>`;
+              <td><span class="team-pending-actions"><span>${tr('modules.join_request_label')}</span><button type="button" data-member-approve="${esc(member.id)}">${tr('modules.accept_member')}</button><button type="button" class="secondary" data-member-decline="${esc(member.id)}">${tr('modules.decline_member')}</button></span></td><td></td><td data-member-usage>—</td>${hasRemoval ? '<td></td>' : ''}</tr>`;
           }
+          const nanos = finite(weeklyMode ? member.weekly_usd_limit : member.budget_nanos);
           const budget = member.can_budget
-            ? `<label class="team-budget"><span aria-hidden="true">$</span><input data-member-budget type="number" min="0" max="1000000" step="any" value="${finite(member.budget_nanos) == null ? '' : esc(member.budget_nanos/1e9)}" placeholder="∞" title="${esc(tr('modules.budget_input_help'))}" aria-label="${esc(tr('modules.daily_usd_limit') + ' · ' + name)}"></label>`
-            : budgetDisplay(member.budget_nanos);
+            ? `<label class="team-budget"><span aria-hidden="true">$</span><input data-member-budget type="number" min="0" max="1000000" step="any" value="${nanos == null ? '' : esc(nanos/1e9)}" placeholder="∞" title="${esc(tr('modules.budget_input_help'))}" aria-label="${esc(budgetLabel + ' · ' + name)}"></label>`
+            : budgetDisplay(nanos);
           const reset = member.role !== 'member';
           const chips = [chip(member,'fast','Fast',editable),chip(member,'ultrafast','Ultrafast',editable),
             chip(member,'publish',tr('modules.upload'),editable),chip(member,'sync',tr('modules.sync'),editable),
@@ -730,7 +849,8 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
             <td>${budget}</td>
             <td><div class="team-chips">${chips}</div></td>
             <td><label class="team-switch" title="${esc(tr('modules.account_enabled_help'))}"><input type="checkbox" role="switch" data-team-permission="enabled" ${member.enabled ? 'checked' : ''} ${editable ? '' : 'disabled'} aria-label="${esc(tr('modules.account_enabled') + ' · ' + name)}"><span></span></label></td>
-            <td>${tokenDetails(byId.get(member.id))}</td></tr>`;
+            <td data-member-usage>${tokenDetails(byId.get(member.id))}</td>
+            ${hasRemoval ? `<td>${member.can_remove ? `<button type="button" class="secondary danger team-member-remove" data-member-remove="${esc(member.id)}" aria-label="${esc(tr('modules.remove_member') + ' · ' + name)}">${tr('modules.remove_member')}</button>` : ''}</td>` : ''}</tr>`;
         }).join('');
         table.innerHTML = `<div class="model-table-wrap"><table class="model-table team-usage-table">
           <thead><tr>${columns.map(label => `<th scope="col">${label}</th>`).join('')}</tr></thead>
@@ -748,6 +868,18 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
     void load(selected);
     bindInvitation(panel.querySelector('[data-member-add]'));
     table.onclick = async event => {
+      const remove = event.target.closest('[data-member-remove]');
+      if (remove) {
+        const member = members.find(item => item.id === remove.dataset.memberRemove);
+        const title = tr('modules.remove_team_member');
+        openModal(title, `<p id="team_remove_member">${esc(tr('modules.remove_team_member_confirm',{name:member.nickname || member.name}))}</p>`,
+          tr('modules.remove_member'), async () => {
+            const confirmation = $('team_remove_member');
+            await action('remove_member',{id:member.id});
+            if (confirmation.isConnected) reopen();
+          }, null, {back:reopen,tone:'danger'});
+        return;
+      }
       const button = event.target.closest('[data-member-approve],[data-member-decline]');
       const approve = button?.hasAttribute('data-member-approve');
       const member = members?.find(item => item.id === (approve ? button.dataset.memberApprove : button?.dataset.memberDecline));
@@ -779,7 +911,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       const row = control.closest('tr');
       const member = members.find(item => item.id === row.dataset.teamMember);
       if (isBudget && !control.checkValidity()) {
-        $('modal_status').textContent = tr('modules.enter_a_valid_budget');
+        control.reportValidity();
         return;
       }
       const controls = row.querySelectorAll('input:not(:disabled),select:not(:disabled)');
@@ -788,8 +920,13 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       try {
         if (isBudget) {
           const value = control.value === '' ? null : Math.round(control.valueAsNumber*1e9);
-          await action('budget',{member:member.id,daily_usd_nanos:value});
-          member.budget_nanos = value;
+          if (weeklyMode) {
+            await action('weekly_budget',{action:'member_limit',member:member.id,usd_nanos:value});
+            member.weekly_usd_limit = value;
+          } else {
+            await action('budget',{member:member.id,daily_usd_nanos:value});
+            member.budget_nanos = value;
+          }
         } else if (permission === 'fast' || permission === 'ultrafast') {
           await action('member_tiers',{id:member.id,fast:member.fast,ultrafast:member.ultrafast,[permission]:control.checked});
           member[permission] = control.checked;
@@ -802,7 +939,10 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
           if (isRole && panel.isConnected) reopen();
         }
       } catch (error) {
-        if (isBudget) control.value = finite(member.budget_nanos) == null ? '' : member.budget_nanos/1e9;
+        if (isBudget) {
+          const nanos = finite(weeklyMode ? member.weekly_usd_limit : member.budget_nanos);
+          control.value = nanos == null ? '' : nanos/1e9;
+        }
         else if (isRole) control.value = member.role;
         else control.checked = member[permission];
         showError(panel,error);
@@ -810,6 +950,23 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         controls.forEach(input => input.disabled = false);
       }
     };
+  }
+
+  function openWeeklyReset(back, reset) {
+    const options = (length, selected, display) => Array.from({length},(_, index) =>
+      `<option value="${index}" ${index === selected ? 'selected' : ''}>${esc(display(index))}</option>`).join('');
+    const title = tr('modules.weekly_reset');
+    openModal(title, `<div id="team_weekly_reset" class="team-form">
+      <p class="setting-help">${esc(reset.timezone)} · ${esc(utcOffset(reset.timezone))}</p>
+      <div class="team-reset-fields">
+        <label>${tr('modules.weekly_reset_weekday')}<select data-weekly-weekday>${options(7,reset.weekday,weekday)}</select></label>
+        <label>${tr('modules.weekly_reset_hour')}<select data-weekly-hour>${options(24,reset.hour,hour)}</select></label>
+      </div></div>`, tr('modules.save'), async () => {
+      const form = $('team_weekly_reset');
+      await action('weekly_budget',{action:'reset',weekday:Number(form.querySelector('[data-weekly-weekday]').value),
+        hour:Number(form.querySelector('[data-weekly-hour]').value)});
+      if (form.isConnected) back();
+    }, null, {back,reopen:() => openWeeklyReset(back,reset)});
   }
 
   function openAudit(home) {
@@ -827,6 +984,9 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
       if (kind === 'profile_visibility') return tr(details.visible ? 'modules.audit_profiles_visible' : 'modules.audit_profiles_private');
       const label = tr('modules.audit_' + kind);
       if (kind === 'budget') return label + ' · ' + (finite(details.daily_usd_nanos) == null ? tr('modules.no_daily_limit') : money(details.daily_usd_nanos));
+      if (kind === 'weekly_usd_limit') return label + ' · ' + (details.usd_nanos == null ? tr('modules.no_daily_limit') : money(details.usd_nanos));
+      if (kind === 'budget_mode') return label + ' · ' + tr(details.mode === 'weekly_usd' ? 'modules.budget_mode_weekly' : 'modules.budget_mode_daily');
+      if (kind === 'weekly_reset') return `${label} · ${weekday(details.weekday)} ${hour(details.hour)}`;
       const changes = Object.entries(details).filter(([key]) => Object.hasOwn(labels,key)).map(([key,value]) =>
         key === 'role' ? roleName(value) : labels[key] + ' ' + tr(value ? 'modules.audit_on' : 'modules.audit_off'));
       return [label,...changes].join(' · ');
@@ -866,7 +1026,8 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
   }
 
   async function reviewServices(home) {
-    management(home, 'subscriptions', `<div class="team-subscription-list" id="team_shared_services">${tr('modules.loading')}</div>`, () => reviewServices(home));
+    const reopen = () => reviewServices(home);
+    management(home, 'subscriptions', `<div class="team-subscription-list team-subscription-admin" id="team_shared_services">${tr('modules.loading')}</div>`, reopen);
     const panel = $('team_shared_services');
     try {
       const {services} = await action('shared_services');
@@ -877,7 +1038,10 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         return `<div class="setting-row team-subscription-row">
         <div class="team-subscription-owner"><span class="team-subscription-dot" data-valid="${service.valid === true}" role="img" aria-label="${status}" title="${status}"></span><strong>${esc(service.owner)}</strong>${planTag(service.plan)}${service.shared ? '' : `<span class="team-pending-tag">${tr('modules.share_review')}</span>`}</div>
         <span class="team-subscription-usage" title="${esc(tr('modules.token_spend'))}">${compact(service.usage)} / ${compactSpend(service.usage)}</span>
-        <button type="button" class="${service.shared ? 'secondary' : ''}" data-review-service="${esc(service.id)}" ${usable ? '' : 'disabled'}>${tr(service.shared ? 'modules.stop_sharing' : 'modules.share_service')}</button></div>`;
+        <div class="team-subscription-actions">
+          <button type="button" class="${service.shared ? 'secondary' : ''}" data-review-service="${esc(service.id)}" ${usable ? '' : 'disabled'}>${tr(service.shared ? 'modules.stop_sharing' : 'modules.share_service')}</button>
+          <button type="button" class="secondary danger" data-icon="trash" data-remove-service="${esc(service.id)}" title="${esc(tr('modules.remove_shared_service'))}" aria-label="${esc(tr('modules.remove_shared_service'))}"></button>
+        </div></div>`;
       }).join('')
         : `<p class="setting-help">${esc(tr('modules.no_uploaded_services'))}</p>`;
       panel.querySelectorAll('[data-review-service]').forEach(button => button.onclick = async () => {
@@ -885,11 +1049,24 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, getState, onCh
         button.disabled = true;
         try {
           await action('review_service',{id:service.id,version:service.version,shared:!service.shared});
-          if (panel.isConnected) reviewServices(home);
+          if (panel.isConnected) reopen();
         } catch (error) {
           showError(panel,error);
           button.disabled = false;
         }
+      });
+      panel.querySelectorAll('[data-remove-service]').forEach(button => button.onclick = () => {
+        const service = services.find(row => row.id === button.dataset.removeService);
+        const title = tr('modules.remove_shared_service');
+        openModal(title, `<p id="team_remove_shared_service">${esc(tr('modules.remove_shared_service_confirm',{owner:service.owner}))}</p>`, title, async () => {
+          const confirmation = $('team_remove_shared_service');
+          try {
+            await action('remove_service',{id:service.id,version:service.version});
+            if (confirmation.isConnected) reopen();
+          } catch (error) {
+            showError(confirmation,error);
+          }
+        }, null, {back:reopen,tone:'danger'});
       });
     } catch (error) {
       if (panel.isConnected) panel.textContent = failure(error);

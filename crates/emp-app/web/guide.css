@@ -1,0 +1,12 @@
+:root{color-scheme:light dark;font:16px/1.65 system-ui,sans-serif;color:CanvasText;background:Canvas}
+body{margin:0}
+main{max-width:54rem;margin:0 auto;padding:clamp(20px,5vw,56px);overflow-wrap:anywhere}
+h1,h2,h3{line-height:1.3}
+h2{margin-top:1.8em;padding-bottom:.25em;border-bottom:1px solid color-mix(in srgb, CanvasText 18%, Canvas)}
+a{color:LinkText}
+img{display:block;max-width:100%;height:auto;border-radius:4px}
+pre{padding:1rem;overflow:auto;background:color-mix(in srgb, CanvasText 6%, Canvas);border-radius:6px}
+code{font-size:.91em}
+table{border-collapse:collapse}
+td,th{padding:.4em .75em;border:1px solid color-mix(in srgb, CanvasText 18%, Canvas);text-align:left}
+blockquote{margin:1em 0;border-inline-start:3px solid color-mix(in srgb, CanvasText 25%, Canvas);padding-inline:1em}

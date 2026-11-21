@@ -17,6 +17,24 @@ The continuation below deepens external request execution and error presentation
 This review traced application workflows and inspected all nine crate manifests;
 it is not a line-by-line security audit or new cross-platform acceptance run.
 
+## Core、Hot Adapter 与官方模组
+
+| 部分 | 职责 |
+| --- | --- |
+| Core | Codex 接入、认证、模型目录、协议转发和用量、本机管理页面与模组生命周期 |
+| Hot Adapter | 独立检查、校验并切换使用教程、GIF、安装与升级说明和 README |
+| 官方模组 | 各自的版本、子进程和面板资产。Core 按可用状态挂接工具栏和设置入口 |
+
+Core 的模组包管理负责注册表、发行版本与文件校验，运行管理负责启动、切换和回收进程。Core 在旧进程可用时准备新包，再切换运行实例。已进入上游的请求使用其现有执行路径。
+
+官方模组通过版本化宿主协议运行，可以独立构建并按兼容版本加载。Core 管理官方入口、权限和 WebUI 插槽。模组面板使用相同的弹窗、语言和样式。Aero 通过独立的环回连接处理推理，stdio 负责启动和配置。Core 为每次 Aero 接力分配临时凭据以保留调用人归属。[官方模组](official-modules.md)
+
+WebUI 启动、打开「使用教程」或打开指南文档时，Hot Adapter 在后台检查官方仓库 `guide` 分支的 `manifest.json`。正常情况下每六小时至多查询一次。正文与 GIF 从对应的 `guide-vN` 标签读取，SHA-256 相同的文件直接复用。所有文件校验后，客户端原子切换本机清单。下次打开教程即可读到新版本。网络不可用时，继续提供最近一次校验成功的内容，首次离线则使用内置版本。
+
+用 `node scripts/prepare_guide_release.cjs 1 /path/to/new/guide-v1` 从当前代码生成 `content/` 和 `manifest.json`。发布时先确认不可变的 `guide-v1` 标签可以读取对应的 `content/`，再更新 `guide` 分支根目录的清单。后续发布递增版本号。撤回发布时，将上一份内容以新的版本号重新发布。
+
+[指南浏览器验收](../scripts/shadow_frontend/e2e_guide_updates.py)使用隔离的发布源，覆盖相同内容跳过下载、同进程切换、校验失败和离线重启。官方渠道通过首个标签和清单启用。
+
 ## 0.13.0 accepted UI and response ownership (2026-10-12)
 
 Formal and Shadow pages now share migration, model management, service presentation,

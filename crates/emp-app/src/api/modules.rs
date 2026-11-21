@@ -7,8 +7,10 @@ use crate::{
             body_error_response, json_error_response, response, status_text, unauthorized_response,
         },
     },
+    services::modules::Action,
 };
 use emp_modules::Module;
+use serde::Deserialize;
 use serde_json::json;
 use std::net::TcpStream;
 
@@ -64,25 +66,67 @@ pub(crate) fn mutate(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
-    let module = serde_json::from_value::<Module>(body["id"].clone());
-    let action = body["action"].as_str().unwrap_or_default();
-    let Ok(module) = module else {
+    if body["action"] == "check_updates" {
+        return match state.backend.modules.check_updates(&state.updates.manager) {
+            Ok(updates) => response(
+                "HTTP/1.1 200 OK",
+                "application/json",
+                &serde_json::to_vec(&json!({"updates":updates})).expect("module updates"),
+                &[("Cache-Control", "no-store")],
+            ),
+            Err(error) => json_error_response(
+                409,
+                status_text(409),
+                "Could not check EMP module updates",
+                Some(&error),
+                &[],
+            ),
+        };
+    }
+    let Ok(module) = Module::deserialize(&body["id"]) else {
         return json_error_response(400, status_text(400), "Unknown EMP module", None, &[]);
     };
-    match state
-        .backend
-        .modules
-        .change(module, action, &state.updates.manager, || {
-            if module == Module::Team {
-                state
-                    .backend
-                    .team
-                    .remove_module_data(state)
-                    .map_err(|error| error.1)?;
+    let Ok(action) = Action::deserialize(&body["action"]) else {
+        return json_error_response(
+            409,
+            status_text(409),
+            "The EMP module could not be changed",
+            Some("invalid_module_action"),
+            &[],
+        );
+    };
+    let change = || {
+        state.backend.modules.change(
+            module,
+            action,
+            body["revision"].as_str(),
+            &state.updates.manager,
+            || {
+                if module == Module::Team {
+                    state
+                        .backend
+                        .team
+                        .purge_local(state)
+                        .map_err(|error| error.1)?;
+                }
+                Ok(())
+            },
+        )
+    };
+    let result = if module == Module::Team {
+        state.backend.team.change_module(state, change)
+    } else {
+        change()
+    };
+    match result {
+        Ok(()) => {
+            if matches!(module, Module::Aggregate | Module::Team | Module::Aero)
+                && crate::services::catalog::refresh_catalog(state).is_err()
+            {
+                crate::services::account_catalog::request_refresh(state, false);
             }
-            Ok(())
-        }) {
-        Ok(()) => read(state),
+            read(state)
+        }
         Err(error) => json_error_response(
             409,
             status_text(409),

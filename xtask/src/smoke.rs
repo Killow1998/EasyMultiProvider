@@ -158,7 +158,7 @@ fn update_in(
     let modules = root.join("state/modules");
     fs::create_dir_all(&modules).map_err(error)?;
     let mut installs = serde_json::Map::new();
-    for module in emp_modules::Module::ALL {
+    for module in emp_modules::Module::STANDARD {
         let asset = package.with_file_name(module.asset());
         let digest = sha256_file(&asset)?;
         let destination = modules.join(format!(

@@ -302,6 +302,31 @@ pub(crate) fn proxy_allowed(request: Request<'_>, state: &ServerState, now: f64)
     )
 }
 
+pub(crate) fn aero_delegation(
+    request: Request<'_>,
+    state: &ServerState,
+    peer: Option<std::net::IpAddr>,
+) -> Option<crate::services::modules::aero::CallerDelegation> {
+    if !peer.is_some_and(|address| address.is_loopback())
+        || request.header("Origin").is_some()
+        || !same_origin(request, state.port)
+        || request.header_count("Authorization") != 1
+        || !matches!(
+            request.raw_path(),
+            "/v1/responses"
+                | "/v1/responses/compact"
+                | "/v1/images/generations"
+                | "/v1/images/edits"
+                | "/v1/audio/transcriptions"
+                | "/v1/realtime/calls"
+        )
+    {
+        return None;
+    }
+    let key = request.header("Authorization")?.strip_prefix("Bearer ")?;
+    state.backend.aero_callers.identify(key)
+}
+
 pub(crate) fn proxy_identity(
     request: Request<'_>,
     state: &ServerState,

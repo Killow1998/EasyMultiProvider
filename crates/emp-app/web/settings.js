@@ -1,19 +1,7 @@
 // Feature state is private; the page supplies current data and UI operations.
-function createSettings({getState, cloneState, persistState, openModal, api, notice, modules = null, $, esc, t, tr, modelName, quotaDisplay, help, contextHelp, openAppIcon, addService, presentationOptions = () => '', collaborationHelp = () => ''}) {
-  async function openGateway(back) {
-    await modules?.loadPanel('gateway');
-    return createGatewaySettings({api, openModal, notice, $, esc, tr, help}).open(back);
-  }
-  async function openDecision(back) {
-    await modules?.loadPanel('decision');
-    return createDecisionSettings({getState, cloneState, persistState, openModal, api, $, esc, tr, help, addService, openGateway:openDecisionConnection}).open(back);
-  }
-  async function openAggregates(back) {
-    await modules?.loadPanel('aggregate');
-    return createAggregateSettings({getState, cloneState, persistState, openModal, $, esc, tr, modelName, help}).open(back);
-  }
+function createSettings({getState, cloneState, persistState, openModal, api, notice, modules = null, $, esc, t, tr, quotaDisplay, help, contextHelp, openAppIcon, presentationOptions = () => '', collaborationHelp = () => ''}) {
   async function openDecisionConnection(back) {
-    if (modules?.active('gateway') !== false) return openGateway(back);
+    if (modules?.active('gateway') !== false) return modules.openOptions('gateway', back);
     const data = await api('/api/decisions/connection');
     openModal(tr('modules.decision_api'), `<div class="setting-row routing-mode"><label for="decision_local_key">${tr('modules.decision_key')}</label><div class="input-action">
       <input id="decision_local_key" type="password" value="${esc(data.api_key)}" readonly>
@@ -58,7 +46,7 @@ function createSettings({getState, cloneState, persistState, openModal, api, not
     const decisionButton = $('modal_body').querySelector('[data-decision-open]');
     const iconButton = $('modal_body').querySelector('[data-app-icon-open]');
     if (iconButton) iconButton.onclick = () => openAppIcon(reopen);
-    if (decisionButton) decisionButton.onclick = () => openDecision(reopen).catch(error => notice(error.message, true));
+    if (decisionButton) decisionButton.onclick = () => modules.openOptions('decision', reopen).catch(error => notice(error.message, true));
     const gatewayButton = $('modal_body').querySelector('[data-gateway-open]');
     const quitButton = $('modal_body').querySelector('[data-quit-open]');
     if (quitButton) quitButton.onclick = () => openModal(t('quit_emp'), `<p>${tr('core.quit_confirm')}</p>`, t('quit_emp'), async () => {
@@ -69,7 +57,7 @@ function createSettings({getState, cloneState, persistState, openModal, api, not
     gatewayButton.onclick = async () => {
       gatewayButton.disabled = true;
       try {
-        await openGateway(reopen);
+        await modules.openOptions('gateway', reopen);
       } catch (error) { notice(error.message, true); }
       finally { gatewayButton.disabled = false; }
     };
@@ -93,5 +81,5 @@ function createSettings({getState, cloneState, persistState, openModal, api, not
     finally { controls.forEach(({button,disabled}) => button.disabled = disabled); }
   }
 
-  return {open:openSettings, toggle:toggleSetting, openDecision, openGateway, openAggregates};
+  return {open:openSettings, toggle:toggleSetting, openDecisionConnection};
 }

@@ -1,0 +1,115 @@
+{
+  "source_commit": "89c66f7755583c9cf390408e427446476205da16",
+  "session": "legacy-compacted-session",
+  "model": "aero/Legacy pair",
+  "profile": {
+    "planner": {
+      "model": "planner-fixture"
+    },
+    "executor": {
+      "model": "executor-fixture"
+    }
+  },
+  "key": "1e8129390f7e9781adde288c7c43d29384d82bfd006f086aaf020f68cad7fdfc",
+  "state": {
+    "public": [
+      {
+        "type": "compaction",
+        "encrypted_content": "native-fixture-opaque"
+      }
+    ],
+    "history": [
+      {
+        "type": "message",
+        "role": "developer",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "LEGACY_CHECKPOINT: SPEC.txt updated and verified; return to the planner for final review."
+          }
+        ]
+      }
+    ],
+    "users": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "role": "executor",
+    "plan": "Update SPEC.txt, run verification, and report for review",
+    "executor_calls": 1,
+    "finished": false,
+    "review_due": "",
+    "pending": {},
+    "response": {
+      "id": "resp_aero_9828e4169020490ebfbb29dab5882af6",
+      "object": "response",
+      "created_at": 1795182758,
+      "status": "completed",
+      "model": "aero/Legacy pair",
+      "output": [
+        {
+          "type": "function_call",
+          "call_id": "verify-legacy",
+          "name": "shell_command",
+          "arguments": "{\"command\": \"verify SPEC.txt\"}",
+          "id": "item_aero_e5c2fd7487804b35b8b6ebdd2dd5bc6c",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": 4,
+        "total_tokens": 24,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "error": null,
+      "incomplete_details": null,
+      "parallel_tool_calls": false
+    },
+    "compact_request": "22d389442c66c28554e4162eba03a119b76d49ee8a8b7f106488e9f633aeb9a1",
+    "compact_response": {
+      "id": "legacy-compact",
+      "object": "response.compaction",
+      "output": [
+        {
+          "id": "legacy-encrypted-checkpoint",
+          "type": "compaction",
+          "encrypted_content": "native-fixture-opaque"
+        }
+      ],
+      "usage": {
+        "input_tokens": 10,
+        "output_tokens": 2,
+        "total_tokens": 12,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "model": "aero/Legacy pair"
+    }
+  },
+  "request": {
+    "model": "aero/Legacy pair",
+    "input": [
+      {
+        "id": "legacy-encrypted-checkpoint",
+        "type": "compaction",
+        "encrypted_content": "native-fixture-opaque"
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "shell_command",
+        "parameters": {
+          "type": "object"
+        }
+      }
+    ]
+  }
+}

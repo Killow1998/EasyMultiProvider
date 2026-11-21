@@ -35,21 +35,22 @@ pub(super) fn automatic(
         .into_iter()
         .flatten()
         .filter(|account| available(account))
-        .filter_map(|account| Some((account["id"].as_str()?, account.get("quota"))));
+        .filter_map(|account| Some((account["id"].as_str()?, account.get("quota"), account)));
     let native = native_auth_document(&state.backend.accounts.native_auth_path)
         .filter(|auth| !crate::services::integration::enable::image_mcp_required(auth))
         .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
         .and_then(|auth| emp_codex::account_auth_headers(&auth))
-        .map(|_| ("@native", native_quota.as_ref()));
+        .map(|_| ("@native", native_quota.as_ref(), &Value::Null));
     let team_active = state.backend.modules.active(emp_modules::Module::Team);
     let mut best: Option<(&str, Option<f64>)> = None;
-    for (id, quota) in native.into_iter().chain(imported) {
+    for (id, quota, account) in native.into_iter().chain(imported) {
+        let source = state.backend.team.subscription_source(state, id, account);
         if limited.contains_key(id)
             || !image_supported(quota)
             || state
                 .backend
                 .team
-                .check_route(id, team_active, None)
+                .check_route(&source, team_active, None)
                 .is_err()
         {
             continue;
@@ -92,15 +93,6 @@ pub(super) fn account_route(
             RouteSource::ImplicitNative,
         )
     } else {
-        state
-            .backend
-            .team
-            .check_route(
-                id,
-                state.backend.modules.active(emp_modules::Module::Team),
-                None,
-            )
-            .map_err(|message| NativeHttpError::router(403, message))?;
         let account = config["accounts"]
             .as_array()
             .into_iter()
@@ -113,6 +105,16 @@ pub(super) fn account_route(
                     "The configured image account is disabled, removed or unavailable",
                 )
             })?;
+        let source = state.backend.team.subscription_source(state, id, account);
+        state
+            .backend
+            .team
+            .check_route(
+                &source,
+                state.backend.modules.active(emp_modules::Module::Team),
+                None,
+            )
+            .map_err(|message| NativeHttpError::router(403, message))?;
         if !image_supported(account.get("quota")) {
             return Err(NativeHttpError::router(
                 422,

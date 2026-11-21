@@ -58,30 +58,49 @@ impl TeamState {
             .map_err(|_| Failure(502, "invalid_workspace_reply".into()))?;
         let native =
             super::super::accounts::native_auth_document(&state.backend.accounts.native_auth_path);
-        let metadata = shares
+        let metadata: Vec<_> = shares
             .iter()
-            .map(|share| ShareMetadata {
-                id: share.id.clone(),
-                version: share.version,
-                valid_payload: share.payload.valid(),
-                duplicates_native: share.payload.subscription.as_ref().is_some_and(|auth| {
-                    native
-                        .as_ref()
-                        .is_some_and(|native| super::subscriptions::duplicates_native(native, auth))
-                }),
+            .map(|share| {
+                let valid_payload = share.payload.valid();
+                let duplicates_native = valid_payload
+                    && valid_identifier(&share.id)
+                    && share.version > 0
+                    && share.payload.subscription.as_ref().is_some_and(|auth| {
+                        native.as_ref().is_some_and(|native| {
+                            super::subscriptions::duplicates_native(native, auth)
+                        })
+                    });
+                ShareMetadata {
+                    id: share.id.clone(),
+                    version: share.version,
+                    valid_payload,
+                    duplicates_native,
+                }
             })
             .collect();
+        let native_duplicates = metadata
+            .iter()
+            .enumerate()
+            .filter(|(_, share)| share.duplicates_native)
+            .map(|(index, _)| index)
+            .collect::<BTreeSet<_>>();
         let plan: SyncPlan = policy(state, Request::SyncShares { shares: metadata })?;
         let selected = plan
             .selected
             .into_iter()
-            .map(|index| {
+            .map(|index| (index, true))
+            .chain(native_duplicates.into_iter().map(|index| (index, false)))
+            .map(|(index, install)| {
                 shares
                     .get(index)
+                    .map(|share| (share, install))
                     .ok_or_else(|| Failure(400, "invalid_module_reply".into()))
             })
             .collect::<Result<Vec<_>>>()?;
-        let available: BTreeSet<_> = selected.iter().map(|share| share.id.as_str()).collect();
+        let available: BTreeSet<_> = selected
+            .iter()
+            .map(|(share, _)| share.id.as_str())
+            .collect();
         let mut access_changed = access_changed;
         for record in store
             .imported
@@ -101,35 +120,44 @@ impl TeamState {
             .retain(|_, record| record.expires_at.is_some());
         let mut credentials = Vec::new();
         let mut changed = 0;
-        for share in selected {
+        for (share, install) in selected {
             let local_id = format!("team-{}", share.id);
             let metadata = store.imported.get(&local_id);
-            if super::subscriptions::stage(
-                state,
-                &mut updated,
-                session,
-                &local_id,
-                metadata,
-                share,
-                &mut credentials,
-            )? {
-                let expires_at = share
-                    .payload
-                    .subscription
-                    .as_ref()
-                    .map(|auth| auth.expires_at);
-                store.imported.insert(
-                    local_id,
-                    Imported {
-                        workspace: workspace.clone(),
-                        share: share.id.clone(),
-                        version: share.version,
-                        available: true,
-                        expires_at,
-                    },
-                );
+            if install
+                && super::subscriptions::stage(
+                    state,
+                    &mut updated,
+                    session,
+                    &local_id,
+                    metadata,
+                    share,
+                    &mut credentials,
+                )?
+            {
                 changed += 1;
             }
+            let auth = share
+                .payload
+                .subscription
+                .as_ref()
+                .ok_or_else(|| Failure(502, "invalid_workspace_share".into()))?;
+            let account_identity = super::subscriptions::identity(auth);
+            access_changed |= metadata.is_none_or(|record| {
+                record.account_identity.as_deref() != Some(account_identity.as_str())
+                    || record.version != share.version
+                    || record.expires_at != Some(auth.expires_at)
+            });
+            store.imported.insert(
+                local_id,
+                Imported {
+                    workspace: workspace.clone(),
+                    share: share.id.clone(),
+                    version: share.version,
+                    available: true,
+                    expires_at: Some(auth.expires_at),
+                    account_identity: Some(account_identity),
+                },
+            );
         }
         if changed > 0 || access_changed || !legacy_paths.is_empty() || *config != updated {
             emp_state::config::preserve_service_route_names(&config, &mut updated);
@@ -153,7 +181,7 @@ impl TeamState {
         Ok(json!({"synced":changed,"skipped_native":plan.skipped_native}))
     }
 
-    pub(super) fn purge_local(&self, state: &ServerState) -> Result<()> {
+    pub(crate) fn purge_local(&self, state: &ServerState) -> Result<()> {
         let settings = &state.backend.configuration;
         let mut config = settings.edit().map_err(|_| Failure::unavailable())?;
         let mut updated = config.clone();

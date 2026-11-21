@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::TcpStream;
 
+mod aero;
 mod claude;
 mod control;
 mod duplex;
@@ -44,6 +45,13 @@ struct ObservedWebSocket<'a, 'stream> {
     codex: bool,
 }
 impl ObservedWebSocket<'_, '_> {
+    fn warmup(&mut self) -> Result<(), emp_transport::WebSocketError> {
+        let id = "";
+        let usage = serde_json::json!({"input_tokens":0,"input_tokens_details":Value::Null,"output_tokens":0,"output_tokens_details":Value::Null,"total_tokens":0});
+        self.send_json(&serde_json::json!({"type":"response.created","response":{"id":id}}))?;
+        self.send_json(&serde_json::json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","output":[],"usage":usage}}))
+    }
+
     fn reject(
         &mut self,
         state: &ServerState,
@@ -208,6 +216,9 @@ pub(crate) fn serve_responses_websocket(
         Ok(websocket) => websocket,
         Err(_) => return,
     };
+    websocket.enable_responses_capacity(std::sync::Arc::clone(
+        &state.backend.transport.request_limits,
+    ));
     let Some(_websocket_permit) = state.connection_admission.acquire_websocket() else {
         state.backend.diagnostics.journal.event(
             "warning",
@@ -255,6 +266,7 @@ pub(crate) fn serve_responses_websocket(
                 return;
             }
         };
+        let _request_budget = websocket.take_request_budget();
         if request
             .source
             .and_then(|source| source.caller.as_ref())
@@ -363,6 +375,50 @@ pub(crate) fn serve_responses_websocket(
         let etag = response_catalog_etag(state).unwrap_or_default();
         if websocket.send_json(&serde_json::json!({"type":"codex.response.metadata","headers":{"x-models-etag":etag}})).is_err(){return;}
         websocket.observation.phase(Phase::ResolveRoute);
+        if let Some(config) = crate::api::aero::selected_config(state, &request_body) {
+            let generate = request_body.as_object_mut().unwrap().remove("generate");
+            if generate == Some(Value::Bool(false)) {
+                websocket.observation.diagnostic_only("aero");
+                let result = if state.backend.modules.active(emp_modules::Module::Aero) {
+                    websocket.warmup()
+                } else {
+                    websocket.send_json(&emp_websocket_error(
+                        404,
+                        "module_disabled",
+                        "Enable the Aero module to use this model.",
+                    ))
+                };
+                if result.is_err() {
+                    return;
+                }
+                continue;
+            }
+            let Some(socket) = monitor_stream.as_ref() else {
+                return;
+            };
+            request_body["stream"] = Value::Bool(true);
+            let request_headers = websocket.observation.headers(incoming.clone());
+            let result = control::run(
+                state,
+                &mut websocket,
+                socket,
+                &mut native_session.pending_request,
+                |websocket, monitor| {
+                    aero::serve(
+                        state,
+                        &config,
+                        &request_body,
+                        (request, &request_headers),
+                        websocket,
+                        monitor,
+                    )
+                },
+            );
+            if matches!(result, TurnResult::Closed) {
+                return;
+            }
+            continue;
+        }
         let (config, route, mut request_body) = match crate::services::memory_routing::prepare(
             state,
             request_body,
@@ -600,15 +656,9 @@ pub(crate) fn serve_responses_websocket(
             // HTTP and CLI adapters do not retain a server-side response.
             // Codex treats an empty response id as a non-resumable warmup and
             // sends the full first request, rather than an incremental one.
-            let id = "";
-            let usage = serde_json::json!({"input_tokens":0,"input_tokens_details":Value::Null,"output_tokens":0,"output_tokens_details":Value::Null,"total_tokens":0});
-            if websocket
-                .send_json(&serde_json::json!({"type":"response.created","response":{"id":id}}))
-                .is_err()
-            {
+            if websocket.warmup().is_err() {
                 return;
             }
-            if websocket.send_json(&serde_json::json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","output":[],"usage":usage}})).is_err(){return;}
             continue;
         }
         body.remove("generate");

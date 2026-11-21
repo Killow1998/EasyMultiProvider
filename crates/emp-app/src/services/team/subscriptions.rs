@@ -71,6 +71,17 @@ fn document(auth: &SubscriptionSnapshot) -> Value {
     }})
 }
 
+pub(super) fn identity(auth: &SubscriptionSnapshot) -> String {
+    emp_state::accounts::account_auth_identity(&document(auth))
+}
+
+pub(super) fn stored_identity(vault: &VaultStore, account: &Value) -> Option<String> {
+    let path = std::path::Path::new(account["auth_file"].as_str()?);
+    let document = vault.read_encrypted_json(path).ok()?;
+    emp_codex::account_auth_headers(&document)?;
+    Some(emp_state::accounts::account_auth_identity(&document))
+}
+
 pub(super) fn owns_credential(account: &Value, path: &std::path::Path) -> bool {
     account["workspace_shared"] == true
         && account["auth_file"]

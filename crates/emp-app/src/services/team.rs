@@ -1,4 +1,7 @@
+mod access;
 mod budget_notices;
+mod commands;
+pub(crate) use commands::Command;
 mod discovery;
 mod sharing;
 mod subscriptions;
@@ -7,7 +10,7 @@ mod transport;
 use crate::app::ServerState;
 use emp_modules::{
     Module,
-    team::{BudgetStatus, IdentityKey, IdentityPlan, Operation, ReportPlan, Request},
+    team::{BudgetStatuses, IdentityKey, IdentityPlan, Operation, ReportPlan, Request},
     workspace::Role,
 };
 use emp_state::config::is_team_service_id;
@@ -15,7 +18,7 @@ use emp_state::{FilesystemError, VaultStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
-use transport::{plan_endpoint, policy, request, send};
+use transport::{policy, request, send};
 
 #[derive(Clone, Deserialize, Serialize)]
 struct Session {
@@ -50,6 +53,8 @@ struct Imported {
     available: bool,
     #[serde(default)]
     expires_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account_identity: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize, Default)]
@@ -65,7 +70,7 @@ struct Store {
 #[derive(Deserialize)]
 struct ReportReceipt {
     inserted: usize,
-    budget: BudgetStatus,
+    budget: BudgetStatuses,
 }
 
 pub(crate) struct TeamState {
@@ -73,6 +78,7 @@ pub(crate) struct TeamState {
     store: Mutex<Option<Store>>,
     configured_shares: std::collections::BTreeSet<String>,
     operations: Mutex<()>,
+    background: Mutex<()>,
     events: tokio::sync::Notify,
     discovery: discovery::Discovery,
     budget_notices: budget_notices::Notices,
@@ -144,6 +150,18 @@ impl TeamState {
             store.session = None;
             store.recovery_required = true;
         }
+        if let Some(store) = &mut store {
+            for account in config["accounts"].as_array().expect("normalized accounts") {
+                if account["workspace_shared"] == true
+                    && let Some(id) = account["id"].as_str()
+                    && let Some(record) = store.imported.get_mut(id)
+                    && record.account_identity.is_none()
+                    && record.expires_at.is_some()
+                {
+                    record.account_identity = subscriptions::stored_identity(vault, account);
+                }
+            }
+        }
         let budget_notices =
             budget_notices::Notices::open(path.with_file_name("team-budget-notices.json"));
         Self {
@@ -151,6 +169,7 @@ impl TeamState {
             store: Mutex::new(store),
             configured_shares,
             operations: Mutex::new(()),
+            background: Mutex::new(()),
             events: Default::default(),
             discovery: Default::default(),
             budget_notices,
@@ -225,9 +244,19 @@ impl TeamState {
         Ok(())
     }
 
-    pub(crate) fn remove_module_data(&self, state: &ServerState) -> Result<()> {
-        let _operation = self.operations.lock().map_err(|_| Failure::unavailable())?;
-        self.purge_local(state)
+    pub(crate) fn change_module(
+        &self,
+        state: &ServerState,
+        change: impl FnOnce() -> std::result::Result<(), String>,
+    ) -> std::result::Result<(), String> {
+        let _operation = self.operations.lock().map_err(|_| "module_unavailable")?;
+        let _background = self.background.lock().map_err(|_| "module_unavailable")?;
+        change()?;
+        if !state.backend.modules.active(Module::Team) {
+            self.discovery.stop();
+        }
+        self.event_ready();
+        Ok(())
     }
 
     pub(crate) fn local_status(&self) -> Result<Value> {
@@ -258,131 +287,6 @@ impl TeamState {
         self.budget_notices.take_desktop()
     }
 
-    pub(crate) fn command(
-        &self,
-        state: &ServerState,
-        operation: &str,
-        body: &Value,
-    ) -> Result<Value> {
-        if operation == "discover" {
-            return self.discovery.find(state);
-        }
-        let _operation = self.operations.lock().map_err(|_| Failure::unavailable())?;
-        let mut store = self.snapshot()?;
-        if operation == "join" {
-            let base = body["base"].as_str().ok_or_else(Failure::invalid)?;
-            return request(state, base, None, Operation::Join, Some(body));
-        }
-        if operation == "login" {
-            let base = body["base"].as_str().ok_or_else(Failure::invalid)?;
-            let name = body["name"].as_str().ok_or_else(Failure::invalid)?;
-            let password = body["password"].as_str().ok_or_else(Failure::invalid)?;
-            if store.device.is_empty() {
-                store.device = crate::util::random_hex(16).map_err(|_| Failure::unavailable())?;
-            }
-            let mut identity = request(
-                state,
-                base,
-                None,
-                Operation::Login,
-                Some(&json!({
-                    "name":name,"password":password,"device":store.device,
-                })),
-            )?;
-            let token = identity
-                .as_object_mut()
-                .and_then(|value| value.remove("token"))
-                .and_then(|value| value.as_str().map(str::to_owned))
-                .ok_or_else(Failure::unavailable)?;
-            plan_identity(state, None, &identity)?;
-            store.session = Some(Session {
-                base: base.to_owned(),
-                token,
-                identity,
-            });
-            store.recovery_required = false;
-            self.save_store(state, store)?;
-            self.events.notify_one();
-            super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
-            return self.local_status();
-        }
-        let session = store.session.as_mut().ok_or_else(Failure::signed_out)?;
-        let base = session.base.as_str();
-        let token = Some(session.token.as_str());
-        let response = match operation {
-            "status" => {
-                self.refresh_status(state, store)?;
-                return self.local_status();
-            }
-            "logout" | "handover" => {
-                if operation == "handover" {
-                    request(state, base, token, Operation::Handover, Some(body))?;
-                } else if session.identity["member"]["role"] == "vps_admin" {
-                    return Err(Failure(403, "workspace_permission_required".into()));
-                }
-                if let Err(error) = request(state, base, token, Operation::Logout, Some(&json!({})))
-                    && error.0 < 500
-                    && error.0 != 401
-                {
-                    return Err(error);
-                }
-                self.purge_local(state)?;
-                return self.local_status();
-            }
-            "publish" => return self.publish(state, session, body),
-            "sync" => return self.sync(state, store),
-            "usage" => {
-                self.events.notify_one();
-                if let Some(period) = body.get("period") {
-                    request(
-                        state,
-                        base,
-                        token,
-                        Operation::UsageFiltered,
-                        Some(&json!({"period":period})),
-                    )?
-                } else {
-                    request(state, base, token, Operation::Usage, None)?
-                }
-            }
-            "members" => request(state, base, token, Operation::Members, Some(body))?,
-            "member_access" => request(state, base, token, Operation::MemberAccess, Some(body))?,
-            "reject_member" => request(state, base, token, Operation::RejectMember, Some(body))?,
-            "budget" => request(state, base, token, Operation::Budget, Some(body))?,
-            "review_service" => request(state, base, token, Operation::ReviewService, Some(body))?,
-            "member_tiers" => request(state, base, token, Operation::MemberTiers, Some(body))?,
-            "profile" => request(state, base, token, Operation::Profile, Some(body))?,
-            "profile_visibility" => {
-                request(state, base, token, Operation::ProfileVisibility, Some(body))?
-            }
-            "subscription_reminder" => request(
-                state,
-                base,
-                token,
-                Operation::SubscriptionReminder,
-                Some(body),
-            )?,
-            "profiles" => request(state, base, token, Operation::Profiles, None)?,
-            "overview" => request(state, base, token, Operation::Overview, None)?,
-            "audit" => request(state, base, token, Operation::Audit, Some(body))?,
-            "backup" => request(state, base, token, Operation::Backup, None)?,
-            "subscriptions" => request(state, base, token, Operation::Subscriptions, None)?,
-            "list_members" => request(state, base, token, Operation::ListMembers, None)?,
-            "shared_services" => request(state, base, token, Operation::SharedServices, None)?,
-            "join_code" => request(state, base, token, Operation::JoinCode, None)?,
-            "issue_invite" => {
-                let endpoint = plan_endpoint(state, base, Operation::IssueInvite)?;
-                let reply = send(state, &endpoint, token, Some(b"{}".to_vec()))?;
-                if let Some(origin) = endpoint.announcement_origin {
-                    let _ = self.discovery.announce(state, &origin, &reply);
-                }
-                reply
-            }
-            _ => return Err(Failure::invalid()),
-        };
-        Ok(response)
-    }
-
     fn refresh_status(&self, state: &ServerState, mut store: Store) -> Result<IdentityPlan> {
         let session = store.session.as_mut().ok_or_else(Failure::signed_out)?;
         let (identity, plan) = remote_identity(state, session)?;
@@ -394,180 +298,6 @@ impl TeamState {
         Ok(plan)
     }
 
-    pub(crate) fn scope(&self, provider: &str) -> Option<Value> {
-        let store = self.store.lock().ok()?;
-        let store = store.as_ref()?;
-        let source = store
-            .imported
-            .get(provider)
-            .filter(|source| source.usable())?;
-        let session = store.session.as_ref().filter(|session| {
-            session.workspace() == source.workspace && session.identity["member"]["sync"] == true
-        })?;
-        Some(json!({
-            "scope":session.scope(&store.device),
-            "share":source.share,
-        }))
-    }
-
-    pub(crate) fn check_route(
-        &self,
-        provider: &str,
-        active: bool,
-        tier: Option<&str>,
-    ) -> std::result::Result<(), &'static str> {
-        if !is_team_service_id(provider) {
-            return Ok(());
-        }
-        let store = self
-            .store
-            .lock()
-            .map_err(|_| "Team workspace is unavailable")?;
-        let store = store.as_ref().ok_or("Team workspace is unavailable")?;
-        let Some(record) = store.imported.get(provider) else {
-            return if self.configured_shares.contains(provider) {
-                Err("This team's service is not currently shared with you")
-            } else {
-                Ok(())
-            };
-        };
-        if record.expires_at.is_none() {
-            return Err("This team's service is not currently shared with you");
-        }
-        let session = store
-            .session
-            .as_ref()
-            .filter(|session| {
-                active
-                    && record.usable()
-                    && session.workspace() == record.workspace
-                    && session.identity["member"]["sync"] == true
-            })
-            .ok_or("This team's service is not currently shared with you")?;
-        let member = &session.identity["member"];
-        match tier {
-            Some("ultrafast") if member["ultrafast"] != true => {
-                Err("Ultrafast is not permitted for this workspace member")
-            }
-            Some("priority" | "fast") if member["fast"] != true => {
-                Err("Fast is not permitted for this workspace member")
-            }
-            _ => Ok(()),
-        }
-    }
-
-    pub(crate) fn unavailable_providers<'a>(
-        &self,
-        active: bool,
-        config: &'a Value,
-    ) -> Vec<&'a str> {
-        ["accounts", "providers"]
-            .into_iter()
-            .flat_map(|kind| config[kind].as_array().expect("normalized services"))
-            .filter_map(|entry| entry["id"].as_str())
-            .filter(|id| is_team_service_id(id) && self.check_route(id, active, None).is_err())
-            .collect()
-    }
-
-    pub(crate) fn shared_subscription(&self, id: &str) -> bool {
-        is_team_service_id(id)
-            && (self.configured_shares.contains(id)
-                || self.store.lock().map_or(true, |store| {
-                    store
-                        .as_ref()
-                        .is_none_or(|store| store.imported.contains_key(id))
-                }))
-    }
-
-    pub(crate) fn exclude_shared_migration_providers(&self, config: &mut Value) -> Result<()> {
-        let store = self.snapshot()?;
-        let shared = |id: &str| {
-            store
-                .imported
-                .get(id)
-                .is_some_and(|record| record.expires_at.is_none())
-        };
-        config["providers"]
-            .as_array_mut()
-            .expect("normalized providers")
-            .retain(|provider| !provider["id"].as_str().is_some_and(shared));
-        config["models"]
-            .as_array_mut()
-            .expect("normalized models")
-            .retain(|model| !model["provider"].as_str().is_some_and(shared));
-        config["model_groups"]
-            .as_array_mut()
-            .expect("normalized model groups")
-            .retain(|group| {
-                !group["sources"]
-                    .as_array()
-                    .expect("normalized sources")
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .filter_map(|source| source.split_once('/'))
-                    .any(|(provider, _)| shared(provider))
-            });
-        Ok(())
-    }
-
-    pub(crate) fn label_subscription_permissions(&self, accounts: &mut Value) {
-        let Ok(store) = self.store.lock() else {
-            return;
-        };
-        let Some(store) = store.as_ref() else { return };
-        for account in accounts.as_array_mut().expect("public account list") {
-            let Some(id) = account["id"].as_str().filter(|id| {
-                store.imported.contains_key(*id) || self.configured_shares.contains(*id)
-            }) else {
-                continue;
-            };
-            let can_reset = store.imported.get(id).is_some_and(|record| {
-                record.usable()
-                    && store.session.as_ref().is_some_and(|session| {
-                        session.workspace() == record.workspace
-                            && session.identity["member"]["sync"] == true
-                            && matches!(
-                                session.identity["member"]["role"].as_str(),
-                                Some("team_admin" | "vps_admin")
-                            )
-                    })
-            });
-            account["team_shared"] = json!(true);
-            account["team_reset_allowed"] = json!(can_reset);
-        }
-    }
-
-    pub(crate) fn shared_subscription_reset(&self, state: &ServerState, id: &str) -> bool {
-        if !self.shared_subscription(id) {
-            return true;
-        }
-        let Ok(store) = self.snapshot() else {
-            return false;
-        };
-        let Some(record) = store.imported.get(id) else {
-            return false;
-        };
-        let Some(session) = store.session.filter(|session| {
-            record.usable()
-                && session.workspace() == record.workspace
-                && matches!(
-                    session.identity["member"]["role"].as_str(),
-                    Some("team_admin" | "vps_admin")
-                )
-        }) else {
-            return false;
-        };
-        state.backend.modules.active(Module::Team)
-            && request(
-                state,
-                &session.base,
-                Some(&session.token),
-                Operation::ResetAuthority,
-                Some(&json!({"share":record.share,"version":record.version})),
-            )
-            .is_ok_and(|reply| reply["workspace"] == record.workspace)
-    }
-
     pub(crate) fn event_ready(&self) {
         self.events.notify_one();
     }
@@ -577,19 +307,33 @@ impl TeamState {
         let runtime = &state.backend.transport.runtime;
         let mut next_budget_check = std::time::Instant::now();
         loop {
+            let active = state.backend.modules.active(Module::Team);
             let stopped = runtime.block_on(async {
                 tokio::select! {
                     () = state.wait_for_shutdown() => true,
                     () = team.events.notified() => false,
-                    () = tokio::time::sleep(Duration::from_secs(15)) => false,
+                    () = tokio::time::sleep(Duration::from_secs(15)), if active => false,
                 }
             });
             if stopped {
                 break;
             }
+            let Ok(_background) = team.background.lock() else {
+                break;
+            };
+            if !state.backend.modules.active(Module::Team) {
+                next_budget_check = std::time::Instant::now();
+                continue;
+            }
             let _ = team.flush(state);
             if std::time::Instant::now() >= next_budget_check {
                 next_budget_check = std::time::Instant::now() + Duration::from_secs(60);
+                if let Ok(_operation) = team.operations.try_lock()
+                    && let Ok(store) = team.snapshot()
+                    && store.session.is_some()
+                {
+                    let _ = team.refresh_status(state, store);
+                }
                 if let Ok(store) = team.snapshot()
                     && let Some(session) = store.session
                     && let Ok(reply) = request(
@@ -654,7 +398,7 @@ impl TeamState {
             .map_err(|_| Failure::unavailable())
     }
 
-    fn observe_budget(&self, state: &ServerState, session: &Session, budget: BudgetStatus) {
+    fn observe_budget(&self, state: &ServerState, session: &Session, budget: BudgetStatuses) {
         let english = state
             .backend
             .configuration
@@ -666,7 +410,11 @@ impl TeamState {
                 .and_then(|store| store.session.as_ref())
                 .is_some_and(|current| current.token == session.token)
         {
-            self.budget_notices.observe(state, english, session, budget);
+            self.budget_notices
+                .observe(state, english, session, budget.daily);
+            if let Some(weekly) = budget.weekly {
+                self.budget_notices.observe(state, english, session, weekly);
+            }
         }
     }
 }

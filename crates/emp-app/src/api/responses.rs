@@ -83,6 +83,17 @@ pub(crate) fn responses_request(
     let incoming = request.incoming();
     let incoming = observation.headers(incoming);
     observation.phase(Phase::ResolveRoute);
+    if let Some(config) = crate::api::aero::selected_config(state, &body) {
+        return crate::api::aero::relay(
+            stream,
+            state,
+            &config,
+            &body,
+            (request, &incoming),
+            observation,
+            false,
+        );
+    }
     let PreparedRequest {
         config,
         route,

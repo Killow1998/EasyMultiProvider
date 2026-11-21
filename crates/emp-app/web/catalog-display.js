@@ -11,7 +11,7 @@ function usableContext(model) {
 }
 function canonicalDisplayName(value) { return String(value || '').replace(/^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+/, '').replace(/\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$/, ''); }
 
-function createCatalogDisplay({getState, $, tr, t, esc, api, notice, cloneState, persistState, syncSavedCatalog, openModal, closeModal, activityIndicatorHtml, updateActivityDots}) {
+function createCatalogDisplay({getState, $, tr, t, esc, api, notice, cloneState, persistState, syncSavedCatalog, openModal, closeModal, activityIndicatorHtml, updateActivityDots, editModuleModel = () => false}) {
   function familyPresentationFor(family) {
     const state = getState();
     const fallback = state.catalog_families.find(item => item.id === family)?.presentation;
@@ -128,6 +128,7 @@ function createCatalogDisplay({getState, $, tr, t, esc, api, notice, cloneState,
   function catalogSourceLabels(route) {
     const state = getState();
     const id = route.id;
+    if (route.sources) return route.sources.flatMap(id => catalogSourceLabels({id}));
     const group=state.model_groups.find(item=>item.id===id);
     if(group)return group.sources.flatMap(id=>catalogSourceLabels({id}));
     const provider=state.providers.find(item=>id.startsWith(item.id+'/'));
@@ -163,6 +164,7 @@ function createCatalogDisplay({getState, $, tr, t, esc, api, notice, cloneState,
   }
   function openCatalogDisplayEditor(family) {
     const group = getState().catalog_families.find(item => item.id === family); if (!group) return;
+    if (editModuleModel(group.routes[0]?.source_type, family)) return;
     const presentation = familyPresentationFor(family);
     const routes = [...new Set(group.routes.flatMap(catalogSourceLabels))].join(' · ');
     openModal(tr("core.edit_model_display"), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr("core.display_name"))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label>`, tr("core.done"), async () => {

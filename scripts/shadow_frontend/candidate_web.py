@@ -8,8 +8,6 @@ from urllib.parse import urlsplit
 
 BACKEND_ASSETS = {
     '/assets/app-icon.png', '/assets/app-icon-source.png',
-    '/assets/module-decision.js', '/assets/module-gateway.js',
-    '/assets/module-aggregate.js', '/assets/module-team.js',
 }
 
 
@@ -50,13 +48,15 @@ def candidate_frontend(stack, backend, web, index_extra="", port=0, index_head="
 
         def serve(self):
             path = urlsplit(self.path).path
+            backend_asset = path in BACKEND_ASSETS or (path.startswith('/assets/module-') and path.endswith('.js')
+                                                       and path != '/assets/module-settings.js')
             if self.command == 'GET' and path in (pages or {}):
                 body = pages[path]().encode()
                 status, content_type = 200, 'text/html; charset=utf-8'
             elif path.startswith('/api/recovery'):
                 # Recovery demos simulate requests in the page; never forward a reset.
                 status, content_type, body = 403, 'application/json', b'{"error":"preview_only"}'
-            elif self.command == 'GET' and (path == '/' or path.startswith('/assets/')) and path not in BACKEND_ASSETS:
+            elif self.command == 'GET' and (path == '/' or path.startswith('/assets/')) and not backend_asset:
                 name = 'index.html' if path == '/' else path.removeprefix('/assets/')
                 asset = asset_file(web, name)
                 if asset is None or not asset.is_file():

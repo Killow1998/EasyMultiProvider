@@ -45,7 +45,7 @@ fn module_artifacts() -> impl Iterator<Item = String> {
         ("macos", "aarch64"),
     ]
     .into_iter()
-    .flat_map(|(os, arch)| emp_modules::Module::ALL.map(|module| module.asset_for(os, arch)))
+    .flat_map(|(os, arch)| emp_modules::Module::STANDARD.map(|module| module.asset_for(os, arch)))
 }
 
 pub fn validate_command(args: &[String]) -> Result {

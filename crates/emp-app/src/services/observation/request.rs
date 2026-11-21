@@ -91,6 +91,12 @@ impl RequestObservation {
     pub(crate) fn errors(&self) -> &crate::services::error_presentation::ErrorPresentation {
         &self.errors
     }
+    pub(crate) fn diagnostic_only(&mut self, route: &str) {
+        self.ledger = None;
+        self.reports_changed = None;
+        self.fields["route"] = json!(route);
+    }
+
     pub(crate) fn with_ledger(
         mut self,
         ledger: Arc<emp_state::usage::ledger::UsageLedger>,

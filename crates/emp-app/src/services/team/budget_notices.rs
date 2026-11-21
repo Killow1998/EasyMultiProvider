@@ -1,6 +1,6 @@
 use super::{Session, policy};
 use crate::app::ServerState;
-use emp_modules::team::{BudgetNotice, BudgetOccurrence, BudgetStatus, Request};
+use emp_modules::team::{BudgetKind, BudgetNotice, BudgetOccurrence, BudgetStatus, Request};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{fs, path::PathBuf, sync::Mutex};
@@ -14,13 +14,15 @@ struct Notice {
     reached: bool,
     used: i64,
     limit: i64,
+    #[serde(default)]
+    kind: BudgetKind,
 }
 
 pub(super) struct Notices {
     path: PathBuf,
     history: Mutex<Vec<Notice>>,
     #[cfg(windows)]
-    pending_desktop: Mutex<Option<(String, String)>>,
+    pending_desktop: Mutex<std::collections::VecDeque<(String, String)>>,
 }
 
 impl Notices {
@@ -33,7 +35,7 @@ impl Notices {
             path,
             history: Mutex::new(history),
             #[cfg(windows)]
-            pending_desktop: Mutex::new(None),
+            pending_desktop: Mutex::default(),
         }
     }
 
@@ -42,8 +44,8 @@ impl Notices {
             return json!([]);
         };
         json!(history.iter().filter(|entry| entry.belongs_to(session)).map(|entry| json!({
-            "id": format!("team-budget-{}-{}-{}-{}", entry.workspace,entry.member,entry.day,entry.reached),
-            "at":entry.at,"reached":entry.reached,"used":entry.used,"limit":entry.limit
+            "id": format!("{}-{}-{}-{}-{}", entry.id_prefix(),entry.workspace,entry.member,entry.day,entry.reached),
+            "at":entry.at,"reached":entry.reached,"used":entry.used,"limit":entry.limit,"kind":entry.kind
         })).collect::<Vec<_>>())
     }
 
@@ -57,9 +59,10 @@ impl Notices {
         let Ok(mut history) = self.history.lock() else {
             return;
         };
+        let kind = status.kind;
         let previous = history
             .iter()
-            .filter(|entry| entry.belongs_to(session))
+            .filter(|entry| entry.belongs_to(session) && entry.kind == kind)
             .map(|entry| BudgetOccurrence {
                 day: entry.day,
                 reached: entry.reached,
@@ -91,6 +94,7 @@ impl Notices {
             reached,
             used,
             limit,
+            kind,
         });
         let expired = history.len().saturating_sub(50);
         let raw = serde_json::to_vec(&history[expired..]).expect("budget notices serialize");
@@ -104,17 +108,24 @@ impl Notices {
         crate::cli::desktop::notify_budget(&title, message);
         #[cfg(windows)]
         if let Ok(mut pending) = self.pending_desktop.lock() {
-            *pending = Some((title, message));
+            pending.push_back((title, message));
         }
     }
 
     #[cfg(windows)]
     pub(super) fn take_desktop(&self) -> Option<(String, String)> {
-        self.pending_desktop.lock().ok()?.take()
+        self.pending_desktop.lock().ok()?.pop_front()
     }
 }
 
 impl Notice {
+    fn id_prefix(&self) -> &'static str {
+        match self.kind {
+            BudgetKind::DailyUsd => "team-budget",
+            BudgetKind::WeeklyUsd => "team-weekly-usds",
+        }
+    }
+
     fn belongs_to(&self, session: &Session) -> bool {
         self.workspace == session.workspace() && self.member == session.member()
     }

@@ -19,7 +19,8 @@ class Release(BaseHTTPRequestHandler):
         releases = {tag: self.server.assets, **getattr(self.server, 'module_releases', {})}
 
         def metadata(release_tag, assets):
-            return dict(tag_name=release_tag, draft=False, prerelease='-beta' in release_tag, assets=[
+            notes = getattr(self.server, 'release_notes', {}).get(release_tag)
+            return dict(tag_name=release_tag, draft=False, prerelease='-beta' in release_tag, body=notes, assets=[
                 dict(name=name, size=len(data), digest='sha256:' + hashlib.sha256(data).hexdigest(),
                      browser_download_url=f'http://127.0.0.1:{self.server.server_port}/releases/download/{release_tag}/{name}')
                 for name, data in assets.items()
@@ -36,6 +37,8 @@ class Release(BaseHTTPRequestHandler):
             body = json.dumps([metadata(release_tag, assets) for release_tag, assets in entries]).encode()
         elif self.path.startswith('/releases/download/'):
             release_tag, name = self.path.rsplit('/', 2)[-2:]
+            if hasattr(self.server, 'package_requests'):
+                self.server.package_requests.append(release_tag)
             if name not in releases.get(release_tag, {}):
                 self.send_error(404)
                 return

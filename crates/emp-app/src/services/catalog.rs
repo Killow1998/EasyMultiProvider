@@ -67,6 +67,14 @@ pub(crate) fn client_catalog(state: &ServerState, config: &Value) -> Value {
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn server_catalog(state: &ServerState, config: &Value) -> Value {
+    let mut catalog = source_catalog(state, config);
+    if state.backend.modules.active(emp_modules::Module::Aero) {
+        super::modules::aero::augment_catalog(config, &mut catalog);
+    }
+    catalog
+}
+
+pub(crate) fn source_catalog(state: &ServerState, config: &Value) -> Value {
     let hide_aggregates = !state.backend.modules.active(emp_modules::Module::Aggregate)
         && config["model_groups"]
             .as_array()
@@ -94,9 +102,10 @@ pub(crate) fn server_catalog(state: &ServerState, config: &Value) -> Value {
                         .any(|provider| model["provider"] == *provider)
                 });
         }
-        return catalog_sources(state, &visible).merged(&visible);
+        catalog_sources(state, &visible).merged(&visible)
+    } else {
+        catalog_sources(state, config).merged(config)
     }
-    catalog_sources(state, config).merged(config)
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -108,7 +117,15 @@ pub(crate) fn public_configuration(
     state: &ServerState,
     config: &Value,
 ) -> Result<Value, emp_state::ConfigError> {
-    catalog_sources(state, config).public_configuration(state, config)
+    let mut public = catalog_sources(state, config).public_configuration(state, config)?;
+    if state.backend.modules.active(emp_modules::Module::Aero) {
+        public["aero_profiles"] = config
+            .get("aero_profiles")
+            .cloned()
+            .unwrap_or(serde_json::json!([]));
+        super::modules::aero::augment_public(config, &mut public);
+    }
+    Ok(public)
 }
 
 pub(crate) fn subscription_options(

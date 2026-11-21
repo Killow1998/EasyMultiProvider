@@ -1,4 +1,5 @@
 pub(crate) mod accounts;
+pub(crate) mod aero;
 pub(crate) mod app_icon;
 pub(crate) mod catalog;
 pub(crate) mod compact;

@@ -58,7 +58,6 @@ pub(super) fn resolve(
             .lock()
             .ok()
             .and_then(|quota| quota.clone());
-        let team_active = state.backend.modules.active(Module::Team);
         let tier = body.get("service_tier").and_then(Value::as_str);
         for source in group["sources"].as_array().expect("normalized sources") {
             let source = source.as_str().expect("normalized source");
@@ -70,7 +69,7 @@ pub(super) fn resolve(
             if state
                 .backend
                 .team
-                .check_route(&route.provider_id, team_active, tier)
+                .check_model_route(state, &route, tier)
                 .is_err()
             {
                 continue;

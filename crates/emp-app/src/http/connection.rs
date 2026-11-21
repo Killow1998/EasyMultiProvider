@@ -59,9 +59,14 @@ pub(crate) fn handle_connection(
     };
     request.observation_id = observation_id.as_deref();
     let peer = stream.peer_addr().ok().map(|peer| peer.ip());
+    let delegation = crate::http::auth::aero_delegation(request, state, peer);
     let source = crate::http::request::RequestSource {
-        caller: crate::http::auth::proxy_identity(request, state, system_now(), peer),
+        caller: delegation
+            .as_ref()
+            .map(|call| call.caller.clone())
+            .or_else(|| crate::http::auth::proxy_identity(request, state, system_now(), peer)),
         peer,
+        delegation,
     };
     request.source = Some(&source);
     observation.received(request);
@@ -281,14 +286,17 @@ pub(crate) fn handle_connection(
                 state,
                 now,
             )),
-            (RequestMethod::Post, "/v1/responses/compact") => Some(compact_request(
+            (RequestMethod::Post, "/v1/responses/compact") => match compact_request(
                 &mut stream,
                 request,
                 raw.body_prefix,
                 state,
                 now,
                 observation.model.as_mut().expect("model HTTP observation"),
-            )),
+            ) {
+                ResponsesRequestResult::Buffered(response) => Some(response),
+                ResponsesRequestResult::Streamed => None,
+            },
             (RequestMethod::Post, "/v1/responses") => {
                 match responses_request(
                     &mut stream,

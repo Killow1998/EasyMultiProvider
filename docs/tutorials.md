@@ -4,10 +4,10 @@
 
 These GIFs are also available offline from **Tutorials** in the WebUI header:
 choose an operation on the left and watch it on the right. Open the larger view
-in a new window when you want to see the details. The four Team workspace
-lessons appear there after this EMP joins a team.
+in a new window when you want to see the details. The joining guide is always
+available. Four more Team Workspace lessons appear after joining a team.
 
-也可在 WebUI 顶栏打开 **使用教程**：左侧选择操作，右侧观看演示；需要看清细节时，可在新窗口打开大图。所有 GIF 均可离线观看；加入团队后，教程里会多出四支「团队空间」演示。
+也可在 WebUI 顶栏打开 **使用教程**，在左侧选择操作，右侧观看演示。所有 GIF 均可离线观看，也能在新窗口打开大图。「如何加入团队」随时可看，加入后还会显示四支团队空间演示。
 
 Expand a task to view its GIF. These recordings use the EMP 0.14.3 interface with
 sample data, a Chinese UI, and Chinese and English captions.
@@ -193,10 +193,19 @@ confirm the import on the receiver.
 
 ## Team Workspace / 团队空间
 
-These lessons appear in the WebUI tutorials after this EMP joins a team; the
-logo in the header then reads **EMPT**.
+### How to join a team / 如何加入团队
 
-加入团队后，WebUI 教程里才会显示这一组；此时左上角标志会变为 **EMPT**。
+1. Open **Modules** in the WebUI header. Install and enable **Team Workspace**,
+   then restart EMP if prompted.
+2. In **Services**, open **Team Workspace**. Paste the administrator's full
+   invitation into the **7-digit join code** field. With just the digits, choose
+   a nearby workspace or enter its address using the gear button.
+3. Enter your nickname, choose a username and password, and submit your request.
+   An administrator must approve it before you can use the workspace.
+
+1. 在 WebUI 顶栏打开 **模组**，安装并启用 **团队空间**。如果提示重启，请重启 EMP。
+2. 从服务区打开 **团队空间**，把管理员发来的整段邀请粘贴到 **七位团队码**。如果只有数字，先选中附近的团队，或通过齿轮填写团队地址。
+3. 填写昵称，设置用户名和密码，再提交加入申请。管理员批准后即可使用团队空间。
 
 <details>
 <summary>12. Explore the workspace and usage / 查看团队空间与用量</summary>

@@ -45,8 +45,10 @@ pub enum Operation {
     ListMembers,
     MemberAccess,
     RejectMember,
+    RemoveMember,
     MemberTiers,
     Budget,
+    WeeklyBudget,
     BudgetStatus,
     Profiles,
     Profile,
@@ -59,6 +61,7 @@ pub enum Operation {
     PublishVersion,
     SharedServices,
     ReviewService,
+    RemoveService,
     ResetAuthority,
     Usage,
     UsageFiltered,
@@ -121,11 +124,29 @@ pub struct ReportPlan {
     pub report: UsageReport,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetKind {
+    #[default]
+    DailyUsd,
+    WeeklyUsd,
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct BudgetStatus {
     pub day: i64,
     pub used: Option<i64>,
     pub limit: Option<i64>,
+    #[serde(default)]
+    pub kind: BudgetKind,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct BudgetStatuses {
+    #[serde(flatten)]
+    pub daily: BudgetStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekly: Option<BudgetStatus>,
 }
 
 #[derive(Deserialize, Serialize)]

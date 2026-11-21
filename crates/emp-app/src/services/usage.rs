@@ -196,11 +196,14 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
                 && !usage.history.stop.load(Ordering::Acquire)
             {
                 let snapshot = usage.ledger.prices.snapshot(system_now());
-                let delay = (snapshot["fetched_at"].as_f64().unwrap_or(0.0) + PRICE_INTERVAL
-                    - system_now())
-                .max(0.0);
-                if delay > 0.0 {
-                    usage.wait_for_prices(&price_state, delay.min(3600.0));
+                if snapshot["stale"] == false {
+                    let delay = (snapshot["fetched_at"]
+                        .as_f64()
+                        .expect("fresh price timestamp")
+                        + PRICE_INTERVAL
+                        - system_now())
+                    .clamp(0.0, 3600.0);
+                    usage.wait_for_prices(&price_state, delay);
                     continue;
                 }
                 if refresh_prices(&price_state) {

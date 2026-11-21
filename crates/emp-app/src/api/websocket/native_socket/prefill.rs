@@ -11,7 +11,7 @@ use serde_json::Value;
 
 mod plan;
 pub(super) use plan::Prefill;
-use plan::{MESSAGE_BUDGET, json_bytes};
+use plan::json_bytes;
 
 pub(super) enum PrefillError {
     Disconnected,
@@ -44,7 +44,7 @@ impl Prefill<'_> {
             payload.insert("generate".into(), Value::Bool(false));
             let payload = Value::Object(payload);
             let bytes = json_bytes(&payload);
-            if bytes > MESSAGE_BUDGET {
+            if bytes > self.budget {
                 return Err(PrefillError::InvalidResponse);
             }
             client
