@@ -17,54 +17,10 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/copy-tutorials.js" => include_bytes!("../web/copy-tutorials.js"),
         "/assets/tutorials.js" => include_bytes!("../web/tutorials.js"),
         "/assets/tutorials.css" => include_bytes!("../web/tutorials.css"),
+        "/assets/guide.css" => include_bytes!("../web/guide.css"),
         "/assets/copy-notifications.js" => include_bytes!("../web/copy-notifications.js"),
         "/assets/notifications.js" => include_bytes!("../web/notifications.js"),
         "/assets/notifications.css" => include_bytes!("../web/notifications.css"),
-        "/assets/tutorial-00-native-context.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/00-native-context.gif")
-        }
-        "/assets/tutorial-00-native-name.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/00-native-name.gif")
-        }
-        "/assets/tutorial-00-remove-subscription.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/00-remove-subscription.gif")
-        }
-        "/assets/tutorial-01-add-service.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/01-add-service.gif")
-        }
-        "/assets/tutorial-02-import-service.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/02-import-service.gif")
-        }
-        "/assets/tutorial-03-export-service.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/03-export-service.gif")
-        }
-        "/assets/tutorial-04-remove-service.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/04-remove-service.gif")
-        }
-        "/assets/tutorial-05-change-context.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/05-change-context.gif")
-        }
-        "/assets/tutorial-06-rename.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/06-rename.gif")
-        }
-        "/assets/tutorial-07-context-label.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/07-context-label.gif")
-        }
-        "/assets/tutorial-08-tunnel-migration.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/08-tunnel-migration.gif")
-        }
-        "/assets/tutorial-09-team-workspace.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/09-team-workspace.gif")
-        }
-        "/assets/tutorial-10-team-share.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/10-team-share.gif")
-        }
-        "/assets/tutorial-11-team-approve.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/11-team-approve.gif")
-        }
-        "/assets/tutorial-12-team-members.gif" => {
-            include_bytes!("../../../docs/assets/tutorials/12-team-members.gif")
-        }
         "/assets/copy-recovery.js" => include_bytes!("../web/copy-recovery.js"),
         "/assets/service-presentation.js" => include_bytes!("../web/service-presentation.js"),
         "/assets/service-presentation.css" => include_bytes!("../web/service-presentation.css"),
@@ -150,13 +106,21 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
 }
 
 pub(crate) fn module_asset_response(
-    path: &str,
+    request: crate::http::request::Request<'_>,
     state: &crate::app::ServerState,
 ) -> Option<Vec<u8>> {
     use emp_modules::Module;
-    let id = path.strip_prefix("/assets/module-")?.strip_suffix(".js")?;
+    let id = request
+        .raw_path()
+        .strip_prefix("/assets/module-")?
+        .strip_suffix(".js")?;
     let module = Module::ALL.into_iter().find(|module| module.id() == id)?;
-    let panel = state.backend.modules.panel(module);
+    let revision = request.target.split_once('?').and_then(|(_, query)| {
+        query
+            .split('&')
+            .find_map(|part| part.strip_prefix("revision="))
+    });
+    let panel = state.backend.modules.panel(module, revision);
     Some(match panel {
         Some(source) => response(
             "HTTP/1.1 200 OK",

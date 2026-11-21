@@ -1,5 +1,14 @@
 # Third-party notices
 
+## Aero module
+
+The separately packaged Aero module bundles CPython under the Python Software
+Foundation License and the PyInstaller bootloader under GPL-2.0-or-later with
+its Bootloader Exception. The module contains the complete license texts as
+`licenses/PYTHON-LICENSE.txt` and `licenses/PYINSTALLER-LICENSE.txt`.
+
+[CPython](https://www.python.org/), [PyInstaller](https://github.com/pyinstaller/pyinstaller)
+
 ## Phosphor Icons
 
 EMP includes selected Regular SVG assets from `@phosphor-icons/core` 2.1.1.

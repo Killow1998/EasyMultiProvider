@@ -10,6 +10,20 @@ pub(super) struct Review {
 }
 
 #[derive(Deserialize)]
+pub(super) struct Remove {
+    id: String,
+    version: i64,
+}
+
+struct ExistingShare {
+    id: String,
+    version: i64,
+    encrypted: Vec<u8>,
+    approved: bool,
+    removed: bool,
+}
+
+#[derive(Deserialize)]
 pub(super) struct ResetAuthority {
     share: String,
     version: i64,
@@ -59,17 +73,26 @@ impl Workspace {
             return Err(invalid());
         }
         let tx = self.db.transaction()?;
-        let existing: Option<(String, i64, Vec<u8>, bool)> = tx
+        let existing = tx
             .query_row(
-                "SELECT s.id,s.version,s.encrypted,r.approved_version=s.version
+                "SELECT s.id,s.version,s.encrypted,r.approved_version=s.version,s.removed_at IS NOT NULL
                  FROM shares s JOIN share_reviews r ON r.share=s.id WHERE s.owner=? AND s.source=?",
                 params![who.member, body.source],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok(ExistingShare {
+                    id:row.get(0)?, version:row.get(1)?, encrypted:row.get(2)?,
+                    approved:row.get(3)?, removed:row.get(4)?,
+                }),
             )
             .optional()?;
         let mut plaintext = serde_json::to_vec(&body.payload)?;
         let mut same_account = false;
-        if let Some((id, version, encrypted, approved)) = &existing
+        if let Some(ExistingShare {
+            id,
+            version,
+            encrypted,
+            approved,
+            removed: false,
+        }) = &existing
             && let Ok(previous) = decode_vault(&self.key, encrypted)
         {
             if body.expected_version <= *version && *previous == plaintext {
@@ -90,8 +113,18 @@ impl Workspace {
                 same_account = true;
             }
         }
-        if existing.as_ref().map_or(0, |(_, version, _, _)| *version) != body.expected_version {
+        if existing.as_ref().map_or(0, |share| share.version) != body.expected_version {
             return Err(Failure(409, "workspace_share_version_conflict"));
+        }
+        if existing.as_ref().is_none_or(|share| share.removed) {
+            let count: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM shares WHERE removed_at IS NULL",
+                [],
+                |row| row.get(0),
+            )?;
+            if count >= MAX_SHARES {
+                return Err(Failure(409, "workspace_share_limit_reached"));
+            }
         }
         if plaintext.len() > MAX_BODY / 8 {
             return Err(Failure(413, "workspace_share_too_large"));
@@ -100,9 +133,9 @@ impl Workspace {
         plaintext.fill(0);
         let version = body.expected_version + 1;
         let mut review_required = true;
-        let id = if let Some((id, _, _, approved)) = existing {
+        let id = if let Some(ExistingShare { id, approved, .. }) = existing {
             tx.execute(
-                "UPDATE shares SET version=?,encrypted=? WHERE id=?",
+                "UPDATE shares SET version=?,encrypted=?,removed_at=NULL WHERE id=?",
                 params![version, encrypted, id],
             )?;
             if same_account {
@@ -123,13 +156,9 @@ impl Workspace {
             }
             id
         } else {
-            let count: i64 = tx.query_row("SELECT COUNT(*) FROM shares", [], |row| row.get(0))?;
-            if count >= MAX_SHARES {
-                return Err(Failure(409, "workspace_share_limit_reached"));
-            }
             let id = hex_id()?;
             tx.execute(
-                "INSERT INTO shares VALUES (?,?,?,?,?)",
+                "INSERT INTO shares (id,owner,source,version,encrypted) VALUES (?,?,?,?,?)",
                 params![id, who.member, body.source, version, encrypted],
             )?;
             tx.execute("INSERT INTO share_reviews VALUES (?,0)", [&id])?;
@@ -147,7 +176,7 @@ impl Workspace {
             "SELECT s.id,s.version,s.encrypted,COALESCE(e.nickname,m.name) FROM shares s JOIN members m ON m.id=s.owner
              JOIN share_reviews r ON r.share=s.id AND r.approved_version=s.version
              LEFT JOIN enrollment e ON e.member=m.id
-             WHERE m.enabled=1 AND m.publish=1 AND s.source=? ORDER BY s.id",
+             WHERE m.enabled=1 AND m.publish=1 AND s.source=? AND s.removed_at IS NULL ORDER BY s.id",
         )?;
         let mut rows = stmt.query([NATIVE_SHARE])?;
         let mut shares = Vec::new();
@@ -189,7 +218,7 @@ impl Workspace {
         let mut stmt = self.db.prepare(
             "SELECT s.id,s.version,s.encrypted,r.approved_version=s.version,COALESCE(e.nickname,m.name),m.enabled AND m.publish
              FROM shares s JOIN members m ON m.id=s.owner JOIN share_reviews r ON r.share=s.id
-             LEFT JOIN enrollment e ON e.member=m.id WHERE s.source=?
+             LEFT JOIN enrollment e ON e.member=m.id WHERE s.source=? AND s.removed_at IS NULL
              ORDER BY r.approved_version=s.version,s.id",
         )?;
         let mut usage = self.share_usage()?;
@@ -224,7 +253,7 @@ impl Workspace {
         let tx = self.db.transaction()?;
         let (owner, previous): (String, i64) = tx.query_row(
             "SELECT s.owner,r.approved_version FROM shares s JOIN share_reviews r ON r.share=s.id
-             WHERE s.id=? AND s.version=? AND s.source=?",
+             WHERE s.id=? AND s.version=? AND s.source=? AND s.removed_at IS NULL",
             params![review.id, review.version, NATIVE_SHARE],
             |row| Ok((row.get(0)?,row.get(1)?)),
         ).optional()?.ok_or(Failure(409, "workspace_share_version_conflict"))?;
@@ -245,6 +274,39 @@ impl Workspace {
         Ok(json!({"shared":review.shared}))
     }
 
+    pub(super) fn remove_share(&mut self, who: &Identity, body: Remove) -> Result<Value> {
+        if !who.role.can_manage() {
+            return Err(forbidden());
+        }
+        let tx = self.db.transaction()?;
+        let owner: String = tx
+            .query_row(
+                "UPDATE shares SET encrypted=X'',version=version+1,removed_at=?
+                 WHERE id=? AND version=? AND source=? AND removed_at IS NULL RETURNING owner",
+                params![now(), body.id, body.version, NATIVE_SHARE],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(Failure(409, "workspace_share_version_conflict"))?;
+        tx.execute(
+            "UPDATE share_reviews SET approved_version=0 WHERE share=?",
+            [&body.id],
+        )?;
+        tx.execute(
+            "DELETE FROM subscription_reminders WHERE share=?",
+            [&body.id],
+        )?;
+        audit::record(
+            &tx,
+            who,
+            Some(&owner),
+            "share_removed",
+            json!({"share":body.id,"version":body.version}),
+        )?;
+        tx.commit()?;
+        Ok(json!({"ok":true}))
+    }
+
     pub(super) fn reset_authority(&self, who: &Identity, body: ResetAuthority) -> Result<Value> {
         if !who.role.can_manage() || !who.sync {
             return Err(forbidden());
@@ -254,7 +316,7 @@ impl Workspace {
             .query_row(
                 "SELECT s.owner FROM shares s JOIN members m ON m.id=s.owner
              JOIN share_reviews r ON r.share=s.id AND r.approved_version=s.version
-             WHERE s.id=? AND s.version=? AND s.source=? AND m.enabled=1 AND m.publish=1",
+             WHERE s.id=? AND s.version=? AND s.source=? AND s.removed_at IS NULL AND m.enabled=1 AND m.publish=1",
                 params![body.share, body.version, NATIVE_SHARE],
                 |row| row.get(0),
             )
@@ -271,7 +333,7 @@ impl Workspace {
                     s.version,(SELECT MAX(sent_at) FROM subscription_reminders WHERE share=s.id)
              FROM shares s JOIN members m ON m.id=s.owner JOIN share_reviews r ON r.share=s.id
              LEFT JOIN enrollment e ON e.member=m.id
-             WHERE s.source=? AND m.enabled=1 AND m.publish=1
+             WHERE s.source=? AND s.removed_at IS NULL AND m.enabled=1 AND m.publish=1
                AND (r.approved_version>0 OR s.owner=? OR ?) ORDER BY m.name,s.id",
         )?;
         let mut entries = query.query(params![NATIVE_SHARE, who.member, who.role.can_manage()])?;
@@ -320,7 +382,7 @@ impl Workspace {
     ) -> Result<Value> {
         let (owner, bytes): (String, Vec<u8>) = self.db.query_row(
             "SELECT s.owner,s.encrypted FROM shares s JOIN share_reviews r ON s.id=r.share AND s.version=r.approved_version
-             JOIN members m ON m.id=s.owner WHERE s.id=? AND s.source=? AND m.enabled=1 AND m.publish=1",
+             JOIN members m ON m.id=s.owner WHERE s.id=? AND s.source=? AND s.removed_at IS NULL AND m.enabled=1 AND m.publish=1",
             params![reminder.share, NATIVE_SHARE],|row| Ok((row.get(0)?,row.get(1)?)),
         ).optional()?.ok_or_else(missing)?;
         let data = decode_vault(&self.key, &bytes)

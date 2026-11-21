@@ -7,7 +7,7 @@ use crate::{
             body_error_response, json_error_response, response, status_text, unauthorized_response,
         },
     },
-    services::team::Failure,
+    services::team::{Command, Failure},
 };
 use serde_json::Value;
 use std::net::TcpStream;
@@ -42,7 +42,12 @@ pub(crate) fn mutate(
         .raw_path()
         .strip_prefix("/api/team/")
         .expect("team path");
-    render(state.backend.team.command(state, operation, &body))
+    render(
+        state
+            .backend
+            .team
+            .command(state, Command::parse(operation), &body),
+    )
 }
 
 fn render(result: Result<Value, Failure>) -> Vec<u8> {

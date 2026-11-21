@@ -1,10 +1,11 @@
 use super::*;
+use emp_modules::team::{BudgetKind, BudgetStatus, BudgetStatuses};
 use emp_modules::workspace::{MAX_USAGE_MODEL_BYTES, UsageEvent};
 use std::collections::BTreeMap;
 
 const NANOS_PER_DOLLAR: i64 = 1_000_000_000;
 const SECONDS_PER_DAY: i64 = 86_400;
-const MAX_MONEY: i64 = 1_000_000 * NANOS_PER_DOLLAR;
+pub(super) const MAX_MONEY: i64 = 1_000_000 * NANOS_PER_DOLLAR;
 
 #[derive(Deserialize)]
 pub(super) struct Budget {
@@ -118,18 +119,40 @@ impl Workspace {
         Ok(json!({"inserted":inserted,"budget":self.budget_status(who)?}))
     }
 
-    pub(super) fn budget_status(&self, who: &Identity) -> Result<Value> {
+    pub(super) fn budget_status(&self, who: &Identity) -> Result<BudgetStatuses> {
         let at = now();
         let day = at.div_euclid(SECONDS_PER_DAY) * SECONDS_PER_DAY;
-        let (limit, used): (Option<i64>, Option<i64>) = self.db.query_row(
+        let mode = self.budget_mode()?;
+        let (limit, used): (Option<i64>, Option<i64>) = if mode == BudgetKind::DailyUsd {
+            self.db.query_row(
             "SELECT m.budget_nanos,
                     SUM(COALESCE(u.actual_nanos,u.estimate_nanos))
              FROM members m LEFT JOIN usage u ON u.member=m.id AND u.finished_at>=? AND u.finished_at<=?
              WHERE m.id=? GROUP BY m.id",
             params![day, at, who.member],
             |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        Ok(json!({"day":day,"limit":limit,"used":used}))
+        )?
+        } else {
+            (None, None)
+        };
+        let reset = if mode == BudgetKind::WeeklyUsd {
+            self.weekly_reset()?
+        } else {
+            None
+        };
+        let weekly = match reset {
+            Some(reset) => Some(self.weekly_usd_status(&who.member, reset.window(at)?.0, at)?),
+            None => None,
+        };
+        Ok(BudgetStatuses {
+            daily: BudgetStatus {
+                day,
+                used,
+                limit,
+                kind: BudgetKind::DailyUsd,
+            },
+            weekly,
+        })
     }
 
     pub(super) fn overview(&self, who: &Identity) -> Result<Value> {
@@ -164,15 +187,27 @@ impl Workspace {
                     "spend_nanos":row.get::<_,Option<i64>>(3)?,"unknown_cost_requests":row.get::<_,i64>(4)?}))
             })
         };
+        let mode = self.budget_mode()?;
+        let reset = self.weekly_reset()?;
+        let weekly = match (&reset, mode) {
+            (Some(reset), BudgetKind::WeeklyUsd) => {
+                let (start, end) = reset.window(at)?;
+                let status = self.weekly_usd_status(&who.member, start, at)?;
+                json!({"reset":reset,"reset_at":end,"used":status.used,"limit":status.limit})
+            }
+            _ => Value::Null,
+        };
         Ok(
             json!({"created_at":created,"joined_at":joined,"members":members,
-            "budget_nanos":limit,"today":period(day)?,"lifetime":period(0)?}),
+            "budget_nanos":limit,"today":period(day)?,"lifetime":period(0)?,"weekly_budget":weekly,
+            "weekly_reset":reset,"budget_mode":mode}),
         )
     }
 
     pub(super) fn usage(&self, who: &Identity, period: Period) -> Result<Value> {
         let end = now() + 1;
         let day = (end - 1).div_euclid(SECONDS_PER_DAY) * SECONDS_PER_DAY;
+        let daily = self.budget_mode()? == BudgetKind::DailyUsd;
         let start = match period {
             Period::Today => day,
             Period::Hour => end - 3600,
@@ -200,17 +235,17 @@ impl Workspace {
             }));
         }
         let mut statement = self.db.prepare(
-            "SELECT m.id,COALESCE(e.nickname,m.name),m.budget_nanos,COUNT(u.id),SUM(u.input_tokens),SUM(u.cached_input_tokens),
+            "SELECT m.id,COALESCE(e.nickname,m.archived_name,m.name),m.budget_nanos,COUNT(u.id),SUM(u.input_tokens),SUM(u.cached_input_tokens),
                     SUM(u.output_tokens),SUM(u.estimate_nanos),SUM(u.actual_nanos),
                     SUM(CASE WHEN u.id IS NOT NULL AND u.actual_nanos IS NULL AND u.estimate_nanos IS NULL THEN 1 ELSE 0 END),
-                    (SELECT SUM(COALESCE(d.actual_nanos,d.estimate_nanos)) FROM usage d WHERE d.member=m.id
-                     AND d.finished_at>=? AND d.finished_at<?),
+                    CASE WHEN ? THEN (SELECT SUM(COALESCE(d.actual_nanos,d.estimate_nanos)) FROM usage d WHERE d.member=m.id
+                     AND d.finished_at>=? AND d.finished_at<?) END,
                     SUM(COALESCE(u.actual_nanos,u.estimate_nanos))
              FROM members m LEFT JOIN usage u ON u.member=m.id AND u.finished_at>=? AND u.finished_at<?
              LEFT JOIN enrollment e ON e.member=m.id
-             WHERE m.id=? OR ? GROUP BY m.id ORDER BY m.name"
+             WHERE m.id=? OR ? GROUP BY m.id ORDER BY COALESCE(m.archived_name,m.name)"
         )?;
-        let rows = statement.query_map(params![day,day+SECONDS_PER_DAY,start,end,who.member,who.role.can_manage()], |r| {
+        let rows = statement.query_map(params![daily,day,day+SECONDS_PER_DAY,start,end,who.member,who.role.can_manage()], |r| {
             let member: String = r.get(0)?;
             let budget: Option<i64> = r.get(2)?;
             let budget_usage: Option<i64> = r.get(10)?;

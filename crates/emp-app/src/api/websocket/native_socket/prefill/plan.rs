@@ -3,15 +3,14 @@ use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 
-// The live native endpoint rejected a 16.83 MiB message with 1009 even with
-// permessage-deflate. Leave headroom; this is an application-message budget,
-// not a token limit or a claim about encoded/TLS bytes.
-pub(super) const MESSAGE_BUDGET: usize = 8 * 1024 * 1024;
+const DEFAULT_BUDGET: usize = 8 * 1024 * 1024;
+const CODEX_BUDGET: usize = 120 * 1024 * 1024;
 const PARENT_RESERVE: usize = 2048;
 
 pub(in crate::api::websocket::native_socket) struct Prefill<'a> {
     pub(super) base: Map<String, Value>,
     pub(super) chunks: Vec<&'a [Value]>,
+    pub(super) budget: usize,
 }
 
 #[derive(Default)]
@@ -33,11 +32,19 @@ pub(super) fn json_bytes(value: &Value) -> usize {
 }
 
 impl<'a> Prefill<'a> {
-    pub(in crate::api::websocket::native_socket) fn plan(payload: &'a Value) -> Option<Self> {
+    pub(in crate::api::websocket::native_socket) fn plan(
+        payload: &'a Value,
+        endpoint: &str,
+    ) -> Option<Self> {
+        let budget = if endpoint == "wss://chatgpt.com/backend-api/codex/responses" {
+            CODEX_BUDGET
+        } else {
+            DEFAULT_BUDGET
+        };
         if payload
             .get("previous_response_id")
             .is_some_and(|id| !id.is_null())
-            || json_bytes(payload) <= MESSAGE_BUDGET
+            || json_bytes(payload) <= budget
         {
             return None;
         }
@@ -52,7 +59,7 @@ impl<'a> Prefill<'a> {
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
         let overhead = json_bytes(&Value::Object(base.clone())) + PARENT_RESERVE;
-        let available = MESSAGE_BUDGET.checked_sub(overhead)?;
+        let available = budget.checked_sub(overhead)?;
         let mut pending = BTreeSet::new();
         let mut group_size = 0;
         let mut chunk_size = 0;
@@ -114,7 +121,11 @@ impl<'a> Prefill<'a> {
                 chunk
             })
             .collect();
-        Some(Self { base, chunks })
+        Some(Self {
+            base,
+            chunks,
+            budget,
+        })
     }
 }
 
@@ -125,13 +136,15 @@ mod tests {
 
     #[test]
     fn prefill_keeps_atomic_input_and_paired_tools_or_declines_without_truncation() {
-        let huge = "x".repeat(MESSAGE_BUDGET / 2);
+        let local = "ws://127.0.0.1/v1/responses";
+        let huge = "x".repeat(DEFAULT_BUDGET / 2);
         let call = json!({"type":"function_call","call_id":"pair","name":"read","arguments":"{}"});
         let result = json!({"type":"function_call_output","call_id":"pair","output":"ok"});
         let payload = json!({"type":"response.create","instructions":"preserve exactly","input":[
             {"role":"user","content":huge},call,result,{"role":"user","content":huge}
         ]});
-        let plan = Prefill::plan(&payload).unwrap();
+        let plan = Prefill::plan(&payload, local).unwrap();
+        assert!(Prefill::plan(&payload, "wss://chatgpt.com/backend-api/codex/responses").is_none());
         let restored: Vec<_> = plan.chunks.iter().flat_map(|c| c.iter().cloned()).collect();
         assert_eq!(json!(restored), payload["input"]);
         assert_eq!(plan.base["instructions"], payload["instructions"]);
@@ -142,9 +155,9 @@ mod tests {
         );
         let mut incremental = payload.clone();
         incremental["previous_response_id"] = json!("parent");
-        assert!(Prefill::plan(&incremental).is_none());
-        let one_item = json!({"input":[{"role":"user","content":"x".repeat(MESSAGE_BUDGET+1)}]});
-        assert!(Prefill::plan(&one_item).is_none());
+        assert!(Prefill::plan(&incremental, local).is_none());
+        let one_item = json!({"input":[{"role":"user","content":"x".repeat(DEFAULT_BUDGET+1)}]});
+        assert!(Prefill::plan(&one_item, local).is_none());
 
         let search = json!({"type":"tool_search_call","call_id":"search","execution":"client","arguments":{}});
         let found = json!({"type":"tool_search_output","call_id":"search","execution":"client","status":"completed","tools":[]});
@@ -152,7 +165,7 @@ mod tests {
             {"type":"web_search_call","status":"completed","action":{"type":"search","query":"synthetic"}},
             {"type":"tool_search_output","execution":"server","status":"completed","tools":[]},
             {"role":"user","content":huge}]});
-        let plan = Prefill::plan(&with_search).unwrap();
+        let plan = Prefill::plan(&with_search, local).unwrap();
         assert!(plan.chunks.iter().any(|chunk| {
             chunk
                 .windows(2)
@@ -160,9 +173,9 @@ mod tests {
         }));
         let mut unknown = with_search;
         unknown["input"][3]["type"] = json!("unknown_tool_call");
-        assert!(Prefill::plan(&unknown).is_none());
+        assert!(Prefill::plan(&unknown, local).is_none());
         unknown["input"][3] = json!({"type":"function_call_output","namespace":"agent",
             "name":"codex_apps_unknown","output":"not a recognized context item"});
-        assert!(Prefill::plan(&unknown).is_none());
+        assert!(Prefill::plan(&unknown, local).is_none());
     }
 }

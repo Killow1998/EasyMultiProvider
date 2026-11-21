@@ -72,6 +72,7 @@ impl From<FilesystemError> for ConfigError {
 
 pub type ConfigResult<T> = Result<T, ConfigError>;
 
+mod aero;
 mod aggregates;
 mod image_routing;
 mod presentation;
@@ -638,6 +639,9 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "codex_runtime_sources": codex_runtime_sources,
         "pricing_aliases": pricing_aliases,
     });
+    if let Some(profiles) = raw.get("aero_profiles") {
+        normalized["aero_profiles"] = aero::normalize(profiles)?;
+    }
     if raw.contains_key("decision_provider") {
         normalized["decision_provider"] = Value::String(string_value(
             raw.get("decision_provider"),

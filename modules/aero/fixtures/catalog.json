@@ -1,0 +1,29 @@
+{
+  "models": [
+    {
+      "slug": "aero-fixture",
+      "display_name": "aero protocol fixture",
+      "description": "Synthetic model for local protocol checks",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        {"effort": "high", "description": "High"}
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 0,
+      "model_messages": {
+        "instructions_template": "You are a coding agent. Use the provided tools to implement the user's request and verify the result."
+      },
+      "default_reasoning_summary": "none",
+      "support_verbosity": false,
+      "apply_patch_tool_type": "freeform",
+      "truncation_policy": {"mode": "bytes", "limit": 10000},
+      "context_window": 128000,
+      "max_context_window": 128000,
+      "effective_context_window_percent": 95,
+      "experimental_supported_tools": [],
+      "input_modalities": ["text"]
+    }
+  ]
+}

@@ -28,6 +28,15 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
     let path = request.raw_path();
     let same_origin = same_origin(request, state.port);
     if request.method == RequestMethod::Get
+        && (path.starts_with("/guide/") || path.starts_with("/assets/tutorial-"))
+    {
+        if !same_origin {
+            return cross_origin_response("cross-origin guide request rejected");
+        }
+        return crate::services::hot_adapter::asset_response(path, state)
+            .unwrap_or_else(not_found_response);
+    }
+    if request.method == RequestMethod::Get
         && matches!(path, "/assets/app-icon.png" | "/assets/app-icon-source.png")
     {
         if !same_origin {
@@ -48,7 +57,7 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
     if request.method == RequestMethod::Get
         && let Some(bytes) = crate::web::asset_response(path).or_else(|| {
             same_origin
-                .then(|| crate::web::module_asset_response(path, state))
+                .then(|| crate::web::module_asset_response(request, state))
                 .flatten()
         })
     {
@@ -106,6 +115,9 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             }
             if request.method == RequestMethod::Get && path == "/api/image-credit" {
                 return crate::api::images::credit_status(state);
+            }
+            if request.method == RequestMethod::Get && path == "/api/resources/tutorials" {
+                return crate::services::hot_adapter::tutorials(state);
             }
             if request.method == RequestMethod::Get && path == "/api/modules" {
                 return crate::api::modules::read(state);

@@ -81,11 +81,16 @@ pub(crate) fn native_search_request(
                 .flatten()
                 .filter(|account| account.get("enabled") != Some(&Value::Bool(false)))
                 .find_map(|account| {
+                    let source = state.backend.team.subscription_source(
+                        state,
+                        account["id"].as_str()?,
+                        account,
+                    );
                     if state
                         .backend
                         .team
                         .check_route(
-                            account["id"].as_str()?,
+                            &source,
                             state.backend.modules.active(emp_modules::Module::Team),
                             None,
                         )

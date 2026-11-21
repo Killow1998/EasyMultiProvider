@@ -32,7 +32,11 @@ def main():
         browser = Browser(stack, root, reduced_motion=0)
         browser.navigate(url)
         browser.execute('document.getElementById("tutorials_open").click();')
-        ids = browser.execute('return [...document.querySelectorAll("[data-tutorial]")].map(button=>button.dataset.tutorial);')
+        browser.execute('document.querySelector("[data-tutorial=team_join]").click();')
+        assert browser.execute('return !document.getElementById("tutorial_join_steps").hidden && document.getElementById("tutorial_full_size").hidden;')
+        screenshot(browser, args.output/'tutorials-join-team.png')
+        checks.append('An EMP without team membership can open the joining guide')
+        ids = browser.execute('return [...document.querySelectorAll("[data-tutorial]:not([data-tutorial=team_join])")].map(button=>button.dataset.tutorial);')
         # Exercise a cold asset; already decoded GIFs can be served from the browser's image cache.
         original = candidate_web.asset_file
         def missing(web, name):
@@ -68,9 +72,9 @@ def main():
         assert browser.execute('return [...document.querySelectorAll("[data-tutorial]")].map(button=>button.dataset.tutorial).slice(-4);') == team_ids
         assert browser.execute('return document.getElementById("tutorial_full_size").getAttribute("href");') == '/assets/tutorial-11-team-approve.gif'
         browser.execute('closeModal();tutorials.setTeam(false);tutorials.open();')
-        assert not browser.execute('return document.querySelector("[data-tutorial^=team_]");')
+        assert browser.execute('return [...document.querySelectorAll("[data-tutorial^=team_]")].map(button=>button.dataset.tutorial);') == ['team_join']
         assert browser.execute('return document.querySelector("[data-tutorial][aria-pressed=true]").dataset.tutorial;') == 'native_context'
-        checks.append('Team workspace lessons appear only while a team is joined and fall back cleanly after leaving')
+        checks.append('Member lessons follow membership and the joining guide stays available after leaving')
 
         for lang, width, height, theme in [('zh-CN',1440,1000,'light'),('en',1280,900,'dark'),('zh-CN',1280,600,'light'),('zh-CN',560,800,'light')]:
             request(browser.base+'/window/rect', {'width':width,'height':height})

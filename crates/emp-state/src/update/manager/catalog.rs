@@ -1,6 +1,6 @@
 //! Last-good release metadata: local first, conditionally refreshed from its source.
 use super::*;
-use crate::update::release::{normalize_current_version, parse_version};
+use crate::update::release::{limit_release_notes, normalize_current_version, parse_version};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -27,12 +27,7 @@ fn stable_releases(releases: &[Value]) -> Vec<&Value> {
 }
 
 fn notes(release: &Value) -> String {
-    release["body"]
-        .as_str()
-        .unwrap_or_default()
-        .chars()
-        .take(65536)
-        .collect()
+    limit_release_notes(release["body"].as_str().unwrap_or_default())
 }
 
 fn history_notes(releases: &[&Value]) -> Vec<Value> {

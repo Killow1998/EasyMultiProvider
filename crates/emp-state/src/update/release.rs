@@ -62,6 +62,7 @@ struct Release {
     draft: bool,
     prerelease: bool,
     assets: Vec<ReleaseAsset>,
+    body: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -164,35 +165,53 @@ pub fn module_version(version: &str) -> Option<ModuleVersion> {
     Some((major, minor, patch, stable, beta))
 }
 
-pub(super) fn module_asset(
+pub struct ModuleRelease {
+    pub(super) asset: Asset,
+    pub version: String,
+    pub notes: String,
+}
+
+impl ModuleRelease {
+    pub fn revision(&self) -> String {
+        format!("{}:{}", self.asset.version, self.asset.digest)
+    }
+}
+
+pub(super) fn module_assets(
     raw: &[u8],
-    desired_name: &str,
-    channel: &str,
+    targets: &[(&str, &str)],
     endpoints: &UpdateEndpoints,
-) -> Result<Option<(Asset, String)>> {
+) -> Result<Vec<Option<ModuleRelease>>> {
     let releases: Vec<Release> =
         serde_json::from_slice(raw).map_err(|_| UpdateError("invalid_release"))?;
-    let selected = releases
+    targets
         .iter()
-        .filter(|release| !release.draft)
-        .filter_map(|release| {
-            let version = release.tag_name.strip_prefix(channel)?;
-            let rank = module_version(version)?;
-            if release.prerelease == rank.3 {
-                return None;
-            }
-            release
-                .assets
+        .map(|&(channel, name)| {
+            releases
                 .iter()
-                .any(|asset| asset.name == desired_name)
-                .then_some((rank, release, version))
+                .filter(|release| !release.draft)
+                .filter_map(|release| {
+                    let version = release.tag_name.strip_prefix(channel)?;
+                    let rank = module_version(version)?;
+                    (release.prerelease != rank.3
+                        && release.assets.iter().any(|asset| asset.name == name))
+                    .then_some((rank, release, version))
+                })
+                .max_by_key(|(rank, _, _)| *rank)
+                .map(|(_, release, version)| {
+                    Ok(ModuleRelease {
+                        asset: select_asset(release, name, endpoints)?,
+                        version: version.to_owned(),
+                        notes: limit_release_notes(release.body.as_deref().unwrap_or_default()),
+                    })
+                })
+                .transpose()
         })
-        .max_by_key(|(rank, _, _)| *rank);
-    selected
-        .map(|(_, release, version)| {
-            select_asset(release, desired_name, endpoints).map(|asset| (asset, version.to_owned()))
-        })
-        .transpose()
+        .collect()
+}
+
+pub(super) fn limit_release_notes(body: &str) -> String {
+    body.chars().take(65536).collect()
 }
 
 fn select_asset(

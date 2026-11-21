@@ -1,0 +1,4 @@
+button[data-icon="aero"]{--button-icon:url('/assets/aero.svg')}.aero-editor{display:grid;gap:22px}.aero-roles{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}.aero-role{min-width:0;margin:0;border:1px solid var(--border);border-radius:8px;padding:18px;display:grid;gap:18px}.aero-role legend{padding:0 7px;font-weight:600}.aero-role .field,.aero-editor>.field{display:grid;gap:8px}.aero-role select,.aero-editor input{width:100%;min-width:0}.aero-pair-info{min-width:0}.aero-pair-summary{display:flex;flex-wrap:wrap;gap:5px 10px;margin-bottom:0}.aero-model-preview{overflow-wrap:anywhere}.aero-pair-info strong{overflow-wrap:anywhere}@media(max-width:620px){.aero-roles{grid-template-columns:1fr}.aero-role{padding:14px}}
+
+.aero-actions{display:flex;flex:none;gap:6px}
+.section-tools.aero-panel-tools{display:flex;justify-content:space-between;align-items:center}

@@ -37,6 +37,15 @@ pub(crate) fn update(
             sources
                 .validate_update(&updated, &current)
                 .map_err(ChangeError::invalid)?;
+            if current["aero_profiles"] != updated["aero_profiles"] {
+                if !state.backend.modules.active(emp_modules::Module::Aero) {
+                    return Err(ChangeError::invalid("module_disabled"));
+                }
+                crate::services::modules::aero::validate_update(&current, &updated, || {
+                    crate::services::catalog::source_catalog(state, &updated)
+                })
+                .map_err(ChangeError::invalid)?;
+            }
             let before = current.clone();
             let preferences = &state.backend.integration.preferences;
             let preferences_changed = (before["background_compaction"]

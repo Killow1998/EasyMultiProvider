@@ -12,6 +12,7 @@ pub use vertex::{VertexModelMetadata, is_vertex_text_model};
 pub const PRICE_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 pub const PRICE_INTERVAL: f64 = 86400.0;
+const RATE_FORMAT: u64 = 1;
 const BASES: [&str; 5] = [
     "input_cost_per_token",
     "output_cost_per_token",
@@ -23,6 +24,7 @@ fn rate_key(key: &str) -> bool {
     let key = key
         .strip_suffix("_priority")
         .or_else(|| key.strip_suffix("_flex"))
+        .or_else(|| key.strip_suffix("_ultrafast"))
         .unwrap_or(key);
     BASES.iter().any(|base| {
         key.strip_prefix(base).is_some_and(|rest| {
@@ -156,6 +158,7 @@ pub fn estimate_tokens(usage: &Value, rates: &Value, tier: &str) -> Result<Value
     let suffix = match tier {
         "default" | "auto" | "standard" => "",
         "fast" | "priority" => "_priority",
+        "ultrafast" => "_ultrafast",
         "flex" => "_flex",
         _ => return Ok(issue("unknown_tier")),
     };
@@ -236,12 +239,13 @@ pub fn estimate_tokens(usage: &Value, rates: &Value, tier: &str) -> Result<Value
     )
 }
 /// Bump when the lookup rules change so unpriced rows are quoted again.
-const LOOKUP_RULES: u32 = 3;
+const LOOKUP_RULES: u32 = 4;
 struct PriceData {
     prices: Value,
     vertex_models: Vec<VertexModelMetadata>,
     aliases: Map<String, Value>,
     fetched: f64,
+    rate_format: u64,
     revision: String,
     error: Option<&'static str>,
 }
@@ -293,6 +297,7 @@ impl PriceCatalog {
                 vertex_models: Vec::new(),
                 aliases: Map::new(),
                 fetched: 0.0,
+                rate_format: 0,
                 revision: String::new(),
                 error: None,
             }),
@@ -307,7 +312,8 @@ impl PriceCatalog {
             let vertex_models =
                 serde_json::from_value::<Vec<VertexModelMetadata>>(value["vertex_models"].clone())
                     .unwrap_or_default();
-            catalog.replace_snapshot(prices, vertex_models, fetched);
+            let format = value["rate_format"].as_u64().unwrap_or_default();
+            catalog.replace_snapshot(prices, vertex_models, fetched, format);
         }
         catalog
     }
@@ -315,18 +321,20 @@ impl PriceCatalog {
         &self.path
     }
     pub fn replace(&self, prices: Value, fetched: f64) {
-        self.replace_snapshot(prices, Vec::new(), fetched);
+        self.replace_snapshot(prices, Vec::new(), fetched, RATE_FORMAT);
     }
     fn replace_snapshot(
         &self,
         prices: Value,
         vertex_models: Vec<VertexModelMetadata>,
         fetched: f64,
+        rate_format: u64,
     ) {
         let mut data = self.data.lock().expect("price catalog");
         data.prices = prices;
         data.vertex_models = vertex_models;
         data.fetched = fetched;
+        data.rate_format = rate_format;
         data.error = None;
         data.revise();
     }
@@ -341,12 +349,12 @@ impl PriceCatalog {
         crate::filesystem::atomic_write_private_state(
             self.path(),
             &serde_json::to_vec(&json!({
-                "prices":prices,"fetched_at":fetched,"vertex_models":vertex_models,
+                "prices":prices,"fetched_at":fetched,"vertex_models":vertex_models,"rate_format":RATE_FORMAT,
             }))
             .expect("price JSON"),
         )
         .map_err(|_| "storage_error")?;
-        self.replace_snapshot(prices, vertex_models, fetched);
+        self.replace_snapshot(prices, vertex_models, fetched, RATE_FORMAT);
         Ok(count)
     }
     pub fn vertex_models(&self) -> Vec<VertexModelMetadata> {
@@ -404,7 +412,7 @@ impl PriceCatalog {
     }
     pub fn snapshot(&self, now: f64) -> Value {
         let data = self.data.lock().expect("price catalog");
-        json!({"source":"LiteLLM","url":PRICE_URL,"fetched_at":if data.fetched>0.0{json!(data.fetched)}else{Value::Null},"stale":now-data.fetched>=PRICE_INTERVAL,"error":data.error,"model_count":data.prices.as_object().unwrap().len(),"interval_hours":24})
+        json!({"source":"LiteLLM","url":PRICE_URL,"fetched_at":if data.fetched>0.0{json!(data.fetched)}else{Value::Null},"stale":data.rate_format != RATE_FORMAT || now-data.fetched>=PRICE_INTERVAL,"error":data.error,"model_count":data.prices.as_object().unwrap().len(),"interval_hours":24})
     }
 }
 
@@ -440,6 +448,30 @@ mod lookup_tests {
             let quote = catalog().quote(&request("work/gpt-5", upstream)).unwrap();
             assert_eq!(quote["price_issue"], "unknown_model", "{quote}");
         }
+    }
+
+    #[test]
+    fn upgrading_a_price_snapshot_loads_ultrafast_rates_and_keeps_standard_available() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("api_prices.json");
+        let prices = json!({"gpt-6.2-sol":{
+            "input_cost_per_token":0.000002,"output_cost_per_token":0.00001,
+        }});
+        std::fs::write(&path, json!({"fetched_at":1,"prices":prices}).to_string()).unwrap();
+        let catalog = PriceCatalog::new(path.clone(), 2.0);
+        let mut event = request("team/gpt-6.2-sol", "gpt-6.2-sol");
+        assert_eq!(catalog.quote(&event).unwrap()["cost_nanos"], 2_100_000);
+        assert_eq!(catalog.snapshot(2.0)["stale"], true);
+        let mut refreshed = prices;
+        refreshed["gpt-6.2-sol"]["input_cost_per_token_ultrafast"] = json!(0.000006);
+        refreshed["gpt-6.2-sol"]["output_cost_per_token_ultrafast"] = json!(0.00003);
+        catalog.save_litellm_snapshot(&refreshed, 2.0).unwrap();
+        let reloaded = PriceCatalog::new(path, 3.0);
+        event["service_tier"] = json!("ultrafast");
+        let quote = reloaded.quote(&event).unwrap();
+        assert_eq!(quote["price_issue"], Value::Null);
+        assert_eq!(quote["cost_nanos"], 6_300_000);
+        assert_eq!(reloaded.snapshot(3.0)["stale"], false);
     }
 
     #[test]

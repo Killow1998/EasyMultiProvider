@@ -12,10 +12,18 @@ pub enum Module {
     Gateway,
     Aggregate,
     Team,
+    Aero,
 }
 
 impl Module {
-    pub const ALL: [Self; 4] = [Self::Decision, Self::Gateway, Self::Aggregate, Self::Team];
+    pub const STANDARD: [Self; 4] = [Self::Decision, Self::Gateway, Self::Aggregate, Self::Team];
+    pub const ALL: [Self; 5] = [
+        Self::Decision,
+        Self::Gateway,
+        Self::Aggregate,
+        Self::Team,
+        Self::Aero,
+    ];
 
     pub const fn id(self) -> &'static str {
         match self {
@@ -23,6 +31,7 @@ impl Module {
             Self::Gateway => "gateway",
             Self::Aggregate => "aggregate",
             Self::Team => "team",
+            Self::Aero => "aero",
         }
     }
 
@@ -31,7 +40,8 @@ impl Module {
             Self::Decision => "0.10-beta",
             Self::Gateway => "0.10-beta",
             Self::Aggregate => "0.10-beta",
-            Self::Team => "0.10-beta",
+            Self::Team => "0.10.1-beta",
+            Self::Aero => "0.10.0-beta",
         }
     }
 
@@ -73,6 +83,16 @@ pub struct GatewayIdentity {
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
     ReadPanel,
+    AeroStart {
+        state_dir: std::path::PathBuf,
+        core_base_url: String,
+        inbound_key: String,
+        upstream_key: String,
+        profiles: Value,
+    },
+    AeroConfigure {
+        profiles: Value,
+    },
     Decision {
         request: decision::Request,
     },

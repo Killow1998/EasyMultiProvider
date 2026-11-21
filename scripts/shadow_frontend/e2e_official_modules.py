@@ -20,6 +20,7 @@ import threading
 import time
 from urllib.error import URLError
 from urllib.parse import unquote
+from urllib.request import urlopen
 
 from candidate_web import candidate_frontend
 from e2e import Browser
@@ -59,6 +60,9 @@ class Upstream(fixture.Upstream):
             return
         if self.path.endswith(('/decisions', '/systemone')):
             data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            if data.get('state') == 'hold-during-disable':
+                self.server.decision_started.set()
+                assert self.server.decision_release.wait(15)
             payload = json.dumps({'model': data['model'], 'answers': {'ok': True},
                                   'usage': {'input_tokens': 2, 'output_tokens': 1}}).encode()
             self.send_response(200)
@@ -121,7 +125,7 @@ def https_workspace(stack, root, upstream_port):
 
 
 class Emp:
-    def __init__(self, stack, binary, root, config, release, ca=None):
+    def __init__(self, stack, binary, root, config, release, ca=None, *, guide_source=None):
         self.stack, self.binary, self.root = stack, binary, root
         root.mkdir()
         self.config = root / 'config.json'
@@ -143,6 +147,8 @@ class Emp:
                     'EMP_UPDATE_TEST_API_URL': release + '/releases?per_page=100'}
         if ca:
             self.env['SSL_CERT_FILE'] = str(ca)
+        if guide_source:
+            self.env['EMP_GUIDE_TEST_SOURCE'] = guide_source
         if os.environ.get('EMP_E2E_DESKTOP_NOTICE_LOG'):
             self.env['DBUS_SESSION_BUS_ADDRESS'] = os.environ['DBUS_SESSION_BUS_ADDRESS']
         self.restarts = 0
@@ -312,7 +318,7 @@ def codex_session(stack, codex, emp, log):
 def browser_roles(browser, output, emps):
     for emp, role, expected in emps:
         browser.navigate(emp.url)
-        wait_for(lambda: browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+        wait_for(lambda: browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
         browser.execute('document.getElementById("team_workspace_open").click();')
         wait_for(lambda: browser.execute('return !!document.getElementById("team_home");'))
         cards = browser.execute('return [...document.querySelectorAll("[data-team-choice]")].map(button=>button.dataset.teamChoice);')
@@ -332,7 +338,7 @@ def browser_roles(browser, output, emps):
             wait_for(lambda: browser.execute('return !!document.querySelector("[data-workspace-subscription]");'))
             assert browser.execute('return !document.querySelector("[data-workspace-subscription] button");')
         else:
-            assert browser.execute('return !!document.querySelector("[data-team-backup]") === arguments[0] && !!document.querySelector("[data-team-leave]") !== arguments[0];', role == 'vps-admin')
+            assert browser.execute('return !!document.querySelector("[data-team-backup]") === arguments[0];', role == 'vps-admin')
             assert browser.execute('return document.getElementById("shadow_migration_open").nextElementSibling.id==="team_workspace_open" && !document.getElementById("shadow_migration_open").hidden;')
             browser.execute('document.querySelector("[data-team-choice=manage]").click();')
             browser.execute('document.querySelector("[data-team-manage-subscriptions]").click();')
@@ -352,7 +358,7 @@ def verify_workspace_backup(stack, root, binary, vps, admin, browser, downloads)
     admin.team('backup',expected=403)
     if browser:
         browser.navigate(vps.url)
-        wait_for(lambda: browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+        wait_for(lambda: browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
         browser.execute('document.getElementById("team_workspace_open").click();')
         wait_for(lambda: browser.execute('return !!document.querySelector("[data-team-backup]");'))
         browser.execute('document.querySelector("[data-team-backup]").click();')
@@ -387,6 +393,47 @@ def verify_workspace_backup(stack, root, binary, vps, admin, browser, downloads)
     original = vps.team('subscriptions')['subscriptions']
     assert request(address+'/workspace/v1/subscriptions',headers=headers)[1]['subscriptions'] == original
     assert request(address+'/workspace/v1/audit',{},headers)[1] == vps.team('audit')
+
+
+def verify_vps_signout(root, vps, workspace, vps_url, member_name, browser):
+    other_device = 'e'*32
+    status, other = request(vps_url+'/workspace/v1/login',
+        {'name':'deployment','password':PASSWORD,'device':other_device})
+    assert status == 200
+    bearer = {'Authorization':'Bearer '+other['token']}
+    device = (vps.root/'state/team-device-id').read_text()
+    with sqlite3.connect(root/'vps/workspace.sqlite3') as database:
+        current = database.execute(
+            'SELECT token FROM sessions WHERE member=? AND device=?',
+            (other['member']['id'],device)
+        ).fetchone()
+        assert current
+    if browser is None:
+        assert not vps.team('logout')['joined']
+        assert vps.login(workspace,member_name)['role'] == 'member'
+    else:
+        browser.navigate(vps.url)
+        wait_for(lambda: browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
+        browser.execute('document.getElementById("team_workspace_open").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-team-leave]");'))
+        browser.execute('document.querySelector("[data-team-leave]").click();')
+        wait_for(lambda: browser.execute('return !!document.getElementById("team_leave_confirm");'))
+        browser.execute('document.getElementById("modal_submit").click();')
+        wait_for(lambda: browser.execute('return !!document.getElementById("team_login") && !document.getElementById("team_join_code");'))
+        assert browser.execute('return document.getElementById("team_base").value;') == workspace
+        browser.execute('document.getElementById("team_name").value=arguments[0]; '
+            'document.getElementById("team_password").value=arguments[1]; '
+            'document.getElementById("modal_submit").click();',member_name,PASSWORD)
+        wait_for(lambda: browser.execute('return !!document.querySelector("#team_home .team-role-member");'))
+        assert vps.team('status')['identity']['member']['name'] == member_name
+    with sqlite3.connect(root/'vps/workspace.sqlite3') as database:
+        assert not database.execute('SELECT 1 FROM sessions WHERE token=?',current).fetchone()
+    status, still_signed_in = request(vps_url+'/workspace/v1/status',headers=bearer)
+    assert status == 200 and still_signed_in['member']['role'] == 'vps_admin'
+    assert request(vps_url+'/workspace/v1/logout',{},bearer)[0] == 200
+    assert request(vps_url+'/workspace/v1/status',headers=bearer)[0] == 401
+    assert not vps.team('logout')['joined']
+    assert vps.login(workspace,'deployment')['role'] == 'vps_admin'
 
 
 def subscription_token(account, plan, expiry):
@@ -448,7 +495,7 @@ def ten_member_demo(admin, vps, member, vps_url, browser, output, keep_available
     assert admin.team('profile',{'member':accounts['qiao']})['activity']
     if browser:
         browser.navigate(member.url)
-        wait_for(lambda: browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+        wait_for(lambda: browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
         browser.execute('document.getElementById("team_workspace_open").click();')
         wait_for(lambda: browser.execute('return !!document.querySelector("[data-team-profiles]");'))
         browser.execute('document.querySelector("[data-team-profiles]").click();')
@@ -471,7 +518,7 @@ def ten_member_demo(admin, vps, member, vps_url, browser, output, keep_available
             wait_for(lambda: browser.execute('return document.querySelectorAll(".team-subscription-status[data-valid=false]").length===1;'))
             assert browser.execute('return !document.querySelector("#team_subscriptions button:not(.shadow-help)");')
             browser.navigate(admin.url)
-            wait_for(lambda: browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+            wait_for(lambda: browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
             browser.execute('document.getElementById("team_workspace_open").click();')
             wait_for(lambda: browser.execute('return !!document.querySelector("[data-team-choice=manage]");'))
             browser.execute('document.querySelector("[data-team-choice=manage]").click();document.querySelector("[data-team-manage-subscriptions]").click();')
@@ -504,10 +551,320 @@ def ten_member_demo(admin, vps, member, vps_url, browser, output, keep_available
     assert request(vps_url+'/workspace/v1/publish',update,expired[1])[0]==409
 
 
+def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, upstream, output, browser_enabled):
+    release_url = f'http://127.0.0.1:{release.server_port}'
+    upstream.catalog = {'models':[{'slug':'gpt-6.2-sol','display_name':'GPT-6.2 Sol','visibility':'list',
+        'context_window':272000,'max_context_window':272000,'supported_in_api':True,'shell_type':'shell_command'}]}
+    vps.install('team')
+    vps.login(workspace, 'deployment')
+    admin = Emp(stack, emppy, root/'team-usage-admin', {'codex_base_url':mock}, release_url, ca)
+    member = Emp(stack, emppy, root/'team-usage-member', {'codex_base_url':mock}, release_url, ca)
+    for emp, name, role in [(admin, 'owner', 'team_admin'), (member, 'member', 'member')]:
+        vps.team('members', {'name':name, 'role':role, 'password':PASSWORD, 'publish':name=='owner', 'sync':True})
+        emp.install('team')
+    def auth(expiry):
+        return {'auth_mode':'chatgpt','tokens':{'account_id':'shared-account',
+            'access_token':subscription_token('shared-account','pro',expiry),
+            'refresh_token':'synthetic-refresh-token','id_token':'synthetic-id-token'}}
+    expiry = int(time.time()) + 3600
+    account = member.api('/api/accounts/import', {'id':'personal-copy','prefix':'personal-copy',
+        'name':'Personal copy','auth_json':auth(expiry)})['account']
+    saved = next(row['auth_file'] for row in json.loads(member.config.read_text())['accounts']
+                 if row['id']==account['id'])
+    private_auth = Path(saved).read_bytes()
+    admin.auth.write_text(json.dumps(auth(expiry+60)))
+    admin.login(workspace, 'owner')
+    published = admin.team('publish')
+    review = {'id':published['id'],'version':published['version'],'shared':True}
+    admin.team('review_service', review)
+    rates = {key + suffix: value for suffix in ('', '_priority', '_ultrafast')
+             for key, value in [('input_cost_per_token', 0.000002), ('output_cost_per_token', 0.00001)]}
+    prices = json.dumps({'rate_format':1,'fetched_at':time.time(), 'prices':{'gpt-6.2-sol':rates}})
+    (member.root/'state/api_prices.json').write_text(prices)
+    member.restart()
+    identity = member.login(workspace, 'member')
+    assert member.team('sync')['synced'] == 1
+    vps.team('budget', {'member':identity['id'],'daily_usd_nanos':90_000})
+    initialize = {'action':'initialize','timezone':'America/Los_Angeles'}
+    assert member.team('overview')['weekly_budget'] is None
+    assert member.team('overview')['budget_mode'] == 'daily_usd'
+    member.team('weekly_budget', initialize, 403)
+    expected_reset = {'weekday':0,'hour':16,'timezone':'America/Los_Angeles'}
+    browser = Browser(stack, root) if browser_enabled else None
+    if browser:
+        asset = next(name for name in release.assets if name.startswith('EMP-mod-team-'))
+        team_row = next(row for row in admin.api('/api/modules')['modules'] if row['id']=='team')
+        host_api = subprocess.run([emppy.with_name('empmod-team')], stdin=subprocess.DEVNULL, check=True,
+                                  capture_output=True, text=True)
+        host_api = json.loads(host_api.stdout)['host_api']
+        tag = f'emp-mod-team-api{host_api}-v0.99.0-beta'
+        unrelated = f'emp-mod-team-api{host_api + 1}-v1.0.0'
+        release.module_releases = dict.fromkeys((tag, unrelated), {asset:release.assets[asset]})
+        release.release_notes = {tag:'### 中文\n更新夹具说明 <b>纯文本</b>\n### English\nFixture release notes <b>plain text</b>'}
+        release.package_requests = []
+        release.paginate_modules = True
+        browser.navigate(admin.url)
+        wait_for(lambda: browser.execute('return document.querySelector("#emp_logo").closest("h1").ariaLabel === "EMPT";'))
+        wait_for(lambda: browser.execute('return document.querySelector("#modules_open").classList.contains("has-update");'))
+        browser.execute('document.querySelector("#modules_open").click();')
+        update_button = '[data-module-id="team"][data-module-action="check_updates"]'
+        wait_for(lambda: browser.execute('return document.querySelector(arguments[0])?.classList.contains("has-update");', update_button))
+        assert browser.execute('return [...document.querySelectorAll(".module-actions")].every(row => row.children.length === 4 && [...row.children].every(button => button.querySelector("svg") && button.ariaLabel && !button.textContent.trim()));')
+        (output/'module-update.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        browser.execute('document.querySelector(arguments[0]).click();', update_button)
+        wait_for(lambda: browser.execute('return document.querySelector("#module_release_notes")?.textContent.includes("<b>");'))
+        assert browser.execute('return !document.querySelector("#module_release_notes b") && document.querySelector("#modal_body").textContent.includes("0.99.0-beta");')
+        (output/'module-update-notes.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        assert release.package_requests == []
+        browser.execute('document.querySelector("#modal_back").click();')
+        wait_for(lambda: browser.execute('return document.querySelector(arguments[0])?.classList.contains("has-update");', update_button))
+        assert release.package_requests == []
+        browser.execute('document.querySelector(arguments[0]).click();', update_button)
+        release.module_releases = {unrelated:{asset:release.assets[asset]}}
+        browser.execute('document.querySelector("#modal_submit").click();')
+        wait_for(lambda: browser.execute('return document.querySelector("#modal_status").textContent.length > 0;'))
+        assert release.package_requests == []
+        assert next(row for row in admin.api('/api/modules')['modules'] if row['id']=='team') == team_row
+        browser.execute('document.querySelector("#modal_back").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector(arguments[0]);', update_button))
+        browser.execute('document.querySelector(arguments[0]).click();', update_button)
+        wait_for(lambda: browser.execute('return document.querySelector("#modal_body").children.length === 2 && !document.querySelector("#module_release_notes");'))
+        assert browser.execute('return !document.querySelector("#modules_open").classList.contains("has-update") && document.querySelector("#modal_submit").style.display === "none";')
+        browser.execute('document.querySelector("#modal_back").click();')
+        assert admin.api('/api/team/status')['joined']
+        browser.execute('document.querySelector("#modal_close").click();')
+        browser.execute('document.querySelector("#team_workspace_open").click();')
+        wait_for(lambda: admin.team('list_members')['weekly_reset'])
+        expected_reset['timezone'] = browser.execute('return Intl.DateTimeFormat().resolvedOptions().timeZone;')
+        assert admin.team('list_members')['weekly_reset'] == expected_reset
+    else:
+        assert admin.team('weekly_budget', initialize)['weekly_reset'] == expected_reset
+    assert vps.team('weekly_budget', {**initialize,'timezone':'Asia/Tokyo'})['weekly_reset'] == expected_reset
+    admin.team('weekly_budget', {'action':'reset','weekday':5,'hour':24}, 400)
+    weekly_limit = {'action':'member_limit','member':identity['id'],'usd_nanos':55_000}
+    member.team('weekly_budget', weekly_limit, 403)
+    admin.team('weekly_budget', {**weekly_limit,'usd_nanos':-1}, 400)
+    admin.team('weekly_budget', weekly_limit)
+    weekly_mode = {'action':'mode','mode':'weekly_usd'}
+    member.team('weekly_budget', weekly_mode, 403)
+    assert admin.team('weekly_budget', weekly_mode)['budget_mode'] == 'weekly_usd'
+    vps.team('member_tiers', {'id':identity['id'],'fast':False,'ultrafast':False})
+    member.team('status')
+    local = {'Authorization':'Bearer '+LOCAL_KEY}
+    body = {'model':account['prefix']+'/gpt-6.2-sol','input':'Synthetic team usage ' * 8}
+    calls = len(upstream.requests)
+    for tier, label in [('priority','Fast'), ('ultrafast','Ultrafast')]:
+        status, error = request(member.base+'/v1/responses', {**body,'service_tier':tier}, local)
+        assert status == 403 and f'{label} is not permitted' in json.dumps(error), (status, error)
+    assert len(upstream.requests) == calls
+    websocket_request(member.base, local, body)
+    assert upstream.requests[-1]['body']['model'] == 'gpt-6.2-sol'
+    def usage():
+        row = member.team('usage', {'period':'lifetime'})['rows'][0]
+        return row if row['requests'] else None
+    row = wait_for(usage)
+    assert (row['requests'],row['input_tokens'],row['output_tokens'],row['estimated_usd_nanos']) == (1,10,3,50_000), row
+    assert row['models'][0]['model'] == 'gpt-6.2-sol', row
+    assert not row['budget_reached']
+    weekly = member.team('overview')['weekly_budget']
+    assert (weekly['used'],weekly['limit'],weekly['reset']) == (50_000,55_000,expected_reset), weekly
+    wait_for(lambda: any(notice['kind']=='weekly_usd' and not notice['reached']
+                         for notice in member.api('/api/team/notices')))
+    second = Emp(stack, emppy, root/'second-member-device', {'codex_base_url':mock}, release_url, ca)
+    second.install('team')
+    second.auth.write_text(json.dumps(auth(expiry+120)))
+    (second.root/'state/api_prices.json').write_text(prices)
+    second.restart()
+    if browser:
+        browser.navigate(member.url)
+        wait_for(lambda: browser.execute('return !document.querySelector("#team_workspace_open").hidden;'))
+        browser.execute('document.querySelector("#team_workspace_open").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-team-copy-login]");'))
+        browser.execute('''
+            Object.defineProperty(navigator,'clipboard',{configurable:true,
+              value:{writeText:async text => {window.fixtureTeamClipboard=text;}}});
+            document.querySelector('[data-team-copy-login]').click();
+        ''')
+        login_info = wait_for(lambda: browser.execute('return window.fixtureTeamClipboard;'))
+        assert json.loads(login_info) == {'workspace':'Lab','base':workspace,'name':'member'}
+        (output/'copy-workspace-sign-in.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        browser.navigate(second.url)
+        wait_for(lambda: browser.execute('return !document.querySelector("#team_workspace_open").hidden;'))
+        browser.execute('document.querySelector("#team_workspace_open").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("#team_switch_entry");'))
+        browser.execute('document.querySelector("#team_switch_entry").click();')
+        browser.execute('''
+          const field = document.querySelector('#team_name');
+          const paste = text => {
+            const event = new ClipboardEvent('paste',{bubbles:true,cancelable:true});
+            Object.defineProperty(event,'clipboardData',{value:{getData:format => format === 'text/plain' ? text : ''}});
+            return field.dispatchEvent(event);
+          };
+          if (!paste('member')) throw Error('Ordinary username paste was intercepted');
+          if (paste(arguments[0])) throw Error('Copied sign-in info was not recognized');
+        ''', login_info)
+        (output/'paste-workspace-sign-in.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        filled = browser.execute('''
+            const password = document.querySelector('#team_password');
+            return {address:document.querySelector('#team_base').value === arguments[0],
+              account:document.querySelector('#team_name').value === 'member',
+              focus:password === document.activeElement, emptyPassword:password.value === '',
+              error:document.querySelector('#modal_status').textContent};
+        ''', workspace)
+        assert filled == {'address':True,'account':True,'focus':True,'emptyPassword':True,'error':''}, filled
+        assert not second.api('/api/team/status')['joined']
+        browser.execute('document.querySelector("#team_password").value=arguments[0]; document.querySelector("#modal_submit").click();', PASSWORD)
+        wait_for(lambda: second.api('/api/team/status').get('identity',{}).get('member',{}).get('id') == identity['id'])
+    else:
+        assert second.login(workspace, 'member')['id'] == identity['id']
+    assert second.team('sync') == {'synced':0,'skipped_native':1}
+    assert not second.api('/api/config')['accounts']
+    native_headers = {'Authorization':'Bearer '+auth(expiry+120)['tokens']['access_token'],
+                      'chatgpt-account-id':'shared-account'}
+    websocket_request(second.base, native_headers, {**body,'model':'gpt-6.2-sol','service_tier':'priority'})
+    assert upstream.requests[-1]['body']['model'] == 'gpt-6.2-sol'
+    assert upstream.requests[-1]['body']['service_tier'] == 'priority'
+    row = wait_for(lambda: row if (row := usage()) and row['requests']==2 else None)
+    assert (row['input_tokens'],row['output_tokens'],row['estimated_usd_nanos']) == (20,6,100_000), row
+    assert not row['budget_reached'] and row['budget_usage_nanos'] is None
+    assert second.team('overview')['weekly_budget']['used'] == 100_000
+    wait_for(lambda: {notice['kind'] for notice in second.api('/api/team/notices') if notice['reached']}
+             == {'weekly_usd'})
+    daily_mode = {'action':'mode','mode':'daily_usd'}
+    assert admin.team('weekly_budget', daily_mode)['budget_mode'] == 'daily_usd'
+    assert second.team('overview')['weekly_budget'] is None
+    assert usage()['budget_reached']
+    assert admin.team('weekly_budget', weekly_mode)['budget_mode'] == 'weekly_usd'
+    assert second.team('overview')['weekly_budget']['limit'] == 55_000
+    vps.team('budget', {'member':identity['id'],'daily_usd_nanos':5_000_000_000})
+    if browser:
+        browser_roles(browser, output, [(member,'member',['publish','sync']),
+                                        (admin,'team-admin',['manage','publish','sync'])])
+        def button_sizes():
+            return browser.execute('''
+                const handover = document.querySelector("[data-team-handover]").getBoundingClientRect();
+                const add = document.querySelector("[data-member-add]").getBoundingClientRect();
+                return {gap:add.left-handover.right, handoverHeight:handover.height, addHeight:add.height};
+            ''')
+        before = button_sizes()
+        assert 0 <= before['gap'] <= 10, before
+        wait_for(lambda: browser.execute('return !document.querySelector("[data-team-budget-mode]").hidden;'))
+        for mode in ('daily_usd','weekly_usd'):
+            browser.execute('''
+              const picker=document.querySelector('[data-team-budget-mode]');
+              picker.value=arguments[0]; picker.dispatchEvent(new Event('change',{bubbles:true}));
+            ''', mode)
+            wait_for(lambda: browser.execute('return !document.querySelector("[data-team-budget-mode]").disabled && document.querySelector("[data-team-budget-mode]").value === arguments[0];', mode))
+            assert admin.team('list_members')['budget_mode'] == mode
+        (output/'member-management-weekly.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        browser.execute('document.querySelector("[data-team-weekly-reset]").click();')
+        wait_for(lambda: browser.execute('return document.querySelector("[data-weekly-weekday]")?.value === "0" && document.querySelector("[data-weekly-hour]")?.value === "16";'))
+        (output/'weekly-reset.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        browser.execute('document.querySelector("[data-weekly-weekday]").value="3"; document.querySelector("[data-weekly-hour]").value="9"; document.querySelector("#modal_submit").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-member-budget]");'))
+        assert admin.team('list_members')['weekly_reset'] == {**expected_reset,'weekday':3,'hour':9}
+        field = f'[data-team-member="{identity["id"]}"] [data-member-budget]'
+        browser.execute('const field=document.querySelector(arguments[0]);field.value="";field.dispatchEvent(new Event("change",{bubbles:true}));',field)
+        wait_for(lambda: member.team('overview')['weekly_budget']['limit'] is None)
+        browser.execute('const field=document.querySelector(arguments[0]);field.value="14";field.dispatchEvent(new Event("change",{bubbles:true}));',field)
+        wait_for(lambda: member.team('overview')['weekly_budget']['limit'] == 14_000_000_000)
+        browser.execute('document.querySelector("[data-member-add]").click();')
+        wait_for(lambda: browser.execute('return /[0-9]{7}/.test(document.querySelector("[data-member-add]").textContent);'))
+        assert button_sizes()['addHeight'] == before['addHeight']
+        request(browser.base+'/window/rect', {'width':640,'height':680})
+        browser.navigate(member.url)
+        wait_for(lambda: browser.execute('return document.querySelector("#team_workspace_open")?.hidden === false;'))
+        browser.execute('document.querySelector("#team_workspace_open").click();')
+        wait_for(lambda: browser.execute('return document.querySelector("[data-team-today]")?.textContent.includes(" / 14.00") && !document.querySelector("[data-team-weekly]").hidden;'))
+        (output/'member-weekly-usd.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        admin.team('weekly_budget', daily_mode)
+        wait_for(lambda: browser.execute('return document.querySelector("[data-team-today]")?.textContent.includes(" / 5.00");'))
+        assert browser.execute('''
+            const amount = document.querySelector("[data-team-today]");
+            const currency = amount.parentElement.previousElementSibling?.textContent;
+            const help = document.querySelector("#modal_help");
+            return currency?.includes("USD") && !currency.includes("UTC") &&
+                getComputedStyle(amount).whiteSpace === "nowrap" &&
+                !help.hidden && help.nextElementSibling.id === "modal_close";
+        ''')
+        (output/'member-narrow.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        websocket_request(second.base, native_headers, {**body,'model':'gpt-6.2-sol','service_tier':'ultrafast'})
+        assert upstream.requests[-1]['body']['service_tier'] == 'ultrafast'
+        wait_for(lambda: browser.execute('return document.querySelector("[data-team-today-tokens]")?.textContent === "39";'), 30)
+    admin.team('review_service', {**review,'shared':False})
+    member.team('sync')
+    calls = len(upstream.requests)
+    assert request(member.base+'/v1/responses', body, local)[0] == 403
+    assert len(upstream.requests) == calls
+    removal = {'id':published['id'],'version':published['version']}
+    member.team('remove_service', removal, 403)
+    request_count = usage()['requests']
+    if browser_enabled:
+        request(browser.base+'/window/rect', {'width':1160,'height':760})
+        browser.navigate(admin.url)
+        wait_for(lambda: browser.execute('return document.querySelector("#team_workspace_open")?.hidden === false;'))
+        browser.execute('document.querySelector("#team_workspace_open").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-team-choice=manage]");'))
+        browser.execute('document.querySelector("[data-team-choice=manage]").click();')
+        browser.execute('document.querySelector("[data-team-manage-subscriptions]").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-remove-service]");'))
+        (output/'subscription-management.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        browser.execute('document.querySelector("[data-remove-service]").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("#team_remove_shared_service");'))
+        (output/'remove-subscription.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        browser.execute('document.querySelector("#modal_back").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-remove-service]");'))
+        assert admin.team('shared_services')['services'][0]['id'] == published['id']
+        browser.execute('document.querySelector("[data-remove-service]").click(); document.querySelector("#modal_submit").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("#team_shared_services") && !document.querySelector("[data-remove-service]");'))
+    else:
+        assert admin.team('remove_service', removal) == {'ok':True}
+    assert not admin.team('shared_services')['services']
+    assert not member.team('subscriptions')['subscriptions']
+    assert usage()['requests'] == request_count
+    member.team('sync')
+    assert request(member.base+'/v1/responses', body, local)[0] == 403
+    renewed = admin.team('publish')
+    assert renewed['review_required'] and renewed['version'] == published['version']+2
+    member.team('remove_member', {'id':identity['id']}, 403)
+    if browser:
+        browser.execute('document.querySelector("[data-team-manage-members]").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-member-remove]");'))
+        (output/'remove-team-member-action.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        browser.execute('document.querySelector("[data-member-remove]").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("#team_remove_member");'))
+        (output/'remove-team-member-confirm.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+        browser.execute('document.querySelector("#modal_back").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-member-remove]");'))
+        assert member.api('/api/team/status')['joined'] and second.api('/api/team/status')['joined']
+        browser.execute('document.querySelector("[data-member-remove]").click(); document.querySelector("#modal_submit").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("#team_manage tbody") && !document.querySelector("[data-member-remove]");'))
+    else:
+        assert admin.team('remove_member', {'id':identity['id']}) == {'ok':True}
+    for emp in (member, second):
+        if emp.api('/api/team/status')['joined']:
+            emp.team('status', expected=401)
+        assert not emp.api('/api/team/status')['joined']
+    assert not any(row['id']==identity['id'] for row in admin.team('list_members')['members'])
+    history = next(row for row in admin.team('usage', {'period':'lifetime'})['rows'] if row['member']==identity['id'])
+    assert history['requests']==request_count and history['name']=='member'
+    assert any(row['kind']=='member_removed' and row['target_login']=='member' for row in admin.team('audit')['entries'])
+    if browser:
+        browser.navigate(member.url)
+        wait_for(lambda: browser.execute('return document.querySelector("#emp_logo circle.on") && document.querySelector("#emp_logo").closest("h1").ariaLabel === "EMP";'))
+        (output/'emp-wordmark.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
+    assert Path(saved).read_bytes() == private_auth
+    websocket_request(member.base, local, body)
+    assert len(upstream.requests) == calls+1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binaries', type=Path, required=True)
-    parser.add_argument('--codex', type=Path, required=True)
+    parser.add_argument('--codex', type=Path)
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument('--vps-signout-only', action='store_true')
+    selection.add_argument('--team-usage-only', action='store_true')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--no-browser', action='store_true')
     parser.add_argument('--hold-demo', action='store_true', help='keep the synthetic review server open until interrupted')
@@ -521,6 +878,8 @@ def main():
     args = parser.parse_args()
     if args.hold_demo and not args.no_browser:
         parser.error('--hold-demo requires --no-browser so the review links are unused')
+    if not (args.vps_signout_only or args.team_usage_only) and args.codex is None:
+        parser.error('--codex is required for the full suite')
     args.output.mkdir(parents=True, exist_ok=True)
     binaries = args.binaries.resolve()
     emppy = binaries / 'EMP'
@@ -552,6 +911,22 @@ def main():
         vps_proc, vps_url = start_vps(stack,binaries/'empmod-team',root/'vps',workspace_port)
         workspace, ca, overrides = https_workspace(stack, root, workspace_port) if args.lan or args.manual_https else (vps_url, None, None)
         vps = Emp(stack, emppy, root/'deployment-emp', {'codex_base_url':mock}, release_url, ca)
+        if args.team_usage_only:
+            verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, upstream,
+                              args.output, not args.no_browser)
+            print(json.dumps({'team_subscription_permissions_and_usage':'passed',
+                              'browser':not args.no_browser}))
+            return
+        if args.vps_signout_only:
+            vps.install('team')
+            vps.login(workspace,'deployment')
+            vps.team('members',{'name':'signout-member','role':'member','sync':True,
+                                'publish':False,'password':PASSWORD})
+            browser = None if args.no_browser else Browser(stack, root)
+            verify_vps_signout(root, vps, workspace, vps_url, 'signout-member', browser)
+            print(json.dumps({'vps_signout_and_account_switch':'passed',
+                              'browser':not args.no_browser}))
+            return
         provider_data = {'providers': [
             {'id':name, 'name':label, 'base_url':mock, 'api_key':PROVIDER_KEY,
              'auth_mode':'api_key', 'protocol':'responses',
@@ -632,16 +1007,18 @@ def main():
         admin.restart()
         checks.append('An invalid optional device store is preserved and does not prevent personal routing')
 
+        core_pid = admin.process.pid
         for kind in KINDS:
             rows = admin.install(kind)['modules']
             row = next(row for row in rows if row['id']==kind)
-            assert row['restart_required'] and not row['active']
+            assert row['active'] and not row['restart_required']
+            with urlopen(admin.base + f'/assets/module-{kind}.js') as panel:
+                assert panel.status == 200 and panel.read()
+        assert admin.process.pid == core_pid and admin.process.poll() is None
         for emp in (vps,member):
             emp.install('team')
-        for emp in (admin,vps,member):
-            emp.restart()
         assert all(row['active'] and row['installed_version'] == row['version']
-                   for row in admin.api('/api/modules')['modules'])
+                   for row in admin.api('/api/modules')['modules'] if row['id'] in KINDS)
         if args.decision_update:
             replacement = args.decision_update.resolve()
             hello = json.loads(subprocess.check_output([replacement], stdin=subprocess.DEVNULL, text=True))
@@ -657,14 +1034,17 @@ def main():
             release.corrupt = asset
             admin.api('/api/modules', {'id':'decision','action':'update'}, 409)
             release.corrupt = None
-            updated = admin.api('/api/modules', {'id':'decision','action':'update'})['modules']
-            staged = next(row for row in updated if row['id'] == 'decision')
-            assert staged['restart_required'] and staged['active_version'] == '0.10-beta'
-            assert staged['installed_version'] == hello['module_version']
-            del release.module_releases
-            admin.restart()
-            active = next(row for row in admin.api('/api/modules')['modules'] if row['id'] == 'decision')
+            update = next(offer for offer in admin.api('/api/modules', {'action':'check_updates'})['updates']
+                          if offer['id']=='decision')
+            assert update['latest_version'] == version
+            updated = admin.api('/api/modules', {'id':'decision','action':'update','revision':update['revision']})['modules']
+            active = next(row for row in updated if row['id'] == 'decision')
+            assert active['installed_version'] == hello['module_version']
             assert active['active'] and active['active_version'] == hello['module_version'] and not active['restart_required']
+            old_revision = hashlib.sha256(release.assets[asset]).hexdigest()
+            assert request(admin.base + f'/assets/module-decision.js?revision={old_revision}')[0] == 404
+            assert admin.process.pid == core_pid
+            del release.module_releases
             admin.api('/api/modules', {'id':'decision','action':'update'})
             assert next(row for row in admin.api('/api/modules')['modules'] if row['id'] == 'decision')['installed_version'] == hello['module_version']
             if args.decision_update_next:
@@ -688,13 +1068,15 @@ def main():
                 del release.module_releases
                 (files/f'decision-{third_digest}').write_bytes(b'broken selected fixture')
                 admin.restart()
+                core_pid = admin.process.pid
                 assert next(row for row in admin.api('/api/modules')['modules'] if row['id']=='decision')['active_revision']==current_digest
                 checks.append('Cleanup happens only after registry commit, preserves the active fallback, and a corrupt third version rolls back')
             release.paginate_modules = False
             assert hashlib.sha256(emppy.read_bytes()).digest() == original_core
             assert all(hashlib.sha256((files/name).read_bytes()).digest() == digest for name,digest in neighbors.items())
             assert request(admin.base+'/v1/decisions', {'state':'updated','questions':{}}, local)[0] == 200
-            checks.append('Reject a corrupt independent release, update Decision, then restart with unchanged Core and sibling workers')
+            checks.append('Reject a corrupt independent release, hot update Decision with unchanged Core and sibling workers')
+        assert admin.process.pid == core_pid and admin.process.poll() is None
         key = admin.api('/api/gateway/clients',{'name':'Fixture device'})['api_key']
         decision = {'Authorization':'Bearer '+key}
         assert request(admin.base+'/v1/decisions', {'state':'fixture','questions':{}}, decision)[1]['model']=='fixture-decision'
@@ -703,11 +1085,32 @@ def main():
         aggregate = next(item['slug'] for item in catalog if item.get('_emp_aggregate') or item['slug']=='auto/probe')
         websocket_request(admin.base,{'Authorization':'Bearer '+key,'session-id':'aggregate-fixture'},
                                      {'model':aggregate,'input':'aggregate fixture ' * 12})
-        checks.append('Four assets activate after restart; Decision, device admission and aggregation complete real paths')
+        checks.append('Four assets activate on installation; Decision, device admission and aggregation complete real paths')
+        upstream.decision_started = threading.Event()
+        upstream.decision_release = threading.Event()
+        held = []
+        def run_held_decision():
+            held.append(request(admin.base+'/v1/decisions', {'state':'hold-during-disable','questions':{}}, local))
+        in_flight = threading.Thread(target=run_held_decision, daemon=True)
+        in_flight.start()
+        try:
+            assert upstream.decision_started.wait(10)
+            admin.api('/api/modules',{'id':'decision','action':'disable'})
+            response_status, response_body = request(admin.base+'/v1/decisions', {'state':'new','questions':{}}, local)
+            assert response_status == 404 and response_body['error']['code'] == 'module_disabled'
+            assert request(admin.base+'/assets/module-decision.js')[0] == 404
+        finally:
+            upstream.decision_release.set()
+            in_flight.join(15)
+        assert held[0][0] == 200
+        admin.api('/api/modules',{'id':'decision','action':'enable'})
+        assert request(admin.base+'/v1/decisions', {'state':'restored','questions':{}}, local)[0] == 200
+        assert admin.process.pid == core_pid
+        checks.append('Hot disable blocks new Decision requests and lets the accepted upstream request finish; re-enable keeps the same Core PID')
         admin.api('/api/modules',{'id':'gateway','action':'disable'})
         admin.api('/api/modules',{'id':'aggregate','action':'disable'})
-        assert admin.api('/api/modules',{'id':'aggregate','action':'uninstall'},409)['error']['code'] == 'module_disable_before_uninstall'
-        admin.restart()
+        assert request(admin.base+'/assets/module-aggregate.js')[0] == 404
+        assert not any(item['slug'] == aggregate for item in admin.api('/v1/models?client_version=0.169.0')['models'])
         admin.api('/api/gateway',expected=404)
         assert request(admin.base+'/v1/decisions', {'state':'fixture','questions':{}},decision)[0]==401
         assert request(admin.base+'/v1/decisions', {'state':'fixture','questions':{}},local)[0]==200
@@ -716,10 +1119,9 @@ def main():
         assert not list((admin.root/'state/modules').glob('aggregate-*'))
         assert any(group['id']=='auto/probe' for group in admin.api('/api/config')['model_groups'])
         admin.install('aggregate')
-        admin.restart()
         websocket_request(admin.base,{**local,'session-id':'aggregate-fixture'},
                           {'model':aggregate,'input':'same aggregate session ' * 8})
-        checks.append('Aggregate uninstall requires restart; reinstall keeps the route and its existing session')
+        checks.append('Aggregate hot uninstall and reinstall preserves the route and its existing session')
 
         assert vps.login(workspace,'deployment')['role']=='vps_admin'
         helper = {'publish':True,'sync':True,'password':PASSWORD}
@@ -740,7 +1142,7 @@ def main():
         else:
             join_browser = Browser(stack, root, download_dir=downloads)
             join_browser.navigate(admin.url)
-            wait_for(lambda: join_browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+            wait_for(lambda: join_browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
             join_browser.execute('document.querySelector(arguments[0]).click();','#team_workspace_open')
             wait_for(lambda: join_browser.execute('return !!document.querySelector("[data-team-choice=manage]");'))
             join_browser.execute('document.querySelector(arguments[0]).click();','[data-team-choice=manage]')
@@ -770,7 +1172,7 @@ def main():
             assert member.team('join',{**application,'code':code})['pending']
         else:
             join_browser.navigate(member.url)
-            wait_for(lambda: join_browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+            wait_for(lambda: join_browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
             join_browser.execute('document.querySelector(arguments[0]).click();','#team_workspace_open')
             wait_for(lambda: join_browser.execute('return !!document.getElementById("team_join_code");'))
             assert join_browser.execute('return document.getElementById("team_nickname").required && document.getElementById("team_join_code").pattern === "[0-9]{7}";')
@@ -813,7 +1215,7 @@ def main():
             checks.append('Authenticated rejection removes the pending member, preserves its audit identity and permits a fresh application')
         else:
             join_browser.navigate(admin.url)
-            wait_for(lambda: join_browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+            wait_for(lambda: join_browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
             join_browser.execute('document.getElementById("team_workspace_open").click();')
             wait_for(lambda: join_browser.execute('return !!document.querySelector("[data-team-choice=manage]");'))
             join_browser.execute('document.querySelector("[data-team-choice=manage]").click();')
@@ -1076,9 +1478,9 @@ def main():
             assert admin.team('budget',{'member':admin_id,'daily_usd_nanos':2_500_000_000})
         if not args.no_browser:
             join_browser.navigate(member.url)
-            wait_for(lambda: join_browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+            wait_for(lambda: join_browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
             join_browser.execute('document.getElementById("team_workspace_open").click();')
-            wait_for(lambda: join_browser.execute(r'return /2\.00\s*\/\s*[^\d]*1\.00/.test(document.querySelector("[data-team-today]")?.textContent);'))
+            wait_for(lambda: join_browser.execute(r'return /^2\.00\s*\/\s*1\.00$/.test(document.querySelector("[data-team-today]")?.textContent);'))
             wait_for(lambda: join_browser.execute('return document.querySelector("[data-team-lifetime-tokens]").textContent !== "—";'))
             assert join_browser.execute('return !document.querySelector(".team-usage-summary button") && document.querySelector("#team_usage_detail").hidden;')
             join_browser.execute('document.querySelector("[data-team-choice=sync]").click();')
@@ -1094,7 +1496,7 @@ def main():
             join_browser.execute('document.querySelector("[data-team-usage-toggle]").click();')
             assert join_browser.execute('return document.querySelector("#team_usage_detail").hidden && document.querySelector("[data-team-usage-toggle]").getAttribute("aria-expanded")==="false";')
             join_browser.navigate(admin.url)
-            wait_for(lambda: join_browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+            wait_for(lambda: join_browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
             join_browser.execute('document.getElementById("team_workspace_open").click();')
             wait_for(lambda: join_browser.execute('return !!document.querySelector("[data-team-choice=manage]");'))
             join_browser.execute('document.querySelector("[data-team-choice=manage]").click();')
@@ -1114,7 +1516,7 @@ def main():
             _, screenshot = request(join_browser.base+'/screenshot')
             (args.output/'team-operation-log.png').write_bytes(base64.b64decode(screenshot['value']))
             join_browser.navigate(vps.url.split('/?')[0])
-            wait_for(lambda: join_browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+            wait_for(lambda: join_browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
             join_browser.execute('document.getElementById("team_workspace_open").click();')
             wait_for(lambda: join_browser.execute('return !!document.querySelector("[data-team-choice=manage]");'))
             join_browser.execute('document.querySelector("[data-team-choice=manage]").click();')
@@ -1440,6 +1842,11 @@ def main():
         checks.append('A synced subscription uses the owner name, and an existing conversation can still send the previous workspace-suffixed route')
         imported = team_credentials()
         member.api('/api/modules',{'id':'team','action':'disable'})
+        member.team('status',expected=404)
+        assert not member.api('/api/modules')['migration_allowed']
+        member.api('/api/modules',{'id':'team','action':'enable'})
+        assert member.team('status')['joined']
+        member.api('/api/modules',{'id':'team','action':'disable'})
         stop(member.process)
         team_path.unlink()
         member.start()
@@ -1457,7 +1864,8 @@ def main():
             {'name':'lab-admin','password':PASSWORD,'device':'f'*32})[1]
         other_admin_bearer = {'Authorization':'Bearer '+other_admin_login['token']}
         assert other_admin_login['member']['id'] == prior
-        vps.team('logout',expected=403)
+        verify_vps_signout(root, vps, workspace, vps_url, 'mei', join_browser if not args.no_browser else None)
+        checks.append('A VPS maintainer can switch accounts on one device without changing the VPS role or other sessions')
         assert admin.team('logout')['joined'] is False
         status, other_member = request(vps_url+'/workspace/v1/status',headers=other_admin_bearer)
         assert status == 200 and other_member['member']['role'] == 'team_admin'
@@ -1469,7 +1877,7 @@ def main():
             assert not admin.team('handover',{'successor':successor['id']})['joined']
         else:
             join_browser.navigate(admin.url)
-            wait_for(lambda: join_browser.execute('return !document.getElementById("team_workspace_open").hidden;'))
+            wait_for(lambda: join_browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
             join_browser.execute('document.getElementById("team_workspace_open").click();')
             wait_for(lambda: join_browser.execute('return !!document.querySelector("[data-team-choice=manage]");'))
             join_browser.execute('document.querySelector("[data-team-choice=manage]").click();')

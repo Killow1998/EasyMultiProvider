@@ -1,0 +1,14 @@
+{
+  "upstream": "http://127.0.0.1:4200/v1",
+  "review_interval": 30,
+  "models": {
+    "aero/astra-sol": {
+      "planner": {"model": "gpt-6-astra", "effort": "high"},
+      "executor": {"model": "gpt-6.1-sol", "effort": "high"}
+    },
+    "aero/sol-dsk": {
+      "planner": {"model": "gpt-6.1-sol", "effort": "high"},
+      "executor": {"model": "deepseek/deepseek-v4-pro"}
+    }
+  }
+}

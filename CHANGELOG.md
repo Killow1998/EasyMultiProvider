@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+## 0.15.2 (2026-11-21)
+
+### 中文
+
+更新顺序
+
+- 将桌面版 Core 升级到 0.15.2。
+- 团队预算功能需要桌面版 Core 0.15.2、团队空间 0.10.1-beta 模组和 VPS 团队服务 0.10.1-beta 同时就位。
+- Decision API、Device Gateway 和 Aggregate Routing 沿用原有的独立模组版本。
+
+新增与改进
+
+- 有兼容的独立更新时，「模组」入口和对应模组会显示红点。打开后可先查看更新说明，再选择安装。
+- 安装、启用、停用和更新模组会直接热加载，无需重启 Core。已接收的请求会继续完成。更新模组后会保留上一份可用版本，以便回滚。
+- 「使用教程」新增加入「团队空间」的教程。尚未安装团队空间模组时也能打开。
+- 教程文字、演示 GIF、安装与升级指南以及两份 README 改为通过独立的指南更新通道发布，只下载有变动的文件。重新打开「使用教程」即可查看最新内容。下载失败时会继续使用上一份有效版本，首次启动使用内置副本。
+- Native Codex Responses WebSocket 支持最大 128 MiB 的消息，超限帧在读取帧头时即被拒绝。
+- 用量估算现已覆盖 GPT-6.2 Sol 和 Astra Ultrafast。升级时会刷新价格快照。
+- Core 已集成新的可选 Aero 模组，可在「模组」中找到。是否可安装取决于对应平台的发布资源，首批提供 Linux x86_64 版本。
+
+### English
+
+Upgrade order
+
+- Upgrade desktop Core to 0.15.2.
+- Team budget features require desktop Core 0.15.2, the Team Workspace 0.10.1-beta module and the VPS team service 0.10.1-beta.
+- Decision API, Device Gateway and Aggregate Routing keep their previous independent module versions.
+
+Improvements
+
+- A red dot appears on the Modules entry and on the relevant module when a compatible independent update is available. Open it to read the notes, then choose whether to install.
+- Installing, enabling, disabling and updating a module hot-loads it without restarting Core. Requests already admitted run to completion. Updates retain the previous verified package for rollback.
+- Tutorials now include a guide for joining a Team Workspace. It is available before the Team Workspace module is installed.
+- Tutorial text, demonstration GIFs, installation and upgrade guides and both READMEs now update through a separately published guide channel that downloads only changed files. Reopen Tutorials to see the latest content. If a download fails, EMP keeps using the last valid edition, and first launch uses the bundled copy.
+- Native Codex Responses WebSocket accepts messages up to 128 MiB and rejects oversized frames at the header.
+- Usage estimates now cover GPT-6.2 Sol and Astra Ultrafast. Upgrading refreshes the price snapshot.
+- Core integrates the new optional Aero module, listed under Modules. Availability follows the published release assets, starting with Linux x86_64.
+
 ## 0.15.1 (2026-11-20)
 
 ### 中文

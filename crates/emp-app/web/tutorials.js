@@ -1,29 +1,45 @@
-function createTutorials({openModal, $, tr, esc}) {
+function createTutorials({openModal, $, tr, esc, api, getLanguage}) {
   const base = [
     ['gpt', [['native_context','00-native-context'], ['native_name','00-native-name'], ['remove_subscription','00-remove-subscription']]],
     ['external', [['add','01-add-service'], ['context','05-change-context'], ['rename','06-rename'], ['remove','04-remove-service']]],
     ['shared', [['labels','07-context-label'], ['export','03-export-service'], ['import','02-import-service'], ['tunnel','08-tunnel-migration']]]
   ];
-  // Team lessons only make sense inside a joined workspace; the team module toggles them.
-  const team = ['team', [['team_overview','09-team-workspace'], ['team_share','10-team-share'], ['team_approve','11-team-approve'], ['team_members','12-team-members']]];
+  const teamLessons = [['team_overview','09-team-workspace'], ['team_share','10-team-share'], ['team_approve','11-team-approve'], ['team_members','12-team-members']];
+  const joinLesson = ['team_join', null];
   let teamJoined = false;
-  const groups = () => teamJoined ? [...base, team] : base;
+  const groups = () => [...base, ['team', teamJoined ? [joinLesson, ...teamLessons] : [joinLesson]]];
   const entries = () => new Map(groups().flatMap(([, items]) => items));
-  let selected = 'native_context';
+  let selected = 'native_context', guide = null;
+  const locale = () => getLanguage() === 'en' ? 'en' : 'zh';
+  const joinCopy = () => guide?.team_join?.[locale()];
+  const title = id => (id === 'team_join' ? joinCopy()?.title : guide?.titles?.[locale()]?.[id]) || tr(`tutorials.${id}`);
+  const joinSteps = () => joinCopy()?.steps || ['team_join_install', 'team_join_invitation', 'team_join_submit'].map(key => tr(`tutorials.${key}`));
+  const check = () => api('/api/resources/tutorials').then(pack => { guide = pack; });
   function setTeam(joined) { teamJoined = Boolean(joined); }
   function select(id) {
-    if (!entries().has(id)) return;
+    const asset = entries().get(id);
+    if (asset === undefined) return;
     selected = id;
-    const name = tr(`tutorials.${id}`), url = `/assets/tutorial-${entries().get(id)}.gif`;
+    const name = title(id);
     $('tutorial_title').textContent = name;
-    $('tutorial_full_size').href = url;
     $('tutorial_list').querySelectorAll('[data-tutorial]').forEach(button => {
       button.setAttribute('aria-pressed', String(button.dataset.tutorial === id));
       if (button.dataset.tutorial === id && $('tutorial_list').scrollHeight > $('tutorial_list').clientHeight) {
         $('tutorial_list').scrollTop = button.offsetTop - ($('tutorial_list').clientHeight - button.offsetHeight) / 2;
       }
     });
+    const fullSize = $('tutorial_full_size'), stage = $('tutorial_stage'), steps = $('tutorial_join_steps');
     const media = $('tutorial_media');
+    fullSize.hidden = stage.hidden = asset === null;
+    steps.hidden = asset !== null;
+    if (asset === null) {
+      media.replaceChildren();
+      media.setAttribute('aria-busy', 'false');
+      return;
+    }
+    const version = guide?.version;
+    const url = `/assets/tutorial-${asset}.gif${version ? `?v=${version}` : ''}`;
+    fullSize.href = url;
     // Replace the whole image owner so late load/error events cannot change a new selection.
     media.innerHTML = `<div class="tutorial-placeholder"><p role="status">${esc(tr('tutorials.loading'))}</p><button type="button" class="secondary" hidden></button></div>`;
     const placeholder = media.firstElementChild, status = placeholder.querySelector('p'), action = placeholder.querySelector('button');
@@ -51,8 +67,11 @@ function createTutorials({openModal, $, tr, esc}) {
   }
   function open(navigation = {}) {
     if (!entries().has(selected)) selected = 'native_context';
-    const list = groups().map(([group, items]) => `<div class="tutorial-group"><h3>${esc(tr(`tutorials.${group}`))}</h3>${items.map(([id]) => `<button type="button" data-tutorial="${id}" aria-controls="tutorial_demo" aria-pressed="false">${esc(tr(`tutorials.${id}`))}</button>`).join('')}</div>`).join('');
-    openModal(tr('tutorials.title'), `<div id="tutorials"><nav id="tutorial_list" aria-label="${esc(tr('tutorials.title'))}">${list}</nav><div id="tutorial_demo"><div class="tutorial-heading"><h3 id="tutorial_title"></h3><a id="tutorial_full_size" target="_blank" rel="noopener">${esc(tr('tutorials.full_size'))}</a></div><div class="tutorial-stage"><div id="tutorial_media" aria-busy="true"></div></div></div></div>`, '', null, null, navigation);
+    const list = groups().map(([group, items]) => `<div class="tutorial-group"><h3 data-tutorial-group="${group}">${esc(title(group))}</h3>${items.map(([id]) => `<button type="button" data-tutorial="${id}" aria-controls="tutorial_demo" aria-pressed="false">${esc(title(id))}</button>`).join('')}</div>`).join('');
+    const documents = [[locale() === 'zh' ? 'README.zh-CN.md' : 'README.md', 'readme'], ['docs/self-update.md', 'install'], ['docs/tutorials.md', 'written']];
+    const links = `<div class="tutorial-group tutorial-documents"><h3>${esc(tr('tutorials.docs'))}</h3>${documents.map(([path, id]) => `<a href="/guide/${path}" target="_blank" rel="noopener">${esc(tr(`tutorials.${id}`))}</a>`).join('')}</div>`;
+    const joinItems = joinSteps().map(step => `<li>${esc(step)}</li>`).join('');
+    openModal(tr('tutorials.title'), `<div id="tutorials"><nav id="tutorial_list" aria-label="${esc(tr('tutorials.title'))}">${list}${links}</nav><div id="tutorial_demo"><div class="tutorial-heading"><h3 id="tutorial_title"></h3><a id="tutorial_full_size" target="_blank" rel="noopener">${esc(tr('tutorials.full_size'))}</a></div><ol id="tutorial_join_steps" hidden>${joinItems}</ol><div id="tutorial_stage" class="tutorial-stage"><div id="tutorial_media" aria-busy="true"></div></div></div></div>`, '', null, null, navigation);
     $('tutorial_list').onclick = event => {
       const button = event.target.closest('[data-tutorial]');
       if (button) select(button.dataset.tutorial);
@@ -67,6 +86,23 @@ function createTutorials({openModal, $, tr, esc}) {
       buttons[next].scrollIntoView({block:'nearest'});
     };
     select(selected);
+    const owner = $('tutorials');
+    const version = guide?.version;
+    check().then(() => {
+      if (!owner.isConnected) return;
+      $('tutorial_list').querySelectorAll('[data-tutorial]').forEach(button => {
+        button.textContent = title(button.dataset.tutorial);
+      });
+      $('tutorial_list').querySelectorAll('[data-tutorial-group]').forEach(heading => {
+        heading.textContent = title(heading.dataset.tutorialGroup);
+      });
+      $('tutorial_join_steps').replaceChildren(...joinSteps().map(step => {
+        const item = document.createElement('li');
+        item.textContent = step;
+        return item;
+      }));
+      if (guide?.version !== version) select(selected);
+    }).catch(() => {});
   }
-  return {open, setTeam};
+  return {open, setTeam, check};
 }

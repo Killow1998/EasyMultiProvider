@@ -1,8 +1,8 @@
 use emp_modules::{
     Command,
     team::{
-        BudgetNotice, BudgetOccurrence, BudgetStatus, DiscoveredWorkspace, Endpoint, IdentityPlan,
-        Method, Operation, ReportPlan, Request, SyncPlan, UsageReport,
+        BudgetKind, BudgetNotice, BudgetOccurrence, BudgetStatus, DiscoveredWorkspace, Endpoint,
+        IdentityPlan, Method, Operation, ReportPlan, Request, SyncPlan, UsageReport,
     },
     workspace::Role,
 };
@@ -118,8 +118,10 @@ fn endpoint(mut origin: Url, operation: Operation) -> Endpoint {
         ListMembers => ("members", Get),
         MemberAccess => ("member-access", Post),
         RejectMember => ("reject-member", Post),
+        RemoveMember => ("remove-member", Post),
         MemberTiers => ("member-tiers", Post),
         Budget => ("budget", Post),
+        WeeklyBudget => ("weekly-budget", Post),
         BudgetStatus => ("budget-status", Get),
         Profiles => ("profiles", Get),
         Profile => ("profile", Post),
@@ -132,6 +134,7 @@ fn endpoint(mut origin: Url, operation: Operation) -> Endpoint {
         PublishVersion => ("publish-version", Get),
         SharedServices => ("shared-services", Get),
         ReviewService => ("review-service", Post),
+        RemoveService => ("remove-service", Post),
         ResetAuthority => ("reset-authority", Post),
         Usage => ("usage", Get),
         UsageFiltered => ("usage", Post),
@@ -180,7 +183,12 @@ fn budget_notice(
     previous: &[BudgetOccurrence],
     english: bool,
 ) -> Option<BudgetNotice> {
-    let BudgetStatus { day, used, limit } = status;
+    let BudgetStatus {
+        day,
+        used,
+        limit,
+        kind,
+    } = status;
     let (used, limit) = (used?, limit?);
     let reached = used >= limit;
     if (!reached && i128::from(used) * 10 < i128::from(limit) * 9)
@@ -190,19 +198,28 @@ fn budget_notice(
     {
         return None;
     }
-    let remaining = limit.saturating_sub(used).max(0) as f64 / 1e9;
+    let remaining = limit.saturating_sub(used).max(0);
     let title = if english {
         "EMP · Team budget"
     } else {
         "EMP · 团队预算"
     };
-    let message = match (english, reached) {
-        (true, true) => "Daily team budget reached.".to_owned(),
-        (true, false) => {
-            format!("Approaching the daily team budget. US${remaining:.2} remaining.")
+    let dollars = remaining as f64 / 1e9;
+    let message = match (kind, english, reached) {
+        (BudgetKind::DailyUsd, true, true) => "Daily team budget reached.".to_owned(),
+        (BudgetKind::DailyUsd, true, false) => {
+            format!("Approaching the daily team budget. US${dollars:.2} remaining.")
         }
-        (false, true) => "已达到团队每日预算。".to_owned(),
-        (false, false) => format!("接近团队每日预算，剩余 US${remaining:.2}。"),
+        (BudgetKind::DailyUsd, false, true) => "已达到团队每日预算。".to_owned(),
+        (BudgetKind::DailyUsd, false, false) => format!("接近团队每日预算，剩余 US${dollars:.2}。"),
+        (BudgetKind::WeeklyUsd, true, true) => "Weekly team budget reached.".to_owned(),
+        (BudgetKind::WeeklyUsd, true, false) => {
+            format!("Approaching the weekly team budget. US${dollars:.2} remaining.")
+        }
+        (BudgetKind::WeeklyUsd, false, true) => "已达到团队每周预算。".to_owned(),
+        (BudgetKind::WeeklyUsd, false, false) => {
+            format!("接近团队每周预算，剩余 US${dollars:.2}。")
+        }
     };
     Some(BudgetNotice {
         day,

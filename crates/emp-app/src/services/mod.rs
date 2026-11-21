@@ -15,6 +15,7 @@ pub(crate) mod external;
 pub(crate) mod failure_feedback;
 pub(crate) mod gateway_clients;
 pub(crate) mod history;
+pub(crate) mod hot_adapter;
 pub(crate) mod integration;
 pub(crate) mod management_events;
 pub(crate) mod memory_routing;

@@ -1,6 +1,6 @@
 [package]
 name = "emp-mod-team"
-version = "0.10.0-beta"
+version = "0.10.1-beta"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -14,6 +14,7 @@ base64 = "0.22"
 emp-modules = { path = "../emp-modules" }
 emp-state = { path = "../emp-state" }
 getrandom = "0.2.17"
+jiff = { version = "0.2.43", features = ["tzdb-bundle-always"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 scrypt = "0.12.0"
 serde.workspace = true

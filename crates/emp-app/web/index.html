@@ -56,10 +56,10 @@
   <h2 data-i18n="services_title"></h2>
   <div class="toolbar">
     <button id="refresh_all" class="secondary" data-icon="refresh" onclick="refreshAllAccounts()" data-i18n="refresh_quotas"></button>
-    <button id="catalog_aggregate_open" type="button" class="secondary" data-icon="aggregate" onclick="openAggregates().catch(error=>notice(error.message,true))" data-i18n="aggregate.title" hidden></button>
+    <template data-module-slot="model-routes"></template>
     <button data-icon="plus" onclick="openServiceChooser()" data-i18n="add_provider"></button>
     <button id="shadow_migration_open" type="button" class="secondary" data-icon="upload" onclick="migration.open()" data-i18n="data_migration" hidden></button>
-    <button id="team_workspace_open" type="button" class="secondary" data-icon="user" onclick="openTeamWorkspace().catch(error=>notice(error.message,true))" data-i18n="modules.team_workspace" hidden></button>
+    <template data-module-slot="workspace"></template>
   </div>
 </div>
 <input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="codexAccountImport.fileChosen(this)">
@@ -101,7 +101,7 @@
 
 <div id="modal_backdrop" class="modal-backdrop hidden">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal_title">
-    <div class="modal-header"><h2 id="modal_title"></h2><div class="modal-navigation"><button id="modal_back" type="button" class="secondary modal-back" data-icon="restore" hidden></button><button id="modal_close" type="button" class="modal-close" data-i18n-aria-label="core.close" onclick="closeModal()">&times;</button></div></div>
+    <div class="modal-header"><h2 id="modal_title"></h2><div class="modal-navigation"><button id="modal_back" type="button" class="secondary modal-back" data-icon="restore" hidden></button><span id="modal_help" hidden></span><button id="modal_close" type="button" class="modal-close" data-i18n-aria-label="core.close" onclick="closeModal()">&times;</button></div></div>
     <div id="modal_body" class="modal-body"></div>
     <div id="modal_status" class="modal-status" role="alert" aria-live="polite"></div>
     <div class="modal-actions"><button id="modal_submit" data-icon="check"></button></div>
@@ -165,14 +165,17 @@ const managementEvents = createManagementEvents({management,isRunning:()=>!manag
   onStart:()=>{updateActivityDots();rescheduleActivityExpiry();void accountDetails.refresh();},onDisconnect:clearActivityConfidence});
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
 const contextHelp = createContextHelp({getState:() => state, tr});
-const catalogDisplay=createCatalogDisplay({getState:()=>state,$,tr,t,esc,api,notice,cloneState,persistState,syncSavedCatalog,openModal,closeModal,activityIndicatorHtml,updateActivityDots});
+const catalogDisplay=createCatalogDisplay({getState:()=>state,$,tr,t,esc,api,notice,cloneState,persistState,syncSavedCatalog,openModal,closeModal,activityIndicatorHtml,updateActivityDots,
+  editModuleModel:(id, family) => moduleSettings.editModel(id, family)});
 const {render:renderCatalogDisplay,openEditor:openCatalogDisplayEditor,toggleContext:toggleCatalogContext,toggleSearch:toggleCatalogSearch,searchKeydown:catalogSearchKeydown,presentationName,modelName:modelDisplayName,serviceName:serviceDisplayName}=catalogDisplay;
 const routingSettings = createRoutingSettings({api, getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
 const ultraSettings = createUltraSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
 const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
-const tutorials = createTutorials({openModal, $, tr, esc});
-const moduleSettings = createModuleSettings({api,openModal,notice,$,esc,tr,icon:uiIcon,onChange:renderModuleEntries,
-  openOptions:(id, back) => ({decision:settings.openDecision,gateway:settings.openGateway,aggregate:openAggregates,team:openTeamWorkspace})[id](back),
+const tutorials = createTutorials({openModal,$,tr,esc,api,getLanguage:() => language});
+const moduleSettings = createModuleSettings({api,openModal,notice,$,esc,tr,icon:uiIcon,getLanguage:() => language,onChange:renderModuleEntries,
+  openMountedPanel:openTeamWorkspace,
+  panelContext:() => ({api,notice,getState:() => state,cloneState,persistState,openModal,$,esc,tr,help:shadowHelp,modelName:modelDisplayName,
+    openGateway:settings.openDecisionConnection,addService:openServiceChooser}),
   onTeamRemoved:refreshImportedAccounts});
 let teamWorkspace, teamPanelRevision;
 async function getTeamWorkspace() {
@@ -180,7 +183,7 @@ async function getTeamWorkspace() {
   if (!teamWorkspace || teamPanelRevision !== revision) {
     teamWorkspace?.stopInvite(); teamWorkspace?.dispose?.();
     teamPanelRevision = revision;
-    teamWorkspace = createTeamWorkspace({api,openModal,notice,$,esc,tr,getState:() => state,onChange:() => {void moduleSettings.refresh().catch(() => {});},onSync:refreshImportedAccounts});
+    teamWorkspace = createTeamWorkspace({api,openModal,notice,$,esc,tr,weeklyBudget:true,memberRemoval:true,getState:() => state,onChange:() => {void moduleSettings.refresh().catch(() => {});},onSync:refreshImportedAccounts});
   }
   return teamWorkspace;
 }
@@ -189,8 +192,9 @@ async function openTeamWorkspace(back) {
   await workspace.refresh();
   workspace.open(back);
 }
-const settings = createSettings({api, notice, modules:moduleSettings, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, modelName:modelDisplayName, help:shadowHelp, contextHelp, openAppIcon:back=>appIcon.open(back), addService:navigation=>openServiceChooser(navigation), presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
-const {open:openSettings, toggle:toggleSetting, openAggregates} = settings;
+const settings = createSettings({api, notice, modules:moduleSettings, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, help:shadowHelp, contextHelp, openAppIcon:back=>appIcon.open(back), presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
+const {open:openSettings, toggle:toggleSetting} = settings;
+const openAggregates = back => moduleSettings.openOptions('aggregate', back);
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, modelDisplayName, serviceName:serviceDisplayName, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, localTimeText, notice});
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
@@ -212,11 +216,14 @@ async function refreshTeamNotices() {
   if (!moduleSettings.active('team')) return;
   try {
     const entries = await api('/api/team/notices');
-    notifications.remember(entries.map(entry => ({
-      id:entry.id, time:entry.at * 1000, error:false, read:false,
-      message:entry.reached ? tr('modules.budget_notice_reached') : tr('modules.budget_notice_near',{remaining:
-        new Intl.NumberFormat(language,{style:'currency',currency:'USD'}).format(Math.max(0, entry.limit-entry.used) / 1e9)})
-    })));
+    notifications.remember(entries.map(entry => {
+      const weekly = entry.kind === 'weekly_usd';
+      const prefix = weekly ? 'modules.weekly_usd_notice_' : 'modules.budget_notice_';
+      const remaining = Math.max(0, entry.limit-entry.used);
+      const amount = new Intl.NumberFormat(language,{style:'currency',currency:'USD'}).format(remaining / 1e9);
+      return {id:entry.id,time:entry.at * 1000,error:false,read:false,
+        message:tr(prefix + (entry.reached ? 'reached' : 'near'),{remaining:amount})};
+    }));
   } catch (_) {}
 }
 function storedPreference(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch (_) { return fallback; } }
@@ -366,11 +373,13 @@ function movePresentation(oldRoute, newRoute, target = state) {
   }
 }
 
-function renderModuleEntries() {
-  $('catalog_aggregate_open').hidden = !moduleSettings.active('aggregate');
+function renderModuleEntries(changed) {
+  moduleSettings.renderEntries();
   $('shadow_migration_open').hidden = !moduleSettings.migrationAllowed();
-  $('team_workspace_open').hidden = !moduleSettings.active('team');
   bootTeamWorkspace();
+  if (changed === 'aggregate' || changed === 'team' || changed === 'aero') {
+    void api('/api/config').then(config => { state = config; fill(); }).catch(error => notice(error.message, true));
+  }
 }
 // A joined EMP shows EMPT and, for administrators, raises join requests in the island without the
 // team panel being open. One status read on startup; the module keeps itself current afterwards.
@@ -393,15 +402,16 @@ async function load() {
   applyPreferences(); drawLogo();
   try {
     state = await api('/api/config');
+    void tutorials.check().catch(() => {});
     void syncLanguage();
     const integration = loadIntegration();
-    void moduleSettings.refresh().catch(() => {});
+    void moduleSettings.refresh().then(moduleSettings.checkHint).catch(() => {});
     let renderError = null;
     try {
       fill();
       managementEvents.start();
       void checkUpdateHint();
-      if (quotaStateTimer === null) quotaStateTimer = setInterval(() => { refreshResetCountdowns(); void refreshTeamNotices(); if (!managementEvents.connected()) { requestQuotaSync(); void integrationUpdated(); } }, 60 * 1000);
+      if (quotaStateTimer === null) quotaStateTimer = setInterval(() => { refreshResetCountdowns(); void refreshTeamNotices(); if (document.visibilityState === 'visible') void moduleSettings.checkHint(); if (!managementEvents.connected()) { requestQuotaSync(); void integrationUpdated(); } }, 60 * 1000);
     } catch (error) { renderError = error; }
     await integration;
     if (renderError) { reportWebClientPhase('window_error', 'failed', renderError); throw renderError; }
@@ -422,6 +432,10 @@ function renderIntegrationToggle() {
 }
 // 5x7 dot-matrix glyphs for the header logo, drawn like a small OLED panel.
 const LOGO_GLYPHS = {E:['11111','10000','10000','11110','10000','10000','11111'], M:['10001','11011','10101','10101','10001','10001','10001'], P:['11110','10001','10001','11110','10000','10000','10000'], T:['11111','00100','00100','00100','00100','00100','00100']};
+const logoDotLevels = Array.from({length:23 * 7}, () => {
+  const sample = Math.random();
+  return sample < .25 ? .24 : sample < .65 ? .55 : .92;
+});
 // The team module switches the wordmark to EMPT while this EMP belongs to a workspace.
 let logoWord = 'EMP';
 function setLogoWord(word) {
@@ -440,8 +454,8 @@ function drawLogo() {
   for (let column = 0; column < width; column++) for (let y = 0; y < 7; y++) {
     const letter = LOGO_GLYPHS[logoWord[Math.floor(column / 6)]], x = column % 6;
     const lit = x < 5 && letter[y][x] === '1';
-    const twinkleDelay = -(column * .18 + y * .13);
-    dots.push(`<circle cx="${(column * pitch + pitch / 2).toFixed(1)}" cy="${(y * pitch + pitch / 2).toFixed(1)}" r="1.32"${lit ? ` class="on" data-lit="1" style="--twinkle-delay:${twinkleDelay.toFixed(2)}s"` : ''}/>`);
+    const level = logoDotLevels[column * 7 + y];
+    dots.push(`<circle cx="${(column * pitch + pitch / 2).toFixed(1)}" cy="${(y * pitch + pitch / 2).toFixed(1)}" r="1.32"${lit ? ` class="on" data-lit="${level}" style="--dot-level:${level}"` : ''}/>`);
   }
   svg.setAttribute('viewBox', `0 0 ${(width * pitch).toFixed(1)} ${(7 * pitch).toFixed(1)}`);
   svg.innerHTML = dots.join('');
@@ -654,6 +668,11 @@ function uiIcon(name) {
   const paths = {
     copy:'<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M5 13H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1"/>',
     refresh:'<path d="M17 7a7 7 0 0 0-12-2L2 8m0-5v5h5M3 13a7 7 0 0 0 12 2l3-3m0 5v-5h-5"/>',
+    download:'<path d="M10 2v10m-4-4 4 4 4-4M3 13v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/>',
+    trash:'<path d="M3 5h14m-12 0v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5M8 5V2h4v3M8 8v6m4-6v6"/>',
+    pause:'<path d="M7 4v12m6-12v12"/>',
+    play:'<path d="M6 3l11 7-11 7z"/>',
+    settings:'<path d="m8.5 2-.4 2.1-1.5.9-2.1-.7L3 7l1.6 1.4v3.2L3 13l1.5 2.7 2.1-.7 1.5.9.4 2.1h3l.4-2.1 1.5-.9 2.1.7L17 13l-1.6-1.4V8.4L17 7l-1.5-2.7-2.1.7-1.5-.9-.4-2.1z"/><circle cx="10" cy="10" r="2.6"/>',
     reset:'<path d="M4 12H2v6h16v-6h-2"/><rect x="4" y="3" width="12" height="11" rx="2"/><path d="M7 8h6"/>',
     eye:'<path d="M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z"/><circle cx="10" cy="10" r="2.5"/>',
     'eye-off':'<path d="m3 3 14 14M7 4.5A9 9 0 0 1 10 4c5 0 8 6 8 6a14 14 0 0 1-2 3M4.3 6A17 17 0 0 0 2 10s3 6 8 6a9 9 0 0 0 4-1M8 8a2.8 2.8 0 0 0 4 4"/>',
@@ -662,6 +681,7 @@ function uiIcon(name) {
     'module-decision':'<path d="M10 2v4m0 0-5 4v3m5-7 5 4v3"/><circle cx="10" cy="4" r="2" fill="currentColor" stroke="none"/><path d="m2.5 15.5 1.5 1.5 3-3M13 14l4 4m0-4-4 4"/>',
     'module-gateway':'<rect x="3" y="3" width="14" height="9" rx="2"/><path d="M7 16h6m-3-4v4M6 7h1m3 0h4"/>',
     'module-aggregate':'<circle cx="4" cy="4" r="2"/><circle cx="4" cy="16" r="2"/><circle cx="16" cy="10" r="2"/><path d="M6 4h1a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H6m4-6h4"/>',
+    'module-aero':'<rect x="7" y="2" width="6" height="5" rx="1"/><path d="M10 7v4M4 13v-2h12v2"/><rect x="1" y="13" width="6" height="5" rx="1"/><rect x="13" y="13" width="6" height="5" rx="1"/>',
     'module-team':'<circle cx="8" cy="6" r="2.5"/><path d="M3 17v-1a5 5 0 0 1 10 0v1m0-13a2.5 2.5 0 0 1 0 5m2 3a4 4 0 0 1 2 3.5V17"/>'
   };
   return `<svg class="ui-icon" viewBox="0 0 20 20" aria-hidden="true">${paths[name] || ''}</svg>`;
@@ -1118,6 +1138,9 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
   const closeButton = $('modal_close');
   closeButton.hidden = Boolean(back);
   closeButton.title = closeButton.ariaLabel = tr("core.close");
+  const help = $('modal_help');
+  help.hidden = !navigation.help;
+  help.innerHTML = navigation.help ? shadowHelp(navigation.help) : '';
   $('modal_title').textContent = title;
   $('modal_body').innerHTML = body;
   services.mount(serviceContext);
@@ -1239,7 +1262,7 @@ document.addEventListener('click', handleDynamicUiClick);
 document.addEventListener('change', handleDynamicUiChange);
 document.addEventListener('keydown', handleModalKeydown);
 
-document.addEventListener('visibilitychange', () => { if (!management.isStopped() && document.visibilityState === 'visible') { managementEvents.start(); requestQuotaSync(); void checkUpdateHint(); } });
+document.addEventListener('visibilitychange', () => { if (!management.isStopped() && document.visibilityState === 'visible') { managementEvents.start(); requestQuotaSync(); void checkUpdateHint(); void moduleSettings.checkHint(); } });
 if (window.addEventListener) {
   window.addEventListener('focus', () => { if (!management.isStopped() && management.isSignedIn()) void integrationUpdated(); });
   window.addEventListener('storage', event => {

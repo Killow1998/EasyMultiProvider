@@ -144,7 +144,12 @@ fn build(root: &Path, skip_service_smoke: bool) -> Result<Vec<PathBuf>> {
     } else {
         None
     };
-    let modules = build_modules(root, &artifacts, &emp_modules::Module::ALL, Some(VERSION))?;
+    let modules = build_modules(
+        root,
+        &artifacts,
+        &emp_modules::Module::STANDARD,
+        Some(VERSION),
+    )?;
     let manifest = build_root.join("transition.rs");
     let mut entries = Vec::new();
     use emp_modules::Module;
@@ -209,7 +214,7 @@ fn build(root: &Path, skip_service_smoke: bool) -> Result<Vec<PathBuf>> {
 
 pub fn run_module(args: &[String]) -> Result {
     let usage = || {
-        "usage: cargo xtask package-module <decision|gateway|aggregate|team> [--output DIR]"
+        "usage: cargo xtask package-module <decision|gateway|aggregate|team|aero> [--output DIR]"
             .to_owned()
     };
     let (id, output) = match args {
@@ -217,7 +222,18 @@ pub fn run_module(args: &[String]) -> Result {
         [id, flag, path] if flag == "--output" => (id, PathBuf::from(path)),
         _ => return Err(usage()),
     };
-    let module = emp_modules::Module::ALL
+    if id == "aero" {
+        let python = std::env::var_os("EMP_AERO_PYTHON")
+            .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into());
+        let mut build = Command::new(python);
+        build
+            .arg("-B")
+            .arg(project_root().join("modules/aero/build.py"))
+            .arg("--output")
+            .arg(output);
+        return run_command(&mut build);
+    }
+    let module = emp_modules::Module::STANDARD
         .into_iter()
         .find(|module| module.id() == id)
         .ok_or_else(usage)?;

@@ -344,16 +344,9 @@ impl ServerHandle {
                 })?;
                 crate::services::account_catalog::request_refresh(&handle.state, false);
             }
-            if handle
-                .state
-                .backend
-                .modules
-                .active(emp_modules::Module::Team)
-            {
-                handle.spawn_worker("emp-team-usage", |state| {
-                    crate::services::team::TeamState::run(&state);
-                })?;
-            }
+            handle.spawn_worker("emp-team-usage", |state| {
+                crate::services::team::TeamState::run(&state);
+            })?;
             handle.spawn_worker("emp-quota-sampler", |state| {
                 crate::services::quota::run_sampler(&state);
             })?;

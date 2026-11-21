@@ -48,6 +48,7 @@ pub(crate) struct Request<'a> {
 pub(crate) struct RequestSource {
     pub(crate) caller: Option<crate::services::gateway_clients::Caller>,
     pub(crate) peer: Option<std::net::IpAddr>,
+    pub(crate) delegation: Option<crate::services::modules::aero::CallerDelegation>,
 }
 
 impl<'a> Request<'a> {
@@ -61,6 +62,12 @@ impl<'a> Request<'a> {
             .filter(|(name, _)| !name.starts_with("x-emp-caller-") && name != "x-emp-peer-ip")
             .collect();
         if let Some(source) = self.source {
+            if let Some(delegation) = &source.delegation {
+                headers.remove("authorization");
+                if let Some(authorization) = &delegation.authorization {
+                    headers.insert("authorization".into(), authorization.clone());
+                }
+            }
             if let Some(caller) = &source.caller {
                 headers.insert("x-emp-caller-id".into(), caller.id.clone());
                 headers.insert("x-emp-caller-name".into(), caller.name.clone());

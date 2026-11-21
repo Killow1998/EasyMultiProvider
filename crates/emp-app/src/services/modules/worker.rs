@@ -11,10 +11,11 @@ use std::{
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) struct Worker {
+    module: Module,
     pub(super) module_version: String,
     pub(super) panel: String,
     child: Child,
-    commands: SyncSender<Vec<u8>>,
+    commands: Option<SyncSender<Vec<u8>>>,
     replies: Receiver<Vec<u8>>,
 }
 
@@ -41,10 +42,11 @@ impl Worker {
         let (sender, replies) = mpsc::sync_channel(1);
         let (commands, input) = mpsc::sync_channel::<Vec<u8>>(1);
         let mut worker = Self {
+            module,
             module_version: String::new(),
             panel: String::new(),
             child,
-            commands,
+            commands: Some(commands),
             replies,
         };
         std::thread::Builder::new()
@@ -104,6 +106,8 @@ impl Worker {
         }
         message.push(b'\n');
         self.commands
+            .as_ref()
+            .expect("module command channel")
             .try_send(message)
             .map_err(|_| "module_stopped")?;
         let line = self
@@ -120,6 +124,13 @@ impl Worker {
 
 impl Drop for Worker {
     fn drop(&mut self) {
+        self.commands.take();
+        if self.module == Module::Aero {
+            let until = std::time::Instant::now() + Duration::from_secs(5);
+            while self.is_running() && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

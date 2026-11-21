@@ -249,6 +249,7 @@ fn merge_web_update_at_time(
         "image_routing",
         "decision_provider",
         "model_groups",
+        "aero_profiles",
         "memory_model",
         "memory_extraction_model",
         "memory_extraction_effort",
@@ -536,6 +537,7 @@ fn merge_web_update_at_time(
     super::service_names::preserve_service_route_names(current, &mut merged);
     let previous_aliases = super::route_aliases::client_route_aliases(current);
     let next_aliases = super::route_aliases::client_route_aliases(&merged);
+    super::aero::preserve_names(current, &mut merged);
     let old_groups = values_by_id(current.get("model_groups"));
     if let Some(groups) = merged["model_groups"].as_array_mut() {
         for group in groups {

@@ -117,16 +117,14 @@ def start_backend(stack, binary, root, configuration, env_overrides=None, *, dev
                          if (state / 'web-session.json').exists() else None)
         return process, url.split('/?')[0], url, {'X-EMP-Session': token}
 
-    process, base, url, headers = launch('backend.log')
+    _, base, url, headers = launch('backend.log')
     if modules:
         for module in modules:
             status, result = request(base + '/api/modules', {'id': module, 'action': 'install'},
                                      headers, timeout=45)
             assert status == 200, (module, status, result)
             row = next(row for row in result['modules'] if row['id'] == module)
-            assert row['installed_version'] and row['enabled'] and row['restart_required'], row
-        stop(process, bool(command))
-        _, base, url, headers = launch('backend-restarted.log')
+            assert row['installed_version'] and row['active'] and not row['restart_required'], row
         status, result = request(base + '/api/modules', headers=headers)
         assert status == 200 and set(modules) <= {
             row['id'] for row in result['modules'] if row['active']

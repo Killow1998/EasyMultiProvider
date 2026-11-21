@@ -32,10 +32,15 @@
 .team-usage-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:8px 0 0}
 .team-usage-summary dt{font-size:12px;color:var(--muted)}
 .team-usage-summary dd{margin:4px 0 0;font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.team-usage-summary :is([data-team-today],[data-team-mine-today]){white-space:nowrap}
 .team-usage-detail{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
 .team-usage-detail .period-presets{margin:0}
 .team-usage-mine{margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)}
 .team-usage-mine h4{margin:0;font-size:12px;font-weight:600;color:var(--text)}
+.team-weekly-usage:not([hidden]){display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 12px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);color:var(--muted);font-size:12px}
+.team-weekly-next{margin-inline-start:auto}
+.team-reset-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.team-reset-fields select{width:100%}
 .team-usage-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .team-usage-detail [data-team-breakdown]{margin-top:10px;min-height:24px}
 @media(max-width:640px){.team-usage-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -53,7 +58,9 @@
 /* Management tabs replace the extra choice page. */
 .team-members-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px}
 .team-members-toolbar .period-presets{margin:0}
-.team-members-toolbar>button{margin:0}
+.team-members-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px;margin-inline-start:auto}
+.team-members-actions>button{margin:0}
+.team-members-actions select{width:auto;margin:0}
 
 /* Member table */
 .modal:has(#team_manage),.modal:has(#team_audit),.modal:has(#team_shared_services){width:min(1060px,100%)}
@@ -62,6 +69,8 @@
 .team-usage-table th:first-child{min-width:118px}
 .team-usage-table tbody :is(th,td){vertical-align:middle}
 .team-usage-table td:last-child,.team-usage-table th:last-child{white-space:nowrap;text-align:right}
+.team-usage-table td[data-member-usage]{white-space:nowrap;text-align:right}
+.team-member-remove.secondary{height:32px;margin:0;white-space:nowrap}
 .team-member-name{display:flex;align-items:center;gap:8px;white-space:nowrap}
 .team-member-name .team-role-icon{position:relative;width:26px;height:26px}
 .team-member-name .team-role-icon svg{width:15px;height:15px}
@@ -125,6 +134,10 @@
 .team-subscription-dot[data-status="review"]{background:var(--warning)}
 .team-subscription-usage{color:var(--muted);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .team-subscription-row>button{width:100%;margin:0}
+.team-subscription-admin :is(.team-subscription-row,.team-subscription-head){grid-template-columns:minmax(0,1fr) auto 10.25rem}
+.team-subscription-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px}
+.team-subscription-actions>button{margin:0}
+.team-subscription-actions>[data-remove-service]{padding-inline:8px}
 .team-subscription-status{display:grid;place-items:center;min-height:32px;padding:0 12px;border:1px solid currentColor;border-radius:6px;color:var(--danger-text);background:var(--danger-soft);font-size:13px}
 .team-subscription-status[data-valid="true"]{color:var(--success);background:color-mix(in srgb,var(--success) 10%,var(--panel))}
 .team-subscription-status[data-status="review"]{color:var(--warning);background:var(--warning-soft)}
@@ -132,6 +145,7 @@
   .setting-row.team-subscription-row{grid-template-columns:minmax(0,1fr) 7rem;gap:4px 12px}
   .team-subscription-usage{grid-row:2;grid-column:1;text-align:start}
   .team-subscription-row>:last-child{grid-area:1/2/3/3}
+  .team-subscription-admin .team-subscription-row{grid-template-columns:minmax(0,1fr) 9rem}
   .team-subscription-head{grid-template-columns:1fr}
   .team-subscription-head>span:not(:nth-child(2)){display:none}
   .team-subscription-head>span:nth-child(2){justify-content:flex-start}

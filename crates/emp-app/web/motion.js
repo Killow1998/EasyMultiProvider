@@ -5,7 +5,10 @@ function enhanceLogo(svg) {
   mask.setAttribute('xmlns','http://www.w3.org/2000/svg');
   for (const dot of [...mask.children]) {
     if (!dot.hasAttribute('data-lit')) dot.remove();
-    else {dot.removeAttribute('class');dot.removeAttribute('style');dot.setAttribute('fill','white');}
+    else {
+      dot.removeAttribute('class');dot.removeAttribute('style');
+      dot.setAttribute('fill','white');dot.setAttribute('opacity',dot.dataset.lit);
+    }
   }
   const image=`url("data:image/svg+xml,${encodeURIComponent(mask.outerHTML)}")`;
   // A redrawn wordmark (EMP ↔ EMPT) keeps its shell and only refreshes the mask.

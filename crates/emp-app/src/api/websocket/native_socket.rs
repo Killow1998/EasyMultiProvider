@@ -135,7 +135,7 @@ impl NativeSession {
             native_turn_activity = Some(state.backend.activity.begin(
                 crate::services::activity::ActivityIdentity::from_route(route),
             ));
-            let payload = if let Some(prefill) = prefill::Prefill::plan(&plan.payload) {
+            let payload = if let Some(prefill) = prefill::Prefill::plan(&plan.payload, &plan.url) {
                 let result = prefill.run(client, &mut duplex, websocket, pending_request);
                 websocket.observation.native_continuation().traffic(
                     traffic_before,

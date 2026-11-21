@@ -8,6 +8,57 @@ mod transport;
 use fixture::*;
 
 #[test]
+#[ignore = "memory smoke: requires at least 1536 MiB available"]
+fn native_websocket_accepts_a_full_128_mib_message_without_http_replay() {
+    let maximum = emp_transport::MAX_RESPONSES_WEBSOCKET_BYTES;
+    let upstream = Upstream::start(maximum);
+    let (_directory, server, model) = server(&upstream, true);
+    let mut client = connect(&server, "expanded-websocket-fixture");
+    client.set_max_message_bytes(maximum).unwrap();
+    let body = json!({"type":"response.create","model":model,"input":[
+        {"role":"user","content":"x".repeat(65 * 1024 * 1024)}
+    ]});
+    let mut wire = body.to_string().into_bytes();
+    drop(body);
+    wire.resize(maximum, b' ');
+    client
+        .send_text(std::str::from_utf8(&wire).unwrap())
+        .unwrap();
+    drop(wire);
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let previous = loop {
+        assert!(
+            Instant::now() < deadline,
+            "large WebSocket turn did not complete"
+        );
+        let text = match client.poll_receive_text().unwrap() {
+            emp_transport::WebSocketPoll::Text(text) => text,
+            emp_transport::WebSocketPoll::Pending => continue,
+            other => panic!("unexpected large WebSocket frame: {other:?}"),
+        };
+        let event: Value = serde_json::from_str(&text).unwrap();
+        assert_ne!(event["type"], "error", "{event}");
+        if event["type"] == "response.completed" {
+            break event["response"]["id"].as_str().unwrap().to_owned();
+        }
+    };
+    completed(turn(
+        &mut client,
+        &json!({"type":"response.create","model":model,
+        "previous_response_id":previous,"input":[{"role":"user","content":"incremental follow-up"}]}),
+    ));
+    client.close();
+    let limits = Arc::clone(&server.state.backend.transport.request_limits);
+    server.shutdown().unwrap();
+    assert_eq!(limits.snapshot().unwrap().reserved_bytes, 0);
+    let stats = upstream.traffic.lock().unwrap();
+    assert_eq!(stats.ws_connections, 1);
+    assert_eq!(stats.http_requests, 0);
+    assert_eq!(stats.generated_hashes.len(), 2);
+    assert!(stats.application_bytes > 65 * 1024 * 1024);
+}
+
+#[test]
 fn native_app_page_context_keeps_large_history_prefill_and_exact_order() {
     for imported in [false, true] {
         let upstream = Upstream::start(10 * 1024 * 1024);

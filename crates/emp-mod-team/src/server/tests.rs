@@ -6,7 +6,7 @@ const DEVICE: &str = "12345678901234561234567890123456";
 fn workspace() -> Workspace {
     let db = Connection::open_in_memory().unwrap();
     db.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-    db.execute_batch(SCHEMA).unwrap();
+    initialize_schema(&db).unwrap();
     Workspace {
         db,
         id: "fixture".into(),
@@ -45,6 +45,133 @@ fn enrollment_code(workspace: &mut Workspace, token: &str) -> Value {
 fn assert_failure(result: Result<Value>, status: u16, code: &str) {
     let Failure(actual_status, actual_code) = result.unwrap_err();
     assert_eq!((actual_status, actual_code), (status, code));
+}
+
+#[test]
+fn removal_archives_members_and_releases_the_login_for_a_new_application() {
+    let mut workspace = workspace();
+    workspace
+        .db
+        .execute("ALTER TABLE members DROP COLUMN archived_name", [])
+        .unwrap();
+    initialize_schema(&workspace.db).unwrap();
+    let admin_id = accounts::create(
+        &workspace.db,
+        "admin",
+        PASSWORD,
+        Role::TeamAdmin,
+        true,
+        true,
+    )
+    .unwrap();
+    let member =
+        accounts::create(&workspace.db, "member", PASSWORD, Role::Member, true, true).unwrap();
+    let admin_login = sign_in(&mut workspace, "admin", PASSWORD).unwrap();
+    let admin = admin_login["token"].as_str();
+    let member_login = sign_in(&mut workspace, "member", PASSWORD).unwrap();
+    let token = member_login["token"].as_str();
+    assert_failure(
+        post(
+            &mut workspace,
+            "remove-member",
+            admin,
+            json!({"id":admin_id}),
+        ),
+        403,
+        "workspace_permission_required",
+    );
+    workspace.db.execute(
+        "INSERT INTO shares(id,owner,source,version,encrypted) VALUES ('share',?,'fixture',1,X'AB')",
+        [&member],
+    ).unwrap();
+    assert_eq!(
+        post(&mut workspace, "remove-member", admin, json!({"id":member})).unwrap(),
+        json!({"ok":true})
+    );
+    assert_failure(
+        workspace.request(&Method::Get, "/workspace/v1/status", token, b""),
+        401,
+        "workspace_authentication_required",
+    );
+    assert_failure(
+        sign_in(&mut workspace, "member", PASSWORD),
+        401,
+        "workspace_login_failed",
+    );
+    let removed_share: (i64, bool) = workspace
+        .db
+        .query_row(
+            "SELECT length(encrypted), removed_at IS NOT NULL FROM shares WHERE id='share'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(removed_share, (0, true));
+    let code = enrollment_code(&mut workspace, admin.unwrap());
+    post(
+        &mut workspace,
+        "join",
+        None,
+        json!({"nickname":"Member","name":"member","password":PASSWORD,"code":code}),
+    )
+    .unwrap();
+    let roster = workspace
+        .request(&Method::Get, "/workspace/v1/members", admin, b"")
+        .unwrap();
+    let pending = roster["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "member")
+        .unwrap();
+    assert_ne!(pending["id"], member);
+    assert_eq!(pending["pending"], true);
+    assert_failure(
+        post(
+            &mut workspace,
+            "remove-member",
+            admin,
+            json!({"id":pending["id"]}),
+        ),
+        409,
+        "workspace_member_pending",
+    );
+}
+
+#[test]
+fn weekly_spend_uses_completion_time_and_prefers_actual_cost() {
+    let workspace = workspace();
+    let member =
+        accounts::create(&workspace.db, "member", PASSWORD, Role::Member, true, true).unwrap();
+    let start = 1_000_000;
+    let end = start + 3600;
+    let used = || {
+        workspace
+            .weekly_usd_status(&member, start, end)
+            .unwrap()
+            .used
+    };
+    workspace.db.execute(
+        "INSERT INTO shares(id,owner,source,version,encrypted) VALUES ('share',?,'fixture',1,X'')",
+        [&member],
+    ).unwrap();
+    let report = |id, device, completed, estimate: Option<i64>, actual: Option<i64>| {
+        workspace
+            .db
+            .execute(
+                "INSERT INTO usage VALUES (?, ?, ?, 'share', 'fixture', ?, 1, NULL, 1, ?, ?)",
+                params![&member, device, id, completed, estimate, actual],
+            )
+            .unwrap();
+    };
+    report("previous", "one", start - 1, Some(200), Some(50));
+    assert_eq!(used(), Some(0));
+    report("unknown", "two", start, None, None);
+    assert_eq!(used(), None);
+    report("known", "two", start + 1, Some(9), Some(3));
+    report("late", "one", start, Some(4), None);
+    report("future", "one", end + 1, Some(30), None);
+    assert_eq!(used(), Some(7));
 }
 
 #[test]
@@ -188,6 +315,117 @@ fn refreshing_a_subscription_carries_only_current_approval_for_the_same_account(
         true
     );
     assert!(sync(&mut workspace).is_empty());
+}
+
+#[test]
+fn removing_a_shared_subscription_discards_credentials_and_accepts_late_usage() {
+    let mut workspace = workspace();
+    workspace
+        .db
+        .execute("ALTER TABLE shares DROP COLUMN removed_at", [])
+        .unwrap();
+    initialize_schema(&workspace.db).unwrap();
+    for (name, role, publish) in [
+        ("admin", Role::TeamAdmin, false),
+        ("publisher", Role::Member, true),
+        ("reader", Role::Member, false),
+    ] {
+        accounts::create(&workspace.db, name, PASSWORD, role, publish, true).unwrap();
+    }
+    let admin_login = sign_in(&mut workspace, "admin", PASSWORD).unwrap();
+    let publisher_login = sign_in(&mut workspace, "publisher", PASSWORD).unwrap();
+    let reader_login = sign_in(&mut workspace, "reader", PASSWORD).unwrap();
+    let admin = admin_login["token"].as_str();
+    let publisher = publisher_login["token"].as_str();
+    let reader = reader_login["token"].as_str();
+    let source = emp_modules::workspace::NATIVE_SHARE;
+    let payload = json!({
+        "provider":{"id":source,"name":"Native","auth_mode":"codex_subscription"},
+        "models":[],"subscription":{"account_id":"fixture","access_token":"fixture-secret","expires_at":now()+3600}
+    });
+    let upload = json!({"source":source,"expected_version":0,"payload":payload});
+    let published = post(&mut workspace, "publish", publisher, upload.clone()).unwrap();
+    let id = published["id"].as_str().unwrap();
+    let removal = json!({"id":id,"version":1});
+    post(
+        &mut workspace,
+        "review-service",
+        admin,
+        json!({"id":id,"version":1,"shared":true}),
+    )
+    .unwrap();
+    assert_failure(
+        post(&mut workspace, "remove-service", reader, removal.clone()),
+        403,
+        "workspace_permission_required",
+    );
+    assert_failure(
+        post(
+            &mut workspace,
+            "remove-service",
+            admin,
+            json!({"id":id,"version":0}),
+        ),
+        409,
+        "workspace_share_version_conflict",
+    );
+    assert_eq!(
+        post(&mut workspace, "remove-service", admin, removal).unwrap(),
+        json!({"ok":true})
+    );
+    let stored: (i64, i64) = workspace
+        .db
+        .query_row(
+            "SELECT length(encrypted),removed_at FROM shares WHERE id=?",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored.0, 0);
+    assert!(stored.1 > 0);
+    for (endpoint, token, field) in [
+        ("shares", reader, "shares"),
+        ("shared-services", admin, "services"),
+        ("subscriptions", publisher, "subscriptions"),
+    ] {
+        let result = workspace
+            .request(
+                &Method::Get,
+                &format!("/workspace/v1/{endpoint}"),
+                token,
+                b"",
+            )
+            .unwrap();
+        assert_eq!(result[field], json!([]), "{result}");
+    }
+    let receipt = post(
+        &mut workspace,
+        "report",
+        reader,
+        json!({"events":[{
+            "id":"queued-before-removal","share":id,"model":"gpt-6.2-sol","finished_at":now(),
+            "input_tokens":8,"output_tokens":2,"estimated_usd_nanos":100
+        }]}),
+    )
+    .unwrap();
+    assert_eq!(receipt["inserted"], 1);
+    let audit = post(&mut workspace, "audit", admin, json!({})).unwrap();
+    assert_eq!(audit["entries"][0]["kind"], "share_removed");
+    assert_failure(
+        post(&mut workspace, "publish", publisher, upload),
+        409,
+        "workspace_share_version_conflict",
+    );
+    let renewed = post(
+        &mut workspace,
+        "publish",
+        publisher,
+        json!({
+            "source":source,"expected_version":2,"payload":payload
+        }),
+    )
+    .unwrap();
+    assert_eq!(renewed, json!({"id":id,"version":3,"review_required":true}));
 }
 
 #[test]

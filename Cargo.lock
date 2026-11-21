@@ -805,7 +805,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "emp-app"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "base64 0.22.1",
  "emp-codex",
@@ -833,6 +833,7 @@ dependencies = [
  "png",
  "polling",
  "portable-pty",
+ "pulldown-cmark",
  "rcgen",
  "rusqlite",
  "rustls",
@@ -850,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "emp-codex"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "base64 0.22.1",
  "emp-history",
@@ -874,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "emp-core"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -884,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "emp-history"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "base64 0.22.1",
  "emp-core",
@@ -895,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "emp-integration"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "emp-state",
  "getrandom 0.2.17",
@@ -933,12 +934,13 @@ dependencies = [
 
 [[package]]
 name = "emp-mod-team"
-version = "0.10.0-beta"
+version = "0.10.1-beta"
 dependencies = [
  "base64 0.22.1",
  "emp-modules",
  "emp-state",
  "getrandom 0.2.17",
+ "jiff",
  "rusqlite",
  "scrypt",
  "serde",
@@ -959,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "emp-protocol"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "base64 0.22.1",
  "regex",
@@ -971,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "emp-router"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "emp-core",
  "emp-protocol",
@@ -989,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "emp-state"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "atomic-write-file",
  "base64 0.22.1",
@@ -1019,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "emp-transport"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "base64 0.22.1",
  "brotli",
@@ -1844,6 +1846,7 @@ checksum = "26699905cc795a23e3949585cc7ba3ee8ade090872a27e4316304a777297894a"
 dependencies = [
  "jiff-core",
  "jiff-static",
+ "jiff-tzdb",
  "jiff-tzdb-platform",
  "log",
  "portable-atomic",
@@ -2485,6 +2488,24 @@ checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "pulldown-cmark"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
+dependencies = [
+ "bitflags 2.13.2",
+ "memchr",
+ "pulldown-cmark-escape",
+ "unicase",
+]
+
+[[package]]
+name = "pulldown-cmark-escape"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "quanta"
@@ -3702,6 +3723,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unicase"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4204,7 +4231,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "emp-modules",
  "emp-state",

@@ -92,7 +92,9 @@ fn text_traffic_measures_encoding_excludes_control_and_keeps_unknown_partial_rea
     let parameters = "permessage-deflate; client_no_context_takeover; server_no_context_takeover";
     let mut codec = PerMessageDeflate::negotiated(parameters).unwrap();
     let text = "synthetic compressed text ".repeat(256);
-    let encoded = codec.compress(text.as_bytes()).unwrap();
+    let encoded = codec
+        .compress(text.as_bytes(), MAX_PROXY_REQUEST_BYTES)
+        .unwrap();
     let mut frame = vec![0xc1];
     frame.extend(frame_length_prefix(encoded.len()));
     frame.extend(&encoded);
@@ -251,6 +253,45 @@ fn regular_websockets_keep_legacy_cap_while_sideband_can_use_four_mib() {
     let client = client_socket();
     assert_eq!(client.max_message_bytes, MAX_PROXY_REQUEST_BYTES);
     assert_eq!(WebSocketPumpConfig::default().max_message_bytes, FOUR_MIB);
+}
+
+#[test]
+fn responses_reject_excess_length_and_concurrency_from_the_frame_header() {
+    let limits = crate::RequestLimits::new(
+        crate::RequestLimitsConfig::default(),
+        || Some(crate::MemoryStatus::available(2 * 1024 * 1024 * 1024)),
+        || 0,
+        "websocket-capacity",
+    )
+    .unwrap();
+    let maximum = MAX_RESPONSES_WEBSOCKET_BYTES as u64;
+    let mut invalid = Cursor::new(masked_data_header(maximum + 1));
+    let mut socket = WebSocketConnection::new(&mut invalid);
+    socket.enable_responses_capacity(limits.clone());
+    assert_eq!(socket.poll_text().unwrap_err().close_code(), 1009);
+    assert_eq!(limits.snapshot().unwrap().reserved_bytes, 0);
+
+    let mut first_input = Cursor::new(masked_data_header(maximum));
+    let mut first = WebSocketConnection::new(&mut first_input);
+    first.enable_responses_capacity(limits.clone());
+    assert!(matches!(
+        first.poll_text().unwrap(),
+        WebSocketPoll::Closed { .. }
+    ));
+    let reservation = first.take_request_budget().unwrap();
+    assert_eq!(reservation.limit(), MAX_RESPONSES_WEBSOCKET_BYTES);
+
+    let mut second_input = Cursor::new(masked_data_header(maximum));
+    let mut second = WebSocketConnection::new(&mut second_input);
+    second.enable_responses_capacity(limits.clone());
+    assert_eq!(second.poll_text().unwrap_err().close_code(), 1013);
+    drop(reservation);
+    assert!(matches!(
+        second.poll_text().unwrap(),
+        WebSocketPoll::Closed { .. }
+    ));
+    drop(second);
+    assert_eq!(limits.snapshot().unwrap().reserved_bytes, 0);
 }
 
 #[test]

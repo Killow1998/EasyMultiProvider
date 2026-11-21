@@ -37,10 +37,10 @@ impl Workspace {
             return Err(forbidden());
         }
         let mut query = self.db.prepare(
-            "SELECT a.id,a.at,COALESCE(ea.nickname,ma.name),
-                    COALESCE(et.nickname,mt.name,json_extract(a.details,'$.former_target.nickname')),
+            "SELECT a.id,a.at,COALESCE(ea.nickname,ma.archived_name,ma.name),
+                    COALESCE(et.nickname,mt.archived_name,mt.name,json_extract(a.details,'$.former_target.nickname')),
                     a.kind,json_remove(a.details,'$.former_target'),
-                    ma.name,COALESCE(mt.name,json_extract(a.details,'$.former_target.name'))
+                    COALESCE(ma.archived_name,ma.name),COALESCE(mt.archived_name,mt.name,json_extract(a.details,'$.former_target.name'))
              FROM workspace_audit a
              JOIN members ma ON ma.id=a.actor LEFT JOIN members mt ON mt.id=a.target
              LEFT JOIN enrollment ea ON ea.member=ma.id LEFT JOIN enrollment et ON et.member=mt.id

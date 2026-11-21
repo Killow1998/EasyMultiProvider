@@ -7,6 +7,7 @@ mod shares;
 #[cfg(test)]
 mod tests;
 mod usage;
+mod weekly_budget;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use emp_modules::workspace::Role;
@@ -35,7 +36,7 @@ CREATE TABLE IF NOT EXISTS workspace (
 CREATE TABLE IF NOT EXISTS members (
     id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, password_hash BLOB NOT NULL, salt BLOB NOT NULL,
     role TEXT NOT NULL, publish INTEGER NOT NULL, sync INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
-    budget_nanos INTEGER
+    budget_nanos INTEGER, archived_name TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token BLOB PRIMARY KEY, member TEXT NOT NULL REFERENCES members(id), device TEXT NOT NULL,
@@ -62,7 +63,7 @@ CREATE TABLE IF NOT EXISTS join_limits (
 );
 CREATE TABLE IF NOT EXISTS shares (
     id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES members(id), source TEXT NOT NULL,
-    version INTEGER NOT NULL, encrypted BLOB NOT NULL, UNIQUE(owner,source)
+    version INTEGER NOT NULL, encrypted BLOB NOT NULL, removed_at INTEGER, UNIQUE(owner,source)
 );
 CREATE TABLE IF NOT EXISTS share_reviews (
     share TEXT PRIMARY KEY REFERENCES shares(id), approved_version INTEGER NOT NULL
@@ -76,6 +77,15 @@ CREATE TABLE IF NOT EXISTS usage (
     PRIMARY KEY(member,device,id)
 );
 CREATE INDEX IF NOT EXISTS use_by_member_date ON usage(member,finished_at);
+CREATE TABLE IF NOT EXISTS weekly_usd_limits (
+    member TEXT PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE, usd_nanos INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS weekly_reset (
+    slot INTEGER PRIMARY KEY CHECK(slot=1), weekday INTEGER NOT NULL, hour INTEGER NOT NULL, timezone TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS budget_mode (
+    slot INTEGER PRIMARY KEY CHECK(slot=1), weekly INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS workspace_profile (
     slot INTEGER PRIMARY KEY CHECK(slot=1), created_at INTEGER, profiles_visible INTEGER NOT NULL DEFAULT 0
 );
@@ -193,13 +203,34 @@ fn derive(secret: &str, salt: &[u8]) -> [u8; 32] {
     hash
 }
 
+fn initialize_schema(db: &Connection) -> Result<()> {
+    db.execute_batch(SCHEMA)?;
+    let migrated: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('shares') WHERE name='removed_at')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !migrated {
+        db.execute("ALTER TABLE shares ADD COLUMN removed_at INTEGER", [])?;
+    }
+    let archives_members: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('members') WHERE name='archived_name')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !archives_members {
+        db.execute("ALTER TABLE members ADD COLUMN archived_name TEXT", [])?;
+    }
+    Ok(())
+}
+
 impl Workspace {
     fn open(path: &Path, password: &str) -> Result<Self> {
         emp_state::filesystem::create_private_directory(path)
             .map_err(|_| Failure(503, "workspace_directory_unavailable"))?;
         let mut db = Connection::open(path.join("workspace.sqlite3"))?;
         db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")?;
-        db.execute_batch(SCHEMA)?;
+        initialize_schema(&db)?;
         let existing: Option<(String, String, Vec<u8>, Vec<u8>)> = db
             .query_row("SELECT id,name,salt,check_key FROM workspace", [], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
@@ -262,9 +293,11 @@ impl Workspace {
             (Method::Post, "members") => self.add_member(&identity, parse(body)?),
             (Method::Post, "member-access") => self.member_access(&identity, parse(body)?),
             (Method::Post, "reject-member") => self.reject_member(&identity, parse(body)?),
+            (Method::Post, "remove-member") => self.remove_member(&identity, parse(body)?),
             (Method::Post, "member-tiers") => self.member_tiers(&identity, parse(body)?),
             (Method::Post, "budget") => self.budget(&identity, parse(body)?),
-            (Method::Get, "budget-status") => self.budget_status(&identity),
+            (Method::Post, "weekly-budget") => self.weekly_budget(&identity, parse(body)?),
+            (Method::Get, "budget-status") => as_json(self.budget_status(&identity)?),
             (Method::Get, "overview") => self.overview(&identity),
             (Method::Post, "audit") => self.audit(&identity, parse(body)?),
             (Method::Post, "handover") => self.handover(&identity, parse(body)?),
@@ -283,6 +316,7 @@ impl Workspace {
             (Method::Get, "publish-version") => self.publish_version(&identity),
             (Method::Get, "shared-services") => self.reviewable_shares(&identity),
             (Method::Post, "review-service") => self.review_share(&identity, parse(body)?),
+            (Method::Post, "remove-service") => self.remove_share(&identity, parse(body)?),
             (Method::Post, "reset-authority") => self.reset_authority(&identity, parse(body)?),
             (Method::Get, "shares") => self.shares(&identity),
             (Method::Get, "usage") => self.usage(&identity, usage::Period::Today),
@@ -291,9 +325,6 @@ impl Workspace {
             }
             (Method::Post, "report") => self.report(&identity, parse(body)?),
             (Method::Post, "logout") => {
-                if identity.role == Role::VpsAdmin {
-                    return Err(forbidden());
-                }
                 self.db.execute(
                     "DELETE FROM sessions WHERE token=?",
                     [digest(token.expect("authenticated token"))],

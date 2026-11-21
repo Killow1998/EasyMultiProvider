@@ -132,6 +132,9 @@ impl Upstream {
                         return;
                     }
                     let mut ws = WebSocketConnection::new(&mut stream);
+                    if limit > emp_transport::MAX_PROXY_REQUEST_BYTES {
+                        ws.set_max_message_bytes(limit).unwrap();
+                    }
                     let mut hash = Sha256::new();
                     let mut last_id = String::new();
                     let mut sequence = 0;

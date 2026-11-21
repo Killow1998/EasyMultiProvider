@@ -256,7 +256,7 @@ impl ClientWebSocket {
     }
 
     pub fn set_max_message_bytes(&mut self, maximum: usize) -> Result<(), ClientWebSocketError> {
-        if maximum == 0 || maximum > MAX_PROXY_REQUEST_BYTES {
+        if maximum == 0 || maximum > super::MAX_RESPONSES_WEBSOCKET_BYTES {
             return Err(ClientWebSocketError::new(
                 413,
                 "native websocket message limit is invalid",
@@ -330,7 +330,7 @@ impl ClientWebSocket {
             ));
         }
         let (result, encoded_bytes) = if let Some(compression) = self.compression.as_mut() {
-            let payload = compression.compress(text.as_bytes())?;
+            let payload = compression.compress(text.as_bytes(), self.max_message_bytes)?;
             (self.send_frame(1, &payload, true), payload.len())
         } else {
             (self.send_frame(1, text.as_bytes(), false), text.len())
@@ -457,13 +457,6 @@ impl ClientWebSocket {
                     .traffic
                     .decoded_received
                     .map(|n| n.saturating_add(payload.len() as u64));
-                if payload.len() > self.max_message_bytes {
-                    self.close_with(1009, "message too large");
-                    return Err(ClientWebSocketError::new(
-                        502,
-                        "native upstream websocket event is too large",
-                    ));
-                }
                 match String::from_utf8(payload) {
                     Ok(text) => Ok(WebSocketPoll::Text(text)),
                     Err(_) => {
@@ -497,6 +490,9 @@ impl ClientWebSocket {
             FrameDecodeError::TooLarge => {
                 self.close_with(1009, "message too large");
                 ClientWebSocketError::new(502, "native upstream websocket event is too large")
+            }
+            FrameDecodeError::AtCapacity => {
+                ClientWebSocketError::new(503, "not enough memory for websocket message")
             }
             FrameDecodeError::Io => ClientWebSocketError::new(
                 if self.local_control { 503 } else { 502 },

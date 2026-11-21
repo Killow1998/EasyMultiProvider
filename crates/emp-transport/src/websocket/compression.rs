@@ -1,6 +1,5 @@
 //! RFC 7692 negotiation and bounded compression, independent of socket I/O.
 use super::ClientWebSocketError;
-use crate::MAX_PROXY_REQUEST_BYTES;
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
 
 pub(super) struct PerMessageDeflate {
@@ -63,7 +62,11 @@ impl PerMessageDeflate {
         })
     }
 
-    pub(super) fn compress(&mut self, payload: &[u8]) -> Result<Vec<u8>, ClientWebSocketError> {
+    pub(super) fn compress(
+        &mut self,
+        payload: &[u8],
+        maximum: usize,
+    ) -> Result<Vec<u8>, ClientWebSocketError> {
         let before_in = self.compressor.total_in();
         let mut output = Vec::with_capacity(payload.len().saturating_add(64));
         loop {
@@ -80,9 +83,11 @@ impl PerMessageDeflate {
                 usize::try_from(self.compressor.total_in() - before_in).unwrap_or(payload.len());
             if consumed >= payload.len() && output.ends_with(&[0, 0, 255, 255]) {
                 output.truncate(output.len() - 4);
-                break;
+                if output.len() <= maximum {
+                    break;
+                }
             }
-            if output.len() > MAX_PROXY_REQUEST_BYTES {
+            if output.len() > maximum {
                 return Err(ClientWebSocketError::new(
                     413,
                     "native websocket request is too large",
