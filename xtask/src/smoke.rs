@@ -268,15 +268,13 @@ fn update_in(
     let result: serde_json::Value = serde_json::from_slice(&result).map_err(|e| e.to_string())?;
     if status != 200
         || !result["modules"].as_array().is_some_and(|modules| {
-            modules.len() == installs.len()
-                && modules.iter().all(|row| {
-                    row["active"] == true
-                        && row["id"]
-                            .as_str()
-                            .and_then(|id| installs.get(id))
-                            .is_some_and(|install| {
-                                row["active_revision"] == install["artifact"]["digest"]
-                            })
+            let active = modules.iter().filter(|row| row["active"] == true);
+            active.clone().count() == installs.len()
+                && installs.iter().all(|(id, install)| {
+                    active.clone().any(|row| {
+                        row["id"] == id.as_str()
+                            && row["active_revision"] == install["artifact"]["digest"]
+                    })
                 })
         })
     {
