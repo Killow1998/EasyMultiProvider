@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.15.4 (2026-11-22)
+
+### 中文
+
+更新顺序
+
+- 先将 VPS 上的团队空间服务更新到 0.10.2-beta，再更新桌面 EMP Core 0.15.4 和团队空间模组 0.10.2-beta。
+
+问题修复
+
+- 团队用量。重新登录或换设备后，Native 使用与团队已批准订阅相同的账号时，自动将新用量计入当前成员。已有 Other 账号也支持凭据匹配。无需先点击「同步」。启用自动识别需要更新桌面 Core 和 VPS 团队服务。
+- 团队预算。在发出团队订阅请求前补报用量并核对当前周期的 USD 上限。达到上限或无法核对预算时，暂停新请求。团队 Fast 和 Ultrafast 权限不足时显示具体原因。
+- 团队上传。切到 EMP Local Key 时选择保留原账号，之后可以直接上传该订阅。同账号续传保留审批，团队同步沿用本机模型入口和设置。
+- 账号额度。修复团队凭据替换与导入迁移包同时执行时可能卡住的问题。
+
+### English
+
+Upgrade order
+
+- Update the Team Workspace service on the VPS to 0.10.2-beta first, then update desktop EMP Core to 0.15.4 and the Team Workspace module to 0.10.2-beta.
+
+Fixes
+
+- Team usage. After signing in again or on another device, new Native usage counts toward the signed-in member when Native uses the same account as an approved subscription. Previously imported Other accounts are also matched by credential identity. Sync is no longer required for this. Automatic attribution requires updates to desktop Core and the VPS workspace service.
+- Team budgets. EMP submits pending usage and checks the active USD limit before sending a team subscription request. New requests pause when the limit is reached or the budget cannot be verified. Fast and Ultrafast denials identify the missing team permission.
+- Team uploads. After switching to EMP Local Key and keeping the previous account, you can upload that subscription directly. Uploading the same account keeps its approval, and sync preserves your local model entry and settings.
+- Account quota. Fixed a possible deadlock when a quota refresh uses shared credentials while a migration import is running.
+
 ## 0.15.3 (2026-11-21)
 
 ### 中文

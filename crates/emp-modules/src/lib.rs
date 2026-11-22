@@ -40,7 +40,7 @@ impl Module {
             Self::Decision => "0.10-beta",
             Self::Gateway => "0.10-beta",
             Self::Aggregate => "0.10-beta",
-            Self::Team => "0.10.1-beta",
+            Self::Team => "0.10.2-beta",
             Self::Aero => "0.10.0-beta",
         }
     }

@@ -1,6 +1,6 @@
 [package]
 name = "emp-mod-team"
-version = "0.10.1-beta"
+version = "0.10.2-beta"
 edition.workspace = true
 license.workspace = true
 publish = false
