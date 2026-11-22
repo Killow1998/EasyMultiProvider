@@ -75,6 +75,9 @@ pub(crate) fn serve_realtime_call(
         )
         .wire_response();
     };
+    if let Err(denial) = state.backend.team.check_native_budget(state) {
+        return crate::api::native_response::error_response(denial.public_error(state));
+    }
     let forwarded = match safe_forwarded_headers(&incoming) {
         Ok(headers) => headers,
         Err(error) => return error.wire_response(),

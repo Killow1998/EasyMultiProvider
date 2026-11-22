@@ -1,32 +1,10 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use emp_modules::workspace::{NATIVE_SHARE, SharePayload, SharedService, SubscriptionSnapshot};
+use emp_modules::workspace::{SharedService, SubscriptionSnapshot};
 use emp_state::{ConfigError, filesystem::FileTransaction};
 
-pub(super) fn publish(state: &ServerState) -> Result<SharePayload> {
-    let path = &state.backend.accounts.native_auth_path;
-    let auth = (emp_integration::local_auth::mode(path) == "subscription")
-        .then(|| crate::services::accounts::native_auth_document(path))
-        .flatten();
-    let quota_plan = state
-        .backend
-        .accounts
-        .native_quota
-        .lock()
-        .ok()
-        .and_then(|quota| quota.as_ref()?["plan_type"].as_str().map(str::to_owned));
-    let mut snapshot = auth
-        .as_ref()
-        .and_then(subscription)
-        .filter(|auth| auth.expires_at > crate::util::system_now() as i64)
-        .ok_or_else(|| Failure(409, "workspace_subscription_sign_in_required".into()))?;
-    snapshot.plan = quota_plan.as_deref().and_then(plan).or(snapshot.plan);
-    Ok(SharePayload {
-        provider: json!({"id":NATIVE_SHARE,"name":"Native","auth_mode":"codex_subscription"}),
-        models: Vec::new(),
-        subscription: Some(snapshot),
-    })
-}
+mod upload;
+pub(super) use upload::{publish, upload_details};
 
 fn subscription(auth: &Value) -> Option<SubscriptionSnapshot> {
     let headers = emp_codex::account_auth_headers(auth)?;
@@ -60,26 +38,40 @@ fn plan(value: &str) -> Option<String> {
     Some(plan.to_owned())
 }
 
-pub(super) fn duplicates_native(native: &Value, auth: &SubscriptionSnapshot) -> bool {
-    emp_state::same_account_auth(native, &document(auth))
-}
-
-fn document(auth: &SubscriptionSnapshot) -> Value {
-    json!({"auth_mode":"chatgptAuthTokens","tokens":{
-        "access_token":auth.access_token,"account_id":auth.account_id,
-        "id_token":auth.id_token.as_deref().unwrap_or(&auth.access_token),"refresh_token":""
-    }})
-}
-
-pub(super) fn identity(auth: &SubscriptionSnapshot) -> String {
-    emp_state::accounts::account_auth_identity(&document(auth))
+fn stored_auth(vault: &VaultStore, account: &Value) -> Option<Value> {
+    let path = std::path::Path::new(account["auth_file"].as_str()?);
+    vault.read_encrypted_json(path).ok()
 }
 
 pub(super) fn stored_identity(vault: &VaultStore, account: &Value) -> Option<String> {
-    let path = std::path::Path::new(account["auth_file"].as_str()?);
-    let document = vault.read_encrypted_json(path).ok()?;
+    let document = stored_auth(vault, account)?;
     emp_codex::account_auth_headers(&document)?;
     Some(emp_state::accounts::account_auth_identity(&document))
+}
+
+pub(super) fn mark_expired_private(
+    vault: &VaultStore,
+    config: &mut Value,
+    shared_identities: &std::collections::BTreeSet<&str>,
+) {
+    if shared_identities.is_empty() {
+        return;
+    }
+    let now = crate::util::system_now() as i64;
+    for account in config["accounts"]
+        .as_array_mut()
+        .expect("normalized accounts")
+    {
+        if account["workspace_shared"] != true
+            && account["credential_status"] != "invalid"
+            && let Some(auth) = stored_auth(vault, account)
+            && subscription(&auth).is_some_and(|subscription| subscription.expires_at <= now)
+            && shared_identities
+                .contains(emp_state::accounts::account_auth_identity(&auth).as_str())
+        {
+            account["credential_status"] = json!("invalid");
+        }
+    }
 }
 
 pub(super) fn owns_credential(account: &Value, path: &std::path::Path) -> bool {
@@ -103,7 +95,7 @@ pub(super) fn stage(
         .subscription
         .as_ref()
         .expect("subscription share");
-    let document = document(auth);
+    let document = auth.auth_document();
     if subscription(&document).is_none_or(|snapshot| snapshot.expires_at != auth.expires_at)
         || auth.expires_at <= crate::util::system_now() as i64
     {
@@ -153,34 +145,7 @@ pub(super) fn stage(
         } else {
             preferred
         };
-        let names: std::collections::BTreeSet<_> = accounts
-            .iter()
-            .chain(
-                updated["providers"]
-                    .as_array()
-                    .expect("normalized providers"),
-            )
-            .filter(|item| item["id"] != local_id)
-            .flat_map(|item| {
-                item["route_names"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .chain(item["name"].as_str())
-                    .chain(item["prefix"].as_str())
-                    .chain(item["id"].as_str())
-            })
-            .map(|name| name.trim().to_lowercase())
-            .collect();
-        if names.contains(&preferred.to_lowercase()) {
-            (2..)
-                .map(|n| format!("{preferred} {n}"))
-                .find(|name| !names.contains(&name.to_lowercase()))
-                .expect("available service name")
-        } else {
-            preferred.to_owned()
-        }
+        emp_state::config::available_service_name(updated, preferred, Some(local_id))
     });
     if let Some(record) = existing {
         if record.workspace != session.workspace() || record.share != share.id {

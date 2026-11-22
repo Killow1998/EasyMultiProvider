@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 mod credentials;
+pub(super) mod retained;
 
 #[derive(Default)]
 pub(crate) struct LoginSession(Mutex<LoginState>);
@@ -63,55 +64,22 @@ pub(crate) fn execute(
             .map_err(|_| "login_auth_unreadable")?
             .ok_or("login_auth_unreadable")?;
         let active = manager.status().map_err(|_| "login_busy")?.relation == "applied";
-        if keep {
-            emp_state::validate_auth_json(&auth).map_err(|_| "login_credentials_invalid")?;
-            let config = state
-                .backend
-                .configuration
-                .read()
-                .map_err(|_| "login_storage_failed")?;
-            let existing = crate::services::accounts::matching_account(
-                &config,
-                &state.backend.configuration.vault,
-                &auth,
-            )
-            .cloned();
-            let mut name = "Native".to_owned();
-            if existing.is_none() {
-                let reserved = config["accounts"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .chain(config["providers"].as_array().into_iter().flatten())
-                    .flat_map(|service| {
-                        service["route_names"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(Value::as_str)
-                            .chain(service["name"].as_str())
-                            .chain(service["prefix"].as_str())
-                            .chain(service["id"].as_str())
-                    })
-                    .map(|name| name.trim().to_lowercase())
-                    .collect::<std::collections::BTreeSet<_>>();
-                let mut index = 2;
-                while reserved.contains(&name.to_lowercase()) {
-                    name = format!("Native {index}");
-                    index += 1;
-                }
-            }
-            drop(config);
-            let mut imported = existing.unwrap_or_else(|| json!({"name":name}));
-            imported["auth_json"] = auth.clone();
-            crate::services::accounts::import_account_state(None, state, &imported)
-                .map_err(|_| "login_import_failed")?;
-        }
+        let retained = if keep {
+            retained::import_native(state, &auth)?
+        } else {
+            retained::Selection::Removed
+        };
+        let mut files = emp_state::FileTransaction::new();
+        files
+            .remember(&retained::path(state))
+            .map_err(|_| "login_storage_failed")?;
+        retained.save(state).map_err(|_| "login_storage_failed")?;
         if !local_auth::replace_with_local(path, &auth, &state.backend.gateway_key)
             .map_err(|_| "login_storage_failed")?
         {
             return Err("login_auth_changed");
         }
+        files.commit();
         if let Ok(mut quota) = state.backend.accounts.native_quota.lock() {
             *quota = None;
         }

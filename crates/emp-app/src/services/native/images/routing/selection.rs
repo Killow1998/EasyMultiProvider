@@ -114,7 +114,7 @@ pub(super) fn account_route(
                 state.backend.modules.active(emp_modules::Module::Team),
                 None,
             )
-            .map_err(|message| NativeHttpError::router(403, message))?;
+            .map_err(|error| error.public_error(state))?;
         if !image_supported(account.get("quota")) {
             return Err(NativeHttpError::router(
                 422,

@@ -1,7 +1,7 @@
 //! Remove one merged imported service under its credential and configuration locks.
 use super::{
     duplicate_accounts, forget_pending_rotation, notify_quota_update, quota_refresh_cancellation,
-    quota_refresh_lock,
+    quota_refresh_locks,
 };
 use crate::app::ServerState;
 use emp_state::FileTransaction;
@@ -50,12 +50,8 @@ pub(crate) fn delete_account_state(
         "account_delete",
         |receipt| {
             receipt.subject(account_id);
-            let refresh_locks = ids
-                .iter()
-                .map(|id| {
-                    quota_refresh_lock(state, id).ok_or_else(|| "internal server error".to_owned())
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+            let refresh_locks = quota_refresh_locks(state, ids.iter().map(String::as_str))
+                .ok_or_else(|| "internal server error".to_owned())?;
             let _refresh_guards = refresh_locks
                 .iter()
                 .map(|lock| lock.lock().map_err(|_| "internal server error".to_owned()))

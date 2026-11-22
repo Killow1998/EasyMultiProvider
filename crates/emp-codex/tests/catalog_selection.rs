@@ -35,6 +35,7 @@ fn model(
         config.as_object().expect("config object"),
         slug,
         account.and_then(Value::as_object),
+        None,
         |_| Some(headers.clone()),
     )
     .map(Value::Object)

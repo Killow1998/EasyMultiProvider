@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Synthetic app-server authentication for isolated onboarding acceptance."""
+import base64
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import threading
 import time
 
 if '--version' in sys.argv:
-    print('codex-cli 0.163.0')
+    print('codex-cli', os.environ.get('EMP_FIXTURE_CODEX_VERSION', '0.163.0'))
     raise SystemExit(0)
 
 control = Path(__file__).with_name('login-control')
@@ -48,8 +49,11 @@ for line in sys.stdin:
         auth_file = Path(os.environ['CODEX_HOME'], 'auth.json')
         if auth_file.exists():
             tokens = json.loads(auth_file.read_text()).get('tokens', {})
-            if tokens.get('access_token', '').startswith('fixture.'):
-                result['account'] = {'type':'chatgpt','email':'synthetic@example.invalid','planType':'pro'}
+            token = tokens.get('access_token', '')
+            if token.startswith('fixture.'):
+                claims = json.loads(base64.urlsafe_b64decode(token.split('.')[1] + '==='))
+                if claims['exp'] > time.time():
+                    result['account'] = {'type':'chatgpt','email':'synthetic@example.invalid','planType':'pro'}
     elif method == 'model/list':
         result = {'data':[],'nextCursor':None}
     elif method == 'account/rateLimits/read':

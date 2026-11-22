@@ -97,10 +97,6 @@ fn credential_fingerprint(headers: &BTreeMap<String, String>) -> String {
     format!("sha256:{:x}", digest.finalize())
 }
 
-pub(crate) struct PersistedCatalog {
-    pub(crate) catalog: Value,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PersistError {
     RuntimeChanged,
@@ -109,23 +105,10 @@ pub(crate) enum PersistError {
 }
 
 pub(crate) enum FetchAndPersistOutcome {
-    Persisted(PersistedCatalog),
+    Persisted(Value),
     UpstreamError(emp_router::RouterError),
     PersistenceError(PersistError),
     Stopped,
-}
-
-pub(crate) async fn fetch_catalog(
-    client: &emp_transport::HttpClient,
-    source: &RefreshSource,
-) -> Result<Value, emp_router::RouterError> {
-    emp_router::subscription_catalog::fetch(
-        client,
-        &source.base,
-        &source.headers,
-        &source.client_version,
-    )
-    .await
 }
 
 pub(crate) fn fetch_and_persist(
@@ -157,7 +140,12 @@ pub(crate) fn fetch_and_persist(
 }
 
 fn fetch_and_persist_inner(state: &ServerState, source: &RefreshSource) -> FetchAndPersistOutcome {
-    let request = fetch_catalog(&state.backend.transport.client, source);
+    let request = emp_router::subscription_catalog::fetch(
+        &state.backend.transport.client,
+        &source.base,
+        &source.headers,
+        &source.client_version,
+    );
     let fetched = state.backend.transport.runtime.block_on(async move {
         tokio::select! {
             biased;
@@ -185,7 +173,7 @@ pub(crate) fn persist_fetched_catalog(
     state: &ServerState,
     source: &RefreshSource,
     mut catalog: Value,
-) -> Result<PersistedCatalog, PersistError> {
+) -> Result<Value, PersistError> {
     let current_version = state
         .backend
         .integration
@@ -205,9 +193,7 @@ pub(crate) fn persist_fetched_catalog(
     }
     let path = if source.native {
         let current_headers = native_subscription_headers(&state.backend.accounts.native_auth_path);
-        let Some(current_map) = current.as_object() else {
-            return Err(PersistError::SourceChanged);
-        };
+        let current_map = current.as_object().expect("normalized config");
         if emp_codex::native_catalog_path(current_map) != source.path
             || current_headers.as_ref() != Some(&source.headers)
         {
@@ -215,16 +201,13 @@ pub(crate) fn persist_fetched_catalog(
         }
         emp_codex::preserved_native_catalog_path(current_map)
     } else {
-        let Some(accounts) = current.get("accounts").and_then(Value::as_array) else {
-            return Err(PersistError::SourceChanged);
-        };
-        let mut matching = accounts
+        let account = current["accounts"]
+            .as_array()
+            .expect("normalized accounts")
             .iter()
-            .filter(|account| account.get("id").and_then(Value::as_str) == Some(&source.id));
-        let account = matching.next().ok_or(PersistError::SourceChanged)?;
-        if source.worker_eligible
-            && (account["enabled"] == Value::Bool(false) || matching.next().is_some())
-        {
+            .find(|account| account["id"] == source.id)
+            .ok_or(PersistError::SourceChanged)?;
+        if source.worker_eligible && account["enabled"] == false {
             return Err(PersistError::SourceChanged);
         }
         let current_path = managed_account_catalog_path(state, &current, account);
@@ -234,9 +217,6 @@ pub(crate) fn persist_fetched_catalog(
             .map(emp_codex::native_catalog_owner);
         if current_path.as_ref() != Some(&source.path)
             || current_owner.as_deref() != Some(&source.owner)
-            || current_headers
-                .as_ref()
-                .is_none_or(|headers| headers.is_empty())
             || state.catalog_refresh.account_generation(&source.id) != source.generation
         {
             return Err(PersistError::SourceChanged);
@@ -266,7 +246,7 @@ pub(crate) fn persist_fetched_catalog(
     let previous = if source.native {
         emp_codex::load_native_catalog(&current)
     } else {
-        super::read_account_cache(&path).unwrap_or_else(|| json!({}))
+        emp_codex::read_subscription_catalog(&path).unwrap_or_else(|| json!({}))
     };
     let retained = retain_known_models(&mut catalog, &previous, source);
     catalog["account_owner"] = json!(source.owner);
@@ -290,7 +270,7 @@ pub(crate) fn persist_fetched_catalog(
             }),
         );
     }
-    Ok(PersistedCatalog { catalog })
+    Ok(catalog)
 }
 
 /// Catalog discovery is not an inference authorization check. A partial

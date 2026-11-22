@@ -101,8 +101,8 @@ fn execute_compact_request(
             return request_router_error_response(400, "request.model is required");
         }
         Err(RequestPreparationError::Route(error)) => return route_resolution_response(error),
-        Err(RequestPreparationError::TeamPermission(message)) => {
-            return request_router_error_response(403, message);
+        Err(RequestPreparationError::TeamAccess(error)) => {
+            return super::native_response::error_response(error.public_error(state));
         }
         Err(RequestPreparationError::ConfigurationUnavailable) => {
             return json_error_response(

@@ -1,5 +1,3 @@
-//! Api search.
-
 use crate::VERSION;
 use crate::api::failure_response::request_router_error_response;
 use crate::app::ServerState;
@@ -51,13 +49,7 @@ pub(crate) fn native_search_request(
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
     };
-    if config
-        .get("subscription_search")
-        .and_then(Value::as_object)
-        .and_then(|search| search.get("enabled"))
-        .and_then(Value::as_bool)
-        != Some(true)
-    {
+    if config["subscription_search"]["enabled"] != true {
         return json_error_response(
             403,
             status_text(403),
@@ -72,30 +64,20 @@ pub(crate) fn native_search_request(
         ("User-Agent".to_owned(), format!("EMP/{VERSION}")),
     ]);
     let mut denied = false;
+    let team = &state.backend.team;
+    let team_active = state.backend.modules.active(emp_modules::Module::Team);
     let credentials = native_subscription_headers(&state.backend.accounts.native_auth_path)
+        .map(|headers| (headers, None))
         .or_else(|| {
-            config
-                .get("accounts")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter(|account| account.get("enabled") != Some(&Value::Bool(false)))
+            config["accounts"]
+                .as_array()
+                .expect("normalized accounts")
+                .iter()
+                .filter(|account| account["enabled"] != false)
                 .find_map(|account| {
-                    let source = state.backend.team.subscription_source(
-                        state,
-                        account["id"].as_str()?,
-                        account,
-                    );
-                    if state
-                        .backend
-                        .team
-                        .check_route(
-                            &source,
-                            state.backend.modules.active(emp_modules::Module::Team),
-                            None,
-                        )
-                        .is_err()
-                    {
+                    let id = account["id"].as_str().expect("normalized account ID");
+                    let source = team.subscription_source(state, id, account);
+                    if team.check_route(&source, team_active, None).is_err() {
                         denied = true;
                         return None;
                     }
@@ -106,10 +88,19 @@ pub(crate) fn native_search_request(
                         .vault
                         .read_encrypted_json(Path::new(path))
                         .ok()?;
-                    account_auth_headers(&auth)
+                    account_auth_headers(&auth).map(|headers| (headers, Some((source, auth))))
                 })
         });
-    if let Some(credentials) = credentials {
+    if let Some((credentials, source)) = credentials {
+        let budget = match source {
+            Some((source, auth)) => team.check_subscription_budget(state, &source, || {
+                Some(emp_state::accounts::account_auth_identity(&auth))
+            }),
+            None => team.check_native_budget(state),
+        };
+        if let Err(denial) = budget {
+            return super::native_response::error_response(denial.public_error(state));
+        }
         headers.extend(credentials);
     } else if denied
         || emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path)

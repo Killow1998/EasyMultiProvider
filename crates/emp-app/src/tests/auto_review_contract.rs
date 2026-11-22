@@ -1,10 +1,9 @@
 use super::{OneShotUpstream, credential_root, post, session_header};
 use crate::http::request::{parse_request, read_request_head};
 use crate::lifecycle::ServerHandle;
-use crate::services::accounts::account_catalog_headers;
 use crate::services::auto_review::{automatic_review_candidates, resolve_auto_review_route};
 use crate::services::request_outcome::RequestOutcome;
-use emp_codex::{account_auth_headers, native_catalog_owner, subscription_route_model};
+use emp_codex::{account_auth_headers, native_catalog_owner};
 use emp_core::{ResolvedRoute, RouteResolutionError};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,9 +22,7 @@ fn resolve_shared_route(
         return route;
     }
     emp_core::resolve_route(config, requested_model, |config, slug, account| {
-        subscription_route_model(config, slug, account, |account| {
-            account_catalog_headers(account, &server.state.backend.configuration.vault)
-        })
+        crate::services::catalog::subscription_model(&server.state, config, slug, account)
     })
 }
 

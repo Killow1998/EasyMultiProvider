@@ -26,6 +26,7 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, weeklyBudget, 
     return ['workspace_join_pending', 'workspace_join_code_invalid', 'workspace_join_limited',
       'workspace_member_exists', 'workspace_discovery_unavailable', 'workspace_discovery_requires_https',
       'workspace_share_version_conflict','workspace_subscription_sign_in_required',
+      'workspace_subscription_selection_required','workspace_subscription_selection_invalid',
       'workspace_only_native_subscription', 'workspace_handover_required',
       'workspace_handover_successor_required','workspace_backup_too_large',
       'workspace_login_failed','workspace_login_limited','workspace_join_rejected',
@@ -639,29 +640,55 @@ function createTeamWorkspace({api, openModal, notice, $, esc, tr, weeklyBudget, 
     clearTimeout(pendingTick);
   }
 
-  function publish(home) {
-    const native = getState().native_account;
-    const ready = native?.auth_mode === 'subscription' && native.credential_set;
-    const plan = native?.quota?.plan_type;
-    const label = native?.quota?.account_label;
+  async function publish(home) {
+    let source;
     openModal(tr('modules.upload_a_service'), `<div id="team_upload_form" class="team-form">
-      <div class="team-upload"><span class="team-role-icon" aria-hidden="true">${roleSvg('member')}</span>
-        <div><strong>Native · Codex</strong> ${planTag(plan)} ${shadowHelp(tr('modules.authorized_teammates_can_sync_native'))}${label ? `<p class="setting-help">${esc(label)}</p>` : ''}</div></div>
-      ${ready ? '' : `<p class="team-form-warning">${tr('modules.workspace_subscription_sign_in_required')}</p>`}
-      </div>`, tr('modules.upload'), async () => {
+      <p class="setting-help">${tr('modules.working')}</p></div>`, tr('modules.upload'), async () => {
         const form = $('team_upload_form');
+        const selected = form.querySelector('#team_upload_subscription')?.value || source?.id;
         try {
-          const result = await action('publish');
+          const result = await action('publish', selected ? {account_id:selected} : {});
           if (form.isConnected) {
             home();
-            // Re-uploading an already approved account only refreshes its credentials, so members keep syncing it.
-            notice(tr(result?.review_required === false ? 'modules.share_refreshed' : 'modules.uploaded_for_review'));
+            notice(tr(result.review_required === false ? 'modules.share_refreshed' : 'modules.uploaded_for_review'));
           }
         } catch (error) {
           showError(form,error);
         }
       }, null, {back:home});
-    $('modal_submit').disabled = !ready;
+    const form = $('team_upload_form');
+    const submit = $('modal_submit');
+    submit.disabled = true;
+    try {
+      const details = await action('publish_source').catch(error => {
+        if (error.payload?.error?.code !== 'invalid_workspace_request') throw error;
+        const native = getState().native_account;
+        return native?.auth_mode === 'subscription' && native.credential_set
+          ? {source:{name:'Native · Codex',plan:native.quota?.plan_type}}
+          : {};
+      });
+      if (!form.isConnected) return;
+      source = details.source;
+      if (source) {
+        form.innerHTML = `<div class="team-upload"><span class="team-role-icon" aria-hidden="true">${roleSvg('member')}</span>
+          <div><strong>${esc(source.name)}</strong> ${planTag(source.plan)} ${shadowHelp(tr('modules.authorized_teammates_can_sync_native'))}</div></div>`;
+        submit.disabled = false;
+      } else if (details.choices?.length) {
+        form.innerHTML = `<label for="team_upload_subscription">${tr('modules.upload_choose_subscription')}</label>
+          <select id="team_upload_subscription" required>
+            <option value="">${tr('modules.upload_select_subscription')}</option>
+            ${details.choices.map(account => `<option value="${esc(account.id)}">${esc(account.name)}${account.plan ? ` · ${esc(subscriptionPlanLabel(account.plan))}` : ''}</option>`).join('')}
+          </select>`;
+        const select = form.querySelector('select');
+        select.onchange = () => { submit.disabled = !select.value; };
+      } else {
+        form.innerHTML = `<p class="team-form-warning">${tr('modules.workspace_subscription_sign_in_required')}</p>`;
+      }
+    } catch (error) {
+      if (!form.isConnected) return;
+      form.replaceChildren();
+      showError(form,error);
+    }
   }
 
   async function sync(button) {

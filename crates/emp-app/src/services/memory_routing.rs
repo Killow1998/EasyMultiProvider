@@ -171,7 +171,10 @@ pub(crate) fn prepare(
         RequestOperation::Responses,
         &BTreeMap::new(),
     )
-    .map_err(|_| fail("model_unavailable"))?;
+    .map_err(|error| match error {
+        RequestPreparationError::TeamAccess(_) => error,
+        _ => fail("model_unavailable"),
+    })?;
     if prepared.route.dialect != Dialect::CodexNative
         || !matches!(
             prepared.route.source,

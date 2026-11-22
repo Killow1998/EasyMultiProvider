@@ -57,7 +57,7 @@ impl NativeSession {
         } = turn;
         let mut native_turn_activity = None;
         let mut fallback_usage = None;
-        let mut plan = match native::websocket_plan(
+        let (mut plan, native_account) = match native::websocket_plan(
             state,
             route,
             config,
@@ -121,17 +121,17 @@ impl NativeSession {
                     .close(1011, "websocket readiness setup failed");
                 return NativeTurnResult::Closed;
             };
-            let owner = emp_state::usage::account_owner(&plan.headers);
             let mut usage = crate::services::request_outcome::RequestOutcome::new(
                 state,
                 route,
                 request_body,
                 request_headers,
-                Some(&owner),
+                None,
                 "responses",
             )
             .started_at(websocket.observation.execution_started())
             .transport("websocket");
+            usage.native_credentials(route, &plan.headers, native_account.as_deref());
             native_turn_activity = Some(state.backend.activity.begin(
                 crate::services::activity::ActivityIdentity::from_route(route),
             ));

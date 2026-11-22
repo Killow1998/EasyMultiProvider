@@ -11,8 +11,10 @@ pub(crate) mod discovery;
 mod provider_models;
 mod selection;
 mod sources;
+mod validation;
 pub(crate) use selection::select_models;
 use sources::CatalogSources;
+pub(super) use validation::validate_update;
 
 pub(crate) fn refresh_catalog(state: &ServerState) -> Result<(PathBuf, usize), ()> {
     let config = state.backend.configuration.read().map_err(|_| ())?;
@@ -101,29 +103,13 @@ pub(crate) fn source_catalog(state: &ServerState, config: &Value) -> Value {
                     .any(|provider| model["provider"] == *provider)
             });
     }
-    let sources = catalog_sources(state, &visible);
-    state
-        .backend
-        .team
-        .project_subscription_credentials(state, &mut visible);
-    sources.merged(&visible)
+    CatalogSources::load(state, &mut visible).merged(&visible)
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
-pub(crate) fn catalog_sources(state: &ServerState, config: &Value) -> CatalogSources {
-    CatalogSources::load(state, config)
-}
-
-pub(crate) fn public_configuration(
-    state: &ServerState,
-    config: &Value,
-) -> Result<Value, emp_state::ConfigError> {
+pub(crate) fn public_configuration(state: &ServerState, config: &Value) -> Value {
     let mut effective = config.clone();
-    state
-        .backend
-        .team
-        .project_subscription_credentials(state, &mut effective);
-    let mut public = catalog_sources(state, config).public_configuration(state, &effective)?;
+    let sources = CatalogSources::load(state, &mut effective);
+    let mut public = sources.public_configuration(state, &effective);
     if state.backend.modules.active(emp_modules::Module::Aero) {
         public["aero_profiles"] = config
             .get("aero_profiles")
@@ -131,7 +117,7 @@ pub(crate) fn public_configuration(
             .unwrap_or(serde_json::json!([]));
         super::modules::aero::augment_public(config, &mut public);
     }
-    Ok(public)
+    public
 }
 
 pub(crate) fn subscription_options(
@@ -145,16 +131,15 @@ pub(crate) fn subscription_options(
         let account = config["accounts"]
             .as_array()
             .and_then(|accounts| accounts.iter().find(|account| account["id"] == id))
-            .filter(|account| {
-                account["auth_file"]
-                    .as_str()
-                    .is_some_and(|path| !path.is_empty())
-            })
             .ok_or("Subscription account is unavailable")?;
-        emp_codex::cached_account_catalog(
+        let auth_path = account["auth_file"]
+            .as_str()
+            .filter(|path| !path.is_empty())
+            .ok_or("Subscription account is unavailable")?;
+        emp_codex::cached_subscription_catalog(
             config.as_object().expect("config"),
-            account.as_object().expect("normalized account"),
-            &mut |_| super::account_catalog::catalog_headers(state, config, account),
+            auth_path,
+            || super::account_catalog::catalog_headers(state, config, account),
         )
     };
     Ok(catalog.as_ref().map_or_else(Vec::new, |catalog| {
@@ -168,16 +153,9 @@ pub(crate) fn subscription_model(
     slug: &str,
     account: Option<&serde_json::Map<String, Value>>,
 ) -> Option<serde_json::Map<String, Value>> {
-    if let Some(account) = account
-        && let Some(path) = account.get("_emp_catalog_auth_file")
-    {
-        let mut catalog_account = account.clone();
-        catalog_account.insert("auth_file".to_owned(), path.clone());
-        return emp_codex::subscription_route_model(config, slug, Some(&catalog_account), |_| {
-            account_catalog_headers(account, &state.backend.configuration.vault)
-        });
-    }
-    emp_codex::subscription_route_model(config, slug, account, |account| {
+    let catalog_auth_path =
+        account.and_then(|account| account.get("_emp_catalog_auth_file")?.as_str());
+    emp_codex::subscription_route_model(config, slug, account, catalog_auth_path, |account| {
         account_catalog_headers(account, &state.backend.configuration.vault)
     })
 }

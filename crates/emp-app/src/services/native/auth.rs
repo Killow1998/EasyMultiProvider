@@ -48,15 +48,21 @@ fn account_headers(
         .ok_or_else(|| NativeHttpError::router(503, "stored auth.json has no access token"))
 }
 
-pub(crate) fn resolve_headers(
+pub(super) struct ResolvedHeaders {
+    pub headers: BTreeMap<String, String>,
+    pub native_account: Option<String>,
+}
+
+pub(super) fn resolve_headers(
     state: &ServerState,
     route: &ResolvedRoute,
     incoming: &BTreeMap<String, String>,
     stream: bool,
     refresh: bool,
-) -> Result<BTreeMap<String, String>, NativeHttpError> {
+) -> Result<ResolvedHeaders, NativeHttpError> {
     let provider = route.provider.value();
     let selected;
+    let mut native_account = None;
     let auth = if provider.get("auth_mode").and_then(Value::as_str) == Some("account") {
         let account = provider
             .get("account")
@@ -86,7 +92,13 @@ pub(crate) fn resolve_headers(
         selected = document.and_then(|auth| {
             emp_state::validate_auth_json(&auth)
                 .ok()
-                .and_then(|auth| account_auth_headers(&auth))
+                .and_then(|auth| {
+                    let headers = account_auth_headers(&auth)?;
+                    if state.backend.modules.active(emp_modules::Module::Team) {
+                        native_account = Some(emp_state::accounts::account_auth_identity(&auth));
+                    }
+                    Some(headers)
+                })
                 .or_else(|| {
                     auth["OPENAI_API_KEY"]
                         .as_str()
@@ -110,5 +122,8 @@ pub(crate) fn resolve_headers(
         );
     }
     crate::services::usage::identities::remember(state, route, &headers);
-    Ok(headers)
+    Ok(ResolvedHeaders {
+        headers,
+        native_account,
+    })
 }

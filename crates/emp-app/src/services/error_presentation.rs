@@ -105,6 +105,24 @@ impl ErrorPresentation {
             "emp" if code == "context_length_exceeded" => {
                 ("EMP", "请求上下文超限", "request context limit exceeded")
             }
+            "emp"
+                if matches!(
+                    code,
+                    "workspace_fast_forbidden"
+                        | "workspace_ultrafast_forbidden"
+                        | "workspace_permission_required"
+                ) =>
+            {
+                ("EMP", "团队权限不足", "team permission required")
+            }
+            "emp" if code == "workspace_budget_reached" => {
+                ("EMP", "团队预算已用完", "team budget reached")
+            }
+            "emp" if code == "workspace_budget_unavailable" => (
+                "EMP",
+                "暂时无法核对团队预算",
+                "team budget verification unavailable",
+            ),
             "emp" => ("EMP", "请求处理出错", "request processing failed"),
             "client" => ("Client", "调用已中断", "request interrupted"),
             _ => {

@@ -15,6 +15,7 @@ pub(crate) enum Command {
     Logout,
     Handover,
     Publish,
+    PublishSource,
     Sync,
     Usage,
     IssueInvite,
@@ -31,6 +32,7 @@ impl Command {
             "logout" => return Some(Self::Logout),
             "handover" => return Some(Self::Handover),
             "publish" => return Some(Self::Publish),
+            "publish_source" => return Some(Self::PublishSource),
             "sync" => return Some(Self::Sync),
             "usage" => return Some(Self::Usage),
             "issue_invite" => return Some(Self::IssueInvite),
@@ -134,6 +136,12 @@ impl TeamState {
                 self.local_status()
             }
             Command::Publish => self.publish(state, session, body),
+            Command::PublishSource => {
+                if session.identity["member"]["publish"] != true {
+                    return Err(Failure(403, "workspace_permission_required".into()));
+                }
+                super::subscriptions::upload_details(state)
+            }
             Command::Sync => self.sync(state, store),
             Command::Usage => {
                 self.events.notify_one();

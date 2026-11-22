@@ -1,5 +1,7 @@
 //! Account-scoped quota refresh, reset and history operations.
 pub(crate) mod commands;
+#[cfg(all(test, unix))]
+mod locks_tests;
 mod sampler;
 
 pub(crate) use sampler::{run as run_sampler, sample_quotas_once};
@@ -11,6 +13,7 @@ use crate::services::accounts::native_account_snapshot;
 use crate::services::accounts::native_auth_document;
 use crate::services::accounts::{
     notify_quota_update, quota_owner_key, quota_refresh_cancellation, quota_refresh_lock,
+    quota_refresh_locks,
 };
 use crate::util::system_now;
 use emp_codex::quota::QuotaControl;
@@ -366,6 +369,10 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
             None,
         )
     {
+        let error = message.public_error(state);
+        let message = error.body["error"]["message"]
+            .as_str()
+            .expect("public error message");
         return Err(QuotaError::new(message, "quota_auth_required"));
     }
     let cancellation = quota_refresh_cancellation(state, account_id)
@@ -447,25 +454,55 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         .inspect(|_| record_quota_snapshot(state, account_id, &quota))
 }
 
-fn refresh_account_by_id_inner(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
-    if account_id != "@native" {
-        let replacement = state.backend.configuration.read().ok().and_then(|config| {
-            let accounts = config["accounts"].as_array()?;
-            let account = accounts
-                .iter()
-                .find(|account| account["id"] == account_id)?;
-            let source = state
-                .backend
-                .team
-                .replacement_subscription(state, accounts, account)?;
-            source["id"].as_str().map(str::to_owned)
-        });
-        if let Some(source) = replacement {
-            refresh_account_serialized(state, &source)?;
-            return account_public_snapshot(state, account_id).ok_or_else(|| {
-                QuotaError::new("account changed during quota refresh", "quota_error")
-            });
+fn replacement_account(state: &ServerState, account_id: &str) -> Option<String> {
+    if account_id == "@native" {
+        return None;
+    }
+    let config = state.backend.configuration.read().ok()?;
+    let accounts = config["accounts"].as_array()?;
+    let account = accounts
+        .iter()
+        .find(|account| account["id"] == account_id)?;
+    state
+        .backend
+        .team
+        .replacement_subscription(state, accounts, account)?["id"]
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn with_refresh_target<T>(
+    state: &ServerState,
+    account_id: &str,
+    refresh: impl FnOnce(Option<&str>) -> T,
+) -> Option<T> {
+    loop {
+        let replacement = replacement_account(state, account_id);
+        let locks = quota_refresh_locks(
+            state,
+            std::iter::once(account_id).chain(replacement.as_deref()),
+        )?;
+        let _guards = locks
+            .iter()
+            .map(|lock| lock.lock().ok())
+            .collect::<Option<Vec<_>>>()?;
+        if replacement_account(state, account_id) == replacement {
+            return Some(refresh(replacement.as_deref()));
         }
+    }
+}
+
+fn refresh_locked_account_inner(
+    state: &ServerState,
+    account_id: &str,
+    replacement: Option<&str>,
+) -> Result<Value, QuotaError> {
+    if let Some(source) = replacement {
+        refresh_locked_account(state, source, None)?;
+        return account_public_snapshot(state, account_id)
+            .ok_or_else(|| QuotaError::new("account changed during quota refresh", "quota_error"));
+    }
+    if account_id != "@native" {
         return refresh_imported_account(state, account_id);
     }
     let quota = read_native_login_quota(
@@ -491,12 +528,13 @@ fn refresh_account_by_id_inner(state: &ServerState, account_id: &str) -> Result<
     Ok(native_account_snapshot(state, &config))
 }
 
-pub(crate) fn refresh_account_by_id(
+fn refresh_locked_account(
     state: &ServerState,
     account_id: &str,
+    replacement: Option<&str>,
 ) -> Result<Value, QuotaError> {
     let started = std::time::Instant::now();
-    let result = refresh_account_by_id_inner(state, account_id);
+    let result = refresh_locked_account_inner(state, account_id, replacement);
     let journal = &state.backend.diagnostics.journal;
     journal.event(
         if result.is_ok() { "info" } else { "warning" },
@@ -613,12 +651,10 @@ pub(crate) fn refresh_account_serialized(
     state: &ServerState,
     account_id: &str,
 ) -> Result<Value, QuotaError> {
-    let refresh_lock = quota_refresh_lock(state, account_id)
-        .ok_or_else(|| QuotaError::new("Codex account quota check failed", "quota_error"))?;
-    let _guard = refresh_lock
-        .lock()
-        .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?;
-    refresh_account_by_id(state, account_id)
+    with_refresh_target(state, account_id, |replacement| {
+        refresh_locked_account(state, account_id, replacement)
+    })
+    .ok_or_else(|| QuotaError::new("Codex account quota check failed", "quota_error"))?
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -1,5 +1,3 @@
-//! Service name validation and retained routing names.
-
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -114,4 +112,35 @@ pub fn validate_service_names(current: &Value, candidate: &Value) -> Result<(), 
         }
     }
     Ok(())
+}
+
+pub fn available_service_name(
+    config: &Value,
+    preferred: &str,
+    excluded_id: Option<&str>,
+) -> String {
+    let reserved: BTreeSet<_> = ["accounts", "providers"]
+        .into_iter()
+        .flat_map(|kind| config[kind].as_array().expect("normalized services"))
+        .filter(|service| excluded_id.is_none_or(|id| service["id"] != id))
+        .flat_map(|service| {
+            service["route_names"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .chain(service["name"].as_str())
+                .chain(service["prefix"].as_str())
+                .chain(service["id"].as_str())
+        })
+        .map(|name| name.trim().to_lowercase())
+        .collect();
+    if reserved.contains(&preferred.to_lowercase()) {
+        (2..)
+            .map(|number| format!("{preferred} {number}"))
+            .find(|name| !reserved.contains(&name.to_lowercase()))
+            .expect("available service name")
+    } else {
+        preferred.to_owned()
+    }
 }

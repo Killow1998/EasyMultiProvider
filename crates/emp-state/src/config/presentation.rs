@@ -53,65 +53,41 @@ const RUNTIME_SOURCES: [&str; 8] = [
     "path_cli",
 ];
 
-/// Project normalized configuration into the credential-free browser shape.
-///
-/// Duplicate-account labels and secret-file status are supplied by the
-/// composition layer so this transformation never reads or decrypts account
-/// credentials and remains deterministic under differential tests.
+pub fn public_accounts(config: &Value, duplicate_accounts: &BTreeMap<String, String>) -> Value {
+    let accounts = config["accounts"].as_array().expect("normalized accounts");
+    Value::Array(
+        accounts.iter().map(|account| {
+            let id = account["id"].as_str().expect("normalized account ID");
+            let duplicate_of = duplicate_accounts.get(id).map_or("", String::as_str);
+            serde_json::json!({
+                "id": id,
+                "name": account["name"],
+                "prefix": account["prefix"],
+                "enabled": account["enabled"],
+                "hidden_models": account["hidden_models"],
+                "model_context_windows": account["model_context_windows"],
+                "credential_set": !account["auth_file"].as_str().expect("normalized auth path").is_empty(),
+                "credential_status": account["credential_status"],
+                "quota": account["quota"],
+                "duplicate": !duplicate_of.is_empty(),
+                "duplicate_of": duplicate_of,
+            })
+        }).collect()
+    )
+}
+
 pub fn public_configuration_with_file_status(
     config: &Value,
     duplicate_accounts: &BTreeMap<String, String>,
     secret_file_is_regular: impl Fn(&Path) -> bool,
-) -> ConfigResult<Value> {
-    let Value::Object(_) = config else {
-        return Err(ConfigError::new("configuration must be a JSON object"));
-    };
+) -> Value {
     let mut result = config.clone();
-    let result_object = result
-        .as_object_mut()
-        .expect("configuration object checked above");
-
-    let accounts = result_object
-        .get("accounts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut public_accounts = Vec::with_capacity(accounts.len());
-    for raw in accounts {
-        let account = normalize_account(&raw)
-            .map_err(|error| ConfigError::python("AccountError", error.to_string()))?;
-        let account = account
-            .as_object()
-            .expect("normalized account is always an object");
-        let id = account
-            .get("id")
-            .and_then(Value::as_str)
-            .expect("normalized account ID");
-        let duplicate_of = duplicate_accounts.get(id).cloned().unwrap_or_default();
-        public_accounts.push(serde_json::json!({
-            "id": account["id"].clone(),
-            "name": account["name"].clone(),
-            "prefix": account["prefix"].clone(),
-            "enabled": account["enabled"].clone(),
-            "hidden_models": account["hidden_models"].clone(),
-            "model_context_windows": account["model_context_windows"].clone(),
-            "credential_set": account["auth_file"].as_str().is_some_and(|path| !path.is_empty()),
-            "credential_status": account["credential_status"].clone(),
-            "quota": account["quota"].clone(),
-            "duplicate": !duplicate_of.is_empty(),
-            "duplicate_of": duplicate_of,
-        }));
-    }
-    result_object.insert("accounts".to_owned(), Value::Array(public_accounts));
-
-    let providers = result_object
-        .get_mut("providers")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| ConfigError::new("configuration.providers must be a list"))?;
-    for provider in providers {
-        let provider = provider
-            .as_object_mut()
-            .ok_or_else(|| ConfigError::new("each provider must be an object"))?;
+    result["accounts"] = public_accounts(config, duplicate_accounts);
+    for provider in result["providers"]
+        .as_array_mut()
+        .expect("normalized providers")
+    {
+        let provider = provider.as_object_mut().expect("normalized provider");
         let key = provider.remove("api_key").unwrap_or(Value::Null);
         let secret_file = provider.remove("api_key_file").unwrap_or(Value::Null);
         let key_set = json_truthy(&key);
@@ -125,7 +101,7 @@ pub fn public_configuration_with_file_status(
             Value::String(if key_set { MASKED_API_KEY } else { "" }.to_owned()),
         );
     }
-    Ok(result)
+    result
 }
 
 fn presentation_error(message: &'static str) -> ConfigError {

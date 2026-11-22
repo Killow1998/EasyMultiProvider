@@ -1,6 +1,6 @@
 use super::*;
 use emp_modules::workspace::NATIVE_SHARE;
-use emp_modules::workspace::{Publish, SharePayload, SharedService, SubscriptionSnapshot};
+use emp_modules::workspace::{Publish, SharePayload, SharedService};
 
 #[derive(Deserialize)]
 pub(super) struct Review {
@@ -32,14 +32,6 @@ pub(super) struct ResetAuthority {
 #[derive(Deserialize)]
 pub(super) struct SubscriptionReminder {
     share: String,
-}
-
-fn subscription_identity(subscription: &SubscriptionSnapshot) -> Value {
-    json!({"tokens":{
-        "account_id":subscription.account_id,
-        "access_token":subscription.access_token,
-        "id_token":subscription.id_token,
-    }})
 }
 
 impl Workspace {
@@ -102,10 +94,7 @@ impl Workspace {
                 && let (Some(prior), Some(incoming)) =
                     (prior.subscription, &body.payload.subscription)
                 && prior.account_id == incoming.account_id
-                && emp_state::same_account_auth(
-                    &subscription_identity(&prior),
-                    &subscription_identity(incoming),
-                )
+                && emp_state::same_account_auth(&prior.auth_document(), &incoming.auth_document())
             {
                 if prior.expires_at > incoming.expires_at {
                     return Err(Failure(409, "workspace_share_version_conflict"));
@@ -166,6 +155,33 @@ impl Workspace {
         };
         tx.commit()?;
         Ok(json!({"id":id,"version":version,"review_required":review_required}))
+    }
+
+    pub(super) fn native_usage(&self, who: &Identity) -> Result<Value> {
+        let mut grants = Vec::new();
+        if who.sync {
+            let mut query = self.db.prepare(
+                "SELECT s.id,s.encrypted FROM shares s JOIN members m ON m.id=s.owner
+                 JOIN share_reviews r ON r.share=s.id AND r.approved_version=s.version
+                 WHERE m.enabled=1 AND m.publish=1 AND s.source=? AND s.removed_at IS NULL
+                 ORDER BY (s.owner=?) DESC,s.id",
+            )?;
+            let mut rows = query.query(params![NATIVE_SHARE, who.member])?;
+            while let Some(row) = rows.next()? {
+                let bytes: Vec<u8> = row.get(1)?;
+                let snapshot = decode_vault(&self.key, &bytes)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<SharePayload>(&bytes).ok())
+                    .and_then(|payload| payload.subscription);
+                if let Some(snapshot) = snapshot {
+                    grants.push(json!({
+                        "share":row.get::<_,String>(0)?,
+                        "account_identity":emp_state::accounts::account_auth_identity(&snapshot.auth_document()),
+                    }));
+                }
+            }
+        }
+        Ok(Value::Array(grants))
     }
 
     pub(super) fn shares(&self, who: &Identity) -> Result<Value> {

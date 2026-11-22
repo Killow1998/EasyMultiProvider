@@ -30,6 +30,20 @@ pub(crate) struct RequestOutcome<'a> {
     finalized: bool,
 }
 impl<'a> RequestOutcome<'a> {
+    pub(crate) fn native_credentials(
+        &mut self,
+        route: &ResolvedRoute,
+        headers: &BTreeMap<String, String>,
+        native_account: Option<&str>,
+    ) {
+        self.owner(&account_owner(headers));
+        if route.provider_id == "codex-native" {
+            self.event["team_usage"] = native_account
+                .and_then(|identity| self.state.backend.team.native_usage_scope(identity))
+                .unwrap_or(Value::Null);
+        }
+    }
+
     pub(crate) fn new(
         state: &'a ServerState,
         route: &ResolvedRoute,
@@ -126,16 +140,7 @@ impl<'a> RequestOutcome<'a> {
                 body.get("client_metadata")
             }
         ));
-        let team_source = state.backend.team.subscription_source(
-            state,
-            &route.provider_id,
-            route
-                .provider
-                .value()
-                .get("account")
-                .unwrap_or(&Value::Null),
-        );
-        if let Some(team) = state.backend.team.scope(&team_source) {
+        if let Some(team) = state.backend.team.usage_scope(state, route) {
             event["team_usage"] = team;
         }
         event["selected_name"] = route

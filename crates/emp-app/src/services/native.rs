@@ -15,7 +15,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 mod auth;
-pub(crate) use auth::resolve_headers;
+use auth::resolve_headers;
 pub(crate) mod images;
 
 pub(crate) fn plaintext_collaboration(config: &Value) -> bool {
@@ -94,14 +94,13 @@ fn open_stream_result_with_monitor<'a>(
 ) -> Result<CancellableNativeStreamOpen<'a>, NativeHttpError> {
     let mut usage = previous_usage
         .unwrap_or_else(|| RequestOutcome::new(state, route, body, incoming, None, "responses"));
-    let (result, usage_owner) = {
+    let result = {
         let receipt = Mutex::new(&mut usage);
         let on_attempt = || receipt.lock().unwrap().dispatch();
         let on_retry = |decision| receipt.lock().unwrap().native_retry(decision);
         let router = NativeRouter::new(&state.backend.transport.client)
             .with_retry_observer(&on_retry)
             .with_attempt_observer(&on_attempt);
-        let mut usage_owner = String::new();
         let open = router.open_stream(
             route,
             body.as_object().unwrap(),
@@ -109,15 +108,16 @@ fn open_stream_result_with_monitor<'a>(
             ids,
             |refresh| {
                 let headers = resolve_headers(state, route, incoming, true, refresh)?;
-                usage_owner = emp_state::usage::account_owner(&headers);
-                Ok(headers)
+                receipt.lock().unwrap().native_credentials(
+                    route,
+                    &headers.headers,
+                    headers.native_account.as_deref(),
+                );
+                Ok(headers.headers)
             },
         );
-        let result =
-            crate::services::disconnect::raced(&state.backend.transport.runtime, monitor, open);
-        (result, usage_owner)
+        crate::services::disconnect::raced(&state.backend.transport.runtime, monitor, open)
     };
-    usage.owner(&usage_owner);
     let result = match result {
         DisconnectRace::Ready(result) => result,
         DisconnectRace::Disconnected => {
@@ -170,21 +170,24 @@ fn buffered(
     operation: &str,
 ) -> Result<NativeCompleteResponse, NativeHttpError> {
     let mut usage = RequestOutcome::new(state, route, body, incoming, None, operation);
-    let (result, usage_owner) = {
+    let result = {
         let receipt = Mutex::new(&mut usage);
         let on_attempt = || receipt.lock().unwrap().dispatch();
         let on_retry = |decision| receipt.lock().unwrap().native_retry(decision);
         let router = NativeRouter::new(&state.backend.transport.client)
             .with_retry_observer(&on_retry)
             .with_attempt_observer(&on_attempt);
-        let mut usage_owner = String::new();
         let mut headers = |refresh| {
             let headers = resolve_headers(state, route, incoming, false, refresh)?;
-            usage_owner = emp_state::usage::account_owner(&headers);
-            Ok(headers)
+            receipt.lock().unwrap().native_credentials(
+                route,
+                &headers.headers,
+                headers.native_account.as_deref(),
+            );
+            Ok(headers.headers)
         };
         let runtime = &state.backend.transport.runtime;
-        let result = if operation == "compact" {
+        if operation == "compact" {
             runtime.block_on(router.execute_compact(
                 route,
                 body.as_object().unwrap(),
@@ -199,10 +202,8 @@ fn buffered(
                 true,
                 &mut headers,
             ))
-        };
-        (result, usage_owner)
+        }
     };
-    usage.owner(&usage_owner);
     match result {
         Ok(mut result) => {
             usage.http_status(result.status);
@@ -244,12 +245,14 @@ pub(crate) fn websocket_plan(
     config: &Value,
     body: &Value,
     incoming: &BTreeMap<String, String>,
-) -> Result<NativeWebSocketPlan, NativeHttpError> {
+) -> Result<(NativeWebSocketPlan, Option<String>), NativeHttpError> {
     let headers = resolve_headers(state, route, incoming, true, false)?;
-    NativeRouter::new(&state.backend.transport.client).prepare_websocket(
-        route,
-        body.as_object().unwrap(),
-        plaintext_collaboration(config),
-        headers,
-    )
+    NativeRouter::new(&state.backend.transport.client)
+        .prepare_websocket(
+            route,
+            body.as_object().unwrap(),
+            plaintext_collaboration(config),
+            headers.headers,
+        )
+        .map(|plan| (plan, headers.native_account))
 }

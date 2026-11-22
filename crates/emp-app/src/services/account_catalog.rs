@@ -19,15 +19,6 @@ pub(crate) enum CatalogRefreshError {
     Internal,
     Upstream(emp_router::RouterError),
 }
-fn read_account_cache(path: &std::path::Path) -> Option<Value> {
-    let metadata = std::fs::symlink_metadata(path).ok()?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 4 * 1024 * 1024
-    {
-        return None;
-    }
-    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
-}
-
 pub(crate) fn refresh(
     request_id: Option<&str>,
     state: &ServerState,
@@ -124,7 +115,7 @@ pub(crate) fn refresh(
                 .map_err(|_| CatalogRefreshError::Internal)?;
             receipt.check("catalog_published", Some(true));
             Ok(
-                json!({"models":emp_codex::management_views::subscription_model_options(&persisted.catalog, false)}),
+                json!({"models":emp_codex::management_views::subscription_model_options(&persisted, false)}),
             )
         },
     )

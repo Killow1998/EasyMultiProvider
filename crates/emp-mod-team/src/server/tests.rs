@@ -354,6 +354,30 @@ fn removing_a_shared_subscription_discards_credentials_and_accepts_late_usage() 
         json!({"id":id,"version":1,"shared":true}),
     )
     .unwrap();
+    // An expired VPS copy cannot be downloaded, but Native can use renewed
+    // local credentials for the same approved account and still report usage.
+    let mut expired = payload.clone();
+    expired["subscription"]["expires_at"] = json!(now() - 1);
+    let encrypted = encode_vault(&workspace.key, &serde_json::to_vec(&expired).unwrap());
+    workspace
+        .db
+        .execute(
+            "UPDATE shares SET encrypted=? WHERE id=?",
+            params![encrypted, id],
+        )
+        .unwrap();
+    let status = workspace
+        .request(&Method::Get, "/workspace/v1/status", reader, b"")
+        .unwrap();
+    assert_eq!(status["native_usage"][0]["share"], id);
+    assert!(
+        workspace
+            .request(&Method::Get, "/workspace/v1/shares", reader, b"")
+            .unwrap()["shares"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_failure(
         post(&mut workspace, "remove-service", reader, removal.clone()),
         403,
@@ -385,6 +409,7 @@ fn removing_a_shared_subscription_discards_credentials_and_accepts_late_usage() 
     assert!(stored.1 > 0);
     for (endpoint, token, field) in [
         ("shares", reader, "shares"),
+        ("status", reader, "native_usage"),
         ("shared-services", admin, "services"),
         ("subscriptions", publisher, "subscriptions"),
     ] {

@@ -1,7 +1,6 @@
 //! Explicit quota commands own serialization and reset/read ordering.
-use super::{consume_quota_reset_for_account, refresh_account_by_id};
+use super::{consume_quota_reset_for_account, refresh_locked_account, with_refresh_target};
 use crate::app::ServerState;
-use crate::services::accounts::quota_refresh_lock;
 use crate::services::observation::operation::{OperationObservation, observe};
 use emp_codex::quota::{QuotaError, validated_reset_credit_id, validated_reset_idempotency_key};
 use serde_json::Value;
@@ -74,18 +73,19 @@ fn execute_inner(
     if reset.is_some() && !state.backend.team.shared_subscription_reset(state, account) {
         return Err(CommandError::ResetForbidden);
     }
-    let refresh_lock = match quota_refresh_lock(state, account) {
-        Some(lock) => lock,
-        None => {
-            return Err(CommandError::Internal);
-        }
-    };
-    let _refresh_guard = match refresh_lock.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            return Err(CommandError::Internal);
-        }
-    };
+    with_refresh_target(state, account, |replacement| {
+        execute_locked(state, account, replacement, reset, receipt)
+    })
+    .ok_or(CommandError::Internal)?
+}
+
+fn execute_locked(
+    state: &ServerState,
+    account: &str,
+    replacement: Option<&str>,
+    reset: Option<(String, Option<&str>)>,
+    receipt: &mut OperationObservation,
+) -> Result<Value, CommandError> {
     if let Some((key, credit_id)) = reset {
         let consumed = receipt.step("consume_reset", || {
             consume_quota_reset_for_account(state, account, &key, credit_id)
@@ -115,7 +115,7 @@ fn execute_inner(
             },
         );
         let (account_snapshot, refresh_error) = match receipt.step("refresh_after_reset", || {
-            refresh_account_by_id(state, account)
+            refresh_locked_account(state, account, replacement)
         }) {
             Ok(snapshot) => (snapshot, Value::Null),
             Err(error) => (
@@ -134,7 +134,9 @@ fn execute_inner(
         }));
     }
     let snapshot = receipt
-        .step("refresh_quota", || refresh_account_by_id(state, account))
+        .step("refresh_quota", || {
+            refresh_locked_account(state, account, replacement)
+        })
         .map_err(CommandError::Refresh)?;
     receipt.check("quota_refreshed", Some(true));
     Ok(serde_json::json!({"account":snapshot}))

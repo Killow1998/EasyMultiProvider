@@ -26,6 +26,11 @@ pub(crate) fn execute(
         .transport
         .image_routes
         .resolve(state, body, incoming)?;
+    state
+        .backend
+        .team
+        .check_route_budget(state, &route)
+        .map_err(|error| error.public_error(state))?;
     let base = route
         .provider
         .value()
@@ -84,18 +89,21 @@ pub(crate) fn execute(
                     && !name.eq_ignore_ascii_case("chatgpt-account-id")
             });
         }
-        let mut auth_headers = if route.source == emp_core::RouteSource::ForwardProvider {
-            emp_router::upstream_headers(
-                route.provider.value(),
-                emp_core::Protocol::Responses,
-                &incoming,
-            )
-            .map_err(|error| NativeHttpError::router(error.status(), error.to_string()))?
+        let mut auth = if route.source == emp_core::RouteSource::ForwardProvider {
+            super::auth::ResolvedHeaders {
+                headers: emp_router::upstream_headers(
+                    route.provider.value(),
+                    emp_core::Protocol::Responses,
+                    &incoming,
+                )
+                .map_err(|error| NativeHttpError::router(error.status(), error.to_string()))?,
+                native_account: None,
+            }
         } else {
             resolve_headers(state, &route, &incoming, false, false)?
         };
         for attempt in 0..2 {
-            usage.owner(&emp_state::usage::account_owner(&auth_headers));
+            usage.native_credentials(&route, &auth.headers, auth.native_account.as_deref());
             usage.dispatch();
             let runtime = &state.backend.transport.runtime;
             let request = async {
@@ -106,7 +114,7 @@ pub(crate) fn execute(
                     .open(
                         HttpMethod::Post,
                         &endpoint,
-                        auth_headers.clone(),
+                        auth.headers.clone(),
                         Some(encoded.clone()),
                         false,
                     )
@@ -181,7 +189,7 @@ pub(crate) fn execute(
                     retry: refreshed.is_ok(),
                 });
                 if let Ok(headers) = refreshed {
-                    auth_headers = headers;
+                    auth = headers;
                     continue;
                 }
             }
