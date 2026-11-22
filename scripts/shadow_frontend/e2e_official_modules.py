@@ -581,9 +581,37 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
              for key, value in [('input_cost_per_token', 0.000002), ('output_cost_per_token', 0.00001)]}
     prices = json.dumps({'rate_format':1,'fetched_at':time.time(), 'prices':{'gpt-6.2-sol':rates}})
     (member.root/'state/api_prices.json').write_text(prices)
-    member.restart()
+    stop(member.process)
+    config = json.loads(member.config.read_text())
+    native_catalog = member.home/'models_cache.json'
+    native_catalog.write_text(json.dumps(upstream.catalog))
+    config['native_catalog_path'] = str(native_catalog)
+    personal = next(row for row in config['accounts'] if row['id'] == account['id'])
+    personal.update(credential_status='invalid', hidden_models=['example-hidden-model'],
+                    model_context_windows={'gpt-6.2-sol':192000})
+    member.config.write_text(json.dumps(config))
+    member.start()
     identity = member.login(workspace, 'member')
     assert member.team('sync')['synced'] == 1
+    assert member.team('sync')['synced'] == 0
+    local_account = next(row for row in member.api('/api/accounts')['accounts'] if row['id'] == account['id'])
+    assert local_account['credential_status'] != 'invalid', local_account
+    assert (local_account['name'],local_account['prefix'],local_account['hidden_models'],
+            local_account['model_context_windows']) == ('Personal copy','personal-copy',
+                ['example-hidden-model'],{'gpt-6.2-sol':192000})
+    member.api('/api/config',member.api('/api/config'))
+    persisted = next(row for row in json.loads(member.config.read_text())['accounts']
+                     if row['id'] == account['id'])
+    assert persisted['credential_status'] == 'invalid'
+    shared_auth = auth(expiry+180)
+    admin.auth.write_text(json.dumps(shared_auth))
+    published = admin.team('publish')
+    assert published['version'] == review['version']+1 and not published['review_required']
+    review['version'] = published['version']
+    assert member.team('sync')['synced'] == 1
+    models = member.api('/v1/models?client_version=0.169.0')['models']
+    model = next((row for row in models if unquote(row['slug']) == 'Personal copy/gpt-6.2-sol'), None)
+    assert model and model['context_window'] == 192000, [row['slug'] for row in models]
     vps.team('budget', {'member':identity['id'],'daily_usd_nanos':90_000})
     initialize = {'action':'initialize','timezone':'America/Los_Angeles'}
     assert member.team('overview')['weekly_budget'] is None
@@ -592,6 +620,15 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
     expected_reset = {'weekday':0,'hour':16,'timezone':'America/Los_Angeles'}
     browser = Browser(stack, root) if browser_enabled else None
     if browser:
+        member.api('/api/accounts/personal-copy/models/refresh', {})
+        browser.navigate(member.url)
+        editor = '[data-service="account:personal-copy"] [data-ui-action="account-edit"]'
+        wait_for(lambda: browser.execute('return !!document.querySelector(arguments[0]);', editor))
+        browser.execute('document.querySelector(arguments[0]).click();', editor)
+        wait_for(lambda: browser.execute('''
+            const input = document.querySelector('#subscription_model_list [data-model="gpt-6.2-sol"]');
+            return input?.value === '192000' && !document.querySelector('#subscription_model_list [data-preference-kind]');
+        '''))
         asset = next(name for name in release.assets if name.startswith('EMP-mod-team-'))
         team_row = next(row for row in admin.api('/api/modules')['modules'] if row['id']=='team')
         host_api = subprocess.run([emppy.with_name('empmod-team')], stdin=subprocess.DEVNULL, check=True,
@@ -659,6 +696,9 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
     assert len(upstream.requests) == calls
     websocket_request(member.base, local, body)
     assert upstream.requests[-1]['body']['model'] == 'gpt-6.2-sol'
+    headers = {key.lower(): value for key, value in upstream.requests[-1]['headers'].items()}
+    assert headers['authorization'] == 'Bearer ' + shared_auth['tokens']['access_token']
+    assert Path(saved).read_bytes() == private_auth
     def usage():
         row = member.team('usage', {'period':'lifetime'})['rows'][0]
         return row if row['requests'] else None

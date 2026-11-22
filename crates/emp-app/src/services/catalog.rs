@@ -83,29 +83,30 @@ pub(crate) fn source_catalog(state: &ServerState, config: &Value) -> Value {
         state.backend.modules.active(emp_modules::Module::Team),
         config,
     );
-    if hide_aggregates || !unavailable.is_empty() {
-        let mut visible = config.clone();
-        if hide_aggregates {
-            visible["model_groups"] = serde_json::json!([]);
-        }
-        if !unavailable.is_empty() {
-            visible["accounts"]
-                .as_array_mut()
-                .expect("normalized accounts")
-                .retain(|account| !unavailable.iter().any(|id| account["id"] == *id));
-            visible["models"]
-                .as_array_mut()
-                .expect("normalized models")
-                .retain(|model| {
-                    !unavailable
-                        .iter()
-                        .any(|provider| model["provider"] == *provider)
-                });
-        }
-        catalog_sources(state, &visible).merged(&visible)
-    } else {
-        catalog_sources(state, config).merged(config)
+    let mut visible = config.clone();
+    if hide_aggregates {
+        visible["model_groups"] = serde_json::json!([]);
     }
+    if !unavailable.is_empty() {
+        visible["accounts"]
+            .as_array_mut()
+            .expect("normalized accounts")
+            .retain(|account| !unavailable.iter().any(|id| account["id"] == *id));
+        visible["models"]
+            .as_array_mut()
+            .expect("normalized models")
+            .retain(|model| {
+                !unavailable
+                    .iter()
+                    .any(|provider| model["provider"] == *provider)
+            });
+    }
+    let sources = catalog_sources(state, &visible);
+    state
+        .backend
+        .team
+        .project_subscription_credentials(state, &mut visible);
+    sources.merged(&visible)
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -117,7 +118,12 @@ pub(crate) fn public_configuration(
     state: &ServerState,
     config: &Value,
 ) -> Result<Value, emp_state::ConfigError> {
-    let mut public = catalog_sources(state, config).public_configuration(state, config)?;
+    let mut effective = config.clone();
+    state
+        .backend
+        .team
+        .project_subscription_credentials(state, &mut effective);
+    let mut public = catalog_sources(state, config).public_configuration(state, &effective)?;
     if state.backend.modules.active(emp_modules::Module::Aero) {
         public["aero_profiles"] = config
             .get("aero_profiles")
@@ -144,12 +150,11 @@ pub(crate) fn subscription_options(
                     .as_str()
                     .is_some_and(|path| !path.is_empty())
             })
-            .and_then(Value::as_object)
             .ok_or("Subscription account is unavailable")?;
         emp_codex::cached_account_catalog(
             config.as_object().expect("config"),
-            account,
-            &mut |account| account_catalog_headers(account, &state.backend.configuration.vault),
+            account.as_object().expect("normalized account"),
+            &mut |_| super::account_catalog::catalog_headers(state, config, account),
         )
     };
     Ok(catalog.as_ref().map_or_else(Vec::new, |catalog| {
@@ -163,6 +168,15 @@ pub(crate) fn subscription_model(
     slug: &str,
     account: Option<&serde_json::Map<String, Value>>,
 ) -> Option<serde_json::Map<String, Value>> {
+    if let Some(account) = account
+        && let Some(path) = account.get("_emp_catalog_auth_file")
+    {
+        let mut catalog_account = account.clone();
+        catalog_account.insert("auth_file".to_owned(), path.clone());
+        return emp_codex::subscription_route_model(config, slug, Some(&catalog_account), |_| {
+            account_catalog_headers(account, &state.backend.configuration.vault)
+        });
+    }
     emp_codex::subscription_route_model(config, slug, account, |account| {
         account_catalog_headers(account, &state.backend.configuration.vault)
     })

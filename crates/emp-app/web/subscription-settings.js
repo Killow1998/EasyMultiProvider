@@ -1,7 +1,7 @@
 // Subscription preferences are independent of the page's other service editors.
 function subscriptionPeers(config,id,native) {
   const owner=native?'当前 Codex 登录':id;
-  return (config.accounts||[]).filter(account=>account.id!==id&&account.duplicate&&account.duplicate_of===owner);
+  return (config.accounts||[]).filter(account=>!account.team_shared&&account.id!==id&&account.duplicate&&account.duplicate_of===owner);
 }
 function subscriptionPreferenceConflicts(config,account) {
   const hidden=new Set(account.hidden_models||[]), windows=account.model_context_windows||{};

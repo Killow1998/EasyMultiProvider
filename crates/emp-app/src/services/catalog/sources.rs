@@ -22,20 +22,22 @@ impl CatalogSources {
             .map(|(id, auth)| (id.as_str(), auth))
             .collect();
         let mut accounts = BTreeMap::new();
-        for account in config["accounts"].as_array().into_iter().flatten() {
-            let Some(account) = account.as_object() else {
-                continue;
-            };
-            let id = account
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+        let configured_accounts = config["accounts"].as_array().expect("normalized accounts");
+        for record in configured_accounts {
+            let credential = state
+                .backend
+                .team
+                .replacement_subscription(state, configured_accounts, record)
+                .unwrap_or(record);
+            let account = record.as_object().expect("normalized account");
+            let id = record["id"].as_str().expect("normalized account ID");
+            let credential_id = credential["id"].as_str().expect("normalized account ID");
             let catalog = emp_codex::cached_account_catalog(
                 config.as_object().expect("config object"),
                 account,
                 &mut |_| {
                     by_id
-                        .get(id)
+                        .get(credential_id)
                         .and_then(|auth| emp_codex::account_auth_headers(auth))
                 },
             )
@@ -133,11 +135,20 @@ impl CatalogSources {
         Ok(public)
     }
 
-    pub(crate) fn validate_update(&self, updated: &Value, previous: &Value) -> Result<(), String> {
+    pub(crate) fn validate_update(
+        &self,
+        state: &ServerState,
+        updated: &Value,
+        previous: &Value,
+    ) -> Result<(), String> {
         validate_subscription_contexts(updated, Some(previous), &self.native, &self.accounts)
             .map_err(|error| error.to_string())?;
         let mut base = updated.clone();
         base["model_groups"] = json!([]);
+        state
+            .backend
+            .team
+            .project_subscription_credentials(state, &mut base);
         let catalog = self.merged(&base);
         for group in updated["model_groups"].as_array().into_iter().flatten() {
             if catalog["models"]
@@ -181,7 +192,7 @@ impl CatalogSources {
                         return Err("Quota balance requires Codex subscription sources; use priority or round robin for API sources".into());
                     }
                     let account =
-                        updated["accounts"]
+                        base["accounts"]
                             .as_array()
                             .into_iter()
                             .flatten()

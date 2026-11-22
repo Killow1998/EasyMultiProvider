@@ -1,7 +1,5 @@
 use crate::app::ServerState;
-use crate::services::accounts::{
-    account_catalog_headers, duplicate_accounts, native_subscription_headers,
-};
+use crate::services::accounts::{duplicate_accounts, native_subscription_headers};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -57,9 +55,7 @@ impl RefreshSource {
     ) -> Option<Self> {
         let id = account.get("id")?.as_str()?;
         let path = managed_account_catalog_path(state, config, account)?;
-        let headers = account.as_object().and_then(|account| {
-            account_catalog_headers(account, &state.backend.configuration.vault)
-        })?;
+        let headers = catalog_headers(state, config, account)?;
         let owner = emp_codex::native_catalog_owner(&headers);
         let credential_fingerprint = credential_fingerprint(&headers);
         Some(Self {
@@ -232,9 +228,7 @@ pub(crate) fn persist_fetched_catalog(
             return Err(PersistError::SourceChanged);
         }
         let current_path = managed_account_catalog_path(state, &current, account);
-        let current_headers = account.as_object().and_then(|account| {
-            account_catalog_headers(account, &state.backend.configuration.vault)
-        });
+        let current_headers = catalog_headers(state, &current, account);
         let current_owner = current_headers
             .as_ref()
             .map(emp_codex::native_catalog_owner);
@@ -333,6 +327,23 @@ fn retain_known_models(catalog: &mut Value, previous: &Value, source: &RefreshSo
         }
     }
     models.len() - fresh_count
+}
+
+pub(crate) fn catalog_headers(
+    state: &ServerState,
+    config: &Value,
+    account: &Value,
+) -> Option<BTreeMap<String, String>> {
+    let accounts = config["accounts"].as_array()?;
+    let source = state
+        .backend
+        .team
+        .replacement_subscription(state, accounts, account)
+        .unwrap_or(account);
+    crate::services::accounts::account_catalog_headers(
+        source.as_object()?,
+        &state.backend.configuration.vault,
+    )
 }
 
 pub(crate) fn managed_account_catalog_path(

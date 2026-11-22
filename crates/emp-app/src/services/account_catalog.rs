@@ -7,6 +7,7 @@ mod pipeline;
 mod refresh_state;
 mod worker;
 
+pub(crate) use pipeline::catalog_headers;
 use pipeline::{
     FetchAndPersistOutcome, PersistError, RefreshSource, fetch_and_persist, publish_pending_catalog,
 };

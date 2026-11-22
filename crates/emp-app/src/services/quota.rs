@@ -449,6 +449,23 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
 
 fn refresh_account_by_id_inner(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
     if account_id != "@native" {
+        let replacement = state.backend.configuration.read().ok().and_then(|config| {
+            let accounts = config["accounts"].as_array()?;
+            let account = accounts
+                .iter()
+                .find(|account| account["id"] == account_id)?;
+            let source = state
+                .backend
+                .team
+                .replacement_subscription(state, accounts, account)?;
+            source["id"].as_str().map(str::to_owned)
+        });
+        if let Some(source) = replacement {
+            refresh_account_serialized(state, &source)?;
+            return account_public_snapshot(state, account_id).ok_or_else(|| {
+                QuotaError::new("account changed during quota refresh", "quota_error")
+            });
+        }
         return refresh_imported_account(state, account_id);
     }
     let quota = read_native_login_quota(
