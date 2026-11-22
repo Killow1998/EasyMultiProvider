@@ -43,3 +43,9 @@ test('verified peers share only chosen model preferences; independent accounts a
   chosen.native_account.hidden_models=['luna'];chosen.native_account.model_context_windows={luna:467368};
   assert.equal(conflicts(chosen,chosen.native_account),false);
 });
+test('a synchronized credential copy does not prompt to replace local preferences',()=>{
+  const local={id:'zhou',hidden_models:['luna'],model_context_windows:{sol:192000}};
+  const shared={id:'team-share',duplicate:true,duplicate_of:local.id,team_shared:true,hidden_models:[]};
+  assert.equal(conflicts({accounts:[local,shared]},local),false);
+  assert.equal(conflicts({accounts:[local,{...shared,team_shared:false}]},local),true);
+});

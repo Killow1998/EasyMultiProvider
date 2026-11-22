@@ -12,6 +12,50 @@ impl Session {
 }
 
 impl TeamState {
+    pub(crate) fn replacement_subscription<'a>(
+        &self,
+        state: &ServerState,
+        accounts: &'a [Value],
+        account: &Value,
+    ) -> Option<&'a Value> {
+        if account["workspace_shared"] == true || account["credential_status"] != "invalid" {
+            return None;
+        }
+        let id = account["id"].as_str()?;
+        let source = self.subscription_source(state, id, account);
+        if source == id || self.check_route(&source, true, None).is_err() {
+            return None;
+        }
+        accounts.iter().find(|candidate| {
+            candidate["id"] == source.as_ref()
+                && candidate["workspace_shared"] == true
+                && candidate["enabled"] != false
+                && candidate["credential_status"] != "invalid"
+        })
+    }
+
+    pub(crate) fn project_subscription_credentials(&self, state: &ServerState, config: &mut Value) {
+        let accounts = config["accounts"]
+            .as_array_mut()
+            .expect("normalized accounts");
+        let replacements = accounts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, account)| {
+                self.replacement_subscription(state, accounts, account)
+                    .map(|source| (index, source.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (index, source) in replacements {
+            let account = &mut accounts[index];
+            account["_emp_catalog_auth_file"] = account["auth_file"].clone();
+            account["auth_file"] = source["auth_file"].clone();
+            account["credential_status"] = source["credential_status"].clone();
+            account["quota"] = source["quota"].clone();
+            account["_emp_shared_source"] = source["id"].clone();
+        }
+    }
+
     pub(crate) fn scope(&self, provider: &str) -> Option<Value> {
         let store = self.store.lock().ok()?;
         let store = store.as_ref()?;
@@ -36,6 +80,9 @@ impl TeamState {
         account: &Value,
     ) -> Cow<'a, str> {
         let personal = Cow::Borrowed(provider);
+        if let Some(source) = account["_emp_shared_source"].as_str() {
+            return Cow::Owned(source.to_owned());
+        }
         if account["workspace_shared"] == true
             || (account.is_null() && provider != "codex-native")
             || !state.backend.modules.active(Module::Team)

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.15.3 (2026-11-21)
+
+### 中文
+
+问题修复
+
+- 团队订阅同步。同一个订阅账号的本机凭据失效时，在「团队空间」点击「同步」，原有模型即可使用团队的有效凭据。模型名称、可见性和上下文设置沿用本机配置。
+- 模型设置。同账号的共享副本有不同设置时，EMP 自动采用本机设置，省去重复选择。
+- 从 0.15.2 升级时，只需更新桌面版 EMP Core。团队空间继续使用 0.10.1-beta。
+
+### English
+
+Fixes
+
+- Team subscription sync. If the local credentials for an account expire, select Sync in Team Workspace to let its existing models use the valid shared credentials. Local names, model visibility, and context settings are preserved.
+- Model settings. When a shared copy of the same account has different settings, EMP keeps the local settings automatically.
+- To upgrade from 0.15.2, update desktop EMP Core. Team Workspace stays at 0.10.1-beta.
+
 ## 0.15.2 (2026-11-21)
 
 ### 中文

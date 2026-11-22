@@ -65,7 +65,11 @@ pub(crate) fn native_account_snapshot(state: &ServerState, config: &Value) -> Va
 }
 
 pub(crate) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
-    let config = state.backend.configuration.read().ok()?.clone();
+    let mut config = state.backend.configuration.read().ok()?.clone();
+    state
+        .backend
+        .team
+        .project_subscription_credentials(state, &mut config);
     let duplicates = duplicate_accounts(
         &config,
         &state.backend.configuration.vault,
@@ -77,7 +81,7 @@ pub(crate) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
         .backend
         .team
         .label_subscription_permissions(&mut public["accounts"]);
-    let errors = state
+    let mut errors = state
         .backend
         .accounts
         .quota_refresh_errors
@@ -89,6 +93,15 @@ pub(crate) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
                 .map(|(key, value)| (key.clone(), Value::String(value.clone())))
                 .collect::<serde_json::Map<_, _>>()
         })?;
+    for account in config["accounts"].as_array().expect("normalized accounts") {
+        if let Some(source) = account["_emp_shared_source"].as_str() {
+            let id = account["id"].as_str().expect("normalized account ID");
+            errors.remove(id);
+            if let Some(error) = errors.get(source).cloned() {
+                errors.insert(id.to_owned(), error);
+            }
+        }
+    }
     Some(serde_json::json!({
         "native_account": native_account_snapshot(state, &config),
         "accounts": public

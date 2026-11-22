@@ -35,7 +35,7 @@ pub(crate) fn update(
                 .map_err(ChangeError::invalid)?;
             let sources = catalog_sources(state, &updated);
             sources
-                .validate_update(&updated, &current)
+                .validate_update(state, &updated, &current)
                 .map_err(ChangeError::invalid)?;
             if current["aero_profiles"] != updated["aero_profiles"] {
                 if !state.backend.modules.active(emp_modules::Module::Aero) {

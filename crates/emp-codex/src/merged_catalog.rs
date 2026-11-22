@@ -18,9 +18,10 @@ pub fn build_catalog(
 ) -> Value {
     let mut hidden = strings(config.get("native_hidden_models"));
     for account in array(config.get("accounts")) {
-        if duplicates
-            .get(text(account, "id"))
-            .is_some_and(|source| source == "当前 Codex 登录")
+        if account["workspace_shared"] != true
+            && duplicates
+                .get(text(account, "id"))
+                .is_some_and(|source| source == "当前 Codex 登录")
         {
             hidden.extend(strings(account.get("hidden_models")));
         }

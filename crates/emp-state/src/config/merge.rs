@@ -404,6 +404,13 @@ fn merge_web_update_at_time(
                     old_file.expect("truthy old file").clone(),
                 );
             }
+            if let Some(old) = old {
+                for field in ["credential_status", "quota"] {
+                    if let Some(value) = old.get(field) {
+                        account.insert(field.to_owned(), value.clone());
+                    }
+                }
+            }
         }
     }
 
