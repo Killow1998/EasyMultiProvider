@@ -78,7 +78,7 @@ mod image_routing;
 mod presentation;
 pub use presentation::{
     normalize_catalog_presentations, normalize_codex_runtime_sources, normalize_pricing_aliases,
-    normalize_subscription_search, public_configuration_with_file_status,
+    normalize_subscription_search, public_accounts, public_configuration_with_file_status,
 };
 
 mod catalog_etag;
@@ -106,7 +106,9 @@ pub use route_aliases::{
     client_catalog, client_model_id, client_route_aliases, resolve_client_model,
 };
 mod service_names;
-pub use service_names::{preserve_service_route_names, validate_service_names};
+pub use service_names::{
+    available_service_name, preserve_service_route_names, validate_service_names,
+};
 
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: i64 = 4200;

@@ -188,11 +188,10 @@ fn add_account(server: &ServerHandle, id: &str, prefix: &str, token: &str) -> Pa
     let auth_path =
         emp_state::account_auth_path(&config, id, &server.state.backend.configuration.config_path)
             .expect("managed auth path");
-    let mut account = json!({
-        "id":id,"name":id,"prefix":prefix,"enabled":true,"hidden_models":[],
-        "auth_file":auth_path.to_string_lossy()
-    });
-    account["auth_file"] = json!(auth_path.to_string_lossy());
+    let account = emp_state::normalize_account(&json!({
+        "id":id,"name":id,"prefix":prefix,"auth_file":auth_path.to_string_lossy()
+    }))
+    .expect("normalized fixture account");
     config["accounts"].as_array_mut().unwrap().push(account);
     server
         .state

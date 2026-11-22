@@ -1,7 +1,7 @@
 //! Configuration commands used by management views.
 use super::ChangeError;
 use crate::app::ServerState;
-use crate::services::catalog::{catalog_sources, refresh_catalog};
+use crate::services::catalog::{refresh_catalog, validate_update};
 use emp_state::{canonicalize_private_paths, merge_web_update};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -33,10 +33,7 @@ pub(crate) fn update(
                 .map_err(ChangeError::invalid)?;
             canonicalize_private_paths(&mut updated, &state.backend.configuration.config_path)
                 .map_err(ChangeError::invalid)?;
-            let sources = catalog_sources(state, &updated);
-            sources
-                .validate_update(state, &updated, &current)
-                .map_err(ChangeError::invalid)?;
+            validate_update(state, &updated, &current).map_err(ChangeError::invalid)?;
             if current["aero_profiles"] != updated["aero_profiles"] {
                 if !state.backend.modules.active(emp_modules::Module::Aero) {
                     return Err(ChangeError::invalid("module_disabled"));

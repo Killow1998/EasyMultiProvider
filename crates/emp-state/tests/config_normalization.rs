@@ -177,8 +177,7 @@ fn application_preferences_survive_web_save_and_reject_non_booleans() {
     })))
     .unwrap();
     let public =
-        emp_state::public_configuration_with_file_status(&current, &Default::default(), |_| false)
-            .unwrap();
+        emp_state::public_configuration_with_file_status(&current, &Default::default(), |_| false);
     let saved = emp_state::merge_web_update(&current, &public).unwrap();
     assert_eq!(saved["auto_enable_on_start"], true);
     assert_eq!(saved["auto_review_fallback"], false);

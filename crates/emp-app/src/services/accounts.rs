@@ -11,7 +11,6 @@ mod import;
 pub(crate) use delete::delete_account_state;
 use emp_state::VaultStore;
 use emp_state::duplicate_account_status;
-use emp_state::public_configuration_with_file_status;
 use emp_state::validate_auth_json;
 pub(crate) use import::{import_account_state, matching_account};
 use serde_json::Value;
@@ -75,12 +74,11 @@ pub(crate) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
         &state.backend.configuration.vault,
         &state.backend.accounts.native_auth_path,
     );
-    let mut public =
-        public_configuration_with_file_status(&config, &duplicates, regular_file).ok()?;
+    let mut accounts = emp_state::config::public_accounts(&config, &duplicates);
     state
         .backend
         .team
-        .label_subscription_permissions(&mut public["accounts"]);
+        .label_subscription_permissions(&mut accounts);
     let mut errors = state
         .backend
         .accounts
@@ -104,10 +102,7 @@ pub(crate) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
     }
     Some(serde_json::json!({
         "native_account": native_account_snapshot(state, &config),
-        "accounts": public
-            .get("accounts")
-            .cloned()
-            .unwrap_or_else(|| Value::Array(Vec::new())),
+        "accounts": accounts,
         "refresh_errors": errors,
         "claude_quota": state.backend.claude_quota.snapshot(crate::util::system_now()),
         "provider_quotas": super::cpa_quota::snapshot(state, &config),
@@ -171,10 +166,7 @@ pub(super) fn replacing_account_credentials<T>(
     loop {
         // Refresh locks before the configuration lock, the order quota
         // refreshes use.
-        let locks = account_ids
-            .iter()
-            .map(|id| quota_refresh_lock(state, id))
-            .collect::<Option<Vec<_>>>()?;
+        let locks = quota_refresh_locks(state, account_ids.iter().map(String::as_str))?;
         let guards = locks
             .iter()
             .map(|lock| lock.lock().ok())
@@ -318,11 +310,13 @@ pub(crate) fn duplicate_accounts(
 }
 
 pub(super) fn account_credentials(config: &Value, vault: &VaultStore) -> Vec<(String, Value)> {
-    config
-        .get("accounts")
-        .and_then(Value::as_array)
+    let accounts = config["accounts"].as_array().expect("normalized accounts");
+    let (shared, private): (Vec<_>, Vec<_>) = accounts
+        .iter()
+        .partition(|account| account["workspace_shared"] == true);
+    private
         .into_iter()
-        .flatten()
+        .chain(shared)
         .filter_map(|account| {
             let id = account.get("id")?.as_str()?;
             let path = account.get("auth_file")?.as_str()?;
@@ -428,6 +422,19 @@ pub(crate) fn quota_refresh_lock(state: &ServerState, account_id: &str) -> Optio
             .entry(account_id.to_owned())
             .or_insert_with(|| Arc::new(Mutex::new(()))),
     ))
+}
+
+pub(super) fn quota_refresh_locks<'a>(
+    state: &ServerState,
+    account_ids: impl IntoIterator<Item = &'a str>,
+) -> Option<Vec<Arc<Mutex<()>>>> {
+    let mut account_ids = account_ids.into_iter().collect::<Vec<_>>();
+    account_ids.sort_unstable();
+    account_ids.dedup();
+    account_ids
+        .into_iter()
+        .map(|id| quota_refresh_lock(state, id))
+        .collect()
 }
 
 pub(crate) fn quota_refresh_cancellation(

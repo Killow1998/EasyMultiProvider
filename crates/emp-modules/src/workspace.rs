@@ -53,6 +53,15 @@ pub struct SubscriptionSnapshot {
     pub plan: Option<String>,
 }
 
+impl SubscriptionSnapshot {
+    pub fn auth_document(&self) -> Value {
+        serde_json::json!({"auth_mode":"chatgptAuthTokens","tokens":{
+            "access_token":self.access_token,"account_id":self.account_id,
+            "id_token":self.id_token.as_deref().unwrap_or(&self.access_token),"refresh_token":""
+        }})
+    }
+}
+
 impl SharePayload {
     pub fn valid(&self) -> bool {
         self.subscription.as_ref().is_some_and(|auth| {

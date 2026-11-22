@@ -451,12 +451,11 @@ pub(crate) fn serve_responses_websocket(
                 ));
                 continue;
             }
-            Err(RequestPreparationError::TeamPermission(message)) => {
-                let _ = websocket.send_json(&emp_websocket_error(
-                    403,
-                    "workspace_permission_required",
-                    message,
-                ));
+            Err(RequestPreparationError::TeamAccess(denial)) => {
+                let error = denial.public_error(state);
+                let _ = websocket.send_json(&serde_json::json!({
+                    "type":"error", "status":error.status, "error":error.body["error"]
+                }));
                 continue;
             }
             Ok(_) | Err(_) => {

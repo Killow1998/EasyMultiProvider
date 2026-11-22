@@ -55,7 +55,7 @@ fn idle_accept_worker_wakes_for_shutdown_after_serving_a_request() {
 fn shutdown_notifies_all_waiters_and_late_waiters_do_not_block() {
     let (directory, server) = test_server();
     let state = Arc::clone(&server.state);
-    crate::services::quota::refresh_account_by_id(&state, "synthetic-private-account")
+    crate::services::quota::refresh_account_serialized(&state, "synthetic-private-account")
         .expect_err("unknown account fails without invoking a quota helper");
     state.backend.transport.runtime.block_on(async {
         let first = state.wait_for_shutdown();

@@ -94,27 +94,22 @@ fn load_native_catalog_from_map(config: &Map<String, Value>) -> Value {
         .unwrap_or_else(empty_catalog)
 }
 
-/// Resolve a subscription model using its catalog owner and context settings.
-///
-/// `account_headers` keeps credential storage outside this crate. It must
-/// return the Authorization and optional chatgpt-account-id headers derived
-/// from the selected account's current encrypted auth document.
-pub fn subscription_route_model<F>(
+pub fn subscription_route_model(
     config: &Map<String, Value>,
     slug: &str,
     account: Option<&Map<String, Value>>,
-    mut account_headers: F,
-) -> Option<Map<String, Value>>
-where
-    F: FnMut(&Map<String, Value>) -> Option<BTreeMap<String, String>>,
-{
-    let catalog = match account {
-        Some(account) => account_catalog(config, account, &mut account_headers),
-        None => load_native_catalog_from_map(config),
-    };
-    let item = catalog
-        .get("models")?
-        .as_array()?
+    catalog_auth_path: Option<&str>,
+    account_headers: impl FnOnce(&Map<String, Value>) -> Option<BTreeMap<String, String>>,
+) -> Option<Map<String, Value>> {
+    let catalog = account
+        .and_then(|account| {
+            let path = catalog_auth_path.or_else(|| account.get("auth_file")?.as_str())?;
+            cached_subscription_catalog(config, path, || account_headers(account))
+        })
+        .unwrap_or_else(|| load_native_catalog_from_map(config));
+    let item = catalog["models"]
+        .as_array()
+        .expect("parsed catalog models")
         .iter()
         .filter_map(Value::as_object)
         .find(|model| {
@@ -189,49 +184,30 @@ pub fn account_auth_headers(auth: &Value) -> Option<BTreeMap<String, String>> {
     Some(headers)
 }
 
-pub fn account_catalog<F>(
+pub fn cached_subscription_catalog(
     config: &Map<String, Value>,
-    account: &Map<String, Value>,
-    account_headers: &mut F,
-) -> Value
-where
-    F: FnMut(&Map<String, Value>) -> Option<BTreeMap<String, String>>,
-{
-    cached_account_catalog(config, account, account_headers)
-        .unwrap_or_else(|| load_native_catalog_from_map(config))
+    auth_path: &str,
+    account_headers: impl FnOnce() -> Option<BTreeMap<String, String>>,
+) -> Option<Value> {
+    let path = Path::new(auth_path).parent()?.join("models_cache.json");
+    let cached = read_subscription_catalog(&path)?;
+    let headers = account_headers()?;
+    let owner_matches = cached.get("account_owner").and_then(Value::as_str)
+        == Some(native_catalog_owner(&headers).as_str());
+    let base_matches = cached.get("base_url").unwrap_or(&Value::Null)
+        == config.get("codex_base_url").unwrap_or(&Value::Null);
+    (owner_matches && base_matches).then_some(cached)
 }
 
-/// Read only an identity- and backend-matched account cache. Callers composing
-/// several accounts can supply one request-local native fallback snapshot.
-pub fn cached_account_catalog<F>(
-    config: &Map<String, Value>,
-    account: &Map<String, Value>,
-    account_headers: &mut F,
-) -> Option<Value>
-where
-    F: FnMut(&Map<String, Value>) -> Option<BTreeMap<String, String>>,
-{
-    let candidate = account
-        .get("auth_file")
-        .and_then(Value::as_str)
-        .filter(|path| !path.is_empty())
-        .and_then(|path| Path::new(path).parent())
-        .map(|parent| parent.join("models_cache.json"));
-    let path = candidate?;
-    let metadata = fs::symlink_metadata(&path).ok()?;
+pub fn read_subscription_catalog(path: &Path) -> Option<Value> {
+    let metadata = fs::symlink_metadata(path).ok()?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() > MAX_ACCOUNT_CATALOG_BYTES
     {
         return None;
     }
-    let cached = read_catalog(&path)?;
-    let headers = account_headers(account)?;
-    let owner_matches = cached.get("account_owner").and_then(Value::as_str)
-        == Some(native_catalog_owner(&headers).as_str());
-    let base_matches = cached.get("base_url").unwrap_or(&Value::Null)
-        == config.get("codex_base_url").unwrap_or(&Value::Null);
-    (owner_matches && base_matches).then_some(cached)
+    read_catalog(path)
 }
 
 pub fn native_catalog_path(config: &Map<String, Value>) -> PathBuf {

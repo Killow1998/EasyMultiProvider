@@ -19,7 +19,7 @@ import tempfile
 import threading
 import time
 from urllib.error import URLError
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 from urllib.request import urlopen
 
 from candidate_web import candidate_frontend
@@ -141,6 +141,7 @@ class Emp:
         quota_helper.chmod(0o700)
         self.env = {**NO_NETWORK, 'HOME': str(root), 'CODEX_HOME': str(self.home),
                     'PATH': str(helpers) + os.pathsep + os.defpath,
+                    'EMP_FIXTURE_CODEX_VERSION': '0.169.0',
                     'XDG_CONFIG_HOME': str(root / 'xdg'), 'APPDATA': str(root / 'appdata'),
                     'LOCALAPPDATA': str(root / 'localappdata'),
                     'EMP_UPDATE_TEST_REPOSITORY_URL': release,
@@ -291,10 +292,21 @@ def bundled_transition(stack, root, old, current, release, url, suff):
 
 def codex_session(stack, codex, emp, log):
     version = subprocess.check_output([str(codex), '--version'], env=emp.env, text=True).strip().split()[-1]
-    catalog = emp.api('/v1/models?client_version=' + version)
-    model = next((item['slug'] for item in catalog['models']
-                  if unquote(item['slug']).startswith('lab-admin/')), None)
-    assert model, [(item['slug'], item['display_name']) for item in catalog['models']]
+    def published_model():
+        catalog = emp.api('/v1/models?client_version=' + version)
+        model = next((item['slug'] for item in catalog['models']
+                      if unquote(item['slug']).startswith('lab-admin/')), None)
+        return (catalog, model) if model else None
+    try:
+        catalog, model = wait_for(published_model)
+    except TimeoutError:
+        accounts = emp.api('/api/config')['accounts']
+        raise AssertionError({
+            'client_version':version,
+            'slugs':[row['slug'] for row in emp.api('/v1/models?client_version='+version)['models']],
+            'subscriptions':[(row['name'], row.get('credential_status'),
+                emp.api('/api/accounts/'+row['id']+'/models')['models']) for row in accounts],
+        }) from None
     model_path = emp.home / 'models.json'
     model_path.write_text(json.dumps(catalog))
     (emp.home / 'config.toml').write_text(
@@ -551,6 +563,123 @@ def ten_member_demo(admin, vps, member, vps_url, browser, output, keep_available
     assert request(vps_url+'/workspace/v1/publish',update,expired[1])[0]==409
 
 
+def pending_team_bill(ledger, event_id):
+    with sqlite3.connect(ledger) as db:
+        return db.execute('select 1 from team_outbox where event_id=?',(event_id,)).fetchone()
+
+
+def verify_local_key_upload(stack, emppy, root, vps, workspace, release, mock, ca, upstream, browser_enabled):
+    upstream.catalog = {'models':[{'slug':'gpt-6.1-sol','display_name':'GPT-6.1 Sol','visibility':'list',
+        'context_window':272000,'max_context_window':272000,'supported_in_api':True,'shell_type':'shell_command'}]}
+    release_url = f'http://127.0.0.1:{release.server_port}'
+    vps.install('team')
+    vps.login(workspace, 'deployment')
+    owner = Emp(stack, emppy, root/'upload-owner', {'codex_base_url':mock}, release_url, ca)
+    member = Emp(stack, emppy, root/'upload-member', {'codex_base_url':mock}, release_url, ca)
+    for emp, name, role in [(owner, 'owner', 'team_admin'), (member, 'reader', 'member')]:
+        vps.team('members', {'name':name, 'role':role, 'password':PASSWORD, 'publish':name=='owner', 'sync':True})
+        emp.install('team')
+        emp.login(workspace, name)
+    expiry = int(time.time()) + 3600
+    def login_auth(account, expires):
+        return {'auth_mode':'chatgpt','tokens':{'account_id':account,
+            'access_token':subscription_token(account,'pro',expires),
+            'refresh_token':'fixture-refresh','id_token':'fixture-id'}}
+    original = login_auth('former-native', expiry)
+    owner.auth.write_text(json.dumps(original))
+    published = owner.team('publish')
+    assert published['version'] == 1 and published['review_required']
+    owner.team('review_service', {'id':published['id'],'version':1,'shared':True})
+    assert member.team('sync')['synced'] == 1
+
+    owner.auth.write_text(json.dumps({'auth_mode':'apikey','OPENAI_API_KEY':LOCAL_KEY}))
+    assert owner.team('sync')['synced'] == 1
+    local_id = 'remembered-subscription'
+    metadata = {'id':local_id,'prefix':local_id,'name':'Kept subscription',
+        'hidden_models':['model-to-hide'], 'model_context_windows':{'gpt-6.1-sol':192000}}
+    newer = login_auth('former-native', expiry+600)
+    owner.api('/api/accounts/import', {**metadata,'auth_json':original})
+    owner.auth.write_text(json.dumps(newer))
+    owner.api('/api/native/login/use-local-key', {'account_action':'keep'})
+    local_key = owner.auth.read_bytes()
+    auth_header = {'Authorization':'Bearer '+json.loads(local_key)['OPENAI_API_KEY']}
+    owner.restart()
+    assert owner.auth.read_bytes() == local_key
+    details = owner.team('publish_source')
+    assert details == {'source':{'id':local_id,'name':'Kept subscription','plan':'pro'}}, details
+    assert member.team('publish_source', expected=403)['error']['code']=='workspace_permission_required'
+    renewed = owner.team('publish')
+    assert renewed == {'id':published['id'],'version':2,'review_required':False}, renewed
+    assert member.team('sync')['synced'] == 1
+    member.api('/api/accounts/team-'+published['id']+'/models/refresh',{})
+    websocket_request(member.base, {'Authorization':'Bearer '+LOCAL_KEY},
+                      {'model':'owner/gpt-6.1-sol','input':'Verify the version received by another device '*6})
+    forwarded = {key.lower():value for key,value in upstream.requests[-1]['headers'].items()}
+    assert forwarded['authorization']=='Bearer '+newer['tokens']['access_token']
+
+    assert owner.team('sync')['synced'] == 1
+    owner.api('/api/accounts/'+local_id+'/models/refresh',{})
+    owner.api('/api/accounts/team-'+published['id']+'/models/refresh',{})
+    def picker():
+        return owner.api('/v1/models?client_version=0.169.0')['models']
+    model = 'Kept subscription/gpt-6.1-sol'
+    def own_model():
+        return next((row for row in picker() if unquote(row['slug']) == model), None)
+    assert wait_for(own_model)['context_window']==192000
+    assert not any(unquote(row['slug'])=='owner/gpt-6.1-sol' for row in picker())
+
+    owner.api('/api/accounts/import', {**metadata,'auth_json':login_auth('former-native', expiry-7200)})
+    private_path = Path(next(row['auth_file'] for row in json.loads(owner.config.read_text())['accounts']
+                            if row['id']==local_id))
+    expired_private = private_path.read_bytes()
+    assert owner.team('publish', expected=409)['error']['code']=='workspace_subscription_sign_in_required'
+    owner.team('sync')
+    assert private_path.read_bytes() == expired_private
+    assert owner.auth.read_bytes() == local_key
+    assert wait_for(own_model)['context_window']==192000
+    websocket_request(owner.base, auth_header,
+                      {'model':model,'input':'Use the synced version through the kept model '*6})
+    forwarded = {key.lower():value for key,value in upstream.requests[-1]['headers'].items()}
+    assert forwarded['authorization']=='Bearer '+newer['tokens']['access_token']
+    config_account = next(row for row in json.loads(owner.config.read_text())['accounts'] if row['id']==local_id)
+    assert (config_account['hidden_models'], config_account['model_context_windows'])==(
+        metadata['hidden_models'],metadata['model_context_windows'])
+
+    owner.api('/api/accounts/import', {**metadata,'auth_json':newer})
+    owner.api('/api/accounts/import', {'id':'different','prefix':'different','name':'Different subscription','auth_json':login_auth('different',expiry)})
+    (owner.root/'state/local-key-subscription.json').unlink()
+    candidates = owner.team('publish_source')
+    assert {item['id'] for item in candidates['choices']} == {local_id,'different'}, candidates
+    assert owner.team('publish',expected=409)['error']['code']=='workspace_subscription_selection_required'
+    assert owner.team('publish',{'account_id':'team-'+published['id']},409)['error']['code']=='workspace_subscription_selection_invalid'
+    if browser_enabled:
+        browser = Browser(stack, root)
+        browser.navigate(owner.url)
+        wait_for(lambda: browser.execute('return !document.querySelector("#team_workspace_open").hidden;'))
+        browser.execute('document.querySelector("#team_workspace_open").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-team-choice=publish]:enabled");'))
+        browser.execute('document.querySelector("[data-team-choice=publish]").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("#team_upload_subscription");'))
+        assert browser.execute('return document.querySelector("#modal_submit").disabled;')
+        browser.execute('const select=document.querySelector("#team_upload_subscription"); select.value=arguments[0]; select.dispatchEvent(new Event("change"));', local_id)
+        browser.execute('document.querySelector("#modal_submit").click();')
+        wait_for(lambda: browser.execute('return !!document.querySelector("[data-team-choice=publish]");'))
+        browser.execute('document.querySelector("[data-team-choice=publish]").click();')
+        wait_for(lambda: browser.execute('return document.querySelector("#team_upload_form strong")?.textContent==="Kept subscription" && !document.querySelector("#modal_submit").disabled;'))
+    else:
+        assert owner.team('publish',{'account_id':local_id})==renewed
+    assert owner.team('publish_source')==details
+    assert owner.team('publish',{'account_id':'different'},409)['error']['code']=='workspace_subscription_selection_invalid'
+    owner.auth.write_text(json.dumps(newer))
+    owner.api('/api/native/login/use-local-key', {'account_action':'remove'})
+    assert owner.team('publish_source')=={}
+    assert owner.team('publish',{'account_id':local_id},409)['error']['code']=='workspace_subscription_sign_in_required'
+    assert owner.team('shared_services')['services'][0]['version']==2
+    owner.auth.write_text(json.dumps(login_auth('different',expiry)))
+    changed = owner.team('publish')
+    assert changed == {'id':published['id'],'version':3,'review_required':True}, changed
+
+
 def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, upstream, output, browser_enabled):
     release_url = f'http://127.0.0.1:{release.server_port}'
     upstream.catalog = {'models':[{'slug':'gpt-6.2-sol','display_name':'GPT-6.2 Sol','visibility':'list',
@@ -568,7 +697,7 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
             'refresh_token':'synthetic-refresh-token','id_token':'synthetic-id-token'}}
     expiry = int(time.time()) + 3600
     account = member.api('/api/accounts/import', {'id':'personal-copy','prefix':'personal-copy',
-        'name':'Personal copy','auth_json':auth(expiry)})['account']
+        'name':'Personal copy','auth_json':auth(int(time.time()) - 60)})['account']
     saved = next(row['auth_file'] for row in json.loads(member.config.read_text())['accounts']
                  if row['id']==account['id'])
     private_auth = Path(saved).read_bytes()
@@ -580,6 +709,65 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
     rates = {key + suffix: value for suffix in ('', '_priority', '_ultrafast')
              for key, value in [('input_cost_per_token', 0.000002), ('output_cost_per_token', 0.00001)]}
     prices = json.dumps({'rate_format':1,'fetched_at':time.time(), 'prices':{'gpt-6.2-sol':rates}})
+    owner_device = Emp(stack, emppy, root/'owner-second-device', {'codex_base_url':mock}, release_url, ca)
+    owner_device.install('team')
+    owner_auth = auth(expiry+90)
+    owner_device.auth.write_text(json.dumps(owner_auth))
+    (owner_device.root/'state/api_prices.json').write_text(prices)
+    owner_device.restart()
+    owner_identity = owner_device.login(workspace, 'owner')
+    owner_headers = {'Authorization':'Bearer '+owner_auth['tokens']['access_token'],
+                     'chatgpt-account-id':'shared-account'}
+    def owner_usage():
+        return next(row for row in admin.team('usage', {'period':'today'})['rows']
+                    if row['member'] == owner_identity['id'])
+    def native_sse(headers):
+        with contextlib.closing(HTTPConnection('127.0.0.1', urlsplit(owner_device.base).port, timeout=15)) as connection:
+            connection.request('POST', '/v1/responses',
+                json.dumps({'model':'gpt-6.2-sol','input':'Native accounting ' * 8,'stream':True}),
+                {'Content-Type':'application/json', **headers})
+            reply = connection.getresponse()
+            body = reply.read()
+            assert reply.status == 200 and b'response.completed' in body, (reply.status, body)
+    assert not owner_device.api('/api/config')['accounts']
+    websocket_request(owner_device.base, owner_headers,
+                      {'model':'gpt-6.2-sol','input':'Native publisher usage ' * 8})
+    assert upstream.requests[-1]['body']['model'] == 'gpt-6.2-sol'
+    wait_for(lambda: owner_usage()['requests'] == 1, 25)
+    owner_device.team('logout')
+    assert not owner_device.api('/api/team/status')['joined']
+    native_sse(owner_headers)
+    assert owner_usage()['requests'] == 1
+    assert owner_device.login(workspace, 'owner')['id'] == owner_identity['id']
+    assert not owner_device.api('/api/config')['accounts']
+    local_copy = owner_device.api('/api/accounts/import', {'id':'owner-copy','prefix':'owner-copy',
+        'name':'Owner copy','auth_json':owner_auth})['account']
+    websocket_request(owner_device.base, owner_headers,
+                      {'model':local_copy['prefix']+'/gpt-6.2-sol','input':'Existing account without workspace sync '*8})
+    assert upstream.requests[-1]['body']['model'] == 'gpt-6.2-sol'
+    wait_for(lambda: owner_usage()['requests'] == 2, 25)
+    assert owner_usage()['estimated_usd_nanos'] == 100_000
+
+    def assert_local_only(headers):
+        native_sse(headers)
+        with sqlite3.connect(owner_device.root/'state/usage.sqlite3') as db:
+            assert db.execute('select count(*) from team_outbox').fetchone()[0] == 0
+        assert owner_usage()['requests'] == 2
+    other_auth = auth(expiry+95)
+    other_auth['tokens'].update(account_id='personal-account',
+                                access_token=subscription_token('personal-account','pro',expiry+95))
+    owner_device.auth.write_text(json.dumps(other_auth))
+    other_headers = {'Authorization':'Bearer '+other_auth['tokens']['access_token'],
+                     'chatgpt-account-id':'personal-account'}
+    assert_local_only({**other_headers, 'chatgpt-account-id':'shared-account'})
+    forwarded = {key.lower(): value for key, value in upstream.requests[-1]['headers'].items()}
+    assert forwarded['authorization'] == other_headers['Authorization']
+    assert forwarded['chatgpt-account-id'] == 'personal-account'
+    owner_device.auth.write_text(json.dumps(owner_auth))
+    admin.team('review_service', {**review,'shared':False})
+    owner_device.team('status')
+    assert_local_only(owner_headers)
+    admin.team('review_service', review)
     (member.root/'state/api_prices.json').write_text(prices)
     stop(member.process)
     config = json.loads(member.config.read_text())
@@ -690,9 +878,15 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
     local = {'Authorization':'Bearer '+LOCAL_KEY}
     body = {'model':account['prefix']+'/gpt-6.2-sol','input':'Synthetic team usage ' * 8}
     calls = len(upstream.requests)
-    for tier, label in [('priority','Fast'), ('ultrafast','Ultrafast')]:
+    for tier, code, detail in [
+        ('priority', 'workspace_fast_forbidden', 'Fast（快速模式）权限'),
+        ('ultrafast', 'workspace_ultrafast_forbidden', 'Ultrafast（极速模式）权限'),
+    ]:
         status, error = request(member.base+'/v1/responses', {**body,'service_tier':tier}, local)
-        assert status == 403 and f'{label} is not permitted' in json.dumps(error), (status, error)
+        assert status == 403 and error['error']['code'] == code, (status, error)
+        assert detail in error['error']['message'], error
+        denied = websocket_request(member.base, local, {**body,'service_tier':tier}, error_code=code)
+        assert denied['status'] == 403 and detail in denied['error']['message'], denied
     assert len(upstream.requests) == calls
     websocket_request(member.base, local, body)
     assert upstream.requests[-1]['body']['model'] == 'gpt-6.2-sol'
@@ -757,7 +951,6 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
         wait_for(lambda: second.api('/api/team/status').get('identity',{}).get('member',{}).get('id') == identity['id'])
     else:
         assert second.login(workspace, 'member')['id'] == identity['id']
-    assert second.team('sync') == {'synced':0,'skipped_native':1}
     assert not second.api('/api/config')['accounts']
     native_headers = {'Authorization':'Bearer '+auth(expiry+120)['tokens']['access_token'],
                       'chatgpt-account-id':'shared-account'}
@@ -768,12 +961,37 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
     assert (row['input_tokens'],row['output_tokens'],row['estimated_usd_nanos']) == (20,6,100_000), row
     assert not row['budget_reached'] and row['budget_usage_nanos'] is None
     assert second.team('overview')['weekly_budget']['used'] == 100_000
+    calls = len(upstream.requests)
+    status, denied = request(member.base+'/v1/responses', body, local)
+    assert status == 403 and denied['error']['code'] == 'workspace_budget_reached', denied
+    assert '每周 USD 上限' in denied['error']['message'], denied
+    denied = websocket_request(second.base, native_headers, {**body,'model':'gpt-6.2-sol'},
+                               error_code='workspace_budget_reached')
+    assert denied['status'] == 403 and '每周 USD 上限' in denied['error']['message'], denied
+    local_copy = second.api('/api/accounts/import', {'id':'member-copy','prefix':'member-copy',
+        'name':'Member copy','auth_json':auth(expiry+120)})['account']
+    unsynced_body = {**body, 'model':local_copy['prefix']+'/gpt-6.2-sol'}
+    status, denied = request(second.base+'/v1/responses', {**unsynced_body,'service_tier':'priority'}, native_headers)
+    assert status == 403 and denied['error']['code']=='workspace_fast_forbidden', denied
+    status, denied = request(second.base+'/v1/responses', unsynced_body, native_headers)
+    assert status == 403 and denied['error']['code']=='workspace_budget_reached', denied
+    assert len(upstream.requests) == calls
     wait_for(lambda: {notice['kind'] for notice in second.api('/api/team/notices') if notice['reached']}
              == {'weekly_usd'})
     daily_mode = {'action':'mode','mode':'daily_usd'}
     assert admin.team('weekly_budget', daily_mode)['budget_mode'] == 'daily_usd'
     assert second.team('overview')['weekly_budget'] is None
     assert usage()['budget_reached']
+    status, denied = request(member.base+'/v1/responses', body, local)
+    assert status == 403 and denied['error']['code'] == 'workspace_budget_reached', denied
+    assert '每日 USD 上限' in denied['error']['message'], denied
+    assert len(upstream.requests) == calls
+    joined_native = second.auth.read_bytes()
+    second.auth.write_text(json.dumps(other_auth))
+    websocket_request(second.base, other_headers, {**body,'model':'gpt-6.2-sol'})
+    assert len(upstream.requests) == calls + 1
+    assert usage()['requests'] == 2
+    second.auth.write_bytes(joined_native)
     assert admin.team('weekly_budget', weekly_mode)['budget_mode'] == 'weekly_usd'
     assert second.team('overview')['weekly_budget']['limit'] == 55_000
     vps.team('budget', {'member':identity['id'],'daily_usd_nanos':5_000_000_000})
@@ -905,6 +1123,7 @@ def main():
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument('--vps-signout-only', action='store_true')
     selection.add_argument('--team-usage-only', action='store_true')
+    selection.add_argument('--local-key-upload-only', action='store_true')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--no-browser', action='store_true')
     parser.add_argument('--hold-demo', action='store_true', help='keep the synthetic review server open until interrupted')
@@ -918,7 +1137,7 @@ def main():
     args = parser.parse_args()
     if args.hold_demo and not args.no_browser:
         parser.error('--hold-demo requires --no-browser so the review links are unused')
-    if not (args.vps_signout_only or args.team_usage_only) and args.codex is None:
+    if not (args.vps_signout_only or args.team_usage_only or args.local_key_upload_only) and args.codex is None:
         parser.error('--codex is required for the full suite')
     args.output.mkdir(parents=True, exist_ok=True)
     binaries = args.binaries.resolve()
@@ -951,6 +1170,11 @@ def main():
         vps_proc, vps_url = start_vps(stack,binaries/'empmod-team',root/'vps',workspace_port)
         workspace, ca, overrides = https_workspace(stack, root, workspace_port) if args.lan or args.manual_https else (vps_url, None, None)
         vps = Emp(stack, emppy, root/'deployment-emp', {'codex_base_url':mock}, release_url, ca)
+        if args.local_key_upload_only:
+            verify_local_key_upload(stack, emppy, root, vps, workspace, release, mock, ca, upstream,
+                                    not args.no_browser)
+            print(json.dumps({'team_local_key_upload_and_sync':'passed', 'browser':not args.no_browser}))
+            return
         if args.team_usage_only:
             verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, upstream,
                               args.output, not args.no_browser)
@@ -1352,7 +1576,8 @@ def main():
         assert {key.lower():value for key,value in upstream.requests[-1]['headers'].items()}['authorization']=='Bearer unrelated-personal-key'
         checks.append('An exact team share ID collision preserves the private service, model and key through sync, sign-out and export/import')
         stop(collision.process)
-        member.api('/api/accounts/'+account_id+'/models/refresh',{})
+        refreshed = member.api('/api/accounts/'+account_id+'/models/refresh',{})
+        assert refreshed['models'], refreshed
         reset_request = {'idempotency_key':'e714453f-d623-4c0a-b81e-918fa0d99409'}
         assert member.api('/api/accounts/'+account_id+'/quota-reset',reset_request,403)['error']['code']=='workspace_reset_forbidden'
         reset_login = request(vps_url+'/workspace/v1/login',
@@ -1370,7 +1595,6 @@ def main():
         else:
             assert status == 503 and result['error']['code']=='quota_auth_required', result
         checks.append('Distinct deployment, team admin and member EMPs enforce role changes and budget writes; publisher can go offline')
-        stop(vps_proc)
         before = len(upstream.requests)
         version, codex_client, codex_thread = codex_session(stack,args.codex.resolve(),member,args.output/'codex.stderr')
         fixture.turn(codex_client,codex_thread,'Public team fixture')
@@ -1378,17 +1602,30 @@ def main():
         assert len(upstream.requests) == before+1
         assert {key.lower():value for key,value in upstream.requests[-1]['headers'].items()}['authorization']=='Bearer '+access
         member_ledger = member.root/'state/usage.sqlite3'
+        store = root/'vps/workspace.sqlite3'
 
-        def queued():
-            if not member_ledger.exists():
-                return None
-            with sqlite3.connect(member_ledger) as db:
-                return db.execute('select scope,event_id,payload from team_outbox').fetchone()
+        def first_bill():
+            with sqlite3.connect(store) as db:
+                db.row_factory = sqlite3.Row
+                row = db.execute("""SELECT device,id,share,model,finished_at,input_tokens,cached_input_tokens,
+                          output_tokens,estimate_nanos AS estimated_usd_nanos,actual_nanos AS actual_usd_nanos
+                          FROM usage WHERE member=?""", (member_id,)).fetchone()
+                return dict(row) if row else None
 
-        pending = wait_for(queued)
-        event = json.loads(pending[2])
-        assert set(event) == {'id','share','model','finished_at','input_tokens','cached_input_tokens','output_tokens',
-                              'actual_usd_nanos','estimated_usd_nanos'}
+        event = wait_for(first_bill)
+        workspace_id = member.team('status')['identity']['workspace']['id']
+        scope = f"{workspace_id}:{member_id}:{event.pop('device')}"
+        pending = (scope,event['id'],json.dumps(event))
+        stop(vps_proc)
+        before = len(upstream.requests)
+        offline_request = {'model':'lab-admin/gpt-6.1-sol','input':'Team budget verification fixture '*8}
+        status, denied = request(member.base+'/v1/responses',offline_request,local)
+        assert status == 503 and denied['error']['code']=='workspace_budget_unavailable', (status,denied)
+        denied = websocket_request(member.base,local,offline_request,error_code='workspace_budget_unavailable')
+        assert denied['status']==503
+        assert len(upstream.requests)==before
+        with sqlite3.connect(member_ledger) as db:
+            db.execute('insert or ignore into team_outbox values (?,?,?)',pending)
         vps_proc,vps_url = start_vps(stack,binaries/'empmod-team',root/'vps',workspace_port)
         personal = wait_for(lambda: (usage if (usage := member.team('usage'))['rows'][0]['requests'] else None))
         assert [(row['name'],row['requests'],row['budget_nanos']) for row in personal['rows']]==[
@@ -1396,13 +1633,10 @@ def main():
         admin.start()
         all_rows = admin.team('usage')['rows']
         assert {row['name'] for row in all_rows}=={application['nickname'],'lab-admin','deployment'}
-        with sqlite3.connect(member_ledger) as db:
-            db.execute('insert into team_outbox values (?,?,?)',pending)
-        assert member.team('usage')['rows'][0]['requests']==1
-        store = root/'vps/workspace.sqlite3'
+        wait_for(lambda: not pending_team_bill(member_ledger, event['id']))
         with sqlite3.connect(store) as db:
             assert db.execute('select count(*) from usage').fetchone()[0]==1
-        checks.append('Real Codex picker routes the shared service while VPS is offline; restart and re-sync produce exactly one VPS bill')
+        checks.append('Real Codex picker routes the shared subscription while the VPS is reachable. VPS outage pauses shared HTTP and WebSocket requests, and the queued replay is billed only once after recovery')
 
         fixture_login = request(vps_url+'/workspace/v1/login',
             {'name':'researcher','password':PASSWORD,'device':'0'*32})[1]
@@ -1442,6 +1676,13 @@ def main():
         assert second.login(workspace,'researcher')['id'] == member_id
         assert second.team('sync')['synced'] == 1
         assert second.team('sync')['synced'] == 0
+        blocked_request = {'model':'lab-admin/gpt-6.1-sol','input':'Second device fixture '*8}
+        before = len(upstream.requests)
+        status, denied = request(second.base+'/v1/responses',blocked_request,local)
+        assert status==403 and denied['error']['code']=='workspace_budget_reached', (status,denied)
+        assert len(upstream.requests)==before
+        limit = {'member':member_id,'daily_usd_nanos':1_000_000_000}
+        vps.team('budget', {**limit,'daily_usd_nanos':None})
         before_usage = member.team('usage')['rows'][0]
         websocket_request(second.base,local,{'model':'lab-admin/gpt-6.1-sol','input':'Second device fixture '*8})
         def combined_usage():
@@ -1491,7 +1732,7 @@ def main():
             raise AssertionError(debug)
         payload = {'model':model, 'input':'Synthetic speed fixture ' * 8}
         denied = request(member.base+'/v1/responses',{**payload,'service_tier':'priority'},local)
-        assert denied[0]==403 and 'Fast is not permitted' in json.dumps(denied[1]), denied
+        assert denied[0]==403 and denied[1]['error']['code']=='workspace_fast_forbidden', denied
         websocket_request(member.base,local,{**payload,'service_tier':'ultrafast'})
         assert upstream.requests[-1]['body']['service_tier']=='ultrafast'
         _, codex_client, codex_thread = codex_session(stack,args.codex.resolve(),member,args.output/'codex-speed.stderr')
@@ -1502,6 +1743,20 @@ def main():
             recorded = upstream.requests[-1]
             assert (recorded['body']['model'],recorded['body']['service_tier']) == ('gpt-6.1-sol',tier), recorded['body']
             assert {key.lower():value for key,value in recorded['headers'].items()}['authorization']=='Bearer '+access
+        codex_client.events.clear()
+        calls = len(upstream.requests)
+        start = codex_client.rpc('turn/start', {'threadId':codex_thread,'serviceTier':'ultrafast',
+            'input':[{'type':'text','text':'Verify unavailable Ultrafast permission'}]})
+        deadline = time.monotonic() + 30
+        while True:
+            complete = next((event['params']['turn'] for event in codex_client.events
+                if event.get('method')=='turn/completed' and event['params']['turn']['id']==start['turn']['id']), None)
+            if complete:
+                break
+            codex_client.events.append(codex_client.read_message(max(0, deadline-time.monotonic())))
+        assert complete['status']=='failed', complete
+        assert 'Ultrafast（极速模式）权限' in json.dumps(complete, ensure_ascii=False), complete
+        assert len(upstream.requests)==calls
         codex_client.close()
         assert request(member.base+'/v1/responses',{**payload,'service_tier':'ultrafast'},local)[0]==403
         vps.team('member_tiers',permissions)
@@ -1516,6 +1771,7 @@ def main():
         assert any(event['kind']=='member_approved' and event['actor']=='lab-admin' and event['target']==application['nickname'] for event in events)
         if args.no_browser:
             assert admin.team('budget',{'member':admin_id,'daily_usd_nanos':2_500_000_000})
+        vps.team('budget', limit)
         if not args.no_browser:
             join_browser.navigate(member.url)
             wait_for(lambda: join_browser.execute('return document.getElementById("team_workspace_open")?.hidden === false;'))
@@ -1598,6 +1854,7 @@ def main():
                    and event['details']['ultrafast'] is True for event in events)
         assert events == admin.team('audit')['entries']
         checks.append('Team administrators can set their own daily limit and inspect the shared approval, budget, speed permission and authorized reset log; ordinary members cannot read it')
+        vps.team('budget', {**limit,'daily_usd_nanos':None})
 
         if overrides is not None:
             overrides['/workspace/v1/members'] = {'members':[{'id':'ordinary "<text>'}]}
@@ -1737,11 +1994,18 @@ def main():
         member.auth.write_bytes(original_auth)
         stop(member.process)
         config = json.loads(member.config.read_text())
-        next(row for row in config['accounts'] if row['id']==account_id)['credential_status'] = 'invalid'
+        saved_share = next(row for row in config['accounts'] if row['id']==account_id)
+        saved_share['credential_status'] = 'invalid'
+        damaged = b'invalid synthetic subscription credentials'
+        credential_file = Path(saved_share['auth_file'])
+        credential_file.write_bytes(damaged)
         member.config.write_text(json.dumps(config))
         member.start()
         assert member.team('subscriptions')['subscriptions'][0]['status']=='available'
         assert member.team('sync')['synced']==1
+        assert credential_file.read_bytes() != damaged
+        websocket_request(member.base, local, payload)
+        assert {key.lower():value for key,value in upstream.requests[-1]['headers'].items()}['authorization']=='Bearer '+access
         checks.append('Sync skips an identical Native account and restores stale local auth while the VPS snapshot is current')
         fresh_owner = Emp(stack,emppy,root/'fresh-owner',{'codex_base_url':mock},release_url,ca)
         fresh_owner.install('team')

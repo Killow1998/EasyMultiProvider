@@ -51,8 +51,7 @@ fn browser_projection_redacts_credentials_and_preserves_safe_state() {
     let config = normalized_fixture(&secret_file);
     let duplicates = BTreeMap::from([("demo".to_owned(), "当前 Codex 登录".to_owned())]);
 
-    let public = public_configuration_with_file_status(&config, &duplicates, regular_file)
-        .expect("public configuration");
+    let public = public_configuration_with_file_status(&config, &duplicates, regular_file);
     let encoded = serde_json::to_string(&public).expect("public JSON");
     assert!(!encoded.contains("secret-inline"));
     assert!(!encoded.contains("managed.key"));
@@ -89,7 +88,6 @@ fn browser_projection_does_not_count_a_symlink_as_a_managed_secret() {
     std::fs::write(&target, b"secret").expect("target");
     symlink(&target, &link).expect("symlink");
     let config = normalized_fixture(&link);
-    let public = public_configuration_with_file_status(&config, &BTreeMap::new(), regular_file)
-        .expect("public configuration");
+    let public = public_configuration_with_file_status(&config, &BTreeMap::new(), regular_file);
     assert_eq!(public["providers"][1]["api_key_set"], false);
 }

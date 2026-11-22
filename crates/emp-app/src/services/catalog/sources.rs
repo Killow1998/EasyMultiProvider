@@ -1,41 +1,40 @@
-//! A request-local view of catalogs and account identities, never a stale cache.
 use crate::app::ServerState;
 use crate::services::accounts::{account_credentials, native_auth_document, regular_file};
-use emp_codex::subscription_contexts::validate_subscription_contexts;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub(crate) struct CatalogSources {
-    native: Value,
-    accounts: BTreeMap<String, Value>,
+pub(super) struct CatalogSources {
+    pub(super) native: Value,
+    pub(super) accounts: BTreeMap<String, Value>,
     duplicates: BTreeMap<String, String>,
-    native_plan: Option<String>,
     native_is_local_key: bool,
 }
 
 impl CatalogSources {
-    pub(super) fn load(state: &ServerState, config: &Value) -> Self {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub(super) fn load(state: &ServerState, config: &mut Value) -> Self {
         let native = emp_codex::load_native_catalog(config);
         let credentials = account_credentials(config, &state.backend.configuration.vault);
         let by_id: BTreeMap<_, _> = credentials
             .iter()
             .map(|(id, auth)| (id.as_str(), auth))
             .collect();
+        state
+            .backend
+            .team
+            .project_subscription_credentials(state, config);
         let mut accounts = BTreeMap::new();
         let configured_accounts = config["accounts"].as_array().expect("normalized accounts");
         for record in configured_accounts {
-            let credential = state
-                .backend
-                .team
-                .replacement_subscription(state, configured_accounts, record)
-                .unwrap_or(record);
-            let account = record.as_object().expect("normalized account");
             let id = record["id"].as_str().expect("normalized account ID");
-            let credential_id = credential["id"].as_str().expect("normalized account ID");
-            let catalog = emp_codex::cached_account_catalog(
+            let credential_id = record["_emp_shared_source"].as_str().unwrap_or(id);
+            let auth_path = record
+                .get("_emp_catalog_auth_file")
+                .unwrap_or(&record["auth_file"]);
+            let catalog = emp_codex::cached_subscription_catalog(
                 config.as_object().expect("config object"),
-                account,
-                &mut |_| {
+                auth_path.as_str().expect("normalized auth path"),
+                || {
                     by_id
                         .get(credential_id)
                         .and_then(|auth| emp_codex::account_auth_headers(auth))
@@ -53,22 +52,10 @@ impl CatalogSources {
         let native_is_local_key = native_auth
             .as_ref()
             .is_some_and(emp_integration::local_auth::is_local);
-        let native_plan = state
-            .backend
-            .accounts
-            .native_quota
-            .lock()
-            .ok()
-            .and_then(|quota| {
-                quota
-                    .as_ref()
-                    .and_then(|value| value["plan_type"].as_str().map(str::to_owned))
-            });
         Self {
             native,
             accounts,
             duplicates,
-            native_plan,
             native_is_local_key,
         }
     }
@@ -86,16 +73,12 @@ impl CatalogSources {
         catalog
     }
 
-    pub(super) fn public_configuration(
-        &self,
-        state: &ServerState,
-        config: &Value,
-    ) -> Result<Value, emp_state::ConfigError> {
+    pub(super) fn public_configuration(&self, state: &ServerState, config: &Value) -> Value {
         let mut public = emp_state::public_configuration_with_file_status(
             config,
             &self.duplicates,
             regular_file,
-        )?;
+        );
         state
             .backend
             .team
@@ -132,101 +115,6 @@ impl CatalogSources {
             .as_object_mut()
             .expect("public config")
             .extend(views.as_object().expect("model views").clone());
-        Ok(public)
-    }
-
-    pub(crate) fn validate_update(
-        &self,
-        state: &ServerState,
-        updated: &Value,
-        previous: &Value,
-    ) -> Result<(), String> {
-        validate_subscription_contexts(updated, Some(previous), &self.native, &self.accounts)
-            .map_err(|error| error.to_string())?;
-        let mut base = updated.clone();
-        base["model_groups"] = json!([]);
-        state
-            .backend
-            .team
-            .project_subscription_credentials(state, &mut base);
-        let catalog = self.merged(&base);
-        for group in updated["model_groups"].as_array().into_iter().flatten() {
-            if catalog["models"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|model| model["slug"] == group["id"])
-            {
-                return Err("Aggregate model ID is already in use".into());
-            }
-            let previous_sources = previous["model_groups"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|old| old["id"] == group["id"])
-                .and_then(|old| old["sources"].as_array());
-            let mut family = None;
-            let mut plans = std::collections::BTreeSet::new();
-            for source in group["sources"].as_array().expect("normalized sources") {
-                let source = source.as_str().expect("normalized source");
-                if !catalog["models"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|model| model["slug"] == source)
-                {
-                    if previous_sources
-                        .is_some_and(|sources| sources.iter().any(|old| old == source))
-                    {
-                        continue;
-                    }
-                    return Err(format!("Aggregate source is unavailable: {source}"));
-                }
-                let external = updated["models"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|model| model["id"] == source);
-                if group["policy"] == "balanced" {
-                    if external.is_some() {
-                        return Err("Quota balance requires Codex subscription sources; use priority or round robin for API sources".into());
-                    }
-                    let account =
-                        base["accounts"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .find(|account| {
-                                account["prefix"]
-                                    .as_str()
-                                    .is_some_and(|prefix| source.starts_with(&format!("{prefix}/")))
-                            });
-                    let plan = if let Some(account) = account {
-                        account["quota"]["plan_type"].as_str()
-                    } else {
-                        self.native_plan.as_deref()
-                    };
-                    if let Some(plan) = plan {
-                        plans.insert(plan);
-                    }
-                }
-                let current = external
-                    .and_then(|model| {
-                        model["family_id"]
-                            .as_str()
-                            .filter(|value| !value.is_empty())
-                            .or_else(|| model["upstream_id"].as_str())
-                    })
-                    .unwrap_or_else(|| source.rsplit('/').next().expect("source"));
-                if family.is_some_and(|family| family != current) {
-                    return Err("Aggregate sources must refer to the same model".into());
-                }
-                family = Some(current);
-            }
-            if plans.len() > 1 {
-                return Err("Quota balance requires accounts on the same subscription plan".into());
-            }
-        }
-        Ok(())
+        public
     }
 }

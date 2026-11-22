@@ -1,4 +1,6 @@
 mod access;
+mod budget;
+pub(crate) use access::RequestDenied;
 mod budget_notices;
 mod commands;
 pub(crate) use commands::Command;
@@ -265,7 +267,14 @@ impl TeamState {
             return Err(Failure::unavailable());
         };
         Ok(match &store.session {
-            Some(session) => json!({"joined":true,"base":session.base,"identity":session.identity}),
+            Some(session) => {
+                let mut identity = session.identity.clone();
+                identity
+                    .as_object_mut()
+                    .expect("workspace identity")
+                    .remove("native_usage");
+                json!({"joined":true,"base":session.base,"identity":identity})
+            }
             None => {
                 json!({"joined":false,"recovery_required":store.recovery_required || !store.imported.is_empty()})
             }
@@ -291,9 +300,13 @@ impl TeamState {
         let session = store.session.as_mut().ok_or_else(Failure::signed_out)?;
         let (identity, plan) = remote_identity(state, session)?;
         if session.identity != identity {
+            let membership_changed = session.identity["workspace"] != identity["workspace"]
+                || session.identity["member"] != identity["member"];
             session.identity = identity;
             self.save_store(state, store)?;
-            super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
+            if membership_changed {
+                super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
+            }
         }
         Ok(plan)
     }
@@ -361,16 +374,19 @@ impl TeamState {
 
     fn flush(&self, state: &ServerState) -> Result<()> {
         let store = self.snapshot()?;
-        let Some(session) = store.session else {
-            return Ok(());
-        };
-        let scope = session.scope(&store.device);
+        if let Some(session) = store.session {
+            self.flush_batch(state, &session, &session.scope(&store.device))?;
+        }
+        Ok(())
+    }
+
+    fn flush_batch(&self, state: &ServerState, session: &Session, scope: &str) -> Result<bool> {
         let ledger = &state.backend.usage.ledger;
         let events = ledger
-            .team_events(&scope)
+            .team_events(scope)
             .map_err(|_| Failure::unavailable())?;
         if events.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let report_events = events
             .iter()
@@ -391,11 +407,12 @@ impl TeamState {
         if receipt.inserted > events.len() {
             return Err(Failure(502, "invalid_workspace_reply".into()));
         }
-        self.observe_budget(state, &session, receipt.budget);
+        self.observe_budget(state, session, receipt.budget);
         let ids: Vec<_> = events.iter().map(|(id, _)| id.as_str()).collect();
         ledger
-            .ack_team_events(&scope, &ids)
-            .map_err(|_| Failure::unavailable())
+            .ack_team_events(scope, &ids)
+            .map_err(|_| Failure::unavailable())?;
+        Ok(true)
     }
 
     fn observe_budget(&self, state: &ServerState, session: &Session, budget: BudgetStatuses) {

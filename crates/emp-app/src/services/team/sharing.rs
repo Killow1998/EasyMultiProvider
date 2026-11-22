@@ -16,13 +16,12 @@ impl TeamState {
         if !body["provider"].is_null() && body["provider"] != NATIVE_SHARE {
             return Err(Failure(400, "workspace_only_native_subscription".into()));
         }
-        let payload = super::subscriptions::publish(state)?;
         let token = Some(session.token.as_str());
         let version = request(state, &session.base, token, Operation::PublishVersion, None)?;
         let publish = Publish {
             source: NATIVE_SHARE.into(),
             expected_version: version["version"].as_i64().ok_or_else(Failure::invalid)?,
-            payload,
+            payload: super::subscriptions::publish(state, body)?,
         };
         request(
             state,
@@ -67,7 +66,7 @@ impl TeamState {
                     && share.version > 0
                     && share.payload.subscription.as_ref().is_some_and(|auth| {
                         native.as_ref().is_some_and(|native| {
-                            super::subscriptions::duplicates_native(native, auth)
+                            emp_state::same_account_auth(native, &auth.auth_document())
                         })
                     });
                 ShareMetadata {
@@ -83,7 +82,7 @@ impl TeamState {
             .enumerate()
             .filter(|(_, share)| share.duplicates_native)
             .map(|(index, _)| index)
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
         let plan: SyncPlan = policy(state, Request::SyncShares { shares: metadata })?;
         let selected = plan
             .selected
@@ -141,7 +140,8 @@ impl TeamState {
                 .subscription
                 .as_ref()
                 .ok_or_else(|| Failure(502, "invalid_workspace_share".into()))?;
-            let account_identity = super::subscriptions::identity(auth);
+            let account_identity =
+                emp_state::accounts::account_auth_identity(&auth.auth_document());
             access_changed |= metadata.is_none_or(|record| {
                 record.account_identity.as_deref() != Some(account_identity.as_str())
                     || record.version != share.version
@@ -159,6 +159,17 @@ impl TeamState {
                 },
             );
         }
+        let available_identities: BTreeSet<_> = store
+            .imported
+            .values()
+            .filter(|record| record.workspace == workspace && record.usable())
+            .filter_map(|record| record.account_identity.as_deref())
+            .collect();
+        super::subscriptions::mark_expired_private(
+            &settings.vault,
+            &mut updated,
+            &available_identities,
+        );
         if changed > 0 || access_changed || !legacy_paths.is_empty() || *config != updated {
             emp_state::config::preserve_service_route_names(&config, &mut updated);
             emp_state::config::validate_service_names(&config, &updated)

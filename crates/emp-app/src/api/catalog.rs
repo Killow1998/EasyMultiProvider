@@ -187,16 +187,11 @@ pub(crate) fn read_management_request(request: Request<'_>, state: &ServerState)
         Err(_) => return internal_error(),
     };
     if request.raw_path() == "/api/config" {
-        return match crate::services::catalog::public_configuration(state, &config) {
-            Ok(mut public) => {
-                public["provider_balances"] =
-                    crate::services::provider_balance::snapshot(state, &config);
-                public["provider_quotas"] = crate::services::cpa_quota::snapshot(state, &config);
-                public["app_icon"] = state.backend.app_icon.snapshot().metadata();
-                json_response(&public)
-            }
-            Err(_) => internal_error(),
-        };
+        let mut public = crate::services::catalog::public_configuration(state, &config);
+        public["provider_balances"] = crate::services::provider_balance::snapshot(state, &config);
+        public["provider_quotas"] = crate::services::cpa_quota::snapshot(state, &config);
+        public["app_icon"] = state.backend.app_icon.snapshot().metadata();
+        return json_response(&public);
     }
     if let Some(id) = request
         .raw_path()

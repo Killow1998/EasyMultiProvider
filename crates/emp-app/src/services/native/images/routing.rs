@@ -104,7 +104,7 @@ impl ImageRoutes {
                     state.backend.modules.active(emp_modules::Module::Team),
                     None,
                 )
-                .map_err(|message| NativeHttpError::router(403, message))?;
+                .map_err(|error| error.public_error(state))?;
             if config["image_routing"]["mode"] == "credit"
                 && config["image_routing"]["credit"]["provider"] == *provider_id
             {

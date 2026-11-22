@@ -20,7 +20,7 @@ from e2e_refinements import Browser
 from local_backend import request, wait_for
 
 
-def websocket_request(base, headers, body):
+def websocket_request(base, headers, body, *, error_code=None):
     address = urlsplit(base)
     with socket.create_connection((address.hostname, address.port), timeout=15) as sock:
         headers = {**headers, 'Host':address.netloc, 'Upgrade':'websocket', 'Connection':'Upgrade',
@@ -42,8 +42,12 @@ def websocket_request(base, headers, body):
                 if size in (126,127):
                     size = int.from_bytes(source.read(2 if size == 126 else 8),'big')
                 event = json.loads(source.read(size))
-                assert event['type'] not in ('error','response.failed'), event
+                if event['type'] == 'error':
+                    assert error_code and event['error']['code'] == error_code, event
+                    return event
+                assert event['type'] != 'response.failed', event
                 if event['type'] == 'response.completed':
+                    assert error_code is None, event
                     return
 
 

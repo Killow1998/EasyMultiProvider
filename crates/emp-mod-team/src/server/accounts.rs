@@ -217,12 +217,11 @@ impl Workspace {
             [&who.member],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        Ok(
-            json!({"workspace":{"id":self.id, "name":self.name}, "member":{
-                "id":who.member,"name":name,"nickname":nickname,"role":who.role,"publish":who.publish,"sync":who.sync,
-                "fast":who.fast,"ultrafast":who.ultrafast
-            }}),
-        )
+        Ok(json!({"workspace":{"id":self.id, "name":self.name},
+            "native_usage":self.native_usage(who)?, "member":{
+            "id":who.member,"name":name,"nickname":nickname,"role":who.role,"publish":who.publish,"sync":who.sync,
+            "fast":who.fast,"ultrafast":who.ultrafast
+        }}))
     }
 
     pub(super) fn members(&self, who: &Identity) -> Result<Value> {

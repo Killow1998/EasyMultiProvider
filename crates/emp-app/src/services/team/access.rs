@@ -1,13 +1,109 @@
-use super::{Imported, Result, Session, TeamState, can_migrate, subscriptions, transport::request};
+use super::{
+    Imported, Result, Session, Store, TeamState, can_migrate, subscriptions, transport::request,
+};
 use crate::app::ServerState;
 use emp_modules::{Module, team::Operation};
 use emp_state::config::is_team_service_id;
 use serde_json::{Value, json};
 use std::borrow::Cow;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RequestDenied {
+    ShareUnavailable,
+    Fast,
+    Ultrafast,
+    BudgetReached(emp_modules::team::BudgetKind),
+    BudgetUnavailable,
+}
+
+impl RequestDenied {
+    pub(crate) fn public_error(
+        self,
+        state: &ServerState,
+    ) -> emp_router::native_http::NativeHttpError {
+        use emp_modules::team::BudgetKind;
+        let (status, code, chinese, english) = match self {
+            Self::ShareUnavailable => (
+                403,
+                "workspace_permission_required",
+                "此团队订阅目前未向你开放。",
+                "This team subscription is not available to your account.",
+            ),
+            Self::Fast => (
+                403,
+                "workspace_fast_forbidden",
+                "团队管理员尚未授予你 Fast（快速模式）权限。",
+                "Your team administrator has not enabled Fast for you.",
+            ),
+            Self::Ultrafast => (
+                403,
+                "workspace_ultrafast_forbidden",
+                "团队管理员尚未授予你 Ultrafast（极速模式）权限。",
+                "Your team administrator has not enabled Ultrafast for you.",
+            ),
+            Self::BudgetReached(BudgetKind::DailyUsd) => (
+                403,
+                "workspace_budget_reached",
+                "你已达到团队每日 USD 上限，团队调用已暂停。",
+                "You have reached your daily team USD limit. Team requests are paused.",
+            ),
+            Self::BudgetReached(BudgetKind::WeeklyUsd) => (
+                403,
+                "workspace_budget_reached",
+                "你已达到团队每周 USD 上限，团队调用已暂停。",
+                "You have reached your weekly team USD limit. Team requests are paused.",
+            ),
+            Self::BudgetUnavailable => (
+                503,
+                "workspace_budget_unavailable",
+                "暂时无法向团队 VPS 核对预算，团队调用已暂停。",
+                "EMP could not confirm your budget with the team VPS. Team requests are paused.",
+            ),
+        };
+        let english_ui = state
+            .backend
+            .configuration
+            .read()
+            .is_ok_and(|config| config["language"] == "en");
+        let mut error = emp_router::native_http::NativeHttpError::router(
+            status,
+            if english_ui { english } else { chinese },
+        );
+        error.body["error"]["code"] = code.into();
+        error
+    }
+}
+
 impl Session {
     fn can_sync(&self, record: &Imported) -> bool {
         self.workspace() == record.workspace && self.identity["member"]["sync"] == true
+    }
+}
+
+impl Store {
+    pub(super) fn native_usage_grant(&self, identity: &str) -> Option<(&Session, &str)> {
+        let session = self
+            .session
+            .as_ref()
+            .filter(|session| session.identity["member"]["sync"] == true)?;
+        let share = match session.identity["native_usage"].as_array() {
+            Some(grants) => grants.iter().find_map(|grant| {
+                let share = grant["share"]
+                    .as_str()
+                    .filter(|id| super::valid_identifier(id))?;
+                (grant["account_identity"] == identity).then_some(share)
+            }),
+            None => self
+                .imported
+                .values()
+                .find(|source| {
+                    source.usable()
+                        && session.workspace() == source.workspace
+                        && source.account_identity.as_deref() == Some(identity)
+                })
+                .map(|source| source.share.as_str()),
+        }?;
+        Some((session, share))
     }
 }
 
@@ -56,21 +152,39 @@ impl TeamState {
         }
     }
 
-    pub(crate) fn scope(&self, provider: &str) -> Option<Value> {
+    pub(crate) fn native_usage_scope(&self, identity: &str) -> Option<Value> {
         let store = self.store.lock().ok()?;
         let store = store.as_ref()?;
-        let source = store
+        let (session, share) = store.native_usage_grant(identity)?;
+        Some(json!({"scope":session.scope(&store.device),"share":share}))
+    }
+
+    pub(crate) fn usage_scope(
+        &self,
+        state: &ServerState,
+        route: &emp_core::ResolvedRoute,
+    ) -> Option<Value> {
+        if route.provider_id == "codex-native" || !state.backend.modules.active(Module::Team) {
+            return None;
+        }
+        let account = route.provider.value().get("account")?;
+        let provider = self.subscription_source(state, &route.provider_id, account);
+        if !self.shared_subscription(&provider) {
+            let identity =
+                subscriptions::stored_identity(&state.backend.configuration.vault, account)?;
+            return self.native_usage_scope(&identity);
+        }
+        let store = self.store.lock().ok()?;
+        let store = store.as_ref()?;
+        let record = store
             .imported
-            .get(provider)
+            .get(provider.as_ref())
             .filter(|source| source.usable())?;
         let session = store
             .session
             .as_ref()
-            .filter(|session| session.can_sync(source))?;
-        Some(json!({
-            "scope":session.scope(&store.device),
-            "share":source.share,
-        }))
+            .filter(|session| session.can_sync(record))?;
+        Some(json!({"scope":session.scope(&store.device),"share":record.share}))
     }
 
     pub(crate) fn subscription_source<'a>(
@@ -127,20 +241,31 @@ impl TeamState {
         state: &ServerState,
         route: &emp_core::ResolvedRoute,
         tier: Option<&str>,
-    ) -> std::result::Result<(), &'static str> {
+    ) -> std::result::Result<(), RequestDenied> {
         if route.provider.value().get("implicit_native") == Some(&Value::Bool(true)) {
             return Ok(());
         }
-        let source = self.subscription_source(
-            state,
-            &route.provider_id,
-            route
-                .provider
-                .value()
-                .get("account")
-                .unwrap_or(&Value::Null),
-        );
-        self.check_route(&source, state.backend.modules.active(Module::Team), tier)
+        let active = state.backend.modules.active(Module::Team);
+        let account = route
+            .provider
+            .value()
+            .get("account")
+            .unwrap_or(&Value::Null);
+        let source = self.subscription_source(state, &route.provider_id, account);
+        self.check_route(&source, active, tier)?;
+        if active
+            && tier.is_some()
+            && !self.shared_subscription(&source)
+            && let Some(identity) =
+                subscriptions::stored_identity(&state.backend.configuration.vault, account)
+            && let Ok(store) = self.store.lock()
+            && let Some((session, _)) = store
+                .as_ref()
+                .and_then(|store| store.native_usage_grant(&identity))
+        {
+            check_tier(&session.identity["member"], tier)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn check_route(
@@ -148,40 +273,31 @@ impl TeamState {
         provider: &str,
         active: bool,
         tier: Option<&str>,
-    ) -> std::result::Result<(), &'static str> {
+    ) -> std::result::Result<(), RequestDenied> {
         if !is_team_service_id(provider) {
             return Ok(());
         }
         let store = self
             .store
             .lock()
-            .map_err(|_| "Team workspace is unavailable")?;
-        let store = store.as_ref().ok_or("Team workspace is unavailable")?;
+            .map_err(|_| RequestDenied::ShareUnavailable)?;
+        let store = store.as_ref().ok_or(RequestDenied::ShareUnavailable)?;
         let Some(record) = store.imported.get(provider) else {
             return if self.configured_shares.contains(provider) {
-                Err("This team's service is not currently shared with you")
+                Err(RequestDenied::ShareUnavailable)
             } else {
                 Ok(())
             };
         };
         if record.expires_at.is_none() {
-            return Err("This team's service is not currently shared with you");
+            return Err(RequestDenied::ShareUnavailable);
         }
         let session = store
             .session
             .as_ref()
             .filter(|session| active && record.usable() && session.can_sync(record))
-            .ok_or("This team's service is not currently shared with you")?;
-        let member = &session.identity["member"];
-        match tier {
-            Some("ultrafast") if member["ultrafast"] != true => {
-                Err("Ultrafast is not permitted for this workspace member")
-            }
-            Some("priority" | "fast") if member["fast"] != true => {
-                Err("Fast is not permitted for this workspace member")
-            }
-            _ => Ok(()),
-        }
+            .ok_or(RequestDenied::ShareUnavailable)?;
+        check_tier(&session.identity["member"], tier)
     }
 
     pub(crate) fn unavailable_providers<'a>(
@@ -286,5 +402,13 @@ impl TeamState {
                 Some(&json!({"share":record.share,"version":record.version})),
             )
             .is_ok_and(|reply| reply["workspace"] == record.workspace)
+    }
+}
+
+fn check_tier(member: &Value, tier: Option<&str>) -> std::result::Result<(), RequestDenied> {
+    match tier {
+        Some("ultrafast") if member["ultrafast"] != true => Err(RequestDenied::Ultrafast),
+        Some("priority" | "fast") if member["fast"] != true => Err(RequestDenied::Fast),
+        _ => Ok(()),
     }
 }

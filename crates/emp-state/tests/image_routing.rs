@@ -25,8 +25,7 @@ fn image_routing_defaults_and_saved_preferences_survive_older_web_clients() {
         let public =
             emp_state::public_configuration_with_file_status(&saved, &Default::default(), |_| {
                 false
-            })
-            .unwrap();
+            });
         assert_eq!(
             merge_web_update(&saved, &public).unwrap()["image_routing"],
             current["image_routing"]
