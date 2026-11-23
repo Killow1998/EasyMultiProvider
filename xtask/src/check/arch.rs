@@ -57,6 +57,9 @@ const FORBIDDEN: &[(&str, &str, &str)] = &[
     ("emp-domain", "emp-*", "领域值是叶子"),
 ];
 
+/// Forbidden paths that still exist until the named PLAN step removes them.
+const TRANSITIONAL: &[(&str, &str, &str)] = &[];
+
 pub(super) fn check(root: &Path, errors: &mut Vec<String>) -> Result {
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .current_dir(root)
@@ -124,7 +127,7 @@ fn dependencies(metadata: &Value, errors: &mut Vec<String>) -> Result {
             }
         }
     }
-    forbidden(&edges, errors);
+    forbidden(&edges, TRANSITIONAL, errors);
     Ok(())
 }
 
@@ -135,7 +138,12 @@ fn matches(pattern: &str, name: &str) -> bool {
     }
 }
 
-fn forbidden(edges: &BTreeSet<(&str, &str, bool)>, errors: &mut Vec<String>) {
+fn forbidden(
+    edges: &BTreeSet<(&str, &str, bool)>,
+    transitional: &[(&str, &str, &str)],
+    errors: &mut Vec<String>,
+) {
+    let mut used = BTreeSet::new();
     let mut graph = BTreeMap::<&str, Vec<&str>>::new();
     for &(from, to, dev) in edges {
         if !dev {
@@ -158,6 +166,13 @@ fn forbidden(edges: &BTreeSet<(&str, &str, bool)>, errors: &mut Vec<String>) {
                 else {
                     continue;
                 };
+                if transitional
+                    .iter()
+                    .any(|(from, to, _)| *from == start && *to == next)
+                {
+                    used.insert((start, next));
+                    continue;
+                }
                 let (mut path, mut node) = (vec![next], next);
                 while node != start {
                     node = parent[node];
@@ -166,6 +181,13 @@ fn forbidden(edges: &BTreeSet<(&str, &str, bool)>, errors: &mut Vec<String>) {
                 path.reverse();
                 errors.push(format!("[arch] 禁止的依赖 {start} ⇢ {next}（{}）：{reason}。这是 PLAN §3.2 的硬性约束，不能靠加允许清单绕过", path.join(" → ")));
             }
+        }
+    }
+    for (from, to, step) in transitional {
+        if !used.contains(&(*from, *to)) {
+            errors.push(format!(
+                "[arch] 过渡豁免 {from} ⇢ {to}（{step} 解除）已不再需要，从 TRANSITIONAL 删除"
+            ));
         }
     }
 }
@@ -209,7 +231,7 @@ mod tests {
             ("emp-app", "emp-storage", false),
         ]);
         let mut errors = Vec::new();
-        forbidden(&edges, &mut errors);
+        forbidden(&edges, &[], &mut errors);
         assert_eq!(errors.len(), 2, "{errors:?}");
         assert!(errors.iter().any(|error| {
             error.contains("emp-router ⇢ emp-storage（emp-router → emp-mid → emp-storage）")
@@ -219,5 +241,19 @@ mod tests {
                 .iter()
                 .any(|error| error.contains("emp-files ⇢ emp-domain（emp-files → emp-domain）"))
         );
+    }
+
+    #[test]
+    fn transitional_exemptions_cover_named_paths_and_must_be_removed_when_unused() {
+        let edges = BTreeSet::from([
+            ("emp-router", "emp-state", false),
+            ("emp-state", "emp-storage", false),
+        ]);
+        let mut errors = Vec::new();
+        forbidden(&edges, &[("emp-router", "emp-storage", "C7")], &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        forbidden(&edges, &[("emp-router", "emp-config", "C7")], &mut errors);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[1].contains("过渡豁免 emp-router ⇢ emp-config（C7 解除）已不再需要"));
     }
 }
