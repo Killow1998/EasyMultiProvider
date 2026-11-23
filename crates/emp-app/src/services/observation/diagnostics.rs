@@ -1,36 +1,26 @@
 //! Bounded, content-free route observations shared by diagnostics and the UI.
-pub mod analytics;
-mod journal;
+mod analytics;
 mod recovery;
-pub mod schema;
-pub use journal::{Journal, redact_sensitive_text};
+pub(crate) mod schema;
+use emp_storage::diagnostics::{Journal, is_probe, random_id, timestamp};
 use serde_json::{Value, json};
 use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Mutex;
-pub const CAPACITY: usize = 512;
-const PROBE_CAPACITY: usize = 64;
-pub use emp_domain::MODEL_TEST_OPERATIONS;
+const CAPACITY: usize = 512;
 
-fn is_probe(operation: &str) -> bool {
-    matches!(
-        operation,
-        "model_metadata" | "model_discovery" | "catalog_refresh"
-    ) || MODEL_TEST_OPERATIONS.contains(&operation)
-}
-
-pub struct Diagnostics {
-    pub journal: Journal,
+pub(crate) struct Diagnostics {
+    pub(crate) journal: Journal,
     recent: Mutex<VecDeque<Value>>,
 }
 impl Diagnostics {
-    pub fn new(state_root: &Path) -> Self {
+    pub(crate) fn new(state_root: &Path) -> Self {
         Self {
             journal: Journal::new(state_root.join("logs")),
             recent: Mutex::new(VecDeque::new()),
         }
     }
-    pub fn record(&self, event: &Value) {
+    pub(crate) fn record(&self, event: &Value) {
         let record = schema::route_record(event, &self.journal);
         self.journal.event("info", "route_observation", &record);
         if is_probe(record["route"].as_str().unwrap_or("")) {
@@ -44,11 +34,11 @@ impl Diagnostics {
     }
     /// Called at request start; a slow generation must not age out a prompt recovery.
     /// Accepts a sanitized route record and consults only the bounded in-memory ring.
-    pub fn continuation_recovery_from(&self, record: &Value) -> Option<String> {
+    pub(crate) fn continuation_recovery_from(&self, record: &Value) -> Option<String> {
         let recent = self.recent.lock().expect("diagnostic observations");
         recovery::previous_rejection(&recent, record).map(str::to_owned)
     }
-    pub fn snapshot(&self) -> Value {
+    pub(crate) fn snapshot(&self) -> Value {
         let (persisted, probes) = self.journal.read_observations(CAPACITY);
         let recent = self.recent.lock().expect("diagnostic observations");
         let mut records = VecDeque::new();
@@ -75,25 +65,4 @@ impl Diagnostics {
         result["probes"] = json!(probes);
         result
     }
-}
-
-pub fn timestamp() -> String {
-    let now = time::OffsetDateTime::now_utc();
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",
-        now.year(),
-        u8::from(now.month()),
-        now.day(),
-        now.hour(),
-        now.minute(),
-        now.second(),
-        now.microsecond()
-    )
-}
-pub(crate) fn random_id(bytes: usize) -> String {
-    let mut value = vec![0; bytes];
-    if getrandom::getrandom(&mut value).is_err() {
-        return String::new();
-    }
-    value.iter().map(|byte| format!("{byte:02x}")).collect()
 }

@@ -4,6 +4,7 @@ use crate::cli::is_loopback;
 use crate::error::AppError;
 use crate::http::auth::{BOOTSTRAP_LIFETIME_SECONDS, BootstrapToken, SessionStore};
 use crate::services::connection_admission::{ConnectionAdmission, ConnectionAdmissionConfig};
+use crate::services::observation::diagnostics::Diagnostics;
 use crate::util::system_now;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -180,7 +181,7 @@ impl ServerHandle {
     fn start_with_config_options_inner(context: StartupContext<'_>) -> Result<Self, AppError> {
         let budget = super::resources::prepare();
         let config_path = emp_state::config::resolve_user_path(context.config_path);
-        let diagnostics = Arc::new(emp_state::diagnostics::Diagnostics::new(
+        let diagnostics = Arc::new(Diagnostics::new(
             &config_path
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
@@ -227,7 +228,7 @@ impl ServerHandle {
 
     fn start_recorded(
         context: StartupContext<'_>,
-        diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+        diagnostics: Arc<Diagnostics>,
     ) -> Result<Self, AppError> {
         let StartupContext {
             host,

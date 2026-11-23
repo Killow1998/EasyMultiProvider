@@ -1,5 +1,5 @@
 //! Model checks must not displace the conversation samples used by diagnostics.
-use emp_state::diagnostics::Diagnostics;
+use crate::services::observation::diagnostics::Diagnostics;
 use serde_json::json;
 
 #[test]

@@ -1,3 +1,4 @@
+use crate::services::observation::diagnostics::Diagnostics;
 use emp_updater::manager::{Snapshot, UpdateHooks, UpdateManager};
 use emp_updater::release::UpdateEndpoints;
 use emp_updater::{Result as UpdateResult, UpdateError};
@@ -45,7 +46,7 @@ impl UpdateState {
         installation_rolled_back: bool,
         shutdown: Arc<AtomicBool>,
         shutdown_wake: Arc<tokio::sync::Notify>,
-        diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+        diagnostics: Arc<Diagnostics>,
         modules: Arc<super::modules::Modules>,
     ) -> Self {
         let endpoints = test_endpoints().unwrap_or_default();

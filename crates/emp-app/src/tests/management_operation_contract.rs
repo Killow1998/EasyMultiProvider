@@ -1,6 +1,7 @@
 //! The real management endpoints retain their contracts and expose partial work.
 use super::internal_events_contract::journal;
 use super::*;
+use crate::services::observation::diagnostics::Diagnostics;
 
 fn completed(root: &Path, operation: &str) -> Value {
     let records = journal(root);
@@ -125,7 +126,7 @@ fn rejected_commands_do_not_claim_side_effects_or_expose_input() {
     assert_eq!(probes[0]["operation"], "model_discovery");
     assert_eq!(probes[0]["outcome"], "failed");
     assert!(!diagnostic.to_string().contains("private-provider"));
-    let persisted = emp_state::diagnostics::Diagnostics::new(&canonical_root(&root).join("state"));
+    let persisted = Diagnostics::new(&canonical_root(&root).join("state"));
     assert_eq!(persisted.snapshot()["probes"], diagnostic["probes"]);
     server.shutdown().unwrap();
     for operation in [

@@ -1,6 +1,6 @@
 //! Passive command receipts access only diagnostics, with completion distinct from
 //! observed effects and client delivery.
-use emp_state::diagnostics::Diagnostics;
+use crate::services::observation::diagnostics::Diagnostics;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Instant;

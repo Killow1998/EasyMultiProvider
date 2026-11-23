@@ -23,6 +23,7 @@ emp-modules = { path = "../emp-modules" }
 emp-protocol = { path = "../emp-protocol" }
 emp-router = { path = "../emp-router" }
 emp-state = { path = "../emp-state" }
+emp-storage = { path = "../emp-storage" }
 emp-transport = { path = "../emp-transport" }
 emp-updater = { path = "../emp-updater" }
 getrandom = "0.2.17"
@@ -33,6 +34,7 @@ polling = { version = "=3.11.0", default-features = false }
 portable-pty = { version = "=0.9.0", default-features = false }
 png = "0.18"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+regex = "1.12"
 serde.workspace = true
 serde_json = { workspace = true }
 sha2 = "0.10.9"

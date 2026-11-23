@@ -15,13 +15,7 @@ emp-files = { path = "../emp-files" }
 emp-storage = { path = "../emp-storage" }
 emp-domain = { path = "../emp-domain" }
 getrandom = "0.2.17"
-regex = "1.12"
 serde_json = { workspace = true }
-sha2 = "0.10.9"
-time = { version = "0.3.55", features = ["formatting", "parsing"] }
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
 
 [dev-dependencies]
 base64 = "0.22"

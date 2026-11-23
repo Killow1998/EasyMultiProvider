@@ -287,7 +287,7 @@ credentials and external files. Measure before introducing that mechanism.
 
 [`RequestOutcome`](../crates/emp-app/src/services/request_outcome.rs) owns a
 request's terminal result. It updates auto-review eligibility through
-`ReviewState`, then submits content-free usage/diagnostic evidence. The
+`ReviewState`, then submits content-free usage/[diagnostic evidence](../crates/emp-app/src/services/observation/diagnostics.rs). The
 observation reporter no longer decides routing cooldowns or owns their locks.
 Network evidence lives below the HTTP support-report adapter.
 
@@ -316,9 +316,9 @@ not reinterpret success, update eligibility, replay output or switch sources.
 The [journal contract](diagnostic-journal-spec.md#request-receipt-contract)
 defines what each observation proves and the remaining unknowns.
 
-Probe classification belongs to `emp-state::diagnostics::MODEL_TEST_OPERATIONS`;
+Probe classification belongs to `emp-domain::MODEL_TEST_OPERATIONS`;
 request admission, receipt creation, accounting and reports share it. Journal
-writing/redaction and bounded replay have separate owners within the same module.
+writing/redaction and bounded replay have separate owners within `emp-storage::diagnostics`.
 Replay separates probes before applying the ordinary-request retention limit.
 
 Native complete/compact forwarding now returns the existing structured result
@@ -1482,7 +1482,8 @@ plugin bus, universal internal message schema or new product capability.
 | `emp-transport` | Connections, proxy/TLS, HTTP framing, SSE and WebSocket transport |
 | `emp-context` | History pairing, context budgeting and compaction algorithms |
 | `emp-codex` | Concrete Codex runtime/catalog/history/quota integration; configuration leases, conflict detection and restoration in `configuration` |
-| `emp-state` | Persisted configuration, credentials, accounting and diagnostics storage |
+| `emp-state` | Persisted configuration, credentials and accounting |
+| `emp-storage::diagnostics` | Diagnostics storage |
 
 Crate dependencies are acyclic, and none of the libraries depends on
 `emp-app`. `xtask` is build/release tooling, not a runtime crate. The complete

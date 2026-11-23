@@ -1,5 +1,6 @@
 //! Request-owned execution facts. Activity is a bounded projection, never the ledger source.
 use super::RequestOutcome;
+use crate::services::observation::diagnostics::schema;
 use emp_domain::ResolvedRoute;
 use serde_json::json;
 
@@ -27,8 +28,8 @@ impl RequestOutcome<'_> {
         );
         let now = crate::util::system_now() as u64;
         let route = json!({"at":now,
-            "upstream_model":emp_state::diagnostics::schema::id(&self.event["upstream_model"]),
-            "protocol":emp_state::diagnostics::schema::id(&self.event["resolved_protocol"])});
+            "upstream_model":schema::id(&self.event["upstream_model"]),
+            "protocol":schema::id(&self.event["resolved_protocol"])});
         let routes = self.event["attempt_routes"].as_array_mut().unwrap();
         if routes.len() < 16 {
             routes.push(route);
@@ -124,7 +125,7 @@ impl RequestOutcome<'_> {
             "info",
             "native_retry_decision",
             &json!({
-                "request_id":emp_state::diagnostics::schema::id(&self.event["request_id"]),
+                "request_id":schema::id(&self.event["request_id"]),
                 "status":decision.status,"retry":decision.retry,"reason":reason,
             }),
         );

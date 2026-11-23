@@ -1,13 +1,14 @@
 //! One content-free receipt around every HTTP handler, including early failures.
 use crate::app::ServerState;
 use crate::http::request::{Request, RequestMethod};
+use crate::services::observation::diagnostics::Diagnostics;
 use serde_json::{Value, json};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
 pub(crate) struct HttpObservation {
-    diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+    diagnostics: Arc<Diagnostics>,
     ledger: Arc<emp_state::usage::ledger::UsageLedger>,
     events: Arc<crate::services::management_events::ManagementEvents>,
     errors: crate::services::error_presentation::ErrorPresentation,

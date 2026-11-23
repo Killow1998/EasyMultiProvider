@@ -6,10 +6,7 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 
 impl Journal {
-    pub(in crate::diagnostics) fn read_observations(
-        &self,
-        limit: usize,
-    ) -> (Vec<Value>, Vec<Value>) {
+    pub fn read_observations(&self, limit: usize) -> (Vec<Value>, Vec<Value>) {
         let mut groups = [Vec::new(), Vec::new()];
         let mut order = 0;
         for (_, _, path, _) in self.parts() {

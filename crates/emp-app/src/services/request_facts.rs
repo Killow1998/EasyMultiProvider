@@ -1,9 +1,10 @@
 //! Content-free request facts. Names, arguments, text and attachments are omitted.
+use crate::services::observation::diagnostics::schema;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 fn kind(value: &Value, default: &str) -> String {
-    let value = emp_state::diagnostics::schema::id(value);
+    let value = schema::id(value);
     if value.is_empty() {
         default.into()
     } else {

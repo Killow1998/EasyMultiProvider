@@ -2,6 +2,7 @@
 //! downstream delivery receipts cannot rewrite this upstream outcome.
 use super::request_facts;
 use crate::app::ServerState;
+use crate::services::observation::diagnostics::schema;
 use emp_domain::ResolvedRoute;
 use emp_state::usage::{account_owner, reported_usage};
 use serde_json::{Value, json};
@@ -116,7 +117,7 @@ impl<'a> RequestOutcome<'a> {
             event["thread_id"] = Value::Null;
             event["session_kind"] = json!("decision");
         }
-        if emp_state::diagnostics::MODEL_TEST_OPERATIONS.contains(&operation) {
+        if emp_domain::MODEL_TEST_OPERATIONS.contains(&operation) {
             event["session_id"] = Value::Null;
             event["thread_id"] = Value::Null;
             event["parent_thread_id"] = Value::Null;
@@ -152,10 +153,7 @@ impl<'a> RequestOutcome<'a> {
             .get("name")
             .cloned()
             .unwrap_or(Value::Null);
-        let record = emp_state::diagnostics::schema::route_record(
-            &event,
-            &state.backend.diagnostics.journal,
-        );
+        let record = schema::route_record(&event, &state.backend.diagnostics.journal);
         if let Some(prior) = state
             .backend
             .diagnostics
@@ -277,9 +275,8 @@ impl<'a> RequestOutcome<'a> {
                         "upstream"
                     })
             );
-            self.event["error_code"] = json!(emp_state::diagnostics::schema::id(&error["code"]));
-            self.event["failure_reason"] =
-                json!(emp_state::diagnostics::schema::id(&error["failure_reason"]));
+            self.event["error_code"] = json!(schema::id(&error["code"]));
+            self.event["failure_reason"] = json!(schema::id(&error["failure_reason"]));
             self.status(
                 event["status"]
                     .as_u64()

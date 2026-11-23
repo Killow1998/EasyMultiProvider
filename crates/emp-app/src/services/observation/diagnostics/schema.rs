@@ -23,10 +23,10 @@ fn text(value: &Value, pattern: &Regex) -> String {
         .unwrap_or("")
         .into()
 }
-pub fn id(value: &Value) -> String {
+pub(crate) fn id(value: &Value) -> String {
     text(value, &ID)
 }
-pub fn integer(value: &Value, maximum: i64) -> Value {
+pub(crate) fn integer(value: &Value, maximum: i64) -> Value {
     let number = match value {
         Value::Number(number) => number
             .as_i64()
@@ -54,7 +54,7 @@ fn select(value: &Value, choices: &[&str], default: &str) -> String {
 fn fallback<'a>(event: &'a Value, key: &str, alternative: &str) -> &'a Value {
     event.get(key).unwrap_or(&event[alternative])
 }
-pub fn route_record(event: &Value, journal: &Journal) -> Value {
+pub(crate) fn route_record(event: &Value, journal: &Journal) -> Value {
     let mut record = serde_json::Map::new();
     for (target, source, choices, default) in [
         (
@@ -352,8 +352,8 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
                 .filter(|code| *code >= 1000)
         ),
     );
-    let input = crate::usage::token_count(event.get("input_tokens"));
-    let cached = crate::usage::token_count(event.get("cached_input_tokens"))
+    let input = emp_storage::usage::token_count(event.get("input_tokens"));
+    let cached = emp_storage::usage::token_count(event.get("cached_input_tokens"))
         .filter(|cached| input.is_some_and(|input| *cached <= input));
     record.insert("input_tokens".into(), json!(input));
     record.insert("cached_input_tokens".into(), json!(cached));

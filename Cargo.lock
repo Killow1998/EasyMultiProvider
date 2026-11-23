@@ -818,6 +818,7 @@ dependencies = [
  "emp-protocol",
  "emp-router",
  "emp-state",
+ "emp-storage",
  "emp-transport",
  "emp-updater",
  "flate2",
@@ -835,6 +836,7 @@ dependencies = [
  "portable-pty",
  "pulldown-cmark",
  "rcgen",
+ "regex",
  "ring",
  "rusqlite",
  "rustls",
@@ -1026,12 +1028,8 @@ dependencies = [
  "emp-files",
  "emp-storage",
  "getrandom 0.2.17",
- "libc",
- "regex",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
- "time",
 ]
 
 [[package]]
@@ -1046,11 +1044,13 @@ dependencies = [
  "libc",
  "num-bigint",
  "num-traits",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "time",
  "windows-sys 0.61.2",
  "zeroize",
 ]

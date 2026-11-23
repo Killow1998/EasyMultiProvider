@@ -50,5 +50,4 @@ pub use emp_storage::{
     gemini_signatures, vault,
 };
 
-pub mod diagnostics;
 pub use emp_storage::usage;

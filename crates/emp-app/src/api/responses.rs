@@ -63,7 +63,7 @@ pub(crate) fn responses_request(
             .sessions
             .contains(request.session_token().as_deref(), now)
         && let Some(kind) = request.header("x-emp-probe")
-        && emp_state::diagnostics::MODEL_TEST_OPERATIONS.contains(&kind)
+        && emp_domain::MODEL_TEST_OPERATIONS.contains(&kind)
     {
         observation.probe(kind);
     }

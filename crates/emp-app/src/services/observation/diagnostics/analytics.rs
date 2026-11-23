@@ -88,8 +88,8 @@ fn cache_totals(records: &[&Value]) -> Value {
     let pairs = records
         .iter()
         .filter_map(|event| {
-            let total = crate::usage::token_count(event.get("input_tokens"))?;
-            let cached = crate::usage::token_count(event.get("cached_input_tokens"))?;
+            let total = emp_storage::usage::token_count(event.get("input_tokens"))?;
+            let cached = emp_storage::usage::token_count(event.get("cached_input_tokens"))?;
             (total > 0 && cached <= total).then_some((total, cached))
         })
         .collect::<Vec<_>>();
@@ -167,7 +167,7 @@ fn cache(records: &[&Value], now: OffsetDateTime) -> Value {
     }
     json!({"bucket_minutes":10,"days":DAYS,"models":models})
 }
-pub fn summarize(records: &[Value], now: OffsetDateTime) -> Value {
+pub(super) fn summarize(records: &[Value], now: OffsetDateTime) -> Value {
     let attempts = records
         .iter()
         .filter(|event| event["route"] == "responses")

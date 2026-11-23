@@ -1,9 +1,9 @@
 //! Passive receipts end at the downstream boundary and cannot access routing, retries,
 //! accounts or accounting; model outcomes retain their separate upstream boundary.
+use crate::services::observation::diagnostics::{Diagnostics, schema};
 use crate::services::request_facts::reasoning_effort;
 use emp_context::HistoryError;
 use emp_domain::ResolvedRoute;
-use emp_state::diagnostics::Diagnostics;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -118,7 +118,7 @@ impl RequestObservation {
             incoming.insert("X-EMP-Request-ID".into(), id.into());
         }
         if let Some(kind) = self.fields["operation"].as_str()
-            && emp_state::diagnostics::MODEL_TEST_OPERATIONS.contains(&kind)
+            && emp_domain::MODEL_TEST_OPERATIONS.contains(&kind)
         {
             incoming.insert("X-EMP-Probe".into(), kind.into());
         }
@@ -269,7 +269,7 @@ impl RequestObservation {
                     .unwrap_or("unknown")
             });
             self.fields["error_origin"] = json!(origin);
-            self.fields["error_code"] = json!(emp_state::diagnostics::schema::id(&error["code"]));
+            self.fields["error_code"] = json!(schema::id(&error["code"]));
             self.diagnostics.journal.event("warning", "response_error", &json!({
                 "request_id":self.fields["request_id"], "connection_id":self.fields["connection_id"],
                 "phase":self.phase.name(), "error_origin":origin, "error_code":self.fields["error_code"],
@@ -376,7 +376,7 @@ pub(crate) fn route_fields(
     let event = json!({"provider_id":route.provider_id,"upstream_model":route.upstream_model,
         "model_id":route.requested_model,"resolved_protocol":route.protocol,"dialect":route.dialect,
         "route_source":route.source,"endpoint_fingerprint":route.endpoint_fingerprint});
-    let safe = emp_state::diagnostics::schema::route_record(&event, &diagnostics.journal);
+    let safe = schema::route_record(&event, &diagnostics.journal);
     [
         "provider_id",
         "upstream_model",

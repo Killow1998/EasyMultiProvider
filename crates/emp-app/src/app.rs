@@ -3,6 +3,7 @@ use crate::services::accounts::AccountState;
 use crate::services::activity::ActivityService;
 use crate::services::configuration::ConfigurationState;
 use crate::services::integration::IntegrationState;
+use crate::services::observation::diagnostics::Diagnostics;
 use crate::util::{random_hex, system_now};
 use emp_state::{load_configuration, save_configuration};
 use emp_transport::{
@@ -93,7 +94,7 @@ pub(crate) struct BackendState {
     pub(crate) management_events: Arc<crate::services::management_events::ManagementEvents>,
     pub(crate) integration: IntegrationState,
     pub(crate) usage: crate::services::usage::UsageState,
-    pub(crate) diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+    pub(crate) diagnostics: Arc<Diagnostics>,
     pub(crate) migration_previews: crate::services::migration::MigrationPreviews,
     pub(crate) native_login: crate::services::native_login::LoginSession,
     pub(crate) account_login: crate::services::native_login::LoginSession,
@@ -116,7 +117,7 @@ impl BackendState {
         codex_binary: &str,
         native_auth_path: PathBuf,
         http_client_override: Option<HttpClient>,
-        diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+        diagnostics: Arc<Diagnostics>,
         updating: crate::services::modules::Startup,
     ) -> Result<Self, AppError> {
         crate::startup_recovery::check_pending(config_path)?;

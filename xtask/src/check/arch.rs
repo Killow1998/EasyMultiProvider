@@ -10,6 +10,7 @@ const NORMAL_BUILD: &[(&str, &str)] = &[
     ("emp-app", "emp-protocol"),
     ("emp-app", "emp-router"),
     ("emp-app", "emp-state"),
+    ("emp-app", "emp-storage"),
     ("emp-app", "emp-transport"),
     ("emp-app", "emp-updater"),
     ("emp-codex", "emp-context"),

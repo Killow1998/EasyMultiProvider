@@ -5,7 +5,7 @@ use crate::http::response::{
     body_error_response, cross_origin_response, json_error_response, response, status_text,
     unauthorized_response,
 };
-use emp_state::diagnostics::schema;
+use crate::services::observation::diagnostics::schema;
 use serde_json::{Value, json};
 use std::net::TcpStream;
 

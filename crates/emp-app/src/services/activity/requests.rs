@@ -1,5 +1,6 @@
 //! Public, content-free request receipts shared with the activity event stream.
 use super::{ACTIVITY_RETENTION_SECONDS, ActivityIdentity};
+use crate::services::observation::diagnostics::schema;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 
@@ -12,7 +13,7 @@ pub(super) struct Requests {
 
 impl Requests {
     fn entry(&mut self, id: &Value, now: u64) -> Option<&mut Value> {
-        let id = emp_state::diagnostics::schema::id(id);
+        let id = schema::id(id);
         if id.is_empty() {
             return None;
         }
@@ -76,7 +77,7 @@ impl Requests {
             "provider_name",
             "model_name_status",
         ] {
-            let value = emp_state::diagnostics::schema::id(&event[field]);
+            let value = schema::id(&event[field]);
             if !value.is_empty() {
                 record[field] = json!(value);
             }

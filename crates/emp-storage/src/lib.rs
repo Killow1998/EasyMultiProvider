@@ -1,3 +1,4 @@
+pub mod diagnostics;
 pub mod gateway_key;
 pub mod gemini_signatures;
 pub mod quota_history;
