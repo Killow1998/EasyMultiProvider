@@ -44,25 +44,50 @@ pub fn assess_with_input_estimate(
     payload: &Value,
     input_estimate: Option<u64>,
 ) -> ContextAssessment {
-    let output_reserve = output_reserve(payload, model);
-    let limits = calibration::limits(
+    let flexible = model.get("_emp_flexible_output_limit") == Some(&Value::Bool(true));
+    let requested = ["max_output_tokens", "max_completion_tokens", "max_tokens"]
+        .into_iter()
+        .find_map(|key| positive_integer(payload.get(key)));
+    let ceiling = positive_integer(model.get("output_limit"));
+    let mut output_reserve = if flexible {
+        requested.map(|n| ceiling.map_or(n, |limit| n.min(limit)))
+    } else {
+        requested.or(ceiling)
+    };
+    if flexible
+        && let (Some(requested), Some(window)) = (output_reserve, context_window(provider, model).0)
+        && !input_only_window(model)
+    {
+        // Fit a ceiling to the measured input. With an unknown estimate, the planner
+        // first compacts the input and then assesses the actual outgoing request.
+        let remaining = input_estimate.map_or(1, |input| {
+            window
+                .saturating_sub(input)
+                .saturating_sub(SAFETY_RESERVE_TOKENS)
+                .max(1)
+        });
+        output_reserve = Some(requested.min(remaining));
+    }
+    let calibration::Limits {
+        context: context_limit,
+        input: safe_input_limit,
+        source,
+        confidence,
+        ..
+    } = calibration::limits(
         provider,
         model,
         protocol,
-        output_reserve.map(|output| output.saturating_add(SAFETY_RESERVE_TOKENS)),
-    );
-    let (context_limit, safe_input_limit, source, confidence) = (
-        limits.context,
-        limits.input,
-        limits.source,
-        limits.confidence,
+        output_reserve
+            .or(flexible.then_some(0))
+            .map(|output| output.saturating_add(SAFETY_RESERVE_TOKENS)),
     );
     let decision = match (input_estimate, safe_input_limit) {
         (None, Some(_)) => "block",
         (Some(estimate), Some(limit)) if estimate > limit => {
             let excess = estimate - limit;
             let clear = excess >= CLEAR_EXCESS_TOKENS.max(limit.max(1) / 100);
-            if confidence >= 0.75 && clear {
+            if (flexible && output_reserve == Some(1)) || (confidence >= 0.75 && clear) {
                 "block"
             } else {
                 "warn"
@@ -84,11 +109,15 @@ pub fn assess_with_input_estimate(
     }
 }
 
-fn output_reserve(payload: &Value, model: &Map<String, Value>) -> Option<u64> {
-    ["max_output_tokens", "max_completion_tokens", "max_tokens"]
-        .into_iter()
-        .find_map(|key| positive_integer(payload.get(key)))
-        .or_else(|| positive_integer(model.get("output_limit")))
+pub(super) fn input_only_window(model: &Map<String, Value>) -> bool {
+    model.get("capability_sources").is_some_and(|sources| {
+        let window = &sources["context_window"];
+        window["input_only"].as_bool().unwrap_or_else(|| {
+            window["source"] == "catalog"
+                && positive_integer(model.get("context_window"))
+                    .is_some_and(|n| Some(n) == positive_integer(model.get("max_input_tokens")))
+        })
+    })
 }
 
 pub(super) fn context_window(
@@ -121,13 +150,14 @@ pub(super) fn context_window(
             .unwrap_or(match name {
                 "official" => 0.95,
                 "advertised" => 0.75,
+                "catalog" => 0.7,
                 "observed" | "manual" => 1.0,
                 "inferred" => 0.35,
                 _ => 0.0,
             });
         if matches!(
             name,
-            "official" | "advertised" | "observed" | "manual" | "inferred"
+            "official" | "advertised" | "observed" | "manual" | "catalog" | "inferred"
         ) && confidence.is_finite()
             && (0.0..=1.0).contains(&confidence)
         {

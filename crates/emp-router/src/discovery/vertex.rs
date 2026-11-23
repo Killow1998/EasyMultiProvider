@@ -1,12 +1,12 @@
 //! Google Model Garden catalog; project access is checked by the model service.
 
 use super::*;
-use emp_state::usage::pricing::{VertexModelMetadata, is_vertex_text_model};
+use emp_state::usage::pricing::{ModelMetadata, apply_catalog_metadata};
 
 pub(super) async fn discover(
     client: &HttpClient,
     provider: &Map<String, Value>,
-    vertex_models: &[VertexModelMetadata],
+    vertex_models: &[ModelMetadata],
 ) -> Result<Vec<Value>, RouterError> {
     if provider["auth_mode"] == "vertex_api_key" {
         if provider["api_key"].as_str().is_none_or(str::is_empty) {
@@ -17,7 +17,7 @@ pub(super) async fn discover(
                 "Vertex API Key is not configured",
             ));
         }
-        let models = api_key_candidates(vertex_models);
+        let models = enrich_discovered_models(provider, api_key_candidates(vertex_models));
         if provider["vertex"]["project"] == "" {
             return verify_express_models(client, provider, models).await;
         }
@@ -90,10 +90,30 @@ pub(super) async fn discover(
             }
         }
     }
-    Ok(enrich_discovered_models(provider, result))
+    let mut models = enrich_discovered_models(provider, result);
+    apply_catalog_metadata(&mut models, vertex_models);
+    Ok(models)
 }
 
-fn api_key_candidates(vertex_models: &[VertexModelMetadata]) -> Vec<Value> {
+fn is_vertex_text_model(id: &str) -> bool {
+    id.starts_with("gemini-")
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && ![
+            "-embedding",
+            "-image",
+            "-tts",
+            "-audio",
+            "-live",
+            "-transcribe",
+        ]
+        .iter()
+        .any(|kind| id.contains(kind))
+}
+
+fn api_key_candidates(vertex_models: &[ModelMetadata]) -> Vec<Value> {
     let mut models = BTreeMap::new();
     for mut model in emp_state::official_registry::published_text_models("google_gemini") {
         let id = model["upstream_id"].as_str().expect("reference model ID");
@@ -111,30 +131,7 @@ fn api_key_candidates(vertex_models: &[VertexModelMetadata]) -> Vec<Value> {
         let model = models.entry(id.clone()).or_insert_with(
             || json!({"upstream_id":id,"display_name":id,"catalog_source":"litellm"}),
         );
-        let modalities = (metadata.supports_vision.is_some()
-            || metadata.supports_audio_input.is_some())
-        .then(|| {
-            let mut modalities = vec!["text"];
-            if metadata.supports_vision == Some(true) {
-                modalities.push("image");
-            }
-            if metadata.supports_audio_input == Some(true) {
-                modalities.push("audio");
-            }
-            modalities
-        });
-        for (field, value) in [
-            ("context_window", json!(metadata.max_input_tokens)),
-            ("max_input_tokens", json!(metadata.max_input_tokens)),
-            ("output_limit", json!(metadata.max_output_tokens)),
-            ("supports_reasoning", json!(metadata.supports_reasoning)),
-            ("input_modalities", json!(modalities)),
-        ] {
-            if model[field].is_null() && !value.is_null() {
-                model[field] = value;
-                model["capability_sources"][field] = source("inferred");
-            }
-        }
+        metadata.apply(model);
     }
     models
         .into_values()

@@ -92,6 +92,8 @@ fn append_gemini_models(
             non_null(item.get("inputModalities")).or_else(|| item.get("supportedInputModalities"));
         let raw_output = non_null(item.get("outputModalities"))
             .or_else(|| item.get("supportedOutputModalities"));
+        let (input_modalities, input_source) = discovered_modalities(raw_input);
+        let (output_modalities, output_source) = discovered_modalities(raw_output);
         let input_limit = positive_int(item.get("inputTokenLimit"));
         let output_limit = positive_int(item.get("outputTokenLimit"));
         let display_name = model_text(item.get("displayName"), &model_id)?;
@@ -106,19 +108,19 @@ fn append_gemini_models(
             "supports_reasoning": supports_reasoning,
             "supports_reasoning_summaries": supports_summaries,
             "reasoning_levels": reasoning_levels,
-            "input_modalities": normalize_input_modalities(raw_input),
-            "output_modalities": normalize_output_modalities(raw_output),
+            "input_modalities": input_modalities,
+            "output_modalities": output_modalities,
             "supports_image_detail_original": false,
             "capability_sources": {
-                "supports_reasoning": source(if supports_reasoning.is_some() { "advertised" } else { "unknown" }),
-                "supports_reasoning_summaries": source(if supports_summaries.is_some() { "advertised" } else { "unknown" }),
-                "reasoning_levels": source(if reasoning_levels.is_empty() { "unknown" } else { "advertised" }),
-                "input_modalities": source(input_modalities_metadata_source(raw_input)),
-                "output_modalities": source(output_modalities_metadata_source(raw_output)),
+                "supports_reasoning": declared_source(supports_reasoning.is_some()),
+                "supports_reasoning_summaries": declared_source(supports_summaries.is_some()),
+                "reasoning_levels": declared_source(!reasoning_levels.is_empty()),
+                "input_modalities": input_source,
+                "output_modalities": output_source,
                 "supports_image_detail_original": source("unknown"),
-                "context_window": source(if input_limit > 0 { "advertised" } else { "unknown" }),
-                "max_input_tokens": source(if input_limit > 0 { "advertised" } else { "unknown" }),
-                "output_limit": source(if output_limit > 0 { "advertised" } else { "unknown" }),
+                "context_window": if input_limit > 0 { json!({"source":"advertised","input_only":true}) } else { source("unknown") },
+                "max_input_tokens": declared_source(input_limit > 0),
+                "output_limit": declared_source(output_limit > 0),
             },
             "created_at": created_timestamp(first_truthy(item, &["created", "created_at", "updated_at"])),
         }));

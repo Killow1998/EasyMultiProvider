@@ -1,11 +1,10 @@
 //! Bounded model discovery for OpenAI-compatible provider catalogs.
 
+use emp_core::json_truthy;
 use std::collections::{BTreeMap, BTreeSet};
 
-use emp_state::{
-    input_modalities_metadata_source, normalize_input_modalities, normalize_output_modalities,
-    normalize_reasoning_levels, output_modalities_metadata_source,
-};
+use emp_state::model_values::{parse_modalities, trim_model_field};
+use emp_state::normalize_reasoning_levels;
 use emp_transport::{
     FailureClass, HttpClient, HttpMethod, HttpTransportErrorKind, status_error_class,
 };
@@ -85,7 +84,7 @@ impl DiscoveryBudget {
 pub async fn discover_models(
     client: &HttpClient,
     provider: &Map<String, Value>,
-    vertex_models: &[emp_state::usage::pricing::VertexModelMetadata],
+    vertex_models: &[emp_state::usage::pricing::ModelMetadata],
 ) -> Result<Vec<Value>, RouterError> {
     if provider.contains_key("vertex") {
         return vertex::discover(client, provider, vertex_models).await;
@@ -201,6 +200,7 @@ fn advertised_reasoning(metadata: &Map<String, Value>) -> (Option<bool>, Vec<Str
     });
     let raw_levels = metadata
         .get("reasoning_levels")
+        .or_else(|| metadata.get("reasoning_effort_levels"))
         .or_else(|| metadata.get("supported_reasoning_levels"))
         .or_else(|| nested.get("effort_levels"))
         .or_else(|| nested.get("supported_efforts"));
@@ -210,12 +210,12 @@ fn advertised_reasoning(metadata: &Map<String, Value>) -> (Option<bool>, Vec<Str
     {
         let mut valid = true;
         for raw in raw_levels {
-            let value = if python_truthy(raw) {
+            let value = if json_truthy(raw) {
                 python_scalar(raw).unwrap_or_default()
             } else {
                 String::new()
             };
-            let value = python_trim(&value).to_owned();
+            let value = trim_model_field(&value).to_owned();
             if value.is_empty()
                 || value.len() > 64
                 || !value
@@ -270,11 +270,11 @@ fn advertised_reasoning_summaries(metadata: &Map<String, Value>) -> Option<bool>
 
 fn model_id(value: Option<&Value>) -> Option<String> {
     let value = value?;
-    if !python_truthy(value) {
+    if !json_truthy(value) {
         return None;
     }
     let mut value = python_scalar(value)?;
-    value = python_trim(&value).to_owned();
+    value = trim_model_field(&value).to_owned();
     if value.len() > MAX_DISCOVERY_FIELD_BYTES {
         return None;
     }
@@ -290,7 +290,7 @@ fn model_id(value: Option<&Value>) -> Option<String> {
 
 fn model_text(value: Option<&Value>, fallback: &str) -> Result<String, RouterError> {
     let text = value
-        .filter(|value| python_truthy(value))
+        .filter(|value| json_truthy(value))
         .and_then(python_scalar)
         .unwrap_or_else(|| fallback.to_owned());
     if text.len() > MAX_DISCOVERY_FIELD_BYTES {
@@ -326,11 +326,11 @@ fn created_timestamp(value: Option<&Value>) -> i64 {
     }
     let number = match value {
         Value::Number(number) => number.as_f64(),
-        Value::String(text) => python_trim(text).parse::<f64>().ok().or_else(|| {
-            OffsetDateTime::parse(python_trim(text), &Rfc3339)
+        Value::String(text) => trim_model_field(text).parse::<f64>().ok().or_else(|| {
+            OffsetDateTime::parse(trim_model_field(text), &Rfc3339)
                 .ok()
                 .map(|value| value.unix_timestamp() as f64)
-                .or_else(|| local_date_timestamp(python_trim(text)).map(|value| value as f64))
+                .or_else(|| local_date_timestamp(trim_model_field(text)).map(|value| value as f64))
         }),
         _ => None,
     };
@@ -391,41 +391,7 @@ fn first_truthy<'a>(item: &'a Map<String, Value>, fields: &[&str]) -> Option<&'a
     fields
         .iter()
         .filter_map(|field| item.get(*field))
-        .find(|value| python_truthy(value))
-}
-
-fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
-}
-
-fn python_trim(value: &str) -> &str {
-    value.trim_matches(|character: char| {
-        matches!(
-            character,
-            '\t' | '\n'
-                | '\u{b}'
-                | '\u{c}'
-                | '\r'
-                | ' '
-                | '\u{85}'
-                | '\u{a0}'
-                | '\u{1680}'
-                | '\u{2000}'..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{1c}'..='\u{1f}'
-        )
-    })
+        .find(|value| json_truthy(value))
 }
 
 fn python_scalar(value: &Value) -> Option<String> {
@@ -443,12 +409,8 @@ fn non_null(value: Option<&Value>) -> Option<&Value> {
     value.filter(|value| !value.is_null())
 }
 
-fn nested_supported(container: &Map<String, Value>, field: &str) -> Option<bool> {
-    container
-        .get(field)
-        .and_then(Value::as_object)
-        .and_then(|value| value.get("supported"))
-        .and_then(Value::as_bool)
+fn nested_supported(container: &Value, field: &str) -> Option<bool> {
+    container[field]["supported"].as_bool()
 }
 
 fn required_key(provider: &Map<String, Value>) -> Result<&str, RouterError> {
@@ -600,7 +562,7 @@ fn pagination_error() -> RouterError {
 }
 
 fn pagination_token(value: Option<&Value>) -> Result<Option<String>, RouterError> {
-    let Some(value) = value.filter(|value| python_truthy(value)) else {
+    let Some(value) = value.filter(|value| json_truthy(value)) else {
         return Ok(None);
     };
     let token = value.as_str().ok_or_else(pagination_error)?;
@@ -623,6 +585,17 @@ fn quote_query(value: &str) -> String {
         }
     }
     result
+}
+
+fn declared_source(declared: bool) -> Value {
+    source(if declared { "advertised" } else { "unknown" })
+}
+
+fn discovered_modalities(raw: Option<&Value>) -> (Vec<String>, Value) {
+    match parse_modalities(raw) {
+        Some(values) => (values, source("advertised")),
+        None => (vec![emp_state::TEXT_MODALITY.to_owned()], source("unknown")),
+    }
 }
 
 fn source(source: &str) -> Value {

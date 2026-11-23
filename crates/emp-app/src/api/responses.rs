@@ -29,7 +29,7 @@ use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::providers::persist_protocol_observation;
 use crate::services::request_preparation::{PreparedRequest, RequestPreparationError};
 use crate::util::projection_ids;
-use crate::util::python_truthy;
+use emp_core::json_truthy;
 use emp_history::HistoryError;
 use std::net::TcpStream;
 
@@ -155,7 +155,7 @@ pub(crate) fn responses_request(
             ));
         }
     };
-    let stream_requested = python_truthy(body.get("stream"));
+    let stream_requested = body.get("stream").is_some_and(json_truthy);
     observation.phase(Phase::PrepareHistory);
     body = match prepare_history(state, &route, body, &incoming) {
         Ok(body) => body,
@@ -301,7 +301,7 @@ pub(crate) fn responses_request(
         usage.observe(&compacted);
         usage.finish();
         persist_protocol_observation(state, &candidate);
-        if python_truthy(body.get("stream")) {
+        if body.get("stream").is_some_and(json_truthy) {
             let downstream = ObservedSse::new(stream, observation, &incoming);
             return match serve_generated_response(downstream, compacted, &ids) {
                 Ok(()) => ResponsesRequestResult::Streamed,
@@ -425,7 +425,7 @@ pub(crate) fn responses_request(
         ));
     }
     if route.dialect == emp_core::Dialect::CodexNative {
-        if python_truthy(body.get("stream")) {
+        if body.get("stream").is_some_and(json_truthy) {
             let _activity_guard = state.backend.activity.begin(
                 crate::services::activity::ActivityIdentity::from_route(&route),
             );
@@ -453,7 +453,7 @@ pub(crate) fn responses_request(
             native::complete(state, &route, &config, &body, &incoming),
         ));
     }
-    if python_truthy(body.get("stream")) {
+    if body.get("stream").is_some_and(json_truthy) {
         let _activity_guard =
             state
                 .backend

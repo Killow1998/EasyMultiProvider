@@ -19,6 +19,7 @@ pub fn confidence(source: &str) -> f64 {
         "official" => 0.95,
         "advertised" => 0.75,
         "observed" | "manual" => 1.0,
+        "catalog" => 0.7,
         "inherited" => 0.6,
         "inferred" => 0.35,
         _ => 0.0,
@@ -31,7 +32,14 @@ fn provenance(raw: Option<&Value>, default: &str) -> Value {
         .unwrap_or(default);
     let known = matches!(
         source,
-        "official" | "advertised" | "observed" | "manual" | "inherited" | "inferred" | "unknown"
+        "official"
+            | "advertised"
+            | "observed"
+            | "manual"
+            | "catalog"
+            | "inherited"
+            | "inferred"
+            | "unknown"
     );
     let weight = raw
         .and_then(|v| v.get("confidence"))

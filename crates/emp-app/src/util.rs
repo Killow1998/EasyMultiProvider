@@ -3,7 +3,6 @@ pub(crate) mod spaced_json;
 
 use crate::error::AppError;
 use emp_router::ProjectionIds;
-use serde_json::Value;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -32,17 +31,6 @@ pub(crate) fn projection_ids() -> Result<ProjectionIds, AppError> {
         format!("rs_{}", random_hex(16)?),
         format!("rs_{}", random_hex(16)?),
     ))
-}
-
-pub(crate) fn python_truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(value)) => *value,
-        Some(Value::Number(value)) => value.as_f64() != Some(0.0),
-        Some(Value::String(value)) => !value.is_empty(),
-        Some(Value::Array(value)) => !value.is_empty(),
-        Some(Value::Object(value)) => !value.is_empty(),
-    }
 }
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]

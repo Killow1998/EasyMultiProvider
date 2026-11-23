@@ -135,10 +135,7 @@ pub fn response_from_anthropic(
             "Anthropic upstream returned invalid content",
         ));
     };
-    if root
-        .get("error")
-        .is_some_and(|value| super::python_truthy(Some(value)))
-    {
+    if root.get("error").is_some_and(crate::json_truthy) {
         return Err(upstream_error("Anthropic upstream returned an error"));
     }
     let mut output = Vec::new();

@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+## 0.15.6 (2026-11-23)
+
+### 中文
+
+从 0.15.5 升级时，只需更新桌面版 EMP Core。团队空间模组和 VPS 团队服务可继续使用当前版本。
+
+#### 改进
+
+- **查看模型能力。** 在服务的模型列表中可以查看已声明的图像输入能力和思考档位。EMP 结合上游服务、官方资料和每日刷新的 LiteLLM 目录，区分目录列出的档位与实际可选档位，并保留手动设置。
+- **编辑模型。** 「编辑模型」里的服务、上游模型名与帮助按钮已对齐。
+- **阅读更新说明。** Core 和模组的「检查更新」窗口现在按标题和列表排版发行说明。
+
+#### 问题修复
+
+- **长对话的输入空间。** 外部模型的上下文窗口与最大输出相等时，EMP 曾可能把可用历史空间算成零。现在会区分输入上限与输入输出共用的窗口，并按本次请求预留输出。
+- **接续 Codex 会话。** 修复 Codex 为同一会话轮换历史文件后，EMP 可能找不到上一段历史并报告 `source_missing` 的问题。
+
+### English
+
+To upgrade from 0.15.5, update desktop EMP Core. Your current Team Workspace module and VPS service can stay in place.
+
+#### Improvements
+
+- **View model capabilities.** The model list for a service shows declared image input support and reasoning levels. EMP combines upstream declarations, official model information and the daily LiteLLM catalog. The list distinguishes catalog-reported levels from selectable levels and keeps your manual overrides.
+- **Edit a model.** The service and upstream model fields now line up with their help controls in the model editor.
+- **Read release notes.** Check for Updates now displays headings and lists for both Core and module releases.
+
+#### Fixes
+
+- **Input space for long conversations.** When an external model had equal context and maximum output limits, EMP could calculate zero space for history. It now distinguishes input-only limits from shared context windows and accounts for the output reserved for each request.
+- **Resume a Codex conversation.** When Codex rotated a thread’s history file, EMP could lose track of the preceding segment and report `source_missing`. EMP now follows the rotated segments.
+
 ## 0.15.5 (2026-11-22)
 
 ### 中文

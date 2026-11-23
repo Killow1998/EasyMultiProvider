@@ -4,6 +4,7 @@ use crate::{
     normalize_input_modalities, normalize_output_modalities, normalize_supported_protocols,
     output_modalities_metadata_source,
 };
+use emp_core::json_truthy;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
@@ -30,10 +31,11 @@ const NESTED_FIELDS: [&str; 6] = [
     "web_search",
     "websocket",
 ];
-const SOURCES: [(&str, f64); 7] = [
+const SOURCES: [(&str, f64); 8] = [
     ("unknown", 0.0),
     ("inherited", 0.6),
     ("inferred", 0.35),
+    ("catalog", 0.7),
     ("official", 0.95),
     ("advertised", 0.75),
     ("observed", 1.0),
@@ -86,7 +88,7 @@ pub fn merge_selected_models(
         if model.get("provider").and_then(Value::as_str) == Some(provider_id)
             && available.contains(upstream)
             && !selected.contains(upstream)
-            && model.get("enabled").is_none_or(truthy)
+            && model.get("enabled").is_none_or(json_truthy)
         {
             model["enabled"] = false.into();
             hidden += 1;
@@ -139,6 +141,9 @@ fn merge_existing(existing: &mut Value, item: &Value, observed_at: &str) {
             _ => value.clone(),
         };
         set_source(existing, field, incoming, observed_at);
+        if field == "context_window" && item["capability_sources"][field]["input_only"] == true {
+            existing["capability_sources"][field]["input_only"] = true.into();
+        }
     }
     for field in NESTED_FIELDS {
         let Some(value) = item
@@ -162,9 +167,12 @@ fn merge_existing(existing: &mut Value, item: &Value, observed_at: &str) {
         existing["capabilities"][field] = value.clone();
         set_source(existing, field, incoming, observed_at);
     }
+    if let Some(efforts) = item.get("catalog_efforts") {
+        existing["catalog_efforts"] = efforts.clone();
+    }
     for field in ["created_at", "family_id"] {
-        if let Some(value) = item.get(field).filter(|value| truthy(value))
-            && !existing.get(field).is_some_and(truthy)
+        if let Some(value) = item.get(field).filter(|value| json_truthy(value))
+            && !existing.get(field).is_some_and(json_truthy)
         {
             existing[field] = value.clone();
         }
@@ -201,14 +209,19 @@ pub fn build_new_model(item: &Value, provider: &str, observed_at: &str) -> Value
             );
         }
     }
+    if let Some(window) = sources.get_mut("context_window")
+        && item["capability_sources"]["context_window"]["input_only"] == true
+    {
+        window["input_only"] = true.into();
+    }
     let mut model = json!({
         "id": format!("{provider}/{upstream}"), "provider": provider, "upstream_id": upstream,
         "family_id": item.get("family_id").cloned().unwrap_or(json!("")),
-        "display_name": item.get("display_name").filter(|value| truthy(value)).cloned().unwrap_or(json!(upstream)),
+        "display_name": item.get("display_name").filter(|value| json_truthy(value)).cloned().unwrap_or(json!(upstream)),
         "description": item.get("description").cloned().unwrap_or(json!("")),
         "supports_reasoning": item.get("supports_reasoning").and_then(Value::as_bool),
         "supports_reasoning_summaries": item.get("supports_reasoning_summaries").and_then(Value::as_bool),
-        "reasoning_levels": item.get("reasoning_levels").filter(|value| truthy(value)).cloned().unwrap_or(json!([])),
+        "reasoning_levels": item.get("reasoning_levels").filter(|value| json_truthy(value)).cloned().unwrap_or(json!([])),
         "reasoning_control": item.get("reasoning_control").cloned().unwrap_or(json!("")),
         "context_window": integer(item.get("context_window")),
         "max_input_tokens": integer(item.get("max_input_tokens")),
@@ -220,6 +233,9 @@ pub fn build_new_model(item: &Value, provider: &str, observed_at: &str) -> Value
         "supports_image_detail_original": item.get("supports_image_detail_original").and_then(Value::as_bool).unwrap_or(false),
         "capability_sources": sources,
     });
+    if let Some(efforts) = item.get("catalog_efforts") {
+        model["catalog_efforts"] = efforts.clone();
+    }
     if !capabilities.is_empty() {
         model["capabilities"] = Value::Object(capabilities);
     }
@@ -257,7 +273,7 @@ fn incoming_source<'a>(item: &'a Value, field: &str) -> &'a str {
         | "output_limit"
         | "reasoning_levels"
         | "supported_protocols" => {
-            if item.get(field).is_some_and(truthy) {
+            if item.get(field).is_some_and(json_truthy) {
                 "advertised"
             } else {
                 "unknown"
@@ -306,14 +322,4 @@ fn set_source(model: &mut Value, field: &str, source: &str, observed_at: &str) {
         model["capability_sources"] = json!({});
     }
     model["capability_sources"][field] = provenance(source, observed_at);
-}
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
 }
