@@ -264,7 +264,7 @@ impl ServerHandle {
         let update = match &markers.ready_path {
             None => Startup::Normal,
             Some(marker) => {
-                if emp_state::update::worker::validate_startup_marker(crate::VERSION, marker)
+                if emp_updater::worker::validate_startup_marker(crate::VERSION, marker)
                     .map_err(std::io::Error::other)?
                 {
                     Startup::PreparedUpdate

@@ -5,8 +5,8 @@ mod parent;
 
 use crate::package::{KillOnDrop, Os, Target, http, reserve_loopback_port};
 use crate::{PRODUCT_NAME, Result, copy, physical, project_root, sha256_file, temporary_directory};
-use emp_state::update::extract::extract_candidate;
-use emp_state::update::worker::{MACOS_BUNDLE_BINARY, MACOS_LEGACY_BINARY, installation_target};
+use emp_updater::extract::extract_candidate;
+use emp_updater::worker::{MACOS_BUNDLE_BINARY, MACOS_LEGACY_BINARY, installation_target};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

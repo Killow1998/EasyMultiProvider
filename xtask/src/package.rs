@@ -1,7 +1,7 @@
 use crate::{
     PRODUCT_NAME, Result, VERSION, copy, make_executable, project_root, run_command, windows,
 };
-use emp_state::update::worker::{MACOS_BUNDLE_BINARY, MACOS_LEGACY_BINARY};
+use emp_updater::worker::{MACOS_BUNDLE_BINARY, MACOS_LEGACY_BINARY};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::collections::BTreeSet;

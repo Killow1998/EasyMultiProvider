@@ -23,7 +23,7 @@ pub struct UpdateDiagnostic {
     pub retry_limit: u8,
 }
 
-pub(in crate::update) fn path_for(args: &[String]) -> Option<PathBuf> {
+pub(crate) fn path_for(args: &[String]) -> Option<PathBuf> {
     let config = args.windows(2).find(|pair| pair[0] == "--config")?;
     Some(
         Path::new(&config[1])
@@ -32,24 +32,24 @@ pub(in crate::update) fn path_for(args: &[String]) -> Option<PathBuf> {
     )
 }
 
-pub(in crate::update) fn read(path: &Path) -> Option<UpdateDiagnostic> {
-    let raw = crate::read_file_limited(path, 4096).ok()?;
+pub(crate) fn read(path: &Path) -> Option<UpdateDiagnostic> {
+    let raw = emp_files::read_file_limited(path, 4096).ok()?;
     serde_json::from_slice(&raw).ok()
 }
 
-pub(in crate::update) fn save(path: Option<&Path>, diagnostic: &UpdateDiagnostic) {
+pub(crate) fn save(path: Option<&Path>, diagnostic: &UpdateDiagnostic) {
     let Ok(raw) = serde_json::to_vec(diagnostic) else {
         return;
     };
     eprintln!("EMP update failure: {}", String::from_utf8_lossy(&raw));
     if let Some(path) = path
-        && let Err(error) = crate::atomic_write_private_state(path, &raw)
+        && let Err(error) = emp_files::atomic_write_private_state(path, &raw)
     {
         eprintln!("EMP update diagnostic save failed: {error:?}");
     }
 }
 
-pub(in crate::update) fn timestamp() -> u64 {
+pub(crate) fn timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -57,7 +57,7 @@ pub(in crate::update) fn timestamp() -> u64 {
 }
 
 impl UpdateManager {
-    pub(in crate::update) fn stage(&self, stage: &str) {
+    pub(crate) fn stage(&self, stage: &str) {
         self.trace_stage(stage);
         if let Ok(mut diagnostic) = self.0.diagnostic.lock() {
             *diagnostic = UpdateDiagnostic {
@@ -67,7 +67,7 @@ impl UpdateManager {
         }
     }
 
-    pub(in crate::update) fn io_error(&self, stage: &str, error: std::io::Error) -> UpdateError {
+    pub(crate) fn io_error(&self, stage: &str, error: std::io::Error) -> UpdateError {
         self.stage(stage);
         if let Ok(mut diagnostic) = self.0.diagnostic.lock() {
             diagnostic.reason = Some(if error.kind() == std::io::ErrorKind::TimedOut {
@@ -96,7 +96,7 @@ impl UpdateManager {
         error.into()
     }
 
-    pub(in crate::update) fn transport_error(&self, error: &reqwest::Error) {
+    pub(crate) fn transport_error(&self, error: &reqwest::Error) {
         if let Ok(mut diagnostic) = self.0.diagnostic.lock() {
             diagnostic.reason = Some(
                 if error.is_timeout() {
@@ -119,21 +119,21 @@ impl UpdateManager {
         }
     }
 
-    pub(in crate::update) fn http_error(&self, status: u16) {
+    pub(crate) fn http_error(&self, status: u16) {
         if let Ok(mut diagnostic) = self.0.diagnostic.lock() {
             diagnostic.http_status = Some(status);
             diagnostic.reason = Some("http_status".into());
         }
     }
 
-    pub(in crate::update) fn incomplete_download(&self) {
+    pub(crate) fn incomplete_download(&self) {
         self.stage("download_package");
         if let Ok(mut diagnostic) = self.0.diagnostic.lock() {
             diagnostic.reason = Some("incomplete_download".into());
         }
     }
 
-    pub(in crate::update) fn failed(&self, error: UpdateError) {
+    pub(crate) fn failed(&self, error: UpdateError) {
         let snapshot = self.snapshot();
         let mut diagnostic = self
             .0

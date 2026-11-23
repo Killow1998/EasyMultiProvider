@@ -1,7 +1,7 @@
 #[cfg(any(unix, windows))]
 use super::probe_candidate_version;
 use super::{UpdateManager, nonce_with};
-use crate::update::release::UpdateEndpoints;
+use crate::release::UpdateEndpoints;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Barrier};
@@ -33,11 +33,11 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
     assert_eq!(
         probe_candidate_version(&nonzero, "0.12.0", root.path(), Duration::from_secs(1))
             .unwrap_err(),
-        crate::update::UpdateError("version_mismatch")
+        crate::UpdateError("version_mismatch")
     );
     assert_eq!(
         probe_candidate_version(&valid, "0.12.1", root.path(), Duration::from_secs(1)).unwrap_err(),
-        crate::update::UpdateError("version_mismatch")
+        crate::UpdateError("version_mismatch")
     );
 }
 
@@ -53,14 +53,14 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
             Duration::from_secs(1)
         )
         .unwrap_err(),
-        crate::update::UpdateError("update_failed")
+        crate::UpdateError("update_failed")
     );
     let denied = candidate_script(root.path(), "denied", "exit 0");
     std::fs::set_permissions(&denied, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
     assert_eq!(
         probe_candidate_version(&denied, "0.12.0", root.path(), Duration::from_secs(1))
             .unwrap_err(),
-        crate::update::UpdateError("directory_not_writable")
+        crate::UpdateError("directory_not_writable")
     );
 }
 
@@ -77,7 +77,7 @@ fn candidate_version_probe_times_out_and_reaps_the_child() {
     assert_eq!(
         probe_candidate_version(&hanging, "0.12.0", root.path(), Duration::from_millis(100))
             .unwrap_err(),
-        crate::update::UpdateError("update_failed")
+        crate::UpdateError("update_failed")
     );
     assert!(started.elapsed() < Duration::from_secs(2));
     let pid: i32 = std::fs::read_to_string(root.path().join("candidate-version.stdout"))
@@ -106,7 +106,7 @@ fn candidate_version_probe_restores_error_mode_after_bad_image() {
     assert_eq!(
         probe_candidate_version(&binary, "0.12.0", root.path(), Duration::from_secs(1))
             .unwrap_err(),
-        crate::update::UpdateError("update_failed")
+        crate::UpdateError("update_failed")
     );
     // SAFETY: GetThreadErrorMode takes no arguments and reads only this thread.
     assert_eq!(unsafe { GetThreadErrorMode() }, previous);
@@ -162,7 +162,7 @@ fn concurrent_checks_start_only_one_release_job() {
         Vec::new(),
         env!("CARGO_PKG_VERSION"),
         UpdateEndpoints::for_source(&base, format!("{base}/latest")),
-        || Err(crate::update::UpdateError("worker_failed")),
+        || Err(crate::UpdateError("worker_failed")),
     )
     .unwrap();
     let callers_gate = Arc::new(Barrier::new(3));
@@ -207,7 +207,7 @@ fn startup_rollback_is_visible_in_the_initial_snapshot() {
         env!("CARGO_PKG_VERSION"),
         UpdateEndpoints::default(),
         true,
-        || Err(crate::update::UpdateError("worker_failed")),
+        || Err(crate::UpdateError("worker_failed")),
     )
     .unwrap();
     let snapshot = manager.snapshot();
@@ -218,7 +218,7 @@ fn startup_rollback_is_visible_in_the_initial_snapshot() {
 #[test]
 fn nonce_random_source_failure_is_returned() {
     let error = nonce_with(|_| Err(getrandom::Error::UNSUPPORTED)).unwrap_err();
-    assert_eq!(error, crate::update::UpdateError("update_failed"));
+    assert_eq!(error, crate::UpdateError("update_failed"));
 }
 
 #[cfg(target_os = "linux")]
@@ -339,7 +339,7 @@ fn dpkg_owned_install_requires_manual_migration_before_any_download() {
 
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let name = crate::update::release::current_asset_name().unwrap();
+    let name = crate::release::current_asset_name().unwrap();
     let release = serde_json::json!({
         "tag_name":"v9.0.0", "draft":false, "prerelease":false,
         "assets":[{"name":name, "digest":format!("sha256:{}", "a".repeat(64)),
@@ -367,7 +367,7 @@ fn dpkg_owned_install_requires_manual_migration_before_any_download() {
         Vec::new(),
         "0.11.2",
         UpdateEndpoints::for_source(&base, format!("{base}/latest")),
-        || Err(crate::update::UpdateError("worker_failed")),
+        || Err(crate::UpdateError("worker_failed")),
     )
     .unwrap();
     Arc::get_mut(&mut manager.0).unwrap().dpkg_query = query;
@@ -378,7 +378,7 @@ fn dpkg_owned_install_requires_manual_migration_before_any_download() {
     assert_eq!(snapshot.manual_update, "linux_system_migration");
     assert_eq!(
         manager.start("install").unwrap_err(),
-        crate::update::UpdateError("update_unavailable")
+        crate::UpdateError("update_unavailable")
     );
 
     // Ownership can change after a check: the installer must reject it before opening
@@ -386,7 +386,7 @@ fn dpkg_owned_install_requires_manual_migration_before_any_download() {
     manager.0.snapshot.lock().unwrap().manual_update.clear();
     assert_eq!(
         manager.install(),
-        Err(crate::update::UpdateError("system_install_manual"))
+        Err(crate::UpdateError("system_install_manual"))
     );
 }
 
@@ -479,7 +479,7 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
 fn release_check_retains_notes_without_starting_installation() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let name = crate::update::release::current_asset_name().unwrap();
+    let name = crate::release::current_asset_name().unwrap();
     let notes = "## Fixes\n- Restore and layout corrections\n<script>sample text</script>";
     let body = serde_json::to_vec(&serde_json::json!({
         "tag_name":"v9.0.0","draft":false,"prerelease":false,"body":notes,

@@ -820,6 +820,7 @@ dependencies = [
  "emp-router",
  "emp-state",
  "emp-transport",
+ "emp-updater",
  "flate2",
  "getrandom 0.2.17",
  "hmac 0.12.1",
@@ -1012,20 +1013,17 @@ dependencies = [
  "emp-files",
  "emp-modules",
  "fernet",
- "flate2",
  "getrandom 0.2.17",
  "libc",
  "num-bigint",
  "num-traits",
  "percent-encoding",
  "regex",
- "reqwest",
  "rusqlite",
  "scrypt",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "tar",
  "tempfile",
  "time",
  "url",
@@ -1056,6 +1054,23 @@ dependencies = [
  "url",
  "windows-sys 0.61.2",
  "zstd 0.13.3",
+]
+
+[[package]]
+name = "emp-updater"
+version = "0.15.4"
+dependencies = [
+ "emp-files",
+ "flate2",
+ "getrandom 0.2.17",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4248,7 +4263,7 @@ name = "xtask"
 version = "0.15.4"
 dependencies = [
  "emp-modules",
- "emp-state",
+ "emp-updater",
  "flate2",
  "serde_json",
  "sha2 0.10.9",

@@ -57,5 +57,4 @@ pub use web_session::{
 };
 
 pub mod diagnostics;
-pub mod update;
 pub mod usage;

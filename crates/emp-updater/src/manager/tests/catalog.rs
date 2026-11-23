@@ -1,9 +1,9 @@
 //! Cache persistence and HTTP validators through the real updater client.
 use super::*;
-use crate::update::release::MAX_RELEASE_BYTES;
+use crate::release::MAX_RELEASE_BYTES;
 
 fn release(base: &str, notes: &str) -> String {
-    let name = crate::update::release::current_asset_name().unwrap();
+    let name = crate::release::current_asset_name().unwrap();
     serde_json::json!({
         "tag_name":"v9.0.0", "draft":false, "prerelease":false, "body":notes,
         "assets":[{"name":name,"digest":format!("sha256:{}","a".repeat(64)),"size":8,
@@ -111,7 +111,7 @@ fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
     for expected in ["check_failed", "update_failed", "invalid_release"] {
         assert_eq!(
             restarted.check().unwrap_err(),
-            crate::update::UpdateError(expected)
+            crate::UpdateError(expected)
         );
         assert_eq!(
             restarted.snapshot().release_notes,
@@ -166,7 +166,7 @@ fn not_modified_without_cached_metadata_is_rejected() {
     let manager = manager(root.path(), &base, "0.13.7");
     assert_eq!(
         manager.check().unwrap_err(),
-        crate::update::UpdateError("invalid_release")
+        crate::UpdateError("invalid_release")
     );
     assert!(manager.snapshot().release_notes.is_empty());
     assert_eq!(server.join().unwrap(), 1);

@@ -5,7 +5,7 @@ use std::time::Duration;
 pub(super) const MAX_RETRIES: u8 = 3;
 
 impl UpdateManager {
-    pub(in crate::update) fn retry_network(
+    pub(crate) fn retry_network(
         &self,
         mut operation: impl FnMut() -> Result<()>,
     ) -> Result<()> {

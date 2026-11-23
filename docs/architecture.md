@@ -110,7 +110,8 @@ to implement. File length is a navigation signal, not a measure of module depth.
 | `emp-codex` | Codex catalogs, concrete history access, quota helpers and runtime discovery | Retain concrete Codex integration; reduce application callers' knowledge of its storage details |
 | `emp-integration` | Configuration leases, conflict detection and recovery | Retain transactional ownership |
 | `emp-files` | Private files, atomic writes, file transactions, cross-process locks and Windows ACLs | Independent of other EMP crates; preserve file formats, permissions and lock semantics |
-| `emp-state` | Configuration, vault, update/usage/diagnostic subsystems | Use `emp-files` for file operations; retain existing root, `filesystem` and `lock` API paths |
+| `emp-state` | Configuration, vault, usage and diagnostic subsystems | Use `emp-files` for file operations; retain existing root, `filesystem` and `lock` API paths |
+| `emp-updater` | Official release discovery, download, verification, extraction and recoverable installation | Depends only on `emp-files` among EMP crates; preserve release formats, installation layouts and worker protocol |
 | `emp-app` | Composition, HTTP/UI, request orchestration and mutable services | Primary refactoring target |
 
 `emp-state::filesystem::VaultStore` retains master-key sources and vault encoding.
@@ -119,6 +120,11 @@ ACL exports support the two vault legacy-key tests in
 `emp-state/src/filesystem/windows_tests.rs`. The Windows private-state CI step
 runs these alongside `emp-files::private_windows::tests`, skipping only the
 directory-reparse test that requires symlink privileges.
+
+`emp-app` and `xtask` call `emp-updater` directly. Its source and existing tests
+live in [`emp-updater/src/`](../crates/emp-updater/src/); the Windows update-process
+CI step selects `emp-updater`'s `process::tests`. Update behavior is described in
+[`self-update.md`](self-update.md).
 
 No library crate depends on `emp-app`. The principal layering leaks are inside
 the application, where most modules can access the complete `ServerState`.

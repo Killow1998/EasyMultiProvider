@@ -9,7 +9,7 @@ pub(super) struct UpdateTrace {
 }
 
 impl UpdateManager {
-    pub(in crate::update) fn trace_download(
+    pub(crate) fn trace_download(
         &self,
         received: u64,
         expected: u64,

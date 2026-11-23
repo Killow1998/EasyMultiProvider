@@ -115,7 +115,7 @@ fn query_output(
 #[cfg(test)]
 mod tests {
     use super::{package_version, system_install_manual};
-    use crate::update::UpdateError;
+    use crate::UpdateError;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;

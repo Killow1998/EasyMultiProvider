@@ -291,7 +291,7 @@ pub(crate) fn run() -> Result<ExitCode, String> {
         }
         Cli::MigrateHistory { thread_id, json } => return history_migration::run(&thread_id, json),
         Cli::ApplyUpdate(path) => {
-            return emp_state::update::worker::run(&path)
+            return emp_updater::worker::run(&path)
                 .map(ExitCode::from)
                 .map_err(|error| error.to_string());
         }

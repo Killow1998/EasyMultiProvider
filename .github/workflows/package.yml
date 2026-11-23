@@ -122,7 +122,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo +1.93.1 test --locked -p emp-state --lib update::process::tests
+          cargo +1.93.1 test --locked -p emp-updater --lib process::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +1.93.1 test --locked -p emp-app --lib configured_browser_helpers_never_allocate_a_console
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

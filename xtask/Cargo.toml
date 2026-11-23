@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 emp-modules = { path = "../crates/emp-modules" }
-emp-state = { path = "../crates/emp-state" }
+emp-updater = { path = "../crates/emp-updater" }
 flate2 = "1.1"
 serde_json = { workspace = true }
 sha2 = "0.10.9"

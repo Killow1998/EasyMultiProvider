@@ -1,6 +1,6 @@
-use emp_state::update::manager::{Snapshot, UpdateHooks, UpdateManager};
-use emp_state::update::release::UpdateEndpoints;
-use emp_state::update::{Result as UpdateResult, UpdateError};
+use emp_updater::manager::{Snapshot, UpdateHooks, UpdateManager};
+use emp_updater::release::UpdateEndpoints;
+use emp_updater::{Result as UpdateResult, UpdateError};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};

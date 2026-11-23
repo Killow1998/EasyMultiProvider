@@ -60,7 +60,7 @@ pub fn installation_target(executable: &Path) -> Result<(PathBuf, String)> {
     }
 }
 fn write(path: &Path, value: &serde_json::Value) -> Result<()> {
-    crate::filesystem::atomic_write_private_state(
+    emp_files::atomic_write_private_state(
         path,
         &serde_json::to_vec(value).map_err(|_| UpdateError("invalid_update_plan"))?,
     )
@@ -178,7 +178,7 @@ pub fn run(plan_path: &Path) -> Result<u8> {
         return Ok(0);
     }
     if let Err(error) = &install {
-        let stage = crate::read_file_limited(&job.join("worker-status.json"), 4096)
+        let stage = emp_files::read_file_limited(&job.join("worker-status.json"), 4096)
             .ok()
             .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
             .and_then(|value| {
@@ -325,7 +325,7 @@ mod windows_tests {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::run;
-    use crate::update::process::created;
+    use crate::process::created;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 

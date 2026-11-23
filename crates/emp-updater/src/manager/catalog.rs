@@ -1,6 +1,6 @@
 //! Last-good release metadata: local first, conditionally refreshed from its source.
 use super::*;
-use crate::update::release::{limit_release_notes, normalize_current_version, parse_version};
+use crate::release::{limit_release_notes, normalize_current_version, parse_version};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -108,10 +108,10 @@ pub(super) fn load(
     current_version: &str,
 ) -> Option<CachedRelease> {
     let path = diagnostic_path?.with_file_name("update-release.json");
-    let raw = crate::read_file_limited(&path, MAX_RELEASE_BYTES + 4096).ok()?;
+    let raw = emp_files::read_file_limited(&path, MAX_RELEASE_BYTES + 4096).ok()?;
     let mut cached: CachedRelease = serde_json::from_slice(&raw).ok()?;
     if cached.source == "https://api.github.com/repos/Killow1998/EasyMultiProvider/releases/latest"
-        && endpoints.release_api_url == crate::update::release::RELEASE_API_URL
+        && endpoints.release_api_url == crate::release::RELEASE_API_URL
     {
         cached.source = endpoints.release_api_url.clone();
         cached.etag = None;
@@ -145,7 +145,7 @@ impl UpdateManager {
                 if let Ok(raw) = serde_json::to_vec(cached)
                     && raw.len() <= MAX_RELEASE_BYTES
                 {
-                    let _ = crate::atomic_write_private_state(&path, &raw);
+                    let _ = emp_files::atomic_write_private_state(&path, &raw);
                 }
             } else {
                 let _ = fs::remove_file(path);
@@ -302,7 +302,7 @@ impl UpdateManager {
         let desired = current_asset_name()?;
         #[cfg(target_os = "linux")]
         let migration = snapshot.supported
-            && crate::update::linux::system_install_manual(
+            && crate::linux::system_install_manual(
                 &installation_target(&self.0.executable)?.0,
                 &self.0.dpkg_query,
             )?;

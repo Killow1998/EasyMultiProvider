@@ -25,6 +25,7 @@ emp-protocol = { path = "../emp-protocol" }
 emp-router = { path = "../emp-router" }
 emp-state = { path = "../emp-state" }
 emp-transport = { path = "../emp-transport" }
+emp-updater = { path = "../emp-updater" }
 getrandom = "0.2.17"
 hmac = "0.12.1"
 if-addrs = "=0.15.0"

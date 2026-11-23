@@ -1,6 +1,6 @@
 use super::worker::Worker;
 use emp_modules::Module;
-use emp_state::update::{manager::UpdateManager, release::module_version as module_version_rank};
+use emp_updater::{manager::UpdateManager, release::module_version as module_version_rank};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{

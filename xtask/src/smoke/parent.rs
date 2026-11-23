@@ -44,7 +44,7 @@ impl Parent {
             .stderr(log);
         let mut process = KillOnDrop(command.spawn().map_err(|error| error.to_string())?);
         let pid = process.0.id();
-        let created = emp_state::update::created(pid).ok_or("old EMP birth time unavailable")?;
+        let created = emp_updater::created(pid).ok_or("old EMP birth time unavailable")?;
         let deadline = Instant::now() + Duration::from_secs(20);
         let bootstrap = loop {
             if process

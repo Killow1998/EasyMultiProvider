@@ -1,5 +1,5 @@
 use super::*;
-use crate::update::release::{ModuleRelease, module_assets, module_version};
+use crate::release::{ModuleRelease, module_assets, module_version};
 
 impl UpdateManager {
     pub fn download_official_module(
@@ -223,7 +223,7 @@ impl UpdateManager {
             .ok_or(UpdateError("update_unavailable"))?;
         let (target, relative) = installation_target(&self.0.executable)?;
         #[cfg(target_os = "linux")]
-        if crate::update::linux::system_install_manual(&target, &self.0.dpkg_query)? {
+        if crate::linux::system_install_manual(&target, &self.0.dpkg_query)? {
             return Err(UpdateError("system_install_manual"));
         }
         let parent = target
@@ -287,7 +287,7 @@ impl UpdateManager {
             "modules_prepared": true,
         });
         self.stage("write_plan");
-        crate::filesystem::atomic_write_private_state(
+        emp_files::atomic_write_private_state(
             &job.join("plan.json"),
             &serde_json::to_vec(&plan).map_err(|_| UpdateError("update_failed"))?,
         )
@@ -348,7 +348,7 @@ impl UpdateManager {
         Ok(())
     }
 
-    pub(in crate::update) fn open_package(&self, raw_url: &str) -> Result<Response> {
+    pub(crate) fn open_package(&self, raw_url: &str) -> Result<Response> {
         self.get(
             raw_url,
             "application/octet-stream",

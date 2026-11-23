@@ -4,7 +4,7 @@ mod ui;
 mod worker;
 
 use emp_modules::{Command, Module};
-use emp_state::update::{manager::UpdateManager, release::module_version as module_version_rank};
+use emp_updater::{manager::UpdateManager, release::module_version as module_version_rank};
 use packages::{Artifact, Install, Installs, Packages, release_channel};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -441,8 +441,8 @@ impl Modules {
         &self,
         updater: &UpdateManager,
         version: &str,
-    ) -> emp_state::update::Result<()> {
-        use emp_state::update::UpdateError;
+    ) -> emp_updater::Result<()> {
+        use emp_updater::UpdateError;
         if let Some(error) = self.registry_error {
             return Err(UpdateError(error));
         }

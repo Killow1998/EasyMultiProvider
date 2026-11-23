@@ -156,7 +156,7 @@ pub(crate) fn run_server(
         if open_browser && initial_launch && !crate::cli::desktop::open_browser(&bootstrap_url) {
             println!("Browser did not open automatically; use the URL above.");
         }
-        emp_state::update::worker::mark_ready(crate::VERSION, markers.ready_path.clone())
+        emp_updater::worker::mark_ready(crate::VERSION, markers.ready_path.clone())
             .map_err(std::io::Error::other)?;
         if !(open_browser && crate::tray::wait(Arc::clone(&server.state))) {
             server.state.wait_for_shutdown().await;
