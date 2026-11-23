@@ -33,7 +33,7 @@ test('U05 不可达发布源检查失败后提供中英文可读提示', async (
     await expect(dialog(page).getByRole('status').filter({
       hasText: chinese ? /检查版本时失败/ : /Update failed while checking for a release/,
     })).toContainText(chinese ? '网络' : 'network');
-    expect((await emp.json('/api/updates')).state).toBe('error');
+    await expect.poll(async () => (await emp.json('/api/updates')).state).toBe('error');
     await expect(dialog(page).getByRole('heading', { name: chinese ? '更新内容' : 'What changed', exact: true })).toBeVisible();
     await dialog(page).getByRole('button', { name: chinese ? '关闭' : 'Close', exact: true }).click();
   }
@@ -112,7 +112,10 @@ test('U05 中英文教程与演示离线可读，返回目录保留管理状态'
   await emp.login(page);
   await addAPIService(page, 'Tutorial API', upstream.url + '/v1');
   for (const chinese of [false, true]) {
-    if (chinese) await page.getByRole('button', { name: '切换为简体中文', exact: true }).click();
+    if (chinese) {
+      await page.getByRole('button', { name: '切换为简体中文', exact: true }).click();
+      await expect.poll(async () => (await emp.storedConfig()).language).toBe('zh-CN');
+    }
     const before = await emp.storedConfig();
     await page.getByRole('button', { name: chinese ? '使用教程' : 'Tutorials', exact: true }).click();
     const lesson = chinese ? '添加外部服务' : 'Add an external service';
