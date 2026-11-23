@@ -68,7 +68,7 @@ image-MCP override and otherwise version 3 for older EMP readers.
 
 | ID | Owner | Phases / transition triggers | Representation and boundary |
 |---|---|---|---|
-| I01 | [Web session](../crates/emp-state/src/web_session.rs), [gateway key](../crates/emp-state/src/gateway_key.rs) | Bootstrap claim → management session; gateway credential → request authorization | I. Management authorization, gateway access and upstream login are distinct identities. |
+| I01 | [Web session](../crates/emp-storage/src/web_session.rs), [gateway key](../crates/emp-storage/src/gateway_key.rs) | Bootstrap claim → management session; gateway credential → request authorization | I. Management authorization, gateway access and upstream login are distinct identities. |
 | I02 | [Login credentials](../crates/emp-app/src/services/native_login/credentials.rs), [login service](../crates/emp-app/src/services/native_login.rs) | Subscription / user API key / EMP Local Key → explicit replacement → configuration update → runtime restart required | M. Keep/remove Other is an explicit action; changing login must not erase usage identity. |
 | I03 | [Login session](../crates/emp-app/src/services/native_login.rs) | Idle → Pending → Completed / Failed / Cancelled; start again → Pending | E after this audit. Native and Other each own a session. Repeated status reads do not start login. |
 | I04 | [Official login helper](../crates/emp-codex/src/quota/process/subscription_login.rs) | Start child → publish browser/device challenge → collect result → cancel/drop child | M. Helper completion precedes credential installation; the service owns installation. |

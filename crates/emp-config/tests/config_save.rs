@@ -1,0 +1,273 @@
+use emp_config::{
+    CONFIG_PATH_ENV, ConfigError, config_path, load_configuration, provider_api_key,
+    save_configuration, save_configuration_in_transaction,
+};
+use emp_files::{FilesystemError, with_file_transaction};
+use emp_storage::VaultStore;
+use serde_json::{Value, json};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use tempfile::tempdir;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+const TEST_KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+const MASKED_API_KEY: &str = "••••••••";
+
+fn write_json(path: &Path, value: &Value) {
+    fs::create_dir_all(path.parent().expect("configuration parent"))
+        .expect("create configuration parent");
+    fs::write(
+        path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(value).expect("pretty JSON")
+        ),
+    )
+    .expect("write JSON");
+}
+
+fn root(directory: &tempfile::TempDir) -> PathBuf {
+    fs::canonicalize(directory.path()).expect("canonical temporary directory")
+}
+
+#[test]
+fn config_save_round_trips_and_manages_derived_secrets() {
+    let directory = tempdir().expect("temporary directory");
+    let root = root(&directory);
+    let path = root.join("nested/config.json");
+    let vault =
+        VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store");
+
+    let first = json!({
+        "port": 5100,
+        "secret_store_path": "secrets",
+        "providers": [{
+            "id": "unicode-provider",
+            "base_url": "https://example.test/v1",
+            "api_key": "ünicode credential"
+        }]
+    });
+    assert_eq!(
+        save_configuration(&first, Some(&path), &vault).expect("save new configuration"),
+        path
+    );
+    let secret_path = root.join("nested/secrets/unicode-provider.key.enc");
+
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("configuration metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(&secret_path)
+                .expect("secret metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(secret_path.parent().expect("secret parent"))
+                .expect("secret parent metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+
+    let raw = fs::read(&path).expect("configuration bytes");
+    assert_eq!(raw.last().copied(), Some(b'\n'));
+    let actual = load_configuration(Some(&path)).expect("load saved configuration");
+    assert_eq!(actual["providers"][0]["api_key"], "");
+    assert_eq!(
+        actual["providers"][0]["api_key_file"],
+        secret_path.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        vault
+            .read_encrypted_text(&secret_path)
+            .expect("read managed secret")
+            .as_str(),
+        "ünicode credential"
+    );
+}
+
+#[test]
+fn provider_credentials_are_hydrated_request_locally_and_fail_closed() {
+    let directory = tempdir().expect("temporary directory");
+    let root = root(&directory);
+    let vault =
+        VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store");
+    let secret_path = root.join("provider.key.enc");
+    vault
+        .write_encrypted_text(&secret_path, "  encrypted-secret  ")
+        .expect("write provider secret");
+
+    assert_eq!(
+        provider_api_key(
+            &json!({"api_key": "inline-secret", "api_key_file": secret_path}),
+            &vault,
+        ),
+        "inline-secret"
+    );
+    assert_eq!(
+        provider_api_key(&json!({"api_key_file": secret_path}), &vault),
+        "encrypted-secret"
+    );
+    assert_eq!(
+        provider_api_key(&json!({"api_key_file": root.join("missing.enc")}), &vault),
+        ""
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let link = root.join("provider-link.enc");
+        symlink(&secret_path, &link).expect("secret symlink");
+        assert_eq!(provider_api_key(&json!({"api_key_file": link}), &vault), "");
+    }
+}
+
+#[test]
+fn config_save_preserves_masked_files_and_cleans_removed_providers() {
+    let directory = tempdir().expect("temporary directory");
+    let root = root(&directory);
+    let path = root.join("configuration/config.json");
+    let vault =
+        VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store");
+    let existing = root.join("configuration/secrets/existing.key.enc");
+    let obsolete = root.join("configuration/secrets/obsolete.key.enc");
+    let unrelated = root.join("configuration/unmanaged.key.enc");
+    write_json(
+        &path,
+        &json!({
+            "secret_store_path": "secrets",
+            "providers": [
+                {
+                    "id": "existing",
+                    "base_url": "https://existing.test/v1",
+                    "api_key_file": "secrets/existing.key.enc"
+                },
+                {
+                    "id": "obsolete",
+                    "base_url": "https://obsolete.test/v1",
+                    "api_key_file": "secrets/obsolete.key.enc"
+                }
+            ]
+        }),
+    );
+    vault
+        .write_encrypted_text(&existing, "existing")
+        .expect("write existing");
+    vault
+        .write_encrypted_text(&obsolete, "obsolete")
+        .expect("write obsolete");
+    fs::write(&unrelated, b"unmanaged").expect("write unrelated file");
+
+    let incoming = json!({
+        "secret_store_path": "secrets",
+        "providers": [{
+            "id": "existing",
+            "base_url": "https://existing.test/v1",
+            "api_key": MASKED_API_KEY,
+            "api_key_file": "secrets/existing.key.enc"
+        }]
+    });
+    save_configuration(&incoming, Some(&path), &vault).expect("save configuration");
+    assert!(existing.is_file(), "existing managed secret must remain");
+    assert!(
+        !obsolete.exists(),
+        "removed provider secret must be deleted"
+    );
+    assert_eq!(fs::read(&unrelated).expect("unmanaged bytes"), b"unmanaged");
+}
+
+#[test]
+fn caller_owned_transaction_rolls_back_config_and_secret_files() {
+    let directory = tempdir().expect("temporary directory");
+    let root = root(&directory);
+    let path = root.join("configuration/config.json");
+    let vault =
+        VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store");
+    let previous_secret = root.join("configuration/secrets/previous.key.enc");
+    write_json(
+        &path,
+        &json!({
+            "secret_store_path": "secrets",
+            "providers": [{
+                "id": "previous",
+                "base_url": "https://previous.test/v1",
+                "api_key_file": "secrets/previous.key.enc"
+            }]
+        }),
+    );
+    vault
+        .write_encrypted_text(&previous_secret, "previous credential")
+        .expect("write previous secret");
+    let original_config = fs::read(&path).expect("original configuration bytes");
+    let original_secret = fs::read(&previous_secret).expect("original secret bytes");
+    let new_secret = root.join("configuration/secrets/new.key.enc");
+    let incoming = json!({
+        "secret_store_path": "secrets",
+        "providers": [{
+            "id": "new",
+            "base_url": "https://new.test/v1",
+            "api_key": "new credential"
+        }]
+    });
+
+    let result: Result<(), ConfigError> = with_file_transaction(|transaction| {
+        save_configuration_in_transaction(&incoming, Some(&path), &vault, transaction)?;
+        Err(FilesystemError::ManagedFileUnavailable.into())
+    });
+    assert!(result.is_err(), "injected enclosing operation must fail");
+    assert_eq!(
+        fs::read(&path).expect("rolled-back configuration"),
+        original_config
+    );
+    assert_eq!(
+        fs::read(&previous_secret).expect("restored previous secret"),
+        original_secret
+    );
+    assert!(
+        !new_secret.exists(),
+        "new secret must be removed on rollback"
+    );
+}
+
+#[test]
+fn save_uses_config_path_environment_without_reloading_vault() {
+    let _lock = ENV_LOCK.lock().expect("environment lock");
+    let directory = tempdir().expect("temporary directory");
+    let root = root(&directory);
+    let configured = root.join("configured/config.json");
+    let vault =
+        VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store");
+    let original = std::env::var_os(CONFIG_PATH_ENV);
+    // SAFETY: ENV_LOCK is held; the runner must exclude concurrent environment readers during mutation.
+    unsafe {
+        std::env::set_var(CONFIG_PATH_ENV, &configured);
+    }
+    let saved = save_configuration(&json!({}), None, &vault).expect("save configured path");
+    assert_eq!(saved, configured);
+    assert_eq!(config_path(), configured);
+    // SAFETY: ENV_LOCK remains held and the runner must exclude environment readers during restoration.
+    unsafe {
+        match original {
+            Some(value) => std::env::set_var(CONFIG_PATH_ENV, value),
+            None => std::env::remove_var(CONFIG_PATH_ENV),
+        }
+    }
+    assert!(configured.is_file());
+}

@@ -879,6 +879,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "emp-config"
+version = "0.15.7"
+dependencies = [
+ "base64 0.22.1",
+ "emp-domain",
+ "emp-files",
+ "emp-storage",
+ "getrandom 0.2.17",
+ "percent-encoding",
+ "scrypt",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "emp-domain"
 version = "0.15.7"
 dependencies = [
@@ -999,22 +1018,17 @@ name = "emp-state"
 version = "0.15.7"
 dependencies = [
  "base64 0.22.1",
+ "emp-config",
  "emp-domain",
  "emp-files",
  "emp-storage",
  "getrandom 0.2.17",
  "libc",
- "percent-encoding",
  "regex",
- "scrypt",
- "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "time",
- "url",
- "windows-sys 0.61.2",
- "zeroize",
 ]
 
 [[package]]

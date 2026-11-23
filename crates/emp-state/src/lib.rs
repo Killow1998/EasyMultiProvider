@@ -1,17 +1,12 @@
-pub mod accounts;
-pub mod config;
-pub mod discovery_merge;
 pub mod filesystem;
-pub mod gateway_key;
-pub mod migration;
-pub mod official_registry;
-pub mod web_session;
+pub use emp_config::{accounts, config, discovery_merge, migration, official_registry};
+pub use emp_storage::{gateway_key, web_session};
 
-pub use accounts::{
+pub use emp_config::accounts::{
     AccountError, AccountResult, account_auth_path, duplicate_account_status, normalize_account,
     normalize_context_windows, normalize_hidden_models, same_account_auth, validate_auth_json,
 };
-pub use config::{
+pub use emp_config::config::{
     CONFIG_PATH_ENV, ConfigError, ConfigResult, canonical_catalog_json, canonicalize_account_paths,
     canonicalize_private_paths, catalog_etag, config_path, generated_catalog_path,
     load_configuration, merge_web_update, merge_web_update_with_time,
@@ -21,6 +16,16 @@ pub use config::{
     normalize_provider_id, normalize_subscription_search, observed_at_now, provider_api_key,
     public_configuration_with_file_status, remember_resolved_protocol,
     remember_resolved_protocol_at, save_configuration, save_configuration_in_transaction,
+};
+pub use emp_config::migration::{
+    DecryptedMigration, ExportGroup, ExportGroups, MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES,
+    MIGRATION_ENVELOPE_VERSION, MIGRATION_MAGIC, MIGRATION_SCHEMA, MIGRATION_VERSION,
+    MIN_IMPORT_PASSWORD_BYTES, MIN_PASSWORD_BYTES, MigrationError, MigrationExportSummary,
+    MigrationImportSummary, MigrationParams, MigrationResult, SALT_BYTES, SCRYPT_N, SCRYPT_P,
+    SCRYPT_R, SCRYPT_V2_N, SCRYPT_V2_P, SCRYPT_V2_R, apply_migration_import, decode_migration,
+    decrypt_migration_bundle, encode_migration, export_migration_bundle,
+    export_migration_bundle_with_summary, import_migration_bundle, parse_envelope,
+    select_export_config,
 };
 pub use emp_domain::model_values;
 pub use emp_domain::{
@@ -35,24 +40,14 @@ pub use emp_files::{
     atomic_write_private_state, create_private_directory, lock, read_file_limited, read_to_limit,
     with_file_transaction, write_new_private_file,
 };
+pub use emp_storage::web_session::{
+    WEB_SESSION_LIFETIME_SECONDS, WEB_SESSION_TOKEN_BYTES, WEB_SESSION_TOKEN_LENGTH, WebSession,
+    WebSessionError, load_or_create_web_session, web_session_path,
+};
 pub use emp_storage::{
     Fernet, FernetError, FernetKey, FernetKeyError, MASTER_KEY_ENV, MASTER_KEY_FILE_ENV,
     VAULT_MAGIC, VaultError, VaultResult, VaultStore, decode_vault, encode_vault, fernet,
     gemini_signatures, vault,
-};
-pub use migration::{
-    DecryptedMigration, ExportGroup, ExportGroups, MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES,
-    MIGRATION_ENVELOPE_VERSION, MIGRATION_MAGIC, MIGRATION_SCHEMA, MIGRATION_VERSION,
-    MIN_IMPORT_PASSWORD_BYTES, MIN_PASSWORD_BYTES, MigrationError, MigrationExportSummary,
-    MigrationImportSummary, MigrationParams, MigrationResult, SALT_BYTES, SCRYPT_N, SCRYPT_P,
-    SCRYPT_R, SCRYPT_V2_N, SCRYPT_V2_P, SCRYPT_V2_R, apply_migration_import, decode_migration,
-    decrypt_migration_bundle, encode_migration, export_migration_bundle,
-    export_migration_bundle_with_summary, import_migration_bundle, parse_envelope,
-    select_export_config,
-};
-pub use web_session::{
-    WEB_SESSION_LIFETIME_SECONDS, WEB_SESSION_TOKEN_BYTES, WEB_SESSION_TOKEN_LENGTH, WebSession,
-    WebSessionError, load_or_create_web_session, web_session_path,
 };
 
 pub mod diagnostics;

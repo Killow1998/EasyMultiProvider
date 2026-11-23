@@ -173,7 +173,7 @@ fn explicit_proxy_restrictions_override_published_model_modalities() {
 #[test]
 fn every_published_model_and_alias_preserves_its_declared_modalities() {
     let registry: Value =
-        serde_json::from_str(include_str!("../../emp-state/data/official_models.json")).unwrap();
+        serde_json::from_str(include_str!("../../emp-config/data/official_models.json")).unwrap();
     let mut expected = Vec::new();
     let mut models = Vec::new();
     let mut identities = std::collections::HashSet::new();

@@ -110,7 +110,9 @@ to implement. File length is a navigation signal, not a measure of module depth.
 | `emp-codex` | Codex catalogs, concrete history access, quota helpers and runtime discovery | Retain concrete Codex integration; reduce application callers' knowledge of its storage details |
 | `emp-codex::configuration` | Configuration leases, conflict detection and recovery | Retain transactional ownership |
 | `emp-files` | Private files, atomic writes, file transactions, cross-process locks and Windows ACLs | Independent of other EMP crates; preserve file formats, permissions and lock semantics |
-| `emp-state` | Configuration, vault, usage and diagnostic subsystems | Use `emp-files` for file operations; retain existing root, `filesystem` and `lock` API paths |
+| `emp-config` | Configuration, accounts, catalog merge, official model registry and portable import/export | Depends on `emp-domain`, `emp-files` and `emp-storage`; retains existing module names |
+| `emp-storage` | Vault, usage, quota history, signatures and local management credentials | Owns persisted credentials; uses `emp-files` for file operations |
+| `emp-state` | Diagnostics and compatibility re-exports | Retains existing root, module, `filesystem` and `lock` API paths |
 | `emp-updater` | Official release discovery, download, verification, extraction and recoverable installation | Depends only on `emp-files` among EMP crates; preserve release formats, installation layouts and worker protocol |
 | `emp-app` | Composition, HTTP/UI, request orchestration and mutable services | Primary refactoring target |
 
@@ -147,7 +149,7 @@ the application, where most modules can access the complete `ServerState`.
 Production SQL projections live in [`contracts/`](../contracts/README.md) and
 are compiled into `emp-state`. State compatibility and normalization fixtures
 live beside their consumers in
-[`emp-state/tests/data/`](../crates/emp-state/tests/data/) and
+[`emp-config/tests/data/`](../crates/emp-config/tests/data/) and
 [`emp-domain/tests/data/`](../crates/emp-domain/tests/data/); Rust integration
 tests load them directly with `include_str!`, without a Python process.
 
@@ -639,7 +641,7 @@ Gemini's native stream adapter and Chat projector form one `StreamProjection`
 variant. Other protocols cannot carry a detached Gemini adapter; completion,
 termination and tool-signature handling retain their existing owners.
 
-`emp-state/config/service_names.rs` owns name-conflict checks and retained
+`emp-config/src/config/service_names.rs` owns name-conflict checks and retained
 account/provider names for both configuration saves and migration imports.
 `route_aliases.rs` owns published route names and resolution.
 Catalog publication uses that resolver once for every proposed readable name;
