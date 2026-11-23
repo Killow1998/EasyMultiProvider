@@ -6,7 +6,7 @@ use emp_state::{ConfigError, filesystem::FileTransaction};
 mod upload;
 pub(super) use upload::{publish, upload_details};
 
-fn subscription(auth: &Value) -> Option<SubscriptionSnapshot> {
+pub(super) fn subscription(auth: &Value) -> Option<SubscriptionSnapshot> {
     let headers = emp_codex::account_auth_headers(auth)?;
     let access_token = headers.get("Authorization")?.strip_prefix("Bearer ")?;
     let claims = URL_SAFE_NO_PAD
@@ -38,7 +38,7 @@ fn plan(value: &str) -> Option<String> {
     Some(plan.to_owned())
 }
 
-fn stored_auth(vault: &VaultStore, account: &Value) -> Option<Value> {
+pub(super) fn stored_auth(vault: &VaultStore, account: &Value) -> Option<Value> {
     let path = std::path::Path::new(account["auth_file"].as_str()?);
     vault.read_encrypted_json(path).ok()
 }

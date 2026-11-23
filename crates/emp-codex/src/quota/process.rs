@@ -175,6 +175,11 @@ pub(super) fn run_isolated_quota_process<'a>(
         .map_err(|_| quota_check_failed())?;
     set_private_directory(directory.path())?;
     let auth_path = directory.path().join("auth.json");
+    let mut helper_auth = std::borrow::Cow::Borrowed(auth);
+    if auth["auth_mode"] == "chatgptAuthTokens" && auth["last_refresh"].is_null() {
+        helper_auth.to_mut()["last_refresh"] = Value::String(emp_state::observed_at_now());
+    }
+    let auth = helper_auth.as_ref();
     write_private(
         &auth_path,
         &serde_json::to_vec(auth).map_err(|_| quota_check_failed())?,
@@ -546,6 +551,12 @@ fn quota_check_failed() -> QuotaError {
 }
 
 pub(super) fn rpc_http_status(message: &str) -> Option<u16> {
+    if message
+        .trim()
+        .eq_ignore_ascii_case("workspace routing discovery unauthorized (401)")
+    {
+        return Some(401);
+    }
     let public = message
         .split_once("; body=")
         .map_or(message, |(head, _)| head);

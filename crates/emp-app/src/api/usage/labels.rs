@@ -25,12 +25,14 @@ pub(super) fn enrich(state: &ServerState, config: &Value, payload: &mut Value) {
             json!({"name":provider["name"].as_str().filter(|s|!s.is_empty()).unwrap_or(id),"local_id":id}),
         );
     }
-    for account in config["accounts"]
+    let mut accounts: Vec<_> = config["accounts"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(Value::as_object)
-    {
+        .collect();
+    accounts.sort_by_key(|account| account.get("workspace_shared") != Some(&Value::Bool(true)));
+    for account in accounts {
         if let Some(headers) = account_catalog_headers(account, &state.backend.configuration.vault)
         {
             let owner = account_owner(&headers);
