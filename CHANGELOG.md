@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.15.7 (2026-11-23)
+
+### 中文
+#### 问题修复
+
+- 父对话已调用过工具时，在侧边对话（sidechat）中切换到外部模型，之前可能提示调用重复，或把已经完成的工具误报为「已中止」。现在即使对话在工具调用和结果之间压缩过，模型也能读到原有结果。
+- 切换到上下文窗口更小的模型后，EMP 再次压缩历史时，会为当前回合一起保留工具调用和对应结果。
+
+从 0.15.6 升级只需更新桌面端 EMP Core。
+
+### English
+
+#### Fixes
+
+- When a parent conversation had already used a tool, continuing in a side chat with an external model could fail on duplicate tool calls or return "aborted" instead of the real output. EMP now keeps the result even when the call and result fall on different sides of a saved compaction.
+- After switching to a model with a smaller context window, further compaction keeps an active tool result together with its call.
+
+To upgrade from 0.15.6, update desktop EMP Core.
+
 ## 0.15.6 (2026-11-23)
 
 ### 中文
