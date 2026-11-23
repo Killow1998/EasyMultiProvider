@@ -44,7 +44,7 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-version, test-boundary, docs-prose, no-python-on-main, comments, disguised-sleep, msvc-only passed"
+            "check: arch, module-version, test-boundary, docs-prose, no-python-on-main, comments, disguised-sleep, msvc-only, domain-purity passed"
         );
         Ok(())
     } else {

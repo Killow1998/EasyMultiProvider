@@ -26,6 +26,7 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
             let contents = read(root, path)?;
             disguised_sleep(path, &contents, errors);
             msvc_only(path, &contents, errors);
+            domain_purity(path, &contents, errors);
         }
     }
     for path in paths {
@@ -120,6 +121,26 @@ fn msvc_only(path: &str, contents: &str, errors: &mut Vec<String>) {
     }
 }
 
+const DOMAIN_IO: &[&str] = &[
+    "std::fs",
+    "std::env",
+    "std::net",
+    "std::process",
+    "rusqlite",
+    "tokio",
+];
+
+fn domain_purity(path: &str, contents: &str, errors: &mut Vec<String>) {
+    if !path.starts_with("crates/emp-domain/src/") {
+        return;
+    }
+    for (index, line) in contents.lines().enumerate() {
+        if let Some(api) = DOMAIN_IO.iter().find(|api| line.contains(*api)) {
+            errors.push(format!("[domain-purity] {path}:{}: emp-domain 只放值和纯规则，不能使用 {api}；把读写放进 emp-files、emp-storage 或 emp-config，由调用方传入结果", index + 1));
+        }
+    }
+}
+
 fn disguised_sleep(path: &str, contents: &str, errors: &mut Vec<String>) {
     for (index, line) in contents.lines().enumerate() {
         let trimmed = line.trim_start();
@@ -131,7 +152,7 @@ fn disguised_sleep(path: &str, contents: &str, errors: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{count, msvc_only};
+    use super::{count, domain_purity, msvc_only};
 
     #[test]
     fn safety_continuation_lines_are_part_of_the_safety_note() {
@@ -149,5 +170,18 @@ mod tests {
         );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].starts_with("[msvc-only] a.rs:2:"));
+    }
+
+    #[test]
+    fn domain_sources_cannot_reach_files_environment_or_storage() {
+        let mut errors = Vec::new();
+        domain_purity(
+            "crates/emp-domain/src/a.rs",
+            "use std::fs;\nfn f() {}\n",
+            &mut errors,
+        );
+        domain_purity("crates/emp-storage/src/a.rs", "use std::fs;\n", &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].starts_with("[domain-purity] crates/emp-domain/src/a.rs:1:"));
     }
 }
