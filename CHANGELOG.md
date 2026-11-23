@@ -6,17 +6,29 @@
 
 ### 中文
 
-- 从 0.15.4 升级时，只需更新桌面 EMP Core。团队空间模组和 VPS 团队服务继续使用 0.10.2-beta。
-- **额度刷新**。修复共享订阅凭据有效，Codex 却报告无法读取账号登录状态的问题。上游实际返回 401 时，EMP 会提示登录失效。
-- **共享订阅同步**。同一账号在本机和团队各有一份登录时，原有模型入口会选用有效期更晚的可用凭据。重复同步保留本机名称和模型设置，切换登录与查看调用用量时只显示一个账号。
-- **同步结果**。新凭据下载后显示更新数量，再次同步且没有变化时提示「当前没有需要更新的共享订阅」。与本机 Native 相同的账号会单独列出跳过数量。
+使用团队共享订阅的电脑只需把桌面 EMP Core 从 0.15.4 更新到 0.15.5，已部署的团队空间模组和 VPS 团队服务仍保持 0.10.2-beta。
+
+#### 问题修复
+
+- **刷新额度**。修复了团队共享的 Codex 订阅登录有效，点「刷新额度」却提示「Codex 无法读取账号登录状态」的问题。
+- **重复账号**。同一个订阅同时在团队和本机 Other 里时，切换账号或查看用量可能会看到“账号名”和“账号名 2”。现在只显示本机原有的名称，保留模型设置，并使用有效期更晚的可用登录。
+
+#### 升级后怎么做
+
+已经同步过最新登录的电脑，直接在服务列表中点该账号的「刷新额度」。如果订阅持有者刚重新上传了登录，先在「团队空间 → 同步」点一次，再刷新额度。再次同步时如果没有变化，会提示「当前没有需要更新的共享订阅」。
 
 ### English
 
-- When upgrading from 0.15.4, update desktop EMP Core only. Both the Team Workspace module and the VPS workspace service stay on 0.10.2-beta.
-- **Quota refresh**. Fixed a case where Codex could not read the sign-in state of a shared subscription with valid credentials. An upstream 401 now identifies an expired or rejected login.
-- **Shared subscriptions**. If the same account has both local and shared credentials, its existing model entry uses the available credentials with the later expiry. Repeated syncs keep local names and model settings. The login picker and usage views show one account.
-- **Sync feedback**. Sync shows how many shared subscriptions it updated. If nothing changed, it says that no updates are needed. Accounts already used by Native have a separate skipped count.
+On computers that use team-shared subscriptions, update desktop EMP Core from 0.15.4 to 0.15.5. Deployed Team Workspace modules and the VPS team service stay on 0.10.2-beta.
+
+#### Fixes
+
+- **Quota refresh.** Fixed an issue where clicking **Refresh quota** for a team-shared Codex subscription showed “Codex could not read the account login state” even with a valid login.
+- **Duplicate accounts.** When the same subscription was in both Team Workspace and your local Other list, you could see both “Account” and “Account 2” when switching accounts or checking usage. EMP now shows just the local name, keeps your model settings, and uses the available login with the later expiry.
+
+#### After you update
+
+If this computer has already synced the latest login, just click **Refresh quota** for that account in the service list. If the subscription owner has just re-uploaded their login, click **Team Workspace → Sync** once, then refresh the quota. If nothing has changed, syncing again will tell you there are no shared subscriptions to update.
 
 ## 0.15.4 (2026-11-22)
 
