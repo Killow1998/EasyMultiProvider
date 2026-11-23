@@ -1,5 +1,3 @@
-//! Persistent browser-management sessions.
-
 use crate::filesystem::{FilesystemError, atomic_write_config};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

@@ -1,10 +1,6 @@
-//! Codec side of Python-compatible migration bundles.
-
 use super::*;
 
-/// Derive a Fernet key from a password and salt using the fixed scrypt
-/// parameters of one envelope version. Returns a padded URL-safe base64
-/// string, matching Python's Fernet key format.
+/// Derive a padded URL-safe Base64 Fernet key with the envelope's fixed scrypt parameters.
 fn derive_fernet_encoded_key(password: &[u8], salt: &[u8], kdf: MigrationParams) -> FernetKey {
     let log_n = u8::try_from(kdf.n.trailing_zeros()).expect("fixed scrypt N is a power of two");
     let r = u32::try_from(kdf.r).expect("fixed scrypt r fits u32");
@@ -17,7 +13,6 @@ fn derive_fernet_encoded_key(password: &[u8], salt: &[u8], kdf: MigrationParams)
     FernetKey::from_encoded(&encoded).expect("derived key is valid Fernet")
 }
 
-/// Build the JSON envelope with the given salt and Fernet-encrypted payload.
 fn build_envelope(
     version: u64,
     kdf: MigrationParams,
@@ -95,9 +90,8 @@ fn encode_with_version(
     Ok(output)
 }
 
-/// Decode a version-1 or version-2 `.emp` migration bundle and return the
-/// decrypted plaintext. KDF parameters are fixed per envelope version; the
-/// bundle's `scrypt` object must match them exactly.
+/// Decrypt a v1 or v2 bundle; its `scrypt` object must match the fixed parameters
+/// for that envelope version exactly.
 pub fn decode_migration(password: &str, encoded: &[u8]) -> MigrationResult<Zeroizing<Vec<u8>>> {
     if encoded.len() > MAX_BUNDLE_BYTES {
         return Err(MigrationError::TooLarge);

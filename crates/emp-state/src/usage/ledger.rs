@@ -1,4 +1,3 @@
-//! Python-compatible SQLite accounting and history/realtime reconciliation.
 use super::pricing::PriceCatalog;
 use super::{CATEGORIES, TOKEN_FIELDS, python_json, token_count};
 use rusqlite::{

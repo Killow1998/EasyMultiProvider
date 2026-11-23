@@ -1,7 +1,5 @@
-//! Private master-key storage, encrypted vault files and bounded rollback.
-//!
-//! Preserve the existing `easy-multi-provider-v1` magic and Fernet token format.
-//! Runtime passes one VaultStore explicitly; key paths are not process-global.
+//! Preserve the `easy-multi-provider-v1` magic and Fernet tokens.
+//! Each runtime supplies its VaultStore; key paths are not process-global.
 
 use crate::{FernetKey, VaultError, decode_vault, encode_vault};
 use atomic_write_file::AtomicWriteFile;
@@ -113,7 +111,6 @@ impl From<VaultError> for FilesystemError {
     }
 }
 
-/// One validated master key and its optional durable location.
 pub struct VaultStore {
     key: FernetKey,
     key_path: Option<PathBuf>,
@@ -147,7 +144,6 @@ impl VaultStore {
         Self::from_sources(None, &configured_path)
     }
 
-    /// Construct from explicit sources for deterministic service composition.
     pub fn from_sources(
         environment_key: Option<&str>,
         key_path: &Path,
@@ -243,8 +239,7 @@ impl VaultStore {
     }
 }
 
-/// Read at most `limit` bytes from `reader`. A longer input fails with
-/// `ErrorKind::FileTooLarge` instead of growing memory without bound.
+/// Read at most `limit` bytes, returning `ErrorKind::FileTooLarge` for longer input.
 pub fn read_to_limit(reader: &mut impl Read, limit: usize) -> std::io::Result<Vec<u8>> {
     let mut data = Vec::new();
     reader.take(limit as u64 + 1).read_to_end(&mut data)?;
@@ -257,8 +252,7 @@ pub fn read_to_limit(reader: &mut impl Read, limit: usize) -> std::io::Result<Ve
     Ok(data)
 }
 
-/// Read a whole file of at most `limit` bytes. Oversized files fail with
-/// `ErrorKind::FileTooLarge`; other failures keep their original kind.
+/// Read a bounded file; oversized inputs fail with `FileTooLarge`, other error kinds are preserved.
 pub fn read_file_limited(path: &Path, limit: usize) -> std::io::Result<Vec<u8>> {
     let mut file = fs::File::open(path)?;
     if file.metadata()?.len() > limit as u64 {
@@ -270,8 +264,7 @@ pub fn read_file_limited(path: &Path, limit: usize) -> std::io::Result<Vec<u8>> 
     read_to_limit(&mut file, limit)
 }
 
-/// Open an existing file for reading without following a final symlink or
-/// reparse point, and without blocking on FIFOs or devices.
+/// Open without following final links/reparse points or blocking on FIFOs/devices.
 fn open_nofollow_for_read(path: &Path) -> std::io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
@@ -282,10 +275,8 @@ fn open_nofollow_for_read(path: &Path) -> std::io::Result<fs::File> {
     options.open(path)
 }
 
-/// Create (if needed) an EMP-owned directory that only the current user can
-/// access: mode 0700 on Unix, a protected current-user DACL on Windows. The
-/// directory itself must be a real directory, not a link. Its ancestors are
-/// not checked: system locations such as macOS `/var` or `/tmp` are links.
+/// Create a real directory with mode 0700 on Unix or a protected current-user DACL on Windows.
+/// Ancestors may be links because system paths such as macOS `/var` and `/tmp` use them.
 pub fn create_private_directory(path: &Path) -> Result<(), FilesystemError> {
     let candidate = absolute(path).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
     fs::create_dir_all(&candidate).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
@@ -297,9 +288,8 @@ pub fn create_private_directory(path: &Path) -> Result<(), FilesystemError> {
     set_private_directory(&candidate).map_err(|_| FilesystemError::ManagedFileUnavailable)
 }
 
-/// Create a new private file (never replacing or following an existing path)
-/// and write `data` to it. The file is mode 0600 on Unix and has a protected
-/// current-user DACL on Windows. A partially written file is removed.
+/// Create a file exclusively with mode 0600 or a protected current-user DACL, then write `data`.
+/// Existing paths are never replaced or followed; partial writes are removed.
 pub fn write_new_private_file(path: &Path, data: &[u8]) -> Result<(), FilesystemError> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -347,9 +337,8 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
-/// Reject existing links/reparse points in every target component before an
-/// atomic replacement. Missing components are allowed and checked again after
-/// their parent directories have been created.
+/// Reject existing links/reparse points in every target component before atomic replacement,
+/// rechecking missing components after their parent directories are created.
 fn ensure_managed_write_path(path: &Path) -> Result<(), FilesystemError> {
     let candidate = absolute(path).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
     for parent in candidate.ancestors().skip(1) {
@@ -501,8 +490,7 @@ fn set_private_directory(_: &Path) -> Result<(), FilesystemError> {
     Ok(())
 }
 
-/// Atomically replace a private configuration file without changing the
-/// permissions of a caller-owned parent directory.
+/// Atomically replace private configuration without changing caller-owned parent permissions.
 pub fn atomic_write_config(path: &Path, data: &[u8]) -> Result<(), FilesystemError> {
     atomic_write(path, data, CONFIG_FILE_MODE, false)
 }
@@ -512,8 +500,7 @@ pub fn atomic_write_private_state(path: &Path, data: &[u8]) -> Result<(), Filesy
     atomic_write(path, data, CONFIG_FILE_MODE, true)
 }
 
-/// Write a generated catalog with the same atomic replacement and private-file
-/// policy used by configuration. The caller owns any enclosing transaction.
+/// Atomically write a private catalog; the caller owns any enclosing transaction.
 pub fn write_catalog_json(path: &Path, value: &Value) -> Result<(), FilesystemError> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|_| FilesystemError::InvalidJson)?;
     bytes.push(b'\n');
@@ -572,8 +559,7 @@ struct Snapshot {
     mode: u32,
 }
 
-/// A bounded transaction. Unless committed, dropping it restores remembered
-/// files in reverse order as a panic-safe best effort.
+/// A bounded transaction whose uncommitted drop restores files in reverse order as panic-safe best effort.
 pub struct FileTransaction {
     snapshots: Vec<Snapshot>,
     active: bool,
@@ -597,8 +583,7 @@ impl FileTransaction {
                 if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
                     return Err(FilesystemError::ManagedFileNotRegular);
                 }
-                // Re-validate on the opened handle so a path swapped for a
-                // link or special file after the check above is not followed.
+                // Recheck the opened handle to reject links or special files substituted after path validation.
                 let mut file = open_nofollow_for_read(&path).map_err(|error| {
                     if error.kind() == std::io::ErrorKind::NotFound {
                         FilesystemError::ManagedFileUnavailable
@@ -692,8 +677,7 @@ fn file_mode(_: &fs::Metadata) -> u32 {
     0o600
 }
 
-/// Serialize transactions within the process and roll back when the operation
-/// returns an error. The generic error can retain a higher-level failure.
+/// Serialize in-process transactions and roll back on error, preserving higher-level failure types.
 pub fn with_file_transaction<T, E>(
     operation: impl FnOnce(&mut FileTransaction) -> Result<T, E>,
 ) -> Result<T, E>

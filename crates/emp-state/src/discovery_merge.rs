@@ -1,4 +1,3 @@
-//! Selected discovery results merged by the Python capability provenance policy.
 use crate::{
     ConfigError, input_modalities_metadata_source, normalize_configuration,
     normalize_input_modalities, normalize_output_modalities, normalize_supported_protocols,

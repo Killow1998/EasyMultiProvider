@@ -1,5 +1,3 @@
-//! One model record and its effective capability values.
-
 use super::*;
 
 /// Normalize a model and discard unknown configuration fields. Capability

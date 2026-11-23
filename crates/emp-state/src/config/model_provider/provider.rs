@@ -1,5 +1,3 @@
-//! One external provider record.
-
 use super::*;
 
 fn normalize_provider_capabilities(raw: Option<&Value>) -> ConfigResult<Value> {
@@ -25,7 +23,6 @@ fn normalize_provider_capabilities(raw: Option<&Value>) -> ConfigResult<Value> {
     Ok(Value::Object(normalized))
 }
 
-/// Normalize one complete external-provider record into the persisted shape.
 pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     let Value::Object(raw) = raw else {
         return Err(ConfigError::new("each provider must be an object"));
@@ -201,8 +198,7 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     if !route_names.is_empty() {
         normalized["route_names"] = serde_json::json!(route_names);
     }
-    // Preserve the historic serialized shape for providers using the default.
-    // An explicit backend remains visible and round-trips through normal config APIs.
+    // Absent backends keep the historic shape; explicitly configured backends round-trip.
     if raw.contains_key("execution_backend") {
         normalized["execution_backend"] = Value::String(execution_backend.to_owned());
     }

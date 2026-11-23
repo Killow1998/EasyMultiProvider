@@ -1,5 +1,3 @@
-//! Config mutation for protocol observations and browser edits.
-
 use super::provider_url::{hostname, parse_provider_url};
 use super::{
     ConfigError, ConfigResult, MASKED_API_KEY, MODEL_BOOLEAN_CAPABILITIES, Map,
@@ -207,9 +205,8 @@ fn base_url_origin(raw: &str) -> Option<UrlOrigin> {
     Some((parsed.scheme, host, port))
 }
 
-/// Whether a browser edit moves a Provider to a different origin. A stored
-/// credential must never follow the Provider to a new scheme, host or port
-/// unless the same request supplies a new credential explicitly.
+/// Stored credentials must not follow an edited provider to a new scheme, host or port;
+/// the same request must explicitly supply any credentials for the new origin.
 fn provider_origin_changed(incoming: &Map<String, Value>, old: &Value) -> bool {
     let Some(incoming_url) = incoming.get("base_url") else {
         return false;
@@ -571,9 +568,7 @@ fn merge_web_update_at_time(
     normalize_configuration(Some(&merged))
 }
 
-/// Apply a Web update while preserving secrets and managed discovery metadata.
-///
-/// Canonical private-path validation is a separate state transition.
+/// Apply a Web update preserving secrets and discovery metadata; private paths are not canonicalized.
 pub fn merge_web_update(current: &Value, incoming: &Value) -> ConfigResult<Value> {
     merge_web_update_at_time(current, incoming, observed_at_now)
 }

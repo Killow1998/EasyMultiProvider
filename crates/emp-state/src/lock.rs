@@ -1,5 +1,3 @@
-//! Cross-process locks compatible with Python's integration lock files.
-
 use std::env;
 #[cfg(unix)]
 use std::ffi::CString;
@@ -247,8 +245,7 @@ fn unlock(file: &File) {
 #[cfg(not(any(unix, windows)))]
 fn unlock(_: &File) {}
 
-/// An exclusive lock released when dropped. The underlying byte range matches
-/// Python's `flock` on POSIX and `msvcrt.locking(..., 1)` on Windows.
+/// An exclusive lock released on drop; uses POSIX `flock` or a one-byte Windows lock.
 pub struct IntegrationFileLock {
     file: File,
 }

@@ -1,5 +1,3 @@
-//! Python-compatible catalog JSON bytes and ETag.
-
 use super::*;
 use sha2::{Digest, Sha256};
 
@@ -81,14 +79,14 @@ fn write_python_json(value: &Value, output: &mut Vec<u8>) -> ConfigResult<()> {
     Ok(())
 }
 
-/// Return the exact compact UTF-8 JSON bytes hashed by Python's catalog ETag.
+/// Compact UTF-8 JSON with sorted object keys and legacy float formatting for catalog hashing.
 pub fn canonical_catalog_json(value: &Value) -> ConfigResult<Vec<u8>> {
     let mut output = Vec::new();
     write_python_json(value, &mut output)?;
     Ok(output)
 }
 
-/// Return the Python-compatible quoted catalog ETag.
+/// Return the quoted catalog ETag.
 pub fn catalog_etag(catalog: &Value) -> ConfigResult<String> {
     let digest = Sha256::digest(canonical_catalog_json(catalog)?);
     let mut encoded = String::with_capacity(64);

@@ -1,8 +1,4 @@
-//! Configuration normalization and persisted state transitions.
-//!
-//! Pure account, provider, model and top-level configuration normalization is
-//! implemented here. Filesystem canonicalization, import merging and persistence
-//! remain separate state transitions so callers cannot mistake parsing for I/O.
+//! Configuration normalization is pure; private-path resolution, merging and persistence are separate.
 
 use crate::accounts::{normalize_account, normalize_context_windows, normalize_hidden_models};
 use crate::filesystem::{
@@ -24,8 +20,7 @@ use std::path::{Path, PathBuf};
 
 pub const CONFIG_PATH_ENV: &str = "EASY_MULTI_PROVIDER_CONFIG";
 const REASONING_SUMMARIES: [&str; 3] = ["auto", "show", "hide"];
-/// Configuration files larger than a transaction snapshot cannot be saved
-/// atomically either, so loading refuses them before reading into memory.
+/// Refuse files larger than an atomic transaction snapshot before loading them.
 const MAX_CONFIG_FILE_BYTES: usize = crate::filesystem::MAX_TRANSACTION_FILE_BYTES;
 const MASKED_API_KEY: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}";
 /// A configuration failure without private input data.
@@ -50,7 +45,6 @@ impl ConfigError {
         }
     }
 
-    /// Exception class produced by the Python compatibility oracle.
     pub fn python_type(&self) -> &'static str {
         self.python_type
     }
@@ -263,10 +257,7 @@ pub fn save_configuration(
     })
 }
 
-/// Add a configuration save to a caller-owned transaction.
-///
-/// This is used by larger state changes such as migration imports. The caller
-/// owns commit and rollback; this function never ends the transaction early.
+/// Stage a configuration save; the caller owns transaction commit and rollback.
 pub fn save_configuration_in_transaction(
     config: &Value,
     path: Option<&Path>,
@@ -359,7 +350,6 @@ pub fn save_configuration_in_transaction(
         match fs::remove_file(&obsolete_path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            // Python deliberately treats obsolete-secret cleanup as best effort.
             Err(_) => {}
         }
     }
@@ -440,8 +430,6 @@ pub fn is_team_service_id(id: &str) -> bool {
 }
 
 /// Normalize the full top-level configuration without filesystem path canonicalization.
-///
-/// Loading, saving, secret extraction, and canonical private paths are separate.
 pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
     if raw.is_none() || raw.is_some_and(Value::is_null) {
         return Ok(default_configuration());

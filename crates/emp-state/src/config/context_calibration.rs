@@ -1,5 +1,3 @@
-//! Python-compatible numeric parsing and model context calibration.
-
 use super::{
     ConfigError, ConfigResult, Map, Value, json_truthy, safe_capability_identity, string_value,
     trim_whitespace, valid_python_iso_timestamp,
@@ -249,11 +247,8 @@ fn calibration_confidence(raw: &Value, name: &str) -> ConfigResult<Value> {
     ))
 }
 
-/// Normalize bounded model context calibration records exactly like Python.
-///
-/// Unknown fields are discarded, only the first eight entries are retained, and
-/// numeric estimates preserve Python's permissive integer parsing. The result
-/// has the normalized caller shape consumed by `_normalize_model`.
+/// Normalize the first eight calibration records, discarding unknown fields.
+/// Numeric estimates retain permissive integer parsing.
 pub fn normalize_context_calibrations(raw: Option<&Value>) -> ConfigResult<Value> {
     let raw = match raw {
         None | Some(Value::Null) => return Ok(Value::Array(Vec::new())),

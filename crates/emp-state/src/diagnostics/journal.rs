@@ -1,4 +1,4 @@
-//! Private, rotating Python-compatible JSONL journal. Failures never stop routing.
+//! Private rotating JSONL diagnostics; journal failures never stop routing.
 use regex::Regex;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

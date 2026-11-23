@@ -1,4 +1,3 @@
-//! Stable release metadata validation and platform asset selection.
 use super::{Result, UpdateError};
 use serde::Deserialize;
 

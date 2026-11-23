@@ -1,4 +1,3 @@
-//! Filtered read projection; recording and accounting remain in their owners.
 use super::*;
 
 pub struct CallFilter {

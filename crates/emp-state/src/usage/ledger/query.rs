@@ -1,4 +1,3 @@
-//! Scoped period and owner summaries; callers keep the public UsageLedger API.
 use super::{RESOLVED_USAGE, Result, UsageError, UsageLedger, read_cache, rows};
 use crate::usage::{CATEGORIES, TOKEN_FIELDS};
 use rusqlite::{params, params_from_iter, types::Value as SqlValue};

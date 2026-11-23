@@ -1,5 +1,3 @@
-//! Windows private-state ACL and reparse-point helpers.
-
 use super::FilesystemError;
 use std::ffi::c_void;
 use std::fs::{self, File, Metadata};
@@ -138,9 +136,7 @@ pub(super) fn set_private_file(file: &File) -> Result<(), FilesystemError> {
     let user = CurrentUser::load().map_err(|_| FilesystemError::ManagedFileUnavailable)?;
     let acl =
         private_acl(user.sid(), false).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
-    // Standard Rust write handles do not request WRITE_DAC. Resolve the name
-    // of the already-open file, then let SetNamedSecurityInfoW acquire the
-    // access it needs without weakening the file's ordinary data handle.
+    // Rust write handles lack WRITE_DAC; use the open file's resolved name to set its DACL.
     let mut wide = path_for_file_handle(file)?;
     set_named_private_acl(&mut wide, user.sid(), acl.0.cast())
 }
@@ -169,9 +165,8 @@ fn set_named_private_acl(
     if status != ERROR_SUCCESS || owner.is_null() {
         return Err(FilesystemError::ManagedFileUnavailable);
     }
-    // A file owner can change its DACL without WRITE_OWNER. Request ownership
-    // changes only when needed: Python-created updater directories often grant
-    // Modify rather than FullControl, even to their own creator.
+    // File owners can change DACLs without WRITE_OWNER; request ownership changes only when needed.
+    // Older updater directories may grant their creator Modify rather than FullControl.
     let change_owner = unsafe { EqualSid(owner, user) } == 0;
     let information = DACL_SECURITY_INFORMATION
         | PROTECTED_DACL_SECURITY_INFORMATION
@@ -262,9 +257,8 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
         return Err(FilesystemError::KeyFileNotPrivate);
     }
 
-    // Require exactly one full-control allow ACE for this user before migrating
-    // an inherited legacy ACL. Never repair a key that grants another principal
-    // access: that is a different security condition, not a missing flag.
+    // Only repair an inherited legacy ACL with exactly one full-control allow ACE for this user;
+    // access granted to any other principal is a separate security failure.
     let mut information: ACL_SIZE_INFORMATION = unsafe { zeroed() };
     // SAFETY: dacl belongs to the live security descriptor and the output
     // buffer has the documented structure and size.
@@ -305,8 +299,7 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
 }
 
 fn protect_legacy_key(file: &File, user: &CurrentUser) -> Result<(), FilesystemError> {
-    // Reopen the validated object itself, not its pathname. The extra handle
-    // needs only DACL access and cannot be redirected to a substituted file.
+    // Reopen the validated object for DACL access so a substituted pathname cannot redirect the repair.
     let handle = unsafe {
         ReOpenFile(
             file.as_raw_handle() as HANDLE,

@@ -1,5 +1,3 @@
-//! Provider URL and identifier normalization at the configuration boundary.
-
 use super::{ConfigError, ConfigResult, Value, trim_whitespace};
 
 #[derive(Debug)]
@@ -101,7 +99,7 @@ pub(super) fn string_value(
     Ok(value.to_owned())
 }
 
-/// Validate and trim an external provider identifier exactly like Python.
+/// Validate and trim an external provider identifier.
 pub fn normalize_provider_id(raw: Option<&Value>) -> ConfigResult<String> {
     let value = string_value(raw, "provider.id", true)?;
     let mut characters = value.chars();

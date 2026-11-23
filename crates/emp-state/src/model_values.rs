@@ -1,8 +1,5 @@
-//! Exact, bounded capability value normalization shared with Python.
-//!
-//! Modality identifiers are normalized with Python's Unicode whitespace and
-//! case rules before validation. Protocol and reasoning values retain their
-//! input order except for the explicit reasoning progression ordering.
+//! Modality identifiers use Unicode whitespace trimming and lowercase normalization.
+//! Protocol values retain input order; reasoning values use effort order, then input order.
 
 use serde_json::Value;
 

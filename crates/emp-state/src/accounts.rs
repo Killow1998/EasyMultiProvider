@@ -204,7 +204,6 @@ pub fn normalize_context_windows(raw: Option<&Value>) -> AccountResult<Map<Strin
     Ok(normalized)
 }
 
-/// Normalize one Codex account record into its persisted JSON shape.
 pub fn normalize_account(raw: &Value) -> AccountResult<Value> {
     let Value::Object(raw) = raw else {
         return Err(AccountError::new("each account must be an object"));
@@ -293,7 +292,6 @@ fn account_segment(raw: Option<&Value>, field: &str) -> AccountResult<String> {
     Ok(trimmed.to_owned())
 }
 
-/// Return the managed credential path for one normalized account.
 pub fn account_auth_path(
     config: &Value,
     account_id: &str,

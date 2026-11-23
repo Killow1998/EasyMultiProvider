@@ -1,5 +1,4 @@
-//! Correlate observed full-history recovery within the existing bounded ring.
-//! These are metadata correlations, not assertions that request contents match.
+//! Correlate recovery metadata in the bounded ring without asserting request-content equality.
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};

@@ -1,4 +1,4 @@
-//! Typed allowlist matching Python ObservationRing; raw content never passes.
+//! Only allowlisted diagnostic fields may pass; raw content is excluded.
 use super::Journal;
 use regex::Regex;
 use serde_json::{Value, json};

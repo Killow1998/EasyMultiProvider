@@ -34,8 +34,7 @@ pub(super) fn remember(connection: &Connection, id: &str, session: &str) -> Resu
 }
 
 pub(super) fn source() -> String {
-    // Copies and inherited fork records may share an event. Ambiguous evidence
-    // stays unassigned rather than billing the same event to multiple sessions.
+    // Ambiguous fork/copy evidence stays unassigned to avoid billing one event to multiple sessions.
     format!(
         "(SELECT u.id,u.observed_at,u.category,u.owner,u.model,u.route_model,u.cost_nanos,u.price_issue,{},
           COALESCE((SELECT MIN(s.session_id) FROM usage_sessions s

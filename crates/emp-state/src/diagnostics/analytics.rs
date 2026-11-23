@@ -1,4 +1,3 @@
-//! Health, model-speed medians and token-weighted cache charts from observations.
 use super::schema::number;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

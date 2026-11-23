@@ -1,5 +1,4 @@
-//! Small decimal arithmetic surface matching Python Decimal's pricing context.
-//! Prices remain decimal strings; binary floating point never computes cost.
+//! Prices remain decimal strings; cost uses a 28-digit half-even context, never binary floating point.
 use num_bigint::BigInt;
 use num_traits::{ToPrimitive, Zero};
 use std::str::FromStr;

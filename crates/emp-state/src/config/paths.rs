@@ -1,5 +1,3 @@
-//! User paths, managed private-path validation and platform config location.
-
 use super::{CONFIG_PATH_ENV, ConfigError, ConfigResult, Value, default_native_catalog_path};
 use std::env;
 use std::path::{Path, PathBuf, absolute};
@@ -78,7 +76,6 @@ pub(crate) fn account_root(config: &Value) -> PathBuf {
     ))
 }
 
-/// Expand `~` exactly for paths escaped from the configuration crate.
 pub(crate) fn expand_home(path: &Path) -> PathBuf {
     expand_user(path)
 }
@@ -178,11 +175,7 @@ fn canonical_account_paths(config: &mut Value, config_path: &Path) -> Result<(),
     Ok(())
 }
 
-/// Canonicalize configured account credentials against the derived account root.
-///
-/// Canonicalization is part of the public error surface: account path errors
-/// surface as `ConfigError`, matching the documented behavior users observe
-/// when a stored account ID would escape the managed root.
+/// Canonicalize account credentials; IDs escaping the managed root fail with `ConfigError`.
 pub fn canonicalize_account_paths(config: &mut Value, config_path: &Path) -> ConfigResult<()> {
     canonical_account_paths(config, config_path)
 }
@@ -262,12 +255,9 @@ fn canonical_secret_paths(config: &mut Value, config_path: &Path) -> Result<(), 
     Ok(())
 }
 
-/// Canonicalize managed private paths for already normalized configuration.
-///
-/// Relative store paths and relative managed
-/// files are based on `config_path.parent`, `~` is expanded, missing path
-/// components are retained, existing links are followed, and the final managed
-/// input path must itself not be a symlink.
+/// Resolve normalized store and managed paths relative to `config_path.parent`, expanding `~`.
+/// Missing components are retained and existing links are followed;
+/// the final managed input path itself must not be a symlink.
 pub fn canonicalize_private_paths(config: &mut Value, config_path: &Path) -> ConfigResult<()> {
     canonical_account_paths(config, config_path)?;
     canonical_secret_paths(config, config_path)
@@ -347,10 +337,8 @@ fn config_path_from_environment(
     }
 }
 
-/// Return the configuration path shared by desktop and CLI launches.
-///
-/// An explicit CLI path takes precedence at the call site, followed here by
-/// `EASY_MULTI_PROVIDER_CONFIG` and the platform's per-user default.
+/// CLI paths take precedence at the call site, then `EASY_MULTI_PROVIDER_CONFIG`,
+/// then the platform's per-user default shared by desktop and CLI launches.
 pub fn config_path() -> PathBuf {
     let configured = env::var(CONFIG_PATH_ENV).ok();
     let home = env::var("HOME").ok();

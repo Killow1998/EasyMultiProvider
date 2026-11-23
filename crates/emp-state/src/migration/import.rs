@@ -1,5 +1,3 @@
-//! Import side of Python-compatible migration bundles.
-
 use super::*;
 
 mod provider_identity;
@@ -461,9 +459,7 @@ pub fn validate_migration_payload(payload: &Value) -> MigrationResult<DecryptedM
     validate_import_payload(payload).map(DecryptedMigration)
 }
 
-/// Decrypt and validate a Python-compatible `.emp` bundle. This is the slow
-/// (scrypt) half of an import and needs no configuration, so callers can run
-/// it before taking their configuration lock.
+/// Decrypt and validate the `.emp` bundle before taking the configuration lock; scrypt needs no config.
 pub fn decrypt_migration_bundle(
     bundle: &[u8],
     password: &str,
@@ -474,8 +470,7 @@ pub fn decrypt_migration_bundle(
     validate_import_payload(&payload).map(DecryptedMigration)
 }
 
-/// Compute the normal import result without writing credentials or configuration.
-/// Developer previews use the same identity/collision rules as the real import.
+/// Preview without writes using the real import's identity and collision rules.
 pub fn preview_migration_import(
     current: &Value,
     payload: &Value,
@@ -487,7 +482,7 @@ pub fn preview_migration_import(
     merge_import(current, validated, config_path, vault, preview_auth)
 }
 
-/// Decrypt, validate, merge and durably import a Python-compatible `.emp` bundle.
+/// Decrypt, validate, merge and durably import a `.emp` bundle.
 pub fn import_migration_bundle(
     current: &Value,
     bundle: &[u8],

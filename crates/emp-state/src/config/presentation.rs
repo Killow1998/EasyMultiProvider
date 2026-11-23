@@ -125,10 +125,7 @@ fn normalize_route(raw: &str) -> ConfigResult<String> {
     Ok(route.to_owned())
 }
 
-/// Normalize route-keyed catalog presentation controls exactly like Python.
-///
-/// Python intentionally rebuilds each value from the three public fields, so
-/// stale or unknown presentation fields are discarded here as well.
+/// Normalize route-keyed controls to the three public fields, discarding stale or unknown fields.
 pub fn normalize_catalog_presentations(raw: Option<&Value>) -> ConfigResult<Value> {
     let raw = match raw {
         None | Some(Value::Null) => return Ok(Value::Object(Map::new())),
@@ -276,7 +273,7 @@ pub fn normalize_pricing_aliases(raw: Option<&Value>) -> ConfigResult<Value> {
     Ok(Value::Object(aliases))
 }
 
-/// Validate ordered runtime selection with Python's trimming and deduplication.
+/// Trim and deduplicate runtime selections while preserving order.
 pub fn normalize_codex_runtime_sources(raw: Option<&Value>) -> ConfigResult<Value> {
     let raw = match raw {
         None | Some(Value::Null) => {

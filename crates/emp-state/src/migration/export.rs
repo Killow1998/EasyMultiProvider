@@ -1,8 +1,5 @@
-//! Export side of Python-compatible migration bundles.
-
 use super::*;
 
-/// One export category from the Python configuration migration format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ExportGroup {
     Native,
@@ -484,8 +481,7 @@ fn native_account_id(config: &Value) -> String {
     candidate
 }
 
-/// Prepare a read-only export snapshot, including selected credentials.
-/// Callers must encrypt it before creating a portable file.
+/// Snapshot selected credentials without writes; encrypt before creating a portable file.
 pub fn prepare_migration_export(
     config: &Value,
     vault: &VaultStore,
@@ -643,7 +639,6 @@ pub fn export_migration_bundle_with_summary(
     Ok((bundle, summary))
 }
 
-/// Return a Python-compatible encrypted migration bundle.
 pub fn export_migration_bundle(
     config: &Value,
     password: &str,

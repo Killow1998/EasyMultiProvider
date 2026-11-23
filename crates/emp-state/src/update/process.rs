@@ -1,4 +1,3 @@
-//! Process birth identity and update-owned child process groups.
 use super::{Result, UpdateError};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};

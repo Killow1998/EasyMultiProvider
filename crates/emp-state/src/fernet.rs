@@ -1,6 +1,4 @@
-//! Fernet key validation and operations backed by the RustCrypto feature of
-//! `fernet`. The wire format is interoperable with Python's
-//! `cryptography.fernet.Fernet` and does not require a platform OpenSSL install.
+//! Standard Fernet wire format via RustCrypto, without a platform OpenSSL dependency.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE};
 use fernet::Fernet as FernetToken;
@@ -62,7 +60,6 @@ impl fmt::Display for FernetKeyError {
 
 impl std::error::Error for FernetKeyError {}
 
-/// Fernet encryptor/decryptor wrapper.
 pub struct Fernet {
     token: FernetToken,
 }
@@ -79,7 +76,7 @@ impl Fernet {
         self.token.encrypt(plaintext).into_bytes()
     }
 
-    /// Decrypt without a TTL, matching Python's `Fernet.decrypt(token)` call.
+    /// Decrypt without a TTL.
     pub fn decrypt(&self, token: &[u8]) -> Result<Zeroizing<Vec<u8>>, FernetError> {
         let token = std::str::from_utf8(token).map_err(|_| FernetError::DecryptFailed)?;
         let header = URL_SAFE
@@ -100,8 +97,7 @@ impl Fernet {
     }
 }
 
-/// Fernet deliberately exposes one failure class for malformed, unauthenticated,
-/// wrong-key and invalid-padding tokens, matching Python's `InvalidToken`.
+/// Malformed, unauthenticated, wrong-key and invalid-padding tokens share one failure class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FernetError {
     DecryptFailed,

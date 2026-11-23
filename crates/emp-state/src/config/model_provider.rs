@@ -1,5 +1,3 @@
-//! Provider, model and capability normalization.
-
 use super::*;
 
 const PROVIDER_PROTOCOLS: [&str; 4] = [
@@ -495,9 +493,8 @@ fn normalize_model_provenance(
     }))
 }
 
-/// Capability provenance for a normalized model. Top-level values, including
-/// null, override nested capabilities. `explicit_fields` records raw top-level
-/// and nested key presence.
+/// Top-level values, including null, override nested capabilities;
+/// `explicit_fields` records raw top-level and nested key presence.
 pub fn normalize_model_capability_sources(
     raw: Option<&Value>,
     values: &Value,

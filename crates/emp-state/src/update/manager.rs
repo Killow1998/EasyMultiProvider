@@ -1,4 +1,3 @@
-//! Release discovery, verified download, and handoff to the replacement worker.
 mod catalog;
 pub(super) mod diagnostics;
 mod operations;

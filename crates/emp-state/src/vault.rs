@@ -4,10 +4,8 @@ use crate::fernet::{Fernet, FernetError, FernetKey};
 use std::fmt;
 use zeroize::Zeroizing;
 
-/// Exact magic prefix for vault-encrypted files.
 pub const VAULT_MAGIC: &[u8] = b"easy-multi-provider-v1\n";
 
-/// Errors from vault operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultError {
     NotVaultFormat,
@@ -37,7 +35,6 @@ impl From<FernetError> for VaultError {
 
 pub type VaultResult<T> = Result<T, VaultError>;
 
-/// Encode plaintext into the vault wire format.
 pub fn encode_vault(key: &FernetKey, plaintext: &[u8]) -> Vec<u8> {
     let fernet = Fernet::new(key);
     let mut output = Vec::with_capacity(VAULT_MAGIC.len() + 128 + plaintext.len());
@@ -46,7 +43,6 @@ pub fn encode_vault(key: &FernetKey, plaintext: &[u8]) -> Vec<u8> {
     output
 }
 
-/// Decode the vault wire format and return the plaintext.
 pub fn decode_vault(key: &FernetKey, encoded: &[u8]) -> VaultResult<Zeroizing<Vec<u8>>> {
     if !encoded.starts_with(VAULT_MAGIC) {
         return Err(VaultError::NotVaultFormat);

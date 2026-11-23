@@ -1,4 +1,3 @@
-//! Encrypted configuration, private files and portable migration envelopes.
 //! Vault and migration formats remain compatible with existing EMP data.
 
 pub mod accounts;
