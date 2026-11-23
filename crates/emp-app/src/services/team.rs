@@ -81,6 +81,8 @@ pub(crate) struct TeamState {
     configured_shares: std::collections::BTreeSet<String>,
     operations: Mutex<()>,
     background: Mutex<()>,
+    #[cfg(all(test, unix))]
+    background_paused: std::sync::atomic::AtomicBool,
     events: tokio::sync::Notify,
     discovery: discovery::Discovery,
     budget_notices: budget_notices::Notices,
@@ -172,10 +174,18 @@ impl TeamState {
             configured_shares,
             operations: Mutex::new(()),
             background: Mutex::new(()),
+            #[cfg(all(test, unix))]
+            background_paused: Default::default(),
             events: Default::default(),
             discovery: Default::default(),
             budget_notices,
         }
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn pause_background_for_test(&self) {
+        self.background_paused
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn snapshot(&self) -> Result<Store> {
@@ -330,6 +340,13 @@ impl TeamState {
             });
             if stopped {
                 break;
+            }
+            #[cfg(all(test, unix))]
+            if team
+                .background_paused
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                continue;
             }
             let Ok(_background) = team.background.lock() else {
                 break;

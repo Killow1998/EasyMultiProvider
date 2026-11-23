@@ -110,7 +110,7 @@ pub(in crate::services::team) fn upload_details(state: &ServerState) -> Result<V
 
 pub(in crate::services::team) fn publish(
     state: &ServerState,
-    body: &Value,
+    account_id: Result<Option<String>>,
 ) -> Result<SharePayload> {
     let _operation = state
         .backend
@@ -118,10 +118,8 @@ pub(in crate::services::team) fn publish(
         .manager
         .operation_lock()
         .map_err(|_| Failure::unavailable())?;
-    let selected = body
-        .get("account_id")
-        .map(|id| id.as_str().ok_or_else(Failure::invalid))
-        .transpose()?;
+    let account_id = account_id?;
+    let selected = account_id.as_deref();
     let invalid_selection = || Failure(409, "workspace_subscription_selection_invalid".into());
     let snapshot = match upload_source(state)? {
         Upload::Native(snapshot) if selected.is_none() => snapshot,

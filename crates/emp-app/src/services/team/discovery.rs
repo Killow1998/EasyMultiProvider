@@ -21,11 +21,27 @@ struct Announcement {
 }
 
 #[derive(Default)]
-pub(super) struct Discovery(Mutex<Option<AbortHandle>>);
+pub(super) struct Discovery {
+    announcement: Mutex<Option<AbortHandle>>,
+    #[cfg(all(test, unix))]
+    no_broadcast_interfaces: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(all(test, unix))]
+impl super::TeamState {
+    pub(crate) fn isolate_discovery_for_test(&self) {
+        self.discovery
+            .no_broadcast_interfaces
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 impl Discovery {
     pub(super) fn announce(&self, state: &ServerState, origin: &str, reply: &Value) -> Result<()> {
-        let mut announcement = self.0.lock().map_err(|_| Failure::unavailable())?;
+        let mut announcement = self
+            .announcement
+            .lock()
+            .map_err(|_| Failure::unavailable())?;
         if announcement
             .as_ref()
             .is_some_and(|task| !task.is_finished())
@@ -60,6 +76,15 @@ impl Discovery {
 
     pub(super) fn find(&self, state: &ServerState) -> Result<Value> {
         let networks = local_networks()?;
+        #[cfg(all(test, unix))]
+        let networks = if self
+            .no_broadcast_interfaces
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            Vec::new()
+        } else {
+            networks
+        };
         let found = state
             .backend
             .transport
@@ -96,7 +121,7 @@ impl Discovery {
     }
 
     pub(super) fn stop(&self) {
-        if let Ok(mut announcement) = self.0.lock()
+        if let Ok(mut announcement) = self.announcement.lock()
             && let Some(task) = announcement.take()
         {
             task.abort();

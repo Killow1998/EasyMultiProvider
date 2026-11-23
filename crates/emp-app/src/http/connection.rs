@@ -30,6 +30,7 @@ use crate::server::http::{
     login,
     management::ManagementSession,
     modules::{self, ModuleAction},
+    team,
 };
 use crate::services::connection_admission::ConnectionPermit;
 use crate::services::observation::http::HttpObservation;
@@ -111,8 +112,10 @@ pub(crate) fn handle_connection(
         )
     } else {
         match (request.method, path) {
-            (RequestMethod::Post, path) if path.starts_with("/api/team/") => Some(
-                crate::api::team::mutate(&mut stream, request, raw.body_prefix, state, now),
+            _ if team::matches_write(request) => Some(
+                team::legacy(&mut stream, request, raw.body_prefix, state, now)
+                    .unwrap_or_else(EntryError::reply)
+                    .wire_response(),
             ),
             (RequestMethod::Post, modules::PATH)
             | (RequestMethod::Post | RequestMethod::Delete, gateway::CLIENTS_PATH) => {

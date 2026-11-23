@@ -72,6 +72,8 @@ mod local_writes;
 mod login_writes;
 #[cfg(unix)]
 mod module_writes;
+#[cfg(unix)]
+mod team_writes;
 
 pub(crate) async fn assert_wire_parity(
     old: SocketAddr,
@@ -418,6 +420,16 @@ fn install_panel_fixture(
     module: emp_modules::Module,
     panel: &str,
 ) -> String {
+    install_worker_fixture(directory, module, panel, "while read -r line; do :; done")
+}
+
+#[cfg(unix)]
+fn install_worker_fixture(
+    directory: &std::path::Path,
+    module: emp_modules::Module,
+    panel: &str,
+    handler: &str,
+) -> String {
     use emp_modules::{HOST_API, Hello, PROTOCOL, Reply};
     use sha2::{Digest, Sha256};
     use std::{fs, os::unix::fs::PermissionsExt};
@@ -438,7 +450,7 @@ fn install_panel_fixture(
     })
     .unwrap();
     let worker = format!(
-        "#!/bin/sh\nprintf '%s\\n' '{hello}'\nread -r line\nprintf '%s\\n' '{reply}'\nwhile read -r line; do :; done\n"
+        "#!/bin/sh\nprintf '%s\\n' '{hello}'\nread -r line\nprintf '%s\\n' '{reply}'\n{handler}\n"
     );
     let revision = format!("{:x}", Sha256::digest(&worker));
     let executable = modules.join(format!("{}-{revision}", module.id()));

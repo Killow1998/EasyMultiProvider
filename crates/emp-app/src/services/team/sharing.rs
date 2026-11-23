@@ -11,9 +11,10 @@ impl TeamState {
         &self,
         state: &ServerState,
         session: &Session,
-        body: &Value,
+        native_source: bool,
+        account_id: Result<Option<String>>,
     ) -> Result<Value> {
-        if !body["provider"].is_null() && body["provider"] != NATIVE_SHARE {
+        if !native_source {
             return Err(Failure(400, "workspace_only_native_subscription".into()));
         }
         let token = Some(session.token.as_str());
@@ -21,7 +22,7 @@ impl TeamState {
         let publish = Publish {
             source: NATIVE_SHARE.into(),
             expected_version: version["version"].as_i64().ok_or_else(Failure::invalid)?,
-            payload: super::subscriptions::publish(state, body)?,
+            payload: super::subscriptions::publish(state, account_id)?,
         };
         request(
             state,
