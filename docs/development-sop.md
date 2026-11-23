@@ -63,6 +63,11 @@ Linux Rust CI 执行这些规则；单元测试随已有 workspace 测试运行�
 前端先注册产品文案，再创建页面控制器；同一文案的简体中文和英文占位符保持一致。
 前端现有检查：按变更选择文案、行为或生命周期合同。
 
+正式资产的 Chromium 行为入口和功能地图见
+[WebUI 浏览器基线](../tests/web/feature-map.md)。在 `tests/web` 下执行
+`npm ci`、`npx playwright install chromium`，设置 `EMP_BIN` 后执行 `npm test`。
+此入口使用 `EMP_BIN` 和临时隔离目录，不复用活动 EMP；Cargo 构建不调用 Node。
+
 ```sh
 node crates/emp-app/tests/web_copy_contract.cjs
 node crates/emp-app/tests/web_features_contract.cjs

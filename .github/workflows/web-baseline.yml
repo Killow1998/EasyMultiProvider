@@ -1,0 +1,52 @@
+name: Web browser baseline
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-baseline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chromium:
+    runs-on: ubuntu-22.04
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 2
+      EMP_BIN: ${{ github.workspace }}/target/debug/EMP
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          shared-key: web-baseline-1.93.1
+          cache-bin: false
+      - name: Build the real EMP application
+        run: cargo build --locked -p emp-app
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "22"
+      - name: Install browser test dependencies
+        working-directory: tests/web
+        run: npm ci
+      - name: Install Chromium
+        working-directory: tests/web
+        run: npx playwright install --with-deps chromium
+      - name: Run U01–U03 against shipped assets
+        working-directory: tests/web
+        run: npm test
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: web-baseline-diagnostics
+          path: |
+            tests/web/playwright-report/
+            tests/web/test-results/
+          retention-days: 3
