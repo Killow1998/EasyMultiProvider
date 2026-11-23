@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "${EMP_ZIG:-zig}" ar "$@"

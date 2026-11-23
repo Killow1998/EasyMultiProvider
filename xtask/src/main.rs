@@ -1,4 +1,5 @@
 mod check;
+mod cross_check;
 mod module_e2e;
 mod package;
 mod release;
@@ -24,6 +25,7 @@ commands:
   package [--skip-service-smoke]   build and smoke-test this platform's native package
   package-module ID [--output DIR] build one official module and its checksum
   module-e2e [--skip-aero]          build real modules and run ignored module journeys
+  cross-check [windows|macos]      clippy the workspace for Windows and macOS from Linux
   package-smoke                    run update/install smoke tests against artifacts/
   validate-release --tag TAG --artifacts DIR [--public-manifest FILE]
   release-notes TAG                print this version's CHANGELOG section";
@@ -36,6 +38,7 @@ fn main() -> ExitCode {
         Some("package") => package::run(rest),
         Some("package-module") => package::run_module(rest),
         Some("module-e2e") => module_e2e::run(rest),
+        Some("cross-check") => cross_check::run(rest),
         Some("package-smoke") => smoke::run(rest),
         Some("validate-release") => release::validate_command(rest),
         Some("release-notes") => release::notes_command(rest),

@@ -9,9 +9,9 @@ const ALLOWED: &[(&str, usize)] = &[
     ("emp-integration", 0),
     ("emp-modules", 0),
     ("emp-protocol", 0),
-    ("emp-router", 1),
+    ("emp-router", 0),
     ("emp-state", 0),
-    ("emp-transport", 1),
+    ("emp-transport", 0),
     ("xtask", 0),
     ("web", 1),
 ];
@@ -23,7 +23,9 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
         .filter(|path| path.ends_with(".rs") && *path != "xtask/src/check/comments.rs")
     {
         if root.join(path).is_file() {
-            disguised_sleep(path, &read(root, path)?, errors);
+            let contents = read(root, path)?;
+            disguised_sleep(path, &contents, errors);
+            msvc_only(path, &contents, errors);
         }
     }
     for path in paths {
@@ -68,6 +70,7 @@ fn group(path: &str) -> Option<&str> {
 fn count(contents: &str, rust: bool) -> usize {
     let mut count = 0;
     let mut test_indent = None;
+    let mut safety = false;
     for line in contents.lines() {
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
@@ -87,8 +90,15 @@ fn count(contents: &str, rust: bool) -> usize {
                 continue;
             }
         }
-        if trimmed.starts_with("//")
-            && !["///", "//!", "// SAFETY:"]
+        let comment = trimmed.starts_with("//");
+        safety = if trimmed.starts_with("// SAFETY:") {
+            true
+        } else {
+            safety && comment
+        };
+        if comment
+            && !safety
+            && !["///", "//!"]
                 .iter()
                 .any(|prefix| trimmed.starts_with(prefix))
         {
@@ -98,11 +108,46 @@ fn count(contents: &str, rust: bool) -> usize {
     count
 }
 
+fn msvc_only(path: &str, contents: &str, errors: &mut Vec<String>) {
+    for (index, line) in contents.lines().enumerate() {
+        if line
+            .split_whitespace()
+            .collect::<String>()
+            .contains("target_env=\"msvc\"")
+        {
+            errors.push(format!("[msvc-only] {path}:{}: cargo xtask cross-check 用 windows-gnu 检查 Windows 代码，msvc 专属分支不会被本机检查覆盖；改用 cfg(windows)，或先扩展 cross-check", index + 1));
+        }
+    }
+}
+
 fn disguised_sleep(path: &str, contents: &str, errors: &mut Vec<String>) {
     for (index, line) in contents.lines().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.contains("let (_") && trimmed.contains("channel") {
             errors.push(format!("[disguised-sleep] {path}:{}: 丢弃 sender 的 channel 只能当 sleep 用；轮询等待用 tests/support/modules.rs 的 eventually，固定间隔用 std::thread::sleep 并加 #[expect(clippy::disallowed_methods, reason = \"…\")]", index + 1));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{count, msvc_only};
+
+    #[test]
+    fn safety_continuation_lines_are_part_of_the_safety_note() {
+        let source = "    // SAFETY: the handle is valid\n    // for the whole call.\n    unsafe { call() };\n    // stray note\n";
+        assert_eq!(count(source, true), 1);
+    }
+
+    #[test]
+    fn msvc_only_branches_are_rejected_because_cross_check_uses_windows_gnu() {
+        let mut errors = Vec::new();
+        msvc_only(
+            "a.rs",
+            "#[cfg(windows)]\n#[cfg(all(windows, target_env = \"msvc\"))]\n",
+            &mut errors,
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].starts_with("[msvc-only] a.rs:2:"));
     }
 }

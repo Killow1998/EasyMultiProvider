@@ -6,7 +6,9 @@
 
 ## 1. 固定构建环境，保留活动缓存
 
-- 工具链与 CI 保持一致，目前为 Rust **1.93.1**。使用 `--locked`。
+- 工具链与 CI 保持一致，目前为 Rust **1.93.1**，由仓库根的 `rust-toolchain.toml`
+  固定（含 rustfmt、clippy 和 `x86_64-pc-windows-gnu`、`x86_64-apple-darwin`
+  两个交叉目标）。使用 `--locked`。
 - 日常使用 dev/test；现有配置保留应用的有限调试信息，关闭依赖的调试信息。
   正式 release 的 LTO 和单 codegen unit 留给发包，不用于每轮界面或逻辑检查。
 - 同一工作树固定 target 目录、工具链、features、profile 和增量设置。dev/test
@@ -23,6 +25,19 @@
 先看 `git status --short` 和已有 diff，确认模块及工作树所有权。慢请求、等待
 构建锁、编译、链接、测试和外部服务等待分别判断；终端等待不能全算作 Rust 编译。
 
+### Linux 上检查 Windows/macOS 代码
+
+`cargo xtask cross-check [windows|macos]` 对整个工作区按目标平台运行
+`clippy --all-targets -D warnings`，提交涉及 `cfg(windows)`、`cfg(target_os = "macos")`
+或平台依赖的改动前必须通过。它只编译检查、不链接、不运行测试，运行证据仍来自平台 CI。
+
+- Windows 用 `x86_64-pc-windows-gnu`，需要 MinGW-w64 C 编译器（Ubuntu：
+  `sudo apt install gcc-mingw-w64-x86-64 cmake`）。不写 `target_env = "msvc"` 专属分支，
+  `cargo xtask check` 的 msvc-only 规则会拒绝它
+- macOS 用 zig 作为 C 编译器（`xtask/cross/zig-*` 包装脚本），不需要 Apple SDK。
+  从 ziglang.org 下载 xtask 固定的 zig 版本（当前 0.15.2），解压到私有目录，
+  `EMP_ZIG` 指向其中的 `zig`
+
 ## 2. 每轮只走需要的路径
 
 | 修改范围 | 日常反馈 | 候选验收 |
@@ -31,7 +46,7 @@
 | JS/CSS/文案 | 受影响的现有 Node 合同检查、Shadow 刷新 | 重建一次候选，运行对应正式资产浏览器 E2E |
 | 单个 Rust 模块 | 对应 crate 的 check 或已有行为测试 | 跨模块边界检查及受影响 E2E |
 | 路由、协议、历史、存储或恢复 | 对应 crate、调用方和失败路径测试 | 假上游或隔离真实引擎的完整工作流 |
-| Windows/macOS 启动、更新、系统匣 | 本地可验证的共享逻辑 | 官方原生 CI 包及受影响平台验收 |
+| Windows/macOS 启动、更新、系统匣 | 本地可验证的共享逻辑；`cargo xtask cross-check` | 官方原生 CI 包及受影响平台验收 |
 
 快速类型反馈：
 

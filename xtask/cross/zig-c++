@@ -1,0 +1,12 @@
+#!/bin/sh
+zig="${EMP_ZIG:-zig}"
+set -- "$@" --emp-end
+while [ "$1" != --emp-end ]; do
+  case "$1" in
+    --target=*|-mmacosx-version-min=*) shift ;;
+    -arch) shift 2 ;;
+    *) set -- "$@" "$1"; shift ;;
+  esac
+done
+shift
+exec "$zig" c++ -target x86_64-macos "$@"
