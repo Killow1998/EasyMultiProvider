@@ -1,12 +1,11 @@
+use crate::server::http::management::ManagementSession;
 use crate::{
     app::ServerState,
     http::{
-        auth::same_origin,
         request::{Request, read_json_body},
-        response::{
-            body_error_response, json_error_response, response, status_text, unauthorized_response,
-        },
+        response::{body_error_response, json_error_response, response, status_text},
     },
+    server::http::error::EntryError,
     services::modules::Action,
 };
 use emp_modules::Module;
@@ -14,7 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::net::TcpStream;
 
-pub(crate) fn unavailable(path: &str, state: &ServerState) -> Option<Vec<u8>> {
+pub(crate) fn unavailable(path: &str, state: &ServerState) -> Option<EntryError> {
     let module = match path {
         "/v1/decisions"
         | "/v1/systemone"
@@ -24,15 +23,11 @@ pub(crate) fn unavailable(path: &str, state: &ServerState) -> Option<Vec<u8>> {
         _ if path.starts_with("/api/team/") => Module::Team,
         _ => return None,
     };
-    (!state.backend.modules.active(module)).then(|| {
-        json_error_response(
-            404,
-            status_text(404),
-            "This EMP module is not active",
-            Some("module_disabled"),
-            &[],
-        )
-    })
+    (!state.backend.modules.active(module)).then_some(EntryError::Json(
+        404,
+        "This EMP module is not active",
+        Some("module_disabled"),
+    ))
 }
 
 pub(crate) fn read(state: &ServerState) -> Vec<u8> {
@@ -55,12 +50,8 @@ pub(crate) fn mutate(
     state: &ServerState,
     now: f64,
 ) -> Vec<u8> {
-    if !same_origin(request, state.port)
-        || !state
-            .sessions
-            .contains(request.session_token().as_deref(), now)
-    {
-        return unauthorized_response();
+    if let Err(error) = ManagementSession::require(request, state, now) {
+        return error.wire_response();
     }
     let body = match read_json_body(stream, request, prefix, state) {
         Ok(body) => body,

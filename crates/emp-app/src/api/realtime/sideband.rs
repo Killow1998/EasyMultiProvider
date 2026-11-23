@@ -2,9 +2,9 @@ use super::call::{incoming_headers, native_headers, safe_forwarded_headers};
 use super::{RealtimeError, valid_call_id};
 use crate::VERSION;
 use crate::app::ServerState;
-use crate::http::auth::{proxy_allowed, same_origin};
 use crate::http::request::Request;
 use crate::http::response::{json_error_response, status_text};
+use crate::server::http::proxy::require_proxy;
 use emp_transport::{
     ClientWebSocket, ClientWebSocketError, ClientWebSocketPump, DEFAULT_PUMP_CHANNEL_CAPACITY,
     PumpCommand, PumpEvent, WebSocketConnection, WebSocketPoll, WebSocketPumpConfig,
@@ -35,18 +35,8 @@ pub(crate) fn prepare_sideband(
     state: &ServerState,
     now: f64,
 ) -> Result<PreparedSideband, Vec<u8>> {
-    if !proxy_allowed(request, state, now) {
-        let status = if same_origin(request, state.port) {
-            401
-        } else {
-            403
-        };
-        return Err(RealtimeError::new(
-            status,
-            "realtime_caller_unauthorized",
-            "Caller authentication is required for Codex Voice",
-        )
-        .wire_response());
+    if let Err(error) = require_proxy(request, state, now) {
+        return Err(error.wire_response());
     }
     if !valid_call_id(call_id) {
         return Err(RealtimeError::new(

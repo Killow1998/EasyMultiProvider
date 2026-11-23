@@ -1,15 +1,5 @@
-use crate::app::ServerState;
 use crate::http::auth::session_header_value;
-use emp_transport::ContentDecodeError;
-use emp_transport::MEMORY_RESERVATION_FACTOR;
-use emp_transport::MIN_MEMORY_HEADROOM_BYTES;
-use emp_transport::REQUEST_GROWTH_QUANTUM;
-use emp_transport::RequestCapacityError;
-use emp_transport::RequestCapacityReason;
-use emp_transport::RequestLimitsConfig;
-use emp_transport::TransportKind;
-use emp_transport::decode_content;
-use serde_json::Value;
+pub(crate) use crate::server::http::body::{BodyError, read_json_body};
 use std::io::Read;
 use std::net::TcpStream;
 use std::time::Duration;
@@ -19,7 +9,6 @@ pub(crate) const MAX_HEADER_BYTES: usize = 8 * 1024;
 
 pub(crate) const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const REQUEST_HEAD_DEADLINE: Duration = Duration::from_secs(30);
-/// Overall limit for receiving a request body, extended for large uploads.
 const REQUEST_BODY_DEADLINE: Duration = Duration::from_secs(120);
 const REQUEST_BODY_GRACE_BYTES_PER_SECOND: usize = 1024 * 1024;
 
@@ -55,7 +44,7 @@ impl<'a> Request<'a> {
             .skip(1)
             .filter_map(|line| line.split_once(':'))
             .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
-            .filter(|(name, _)| !name.starts_with("x-emp-caller-") && name != "x-emp-peer-ip")
+            .filter(|(name, _)| !reserved_source_header(name))
             .collect();
         if let Some(source) = self.source {
             if let Some(delegation) = &source.delegation {
@@ -77,9 +66,8 @@ impl<'a> Request<'a> {
     pub(crate) fn header(&self, name: &str) -> Option<&'a str> {
         self.headers.lines().skip(1).find_map(|line| {
             let (header_name, value) = line.split_once(':')?;
-            header_name
-                .trim()
-                .eq_ignore_ascii_case(name)
+            let header_name = header_name.trim();
+            (!reserved_source_header(header_name) && header_name.eq_ignore_ascii_case(name))
                 .then(|| value.trim())
         })
     }
@@ -97,6 +85,11 @@ impl<'a> Request<'a> {
         self.target
             .split_once('?')
             .map_or(self.target, |(path, _)| path)
+    }
+
+    pub(crate) fn is_model_http(&self) -> bool {
+        self.method == RequestMethod::Post
+            && matches!(self.raw_path(), "/v1/responses" | "/v1/responses/compact")
     }
 
     pub(crate) fn releases_request_permit(&self) -> bool {
@@ -119,6 +112,13 @@ impl<'a> Request<'a> {
     }
 }
 
+pub(crate) fn reserved_source_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("x-emp-peer-ip")
+        || name
+            .get(.."x-emp-caller-".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("x-emp-caller-"))
+}
+
 pub(crate) struct RequestHead {
     pub(crate) head: String,
     pub(crate) body_prefix: Vec<u8>,
@@ -126,8 +126,12 @@ pub(crate) struct RequestHead {
 
 /// Deadline for a request body of `length` bytes, starting now.
 pub(crate) fn request_body_deadline(length: usize) -> Instant {
+    Instant::now() + request_body_timeout(length)
+}
+
+pub(crate) fn request_body_timeout(length: usize) -> Duration {
     let grace = (length / REQUEST_BODY_GRACE_BYTES_PER_SECOND) as u64;
-    Instant::now() + REQUEST_BODY_DEADLINE + Duration::from_secs(grace)
+    REQUEST_BODY_DEADLINE + Duration::from_secs(grace)
 }
 
 /// Read once, bounded by both the per-read idle timeout and `deadline`, so a
@@ -286,180 +290,4 @@ pub(crate) fn query_values(target: &str, name: &str) -> Vec<String> {
         .filter(|(key, _)| percent_decode(key, true) == name)
         .map(|(_, value)| percent_decode(value, true))
         .collect()
-}
-
-pub(crate) enum BodyError {
-    Invalid(String),
-    Timeout,
-    Capacity(RequestCapacityError),
-    Decode(ContentDecodeError),
-}
-
-fn body_size_error(limit: usize, decoded: bool) -> BodyError {
-    BodyError::Capacity(RequestCapacityError {
-        limit,
-        decoded,
-        reason: emp_transport::RequestCapacityReason::HardLimit,
-        available_bytes: None,
-        required_memory_bytes: 0,
-        memory_total_bytes: None,
-        memory_used_bytes: None,
-        memory_used_percent: None,
-    })
-}
-
-fn allocation_capacity_error(limit: usize) -> BodyError {
-    let memory = emp_transport::system_memory_status();
-    let reserved_limit = limit
-        .div_ceil(REQUEST_GROWTH_QUANTUM)
-        .saturating_mul(REQUEST_GROWTH_QUANTUM);
-    BodyError::Capacity(RequestCapacityError {
-        limit: reserved_limit,
-        decoded: false,
-        reason: RequestCapacityReason::MemoryLimit,
-        available_bytes: memory.map(|memory| memory.available),
-        required_memory_bytes: reserved_limit
-            .saturating_mul(MEMORY_RESERVATION_FACTOR)
-            .saturating_add(MIN_MEMORY_HEADROOM_BYTES),
-        memory_total_bytes: memory.and_then(|memory| memory.total),
-        memory_used_bytes: memory.and_then(|memory| memory.used),
-        memory_used_percent: memory
-            .and_then(|memory| memory.used_percent)
-            .filter(|value| value.is_finite()),
-    })
-}
-
-fn reserve_body_capacity(
-    body: &mut Vec<u8>,
-    target_length: usize,
-) -> Result<(), std::collections::TryReserveError> {
-    body.try_reserve_exact(target_length.saturating_sub(body.len()))
-}
-
-pub(crate) fn read_json_body(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    mut body: Vec<u8>,
-    state: &ServerState,
-) -> Result<Value, BodyError> {
-    let content_type = request
-        .header("Content-Type")
-        .and_then(|value| value.split(';').next())
-        .map(str::trim)
-        .unwrap_or_default();
-    if !content_type.eq_ignore_ascii_case("application/json") {
-        return Err(BodyError::Invalid(
-            "Content-Type must be application/json".to_owned(),
-        ));
-    }
-    request.validate_body_framing()?;
-    let raw_length = request.header("Content-Length").unwrap_or("0");
-    if raw_length.starts_with('-') {
-        if raw_length.parse::<i128>().is_ok_and(|value| value < 0) {
-            return Err(BodyError::Invalid(
-                "Content-Length cannot be negative".to_owned(),
-            ));
-        }
-        return Err(BodyError::Invalid("invalid Content-Length".to_owned()));
-    }
-    let length = raw_length
-        .parse::<u128>()
-        .map_err(|_| BodyError::Invalid("invalid Content-Length".to_owned()))?;
-    let management = request.raw_path().starts_with("/api/");
-    let limit = if management {
-        5 * 1024 * 1024
-    } else {
-        RequestLimitsConfig::default().maximum
-    };
-    let length = usize::try_from(length).map_err(|_| body_size_error(limit, false))?;
-    let mut budget = (!management).then(|| {
-        state
-            .backend
-            .transport
-            .request_limits
-            .request(TransportKind::Http)
-    });
-    if let Some(budget) = &mut budget {
-        budget.ensure(length).map_err(BodyError::Capacity)?;
-    } else if length > limit {
-        return Err(body_size_error(limit, false));
-    }
-    if body.len() > length {
-        body.truncate(length);
-    }
-    if reserve_body_capacity(&mut body, length).is_err() {
-        return Err(allocation_capacity_error(length));
-    }
-    let deadline = request_body_deadline(length);
-    if let Err(error) = read_exact_before(stream, &mut body, length, deadline) {
-        restore_read_timeout(stream);
-        return if error.kind() == std::io::ErrorKind::TimedOut {
-            Err(BodyError::Timeout)
-        } else {
-            Err(BodyError::Invalid("request body is incomplete".to_owned()))
-        };
-    }
-    restore_read_timeout(stream);
-    let body = decode_content(
-        body,
-        request.header("Content-Encoding").unwrap_or_default(),
-        limit,
-        budget.as_mut(),
-    )
-    .map_err(|error| match error {
-        ContentDecodeError::DecodedTooLarge { limit } => body_size_error(limit, true),
-        error => BodyError::Decode(error),
-    })?;
-    let decoded_size = body.len();
-    let value: Value = serde_json::from_slice(&body)
-        .map_err(|error| BodyError::Invalid(format!("request body must be valid JSON: {error}")))?;
-    drop(body);
-    crate::util::release_large_temporary_pages(decoded_size);
-    if !value.is_object() {
-        return Err(BodyError::Invalid(
-            "request body must be a JSON object".to_owned(),
-        ));
-    }
-    Ok(value)
-}
-
-#[cfg(test)]
-mod body_capacity_tests {
-    use super::{
-        BodyError, REQUEST_GROWTH_QUANTUM, allocation_capacity_error, reserve_body_capacity,
-    };
-    use emp_transport::RequestCapacityReason;
-
-    #[test]
-    fn reserves_wire_content_length_without_geometric_growth() {
-        let target_length = 1024 * 1024 + 269;
-        let mut body = Vec::with_capacity(1024);
-        body.extend_from_slice(&[0_u8; 1024]);
-
-        reserve_body_capacity(&mut body, target_length).expect("reserve validated wire size");
-        assert!(body.capacity() >= target_length);
-        let reserved_capacity = body.capacity();
-        let reserved_pointer = body.as_ptr();
-
-        let chunk = [7_u8; 64 * 1024];
-        while body.len() + chunk.len() <= target_length {
-            body.extend_from_slice(&chunk);
-        }
-        let remainder = target_length - body.len();
-        body.extend_from_slice(&chunk[..remainder]);
-        assert_eq!(body.len(), target_length);
-        assert_eq!(body.capacity(), reserved_capacity);
-        assert_eq!(body.as_ptr(), reserved_pointer);
-        assert!(body.iter().all(|byte| *byte == 0 || *byte == 7));
-    }
-
-    #[test]
-    fn allocation_failure_maps_to_safe_memory_capacity_error() {
-        let BodyError::Capacity(error) = allocation_capacity_error(1024) else {
-            panic!("allocation failure must map to capacity error");
-        };
-        assert_eq!(error.reason, RequestCapacityReason::MemoryLimit);
-        assert_eq!(error.http_status(), 503);
-        assert_eq!(error.limit, REQUEST_GROWTH_QUANTUM);
-    }
 }

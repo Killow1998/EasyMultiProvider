@@ -1,15 +1,13 @@
 use crate::app::ServerState;
-use crate::http::auth::EXPORT_CONFIRMATION_LIFETIME_SECONDS;
-use crate::http::auth::EXPORT_CONFIRMATION_OPERATION;
-use crate::http::auth::same_origin;
 use crate::http::request::Request;
 use crate::http::request::read_json_body;
 use crate::http::response::body_error_response;
-use crate::http::response::cross_origin_response;
 use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
-use crate::http::response::unauthorized_response;
+use crate::server::http::management::{
+    ManagementSession, consume_export_confirmation, issue_export_confirmation,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 use std::net::TcpStream;
@@ -21,14 +19,9 @@ pub(crate) fn management_migration_request(
     state: &ServerState,
     now: f64,
 ) -> Vec<u8> {
-    if !same_origin(request, state.port) {
-        return cross_origin_response("management session is required");
-    }
-    let Some(session) = request
-        .session_token()
-        .filter(|token| state.sessions.contains(Some(token.as_str()), now))
-    else {
-        return unauthorized_response();
+    let session = match ManagementSession::require(request, state, now) {
+        Ok(ManagementSession(session)) => session,
+        Err(error) => return error.wire_response(),
     };
     if let Err(crate::services::team::Failure(status, code)) =
         state.backend.team.check_migration(state)
@@ -53,19 +46,14 @@ pub(crate) fn management_migration_request(
     let lan = request.raw_path().starts_with("/api/migration/lan/");
     let result = if lan {
         if operation == "start"
-            && !state.sessions.consume_export_confirmation(
+            && let Err(error) = consume_export_confirmation(
+                state,
                 body["confirmation"].as_str().unwrap_or_default(),
-                EXPORT_CONFIRMATION_OPERATION,
+                request.raw_path(),
                 now,
             )
         {
-            return json_error_response(
-                403,
-                status_text(403),
-                "export confirmation is required",
-                Some("export_confirmation_required"),
-                &[],
-            );
+            return error.wire_response();
         }
         crate::services::migration::lan::execute(state, &session, operation, &body)
     } else if matches!(operation, "decode" | "preview" | "demo")
@@ -79,35 +67,19 @@ pub(crate) fn management_migration_request(
             &body,
         )
     } else if request.raw_path() == "/api/migration/export/confirm" {
-        let Some(confirmation) = state
-            .sessions
-            .issue_export_confirmation(EXPORT_CONFIRMATION_OPERATION, now)
-        else {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        return match issue_export_confirmation(state, now) {
+            Ok(reply) => reply.wire_response(),
+            Err(error) => error.wire_response(),
         };
-        let body = serde_json::to_vec(&serde_json::json!({
-            "confirmation": confirmation,
-            "expires_in": EXPORT_CONFIRMATION_LIFETIME_SECONDS as u64,
-        }))
-        .expect("export confirmation is JSON serializable");
-        return response("HTTP/1.1 200 OK", "application/json", &body, &[]);
     } else if request.raw_path() == "/api/migration/export" {
         let confirmation = body
             .get("confirmation")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !state.sessions.consume_export_confirmation(
-            confirmation,
-            EXPORT_CONFIRMATION_OPERATION,
-            now,
-        ) {
-            return json_error_response(
-                403,
-                status_text(403),
-                "export confirmation is missing or expired; confirm the export again",
-                Some("export_confirmation_required"),
-                &[],
-            );
+        if let Err(error) =
+            consume_export_confirmation(state, confirmation, request.raw_path(), now)
+        {
+            return error.wire_response();
         }
         return match crate::services::migration::export(request.observation_id, state, &body) {
             Ok(exported) if body.get("selections").is_some() => response(

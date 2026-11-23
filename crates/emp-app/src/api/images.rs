@@ -1,8 +1,8 @@
 //! Standalone Codex image tools use their own JSON endpoints, outside Responses.
 use crate::app::ServerState;
-use crate::http::auth::{proxy_allowed, same_origin};
 use crate::http::request::{Request, read_json_body};
 use crate::http::response::{body_error_response, json_error_response, response, status_text};
+use crate::server::http::proxy::require_proxy;
 use crate::services::native::images;
 use std::net::TcpStream;
 
@@ -32,19 +32,8 @@ pub(crate) fn image_request(
     state: &ServerState,
     now: f64,
 ) -> Vec<u8> {
-    if !proxy_allowed(request, state, now) {
-        let status = if same_origin(request, state.port) {
-            401
-        } else {
-            403
-        };
-        return json_error_response(
-            status,
-            status_text(status),
-            "proxy caller authentication is required",
-            None,
-            &[],
-        );
+    if let Err(error) = require_proxy(request, state, now) {
+        return error.wire_response();
     }
     let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,

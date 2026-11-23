@@ -1,8 +1,7 @@
-//! Forward native decision payloads using service credentials and instance authentication.
+use crate::server::http::proxy::require_proxy;
 
 use crate::app::ServerState;
 use crate::http::{
-    auth::proxy_allowed,
     request::{Request, read_json_body},
     response::{body_error_response, json_error_response, response, status_text},
 };
@@ -25,14 +24,8 @@ pub(crate) fn request(
     state: &ServerState,
     now: f64,
 ) -> Vec<u8> {
-    if !proxy_allowed(request, state, now) {
-        return json_error_response(
-            401,
-            status_text(401),
-            "EMP gateway authentication is required",
-            None,
-            &[],
-        );
+    if let Err(error) = require_proxy(request, state, now) {
+        return error.wire_response();
     }
     let provider_override = request.header("X-EMP-Provider");
     if request.header_count("X-EMP-Provider") > 1 || provider_override == Some("") {

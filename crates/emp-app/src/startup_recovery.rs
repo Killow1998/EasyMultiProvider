@@ -8,6 +8,20 @@ use crate::error::AppError;
 use emp_state::{FilesystemError, VaultStore};
 use serde_json::Value;
 pub(crate) use server::run;
+#[cfg(test)]
+pub(crate) fn serve_for_test(
+    listener: std::net::TcpListener,
+    config: &Path,
+    token: &str,
+) -> Result<bool, AppError> {
+    server::serve(
+        listener,
+        config,
+        "config_invalid",
+        token,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+}
 use std::path::{Path, PathBuf};
 
 pub(crate) fn external_key() -> bool {

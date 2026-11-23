@@ -1,5 +1,6 @@
 pub(crate) mod connection;
 pub(crate) mod head;
+pub(crate) mod http;
 
 use crate::lifecycle::connections::ACCEPT_RETRY;
 use crate::services::connection_admission::ConnectionAdmission;
@@ -40,7 +41,14 @@ impl ShutdownSignal {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ServerMode {
+    Http,
+    Recovery,
+}
+
 struct ServerControl {
+    mode: ServerMode,
     admission: Arc<ConnectionAdmission>,
     shutdown: watch::Sender<Option<ShutdownReason>>,
 }
@@ -49,6 +57,7 @@ impl ServerControl {
     fn new(admission: Arc<ConnectionAdmission>) -> Self {
         Self {
             admission,
+            mode: ServerMode::Http,
             shutdown: watch::Sender::new(None),
         }
     }
@@ -81,9 +90,29 @@ impl ServerHandle {
         router: Router,
         admission: Arc<ConnectionAdmission>,
     ) -> io::Result<Self> {
+        Self::bind_with_mode(address, router, admission, ServerMode::Http).await
+    }
+
+    pub(crate) async fn bind_recovery(
+        address: SocketAddr,
+        router: Router,
+        admission: Arc<ConnectionAdmission>,
+    ) -> io::Result<Self> {
+        Self::bind_with_mode(address, router, admission, ServerMode::Recovery).await
+    }
+
+    async fn bind_with_mode(
+        address: SocketAddr,
+        router: Router,
+        admission: Arc<ConnectionAdmission>,
+        mode: ServerMode,
+    ) -> io::Result<Self> {
         let socket = TcpListener::bind(address).await?;
         let address = socket.local_addr()?;
-        let control = Arc::new(ServerControl::new(admission));
+        let control = Arc::new(ServerControl {
+            mode,
+            ..ServerControl::new(admission)
+        });
         let listener = tokio::spawn(serve(socket, router, Arc::clone(&control)));
         Ok(Self {
             address,

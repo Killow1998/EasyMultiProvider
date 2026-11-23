@@ -1,4 +1,4 @@
-use crate::http::response::{json_error_response, status_text};
+use crate::{app::ServerState, server::http::error::EntryError};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -70,13 +70,7 @@ impl RealtimeError {
     }
 
     pub(crate) fn wire_response(&self) -> Vec<u8> {
-        json_error_response(
-            self.status,
-            status_text(self.status),
-            &self.message,
-            Some(self.code),
-            &[],
-        )
+        EntryError::from(self.clone()).wire_response()
     }
 }
 
@@ -85,4 +79,16 @@ fn header<'a>(headers: &'a BTreeMap<String, String>, name: &str) -> Option<&'a s
         .iter()
         .find(|(key, _)| key.eq_ignore_ascii_case(name))
         .map(|(_, value)| value.as_str())
+}
+
+pub(crate) fn has_native_subscription(state: &ServerState) -> bool {
+    call::native_headers(state).is_some()
+}
+
+pub(crate) fn native_subscription_unavailable() -> RealtimeError {
+    RealtimeError::new(
+        401,
+        "native_subscription_unavailable",
+        "A current native ChatGPT subscription login is required for Codex Voice",
+    )
 }

@@ -1,7 +1,9 @@
 use super::*;
-use crate::http::auth::{constant_time_eq, same_origin};
 use crate::http::request::{RequestMethod, parse_request, read_request_head_before};
 use crate::http::response::response;
+use crate::server::http::management::{
+    RecoveryMutation, recovery_mutation, recovery_origin, recovery_session,
+};
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
@@ -63,7 +65,7 @@ pub(crate) fn run(config: &Path, error: &AppError, open_browser: bool) -> Result
     )
 }
 
-fn serve(
+pub(super) fn serve(
     listener: TcpListener,
     config: &Path,
     reason: &str,
@@ -85,12 +87,8 @@ fn serve(
         let Some(request) = parse_request(&raw.head) else {
             continue;
         };
-        if !same_origin(request, port) {
-            send(
-                &mut stream,
-                403,
-                serde_json::json!({"error":"origin_rejected"}),
-            );
+        if let Err(error) = recovery_origin(request, port) {
+            let _ = stream.write_all(&error.wire_response());
             continue;
         }
         if request.method == RequestMethod::Get && request.target == "/" {
@@ -124,49 +122,23 @@ fn serve(
             }
             continue;
         }
-        if request.header_count("X-EMP-Recovery") != 1
-            || !request
-                .header("X-EMP-Recovery")
-                .is_some_and(|supplied| constant_time_eq(supplied.as_bytes(), token.as_bytes()))
-        {
-            send(
-                &mut stream,
-                401,
-                serde_json::json!({"error":"recovery_session_required"}),
-            );
+        if let Err(error) = recovery_session(request, token) {
+            let _ = stream.write_all(&error.wire_response());
             continue;
         }
         if request.method == RequestMethod::Get && request.target == "/api/recovery" {
             send(&mut stream, 200, serde_json::json!({"reason":reason}));
             continue;
         }
-        if request.method != RequestMethod::Post
-            || request.header_count("Content-Length") != 1
-            || request.header("Content-Length") != Some("0")
-            || request.header_count("Transfer-Encoding") != 0
-            || !raw.body_prefix.is_empty()
-        {
-            send(
-                &mut stream,
-                400,
-                serde_json::json!({"error":"invalid_request"}),
-            );
-            continue;
-        }
-        match request.target {
-            "/api/recovery/exit" => {
+        match recovery_mutation(request, raw.body_prefix.len()) {
+            Err(error) => {
+                let _ = stream.write_all(&error.wire_response());
+            }
+            Ok(RecoveryMutation::Exit) => {
                 send(&mut stream, 200, serde_json::json!({"exiting":true}));
                 return Ok(false);
             }
-            "/api/recovery/reset"
-                if request.header_count("X-EMP-Recovery-Confirm") == 1
-                    && matches!(
-                        request.header("X-EMP-Recovery-Confirm"),
-                        Some("clear-and-reset" | "backup-and-reset")
-                    ) =>
-            {
-                let keep_backup =
-                    request.header("X-EMP-Recovery-Confirm") == Some("backup-and-reset");
+            Ok(RecoveryMutation::Reset { keep_backup }) => {
                 match reset::rebuild(config, keep_backup) {
                     Ok((backup, cleanup_pending)) => {
                         send(
@@ -181,11 +153,6 @@ fn serve(
                     }
                 }
             }
-            _ => send(
-                &mut stream,
-                409,
-                serde_json::json!({"error":"confirmation_required"}),
-            ),
         }
     }
     Ok(false)

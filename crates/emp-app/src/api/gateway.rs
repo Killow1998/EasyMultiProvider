@@ -1,11 +1,9 @@
+use crate::server::http::management::ManagementSession;
 use crate::{
     app::ServerState,
     http::{
-        auth::same_origin,
         request::{Request, RequestMethod, query_values, read_json_body},
-        response::{
-            body_error_response, json_error_response, response, status_text, unauthorized_response,
-        },
+        response::{body_error_response, json_error_response, response, status_text},
     },
 };
 use emp_state::usage::ledger::UsageLedger;
@@ -95,12 +93,8 @@ pub(crate) fn mutate(
     state: &ServerState,
     now: f64,
 ) -> Vec<u8> {
-    if !same_origin(request, state.port)
-        || !state
-            .sessions
-            .contains(request.session_token().as_deref(), now)
-    {
-        return unauthorized_response();
+    if let Err(error) = ManagementSession::require(request, state, now) {
+        return error.wire_response();
     }
     let body = match read_json_body(stream, request, prefix, state) {
         Ok(body) => body,

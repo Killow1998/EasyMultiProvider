@@ -1,16 +1,14 @@
 use crate::api::failure_response::router_error_response;
 use crate::app::ServerState;
-use crate::http::auth::same_origin;
 use crate::http::request::Request;
 use crate::http::request::percent_decode;
 use crate::http::request::query_values;
 use crate::http::request::read_json_body;
 use crate::http::response::body_error_response;
-use crate::http::response::cross_origin_response;
 use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
-use crate::http::response::unauthorized_response;
+use crate::server::http::management::ManagementSession;
 use crate::services::catalog::refresh_for_management;
 use crate::services::catalog::server_catalog;
 use emp_codex::preserve_native_catalog;
@@ -25,12 +23,8 @@ pub(crate) fn management_request(
     state: &ServerState,
     now: f64,
 ) -> Vec<u8> {
-    if !same_origin(request, state.port) {
-        return cross_origin_response("management session is required");
-    }
-    let session = request.session_token();
-    if !state.sessions.contains(session.as_deref(), now) {
-        return unauthorized_response();
+    if let Err(error) = ManagementSession::require(request, state, now) {
+        return error.wire_response();
     }
     let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,

@@ -38,12 +38,7 @@ impl HttpObservation {
 
     pub(crate) fn received(&mut self, request: Request<'_>) {
         self.errors.thread(request.header("thread-id"));
-        if request.method == RequestMethod::Post
-            && matches!(
-                request.raw_path(),
-                "/v1/responses" | "/v1/responses/compact"
-            )
-        {
+        if request.is_model_http() {
             self.model = Some(
                 super::request::RequestObservation::new(
                     Arc::clone(&self.diagnostics),

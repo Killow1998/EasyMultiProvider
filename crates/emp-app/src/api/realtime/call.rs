@@ -1,13 +1,13 @@
-use super::multipart::read_realtime_call_from_socket;
+use super::multipart::{read_realtime_call_from_socket, validate_headers};
 use super::{
     MAX_REALTIME_RESPONSE_BYTES, REALTIME_TIMEOUT, RealtimeError, RealtimeResponse, header,
     valid_call_id,
 };
 use crate::VERSION;
 use crate::app::ServerState;
-use crate::http::auth::{proxy_allowed, same_origin};
 use crate::http::request::Request;
 use crate::http::response::response;
+use crate::server::http::proxy::require_proxy;
 use crate::services::accounts::native_auth_document;
 use emp_codex::account_auth_headers;
 use emp_transport::{HttpMethod, HttpTransportErrorKind};
@@ -22,43 +22,11 @@ pub(crate) fn serve_realtime_call(
     state: &ServerState,
     now: f64,
 ) -> Vec<u8> {
-    if !proxy_allowed(request, state, now) {
-        let status = if same_origin(request, state.port) {
-            401
-        } else {
-            403
-        };
-        if status == 401 && native_headers(state).is_none() {
-            return RealtimeError::new(
-                401,
-                "native_subscription_unavailable",
-                "A current native ChatGPT subscription login is required for Codex Voice",
-            )
-            .wire_response();
-        }
-        return RealtimeError::new(
-            status,
-            "realtime_caller_unauthorized",
-            "Caller authentication is required for Codex Voice",
-        )
-        .wire_response();
+    if let Err(error) = require_proxy(request, state, now) {
+        return error.wire_response();
     }
-    if [
-        "Content-Length",
-        "Transfer-Encoding",
-        "Content-Type",
-        "Content-Encoding",
-    ]
-    .iter()
-    .any(|name| request.header_count(name) > 1)
-    {
-        return RealtimeError::new(
-            400,
-            "realtime_invalid_request",
-            "Realtime request contains duplicate framing or media-type headers",
-        )
-        .closing()
-        .wire_response();
+    if let Err(error) = validate_headers(request) {
+        return error.wire_response();
     }
     let incoming = incoming_headers(request);
     let call = match read_realtime_call_from_socket(&incoming, body_prefix, stream) {
@@ -66,12 +34,7 @@ pub(crate) fn serve_realtime_call(
         Err(error) => return error.wire_response(),
     };
     let Some(mut headers) = native_headers(state) else {
-        return RealtimeError::new(
-            401,
-            "native_subscription_unavailable",
-            "A current native ChatGPT subscription login is required for Codex Voice",
-        )
-        .wire_response();
+        return super::native_subscription_unavailable().wire_response();
     };
     if let Err(denial) = state.backend.team.check_native_budget(state) {
         return crate::api::native_response::error_response(denial.public_error(state));

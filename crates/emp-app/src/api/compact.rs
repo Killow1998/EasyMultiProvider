@@ -4,14 +4,13 @@ use crate::api::history_response::destination_error_response;
 use crate::api::history_response::history_http_error;
 use crate::api::responses::ResponsesRequestResult;
 use crate::app::ServerState;
-use crate::http::auth::proxy_allowed;
-use crate::http::auth::same_origin;
 use crate::http::request::Request;
 use crate::http::request::read_json_body;
 use crate::http::response::body_error_response;
 use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
+use crate::server::http::proxy::require_proxy;
 use crate::services::compaction::external_compaction_response;
 use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
@@ -32,19 +31,8 @@ pub(crate) fn compact_request(
     now: f64,
     observation: &mut RequestObservation,
 ) -> ResponsesRequestResult {
-    if !proxy_allowed(request, state, now) {
-        let status = if same_origin(request, state.port) {
-            401
-        } else {
-            403
-        };
-        return ResponsesRequestResult::Buffered(json_error_response(
-            status,
-            status_text(status),
-            "proxy caller authentication is required",
-            None,
-            &[],
-        ));
+    if let Err(error) = require_proxy(request, state, now) {
+        return ResponsesRequestResult::Buffered(error.wire_response());
     }
     observation.phase(Phase::ReadBody);
     let body = match read_json_body(stream, request, body_prefix, state) {

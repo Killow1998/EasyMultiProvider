@@ -2,11 +2,10 @@ use crate::api::failure_response::emp_websocket_error;
 use crate::api::failure_response::websocket_router_error;
 use crate::api::history_response::history_stream_error;
 use crate::app::ServerState;
-use crate::http::auth::proxy_allowed;
-use crate::http::auth::same_origin;
 use crate::http::request::Request;
 use crate::http::response::json_error_response;
 use crate::http::response::status_text;
+use crate::server::http::proxy::require_proxy;
 use crate::services::catalog::response_catalog_etag;
 use crate::services::history::DestinationPrepareError;
 use crate::services::history::prepare_destination_context;
@@ -150,20 +149,8 @@ pub(crate) fn serve_responses_websocket(
     now: f64,
     connection_id: Option<&str>,
 ) {
-    if !proxy_allowed(request, state, now) {
-        let status = if same_origin(request, state.port) {
-            401
-        } else {
-            403
-        };
-        let response = json_error_response(
-            status,
-            status_text(status),
-            "proxy caller authentication is required",
-            None,
-            &[],
-        );
-        let _ = stream.write_all(&response);
+    if let Err(error) = require_proxy(request, state, now) {
+        let _ = stream.write_all(&error.wire_response());
         let _ = stream.flush();
         return;
     }

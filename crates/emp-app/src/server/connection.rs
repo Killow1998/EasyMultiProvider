@@ -1,4 +1,5 @@
-use super::{ServerControl, ShutdownReason, ShutdownSignal, head::GuardedHead};
+use super::http::error::EntryWire;
+use super::{ServerControl, ServerMode, ShutdownReason, ShutdownSignal, head::GuardedHead};
 use crate::{
     http::request::{MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE},
     services::connection_admission::ConnectionPermit,
@@ -16,13 +17,13 @@ use std::{
     net::SocketAddr,
     pin::Pin,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tower::ServiceExt;
 
@@ -72,10 +73,17 @@ pub(super) async fn drive(
     control: Arc<ServerControl>,
     permit: ConnectionPermit,
 ) {
-    let head = match GuardedHead::read(&mut io, accepted).await {
+    let head_timeout = match control.mode {
+        ServerMode::Http => REQUEST_HEAD_DEADLINE,
+        ServerMode::Recovery => Duration::from_secs(3),
+    };
+    let mode = control.mode;
+    let head = match GuardedHead::read(&mut io, accepted + head_timeout).await {
         Ok(head) => head,
         Err(response) => {
-            let _ = io.write_all(&response).await;
+            if matches!(mode, ServerMode::Http) {
+                let _ = io.write_all(&response.wire_response()).await;
+            }
             let _ = io.shutdown().await;
             return;
         }
@@ -92,16 +100,24 @@ pub(super) async fn drive(
         upgrade: Arc::default(),
     };
     let stop_after_write = AtomicBool::new(false);
+    let wire_response = Arc::new(OnceLock::new());
     let service = tower::service_fn(|mut request: axum::http::Request<hyper::body::Incoming>| {
         let router = router.clone();
         let raw = raw.clone();
         let context = context.clone();
         let stop_after_write = &stop_after_write;
+        let wire_response = &wire_response;
         async move {
             request.extensions_mut().insert(ConnectInfo(peer));
-            request.extensions_mut().insert(raw);
+            request.extensions_mut().insert(raw.clone());
             request.extensions_mut().insert(context.clone());
             let response = router.oneshot(request).await?;
+            let _ = wire_response.set(
+                response
+                    .extensions()
+                    .get::<EntryWire>()
+                    .map(|wire| wire.0.clone()),
+            );
             stop_after_write.store(
                 response
                     .extensions()
@@ -109,6 +125,11 @@ pub(super) async fn drive(
                     .is_some(),
                 Ordering::Relaxed,
             );
+            if response.status().is_success()
+                || response.status() == StatusCode::SWITCHING_PROTOCOLS
+            {
+                raw.allow_body();
+            }
             if response.status() != StatusCode::SWITCHING_PROTOCOLS {
                 context.upgrade.lock().expect("upgrade registration").take();
             }
@@ -121,10 +142,10 @@ pub(super) async fn drive(
         .max_buf_size(MAX_HEADER_BYTES + 4)
         .max_headers(MAX_HEADER_BYTES / 4)
         .timer(TokioTimer::new())
-        .header_read_timeout(REQUEST_HEAD_DEADLINE)
+        .header_read_timeout(head_timeout)
         .auto_date_header(false)
         .serve_connection(
-            TokioIo::new(head.replay(io)),
+            TokioIo::new(head.replay(io, Arc::clone(&wire_response), mode)),
             TowerToHyperService::new(service),
         )
         .with_upgrades()

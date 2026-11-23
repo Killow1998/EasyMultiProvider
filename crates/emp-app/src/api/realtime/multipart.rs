@@ -2,9 +2,9 @@ use super::{
     MAX_REALTIME_PART_BYTES, MAX_REALTIME_PART_HEADER_BYTES, MAX_REALTIME_REQUEST_BYTES,
     RealtimeCall, RealtimeError,
 };
-use crate::http::request::read_before;
 use crate::http::request::request_body_deadline;
 use crate::http::request::restore_read_timeout;
+use crate::http::request::{Request, read_before};
 use serde_json::Value;
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -44,52 +44,122 @@ fn read_realtime_call_with_reader(
     mut prefix: Vec<u8>,
     mut read: impl FnMut(&mut [u8], Instant) -> std::io::Result<usize>,
 ) -> Result<RealtimeCall, RealtimeError> {
-    let content_encoding = header(headers, "content-encoding").unwrap_or("identity");
-    if !content_encoding.trim().eq_ignore_ascii_case("identity") {
-        return Err(RealtimeError::new(
-            415,
-            "realtime_unsupported_encoding",
-            "Realtime calls require identity Content-Encoding",
-        )
-        .closing());
+    let input = RealtimeRead::prepare(headers)?;
+    let length = input.length;
+    prefix.truncate(length);
+    input.reserve(&mut prefix, length)?;
+    let deadline = request_body_deadline(length);
+    while prefix.len() < length {
+        if Instant::now() >= deadline {
+            return Err(RealtimeRead::timeout());
+        }
+        let remaining = length - prefix.len();
+        let mut chunk = [0u8; 32 * 1024];
+        let chunk_length = remaining.min(chunk.len());
+        let count = read(&mut chunk[..chunk_length], deadline).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::TimedOut {
+                RealtimeRead::timeout()
+            } else {
+                RealtimeRead::incomplete()
+            }
+        })?;
+        if count == 0 {
+            return Err(RealtimeRead::incomplete());
+        }
+        prefix.extend_from_slice(&chunk[..count]);
     }
-    let content_type = header(headers, "content-type").unwrap_or_default();
-    if media_type(content_type).as_deref() != Some("multipart/form-data") {
-        return Err(RealtimeError::new(
-            415,
-            "realtime_invalid_content_type",
-            "Content-Type must be multipart/form-data for /v1/live",
-        )
-        .closing());
-    }
-    let boundary = multipart_boundary(content_type).ok_or_else(|| {
-        RealtimeError::new(
-            400,
-            "realtime_invalid_multipart",
-            "Realtime multipart boundary is missing or invalid",
-        )
-        .closing()
-    })?;
+    input.parse(&prefix)
+}
 
-    if header(headers, "transfer-encoding").is_some() {
+pub(crate) fn validate_headers(request: Request<'_>) -> Result<(), RealtimeError> {
+    if [
+        "Content-Length",
+        "Transfer-Encoding",
+        "Content-Type",
+        "Content-Encoding",
+    ]
+    .iter()
+    .any(|name| request.header_count(name) > 1)
+    {
         return Err(RealtimeError::new(
             400,
             "realtime_invalid_request",
-            "Transfer-Encoding is not supported for realtime calls",
+            "Realtime request contains duplicate framing or media-type headers",
         )
         .closing());
     }
-    let raw_length = header(headers, "content-length").ok_or_else(|| {
-        RealtimeError::new(
-            411,
-            "realtime_length_required",
-            "Content-Length is required for realtime calls",
-        )
-        .closing()
-    })?;
-    let raw_length = raw_length.trim();
-    if let Some(negative) = raw_length.strip_prefix('-') {
-        if negative.is_empty() || !negative.bytes().all(|byte| byte.is_ascii_digit()) {
+    Ok(())
+}
+
+pub(crate) struct RealtimeRead {
+    pub(crate) length: usize,
+    boundary: String,
+}
+
+impl RealtimeRead {
+    pub(crate) fn prepare(headers: &BTreeMap<String, String>) -> Result<Self, RealtimeError> {
+        let content_encoding = header(headers, "content-encoding").unwrap_or("identity");
+        if !content_encoding.trim().eq_ignore_ascii_case("identity") {
+            return Err(RealtimeError::new(
+                415,
+                "realtime_unsupported_encoding",
+                "Realtime calls require identity Content-Encoding",
+            )
+            .closing());
+        }
+        let content_type = header(headers, "content-type").unwrap_or_default();
+        if media_type(content_type).as_deref() != Some("multipart/form-data") {
+            return Err(RealtimeError::new(
+                415,
+                "realtime_invalid_content_type",
+                "Content-Type must be multipart/form-data for /v1/live",
+            )
+            .closing());
+        }
+        let boundary = multipart_boundary(content_type).ok_or_else(|| {
+            RealtimeError::new(
+                400,
+                "realtime_invalid_multipart",
+                "Realtime multipart boundary is missing or invalid",
+            )
+            .closing()
+        })?;
+
+        if header(headers, "transfer-encoding").is_some() {
+            return Err(RealtimeError::new(
+                400,
+                "realtime_invalid_request",
+                "Transfer-Encoding is not supported for realtime calls",
+            )
+            .closing());
+        }
+        let raw_length = header(headers, "content-length").ok_or_else(|| {
+            RealtimeError::new(
+                411,
+                "realtime_length_required",
+                "Content-Length is required for realtime calls",
+            )
+            .closing()
+        })?;
+        let raw_length = raw_length.trim();
+        if let Some(negative) = raw_length.strip_prefix('-') {
+            if negative.is_empty() || !negative.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(RealtimeError::new(
+                    400,
+                    "realtime_invalid_request",
+                    "invalid Content-Length",
+                )
+                .closing());
+            }
+            return Err(RealtimeError::new(
+                400,
+                "realtime_invalid_request",
+                "Content-Length cannot be negative",
+            )
+            .closing());
+        }
+        let positive = raw_length.strip_prefix('+').unwrap_or(raw_length);
+        if positive.is_empty() || !positive.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err(RealtimeError::new(
                 400,
                 "realtime_invalid_request",
@@ -97,83 +167,58 @@ fn read_realtime_call_with_reader(
             )
             .closing());
         }
-        return Err(RealtimeError::new(
-            400,
-            "realtime_invalid_request",
-            "Content-Length cannot be negative",
-        )
-        .closing());
+        let length = positive.parse::<u128>().unwrap_or(u128::MAX);
+        if length > MAX_REALTIME_REQUEST_BYTES as u128 {
+            return Err(Self::too_large());
+        }
+        Ok(Self {
+            length: length as usize,
+            boundary,
+        })
     }
-    let positive = raw_length.strip_prefix('+').unwrap_or(raw_length);
-    if positive.is_empty() || !positive.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(
-            RealtimeError::new(400, "realtime_invalid_request", "invalid Content-Length").closing(),
-        );
+
+    pub(crate) fn reserve(
+        &self,
+        body: &mut Vec<u8>,
+        projected: usize,
+    ) -> Result<(), RealtimeError> {
+        if projected > self.length {
+            return Err(Self::too_large());
+        }
+        body.try_reserve_exact(projected.saturating_sub(body.len()))
+            .map_err(|_| Self::too_large())
     }
-    let length = positive.parse::<u128>().unwrap_or(u128::MAX);
-    if length > MAX_REALTIME_REQUEST_BYTES as u128 {
-        return Err(RealtimeError::new(
+
+    pub(crate) fn parse(&self, bytes: &[u8]) -> Result<RealtimeCall, RealtimeError> {
+        parse_realtime_multipart(bytes, &self.boundary)
+    }
+
+    fn too_large() -> RealtimeError {
+        RealtimeError::new(
             413,
             "realtime_request_too_large",
             format!("Realtime request exceeds the {MAX_REALTIME_REQUEST_BYTES} byte limit"),
         )
-        .closing());
+        .closing()
     }
-    let length = length as usize;
-    if prefix.len() > length {
-        prefix.truncate(length);
+
+    pub(crate) fn timeout() -> RealtimeError {
+        RealtimeError::new(
+            408,
+            "realtime_request_timeout",
+            "Realtime request body was not received in time",
+        )
+        .closing()
     }
-    prefix
-        .try_reserve_exact(length.saturating_sub(prefix.len()))
-        .map_err(|_| {
-            RealtimeError::new(
-                413,
-                "realtime_request_too_large",
-                format!("Realtime request exceeds the {MAX_REALTIME_REQUEST_BYTES} byte limit"),
-            )
-            .closing()
-        })?;
-    let deadline = request_body_deadline(length);
-    while prefix.len() < length {
-        if Instant::now() >= deadline {
-            return Err(RealtimeError::new(
-                408,
-                "realtime_request_timeout",
-                "Realtime request body was not received in time",
-            )
-            .closing());
-        }
-        let remaining = length - prefix.len();
-        let mut chunk = [0u8; 32 * 1024];
-        let chunk_length = remaining.min(chunk.len());
-        let count = read(&mut chunk[..chunk_length], deadline).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::TimedOut {
-                RealtimeError::new(
-                    408,
-                    "realtime_request_timeout",
-                    "Realtime request body was not received in time",
-                )
-                .closing()
-            } else {
-                RealtimeError::new(
-                    400,
-                    "realtime_invalid_request",
-                    "Realtime request body is incomplete",
-                )
-                .closing()
-            }
-        })?;
-        if count == 0 {
-            return Err(RealtimeError::new(
-                400,
-                "realtime_invalid_request",
-                "Realtime request body is incomplete",
-            )
-            .closing());
-        }
-        prefix.extend_from_slice(&chunk[..count]);
+
+    pub(crate) fn incomplete() -> RealtimeError {
+        RealtimeError::new(
+            400,
+            "realtime_invalid_request",
+            "Realtime request body is incomplete",
+        )
+        .closing()
     }
-    parse_realtime_multipart(&prefix, &boundary)
 }
 
 fn header<'a>(headers: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {

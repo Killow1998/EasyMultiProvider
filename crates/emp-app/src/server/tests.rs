@@ -27,10 +27,11 @@ use tokio::{
     time::{Duration, advance, timeout},
 };
 
-const LOOPBACK: SocketAddr = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+pub(super) const LOOPBACK: SocketAddr =
+    SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 const GET: &[u8] = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
 
-fn admission() -> Arc<ConnectionAdmission> {
+pub(super) fn admission() -> Arc<ConnectionAdmission> {
     let single = SlotLimits {
         initial: 1,
         maximum: 1,
@@ -42,7 +43,7 @@ fn admission() -> Arc<ConnectionAdmission> {
     }))
 }
 
-async fn poll_once<T>(mut future: Pin<&mut impl Future<Output = T>>) -> Poll<T> {
+pub(super) async fn poll_once<T>(mut future: Pin<&mut impl Future<Output = T>>) -> Poll<T> {
     poll_fn(|cx| Poll::Ready(future.as_mut().poll(cx))).await
 }
 
@@ -398,7 +399,12 @@ async fn wire_guard_returns_legacy_400_status_and_body() {
     const INVALID_HEAD: &[u8] = br#"{"error":{"message":"invalid HTTP request"}}"#;
     const INVALID_FRAMING: &[u8] =
         br#"{"error":{"message":"duplicate Content-Length or unsupported Transfer-Encoding","origin":"emp"}}"#;
-    let router = Router::new().fallback(|| async { "unexpected route" });
+    let router = Router::new().fallback(|Extension(raw): Extension<RawRequestHead>| async move {
+        raw.request()
+            .validate_body_framing()
+            .map_err(http::error::EntryError::from)?;
+        Ok::<_, http::error::EntryError>("unexpected route")
+    });
     let server = ServerHandle::bind(LOOPBACK, router, admission())
         .await
         .unwrap();

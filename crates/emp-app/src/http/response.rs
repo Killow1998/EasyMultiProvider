@@ -1,6 +1,5 @@
 use crate::http::request::BodyError;
-use emp_transport::ContentDecodeError;
-use emp_transport::RequestCapacityError;
+use crate::server::http::error::EntryError;
 use serde_json::Value;
 use std::io::Write;
 
@@ -61,30 +60,15 @@ pub(crate) fn not_found_response() -> Vec<u8> {
 }
 
 pub(crate) fn unauthorized_response() -> Vec<u8> {
-    response(
-        "HTTP/1.1 401 Unauthorized",
-        "application/json",
-        b"{\"error\":{\"message\":\"management session is required\"}}",
-        &[],
-    )
+    EntryError::ManagementSession.wire_response()
 }
 
-pub(crate) fn cross_origin_response(message: &str) -> Vec<u8> {
-    response(
-        "HTTP/1.1 403 Forbidden",
-        "application/json",
-        format!("{{\"error\":{{\"message\":\"{message}\"}}}}").as_bytes(),
-        &[],
-    )
+pub(crate) fn cross_origin_response(message: &'static str) -> Vec<u8> {
+    EntryError::CrossOrigin(message).wire_response()
 }
 
 pub(crate) fn bad_request_response() -> Vec<u8> {
-    response(
-        "HTTP/1.1 400 Bad Request",
-        "application/json",
-        b"{\"error\":{\"message\":\"invalid HTTP request\"}}",
-        &[],
-    )
+    EntryError::InvalidHead.wire_response()
 }
 
 pub(crate) fn json_error_response(
@@ -94,20 +78,23 @@ pub(crate) fn json_error_response(
     code: Option<&str>,
     headers: &[(&str, &str)],
 ) -> Vec<u8> {
+    response(
+        &format!("HTTP/1.1 {status} {status_text}"),
+        "application/json",
+        &json_error_body(message, code),
+        headers,
+    )
+}
+
+pub(crate) fn json_error_body(message: &str, code: Option<&str>) -> Vec<u8> {
     let mut error = serde_json::Map::new();
     error.insert("origin".to_owned(), Value::String("emp".to_owned()));
     if let Some(code) = code {
         error.insert("code".to_owned(), Value::String(code.to_owned()));
     }
     error.insert("message".to_owned(), Value::String(message.to_owned()));
-    let body = serde_json::to_vec(&serde_json::json!({"error": error}))
-        .expect("error response is JSON serializable");
-    response(
-        &format!("HTTP/1.1 {status} {status_text}"),
-        "application/json",
-        &body,
-        headers,
-    )
+    serde_json::to_vec(&serde_json::json!({"error": error}))
+        .expect("error response is JSON serializable")
 }
 
 pub(crate) fn status_text(status: u16) -> &'static str {
@@ -133,65 +120,8 @@ pub(crate) fn status_text(status: u16) -> &'static str {
     }
 }
 
-fn capacity_response(error: &RequestCapacityError) -> Vec<u8> {
-    let capacity = error.http_status() == 503;
-    let code = if capacity {
-        "request_capacity_unavailable"
-    } else {
-        "request_too_large"
-    };
-    let mut detail = serde_json::json!({
-        "code": code,
-        "reason": error.reason,
-        "message": error.to_string(),
-        "limit_bytes": error.limit,
-    });
-    if capacity {
-        detail["memory"] = serde_json::json!({
-            "used_percent": error.memory_used_percent,
-            "used_bytes": error.memory_used_bytes,
-            "total_bytes": error.memory_total_bytes,
-            "available_bytes": error.available_bytes,
-            "required_bytes": error.required_memory_bytes,
-        });
-    }
-    let body = serde_json::to_vec(&serde_json::json!({"error": detail}))
-        .expect("capacity response is JSON serializable");
-    let retry = capacity.then_some(("Retry-After", "2"));
-    response(
-        &format!(
-            "HTTP/1.1 {} {}",
-            error.http_status(),
-            status_text(error.http_status())
-        ),
-        "application/json",
-        &body,
-        &retry.into_iter().collect::<Vec<_>>(),
-    )
-}
-
 pub(crate) fn body_error_response(error: BodyError) -> Vec<u8> {
-    match error {
-        BodyError::Invalid(message) => {
-            json_error_response(400, status_text(400), &message, None, &[])
-        }
-        BodyError::Timeout => json_error_response(
-            408,
-            status_text(408),
-            "request body timed out",
-            Some("request_timeout"),
-            &[],
-        ),
-        BodyError::Capacity(error) => capacity_response(&error),
-        BodyError::Decode(ContentDecodeError::Capacity(error)) => capacity_response(&error),
-        BodyError::Decode(error) => json_error_response(
-            error.http_status(),
-            status_text(error.http_status()),
-            &error.to_string(),
-            (error.http_status() == 413).then_some("request_too_large"),
-            &[],
-        ),
-    }
+    EntryError::from(error).wire_response()
 }
 
 #[cfg(test)]

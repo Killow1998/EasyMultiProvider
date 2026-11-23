@@ -1,14 +1,14 @@
-use crate::http::{
-    request::{
-        BodyError, REQUEST_HEAD_DEADLINE, REQUEST_READ_TIMEOUT, parse_request, request_head_end,
-    },
-    response::{bad_request_response, body_error_response},
+use super::ServerMode;
+use crate::http::request::{
+    REQUEST_READ_TIMEOUT, Request, parse_request, request_head_end, reserved_source_header,
 };
+use crate::server::http::error::EntryError;
+use axum::body::Bytes;
 use std::{
     io::{self, Cursor},
     pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
+    sync::{Arc, Mutex, OnceLock},
+    task::{Context, Poll, Waker, ready},
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf},
@@ -16,82 +16,152 @@ use tokio::{
 };
 
 #[derive(Clone)]
-pub(crate) struct RawRequestHead(pub(crate) Arc<str>);
+pub(crate) struct RawRequestHead(pub(crate) Arc<str>, usize, Arc<Mutex<BodyRead>>);
+
+impl RawRequestHead {
+    pub(crate) fn request(&self) -> Request<'_> {
+        parse_request(&self.0).expect("the connection already parsed the request head")
+    }
+
+    pub(crate) fn body_prefix_len(&self) -> usize {
+        self.1
+    }
+
+    pub(crate) fn allow_body(&self) {
+        let previous = std::mem::replace(
+            &mut *self.2.lock().expect("request body gate"),
+            BodyRead::Open,
+        );
+        if let BodyRead::Waiting(Some(waker)) = previous {
+            waker.wake();
+        }
+    }
+}
+
+enum BodyRead {
+    Waiting(Option<Waker>),
+    Open,
+}
 
 pub(super) struct GuardedHead {
     pub(super) raw: RawRequestHead,
     pub(super) release_request_permit: bool,
-    bytes: Vec<u8>,
-}
-
-enum HeadError {
-    Invalid,
-    Framing(BodyError),
+    body_prefix: Vec<u8>,
 }
 
 impl GuardedHead {
     pub(super) async fn read(
         io: &mut (impl AsyncRead + Unpin),
-        accepted: Instant,
-    ) -> Result<Self, Vec<u8>> {
-        Self::read_before(io, accepted + REQUEST_HEAD_DEADLINE)
-            .await
-            .map_err(|error| match error {
-                HeadError::Invalid => bad_request_response(),
-                HeadError::Framing(error) => body_error_response(error),
-            })
-    }
-
-    async fn read_before(
-        io: &mut (impl AsyncRead + Unpin),
         deadline: Instant,
-    ) -> Result<Self, HeadError> {
+    ) -> Result<Self, EntryError> {
         let mut bytes = Vec::new();
         let mut buffer = [0; 1024];
         loop {
             let now = Instant::now();
             if now >= deadline {
-                return Err(HeadError::Invalid);
+                return Err(EntryError::InvalidHead);
             }
             let until = deadline.min(now + REQUEST_READ_TIMEOUT);
             let count = timeout_at(until, io.read(&mut buffer))
                 .await
-                .map_err(|_| HeadError::Invalid)?
-                .map_err(|_| HeadError::Invalid)?;
+                .map_err(|_| EntryError::InvalidHead)?
+                .map_err(|_| EntryError::InvalidHead)?;
             if count == 0 || Instant::now() >= deadline {
-                return Err(HeadError::Invalid);
+                return Err(EntryError::InvalidHead);
             }
             let previous_len = bytes.len();
             bytes.extend_from_slice(&buffer[..count]);
             let Some(end) =
-                request_head_end(&bytes, previous_len).map_err(|()| HeadError::Invalid)?
+                request_head_end(&bytes, previous_len).map_err(|()| EntryError::InvalidHead)?
             else {
                 continue;
             };
-            let head = str::from_utf8(&bytes[..end]).map_err(|_| HeadError::Invalid)?;
-            let request = parse_request(head).ok_or(HeadError::Invalid)?;
-            request
-                .validate_body_framing()
-                .map_err(HeadError::Framing)?;
+            let body_prefix = bytes.split_off(end);
+            let head = str::from_utf8(&bytes).map_err(|_| EntryError::InvalidHead)?;
+            let request = parse_request(head).ok_or(EntryError::InvalidHead)?;
             return Ok(Self {
-                raw: RawRequestHead(Arc::from(head)),
+                raw: RawRequestHead(
+                    Arc::from(head),
+                    body_prefix.len(),
+                    Arc::new(Mutex::new(BodyRead::Waiting(None))),
+                ),
                 release_request_permit: request.releases_request_permit(),
-                bytes,
+                body_prefix,
             });
         }
     }
 
-    pub(super) fn replay<I>(self, io: I) -> Prefixed<I> {
+    pub(super) fn replay<I>(
+        self,
+        io: I,
+        response: Arc<OnceLock<Option<Bytes>>>,
+        mode: ServerMode,
+    ) -> Prefixed<I> {
+        let request = self.raw.request();
+        let transport_length = if request.header_count("Content-Length") == 1
+            && request.header("Transfer-Encoding").is_none()
+        {
+            request
+                .header("Content-Length")
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|&length| (length as u64) < u64::MAX - 1)
+        } else {
+            None
+        };
+        if request.header_count("Content-Length") == 0
+            && request.header("Transfer-Encoding").is_none()
+            || transport_length == Some(0)
+        {
+            self.raw.allow_body();
+        }
+        let mut lines = self.raw.0.split_inclusive('\n');
+        let mut head = lines
+            .next()
+            .expect("validated request line")
+            .as_bytes()
+            .to_vec();
+        for line in lines {
+            let Some((name, _)) = line.split_once(':') else {
+                if !line.trim().is_empty() {
+                    head.extend_from_slice(line.as_bytes());
+                }
+                continue;
+            };
+            let name = name.trim();
+            if name.eq_ignore_ascii_case("Content-Length") {
+                if let Some(length) = transport_length {
+                    use std::io::Write;
+                    let ending = &line[line.trim_end_matches(['\r', '\n']).len()..];
+                    write!(head, "Content-Length:{length}{ending}").expect("write into Vec");
+                }
+            } else if !name.eq_ignore_ascii_case("Transfer-Encoding")
+                && !name.eq_ignore_ascii_case("Expect")
+                && !reserved_source_header(name)
+            {
+                head.extend_from_slice(line.as_bytes());
+            }
+        }
+        head.extend_from_slice(b"\r\n");
         Prefixed {
             io,
-            prefix: Cursor::new(self.bytes),
+            head: Cursor::new(head),
+            prefix: Cursor::new(self.body_prefix),
+            body: self.raw.2,
+            response,
+            mode,
+            written: 0,
         }
     }
 }
 
 pub(super) struct Prefixed<I> {
     io: I,
+    head: Cursor<Vec<u8>>,
     prefix: Cursor<Vec<u8>>,
+    body: Arc<Mutex<BodyRead>>,
+    response: Arc<OnceLock<Option<Bytes>>>,
+    mode: ServerMode,
+    written: usize,
 }
 
 impl<I: AsyncRead + Unpin> AsyncRead for Prefixed<I> {
@@ -100,25 +170,60 @@ impl<I: AsyncRead + Unpin> AsyncRead for Prefixed<I> {
         cx: &mut Context<'_>,
         output: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let offset = self.prefix.position() as usize;
-        let remaining = &self.prefix.get_ref()[offset..];
-        if !remaining.is_empty() {
-            let count = output.remaining().min(remaining.len());
-            output.put_slice(&remaining[..count]);
-            self.prefix.set_position((offset + count) as u64);
+        if read_prefix(&mut self.head, output) {
+            return Poll::Ready(Ok(()));
+        }
+        {
+            let mut body = self.body.lock().expect("request body gate");
+            if let BodyRead::Waiting(waker) = &mut *body {
+                *waker = Some(cx.waker().clone());
+                return Poll::Pending;
+            }
+        }
+        if read_prefix(&mut self.prefix, output) {
             return Poll::Ready(Ok(()));
         }
         Pin::new(&mut self.io).poll_read(cx, output)
     }
 }
 
+fn read_prefix(prefix: &mut Cursor<Vec<u8>>, output: &mut ReadBuf<'_>) -> bool {
+    let offset = prefix.position() as usize;
+    let bytes = &prefix.get_ref()[offset..];
+    if bytes.is_empty() {
+        return false;
+    }
+    let count = output.remaining().min(bytes.len());
+    output.put_slice(&bytes[..count]);
+    prefix.set_position((offset + count) as u64);
+    true
+}
+
 impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         bytes: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.io).poll_write(cx, bytes)
+        let this = self.get_mut();
+        let response = this.response.get_or_init(|| {
+            Some(match this.mode {
+                ServerMode::Http => Bytes::from(EntryError::InvalidHead.wire_response()),
+                ServerMode::Recovery => Bytes::new(),
+            })
+        });
+        if let Some(response) = response {
+            while this.written < response.len() {
+                let count =
+                    ready!(Pin::new(&mut this.io).poll_write(cx, &response[this.written..]))?;
+                if count == 0 {
+                    return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+                }
+                this.written += count;
+            }
+            return Poll::Ready(Ok(bytes.len()));
+        }
+        Pin::new(&mut this.io).poll_write(cx, bytes)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

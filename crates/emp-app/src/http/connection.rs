@@ -19,9 +19,8 @@ use crate::http::request::parse_request;
 use crate::http::request::percent_decode;
 use crate::http::request::read_request_head;
 use crate::http::response::bad_request_response;
-use crate::http::response::json_error_response;
-use crate::http::response::status_text;
 use crate::http::routes::route_request_at;
+use crate::server::http::proxy::{RequestAccess, request_source};
 use crate::services::connection_admission::ConnectionPermit;
 use crate::util::system_now;
 use std::net::Shutdown;
@@ -57,15 +56,7 @@ pub(crate) fn handle_connection(
     };
     request.observation_id = observation_id.as_deref();
     let peer = stream.peer_addr().ok().map(|peer| peer.ip());
-    let delegation = crate::http::auth::aero_delegation(request, state, peer);
-    let source = crate::http::request::RequestSource {
-        caller: delegation
-            .as_ref()
-            .map(|call| call.caller.clone())
-            .or_else(|| crate::http::auth::proxy_identity(request, state, system_now(), peer)),
-        peer,
-        delegation,
-    };
+    let source = request_source(request, state, system_now(), peer);
     request.source = Some(&source);
     observation.received(request);
     let path = request.raw_path();
@@ -77,28 +68,15 @@ pub(crate) fn handle_connection(
     {
         crate::services::runtime::codex_contacted(state);
     }
-    if let Some(reply) = crate::api::modules::unavailable(path, state) {
-        observation.write_response(&mut stream, &reply);
-        let _ = stream.shutdown(Shutdown::Write);
-        return;
-    }
-    let update_request = path.starts_with("/api/updates/");
-    let gated_mutation = (request.method == RequestMethod::Post && !update_request)
-        || request.method == RequestMethod::Delete;
-    let permit = if gated_mutation {
-        state.updates.enter()
-    } else {
-        None
+    let _access = match RequestAccess::require(request, state) {
+        Ok(access) => access,
+        Err(error) => {
+            observation.write_response(&mut stream, &error.wire_response());
+            let _ = stream.shutdown(Shutdown::Write);
+            return;
+        }
     };
-    let response = if gated_mutation && permit.is_none() {
-        Some(json_error_response(
-            503,
-            status_text(503),
-            "EMP is installing an update. Please retry shortly.",
-            Some("updating"),
-            &[("Retry-After", "2")],
-        ))
-    } else {
+    let response = {
         let now = system_now();
         match (request.method, path) {
             (RequestMethod::Post, path) if path.starts_with("/api/team/") => Some(

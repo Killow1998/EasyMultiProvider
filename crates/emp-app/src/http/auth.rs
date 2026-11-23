@@ -1,5 +1,5 @@
-use crate::app::ServerState;
-use crate::http::request::Request;
+pub(crate) use crate::server::http::management::{same_origin, session_header_value};
+pub(crate) use crate::server::http::proxy::proxy_identity;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use emp_state::WebSession;
@@ -169,15 +169,6 @@ impl SessionStore {
     }
 }
 
-pub(crate) fn session_header_value(request: Request<'_>) -> Option<String> {
-    if request.header_count(SESSION_HEADER) != 1 {
-        return None;
-    }
-    let value = request.header(SESSION_HEADER)?;
-    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_graphic()))
-        .then(|| value.to_owned())
-}
-
 pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     let mut difference = left.len() ^ right.len();
     let length = left.len().max(right.len());
@@ -187,54 +178,6 @@ pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         difference |= usize::from(left_byte ^ right_byte);
     }
     difference == 0
-}
-
-pub(crate) fn same_origin(request: Request<'_>, port: u16) -> bool {
-    let allowed_hosts = [format!("127.0.0.1:{port}"), format!("localhost:{port}")];
-    if request.header_count("Host") != 1 || request.header_count("Origin") > 1 {
-        return false;
-    }
-    let Some(host) = request.header("Host") else {
-        return false;
-    };
-    let host = host.to_ascii_lowercase();
-    let host = host.strip_suffix('.').unwrap_or(&host);
-    if !allowed_hosts.iter().any(|allowed| allowed == host) {
-        return false;
-    }
-
-    let Some(origin) = request.header("Origin") else {
-        return true;
-    };
-    match parse_origin(origin, port) {
-        Some(true) => true,
-        Some(false) | None => false,
-    }
-}
-
-fn parse_origin(origin: &str, port: u16) -> Option<bool> {
-    let (scheme, rest) = origin.split_once("://")?;
-    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
-        return Some(false);
-    }
-    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let authority = &rest[..authority_end];
-    if authority.contains('@') {
-        return Some(false);
-    }
-    let (host, origin_port) = if let Some(host) = authority.strip_prefix('[') {
-        let Some((host, suffix)) = host.split_once(']') else {
-            return Some(false);
-        };
-        let port = suffix.strip_prefix(':')?;
-        (host, port)
-    } else {
-        let (host, origin_port) = authority.rsplit_once(':')?;
-        (host, origin_port)
-    };
-    let host = host.to_ascii_lowercase();
-    let origin_port = origin_port.parse::<u16>().ok()?;
-    Some((host == "127.0.0.1" || host == "localhost") && origin_port == port)
 }
 
 pub(crate) const MAX_NATIVE_AUTH_BYTES: usize = 1024 * 1024;
@@ -281,102 +224,4 @@ pub(crate) fn valid_caller_authorization(value: Option<&str>, auth_path: &Path) 
     };
     native_access_token(auth_path)
         .is_some_and(|candidate| constant_time_eq(supplied.as_bytes(), candidate.as_bytes()))
-}
-
-pub(crate) fn proxy_allowed(request: Request<'_>, state: &ServerState, now: f64) -> bool {
-    request.source.map_or_else(
-        || proxy_identity(request, state, now, None).is_some(),
-        |source| source.caller.is_some(),
-    )
-}
-
-pub(crate) fn aero_delegation(
-    request: Request<'_>,
-    state: &ServerState,
-    peer: Option<std::net::IpAddr>,
-) -> Option<crate::services::modules::aero::CallerDelegation> {
-    if !peer.is_some_and(|address| address.is_loopback())
-        || request.header("Origin").is_some()
-        || !same_origin(request, state.port)
-        || request.header_count("Authorization") != 1
-        || !matches!(
-            request.raw_path(),
-            "/v1/responses"
-                | "/v1/responses/compact"
-                | "/v1/images/generations"
-                | "/v1/images/edits"
-                | "/v1/audio/transcriptions"
-                | "/v1/realtime/calls"
-        )
-    {
-        return None;
-    }
-    let key = request.header("Authorization")?.strip_prefix("Bearer ")?;
-    state.backend.aero_callers.identify(key)
-}
-
-pub(crate) fn proxy_identity(
-    request: Request<'_>,
-    state: &ServerState,
-    now: f64,
-    peer: Option<std::net::IpAddr>,
-) -> Option<crate::services::gateway_clients::Caller> {
-    use crate::services::gateway_clients::Caller;
-    if request.header_count("Authorization") > 1 {
-        return None;
-    }
-    let token = request
-        .header("Authorization")
-        .and_then(|value| value.strip_prefix("Bearer "));
-    let gateway = token
-        .filter(|_| state.backend.modules.active(emp_modules::Module::Gateway))
-        .and_then(|value| {
-            if constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes()) {
-                Some(Caller {
-                    id: "shared".into(),
-                    name: String::new(),
-                })
-            } else {
-                state
-                    .backend
-                    .gateway_clients
-                    .identify(value, &state.backend.modules)
-            }
-        });
-    if gateway.is_some() && request.header("Origin").is_none() {
-        return gateway;
-    }
-    if !same_origin(request, state.port) {
-        return None;
-    }
-    let supplied_session = request.session_token();
-    if gateway.is_some() {
-        return gateway;
-    }
-    let local_decision = matches!(request.raw_path(), "/v1/decisions" | "/v1/systemone")
-        && state.backend.modules.active(emp_modules::Module::Decision)
-        && token.is_some_and(|value| {
-            constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes())
-        });
-    let local_image = request.method == super::request::RequestMethod::Post
-        && matches!(
-            request.raw_path(),
-            "/v1/images/generations" | "/v1/images/edits"
-        )
-        && peer.is_some_and(|peer| peer.is_loopback())
-        && request.header("Origin").is_none()
-        && token.is_some_and(|value| {
-            constant_time_eq(value.as_bytes(), state.backend.gateway_key.as_bytes())
-        });
-    (local_decision
-        || local_image
-        || state.sessions.contains(supplied_session.as_deref(), now)
-        || valid_caller_authorization(
-            request.header("Authorization"),
-            &state.backend.accounts.native_auth_path,
-        ))
-    .then(|| Caller {
-        id: "local".into(),
-        name: String::new(),
-    })
 }
