@@ -159,8 +159,7 @@ pub(crate) fn execute(
                     return Err("login_cancelled");
                 }
                 if let Some(name) = &pending.account_name {
-                    crate::services::accounts::import_account_state(
-                        None,
+                    crate::services::accounts::import_emp_login_account_state(
                         state,
                         &json!({"name":name,"auth_json":auth}),
                     )
@@ -217,6 +216,16 @@ mod tests {
 
     #[test]
     fn local_key_round_trip_keeps_other_and_installs_device_login() {
+        check_local_key_round_trip(false);
+    }
+
+    /// Fails if official Other login is treated as shared or retained Native credentials become owned.
+    #[test]
+    fn official_other_login_records_ownership_without_claiming_retained_native() {
+        check_local_key_round_trip(true);
+    }
+
+    fn check_local_key_round_trip(importing: bool) {
         let root = tempfile::tempdir().unwrap();
         let config = root.path().join("config.json");
         std::fs::write(&config, b"{}").unwrap();
@@ -242,6 +251,13 @@ mod tests {
             auth_path.clone(),
         )
         .unwrap();
+        if importing {
+            crate::services::accounts::import_emp_login_account_state(
+                &server.state,
+                &json!({"name":"Original login","auth_json":original}),
+            )
+            .unwrap();
+        }
         let result = execute(
             &server.state,
             "use-local-key",
@@ -256,6 +272,7 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(accounts.len(), 1);
+        assert!(accounts[0].get("credential_source").is_none());
         let retained = server
             .state
             .backend
@@ -266,12 +283,18 @@ mod tests {
             ))
             .unwrap();
         assert!(emp_state::same_account_auth(&retained, &original));
-        execute(&server.state, "start", &json!({}), false).unwrap();
+        execute(
+            &server.state,
+            "start",
+            &json!({"name":"EMP login"}),
+            importing,
+        )
+        .unwrap();
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            let status = execute(&server.state, "status", &json!({}), false).unwrap();
+            let status = execute(&server.state, "status", &json!({}), importing).unwrap();
             if status["status"] == "completed" {
-                assert_eq!(status["restart_required"], true);
+                assert_eq!(status["restart_required"], !importing);
                 break;
             }
             assert_ne!(status["status"], "failed", "{status}");
@@ -285,6 +308,20 @@ mod tests {
             )]
             std::thread::sleep(Duration::from_millis(25));
         }
+        if importing {
+            assert_eq!(local_auth::mode(&auth_path), "local_key");
+            let accounts =
+                server.state.backend.configuration.snapshot().unwrap()["accounts"].clone();
+            let accounts = accounts.as_array().unwrap();
+            assert_eq!(accounts.len(), 2);
+            let owned = accounts
+                .iter()
+                .find(|account| account["name"] == "EMP login")
+                .unwrap();
+            assert_eq!(owned["credential_source"], "emp_login");
+            server.shutdown().unwrap();
+            return;
+        }
         assert_eq!(local_auth::mode(&auth_path), "subscription");
         assert_eq!(
             local_auth::read(&auth_path).unwrap().unwrap()["tokens"]["account_id"],
@@ -297,5 +334,6 @@ mod tests {
                 .len(),
             1
         );
+        server.shutdown().unwrap();
     }
 }

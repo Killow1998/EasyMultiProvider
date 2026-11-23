@@ -78,6 +78,32 @@ fn provider_update(base_url: &str, api_key: Option<&str>) -> Value {
 const MASK: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}";
 const AT: &str = "2026-08-22T00:00:00+00:00";
 
+/// Fails if editing account settings drops login ownership or lets a browser grant it.
+#[test]
+fn account_settings_preserve_server_owned_credential_source() {
+    for source in [None, Some("emp_login")] {
+        let mut account = json!({"id":"demo","prefix":"demo"});
+        if let Some(source) = source {
+            account["credential_source"] = source.into();
+        }
+        let current = normalize_configuration(Some(&json!({"accounts":[account]}))).unwrap();
+        for incoming in [None, Some("emp_login"), Some("import")] {
+            let mut update = json!({"id":"demo","prefix":"demo","name":"Renamed"});
+            if let Some(incoming) = incoming {
+                update["credential_source"] = incoming.into();
+            }
+            let merged =
+                merge_web_update_with_time(&current, &json!({"accounts":[update]}), AT).unwrap();
+            assert_eq!(
+                merged["accounts"][0]
+                    .get("credential_source")
+                    .and_then(Value::as_str),
+                source
+            );
+        }
+    }
+}
+
 #[test]
 fn older_clients_preserve_ultra_overrides_but_an_explicit_reset_removes_them() {
     let current =

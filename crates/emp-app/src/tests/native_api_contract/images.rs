@@ -7,6 +7,50 @@ mod installed;
 mod routing;
 use fixture::*;
 
+/// Fails if an image 401 refreshes a shared Other account instead of preserving rejection.
+#[test]
+fn shared_image_account_401_never_enters_credential_refresh() {
+    let upstream = ImageUpstream::start(401);
+    let (directory, server) = image_server(&upstream.base_url());
+    server
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap()["image_routing"] = json!({"mode":"account","account_id":"selected"});
+    select_turn(&server, "selected/gpt-6.1-sol", "shared-image-turn", false);
+    upstream.next();
+    let auth_path =
+        server.state.backend.configuration.snapshot().unwrap()["accounts"][0]["auth_file"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let original = std::fs::read(&auth_path).unwrap();
+    let response = post(
+        &server,
+        "/v1/images/generations",
+        br#"{"model":"gpt-image-2","prompt":"fixture"}"#,
+        &[
+            &session_header(&server),
+            "x-codex-image-turn-id: shared-image-turn",
+        ],
+    );
+    assert!(
+        response.starts_with("HTTP/1.1 401 Unauthorized"),
+        "{response}"
+    );
+    assert_eq!(
+        upstream.next().headers["authorization"],
+        "Bearer selected-fixture"
+    );
+    assert!(upstream.observed.try_recv().is_err());
+    assert_eq!(std::fs::read(&auth_path).unwrap(), original);
+    server.shutdown().unwrap();
+    let events = crate::tests::internal_events_contract::journal(directory.path());
+    assert!(!events.iter().any(|event| event["event"] == "quota_refresh"));
+}
+
 #[test]
 fn image_credit_uses_the_project_key_and_stops_dispatch_at_the_local_limit() {
     let upstream = super::vertex::VertexFixture::start_for("api.openai.com");

@@ -79,6 +79,7 @@ mod memory_routing_contract;
 mod native_api_contract;
 #[cfg(unix)]
 mod native_login_contract;
+mod other_auth_contract;
 mod performance_contract;
 mod quota_management_contract;
 mod quota_rotation_contract;

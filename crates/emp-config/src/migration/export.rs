@@ -343,6 +343,7 @@ fn metadata_without_auth_file(account: &Value) -> Value {
     let mut metadata = normalize_account(account).expect("validated account");
     if let Some(object) = metadata.as_object_mut() {
         object.remove("auth_file");
+        object.remove("credential_source");
     }
     metadata
 }

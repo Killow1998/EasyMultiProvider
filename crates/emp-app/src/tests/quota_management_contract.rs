@@ -155,6 +155,7 @@ fn native_and_imported_quota_refresh_cross_the_management_boundary() {
                 "name": "demo",
                 "prefix": "demo",
                 "auth_file": imported_auth,
+                "credential_source": "emp_login",
             }, {
                 "id": "native-copy",
                 "name": "Native copy",

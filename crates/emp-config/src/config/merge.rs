@@ -382,6 +382,7 @@ fn merge_web_update_at_time(
                 .and_then(Value::as_str)
                 .and_then(|id| old_accounts.get(id));
             account.remove("workspace_shared");
+            account.remove("credential_source");
             if old.and_then(|value| value.get("workspace_shared")) == Some(&Value::Bool(true)) {
                 account.insert("workspace_shared".to_owned(), Value::Bool(true));
             }
@@ -397,7 +398,7 @@ fn merge_web_update_at_time(
                 );
             }
             if let Some(old) = old {
-                for field in ["credential_status", "quota"] {
+                for field in ["credential_status", "credential_source", "quota"] {
                     if let Some(value) = old.get(field) {
                         account.insert(field.to_owned(), value.clone());
                     }

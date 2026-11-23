@@ -41,10 +41,9 @@ fn validate_import_payload(payload: &Value) -> MigrationResult<ValidatedImport> 
             .ok_or(MigrationError::InvalidAccountRecord)?;
         let mut metadata = normalize_account(record.get("metadata").unwrap_or(&Value::Null))
             .map_err(|_| MigrationError::InvalidAccountRecord)?;
-        metadata
-            .as_object_mut()
-            .expect("normalized account")
-            .remove("workspace_shared");
+        let object = metadata.as_object_mut().expect("normalized account");
+        object.remove("workspace_shared");
+        object.remove("credential_source");
         let auth = validate_auth_json(record.get("auth").unwrap_or(&Value::Null))
             .map_err(|_| MigrationError::InvalidAccountRecord)?;
         let id = metadata

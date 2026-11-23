@@ -2,7 +2,8 @@
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use emp_codex::quota::{
-    consume_native_quota_reset, read_native_login_quota, run_quota_query_persisting,
+    access_token_snapshot, consume_native_quota_reset, read_native_login_quota, run_quota_query,
+    run_quota_query_persisting, run_quota_reset,
 };
 use rustls::{ServerConfig, ServerConnection, StreamOwned, pki_types::PrivatePkcs8KeyDer};
 use serde_json::json;
@@ -15,6 +16,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
+/// Fails if native/shared reads or resets call OAuth, mutate source credentials, or download models.
 #[test]
 #[ignore = "requires installed Codex and isolated loopback; synthetic auth only"]
 fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rotation() {
@@ -44,6 +46,7 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
     let server = std::thread::spawn(move || {
         let mut paths = Vec::new();
         let mut shared_usage_authenticated = false;
+        let mut shared_reset_authenticated = false;
         while !stopping.load(Ordering::Acquire) {
             let (stream, _) = match listener.accept() {
                 Ok(connection) => connection,
@@ -77,6 +80,14 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
                     })
                 {
                     shared_usage_authenticated = true;
+                }
+                if path.ends_with("/consume")
+                    && line.split_once(':').is_some_and(|(name, value)| {
+                        name.eq_ignore_ascii_case("authorization")
+                            && value.trim() == "Bearer shared-fixture-access"
+                    })
+                {
+                    shared_reset_authenticated = true;
                 }
             }
             drop(reader);
@@ -122,7 +133,11 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
             );
             let _ = stream.write_all(&body);
         }
-        (paths, shared_usage_authenticated)
+        (
+            paths,
+            shared_usage_authenticated,
+            shared_reset_authenticated,
+        )
     });
     let launcher = root.path().join("codex");
     // Only the test launcher changes the backend URL. The production helper
@@ -189,19 +204,30 @@ os.execv({binary}, [{binary}, *sys.argv[1:]])
             Ok(())
         },
     );
-    let shared = json!({"auth_mode":"chatgptAuthTokens","tokens":{
-        "id_token":token,"access_token":"shared-fixture-access",
-        "account_id":"fixture-account","refresh_token":""
-    }});
-    let shared_quota = run_quota_query_persisting(
+    let mut shared_source = auth.clone();
+    shared_source["tokens"]["access_token"] = "shared-fixture-access".into();
+    let shared_path = root.path().join("shared-other-auth.json");
+    let shared_bytes = serde_json::to_vec(&shared_source).unwrap();
+    std::fs::write(&shared_path, &shared_bytes).unwrap();
+    let shared = access_token_snapshot(&shared_source);
+    let shared_quota = run_quota_query(
         &shared,
         launcher.to_str().unwrap(),
         Duration::from_secs(15),
         false,
-        |_| panic!("reading a shared subscription must not persist a rotation"),
     );
+    let shared_reset = run_quota_reset(
+        &shared,
+        launcher.to_str().unwrap(),
+        Duration::from_secs(15),
+        false,
+        "87654321-4321-4321-8321-cba987654321",
+        None,
+    );
+    assert_eq!(std::fs::read(&shared_path).unwrap(), shared_bytes);
+    assert_eq!(shared_source["tokens"]["refresh_token"], "fixture-only");
     stop.store(true, Ordering::Release);
-    let (paths, shared_usage_authenticated) = server.join().unwrap();
+    let (paths, shared_usage_authenticated, shared_reset_authenticated) = server.join().unwrap();
     println!("captured HTTP requests: {paths:?}");
     for result in results {
         assert!(
@@ -217,12 +243,17 @@ os.execv({binary}, [{binary}, *sys.argv[1:]])
         "quota requests: {paths:?}"
     );
     assert_eq!(reset.expect("native reset"), "reset");
+    assert_eq!(shared_reset.expect("shared Other reset"), "reset");
+    assert!(
+        shared_reset_authenticated,
+        "shared reset lost its bearer token"
+    );
     assert!(
         shared_usage_authenticated,
         "shared quota request lost its bearer token"
     );
     assert_eq!(
-        shared_quota.unwrap()["rate_limits"]["primary"]["usedPercent"],
+        shared_quota.unwrap().quota["rate_limits"]["primary"]["usedPercent"],
         7
     );
     assert!(imported.is_ok(), "{imported:?}");
@@ -243,7 +274,7 @@ os.execv({binary}, [{binary}, *sys.argv[1:]])
             .iter()
             .filter(|path| path.ends_with("/consume"))
             .count(),
-        1
+        2
     );
     assert!(
         paths.iter().all(|path| path == "/backend-api/wham/usage"

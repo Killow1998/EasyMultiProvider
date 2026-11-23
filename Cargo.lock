@@ -851,7 +851,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "emp-app"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -905,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "emp-codex"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "base64 0.22.1",
  "emp-context",
@@ -932,7 +932,7 @@ dependencies = [
 
 [[package]]
 name = "emp-config"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "base64 0.22.1",
  "emp-domain",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "emp-context"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "base64 0.22.1",
  "emp-domain",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "emp-domain"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "regex",
  "serde",
@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "emp-files"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "atomic-write-file",
  "libc",
@@ -1039,7 +1039,7 @@ dependencies = [
 
 [[package]]
 name = "emp-protocol"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "base64 0.22.1",
  "regex",
@@ -1051,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "emp-router"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "emp-config",
  "emp-domain",
@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "emp-state"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "base64 0.22.1",
  "emp-config",
@@ -1085,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "emp-storage"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "base64 0.22.1",
  "emp-domain",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "emp-transport"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "base64 0.22.1",
  "brotli",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "emp-updater"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "emp-files",
  "flate2",
@@ -4348,7 +4348,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.15.8"
+version = "0.15.9"
 dependencies = [
  "emp-modules",
  "emp-updater",

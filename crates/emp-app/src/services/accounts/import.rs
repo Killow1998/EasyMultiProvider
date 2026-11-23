@@ -109,6 +109,22 @@ pub(crate) fn import_account_state(
     state: &ServerState,
     body: &Value,
 ) -> Result<Value, String> {
+    import_credentials(request_id, state, body, None)
+}
+
+pub(crate) fn import_emp_login_account_state(
+    state: &ServerState,
+    body: &Value,
+) -> Result<Value, String> {
+    import_credentials(None, state, body, Some("emp_login"))
+}
+
+fn import_credentials(
+    request_id: Option<&str>,
+    state: &ServerState,
+    body: &Value,
+    credential_source: Option<&str>,
+) -> Result<Value, String> {
     crate::services::observation::operation::observe(
         &state.backend.diagnostics,
         request_id,
@@ -172,6 +188,7 @@ pub(crate) fn import_account_state(
                 "prefix":metadata.get("prefix").cloned().unwrap_or(Value::Null),
                 "auth_file":auth_path.to_string_lossy(),
                 "credential_status":"unknown",
+                "credential_source":credential_source,
                 "enabled":metadata.get("enabled").cloned().unwrap_or(Value::Bool(true)),
                 "hidden_models":metadata.get("hidden_models").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
                 "model_context_windows":metadata.get("model_context_windows").cloned().unwrap_or_else(|| Value::Object(serde_json::Map::new())),

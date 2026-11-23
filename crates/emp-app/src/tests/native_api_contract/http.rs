@@ -128,7 +128,7 @@ fn account_server(base_url: &str, codex_binary: &str) -> (TempDir, ServerHandle,
     let native_auth_path = root.join("codex/auth.json");
     std::fs::create_dir_all(native_auth_path.parent().unwrap()).unwrap();
     let mut config = json!({"codex_base_url":base_url,"providers":[],"models":[],
-        "accounts":[{"id":"demo","name":"Demo","prefix":"demo","enabled":true,"hidden_models":[]}]});
+        "accounts":[{"id":"demo","name":"Demo","prefix":"demo","enabled":true,"hidden_models":[],"credential_source":"emp_login"}]});
     let auth_path = emp_state::account_auth_path(&config, "demo", &config_path).unwrap();
     config["accounts"][0]["auth_file"] = Value::String(auth_path.to_string_lossy().into_owned());
     std::fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
@@ -466,6 +466,47 @@ fn gateway_requests_use_native_api_keys_and_subscription_credentials_separately(
         );
     }
     server.shutdown().unwrap();
+}
+
+#[cfg(unix)]
+/// Fails if a shared account's inference 401 starts a quota refresh before returning rejection.
+#[test]
+fn shared_account_401_never_enters_credential_refresh() {
+    for stream in [false, true] {
+        let upstream = RefreshUpstream::start(1);
+        let (directory, server, auth_path) =
+            account_server(&upstream.base_url(), "missing-test-codex");
+        server
+            .state
+            .backend
+            .configuration
+            .test_config()
+            .lock()
+            .unwrap()["accounts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("credential_source");
+        let original = std::fs::read(&auth_path).unwrap();
+        let body = json!({"model":"demo/upstream","input":"hello","stream":stream}).to_string();
+        let response = post(
+            &server,
+            "/v1/responses",
+            body.as_bytes(),
+            &[&session_header(&server)],
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 401 Unauthorized"),
+            "{response}"
+        );
+        assert_eq!(
+            upstream.next().headers["authorization"],
+            "Bearer original-secret"
+        );
+        assert_eq!(std::fs::read(&auth_path).unwrap(), original);
+        server.shutdown().unwrap();
+        let events = crate::tests::internal_events_contract::journal(directory.path());
+        assert!(!events.iter().any(|event| event["event"] == "quota_refresh"));
+    }
 }
 
 #[cfg(unix)]

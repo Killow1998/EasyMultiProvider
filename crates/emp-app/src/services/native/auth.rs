@@ -1,5 +1,6 @@
 //! Native credential selection; imported-account rotation stays in the quota owner.
 use crate::app::ServerState;
+use crate::services::accounts::account_allows_refresh;
 use crate::services::accounts::native_auth_document;
 use crate::services::quota::refresh_account_serialized;
 use emp_codex::account_auth_headers;
@@ -73,6 +74,17 @@ pub(super) fn resolve_headers(
                 .get("id")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            if !account_allows_refresh(state, id)
+                || account
+                    .get("_emp_shared_source")
+                    .and_then(Value::as_str)
+                    .is_some()
+            {
+                return Err(NativeHttpError::router(
+                    401,
+                    "Codex account needs sign-in; sign in again and re-import the account",
+                ));
+            }
             refresh_account_serialized(state, id)
                 .map_err(|error| NativeHttpError::router(503, error.to_string()))?;
         }

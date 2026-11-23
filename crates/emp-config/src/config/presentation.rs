@@ -58,6 +58,13 @@ pub fn public_accounts(config: &Value, duplicate_accounts: &BTreeMap<String, Str
         accounts.iter().map(|account| {
             let id = account["id"].as_str().expect("normalized account ID");
             let duplicate_of = duplicate_accounts.get(id).map_or("", String::as_str);
+            let credential_source = if account["workspace_shared"] == true || account["_emp_shared_source"].is_string() {
+                "team"
+            } else if account["credential_source"] == "emp_login" {
+                "emp_login"
+            } else {
+                "import"
+            };
             serde_json::json!({
                 "id": id,
                 "name": account["name"],
@@ -67,6 +74,7 @@ pub fn public_accounts(config: &Value, duplicate_accounts: &BTreeMap<String, Str
                 "model_context_windows": account["model_context_windows"],
                 "credential_set": !account["auth_file"].as_str().expect("normalized auth path").is_empty(),
                 "credential_status": account["credential_status"],
+                "credential_source": credential_source,
                 "quota": account["quota"],
                 "duplicate": !duplicate_of.is_empty(),
                 "duplicate_of": duplicate_of,

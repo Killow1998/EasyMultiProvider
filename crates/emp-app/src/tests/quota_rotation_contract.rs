@@ -28,7 +28,7 @@ fn rotated_credentials_survive_a_failed_save_and_are_persisted_later() {
         &config_path,
         serde_json::to_vec(&json!({
             "account_store_path": account_root,
-            "accounts": [{"id":"rotating","name":"rotating","prefix":"rotating","auth_file":auth_path}],
+            "accounts": [{"id":"rotating","name":"rotating","prefix":"rotating","auth_file":auth_path,"credential_source":"emp_login"}],
         }))
         .expect("encode rotation config"),
     )
@@ -239,7 +239,7 @@ fn shutdown_flushes_pending_rotations_of_configured_accounts_only() {
         &config_path,
         serde_json::to_vec(&json!({
             "account_store_path": account_root,
-            "accounts": [{"id":"kept","name":"kept","prefix":"kept","auth_file":auth_path}],
+            "accounts": [{"id":"kept","name":"kept","prefix":"kept","auth_file":auth_path,"credential_source":"emp_login"}],
         }))
         .expect("encode flush config"),
     )
@@ -295,7 +295,7 @@ fn shutdown_reports_rotated_credentials_it_could_not_save() {
         &config_path,
         serde_json::to_vec(&json!({
             "account_store_path": account_root,
-            "accounts": [{"id":"unsaved","name":"unsaved","prefix":"unsaved","auth_file":auth_path}],
+            "accounts": [{"id":"unsaved","name":"unsaved","prefix":"unsaved","auth_file":auth_path,"credential_source":"emp_login"}],
         }))
         .expect("encode unsaved config"),
     )
@@ -349,7 +349,7 @@ fn shutdown_waits_for_a_quota_check_that_is_rotating_a_credential() {
         &config_path,
         serde_json::to_vec(&json!({
             "account_store_path": account_root,
-            "accounts": [{"id":"draining","name":"draining","prefix":"draining","auth_file":auth_path}],
+            "accounts": [{"id":"draining","name":"draining","prefix":"draining","auth_file":auth_path,"credential_source":"emp_login"}],
         }))
         .expect("encode drain config"),
     )
