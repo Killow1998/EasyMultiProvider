@@ -1,13 +1,15 @@
 //! Observable command receipts, management events and privacy-safe failures.
 use super::*;
 
+/// Parses newline-terminated records only; a record still being written is left for the next poll.
 pub(super) fn journal(root: &Path) -> Vec<Value> {
     std::fs::read_dir(root.join("state/logs"))
         .unwrap()
         .flat_map(|entry| {
             std::fs::read_to_string(entry.unwrap().path())
                 .unwrap()
-                .lines()
+                .split_inclusive('\n')
+                .filter_map(|line| line.strip_suffix('\n'))
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect::<Vec<Value>>()
         })
