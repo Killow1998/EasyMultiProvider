@@ -277,7 +277,7 @@ registerUiCopy({
   "core.reset_completed_quota_and_refresh_time_were_updated": ["重置已完成，额度与刷新时间已更新。","Reset completed. Quota and refresh time were updated."],
   "core.subscription_imported": ["订阅已导入","Subscription imported"],
   "core.the_current_codex_login_is_no_longer_valid_sign": ["当前 Codex 登录已失效，请在 Codex 中重新登录。","The current Codex login is no longer valid. Sign in again in Codex."],
-  "core.the_imported_credentials_are_no_longer_valid_sign_in": ["导入的登录凭据已失效，请重新登录该账号，再导入该账号最新的 auth.json。","The imported credentials are no longer valid. Sign in again, then import the latest auth.json for that account."],
+  "core.the_imported_credentials_are_no_longer_valid_sign_in": ["导入的登录凭据已失效，请从原主机重新导入该账号最新的 auth.json。","The imported credentials are no longer valid. Re-import the latest auth.json for this account from its original host."],
   "core.quota_access_denied_403_check_account_permissions_or_network": ["额度服务拒绝访问（403）；请检查账号权限或网络。","Quota access denied (403). Check account permissions or network."],
   "core.quota_queries_are_rate_limited_429_try_again_later": ["额度查询过于频繁（429），请稍后再试。","Quota queries are rate limited (429). Try again later."],
   "core.codex_could_not_reach_chatgpt_workspace_routing_check_dns": ["Codex 无法连接 ChatGPT 工作区路由服务；请检查 DNS、VPN/TUN、系统代理和网络连通性。","Codex could not reach ChatGPT workspace routing. Check DNS, VPN/TUN, the system proxy, and network connectivity."],

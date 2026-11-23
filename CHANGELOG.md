@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### 中文
+
+#### 问题修复
+
+- 读取、采样或重置导入的 Other 订阅额度，以及推理鉴权失败时，不再轮换共享账号的 refresh token，避免原主机被要求重新登录；凭据失效后提示从原主机重新导入 auth.json。通过 EMP 官方登录新增的 Other 仍可自动刷新并保存凭据。
+
+### English
+
+#### Fixes
+
+- Quota reads, sampling, resets and inference authentication failures no longer rotate shared Other subscription refresh tokens, preserving the original host's login. Expired credentials require re-importing auth.json from that host. Other accounts added through EMP's official login still refresh and save credentials automatically.
+
 ## 0.15.8 (2026-11-23)
 
 ### 中文

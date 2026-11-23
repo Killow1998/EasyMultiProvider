@@ -189,7 +189,7 @@ fn export_encrypts_credentials_and_uses_portable_paths() {
             "api_key": "synthetic provider secret"
         }],
         "models": [{"id": "deepseek/chat", "provider": "deepseek"}],
-        "accounts": [{"id": "subscription", "prefix": "subscription"}]
+        "accounts": [{"id": "subscription", "prefix": "subscription", "credential_source":"emp_login"}]
     })))
     .expect("normalized source");
     let auth_path = account_auth_path(&config, "subscription", &path).expect("account path");
@@ -246,6 +246,18 @@ fn export_encrypts_credentials_and_uses_portable_paths() {
     );
     assert_eq!(payload["config"]["providers"][0]["api_key"], "");
     assert!(payload["config"]["accounts"][0].get("auth_file").is_none());
+    assert!(
+        payload["config"]["accounts"][0]
+            .get("credential_source")
+            .is_none(),
+        "exported configuration must not grant credential ownership to another EMP"
+    );
+    assert!(
+        payload["accounts"][0]["metadata"]
+            .get("credential_source")
+            .is_none(),
+        "exported credential metadata must not grant ownership to another EMP"
+    );
     assert_eq!(
         payload["provider_keys"]["deepseek"],
         "synthetic provider secret"

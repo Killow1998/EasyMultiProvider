@@ -1527,15 +1527,44 @@ inference or publish this catalog to the user's model picker. This keeps
 app-server startup from downloading a remote model catalog on every quota read,
 without sharing credential directories or changing the user's Codex settings.
 Native quota reads and resets use a disposable `chatgptAuthTokens` snapshot with
-an empty refresh credential. The canonical native login belongs to Codex; a
-helper must not rotate credentials it cannot persist. Imported accounts retain
-managed refresh credentials and their existing save callback, including saves
-before later errors or cancellation. RPC `refreshToken=false` alone does not
-prevent Codex's auth manager from proactively rotating stale credentials.
+an empty refresh credential. The canonical native login belongs to Codex.
+Other accounts may rotate credentials only when `credential_source="emp_login"`,
+recorded by EMP's official login flow for adding an Other account. These accounts
+retain refresh retries and their save callback, including saves before later
+errors or cancellation, pending-rotation draining and shutdown flushes.
+Every other source is shared: auth.json imports, retained Native logins, Team
+subscriptions, migration imports, unknown sources and existing records without
+the field. Shared quota reads, background samples and resets use the same
+access-token snapshot as Native, with `allow_refresh=false` and no persist
+callback. Neither authentication errors nor workspace-discovery retry hints
+authorize a refresh. Authentication errors mark the account invalid and ask the
+user to re-import the latest auth.json from its original host. Inference and
+image 401s also skip shared-account refreshes and return authentication failure.
+RPC `refreshToken=false` alone does not prevent Codex's auth manager from
+proactively rotating stale credentials; the snapshot removes that capability.
+Each credential re-import records its current source, so importing auth.json
+over an EMP login makes it shared. Saving a rotation preserves its source;
+ordinary settings edits preserve the server-owned field. Migration export omits
+the field and migration import discards it, including when replacing an account.
+Other accounts matching the current Native identity retain their existing
+Native snapshot path regardless of source.
+`login.existing_other` remains unchanged: selecting an Other as Native copies
+its full credentials into local `~/.codex/auth.json`. Local Codex may subsequently
+rotate that shared refresh token and invalidate the original host's copy; Xian
+owns the decision on changing this flow.
 `quota_catalog_download` exercises actual installed engines against a synthetic
-TLS backend: native reads/resets never call OAuth, imported rotation is saved,
+TLS backend: native/shared reads and resets never call OAuth or change source
+credential bytes, managed Other rotation is saved,
 and startup does not request `/models`. Removing the local catalog configuration
 must expose a `/models` request.
+
+The Other credential-source fix is implemented in the
+`EasyMultiProvider-otherauth` worktree based on `835ea02` (Core 0.15.8).
+Regression cases are in `other_auth_contract`, native login/HTTP/image contracts,
+state normalization/settings/migration tests and `quota_catalog_download`.
+Point has not run builds, tests or EMP here; coz owns execution and commit on
+the validation host. The installed-engine case remains explicitly ignored by
+default and needs `EMP_TEST_CODEX_CLI` when coz runs it.
 
 Execution facts now belong to the request's `RequestOutcome`: each dispatch
 increments its own attempt count and records its protocol/model; scheduled

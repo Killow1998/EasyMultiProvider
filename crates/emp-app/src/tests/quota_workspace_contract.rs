@@ -30,6 +30,7 @@ fn workspace_routing_error_retries_imported_once_and_never_refreshes_native() {
                 "name":id,
                 "prefix":id,
                 "auth_file":account_root.join(id).join("auth.json.enc"),
+                "credential_source":"emp_login",
             })
         })
         .collect::<Vec<_>>();

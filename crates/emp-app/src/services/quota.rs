@@ -8,6 +8,7 @@ pub(crate) use sampler::{run as run_sampler, sample_quotas_once};
 
 use crate::app::ServerState;
 use crate::services::accounts::CredentialOperation;
+use crate::services::accounts::account_allows_refresh;
 use crate::services::accounts::account_public_snapshot;
 use crate::services::accounts::native_account_snapshot;
 use crate::services::accounts::native_auth_document;
@@ -18,9 +19,12 @@ use crate::services::accounts::{
 use crate::util::system_now;
 use emp_codex::quota::QuotaControl;
 use emp_codex::quota::QuotaError;
+use emp_codex::quota::access_token_snapshot;
 use emp_codex::quota::consume_native_quota_reset;
 use emp_codex::quota::read_native_login_quota;
+use emp_codex::quota::run_quota_query;
 use emp_codex::quota::run_quota_query_persisting;
+use emp_codex::quota::run_quota_reset;
 use emp_codex::quota::run_quota_reset_persisting;
 use emp_codex::quota_history::QuotaHistoryError;
 use emp_state::same_account_auth;
@@ -389,13 +393,19 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
     }
     let credentials = AccountCredentials::for_account(state, account_id)?;
     let auth_file = credentials.auth_file.clone();
+    let allow_refresh = account_allows_refresh(state, account_id);
     let read_auth = || credentials.read();
-    let query = |auth: &Value, allow_refresh: bool| {
+    let query = |auth: &Value, refresh: bool| {
+        let binary = crate::services::runtime::helper_binary(state)?;
+        if !allow_refresh {
+            return run_quota_query(&access_token_snapshot(auth), &binary, control, false)
+                .map(|result| result.quota);
+        }
         run_quota_query_persisting(
             auth,
-            &crate::services::runtime::helper_binary(state)?,
+            &binary,
             control,
-            allow_refresh,
+            refresh,
             |refreshed| credentials.persist(refreshed),
         )
     };
@@ -426,12 +436,12 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
     }
     let quota = match query(&auth, false) {
         Ok(quota) => quota,
-        Err(error) if shared && error.code() == "quota_auth_required" => {
+        Err(error) if !allow_refresh && error.code() == "quota_auth_required" => {
             let _ = save_account_quota_state(state, account_id, &auth_file, "invalid", None);
             return Err(error);
         }
         Err(error)
-            if !shared
+            if allow_refresh
                 && (error.code() == "quota_auth_required"
                     || error.should_retry_imported_refresh()) =>
         {
@@ -611,6 +621,7 @@ pub(crate) fn consume_quota_reset_for_account(
         );
     }
     let credentials = AccountCredentials::for_account(state, account_id)?;
+    let allow_refresh = account_allows_refresh(state, account_id);
     let read_auth = || credentials.read();
     let auth = read_auth()?;
     if native_auth_document(&state.backend.accounts.native_auth_path)
@@ -622,29 +633,57 @@ pub(crate) fn consume_quota_reset_for_account(
             Duration::from_secs(45),
             idempotency_key,
             credit_id,
-        );
+        )
+        .inspect_err(|error| {
+            if !allow_refresh && error.code() == "quota_auth_required" {
+                let _ = save_account_quota_state(
+                    state,
+                    account_id,
+                    &credentials.auth_file,
+                    "invalid",
+                    None,
+                );
+            }
+        });
     }
-    let query = |auth: &Value, allow_refresh: bool| {
+    let query = |auth: &Value, refresh: bool| {
+        let binary = crate::services::runtime::helper_binary(state)?;
+        if !allow_refresh {
+            return run_quota_reset(
+                &access_token_snapshot(auth),
+                &binary,
+                Duration::from_secs(45),
+                false,
+                idempotency_key,
+                credit_id,
+            );
+        }
         run_quota_reset_persisting(
             auth,
-            &crate::services::runtime::helper_binary(state)?,
+            &binary,
             Duration::from_secs(45),
-            allow_refresh,
+            refresh,
             idempotency_key,
             credit_id,
             |refreshed| credentials.persist(refreshed),
         )
     };
-    match query(&auth, false) {
+    let result = match query(&auth, false) {
         Ok(outcome) => Ok(outcome),
-        Err(error)
-            if error.code() == "quota_auth_required"
-                && !state.backend.team.shared_subscription(account_id) =>
-        {
+        Err(error) if allow_refresh && error.code() == "quota_auth_required" => {
             query(&read_auth()?, true)
         }
         Err(error) => Err(error),
+    };
+    if !allow_refresh
+        && result
+            .as_ref()
+            .is_err_and(|error| error.code() == "quota_auth_required")
+    {
+        let _ =
+            save_account_quota_state(state, account_id, &credentials.auth_file, "invalid", None);
     }
+    result
 }
 
 pub(crate) fn refresh_account_serialized(

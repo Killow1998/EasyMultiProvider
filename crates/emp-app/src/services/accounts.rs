@@ -12,11 +12,24 @@ pub(crate) use delete::delete_account_state;
 use emp_state::VaultStore;
 use emp_state::duplicate_account_status;
 use emp_state::validate_auth_json;
-pub(crate) use import::{import_account_state, matching_account};
+pub(crate) use import::{import_account_state, import_emp_login_account_state, matching_account};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
+
+pub(crate) fn account_allows_refresh(state: &ServerState, account_id: &str) -> bool {
+    !state.backend.team.shared_subscription(account_id)
+        && state.backend.configuration.read().is_ok_and(|config| {
+            config["accounts"].as_array().is_some_and(|accounts| {
+                accounts.iter().any(|account| {
+                    account["id"] == account_id
+                        && account["credential_source"] == "emp_login"
+                        && account["workspace_shared"] != true
+                })
+            })
+        })
+}
 
 pub(crate) fn account_catalog_headers(
     account: &serde_json::Map<String, Value>,
