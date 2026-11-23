@@ -1025,6 +1025,7 @@ dependencies = [
  "emp-domain",
  "emp-files",
  "fernet",
+ "getrandom 0.2.17",
  "libc",
  "num-bigint",
  "num-traits",

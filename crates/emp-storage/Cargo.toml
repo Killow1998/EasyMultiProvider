@@ -13,6 +13,7 @@ workspace = true
 emp-domain = { path = "../emp-domain" }
 emp-files = { path = "../emp-files" }
 base64 = "0.22"
+getrandom = "0.2.17"
 fernet = { version = "0.2.2", default-features = false, features = ["rustcrypto", "fernet_danger_timestamps"] }
 num-bigint = "0.4.8"
 num-traits = "0.2.19"

@@ -88,16 +88,11 @@ pub(super) fn load(state: &ServerState, provider: &Value) -> Option<SavedModels>
     }
     saved.models =
         emp_state::official_registry::enrich_saved_models(provider.as_object()?, saved.models);
-    state
-        .backend
-        .usage
-        .ledger
-        .prices
-        .enrich_models(
-            provider.as_object()?,
-            emp_state::official_registry::identify_provider(provider.as_object()?).as_deref(),
-            &mut saved.models,
-        );
+    state.backend.usage.ledger.prices.enrich_models(
+        provider.as_object()?,
+        emp_state::official_registry::identify_provider(provider.as_object()?).as_deref(),
+        &mut saved.models,
+    );
     Some(saved)
 }
 

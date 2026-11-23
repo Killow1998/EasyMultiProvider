@@ -66,8 +66,10 @@ pub(super) fn from_litellm(entries: &Map<String, Value>) -> Catalog {
             supports_reasoning: entry["supports_reasoning"].as_bool(),
             supports_vision: entry["supports_vision"].as_bool(),
             supports_audio_input: entry["supports_audio_input"].as_bool(),
-            input_modalities: emp_domain::model_values::parse_modalities(modalities).unwrap_or_default(),
-            output_modalities: emp_domain::model_values::parse_modalities(output).unwrap_or_default(),
+            input_modalities: emp_domain::model_values::parse_modalities(modalities)
+                .unwrap_or_default(),
+            output_modalities: emp_domain::model_values::parse_modalities(output)
+                .unwrap_or_default(),
             reasoning_levels: emp_domain::normalize_reasoning_levels(
                 entry.get("reasoning_effort_levels"),
             ),
