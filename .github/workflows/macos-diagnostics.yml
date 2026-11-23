@@ -34,7 +34,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "22"
       - name: Test discovery, executable trust, browser login and shutdown
