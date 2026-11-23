@@ -13,6 +13,9 @@ mod https;
 #[cfg(unix)]
 pub mod modules;
 mod process;
+#[cfg(unix)]
+#[allow(dead_code, reason = "Only the e2e target uses Team process fixtures")]
+pub mod team;
 mod upstream;
 mod websocket;
 

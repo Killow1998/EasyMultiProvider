@@ -13,5 +13,6 @@ mod e2e {
     #[cfg(target_os = "linux")]
     mod native;
     mod streams;
+    mod team;
     mod usage;
 }

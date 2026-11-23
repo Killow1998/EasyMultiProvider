@@ -90,6 +90,22 @@ Banked Reset 的次数和到期信息可在同步后的订阅详情查看。个�
 
 ## 开发验收
 
+Team 的 Rust 黑盒入口是 [`tests/e2e/team.rs`](../crates/emp-app/tests/e2e/team.rs)，专用夹具在 [`tests/support/team.rs`](../crates/emp-app/tests/support/team.rs)。五个 `m03_` 测试均为 ignored，运行时需要与 EMP 同目录的真实 `empmod-team`；热更新还需要 `EMP_E2E_MODULE_NEXT_DIR` 指向版本更高的 Team 构建目录，沿用 M01 的本地 Release 夹具。
+
+夹具运行两个独立 EMP 和一个真实 Team 服务端。`empmod-team` 无参数时提供桌面模组协议；服务端使用 `empmod-team serve --state DIR --listen 127.0.0.1:PORT`，随机端口大于 4300，SQLite 保存在临时目录的 `workspace.sqlite3`。初始化环境变量为 `EMP_TEAM_SPACE_PASSWORD`、`EMP_TEAM_ADMIN`、`EMP_TEAM_ADMIN_PASSWORD`、`EMP_TEAM_NAME`，夹具只使用合成凭据。桌面端经 `/api/team/*` 调用模组生成的 `/workspace/v1/*` 接口；服务端分别由 enrollment、profiles、accounts、usage、backup 处理加入、资料、身份、账本和备份，共享订阅通过正式发布、审核、同步入口进入本地账号配置。
+
+| 测试名（均以 `m03_` 开头） | 场景与失败条件 |
+|---|---|
+| `roles_require_enrollment_review_and_enforce_management_permissions` | `vps_admin`、`team_admin`、`member` 的审核与权限；未审核可登录、越权晋升或备份会失败 |
+| `two_devices_forward_shared_subscription_and_keep_personal_data_after_uninstall` | 共享订阅真实转发、两设备同成员账本、卸载保留个人服务、凭据和用量；错用凭据、记错成员或删除个人数据会失败 |
+| `offline_completion_retries_unacknowledged_usage_without_double_billing` | 已获准的流在服务端停机后完成，恢复后补报；真实服务端入账后丢弃一次回执，要求同事件重试且再次插入数为零；用量丢失、提前确认或重复计费会失败 |
+| `budget_and_revocation_block_shared_requests_before_the_upstream` | 预算上限、取消同步权限、禁用成员；拒绝后仍访问上游、共享模型仍可见或个人服务受损会失败 |
+| `hot_update_waits_for_reporting_and_delivers_each_usage_event_once` | 挂起真实上报回执时更新等待，更新后旧进程回收、Core 和另一设备保持运行；重复上报在服务端去重前按事件 ID 计数，会使测试失败 |
+
+用量和权限通过 HTTP 观察；本地转发夹具记录真实服务端接受的上报，在 Team 通道只控制回执时机。假上游的模型目录请求单独响应，业务响应按字节转发，门控流可在上游完成前到达 EMP。每个测试结束调用进程回收断言。取消同步权限场景先执行同步以刷新本地权限；禁用成员场景直接检查下一次请求被拒。共享调用在服务端离线时受预算核对约束，因此离线补报使用停机前已获准的流。
+
+热更新测试检查上报串行化、更新完成后的旧 PID 消失和更新窗口内同事件仅上报一次。严格的“旧进程退出先于新版激活”需要正式的有序生命周期事件接口；当前状态 API 只有激活版本快照，这项顺序不计入上述测试的覆盖。上报任务当前由 Core 执行，桌面模组提供策略。
+
 ```sh
 cargo build --locked -p emp-app -p emp-mod-decision -p emp-mod-gateway -p emp-mod-aggregate -p emp-mod-team
 python3 -B scripts/shadow_frontend/e2e_official_modules.py \
