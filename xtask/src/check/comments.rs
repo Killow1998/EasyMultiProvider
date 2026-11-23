@@ -18,7 +18,10 @@ const ALLOWED: &[(&str, usize)] = &[
 
 pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
     let mut counts: BTreeMap<_, usize> = ALLOWED.iter().map(|&(name, _)| (name, 0)).collect();
-    for path in paths.iter().filter(|path| path.ends_with(".rs")) {
+    for path in paths
+        .iter()
+        .filter(|path| path.ends_with(".rs") && *path != "xtask/src/check/comments.rs")
+    {
         if root.join(path).is_file() {
             disguised_sleep(path, &read(root, path)?, errors);
         }
@@ -98,7 +101,7 @@ fn count(contents: &str, rust: bool) -> usize {
 fn disguised_sleep(path: &str, contents: &str, errors: &mut Vec<String>) {
     for (index, line) in contents.lines().enumerate() {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("let (_") && trimmed.contains("channel") {
+        if trimmed.contains("let (_") && trimmed.contains("channel") {
             errors.push(format!("[disguised-sleep] {path}:{}: 丢弃 sender 的 channel 只能当 sleep 用；轮询等待用 tests/support/modules.rs 的 eventually，固定间隔用 std::thread::sleep 并加 #[expect(clippy::disallowed_methods, reason = \"…\")]", index + 1));
         }
     }
