@@ -1,4 +1,5 @@
 mod check;
+mod module_e2e;
 mod package;
 mod release;
 mod smoke;
@@ -22,6 +23,7 @@ commands:
   check                            check architecture, module versions, tests, docs and CI
   package [--skip-service-smoke]   build and smoke-test this platform's native package
   package-module ID [--output DIR] build one official module and its checksum
+  module-e2e [--skip-aero]          build real modules and run ignored module journeys
   package-smoke                    run update/install smoke tests against artifacts/
   validate-release --tag TAG --artifacts DIR [--public-manifest FILE]
   release-notes TAG                print this version's CHANGELOG section";
@@ -33,6 +35,7 @@ fn main() -> ExitCode {
         Some("check") => check::run(rest),
         Some("package") => package::run(rest),
         Some("package-module") => package::run_module(rest),
+        Some("module-e2e") => module_e2e::run(rest),
         Some("package-smoke") => smoke::run(rest),
         Some("validate-release") => release::validate_command(rest),
         Some("release-notes") => release::notes_command(rest),

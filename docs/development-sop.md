@@ -45,6 +45,22 @@ cargo +1.93.1 check --locked -p emp-app
 cargo +1.93.1 test --locked -p emp-codex --test history_contract
 ```
 
+模组真实进程验收固定入口为 `cargo xtask module-e2e`（Unix）：先设置
+`EMP_AERO_PYTHON` 指向装有 PyInstaller 的 Python。命令依次构建当前 EMP 和
+四个 Rust 模组，在临时 HEAD worktree 中将四个模组的 patch 版本升一并同步
+Cargo.lock，使用独立 target 构建升版模组，移除 worktree，再通过现有
+`package-module aero` 打包 Aero，设置 `EMP_E2E_MODULE_NEXT_DIR` 和
+`EMP_E2E_AERO_PACKAGE`，串行运行 ignored 的 `e2e::modules::`、`e2e::team::`、
+`e2e::aero::` 场景。当前构建和测试共用 Cargo 的 target 与 dev/test profile，
+所有子进程继承 `CARGO_BUILD_JOBS`，日志保留 Core/模组 PID 和 digest；8 GiB
+主机通过 `../.emp-cargo.sh xtask module-e2e` 调用。
+`cargo xtask module-e2e --skip-aero` 会打印显式跳过 M04；默认缺少打包 Python
+直接失败。失败输出含完整命令，临时升版源码和产物在结束时清理。
+[Module E2E](../.github/workflows/module-e2e.yml) 在手动触发及模组、宿主、验收入口
+相关 PR 上运行；CI 的 Python 用于 PyInstaller 打包，场景由 Rust 执行。
+M04 检查安装握手、planner/executor 接力与回复流、服务用量、停用和模型目录；
+现有账本公开 Aero 来源及各服务会话，独立配对 ID 和角色字段需要后续正式入口。
+
 模块内已有回归可再限定 `--lib` 和测试过滤词。过滤后确认实际运行了目标用例，
 零测试不算通过。如果本轮马上需要测试结果，可直接运行测试，不必机械地先
 check，再全量 clippy、test、build。`check` 跳过最终代码生成，不能替代可执行

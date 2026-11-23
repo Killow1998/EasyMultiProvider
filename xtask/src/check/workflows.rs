@@ -1,4 +1,7 @@
-const ALLOWED: &[(&str, &str)] = &[];
+const ALLOWED: &[(&str, &str)] = &[(
+    ".github/workflows/module-e2e.yml",
+    "M04 验收真实 Aero 包；Python 仅用于安装 PyInstaller 和打包，场景由 Rust 执行",
+)];
 
 pub(super) fn check(path: &str, contents: &str, errors: &mut Vec<String>) {
     if ALLOWED.iter().any(|(file, _reason)| *file == path) {

@@ -44,7 +44,11 @@ impl BuiltModule {
 
     fn read(directory: &Path, id: &str) -> Self {
         let binary = directory.join(format!("empmod-{id}{}", std::env::consts::EXE_SUFFIX));
-        let bytes = std::fs::read(&binary).unwrap_or_else(|error| {
+        Self::from_binary(&binary, id)
+    }
+
+    pub fn from_binary(binary: &Path, id: &str) -> Self {
+        let bytes = std::fs::read(binary).unwrap_or_else(|error| {
             panic!(
                 "missing real module binary {}: {error}; first run cargo build --locked \
                  -p emp-mod-decision -p emp-mod-gateway -p emp-mod-aggregate --bins \
@@ -52,7 +56,7 @@ impl BuiltModule {
                 binary.display()
             )
         });
-        let output = Command::new(&binary)
+        let output = Command::new(binary)
             .stdin(Stdio::null())
             .output()
             .unwrap_or_else(|error| panic!("{}: {error}", binary.display()));
@@ -339,6 +343,12 @@ impl ModuleEmp {
     }
 
     pub fn active(&self, module: &BuiltModule) -> i32 {
+        let workers = self.active_processes(module);
+        assert_eq!(workers.len(), 1, "expected one real {} worker", module.id);
+        workers[0]
+    }
+
+    pub fn active_processes(&self, module: &BuiltModule) -> Vec<i32> {
         let row = self.status(&module.id);
         assert_eq!(row["enabled"], true, "{row}");
         assert_eq!(row["active"], true, "{row}");
@@ -365,54 +375,51 @@ impl ModuleEmp {
             .into_iter()
             .filter(|(_, args)| args.as_str() == executable.as_ref())
             .collect();
-        assert_eq!(
-            workers.len(),
-            1,
-            "expected one real {} worker: {workers:?}",
-            module.id
-        );
-        let pid = workers[0].0;
-        self.observed.lock().expect("observed workers").insert(pid);
-        eprintln!(
-            "Core PID={} module={} PID={pid} version={} sha256={}",
-            self.pid(),
-            module.id,
-            module.version,
-            module.digest
-        );
-        pid
+        assert!(!workers.is_empty(), "missing real {} worker", module.id);
+        workers
+            .into_iter()
+            .map(|(pid, _)| {
+                self.observed.lock().expect("observed workers").insert(pid);
+                eprintln!(
+                    "Core PID={} module={} PID={pid} version={} sha256={}",
+                    self.pid(),
+                    module.id,
+                    module.version,
+                    module.digest
+                );
+                pid
+            })
+            .collect()
     }
 
     pub fn assert_gone(&self, pid: i32) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while processes().iter().any(|(found, _)| *found == pid) {
-            assert!(Instant::now() < deadline, "module PID {pid} was not reaped");
-            thread::sleep(Duration::from_millis(20));
-        }
+        eventually(Duration::from_secs(5), "module PID was not reaped", || {
+            (!processes().iter().any(|(found, _)| *found == pid)).then_some(())
+        });
     }
 
     pub fn stop(mut self) {
         self.emp.take().expect("running EMP").stop();
-        let deadline = Instant::now() + Duration::from_secs(5);
         let directory = self.root.to_string_lossy();
-        loop {
+        eventually(Duration::from_secs(5), "orphan module processes", || {
             let observed = self.observed.lock().expect("observed workers");
-            let remaining: Vec<_> = processes()
+            let remaining = processes()
                 .into_iter()
-                .filter(|(pid, args)| {
-                    observed.contains(pid) || args.starts_with(directory.as_ref())
-                })
-                .collect();
-            if remaining.is_empty() {
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "orphan module processes: {remaining:?}"
-            );
-            drop(observed);
-            thread::sleep(Duration::from_millis(20));
+                .any(|(pid, args)| observed.contains(&pid) || args.starts_with(directory.as_ref()));
+            (!remaining).then_some(())
+        });
+    }
+}
+
+/// Polls `probe` every 20 ms until it yields a value, panicking with `what` after `timeout`.
+pub fn eventually<T>(timeout: Duration, what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(value) = probe() {
+            return value;
         }
+        assert!(Instant::now() < deadline, "{what} within {timeout:?}");
+        thread::sleep(Duration::from_millis(20));
     }
 }
 

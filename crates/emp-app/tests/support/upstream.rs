@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -61,6 +61,7 @@ pub struct Upstream {
     port: u16,
     reply: Arc<Mutex<Reply>>,
     requests: Receiver<UpstreamRequest>,
+    script: Arc<Mutex<VecDeque<Reply>>>,
 }
 
 impl Upstream {
@@ -76,19 +77,23 @@ impl Upstream {
         }));
         let (sender, requests) = mpsc::channel();
         let shared = Arc::clone(&reply);
+        let script = Arc::new(Mutex::new(VecDeque::new()));
+        let scripted = Arc::clone(&script);
         // Detached: the accept loop ends with the test process.
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
                 let reply = shared.lock().expect("reply").clone();
                 let sender = sender.clone();
-                thread::spawn(move || serve_upstream(stream, &reply, &sender));
+                let script = Arc::clone(&scripted);
+                thread::spawn(move || serve_upstream(stream, &reply, &sender, &script));
             }
         });
         Self {
             port,
             reply,
             requests,
+            script,
         }
     }
 
@@ -137,6 +142,23 @@ impl Upstream {
 
     pub fn reply_json(&self, value: &Value) {
         self.configure(200, "application/json", value.to_string());
+    }
+
+    pub fn reply_response_script(&self, responses: &[Value]) {
+        *self.script.lock().expect("upstream script") = responses
+            .iter()
+            .map(|response| Reply {
+                status: 200,
+                content_type: "text/event-stream".into(),
+                body: format!(
+                    "data: {}\n\n",
+                    serde_json::json!({"type":"response.completed", "response":response})
+                )
+                .into_bytes(),
+                headers: Vec::new(),
+                gate: None,
+            })
+            .collect();
     }
 
     /// Chat-completions SSE wire: one frame per chunk, then `[DONE]`.
@@ -204,9 +226,21 @@ pub(super) fn read_request(stream: &mut impl Read) -> UpstreamRequest {
     }
 }
 
-fn serve_upstream(mut stream: TcpStream, reply: &Reply, sender: &Sender<UpstreamRequest>) {
+fn serve_upstream(
+    mut stream: TcpStream,
+    reply: &Reply,
+    sender: &Sender<UpstreamRequest>,
+    script: &Mutex<VecDeque<Reply>>,
+) {
     stream.set_read_timeout(Some(IO_TIMEOUT)).expect("timeout");
-    let _ = sender.send(read_request(&mut stream));
+    let request = read_request(&mut stream);
+    let scripted = if request.is_catalog_refresh() {
+        None
+    } else {
+        script.lock().expect("upstream script").pop_front()
+    };
+    let reply = scripted.as_ref().unwrap_or(reply);
+    let _ = sender.send(request);
     let length = reply.body.len()
         + reply
             .gate

@@ -4,6 +4,7 @@ mod support;
 
 mod e2e {
     mod accounts;
+    mod aero;
     mod codex_config;
     mod forwarding;
     mod management;
