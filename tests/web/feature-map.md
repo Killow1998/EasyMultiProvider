@@ -1,6 +1,6 @@
 # WebUI 功能地图与浏览器基线
 
-U01–U05 的浏览器测试入口；U06 由另一条工作线负责。这里的入口来自 `crates/emp-app/web/` 的正式页面，模组入口还取决于已安装制品及启用状态
+U01–U06 的浏览器测试入口。这里的入口来自 `crates/emp-app/web/` 的正式页面，模组入口还取决于已安装制品及启用状态
 
 ## 固定运行入口
 
@@ -8,6 +8,7 @@ U01–U05 的浏览器测试入口；U06 由另一条工作线负责。这里的
 
 ```bash
 cargo build --locked -p emp-app
+cargo build --locked -p emp-mod-decision -p emp-mod-gateway -p emp-mod-aggregate -p emp-mod-team --bins
 export EMP_BIN="$PWD/target/debug/EMP"
 cd tests/web
 npm ci
@@ -24,13 +25,20 @@ npm test -- migration.spec.mjs
 npm test -- modal-ownership.spec.mjs
 npm test -- usage.spec.mjs
 npm test -- recovery.spec.mjs
+npm test -- modules.spec.mjs
 ```
 
-完整入口应发现 **18 个测试**，其中 U04 编辑中打开通知信箱的 1 项标为 `test.fail`（已知产品问题，预期失败）；不能把零测试、跳过项或过滤后的局部结果当作全部基线通过。只运行一个 Chromium headless project，`workers: 1`、不自动重试。用例以 U 编号命名，结果附二进制路径、SHA-256、浏览器和 Node 版本；失败保留 trace、截图和脱敏 EMP 日志
+完整入口应发现 **23 个测试**（U06 为 5 个），其中 U04 编辑中打开通知信箱的 1 项标为 `test.fail`（已知产品问题，预期失败）；不能把零测试、跳过项或过滤后的局部结果当作全部基线通过。只运行一个 Chromium headless project，`workers: 1`、不自动重试。用例以 U 编号命名，结果附二进制路径、SHA-256、浏览器和 Node 版本；失败保留 trace、截图和脱敏 EMP 日志
 
 每个 EMP 实例使用独立临时工作目录、HOME、CODEX_HOME、XDG 目录和配置。只继承 PATH、系统路径和语言环境；不继承凭据或桌面会话。端口随机分配且必须高于 4300。外网请求在夹具环境中指向不可达的环回代理，环回假上游直连；浏览器只放行 `127.0.0.1` 上高于 4300 的 HTTP 端口，其余请求中止。结束时对自己的进程组发送 TERM，退出后清除残余子进程，再回收临时目录。不会连接运行中的 EMP 或使用真实模型凭据
 
-`fixtures.mjs` 将 `EMP_UPDATE_TEST_REPOSITORY_URL` 和 `EMP_UPDATE_TEST_API_URL` 设为不可达的 `http://127.0.0.1:9/releases`。`services/updates.rs` 的 `test_endpoints()` 仅在 debug 构建接收它们，因此本基线要求 debug 二进制；日志中的 `EMP update retry ... os_error 111` 是预期结果
+`fixtures.mjs` 默认将 `EMP_UPDATE_TEST_REPOSITORY_URL` 和 `EMP_UPDATE_TEST_API_URL` 设为不可达的 `http://127.0.0.1:9/releases`；U05、U06 通过 `release: { repositoryURL, apiURL }` 将其指向本地 Release 服务。`services/updates.rs` 的 `test_endpoints()` 仅在 debug 构建接收它们，因此本基线要求 debug 二进制；默认夹具日志中的 `EMP update retry ... os_error 111` 是预期结果
+
+U06 从 `EMP_BIN` 同目录读取四个 `empmod-*` 可执行文件，缺失或不可执行时直接失败并给出上面的模组构建命令；不自动构建或下载。模组版本和宿主 API 由真实二进制握手读取，Core 版本由 `EMP --version` 读取。`modules-fixture.mjs` 提供与 Rust `ModuleRelease` 相同的资产命名、大小、SHA-256 digest、下载地址和分页 Release 元数据：第一页为当前 Core tag，第二页为独立模组 tag。所有安装及 registry 写入都由正式 UI 安装入口完成，夹具不预写模组 registry
+
+Team 运行真实 `empmod-team serve --state DIR --listen 127.0.0.1:PORT`，状态目录和 HOME 隔离。夹具只通过真实 Team HTTP 接口建立团队管理员账号和邀请码；浏览器负责登录、成员申请、批准、上传、审核及同步。环回 relay 将团队请求交给真实 Team 服务，将模型目录和推理请求交给本地假上游。浏览器的非环回请求及 `/api/team/discover` 被中止，测试使用手动填写的环回地址；邀请码在 Team 服务端直接签发，避免启动局域网发现广播。EMP、Release、上游、relay 和 Team 监听端口均随机且高于 4300
+
+U06 用 `/api/modules` 与操作系统进程表同时确认安装、版本、digest、启停及退出；测试收尾停止自己的 EMP 进程组、清理隔离目录下的残余模组进程并确认退出，Team 子进程等待回收后清理目录。该进程夹具沿用现有 POSIX 运行前提，CI 使用 Linux，并需提供 `ps`
 
 U05 本地 Release 用例通过同一组环境变量切到 Node 环回服务，提供重定向、版本 `9999.0.0`、双语说明及各平台资产元数据，随后返回 HTTP 503，验证上次成功取得的说明仍可读。夹具不提供可安装的包，用例只点击检查并阅读说明；真正的替换安装和回滚由 `crates/emp-app/tests/update_process.rs` 覆盖，浏览器自动重连仍未覆盖
 
@@ -40,7 +48,7 @@ U04 先经真实 `/v1/responses` 发送订阅账号、两个外部服务和不�
 
 ## 功能入口
 
-斜线两侧为中文 / 英文可访问名称；具体覆盖与缺口见下方测试映射，U06 仅列功能归属
+斜线两侧为中文 / 英文可访问名称；具体覆盖与缺口见下方测试映射，U06 的更新切换等未覆盖项见下方边界
 
 | 功能区 | 入口与关键控件 | 典型操作 | 可观察结果 | U 编号 |
 |---|---|---|---|---|
@@ -57,16 +65,19 @@ U04 先经真实 `/v1/responses` 发送订阅账号、两个外部服务和不�
 | 更新 | 检查更新 / Check updates | 检查失败后阅读提示；本地 Release 新版本及双语说明；再检查失败后重读说明 | 真实更新 API 返回对应状态与版本；页面保留上次说明；不执行安装 | U05；安装与回滚由 Rust 进程测试负责，页面重连未覆盖 |
 | 恢复与退出 | 恢复原生 / Restore Native；设置 / Settings → 通用 / General → 退出 EMP / Quit EMP；启动失败后的恢复页 | 恢复 Native、退出；处理恢复页操作 | 真实进程完成恢复或退出，Native 配置文件恢复；有活动请求时保留既有排空保障 | U05 |
 | 教程 | 使用教程 / Tutorials → 文档 / Documentation、项目说明 / README、图文教程 / Written tutorials | 打开中英文教程，查看操作演示，返回目录 | 随 Core 内嵌的教程离线可读；返回不影响管理状态 | U05 |
-| 模组设置 | 模组 / Modules → 对应模组行的安装 / Install、启用 / Enable、停用 / Disable、检查更新 / Check for updates、`设置{模组名} / Configure {name}` | 安装并启用；进入面板；更新后再打开；停用、卸载 | 实际制品版本和请求结果正确；旧 revision 的读和回调停止 | U06 |
-| 团队 | 模组 / Modules → 团队空间 / Team Workspace 的配置按钮；安装启用后出现团队入口 | 加入/登录团队；管理员审核共享与成员权限；查看团队用量 | 团队角色及共享订阅与真实团队服务一致 | U06 |
+| 模组设置 | 模组 / Modules → 对应模组行的安装 / Install、启用 / Enable、停用 / Disable、移除 / Remove、`设置{模组名} / Configure {name}` | Decision 安装、启停、进入面板、修改服务与模型、保存、卸载 | `/api/modules` 和真实进程一致；请求命中所选上游；另一标签页停用/卸载后旧面板刷新被 EMP 以 `module_disabled` 拒绝，不到上游 | U06；更新切换未覆盖 |
+| 团队 | 模组 / Modules → 团队空间 / Team Workspace 的配置按钮；安装启用后出现团队入口 | 申请加入、批准成员、管理员上传与批准共享、成员同步 | 管理员能进入订阅审核；普通成员没有审核入口；审批前无共享账号、审批后同步并刷新仍可见 | U06；团队用量完整矩阵由 M03 负责 |
 | 语言与键盘 | Switch to English / 切换为简体中文；Tab、Enter、Escape | 切换语言；键盘打开添加服务、填写并保存；键盘隐藏模型、Escape 关闭 | 服务 / Services 关键文案切换；键盘操作保存真实数据；保存模型后关闭弹窗的焦点问题见下方已知问题 | U01；其余 U 可复用 |
 
 当前模型窗口没有独立“删除模型”按钮。U01 验证隐藏模型、目录撤下，以及移除服务时级联删除模型。首次设置没有独立向导，U02 使用当前真实的接入流程，不把 Runtime 已加载模型当作配置保存的同义词
 
 定位优先使用 role、名称、label 和 placeholder。当前自定义服务表单的名称、服务地址、协议，以及模型编辑器的上游名缺少关联 label；`ui.mjs` 的 `field` 先查 label，再接受现有输入 ID：`modal_provider_name`、`modal_provider_base`、`modal_provider_protocol`、`modal_model_upstream`。迁移密码框也复用 `field`，接受 `shadow_export_password`、`shadow_export_password_confirm`、`shadow_import_password`；迁移文件直接定位当前 dialog 内的 `input[type="file"]` 并调用 `setInputFiles`。Lit 页面补齐 label 后密码等字段可继续按名称定位；不要求保留组件结构、HTML 字符串或内部 state
 
+模组列表的操作组没有独立可访问名称，U06 从对应的 `Configure {name}` 按钮定位直接父级操作组，再按 Install/Enable/Disable/Remove 名称操作；没有断言该组的标签或组件名称。Decision 与 Team 表单均按现有可访问名称定位。安装当前会自动启用模组，因此生命周期场景包含安装后停用、重新启用，再进入设置面板的路径
+
 ## 已知产品问题
 
+- 切换语言后模组入口按钮的可访问名称不更新：`module-settings.js:17` 在初始化时按当时语言设置 `ariaLabel`，语言切换只更新 `data-i18n` 文本。U06 用中英文名称都接受的正则定位，修复后改回精确名称
 - 保存模型并关闭弹窗后焦点落到 body：`persistState()` 调用 `fill()` 重绘服务卡片，`modalOpener` 指向已断开的旧按钮，`closeModal()` 无法恢复入口焦点。U01 不断言关闭后的焦点，修复时补上回到入口按钮的断言
 - `migration-view.js` 的密码和文件 `<label>` 内，帮助按钮排在输入框之前，隐式 label 关联到帮助按钮，密码框没有可访问名称。测试经 `ui.mjs` 的 `field` 回退到输入 ID 定位。迁移提交期间提交按钮显示 Working… 并禁用，U02 按这个名称断言锁定
 - 编辑中通知入口被遮罩覆盖（已实测）：`notifications.css` 的信箱按钮为 `z-index:19`，`style.css` 的整屏弹窗遮罩为 `z-index:20`，点击被 `modal_backdrop` 拦截；键盘 Tab 也被 `handleModalKeydown` 限在弹窗内。`usage.spec.mjs` 的“在编辑中关闭通知信箱保留草稿”标为 `test.fail`，保留期望的 Close/Escape 后草稿断言；修复后该测试会意外通过而报错，届时删除标记
@@ -93,9 +104,20 @@ U04 先经真实 `/v1/responses` 发送订阅账号、两个外部服务和不�
 | `recovery.spec.mjs` / 启动恢复页取消保留旧数据，直接重置进入正式管理页 | U05 | `e2e_startup_recovery.py` 的正式失败入口、取消、默认不备份、重新配置 | 损坏主密钥没有正式恢复页；取消已改文件；未确认就清除；重置无效；残留暂存数据；Native 文件被重置；管理页无法登录 |
 | `recovery.spec.mjs` / 启动恢复页取消保留旧数据，备份后重置进入正式管理页 | U05 | `e2e_startup_recovery.py` 的可选备份与正常启动 | 勾选备份却丢失旧配置或密钥；备份内容改变；新密钥未创建；重置后不能进入管理页；Native 认证被清除 |
 | `recovery.spec.mjs` / 启动恢复页退出真实进程并保留损坏数据 | U05 | `e2e_startup_recovery.py` 的独立恢复退出 | 退出请求成功但进程仍运行；退出误清除旧配置、密钥或 Native 文件 |
+| `modules.spec.mjs` / 模组安装、启停、设置入口与卸载对应真实状态和进程 | U06 生命周期与设置入口 | `e2e_official_modules.py` 的页面安装启停与面板入口 | UI 只显示成功而未安装；启用无进程、版本/digest 错误；停用进程仍存在；未启用也能进入面板；卸载状态或入口残留 |
+| `modules.spec.mjs` / Decision 面板保存所选服务和模型后真实请求切换上游 | U06 路由型模组设置与实际请求 | `e2e_decisions.py`、`e2e_routing.py` 的设置选择、保存与真实请求 | 保存或刷新后丢失选项；继续命中原服务；未转发新模型；使用错误服务凭据 |
+| `modules.spec.mjs` / 另一标签页停用后旧面板刷新被 EMP 拒绝且不到上游 | U06 停用后的旧回调 | `e2e_official_modules.py` 的旧面板生命周期 | 停用后 `/api/decisions/models` 仍返回模型或转发到上游；旧面板不提示失败或抛页面错误 |
+| `modules.spec.mjs` / 另一标签页卸载后旧面板刷新被 EMP 拒绝且不到上游 | U06 卸载后的旧回调 | `e2e_official_modules.py` 的卸载与旧面板生命周期 | 卸载后 `/api/decisions/models` 仍返回模型或转发到上游；旧面板不提示失败或抛页面错误 |
+| `modules.spec.mjs` / Team 加入、管理员审核入口与成员同步获批共享订阅 | U06 Team 角色页面与共享结果 | `e2e_official_modules.py` 的团队加入、权限页面和共享订阅同步 | 成员申请直接生效；管理员缺少审核入口；成员看到审核操作；未审核就能同步；获批后无法同步、凭据缺失或页面刷新丢失账号 |
 
 此表是已迁移主题的映射，不是旧脚本整份覆盖完成的声明。开发路由拒绝、设备码/浏览器登录完整目的地矩阵、模型探测矩阵、Vertex、重名冲突、LAN、多服务窄屏、预览超时、模组设备写入和额度重置等独有场景尚未承接。所有原 Python 脚本保留，阶段 7 删除前仍需逐项核销
 
 U04/U05 的其余缺口：通知自动消失计时、悬停暂停和存储阻断；账号用量缓存失效的完整竞态矩阵；真实升级期间的页面重连和回滚提示；Native 历史文件修复、活动请求排空和 Runtime 目录核验。本步骤不执行安装，也不添加故障注入产品入口；页面重连和回滚提示仍缺一个不替换当前二进制的正式触发入口。启动恢复页已能用损坏的临时主密钥正式触发，无需新增产品入口
 
 假上游由 Node 内置 `http` 提供，记录路径、鉴权、模型、请求序号和连接取消，支持显式 gate。管理请求使用 Playwright 路由门控：先向真实 EMP 发请求并取得结果，再暂停向页面交付响应。U03 的读取消观察浏览器 `requestfailed`，不声称覆盖 Rust 到上游的取消链；写入以真实 `/api/config` 和持久化文件为证。U02 导出源实例停止后才启动目标实例，减少驻留内存
+
+U06 的旧回调用例先证明刷新控件能完成真实请求，再在第二个标签页停用/卸载，原页面的 Decision 面板保持打开。页面没有跨标签页的模组状态推送，旧面板仍会发出 `/api/decisions/models`；契约是 EMP 返回 `404 module_disabled`、两个假上游都收不到请求、面板显示失败提示且没有页面异常。Decision 假上游的模型条目带 `architecture.output_modalities: ["decisions"]`，`openai` 协议的决策发现只收这类模型（`gpt-6-luna` 除外）
+
+U06 已由 coz 用真实 debug Core 和四个模组二进制运行 5/5 通过
+
+本步骤没有覆盖更新前后 revision 切换、旧 revision 的在途读与定时器回收：当前只读取 `EMP_BIN` 同目录的单版本制品，缺少另一份版本更高、digest 不同且兼容同一宿主 API 的真实制品及其 CI 输入约定。安装、更新和面板入口本身已有，缺的是升级制品；同版本重复下载不能替代更新证据。Gateway/Aggregate 的业务面板、Team 的 VPS 维护者完整权限矩阵、局域网发现及完整用量由对应 M/U 场景继续承担，本步骤未写 U04/U05 或修改旧 Rust/Python 验收

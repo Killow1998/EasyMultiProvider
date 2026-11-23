@@ -40,6 +40,7 @@ async function fakeUpstream() {
   const upstream = {
     requests,
     models: ['fixture-model', 'spare-model'],
+    modelArchitecture: undefined,
     rejectResponses: false,
     omitUsage: false,
     gate(method, path) {
@@ -73,8 +74,9 @@ async function fakeUpstream() {
     }
     let status = 200, result;
     if (request.method === 'GET' && path.endsWith('/models')) {
-      result = { object: 'list', data: upstream.models.map(id => ({ id, object: 'model', owned_by: 'fixture' })) };
-    } else if (request.method === 'POST' && path.endsWith('/responses')) {
+      result = { object: 'list', data: upstream.models.map(id => ({ id, object: 'model', owned_by: 'fixture',
+        architecture: upstream.modelArchitecture })) };
+    } else if (request.method === 'POST' && (path.endsWith('/responses') || path.endsWith('/decisions'))) {
       if (upstream.rejectResponses) {
         status = 401;
         result = { error: { type: 'authentication_error', code: 'invalid_api_key', message: 'Fixture rejected key' } };
@@ -375,4 +377,4 @@ export const test = base.extend({
   },
 });
 
-export { expect };
+export { expect, fakeUpstream, freePort, isolatedEnvironment, listen };
