@@ -256,7 +256,7 @@ impl UsageLedger {
                 | "memory_extraction"
                 | "memory_consolidation"
                 | "decisions"
-        ) || crate::diagnostics::MODEL_TEST_OPERATIONS.contains(&operation))
+        ) || emp_domain::MODEL_TEST_OPERATIONS.contains(&operation))
             || !event["usage_category"]
                 .as_str()
                 .is_some_and(|value| CATEGORIES.contains(&value))

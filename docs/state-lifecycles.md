@@ -76,7 +76,7 @@ image-MCP override and otherwise version 3 for older EMP readers.
 | I06 | [Catalog refresh queue](../crates/emp-app/src/services/account_catalog/refresh_state.rs) | Request → pending → running → publication → sleep; source change queues another pass | I. `pending` and `running` may both be true. Do not collapse them into one exclusive phase. |
 | I07 | [Catalog poll state](../crates/emp-app/src/services/account_catalog/refresh_state.rs) | Missing / expired → poll → fresh; failure → backoff; identity generation change → invalidate | I. Per-account freshness is separate from the global worker queue. |
 | I08 | [Auto Review feedback](../crates/emp-app/src/services/auto_review/state.rs) | Eligible → unavailable result → cooldown → expiry or success → eligible | I. Feedback owns routing eligibility; telemetry does not. |
-| I09 | [Aggregate routing](../crates/emp-app/src/services/aggregate_routing.rs), [affinity ledger](../crates/emp-state/src/usage/ledger/affinity.rs) | Unbound conversation → select source → sticky account → unavailable → select replacement | I. Source policy applies at assignment; ordinary turns retain affinity. |
+| I09 | [Aggregate routing](../crates/emp-app/src/services/aggregate_routing.rs), [affinity ledger](../crates/emp-storage/src/usage/ledger/affinity.rs) | Unbound conversation → select source → sticky account → unavailable → select replacement | I. Source policy applies at assignment; ordinary turns retain affinity. |
 | I10 | [Image routing](../crates/emp-app/src/services/native/images/routing.rs), [affinity](../crates/emp-app/src/services/native/images/routing/affinity.rs) | Select image account → bind turn → reuse / reject unavailable destination | I. The account supplying image quota is not necessarily the Runtime's login account. |
 
 Session rotation persists the replacement before discarding the current
@@ -177,11 +177,11 @@ has no separate flush.
 | B02 | [System proxy cache](../crates/emp-transport/src/system_proxy/cache.rs) | Cold → reading → fresh → expired; read failure retains prior valid snapshot | I. A read in progress and a usable cached value can coexist. |
 | B03 | [Provider balance](../crates/emp-app/src/services/provider_balance.rs) | Supported provider → fetch → balance or mapped error → refresh | M. Unsupported, unknown and zero balance are distinct. |
 | B04 | [CPA quota](../crates/emp-app/src/services/cpa_quota.rs), [history](../crates/emp-app/src/services/cpa_quota/history.rs) | Discover support → fetch pool/account observation → persist trend; stale/error → subsequent refresh | M. Unsupported quota APIs must not create usable-looking meters. |
-| B05 | [Pricing ledger](../crates/emp-state/src/usage/ledger.rs) | Unpriced record → price available → calculate and store; stop → leave pending records | I. Missing price does not mean zero cost. |
+| B05 | [Pricing ledger](../crates/emp-storage/src/usage/ledger.rs) | Unpriced record → price available → calculate and store; stop → leave pending records | I. Missing price does not mean zero cost. |
 | B06 | [Release cache](../crates/emp-updater/src/manager/catalog.rs) | Missing/stale → request or conditional request → retain/update notes; failure → keep usable cache | I. Cached notes and a pending update check can coexist. |
 | B07 | [Local Claude quota](../crates/emp-app/src/services/claude_cli/quota.rs) | Identify login → begin observation generation → accept matching usage → persist; owner change → reset current observation | I. Late results cannot become the new login's quota. |
 | B08 | [Diagnostic journal](../crates/emp-state/src/diagnostics/journal.rs) | Open part → append sanitized records → rotate/prune → continue | I. Bounded passive evidence storage; it never authorizes request retries. |
-| B09 | [Report fact cache](../crates/emp-state/src/usage/ledger/read_cache.rs) | Empty → load timestamped facts → reuse or extend range; database version changes → rebuild; reader disconnect → interrupt/rollback | I. One disk-backed window per projection; aggregates and UI filters do not own cache state. The connection guard removes the cancellation hook before reuse. |
+| B09 | [Report fact cache](../crates/emp-storage/src/usage/ledger/read_cache.rs) | Empty → load timestamped facts → reuse or extend range; database version changes → rebuild; reader disconnect → interrupt/rollback | I. One disk-backed window per projection; aggregates and UI filters do not own cache state. The connection guard removes the cancellation hook before reuse. |
 
 ## WebUI lifecycles
 

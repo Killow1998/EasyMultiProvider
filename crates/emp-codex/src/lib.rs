@@ -14,7 +14,7 @@ pub mod installed_cli;
 pub mod management_views;
 pub mod merged_catalog;
 pub mod quota;
-pub mod quota_history;
+pub use emp_storage::quota_history;
 pub mod runtime_probe;
 pub mod session_directory;
 pub mod subscription_contexts;

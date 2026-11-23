@@ -164,14 +164,10 @@ impl UsageLedger {
         }
         let _guard = self.lock.lock().map_err(|_| UsageError)?;
         let connection = self.connect()?;
-        let probes = crate::diagnostics::MODEL_TEST_OPERATIONS
-            .map(|_| "?")
-            .join(",");
+        let probes = emp_domain::MODEL_TEST_OPERATIONS.map(|_| "?").join(",");
         let mut args = [SqlValue::Real(start), SqlValue::Real(end)]
             .into_iter()
-            .chain(
-                crate::diagnostics::MODEL_TEST_OPERATIONS.map(|name| SqlValue::Text(name.into())),
-            )
+            .chain(emp_domain::MODEL_TEST_OPERATIONS.map(|name| SqlValue::Text(name.into())))
             .collect::<Vec<_>>();
         let (detail, group, selection) = if let Some(ids) = device_ids {
             args.push(SqlValue::Text(json!(ids).to_string()));
@@ -293,7 +289,7 @@ impl UsageLedger {
         ) && event["attempts"]
             .as_u64()
             .is_some_and(|attempts| attempts > 0)
-            && !crate::diagnostics::MODEL_TEST_OPERATIONS.contains(&text(event, "route", ""))
+            && !emp_domain::MODEL_TEST_OPERATIONS.contains(&text(event, "route", ""))
         {
             self.record_team_event(&transaction, scope, share, event_id, event, finished)?;
         }

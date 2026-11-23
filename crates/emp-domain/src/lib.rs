@@ -151,7 +151,7 @@ pub use model_values::{
     output_modalities_known, output_modalities_metadata_source, supported_protocols_known,
 };
 pub use session::{SessionMetadata, SessionScope};
-pub use usage::MAX_USAGE_MODEL_BYTES;
+pub use usage::{MAX_USAGE_MODEL_BYTES, MODEL_TEST_OPERATIONS};
 
 pub fn json_truthy(value: &Value) -> bool {
     match value {

@@ -1,4 +1,4 @@
-use emp_codex::quota_history::QuotaHistoryStore;
+use emp_storage::quota_history::QuotaHistoryStore;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -6,14 +6,16 @@ use tempfile::TempDir;
 fn failed_observations_explain_gaps_without_creating_quota_points() {
     let root = TempDir::new().unwrap();
     let store = QuotaHistoryStore::new(root.path().join("history.sqlite3"));
-    let error = emp_codex::quota::quota_rpc_error(
-        "account/rateLimits/read",
-        &json!({"message":"error sending request: dns error https://private.invalid/?token=PRIVATE"}),
-    );
-    assert_eq!(error.diagnostics()["rpc_method"], "account/rateLimits/read");
-    assert_eq!(error.diagnostics()["transport_cause"], "dns");
+    let diagnostics = json!({
+        "code": "quota_transport_error",
+        "rpc_method": "account/rateLimits/read",
+        "http_status": null,
+        "transport_cause": "dns"
+    });
+    assert_eq!(diagnostics["rpc_method"], "account/rateLimits/read");
+    assert_eq!(diagnostics["transport_cause"], "dns");
     for at in [1000, 1044, 1088] {
-        store.append_failure("account", &error, at).unwrap();
+        store.append_failure("account", &diagnostics, at).unwrap();
     }
     let history = store.query_period("account", 900, 1200).unwrap();
     assert_eq!(history["series"], json!([]));

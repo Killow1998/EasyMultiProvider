@@ -105,7 +105,7 @@ impl PriceCatalog {
         let prices = rates::normalize_rates(entries).map_err(|_| "invalid_prices")?;
         let count = prices.len();
         let models = catalog::from_litellm(entries);
-        crate::filesystem::atomic_write_private_state(
+        emp_files::atomic_write_private_state(
             self.path(),
             &serde_json::to_vec(&json!({
                 "prices":prices,"fetched_at":fetched,"model_catalog":models,"rate_format":RATE_FORMAT,
@@ -126,12 +126,17 @@ impl PriceCatalog {
             .collect()
     }
 
-    pub fn enrich_models(&self, provider: &Map<String, Value>, models: &mut [Value]) {
-        let official = crate::official_registry::identify_provider(provider);
+    /// `official` is the provider's official registry key, if any.
+    pub fn enrich_models(
+        &self,
+        provider: &Map<String, Value>,
+        official: Option<&str>,
+        models: &mut [Value],
+    ) {
         let source = if provider.contains_key("vertex") {
             Some("vertex_ai")
         } else {
-            match official.as_deref() {
+            match official {
                 Some("google_gemini") => Some("gemini"),
                 Some("zhipu_glm")
                     if provider["base_url"]

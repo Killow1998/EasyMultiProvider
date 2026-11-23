@@ -430,7 +430,7 @@ markups. It does not prove that EMP changes cache hit rates versus native use.
 
 ## Local storage
 
-`crates/emp-state/src/usage/ledger.rs` owns persisted usage and report projections.
+`crates/emp-storage/src/usage/ledger.rs` owns persisted usage and report projections.
 `crates/emp-codex/src/usage_history.rs` reconciles live receipts with Codex history;
 checkpoints skip unchanged files. Account identity and compatible turn metadata
 determine whether historical and live records describe one call.
@@ -466,10 +466,10 @@ launch or require a Codex runtime.
 
 Existing boundary contracts:
 
-- `crates/emp-state/tests/call_reports.rs`: durable details, outcome classification
+- `crates/emp-storage/tests/call_reports.rs`: durable details, outcome classification
   and filtering, history-recovery linkage without duplicate usage, scan progress
   and cancellation, tier/effort persistence and invalid historical TPS exclusion.
-- `crates/emp-state/tests/account_usage.rs`: ownership, periods/start times,
+- `crates/emp-storage/tests/account_usage.rs`: ownership, periods/start times,
   one-time live/history reconciliation, chart totals/source filters and historical
   identity requiring a unique matching turn and route.
 - `crates/emp-app/src/tests/gateway_contract.rs`: device/shared-key attribution

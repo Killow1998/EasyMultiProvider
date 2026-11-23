@@ -1,4 +1,6 @@
 pub mod gemini_signatures;
+pub mod quota_history;
+pub mod usage;
 pub mod vault;
 
 pub use emp_files::FilesystemError;

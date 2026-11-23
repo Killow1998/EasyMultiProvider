@@ -56,4 +56,4 @@ pub use web_session::{
 };
 
 pub mod diagnostics;
-pub mod usage;
+pub use emp_storage::usage;

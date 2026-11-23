@@ -10,6 +10,7 @@ const ALLOWED: &[(&str, usize)] = &[
     ("emp-protocol", 0),
     ("emp-router", 0),
     ("emp-state", 0),
+    ("emp-storage", 0),
     ("emp-transport", 0),
     ("xtask", 0),
     ("web", 1),

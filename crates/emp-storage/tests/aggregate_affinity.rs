@@ -1,4 +1,4 @@
-use emp_state::usage::{ledger::UsageLedger, pricing::PriceCatalog};
+use emp_storage::usage::{ledger::UsageLedger, pricing::PriceCatalog};
 use std::sync::Arc;
 
 #[test]

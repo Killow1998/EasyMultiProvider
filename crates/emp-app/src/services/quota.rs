@@ -544,7 +544,7 @@ fn refresh_locked_account(
                 .backend
                 .accounts
                 .quota_history
-                .append_failure(&owner, error, system_now().trunc() as i64)
+                .append_failure(&owner, &error.diagnostics(), system_now().trunc() as i64)
                 .ok()
         });
         if saved.is_none() {

@@ -1,12 +1,11 @@
 //! Failed observations explain holes without inventing quota measurements.
 use super::*;
-use crate::quota::QuotaError;
 
 impl QuotaHistoryStore {
     pub fn append_failure(
         &self,
         owner: &str,
-        error: &QuotaError,
+        diagnostics: &serde_json::Value,
         at: i64,
     ) -> Result<(), QuotaHistoryError> {
         if owner.is_empty() {
@@ -22,7 +21,7 @@ impl QuotaHistoryStore {
             .map_err(|_| QuotaHistoryError::unavailable())?;
         let timestamp = at - at.rem_euclid(SAMPLE_INTERVAL_SECONDS);
         transaction.execute("INSERT OR REPLACE INTO quota_failures (account_key,observed_at,diagnostics) VALUES (?,?,?)",
-            params![owner,timestamp,error.diagnostics().to_string()]).map_err(|_| QuotaHistoryError::unavailable())?;
+            params![owner,timestamp,diagnostics.to_string()]).map_err(|_| QuotaHistoryError::unavailable())?;
         transaction
             .execute(
                 "DELETE FROM quota_failures WHERE observed_at < ?",

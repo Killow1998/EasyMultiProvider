@@ -144,7 +144,11 @@ fn discover_inner(
                     .map_err(DiscoveryError::Upstream)
             }
         })?;
-        prices.enrich_models(fields, &mut models);
+        prices.enrich_models(
+            fields,
+            emp_state::official_registry::identify_provider(fields).as_deref(),
+            &mut models,
+        );
         let config = state
             .backend
             .configuration

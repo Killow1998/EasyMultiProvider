@@ -1,4 +1,4 @@
-use emp_state::usage::{
+use emp_storage::usage::{
     ledger::{CallFilter, UsageLedger},
     pricing::PriceCatalog,
 };
@@ -177,7 +177,7 @@ fn reported_tiers_and_effort_survive_restart_without_relabeling_legacy_requests(
         event
             .as_object_mut()
             .unwrap()
-            .extend(emp_state::usage::reported_usage(
+            .extend(emp_storage::usage::reported_usage(
                 &json!({"type":"response.completed","response":response}),
             ));
         assert_eq!(event["speed_mode"], expected);

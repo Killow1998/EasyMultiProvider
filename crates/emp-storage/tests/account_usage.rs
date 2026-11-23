@@ -1,4 +1,4 @@
-use emp_state::usage::{ledger::UsageLedger, pricing::PriceCatalog};
+use emp_storage::usage::{ledger::UsageLedger, pricing::PriceCatalog};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -229,7 +229,7 @@ fn account_details_keep_tokens_periods_and_start_time_with_the_verified_owner() 
 
 #[test]
 fn chart_series_preserve_totals_and_filter_by_receipt_and_service() {
-    use emp_state::usage::ledger::UsageSeriesFilter;
+    use emp_storage::usage::ledger::UsageSeriesFilter;
     let root = tempfile::tempdir().unwrap();
     let ledger = UsageLedger::new(
         root.path().join("usage.sqlite3"),
@@ -300,7 +300,7 @@ fn chart_series_preserve_totals_and_filter_by_receipt_and_service() {
 
 #[test]
 fn historical_identity_requires_a_unique_matching_turn_and_route() {
-    use emp_state::usage::ledger::UsageSeriesFilter;
+    use emp_storage::usage::ledger::UsageSeriesFilter;
     let root = tempfile::tempdir().unwrap();
     let ledger = UsageLedger::new(
         root.path().join("usage.sqlite3"),

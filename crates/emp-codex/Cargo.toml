@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 base64 = "0.22"
 emp-state = { path = "../emp-state" }
+emp-storage = { path = "../emp-storage" }
 emp-history = { path = "../emp-history" }
 emp-transport = { path = "../emp-transport" }
 getrandom = "0.2.17"

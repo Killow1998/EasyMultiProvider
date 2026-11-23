@@ -10,8 +10,7 @@ use std::path::Path;
 use std::sync::Mutex;
 pub const CAPACITY: usize = 512;
 const PROBE_CAPACITY: usize = 64;
-/// Model checks consume usage but do not belong to conversations or performance samples.
-pub const MODEL_TEST_OPERATIONS: [&str; 3] = ["model_test", "vision_test", "audio_test"];
+pub use emp_domain::MODEL_TEST_OPERATIONS;
 
 fn is_probe(operation: &str) -> bool {
     matches!(
