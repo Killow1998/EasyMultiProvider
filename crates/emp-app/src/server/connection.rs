@@ -2,8 +2,12 @@ use super::{
     ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
     head::GuardedHead,
     http::{
-        accounts, catalog, error::EntryWire, inspection, pages, proxy::RequestAccess, settings,
-        team, usage,
+        accounts::{self, AccountWriteRoute},
+        catalog,
+        error::EntryWire,
+        inspection, pages,
+        proxy::RequestAccess,
+        settings, team, usage,
     },
     run_blocking,
 };
@@ -42,6 +46,7 @@ struct CandidateRequest {
     observation: HttpObservation,
     report_socket: Option<Arc<TcpStream>>,
     half_close: bool,
+    account_write: Option<AccountWriteRoute>,
 }
 
 type UpgradeSession = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -124,9 +129,11 @@ pub(super) async fn drive_candidate(
         }
     };
     let request = head.raw.request();
+    let account_write = AccountWriteRoute::for_request(request);
     let (half_close, watch_report) = if usage::matches(request) {
         (true, usage::Report::for_path(request.raw_path()).is_some())
-    } else if settings::matches(request)
+    } else if account_write.is_some()
+        || settings::matches(request)
         || catalog::matches(request)
         || module_or_update_read(request)
         || pages::matches(request)
@@ -177,6 +184,7 @@ pub(super) async fn drive_candidate(
         observation,
         report_socket,
         half_close,
+        account_write,
     };
     drive_http(io, peer, router, control, permit, head, Some(candidate)).await;
 }
@@ -223,6 +231,9 @@ async fn drive_http(
 ) {
     let mode = control.mode;
     let half_close = candidate.as_ref().is_some_and(|request| request.half_close);
+    let account_write = candidate
+        .as_ref()
+        .and_then(|request| request.account_write.as_ref());
     let report_socket = candidate
         .as_ref()
         .and_then(|request| request.report_socket.as_ref());
@@ -256,6 +267,9 @@ async fn drive_http(
             request.extensions_mut().insert(ConnectInfo(peer));
             request.extensions_mut().insert(raw.clone());
             request.extensions_mut().insert(context.clone());
+            if let Some(route) = account_write {
+                request.extensions_mut().insert(route.clone());
+            }
             if let Some(socket) = report_socket {
                 request.extensions_mut().insert(Arc::clone(socket));
             }

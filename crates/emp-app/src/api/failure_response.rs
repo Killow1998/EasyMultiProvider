@@ -1,5 +1,5 @@
-use crate::http::response::response;
 use crate::http::response::status_text;
+use crate::server::http::error::JsonReply;
 use crate::services::error_origin;
 use crate::services::external::ExternalRequestError;
 use crate::services::failure_feedback;
@@ -112,6 +112,10 @@ fn routed_message(error: &RouterError, route: &ResolvedRoute, output_started: bo
 }
 
 pub(crate) fn router_error_response(error: RouterError) -> Vec<u8> {
+    router_error_reply(error).wire_response()
+}
+
+pub(crate) fn router_error_reply(error: RouterError) -> JsonReply {
     router_error_response_with_route(error, None)
 }
 
@@ -119,10 +123,13 @@ pub(crate) fn router_error_response_for_route(
     error: RouterError,
     route: &ResolvedRoute,
 ) -> Vec<u8> {
-    router_error_response_with_route(error, Some(route))
+    router_error_response_with_route(error, Some(route)).wire_response()
 }
 
-fn router_error_response_with_route(error: RouterError, route: Option<&ResolvedRoute>) -> Vec<u8> {
+fn router_error_response_with_route(
+    error: RouterError,
+    route: Option<&ResolvedRoute>,
+) -> JsonReply {
     let failure_reason = error.failure_reason().map(str::to_owned);
     let error_class = error.error_class().as_str();
     let code = if error_class == "rate_limit" {
@@ -148,7 +155,7 @@ fn router_error_response_with_route(error: RouterError, route: Option<&ResolvedR
     if let Some(reason) = failure_reason {
         detail["failure_reason"] = Value::String(reason);
     }
-    http_error(error.status(), detail, error.retry_after_seconds())
+    http_error_reply(error.status(), detail, error.retry_after_seconds())
 }
 
 pub(crate) fn pre_output_failure_response(event: &Value, route: &ResolvedRoute) -> Option<Vec<u8>> {
@@ -228,21 +235,19 @@ fn pre_output_router_error_response_with_route(
     http_error(error.status(), detail, error.retry_after_seconds())
 }
 
-fn http_error(status: u16, mut detail: Value, retry_after: Option<u64>) -> Vec<u8> {
+fn http_error(status: u16, detail: Value, retry_after: Option<u64>) -> Vec<u8> {
+    http_error_reply(status, detail, retry_after).wire_response()
+}
+
+fn http_error_reply(status: u16, mut detail: Value, retry_after: Option<u64>) -> JsonReply {
     if let Some(delay) = retry_after {
         detail["retry_after_seconds"] = Value::from(delay);
     }
     let body = serde_json::to_vec(&serde_json::json!({"error":detail}))
         .expect("error response is JSON serializable");
-    let retry = retry_after.map(|delay| delay.to_string());
-    let headers = retry
-        .as_deref()
-        .map(|value| vec![("Retry-After", value)])
-        .unwrap_or_default();
-    response(
-        &format!("HTTP/1.1 {status} {}", status_text(status)),
-        "application/json",
-        &body,
-        &headers,
-    )
+    let reply = JsonReply::new(status, body);
+    match retry_after {
+        Some(delay) => reply.with_header("Retry-After", delay.to_string()),
+        None => reply,
+    }
 }

@@ -85,7 +85,12 @@ fn replacement_quota_refresh_waits_in_migration_lock_order() {
         let (done_tx, done_rx) = mpsc::channel();
         let refresh = std::thread::spawn(move || {
             if manual {
-                let _ = super::commands::execute(None, &state, personal, false, &json!({}));
+                let _ = super::commands::execute(
+                    None,
+                    &state,
+                    personal,
+                    super::commands::QuotaCommand::Refresh,
+                );
             } else {
                 let _ = super::refresh_account_serialized(&state, personal);
             }

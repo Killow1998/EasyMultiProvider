@@ -1,10 +1,8 @@
-use crate::api::accounts::management_account_request;
 use crate::api::catalog;
 use crate::api::compact::compact_request;
 use crate::api::integration::management_integration_request;
 use crate::api::lifecycle::quit_request;
 use crate::api::migration::management_migration_request;
-use crate::api::quota::management_quota_request;
 use crate::api::quota::serve_quota_events;
 use crate::api::realtime::serve_realtime_call;
 use crate::api::realtime::sideband::serve_realtime_sideband;
@@ -21,6 +19,7 @@ use crate::http::request::percent_decode;
 use crate::http::request::read_request_head;
 use crate::http::response::bad_request_response;
 use crate::http::routes::route_request_at;
+use crate::server::http::accounts::AccountWriteRoute;
 use crate::server::http::proxy::{RequestAccess, request_source};
 use crate::server::http::usage::Report;
 use crate::services::connection_admission::ConnectionPermit;
@@ -78,8 +77,10 @@ pub(crate) fn handle_connection(
             return;
         }
     };
-    let response = {
-        let now = system_now();
+    let now = system_now();
+    let response = if let Some(route) = AccountWriteRoute::for_request(request) {
+        Some(route.legacy(&mut stream, request, raw.body_prefix, state, now))
+    } else {
         match (request.method, path) {
             (RequestMethod::Post, path) if path.starts_with("/api/team/") => Some(
                 crate::api::team::mutate(&mut stream, request, raw.body_prefix, state, now),
@@ -112,17 +113,6 @@ pub(crate) fn handle_connection(
             (RequestMethod::Post, "/api/updates/check" | "/api/updates/install") => Some(
                 crate::api::updates::start(&mut stream, request, raw.body_prefix, state, now),
             ),
-            (RequestMethod::Post, path)
-                if path.starts_with("/api/accounts/") && path.ends_with("/models/refresh") =>
-            {
-                Some(management_account_request(
-                    &mut stream,
-                    request,
-                    raw.body_prefix,
-                    state,
-                    now,
-                ))
-            }
             (RequestMethod::Post, "/api/client-events") => {
                 Some(crate::api::diagnostics::client_event(
                     &mut stream,
@@ -218,13 +208,6 @@ pub(crate) fn handle_connection(
                 state,
                 now,
             )),
-            (RequestMethod::Post, "/api/accounts/import") => Some(management_account_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                now,
-            )),
             (
                 RequestMethod::Post,
                 "/api/migration/export"
@@ -252,7 +235,6 @@ pub(crate) fn handle_connection(
                 | "/api/catalog/context-preference"
                 | "/api/models/metadata"
                 | "/api/decisions/models"
-                | "/api/config"
                 | "/api/language",
             ) => Some(catalog::management_request(
                 &mut stream,
@@ -294,18 +276,6 @@ pub(crate) fn handle_connection(
             (RequestMethod::Get, "/api/accounts/events") => {
                 serve_quota_events(&mut stream, request, state, now);
                 None
-            }
-            (RequestMethod::Post, path)
-                if path.starts_with("/api/accounts/")
-                    && (path.ends_with("/quota") || path.ends_with("/quota-reset")) =>
-            {
-                Some(management_quota_request(
-                    &mut stream,
-                    request,
-                    raw.body_prefix,
-                    state,
-                    now,
-                ))
             }
             (RequestMethod::Post, path)
                 if path.starts_with("/api/providers/") && path.ends_with("/balance") =>

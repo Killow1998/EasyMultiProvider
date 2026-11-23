@@ -1,18 +1,25 @@
 use super::{
+    body::{JsonBody, read_json_body},
     error::{EntryError, JsonReply},
     management::ManagementSession,
     proxy::RequestAccess,
     raw_head,
 };
 use crate::{
-    api::accounts::AccountRead,
+    api::accounts::{AccountRead, AccountWrite},
     app::ServerState,
-    http::request::{Request, RequestMethod},
-    server::run_blocking,
+    http::request::{Request, RequestMethod, percent_decode},
+    server::{connection::ConnectionContext, run_blocking},
+    services::{accounts::AccountImport, quota::commands::QuotaCommand},
     util::system_now,
 };
-use axum::{Router, extract::State, routing::get};
-use std::sync::Arc;
+use axum::{
+    Extension, Router,
+    extract::{FromRequest, State},
+    routing::{delete, get, post},
+};
+use serde_json::Value;
+use std::{net::TcpStream, sync::Arc};
 
 pub(in crate::server) fn matches(request: Request<'_>) -> bool {
     request.method == RequestMethod::Get && AccountRead::for_path(request.raw_path()).is_some()
@@ -21,7 +28,9 @@ pub(in crate::server) fn matches(request: Request<'_>) -> bool {
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/api/accounts", get(read))
-        .route("/api/accounts/{*path}", get(read))
+        .route("/api/accounts/{*path}", get(read).post(write).delete(write))
+        .route("/api/accounts/", delete(write))
+        .route("/api/config", post(write))
 }
 
 async fn read(
@@ -39,4 +48,132 @@ async fn read(
     })
     .await
     .map_err(|_| EntryError::internal())?
+}
+
+#[derive(Clone)]
+pub(crate) enum AccountWriteRoute {
+    Import,
+    Delete(String),
+    EditConfiguration,
+    RefreshModels(String),
+    RefreshQuota(String),
+    ResetQuota(String),
+    MissingAccount,
+}
+
+impl AccountWriteRoute {
+    pub(crate) fn for_request(request: Request<'_>) -> Option<Self> {
+        let path = request.raw_path();
+        if request.method == RequestMethod::Post && path == "/api/config" {
+            return Some(Self::EditConfiguration);
+        }
+        let path = path.strip_prefix("/api/accounts/")?;
+        match request.method {
+            RequestMethod::Post if path.starts_with("login/") => None,
+            RequestMethod::Post if path == "import" || path == "models/refresh" => {
+                Some(Self::Import)
+            }
+            RequestMethod::Post => {
+                if let Some(account) = path.strip_suffix("/models/refresh") {
+                    Some(Self::RefreshModels(percent_decode(account, false)))
+                } else if let Some(account) = path.strip_suffix("/quota") {
+                    Some(path_account(account).map_or(Self::MissingAccount, Self::RefreshQuota))
+                } else if let Some(account) = path.strip_suffix("/quota-reset") {
+                    Some(path_account(account).map_or(Self::MissingAccount, Self::ResetQuota))
+                } else if matches!(path, "quota" | "quota-reset") {
+                    Some(Self::MissingAccount)
+                } else {
+                    None
+                }
+            }
+            RequestMethod::Delete => {
+                Some(path_account(path).map_or(Self::MissingAccount, Self::Delete))
+            }
+            _ => None,
+        }
+    }
+
+    fn without_body(&self) -> Result<Option<AccountWrite>, EntryError> {
+        match self {
+            Self::MissingAccount => Err(EntryError::NotFound),
+            Self::Delete(account) => Ok(Some(AccountWrite::Delete(account.clone()))),
+            _ => Ok(None),
+        }
+    }
+
+    fn with_body(self, body: Value) -> AccountWrite {
+        match self {
+            Self::Import => AccountWrite::Import(AccountImport::parse(&body)),
+            Self::RefreshModels(account) => AccountWrite::RefreshModels(account),
+            Self::RefreshQuota(account) => AccountWrite::Quota(account, QuotaCommand::Refresh),
+            Self::ResetQuota(account) => AccountWrite::Quota(account, QuotaCommand::reset(&body)),
+            Self::EditConfiguration => {
+                let Value::Object(body) = body else {
+                    unreachable!("JSON body reader requires an object")
+                };
+                AccountWrite::EditConfiguration(body)
+            }
+            Self::Delete(_) | Self::MissingAccount => unreachable!("route does not read a body"),
+        }
+    }
+
+    pub(crate) fn legacy(
+        self,
+        stream: &mut TcpStream,
+        request: Request<'_>,
+        body_prefix: Vec<u8>,
+        state: &ServerState,
+        now: f64,
+    ) -> Vec<u8> {
+        let command = (|| {
+            ManagementSession::require(request, state, now)?;
+            if let Some(command) = self.without_body()? {
+                return Ok(command);
+            }
+            Ok(self.with_body(read_json_body(stream, request, body_prefix, state)?))
+        })();
+        match command {
+            Ok(command) => command
+                .execute(state, request.observation_id)
+                .wire_response(),
+            Err(error) => EntryError::wire_response(error),
+        }
+    }
+}
+
+fn path_account(raw: &str) -> Option<String> {
+    let raw = raw.trim_end_matches('/');
+    (!raw.is_empty()).then(|| percent_decode(raw, false))
+}
+
+impl FromRequest<Arc<ServerState>> for JsonBody<AccountWrite> {
+    type Rejection = EntryError;
+
+    async fn from_request(
+        mut request: axum::extract::Request,
+        state: &Arc<ServerState>,
+    ) -> Result<Self, EntryError> {
+        let route = request
+            .extensions_mut()
+            .remove::<AccountWriteRoute>()
+            .ok_or(EntryError::NotFound)?;
+        if let Some(command) = route.without_body()? {
+            return Ok(Self(command));
+        }
+        let JsonBody(body) = JsonBody::<Value>::from_request(request, state).await?;
+        Ok(Self(route.with_body(body)))
+    }
+}
+
+async fn write(
+    access: RequestAccess,
+    _session: ManagementSession,
+    State(state): State<Arc<ServerState>>,
+    Extension(connection): Extension<ConnectionContext>,
+    JsonBody(command): JsonBody<AccountWrite>,
+) -> Result<JsonReply, EntryError> {
+    connection.retain_request_access(access);
+    run_blocking(move || command.execute(&state, connection.request_id()))
+        .await
+        .map_err(|_| EntryError::internal())
 }

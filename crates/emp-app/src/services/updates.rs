@@ -118,6 +118,11 @@ impl UpdateState {
         Some(RequestPermit(Arc::clone(&self.gate)))
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn drain_for_test(&self, timeout: Duration) -> bool {
+        drain(&self.gate, timeout)
+    }
+
     pub(crate) fn snapshot(&self) -> Snapshot {
         self.manager.snapshot()
     }

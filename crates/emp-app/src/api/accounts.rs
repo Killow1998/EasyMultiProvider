@@ -1,20 +1,16 @@
 use crate::app::ServerState;
-use crate::http::auth::same_origin;
 use crate::http::request::Request;
-use crate::http::request::read_json_body;
 use crate::http::request::{percent_decode, query_values};
-use crate::http::response::body_error_response;
-use crate::http::response::cross_origin_response;
 use crate::http::response::json_error_body;
-use crate::http::response::json_error_response;
-use crate::http::response::response;
-use crate::http::response::status_text;
-use crate::http::response::unauthorized_response;
 use crate::server::http::error::{EntryError, JsonReply};
-use crate::services::account_catalog::CatalogRefreshError;
-use crate::services::accounts::{accounts_snapshot, import_account_state};
+use crate::services::account_catalog::{self, CatalogRefreshError};
+use crate::services::accounts::{
+    AccountImport, accounts_snapshot, delete_account_state, import_parsed_account,
+};
+use crate::services::configuration::{ChangeError, settings};
+use crate::services::quota::commands::{self, CommandError, QuotaCommand};
 use crate::services::quota::{QuotaHistoryResponseError, quota_history_response};
-use std::net::TcpStream;
+use serde_json::{Map, Value, json};
 
 pub(crate) enum AccountRead<'a> {
     List,
@@ -107,55 +103,78 @@ impl<'a> AccountRead<'a> {
     }
 }
 
-pub(crate) fn management_account_request(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    body_prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-) -> Vec<u8> {
-    if !same_origin(request, state.port) {
-        return cross_origin_response("management session is required");
-    }
-    if !state
-        .sessions
-        .contains(request.session_token().as_deref(), now)
-    {
-        return unauthorized_response();
-    }
-    let body = match read_json_body(stream, request, body_prefix, state) {
-        Ok(body) => body,
-        Err(error) => return body_error_response(error),
-    };
-    if let Some(id) = request
-        .raw_path()
-        .strip_prefix("/api/accounts/")
-        .and_then(|path| path.strip_suffix("/models/refresh"))
-    {
-        let id = percent_decode(id, false);
-        return match crate::services::account_catalog::refresh(request.observation_id, state, &id) {
-            Ok(payload) => response(
-                "HTTP/1.1 200 OK",
-                "application/json",
-                &serde_json::to_vec(&payload).expect("subscription models"),
-                &[],
-            ),
-            Err(CatalogRefreshError::Upstream(error)) => {
-                crate::api::failure_response::router_error_response(error)
+pub(crate) enum AccountWrite {
+    Import(Result<AccountImport, String>),
+    Delete(String),
+    EditConfiguration(Map<String, Value>),
+    RefreshModels(String),
+    Quota(String, QuotaCommand),
+}
+
+impl AccountWrite {
+    pub(crate) fn execute(self, state: &ServerState, id: Option<&str>) -> JsonReply {
+        let payload = match self {
+            Self::Import(input) => import_parsed_account(id, state, input)
+                .map(|account| json!({"account":account}))
+                .map_err(|error| JsonReply::error(400, &error, None)),
+            Self::Delete(account) => delete_account_state(id, state, &account)
+                .map(|()| json!({"status":"ok"}))
+                .map_err(|error| JsonReply::error(400, &error, None)),
+            Self::EditConfiguration(body) => {
+                return match settings::update(id, state, &Value::Object(body)) {
+                    Ok(()) => super::catalog::read_configuration(state),
+                    Err(ChangeError::Invalid(message)) => JsonReply::error(400, &message, None),
+                    Err(ChangeError::Unavailable) => EntryError::internal().reply(),
+                };
             }
-            Err(CatalogRefreshError::Invalid(message)) => {
-                json_error_response(400, status_text(400), message, None, &[])
+            Self::RefreshModels(account) => {
+                account_catalog::refresh(id, state, &account).map_err(|error| match error {
+                    CatalogRefreshError::Upstream(error) => {
+                        super::failure_response::router_error_reply(error)
+                    }
+                    CatalogRefreshError::Invalid(message) => JsonReply::error(400, message, None),
+                    CatalogRefreshError::Internal => EntryError::internal().reply(),
+                })
             }
-            Err(CatalogRefreshError::Internal) => {
-                json_error_response(500, status_text(500), "internal server error", None, &[])
+            Self::Quota(account, command) => {
+                commands::execute(id, state, &account, command).map_err(quota_error)
             }
         };
-    }
-    match import_account_state(request.observation_id, state, &body) {
-        Ok(account) => {
-            let body = serde_json::to_vec(&serde_json::json!({"account":account})).unwrap();
-            response("HTTP/1.1 200 OK", "application/json", &body, &[])
+        match payload {
+            Ok(payload) => JsonReply::new(200, payload.to_string()),
+            Err(reply) => reply,
         }
-        Err(error) => json_error_response(400, status_text(400), &error, None, &[]),
+    }
+}
+
+fn quota_error(error: CommandError) -> JsonReply {
+    match error {
+        CommandError::Internal => EntryError::internal().reply(),
+        CommandError::UnknownAccount(account) => JsonReply::error(
+            503,
+            &format!("unknown account: {account}"),
+            Some("quota_error"),
+        ),
+        CommandError::InvalidCredit => JsonReply::error(
+            400,
+            "reset credit id is invalid",
+            Some("quota_reset_invalid_request"),
+        ),
+        CommandError::ResetForbidden => JsonReply::error(
+            403,
+            "A workspace administrator must reset this shared subscription",
+            Some("workspace_reset_forbidden"),
+        ),
+        CommandError::Reset(error) => {
+            let status = if error.code() == "quota_reset_invalid_request" {
+                400
+            } else {
+                503
+            };
+            JsonReply::error(status, &error.to_string(), Some(error.code()))
+        }
+        CommandError::Refresh(error) => {
+            JsonReply::error(503, &error.to_string(), Some(error.code()))
+        }
     }
 }

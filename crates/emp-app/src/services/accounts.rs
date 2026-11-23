@@ -11,7 +11,10 @@ pub(crate) use delete::delete_account_state;
 use emp_state::VaultStore;
 use emp_state::duplicate_account_status;
 use emp_state::validate_auth_json;
-pub(crate) use import::{import_account_state, import_emp_login_account_state, matching_account};
+pub(crate) use import::{
+    AccountImport, import_account_state, import_emp_login_account_state, import_parsed_account,
+    matching_account,
+};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;

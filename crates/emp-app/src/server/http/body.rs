@@ -202,7 +202,7 @@ fn decode_json(
     Ok(value)
 }
 
-pub(crate) struct JsonBody(pub(crate) Value);
+pub(crate) struct JsonBody<T = Value>(pub(crate) T);
 
 impl JsonBody {
     pub(crate) fn into_typed<T: serde::de::DeserializeOwned>(self) -> Result<T, EntryError> {

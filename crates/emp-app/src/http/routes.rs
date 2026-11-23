@@ -5,17 +5,12 @@ use crate::api::provider_quota;
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::request::RequestMethod;
-use crate::http::request::percent_decode;
-use crate::http::response::json_error_response;
 use crate::http::response::not_found_response;
-use crate::http::response::response;
-use crate::http::response::status_text;
 use crate::server::http::management::{ManagementSession, exchange};
 use crate::server::http::modules::ModulePanel;
 use crate::server::http::proxy::require_model_catalog;
 use crate::server::http::settings::SettingsRead;
 use crate::server::http::{inspection, pages, team};
-use crate::services::accounts::delete_account_state;
 
 pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f64) -> Vec<u8> {
     let path = request.raw_path();
@@ -86,22 +81,6 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             && let Some(id) = provider_quota::history_id(path)
         {
             return provider_quota::history(request, state, id, now).wire_response();
-        }
-        if request.method == RequestMethod::Delete
-            && let Some(raw_account) = path.strip_prefix("/api/accounts/")
-        {
-            let raw_account = raw_account.trim_end_matches('/');
-            if raw_account.is_empty() {
-                return not_found_response();
-            }
-            let account_id = percent_decode(raw_account, false);
-            return match delete_account_state(request.observation_id, state, &account_id) {
-                Ok(()) => {
-                    let body = serde_json::to_vec(&serde_json::json!({"status":"ok"})).unwrap();
-                    response("HTTP/1.1 200 OK", "application/json", &body, &[])
-                }
-                Err(error) => json_error_response(400, status_text(400), &error, None, &[]),
-            };
         }
         return not_found_response();
     }

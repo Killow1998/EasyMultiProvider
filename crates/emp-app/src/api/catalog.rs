@@ -41,16 +41,6 @@ pub(crate) fn management_request(
             Err(error) => config_error(&error),
         };
     }
-    if request.raw_path() == "/api/config" {
-        return match crate::services::configuration::settings::update(
-            request.observation_id,
-            state,
-            &body,
-        ) {
-            Ok(()) => read_configuration(state).wire_response(),
-            Err(error) => change_error(error),
-        };
-    }
     if request.raw_path() == "/api/catalog/context-preference" {
         return update_catalog_context_preference(request, state, &body);
     }

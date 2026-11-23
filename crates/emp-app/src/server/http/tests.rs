@@ -61,20 +61,32 @@ pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input
     .expect("complete HTTP response")
 }
 
+#[cfg(unix)]
+mod account_writes;
+
 pub(crate) async fn assert_wire_parity(
     old: SocketAddr,
     new: SocketAddr,
     request: &[u8],
     end_input: bool,
 ) -> Vec<u8> {
+    assert_wire_parity_with([(old, request), (new, request)], end_input, |reply| reply).await
+}
+
+async fn assert_wire_parity_with(
+    [(old, old_request), (new, new_request)]: [(SocketAddr, &[u8]); 2],
+    end_input: bool,
+    normalize: impl Fn(Vec<u8>) -> Vec<u8>,
+) -> Vec<u8> {
     let (old, new) = tokio::join!(
-        exchange_wire(old, request, end_input),
-        exchange_wire(new, request, end_input),
+        exchange_wire(old, old_request, end_input),
+        exchange_wire(new, new_request, end_input),
     );
+    let (old, new) = (normalize(old), normalize(new));
     assert!(
         new == old,
         "different responses for {}\nnew: {}\nold: {}",
-        String::from_utf8_lossy(request.split(|&byte| byte == b'\r').next().unwrap()),
+        String::from_utf8_lossy(old_request.split(|&byte| byte == b'\r').next().unwrap()),
         String::from_utf8_lossy(&new),
         String::from_utf8_lossy(&old),
     );

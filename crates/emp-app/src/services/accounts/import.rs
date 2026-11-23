@@ -17,31 +17,61 @@ struct ResolvedImport {
     identity_only: bool,
 }
 
-fn resolve(state: &ServerState, body: &Value) -> Result<ResolvedImport, String> {
-    let mut metadata = body
-        .as_object()
-        .cloned()
-        .ok_or("account import body must be an object")?;
-    let auth = metadata
-        .remove("auth_json")
-        .ok_or("auth_json is required")?;
-    let auth = validate_auth_json(&auth).map_err(|error| error.to_string())?;
-    if let Some(id) = metadata.get("id") {
-        let account_id = id
-            .as_str()
-            .ok_or("account.id must be a safe single path segment")?
-            .to_owned();
-        return Ok(ResolvedImport {
-            metadata,
-            auth,
-            account_id,
-            identity_only: false,
-        });
+enum ImportTarget {
+    Explicit {
+        id: String,
+        metadata: serde_json::Map<String, Value>,
+    },
+    Identity(String),
+}
+
+pub(crate) struct AccountImport {
+    auth: Value,
+    target: ImportTarget,
+}
+
+impl AccountImport {
+    pub(crate) fn parse(body: &Value) -> Result<Self, String> {
+        let mut metadata = body
+            .as_object()
+            .cloned()
+            .ok_or("account import body must be an object")?;
+        let auth = metadata
+            .remove("auth_json")
+            .ok_or("auth_json is required")?;
+        let auth = validate_auth_json(&auth).map_err(|error| error.to_string())?;
+        let target = if let Some(id) = metadata.remove("id") {
+            let id = id
+                .as_str()
+                .ok_or("account.id must be a safe single path segment")?
+                .to_owned();
+            ImportTarget::Explicit { id, metadata }
+        } else {
+            let name = metadata
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or("name is required")?;
+            ImportTarget::Identity(name.to_owned())
+        };
+        Ok(Self { auth, target })
     }
-    let name = body["name"]
-        .as_str()
-        .filter(|name| !name.trim().is_empty())
-        .ok_or("name is required")?;
+}
+
+fn resolve(state: &ServerState, input: AccountImport) -> Result<ResolvedImport, String> {
+    let AccountImport { auth, target } = input;
+    let name = match target {
+        ImportTarget::Explicit { id, metadata } => {
+            return Ok(ResolvedImport {
+                metadata,
+                auth,
+                account_id: id,
+                identity_only: false,
+            });
+        }
+        ImportTarget::Identity(name) => name,
+    };
     let config = state
         .backend
         .configuration
@@ -71,7 +101,7 @@ fn resolve(state: &ServerState, body: &Value) -> Result<ResolvedImport, String> 
         resolved["id"] = Value::String(id.clone());
         resolved["prefix"] = Value::String(id);
     }
-    resolved["name"] = Value::String(name.trim().to_owned());
+    resolved["name"] = Value::String(name);
     if native_auth_document(&state.backend.accounts.native_auth_path)
         .is_some_and(|native| emp_state::same_account_auth(&native, &auth))
     {
@@ -109,20 +139,28 @@ pub(crate) fn import_account_state(
     state: &ServerState,
     body: &Value,
 ) -> Result<Value, String> {
-    import_credentials(request_id, state, body, None)
+    import_parsed_account(request_id, state, AccountImport::parse(body))
 }
 
 pub(crate) fn import_emp_login_account_state(
     state: &ServerState,
     body: &Value,
 ) -> Result<Value, String> {
-    import_credentials(None, state, body, Some("emp_login"))
+    import_credentials(None, state, AccountImport::parse(body), Some("emp_login"))
+}
+
+pub(crate) fn import_parsed_account(
+    request_id: Option<&str>,
+    state: &ServerState,
+    input: Result<AccountImport, String>,
+) -> Result<Value, String> {
+    import_credentials(request_id, state, input, None)
 }
 
 fn import_credentials(
     request_id: Option<&str>,
     state: &ServerState,
-    body: &Value,
+    input: Result<AccountImport, String>,
     credential_source: Option<&str>,
 ) -> Result<Value, String> {
     crate::services::observation::operation::observe(
@@ -135,7 +173,7 @@ fn import_credentials(
                 auth,
                 account_id,
                 identity_only,
-            } = resolve(state, body)?;
+            } = resolve(state, input?)?;
             let account_id = account_id.as_str();
             receipt.subject(account_id);
             let refresh_lock = quota_refresh_lock(state, account_id)
