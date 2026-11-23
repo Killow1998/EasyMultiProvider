@@ -8,6 +8,7 @@ mod e2e {
     mod forwarding;
     mod management;
     mod migration;
+    mod modules;
     #[cfg(target_os = "linux")]
     mod native;
     mod streams;

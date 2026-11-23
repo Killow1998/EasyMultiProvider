@@ -10,6 +10,8 @@ mod accounts;
 mod http;
 #[cfg(target_os = "linux")]
 mod https;
+#[cfg(unix)]
+pub mod modules;
 mod process;
 mod upstream;
 mod websocket;

@@ -1,0 +1,584 @@
+use crate::support::modules::{BuiltModule, Fault, IDS, ModuleRelease};
+use crate::support::{
+    Emp, NATIVE_TOKEN, Response, Upstream, UpstreamRequest, Workspace, http, write_file,
+};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+fn built_modules() -> Vec<BuiltModule> {
+    IDS.into_iter().map(BuiltModule::current).collect()
+}
+
+struct Routes {
+    first: Upstream,
+    second: Upstream,
+}
+
+impl Routes {
+    fn new() -> Self {
+        let routes = Self {
+            first: Upstream::start(),
+            second: Upstream::start(),
+        };
+        for (id, upstream) in [("first", &routes.first), ("second", &routes.second)] {
+            upstream.reply_json(&json!({"id":format!("resp-{id}"), "object":"response",
+                "status":"completed", "model":"upstream-model", "output":[],
+                "usage":{"input_tokens":7,"output_tokens":3,"total_tokens":10}}));
+        }
+        routes
+    }
+
+    fn config(&self) -> Value {
+        json!({"codex_base_url":self.first.base_url(), "auto_enable_on_start":false,
+            "providers":[
+                {"id":"first", "base_url":self.first.base_url(), "protocol":"responses",
+                    "auth_mode":"api_key", "api_key":"first-api-key"},
+                {"id":"second", "base_url":self.second.base_url(), "protocol":"responses",
+                    "auth_mode":"api_key", "api_key":"second-api-key"}],
+            "models":[
+                {"id":"first/model", "provider":"first", "upstream_id":"upstream-model", "enabled":true},
+                {"id":"second/model", "provider":"second", "upstream_id":"upstream-model", "enabled":true}]})
+    }
+
+    fn configured_workspace(&self, policy: &str) -> Workspace {
+        let workspace = Workspace::new();
+        let mut config = self.config();
+        config["decision_provider"] = json!("first");
+        for (index, id) in ["first", "second"].iter().enumerate() {
+            config["providers"][index]["decision_api"] =
+                json!({"protocol":"openai", "model":format!("{id}-decision")});
+        }
+        config["model_groups"] = json!([{"id":"auto/probe", "name_prefix":"auto",
+            "policy":policy, "sources":["first/model","second/model"]}]);
+        workspace.write_config(config);
+        workspace
+    }
+
+    fn assert_forwarded(&self, selected: &str, path: &str, model: &str) -> UpstreamRequest {
+        let (upstream, other) = match selected {
+            "first" => (&self.first, &self.second),
+            "second" => (&self.second, &self.first),
+            _ => panic!("unknown fixture provider {selected}"),
+        };
+        let forwarded = upstream.next_forwarded();
+        assert_eq!(forwarded.method, "POST");
+        assert_eq!(forwarded.path, path);
+        assert_eq!(
+            forwarded.headers["authorization"],
+            format!("Bearer {selected}-api-key")
+        );
+        assert_eq!(
+            forwarded.body.as_ref().expect("forwarded body")["model"],
+            model
+        );
+        upstream.assert_idle();
+        other.assert_idle();
+        forwarded
+    }
+
+    fn assert_idle(&self) {
+        self.first.assert_idle();
+        self.second.assert_idle();
+    }
+}
+
+fn routed(emp: &Emp, key: &str, model: &str, session: &str) -> Response {
+    http(
+        emp.port,
+        "POST",
+        "/v1/responses",
+        &[
+            ("Authorization", &format!("Bearer {key}")),
+            ("Content-Type", "application/json"),
+            ("session-id", session),
+        ],
+        json!({"model":model,"input":"module process fixture","stream":false})
+            .to_string()
+            .as_bytes(),
+    )
+}
+
+fn report(emp: &Emp, path: &str) -> Value {
+    let response = emp.get(path);
+    assert_eq!(response.status, 200, "{path}: {}", response.text());
+    response.json()
+}
+
+fn assert_ok(response: &Response, selected: &str) {
+    assert_eq!(response.status, 200, "{}", response.text());
+    assert_eq!(response.json()["id"], format!("resp-{selected}"));
+}
+
+fn exercise(emp: &Emp, module: &str, routes: &Routes) {
+    match module {
+        "decision" => {
+            let response = emp.codex(
+                "POST",
+                "/v1/decisions",
+                Some(&json!({"state":"lifecycle", "questions":{}})),
+            );
+            assert_ok(&response, "first");
+            routes.assert_forwarded("first", "/v1/decisions", "first-decision");
+        }
+        "gateway" => {
+            let client = emp.post("/api/gateway/clients", &json!({"name":"Lifecycle device"}));
+            assert_eq!(client.status, 200, "{}", client.text());
+            let client = client.json();
+            assert_ok(
+                &routed(
+                    emp,
+                    client["api_key"].as_str().expect("device key"),
+                    "first/model",
+                    "lifecycle-device",
+                ),
+                "first",
+            );
+            routes.assert_forwarded("first", "/v1/responses", "upstream-model");
+        }
+        "aggregate" => {
+            assert_ok(
+                &routed(emp, NATIVE_TOKEN, "auto/probe", "lifecycle-aggregate"),
+                "first",
+            );
+            routes.assert_forwarded("first", "/v1/responses", "upstream-model");
+        }
+        _ => panic!("unknown module {module}"),
+    }
+}
+
+fn assert_unavailable(emp: &Emp, module: &str, routes: &Routes) {
+    let response = match module {
+        "decision" => emp.codex("POST", "/v1/decisions", Some(&json!({"questions":{}}))),
+        "gateway" => emp.get("/api/gateway/clients"),
+        "aggregate" => routed(emp, NATIVE_TOKEN, "auto/probe", "lifecycle-aggregate"),
+        _ => panic!("unknown module {module}"),
+    };
+    if module == "aggregate" {
+        assert_eq!(response.status, 503, "{}", response.text());
+        assert!(
+            !report(emp, "/v1/models?client_version=0.169.0")["models"]
+                .as_array()
+                .expect("catalog")
+                .iter()
+                .any(|row| row["slug"] == "auto/probe")
+        );
+    } else {
+        assert_eq!(response.status, 404, "{}", response.text());
+        assert_eq!(response.json()["error"]["code"], "module_disabled");
+    }
+    routes.assert_idle();
+}
+
+#[test]
+#[ignore = "needs current and next-version module binaries; see tests/support/modules.rs"]
+fn m01_real_modules_install_update_preserve_on_failure_and_uninstall() {
+    let mut modules = built_modules();
+    let next: Vec<_> = IDS.into_iter().map(BuiltModule::next).collect();
+    for (current, next) in modules.iter().zip(&next) {
+        assert_ne!(
+            current.version, next.version,
+            "M01 needs a higher-version {} build",
+            current.id
+        );
+        assert_ne!(
+            current.digest, next.digest,
+            "M01 needs different real artifacts"
+        );
+    }
+    let release = ModuleRelease::start(&modules);
+    let routes = Routes::new();
+    let workspace = routes.configured_workspace("priority");
+    let emp = release.start_emp(&workspace);
+    let core_pid = emp.pid();
+    for module in &modules {
+        emp.change(&module.id, "install");
+        let pid = emp.active(module);
+        emp.change(&module.id, "enable");
+        assert_eq!(emp.active(module), pid);
+        exercise(&emp, &module.id, &routes);
+    }
+    for (index, candidate) in next.into_iter().enumerate() {
+        let before: Vec<_> = modules.iter().map(|module| emp.active(module)).collect();
+        release.publish(&candidate, Fault::None);
+        let updates = emp.post("/api/modules", &json!({"action":"check_updates"}));
+        assert_eq!(updates.status, 200, "{}", updates.text());
+        let updates = updates.json();
+        let offer = updates["updates"]
+            .as_array()
+            .expect("update offers")
+            .iter()
+            .find(|row| row["id"] == candidate.id)
+            .expect("EMP_E2E_MODULE_NEXT_DIR must contain a higher-version build");
+        assert_eq!(offer["latest_version"], candidate.version);
+        let downloads = release.downloads();
+        let updated = emp.post(
+            "/api/modules",
+            &json!({"id":candidate.id,
+            "action":"update", "revision":offer["revision"]}),
+        );
+        assert_eq!(updated.status, 200, "{}", updated.text());
+        assert!(
+            release.downloads() > downloads,
+            "update must download its real asset"
+        );
+        let replacement_pid = emp.active(&candidate);
+        assert_ne!(replacement_pid, before[index]);
+        emp.assert_gone(before[index]);
+        modules[index] = candidate.clone();
+        for (sibling, module) in modules
+            .iter()
+            .enumerate()
+            .filter(|(sibling, _)| *sibling != index)
+        {
+            assert_eq!(
+                emp.active(module),
+                before[sibling],
+                "unrelated worker changed"
+            );
+        }
+        assert_eq!(emp.pid(), core_pid);
+        exercise(&emp, &candidate.id, &routes);
+        for (fault, code) in [
+            (Fault::Digest, "checksum_mismatch"),
+            (Fault::Executable, "module_start_failed"),
+        ] {
+            release.publish(&candidate, fault);
+            let downloads = release.downloads();
+            let failed = emp.post(
+                "/api/modules",
+                &json!({"id":candidate.id,"action":"update"}),
+            );
+            assert_eq!(failed.status, 409, "{}", failed.text());
+            assert_eq!(failed.json()["error"]["code"], code);
+            assert!(
+                release.downloads() > downloads,
+                "failure must reach the asset boundary"
+            );
+            assert_eq!(
+                emp.active(&candidate),
+                replacement_pid,
+                "failed update displaced the working process"
+            );
+            for (sibling, module) in modules
+                .iter()
+                .enumerate()
+                .filter(|(sibling, _)| *sibling != index)
+            {
+                assert_eq!(
+                    emp.active(module),
+                    before[sibling],
+                    "failed update changed an unrelated worker"
+                );
+            }
+            exercise(&emp, &candidate.id, &routes);
+        }
+        release.publish(&candidate, Fault::None);
+    }
+    for module in &modules {
+        let pid = emp.active(module);
+        let blocked = emp.post(
+            "/api/modules",
+            &json!({"id":module.id,"action":"uninstall"}),
+        );
+        assert_eq!(blocked.status, 409, "{}", blocked.text());
+        assert_eq!(
+            blocked.json()["error"]["code"],
+            "module_disable_before_uninstall"
+        );
+        assert_eq!(emp.active(module), pid);
+        emp.change(&module.id, "disable");
+        emp.assert_gone(pid);
+        assert_unavailable(&emp, &module.id, &routes);
+        emp.change(&module.id, "uninstall");
+        let row = emp.status(&module.id);
+        assert_eq!(row["active"], false, "{row}");
+        assert_eq!(row["enabled"], false, "{row}");
+        assert!(row["installed_version"].is_null(), "{row}");
+        assert_unavailable(&emp, &module.id, &routes);
+    }
+    assert_eq!(emp.pid(), core_pid);
+    assert_ok(
+        &routed(&emp, NATIVE_TOKEN, "first/model", "core-after-uninstall"),
+        "first",
+    );
+    routes.assert_forwarded("first", "/v1/responses", "upstream-model");
+    emp.stop();
+}
+
+#[test]
+#[ignore = "needs current and next-version module binaries; see tests/support/modules.rs"]
+fn m01_k2_normal_start_requires_install_and_restores_installed_modules_with_or_without_settings() {
+    let modules = built_modules();
+    let release = ModuleRelease::start(&modules);
+    let routes = Routes::new();
+    for settings in [
+        "none",
+        "decision_provider",
+        "decision_api",
+        "gateway",
+        "aggregate",
+    ] {
+        let workspace = Workspace::new();
+        let mut config = routes.config();
+        match settings {
+            "decision_provider" => config["decision_provider"] = json!("first"),
+            "decision_api" => {
+                config["providers"][0]["decision_api"] =
+                    json!({"protocol":"openai","model":"first-decision"})
+            }
+            "gateway" => write_file(
+                &workspace.root.join("state/gateway-clients.json"),
+                &json!([{"id":"old-device", "name":"Existing device", "created_at":1.0,
+                    "digest":format!("{:x}", Sha256::digest(b"old-device-key"))}])
+                .to_string(),
+            ),
+            "aggregate" => {
+                config["model_groups"] = json!([{"id":"auto/probe",
+                "sources":["first/model","second/model"], "policy":"priority"}])
+            }
+            "none" => {}
+            _ => unreachable!(),
+        }
+        workspace.write_config(config);
+        let emp = release.start_emp(&workspace);
+        for id in ["decision", "gateway", "aggregate", "team", "aero"] {
+            let row = emp.status(id);
+            assert_eq!(row["active"], false, "settings={settings}: {row}");
+            assert_eq!(row["enabled"], false, "settings={settings}: {row}");
+            assert!(
+                row["installed_version"].is_null(),
+                "settings={settings}: {row}"
+            );
+        }
+        assert_ok(
+            &routed(&emp, NATIVE_TOKEN, "first/model", "core-only"),
+            "first",
+        );
+        routes.assert_forwarded("first", "/v1/responses", "upstream-model");
+        for module in &modules {
+            emp.change(&module.id, "install");
+            emp.active(module);
+        }
+        if settings == "gateway" {
+            assert_eq!(
+                report(&emp, "/api/gateway/clients")["clients"][0]["id"],
+                "old-device"
+            );
+            assert_ok(
+                &routed(&emp, "old-device-key", "first/model", "old-device"),
+                "first",
+            );
+            routes.assert_forwarded("first", "/v1/responses", "upstream-model");
+        }
+        emp.stop();
+        let restored = release.start_emp(&workspace);
+        for module in &modules {
+            restored.active(module);
+        }
+        for id in ["team", "aero"] {
+            assert_eq!(restored.status(id)["active"], false);
+        }
+        restored.stop();
+    }
+}
+
+#[test]
+#[ignore = "needs current and next-version module binaries; see tests/support/modules.rs"]
+fn m02_decision_routes_to_default_and_overridden_real_services() {
+    let module = BuiltModule::current("decision");
+    let release = ModuleRelease::start(std::slice::from_ref(&module));
+    let routes = Routes::new();
+    let workspace = routes.configured_workspace("priority");
+    let emp = release.start_emp(&workspace);
+    emp.change("decision", "install");
+    let pid = emp.active(&module);
+    for (provider, explicit, selected, expected_model) in [
+        (None, None, "first", "first-decision"),
+        (Some("second"), None, "second", "second-decision"),
+        (
+            Some("first"),
+            Some("explicit-decision"),
+            "first",
+            "explicit-decision",
+        ),
+    ] {
+        let mut headers = vec![
+            ("Authorization", format!("Bearer {NATIVE_TOKEN}")),
+            ("Content-Type", "application/json".into()),
+        ];
+        if let Some(provider) = provider {
+            headers.push(("X-EMP-Provider", provider.into()));
+        }
+        let mut body = json!({"state":"routing fixture","questions":{}});
+        if let Some(model) = explicit {
+            body["model"] = json!(model);
+        }
+        let response = http(
+            emp.port,
+            "POST",
+            "/v1/decisions",
+            &headers
+                .iter()
+                .map(|(key, value)| (*key, value.as_str()))
+                .collect::<Vec<_>>(),
+            body.to_string().as_bytes(),
+        );
+        assert_ok(&response, selected);
+        routes.assert_forwarded(selected, "/v1/decisions", expected_model);
+    }
+    emp.change("decision", "disable");
+    emp.assert_gone(pid);
+    assert_unavailable(&emp, "decision", &routes);
+    emp.change("decision", "enable");
+    emp.active(&module);
+    exercise(&emp, "decision", &routes);
+    emp.stop();
+}
+
+#[test]
+#[ignore = "needs current and next-version module binaries; see tests/support/modules.rs"]
+fn m02_gateway_admits_device_keys_rejects_revoked_keys_and_attributes_usage() {
+    let module = BuiltModule::current("gateway");
+    let release = ModuleRelease::start(std::slice::from_ref(&module));
+    let routes = Routes::new();
+    let workspace = routes.configured_workspace("priority");
+    let emp = release.start_emp(&workspace);
+    emp.change("gateway", "install");
+    let pid = emp.active(&module);
+    let mut clients = Vec::new();
+    let mut requests = Vec::new();
+    for name in ["Desktop", "Laptop"] {
+        let issued = emp.post("/api/gateway/clients", &json!({"name":name}));
+        assert_eq!(issued.status, 200, "{}", issued.text());
+        let client = issued.json();
+        assert_ok(
+            &routed(
+                &emp,
+                client["api_key"].as_str().expect("device key"),
+                "first/model",
+                name,
+            ),
+            "first",
+        );
+        requests.push(
+            routes
+                .assert_forwarded("first", "/v1/responses", "upstream-model")
+                .headers["x-emp-request-id"]
+                .clone(),
+        );
+        clients.push(client);
+    }
+    let usage = report(
+        &emp,
+        "/api/gateway/usage?group=device&start=0&end=4102444800",
+    );
+    let rows = usage["rows"].as_array().expect("device usage");
+    assert_eq!(rows.len(), 2, "{usage}");
+    let calls = report(&emp, "/api/calls?start=0&end=4102444800");
+    for (client, request_id) in clients.iter().zip(&requests) {
+        let row = rows
+            .iter()
+            .find(|row| row["caller_id"] == client["id"])
+            .expect("usage attributed to issued device");
+        assert_eq!(row["caller_name"], client["name"]);
+        assert_eq!(row["calls"], 1, "{row}");
+        assert_eq!(row["input_tokens"], 7, "{row}");
+        assert_eq!(row["output_tokens"], 3, "{row}");
+        assert_eq!(row["models"][0]["model"], "upstream-model");
+        let call = calls["records"]
+            .as_array()
+            .expect("call records")
+            .iter()
+            .find(|row| row["request_id"] == *request_id)
+            .expect("device call");
+        assert_eq!(call["caller_id"], client["id"], "{call}");
+        assert_eq!(call["caller_name"], client["name"]);
+        assert_eq!(call["provider_id"], "first");
+    }
+    let removed = emp.api(
+        "DELETE",
+        "/api/gateway/clients",
+        Some(&json!({"id":clients[0]["id"]})),
+    );
+    assert_eq!(removed.status, 200, "{}", removed.text());
+    for key in ["wrong-device-key", clients[0]["api_key"].as_str().unwrap()] {
+        let denied = routed(&emp, key, "first/model", "denied-device");
+        assert_eq!(denied.status, 401, "{}", denied.text());
+        routes.assert_idle();
+    }
+    let history = report(&emp, "/api/gateway/usage?start=0&end=4102444800");
+    for client in &clients {
+        let row = history["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["caller_id"] == client["id"])
+            .expect("retained device usage");
+        assert_eq!(
+            row["calls"], 1,
+            "denied requests must not add device usage: {row}"
+        );
+    }
+    emp.change("gateway", "disable");
+    emp.assert_gone(pid);
+    assert_unavailable(&emp, "gateway", &routes);
+    let denied = routed(
+        &emp,
+        clients[1]["api_key"].as_str().unwrap(),
+        "first/model",
+        "disabled-device",
+    );
+    assert_eq!(denied.status, 401, "{}", denied.text());
+    routes.assert_idle();
+    assert_ok(
+        &routed(&emp, NATIVE_TOKEN, "first/model", "local-after-disable"),
+        "first",
+    );
+    routes.assert_forwarded("first", "/v1/responses", "upstream-model");
+    emp.stop();
+}
+
+#[test]
+#[ignore = "needs current and next-version module binaries; see tests/support/modules.rs"]
+fn m02_aggregate_selects_candidates_pins_sessions_and_disables_routes() {
+    let module = BuiltModule::current("aggregate");
+    let release = ModuleRelease::start(std::slice::from_ref(&module));
+    let routes = Routes::new();
+    for (policy, choices) in [
+        ("priority", ["first", "first", "first", "first"]),
+        ("round_robin", ["first", "second", "first", "second"]),
+    ] {
+        let workspace = routes.configured_workspace(policy);
+        let emp = release.start_emp(&workspace);
+        emp.change("aggregate", "install");
+        let pid = emp.active(&module);
+        for (session, selected) in ["session-a", "session-b", "session-a", "session-b"]
+            .into_iter()
+            .zip(choices)
+        {
+            assert_ok(&routed(&emp, NATIVE_TOKEN, "auto/probe", session), selected);
+            routes.assert_forwarded(selected, "/v1/responses", "upstream-model");
+        }
+        emp.change("aggregate", "disable");
+        emp.assert_gone(pid);
+        assert_unavailable(&emp, "aggregate", &routes);
+        for session in ["session-a", "session-b"] {
+            let denied = routed(&emp, NATIVE_TOKEN, "auto/probe", session);
+            assert_eq!(denied.status, 503, "{}", denied.text());
+            routes.assert_idle();
+        }
+        assert_ok(
+            &routed(&emp, NATIVE_TOKEN, "first/model", "direct-route"),
+            "first",
+        );
+        routes.assert_forwarded("first", "/v1/responses", "upstream-model");
+        emp.change("aggregate", "enable");
+        emp.active(&module);
+        assert_ok(
+            &routed(&emp, NATIVE_TOKEN, "auto/probe", "session-b"),
+            choices[1],
+        );
+        routes.assert_forwarded(choices[1], "/v1/responses", "upstream-model");
+        emp.stop();
+    }
+}
