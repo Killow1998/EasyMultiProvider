@@ -1,5 +1,3 @@
-//! Stable quota display projection.
-
 use super::*;
 
 pub(super) fn read_limits(

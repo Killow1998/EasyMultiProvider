@@ -28,8 +28,6 @@ const MAX_ROLLOUT_LINE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ROLLOUT_SCAN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const REVERSE_SCAN_WINDOW_CAP: u64 = 64 * 1024 * 1024;
 
-/// Replay wiring for one rollout read: lineage bounds, fork checkpoint, and
-/// the seed history.
 struct ReplayContext<'a> {
     exact_compaction: Option<&'a Map<String, Value>>,
     lineage_bound: Option<u64>,
@@ -94,12 +92,8 @@ impl CodexHomeHistoryReader {
                 },
             );
         }
-        // The lineage is one logical rollout: ancestors replay oldest first
-        // into the same visible vector, and the child replays on top of that
-        // state. A self-contained child compaction then replaces the whole
-        // vector (ancestors drop out), while an opaque child compaction
-        // resolves against the merged pre-compaction history exactly as the
-        // full scan would.
+        // Replay ancestors oldest first into the child's history; self-contained compactions
+        // replace it, while opaque compactions resolve against the merged pre-compaction history.
         let segments = self.lineage_segments(&database, &location.path, thread)?;
         let mut visible = Vec::<VisibleItem>::new();
         let mut source_model = None;
@@ -175,10 +169,8 @@ impl HistoryReader for CodexHomeHistoryReader {
         let mut snapshot =
             match self.read_committed_checkpoint(&database, location, source_thread, compaction) {
                 Ok(snapshot) => snapshot,
-                // Older, non-paginated rollouts can store a visible summary without
-                // the remote checkpoint identity. Preserve that existing contract.
-                // Paginated histories must resolve the requested durable checkpoint:
-                // an older visible summary does not authorize dropping newer work.
+                // Non-paginated rollouts may use visible summaries without remote identities;
+                // paginated histories require the exact durable checkpoint to preserve newer work.
                 Err(error) if legacy && error.reason() == "compaction_identity_missing" => {
                     match resumed.filter(|snapshot| {
                         snapshot.items.iter().any(|item| {

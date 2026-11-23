@@ -1,4 +1,3 @@
-//! Preserve the Node interpreter needed by npm-installed Codex launchers.
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,11 +9,8 @@ pub(crate) enum PathAdjustment {
     Refuse,
 }
 
-/// Put a trusted Node runtime beside an npm launcher ahead of the inherited
-/// PATH. npm's `codex` entry commonly has `#!/usr/bin/env node`; desktop apps
-/// often start with a PATH that omits the nvm version containing both files.
-/// If an untrusted sibling `node` exists, remove that directory from PATH so
-/// `/usr/bin/env` cannot select it from an inherited PATH entry.
+/// npm launchers use env node: prepend their trusted sibling Node for desktop PATHs that omit it,
+/// or remove the directory from inherited PATH if that sibling exists but is untrusted.
 pub(crate) fn path_with_node(directory: &Path, inherited: Option<OsString>) -> PathAdjustment {
     let Ok(directory) = directory.canonicalize() else {
         return PathAdjustment::Inherit;
@@ -57,8 +53,7 @@ pub(crate) fn path_with_node(directory: &Path, inherited: Option<OsString>) -> P
     std::env::join_paths(paths).map_or(PathAdjustment::Refuse, PathAdjustment::Set)
 }
 
-/// Resolve an npm launcher's directory before its symlink target is
-/// canonicalized, so its sibling `node` remains discoverable at spawn time.
+/// Resolve the directory before canonicalizing the launcher, preserving sibling Node discovery.
 pub(crate) fn launcher_directory(path: &Path) -> Option<PathBuf> {
     path.parent()?.canonicalize().ok()
 }

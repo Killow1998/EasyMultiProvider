@@ -99,12 +99,8 @@ pub(super) fn session_meta_history_mode(
     }
 }
 
-/// Lineage pointer recorded on a paginated rollout's session meta.
-///
-/// Returns `(parent rollout id, end_ordinal_exclusive, end_byte_offset)` when
-/// the child inherits a bounded prefix from another rollout. The byte offset
-/// freezes the physical prefix the child forked from; `0` (or absent) keeps
-/// the ordinal bound as the only cutoff.
+/// Inherited prefix: `(parent rollout id, end_ordinal_exclusive, end_byte_offset)`;
+/// the byte offset freezes the fork point, while 0 or absent leaves only the ordinal cutoff.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct HistoryBase {
     pub(super) thread_id: String,
@@ -206,8 +202,7 @@ pub(super) fn replacement_history(
                 .ok_or_else(|| HistoryError::new("invalid_replacement_history"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    // Per-item metadata is positional: anything other than a parallel array
-    // means the replacement cannot be trusted item for item.
+    // Positional replacement metadata requires a parallel array to preserve item identity.
     if let Some(metadata) = payload
         .get("replacement_history_metadata")
         .filter(|value| !value.is_null())
@@ -263,7 +258,6 @@ pub(super) fn replacement_entries(
     Ok(output)
 }
 
-/// Window number persisted on a compaction record, when present.
 pub(super) fn payload_window_number(record: &Map<String, Value>) -> Option<u64> {
     let payload = record.get("payload").and_then(Value::as_object);
     payload
@@ -272,7 +266,6 @@ pub(super) fn payload_window_number(record: &Map<String, Value>) -> Option<u64> 
         .and_then(Value::as_u64)
 }
 
-/// Resume metadata contract marker on a compaction record.
 pub(super) fn payload_resume_metadata(record: &Map<String, Value>) -> Option<&Value> {
     let payload = record.get("payload").and_then(Value::as_object);
     payload

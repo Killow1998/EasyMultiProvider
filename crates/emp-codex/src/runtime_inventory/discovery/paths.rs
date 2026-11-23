@@ -1,4 +1,3 @@
-//! Known on-disk installation layouts and trust-gated path lookup.
 use super::platform::{RuntimeOs, RuntimePlatform};
 use super::windows::cli_runtime_candidate_for_launcher;
 use std::cmp::Ordering;
@@ -252,8 +251,7 @@ pub(super) fn app(
         .into_iter()
         .next()
 }
-/// Known nvm roots only. This reads their direct Node-version children and
-/// never sources shell startup files or walks the user's home recursively.
+/// Read only direct children of known nvm roots, without sourcing shell files or walking the home.
 pub(in crate::runtime_inventory) fn nvm_roots(
     user_home: &Path,
     nvm_dir: Option<&OsStr>,

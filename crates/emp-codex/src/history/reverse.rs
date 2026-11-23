@@ -1,4 +1,3 @@
-//! Bounded reverse lookup of a self-contained compaction checkpoint.
 use super::REVERSE_SCAN_WINDOW_CAP;
 use super::lines::{read_bounded_line, rollout_json_line};
 use super::records::{payload_resume_metadata, payload_window_number, replacement_history};
@@ -8,27 +7,18 @@ use serde_json::{Map, Value};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 
-/// Byte offset where the newest replacement-history compaction record ends.
 #[derive(Debug)]
 pub(super) struct ReverseBase {
-    /// Records replayed instead of the full rollout prefix.
     pub(super) replacement: Vec<Map<String, Value>>,
     /// File offset of the compaction record, used to carry prefix controls.
     pub(super) record_start: u64,
-    /// File offset of the first record after the compaction record.
     pub(super) suffix_start: u64,
-    /// Explicit turn on the compaction record, if present.
     pub(super) turn: Option<String>,
     /// Ordinal of the compaction record; seeds suffix monotonicity.
     pub(super) ordinal: Option<u64>,
 }
 
-/// Offset of the first record boundary at or after `start`.
-///
-/// When `start` already sits exactly on a record start (offset 0, or the
-/// byte before it is `\n`), the record beginning there is inside the window
-/// and must stay visible; otherwise the boundary is the first `\n` in the
-/// window plus one. Window end is returned when no complete line exists.
+/// Keep `start` if it is a record boundary; otherwise skip the partial line, or return `end`.
 fn first_line_boundary(file: &mut File, start: u64, end: u64) -> Result<u64, HistoryError> {
     if start >= end {
         return Ok(end);
@@ -64,10 +54,8 @@ fn first_line_boundary(file: &mut File, start: u64, end: u64) -> Result<u64, His
     }
 }
 
-/// Scan backward for the newest compaction, then return its following record
-/// boundary. `None` requires full replay; never substitute an older compaction.
-/// Paginated history needs replacement history and a window number; other
-/// history also needs resume metadata. Growing tail windows bound normal reads.
+/// Only the newest compaction may seed replay: require replacement history and a window number,
+/// plus resume metadata outside paginated mode; `None` requires full replay.
 pub(super) fn locate_latest_compaction(
     file: &mut File,
     captured_end: u64,
@@ -96,18 +84,13 @@ pub(super) fn locate_latest_compaction(
             match rollout_json_line(&line, terminated) {
                 Ok(Some(record)) => {
                     if token(record.get("type")).as_str() == "compacted" {
-                        // Scanning forward, so each later compaction replaces
-                        // the earlier one: the newest encountered record is
-                        // the only candidate. Whether it is eligible decides
-                        // the whole outcome; never fall back to an older one.
+                        // Always replace the candidate: an ineligible newest compaction forbids older bases.
                         let replacement = replacement_history(&record)?;
                         let eligible = replacement.is_some()
                             && payload_window_number(&record).is_some()
                             && (history_mode == "paginated"
                                 || payload_resume_metadata(&record).is_some())
-                            // An opaque compaction item resolves against the
-                            // pre-compaction visible history, so it is not
-                            // self-contained; the full scan owns that case.
+                            // Opaque compactions need pre-compaction history from full replay.
                             && !replacement.as_ref().is_some_and(|items| {
                                 items.iter().any(|item| {
                                     item.get("type").and_then(Value::as_str)
@@ -119,8 +102,7 @@ pub(super) fn locate_latest_compaction(
                                 })
                             });
                         let base_ordinal = ordinal(&record);
-                        // A paginated base without an ordinal cannot seed the
-                        // suffix monotonicity check; the full scan owns it.
+                        // Paginated suffix monotonicity needs the base's ordinal.
                         let has_seed_ordinal =
                             history_mode != "paginated" || base_ordinal.is_some();
                         candidate = (eligible && has_seed_ordinal).then(|| ReverseBase {
@@ -142,7 +124,6 @@ pub(super) fn locate_latest_compaction(
             return Ok(candidate);
         }
         if start == 0 {
-            // Whole file scanned without an eligible compaction base.
             return Ok(None);
         }
         if window >= REVERSE_SCAN_WINDOW_CAP {

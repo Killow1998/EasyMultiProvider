@@ -1,19 +1,7 @@
-//! The one executable trust rule for every Codex binary EMP runs: runtime
-//! inventory probes and quota app-server processes.
-//!
-//! The canonical target must be a regular file. On Unix it must also be
-//! executable and not set-id, and neither it nor any ancestor directory may
-//! be modifiable by another user:
-//!
-//! - every entry must be owned by root or the current user, since an owner
-//!   can always change its entry's permissions;
-//! - world write is foreign unless the directory is sticky and the entry
-//!   below it belongs to root or the current user (`/tmp`), since then other
-//!   users cannot rename or remove that entry;
-//! - group write is foreign unless the group is private: every member, both
-//!   users whose primary group it is and its supplementary members, is root
-//!   or the current user (user-private groups from umask 002 npm/nvm
-//!   installs).
+//! Codex executables must be canonical regular files; Unix targets must be executable and not set-id.
+//! Unix entries and ancestors must be root/user-owned with no foreign write access.
+//! Sticky directories protect root/user-owned children; writable groups must have only root/user
+//! members, counting both primary and supplementary membership.
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -67,7 +55,6 @@ fn validate_executable_with(
         if foreign_writable(&metadata, None, current_uid, &private_groups) {
             return Err(TrustFailure::Writable);
         }
-        // Owner of the entry directly below the ancestor being checked.
         let mut entry_uid = metadata.uid();
         for parent in path.ancestors().skip(1) {
             let info = fs::metadata(parent).map_err(|_| TrustFailure::Unavailable)?;
@@ -82,9 +69,7 @@ fn validate_executable_with(
     Ok(())
 }
 
-/// Validate a directory that will be placed on a child process PATH.
-/// Unlike an executable's ancestors, the directory itself cannot use sticky
-/// world-write protection: other users could add a higher-priority command.
+/// Validate a child PATH directory; sticky world-write protection cannot stop foreign commands.
 pub(crate) fn validate_search_directory(path: &Path) -> Result<(), TrustFailure> {
     if !path.is_absolute() {
         return Err(TrustFailure::NotTrusted);
@@ -135,8 +120,7 @@ fn foreign_writable(
         return true;
     }
     let mode = info.mode();
-    // The directory owner is trusted (checked above), so only root, the
-    // current user and the entry's owner can rename or remove the entry.
+    // The trusted directory owner limits replacement to root, the current user and the entry owner.
     let sticky_protects_entry = mode & 0o1000 != 0
         && info.is_dir()
         && entry_uid.is_some_and(|uid| trusted_owner(uid, current_uid));
@@ -173,8 +157,7 @@ impl PrivateGroups {
             return false;
         };
         let trusted = |uid: u32| trusted_owner(uid, self.current_uid);
-        // Users whose primary group this is are members without appearing
-        // in the group's member list.
+        // Primary-group members need not appear in the group's member list.
         if accounts
             .iter()
             .any(|(_, uid, primary)| *primary == gid && !trusted(*uid))
@@ -192,9 +175,7 @@ impl PrivateGroups {
     }
 }
 
-/// Every account the passwd database enumerates; `None` when the
-/// enumeration fails part-way, since a missed account could share the group.
-/// `getpwent` keeps global cursor state, so enumerations are serialized.
+/// Reject partial passwd enumerations that could miss group members; serialize getpwent's global cursor.
 #[cfg(unix)]
 fn enumerate_accounts() -> Option<Vec<(Vec<u8>, u32, u32)>> {
     static ENUMERATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -204,8 +185,7 @@ fn enumerate_accounts() -> Option<Vec<(Vec<u8>, u32, u32)>> {
     unsafe {
         libc::setpwent();
         let accounts = collect_entries(|| {
-            // getpwent signals both the end and an error with NULL; only
-            // errno tells them apart.
+            // getpwent uses NULL for both EOF and errors; errno distinguishes them.
             *errno_location() = 0;
             let entry = libc::getpwent();
             if entry.is_null() {
@@ -228,9 +208,7 @@ fn enumerate_accounts() -> Option<Vec<(Vec<u8>, u32, u32)>> {
     }
 }
 
-/// Drain `next` (`Ok(None)` at the end, `Ok(Some(None))` for a skipped
-/// entry). Any error discards everything: a partial list is not a complete
-/// one. An empty enumeration is treated as a failure too.
+/// Drain `next` (`Ok(None)` ends, `Ok(Some(None))` skips); discard partial or empty enumerations.
 #[cfg(unix)]
 fn collect_entries<T>(mut next: impl FnMut() -> Result<Option<Option<T>>, ()>) -> Option<Vec<T>> {
     let mut entries = Vec::new();

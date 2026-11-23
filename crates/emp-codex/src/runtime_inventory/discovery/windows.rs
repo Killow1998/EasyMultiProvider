@@ -1,4 +1,3 @@
-//! Windows package registration and npm launcher resolution.
 use super::paths::executable;
 use super::platform::{RuntimeOs, RuntimePlatform};
 use std::path::{Path, PathBuf};
@@ -44,8 +43,7 @@ pub(super) fn windows_npm_native_candidate(
     }
     let prefix = launcher.parent()?;
     let package = platform.cli_optional_package();
-    // Global npm places codex.cmd beside node_modules. Local npm places it
-    // under node_modules/.bin, with @openai/codex beside .bin.
+    // npm places codex.cmd beside node_modules globally, or under node_modules/.bin locally.
     let package_root = if prefix
         .file_name()
         .is_some_and(|name| name.eq_ignore_ascii_case(".bin"))
@@ -58,9 +56,7 @@ pub(super) fn windows_npm_native_candidate(
     } else {
         prefix.join("node_modules/@openai/codex")
     };
-    // Match the official launcher: require.resolve checks package-local
-    // node_modules before hoisted optional dependencies. If resolution fails,
-    // the launcher looks for the vendored binary inside @openai/codex.
+    // Match official resolution order: package-local dependencies, hoisted dependencies, vendored binary.
     let roots = [
         package_root.join("node_modules/@openai").join(package),
         package_root.parent()?.join(package),

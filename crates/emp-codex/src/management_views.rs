@@ -3,7 +3,6 @@ use crate::merged_catalog::{build_catalog, family_identity, strip_context_prefix
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// Shadow uses the production aggregation over resolved, credential-free source metadata.
 pub fn aggregate_views(config: &Value, source: &Value) -> Value {
     let mut models = array(source, "models")
         .iter()
@@ -59,8 +58,7 @@ pub fn model_views(
     })
 }
 
-/// Subscription edit controls use the owner's unmodified catalog limits, not
-/// context overrides or display visibility from EMP configuration.
+/// Subscription edit controls use the owner's catalog limits without EMP overrides or visibility.
 pub fn subscription_model_options(catalog: &Value, include_retained: bool) -> Vec<Value> {
     array(catalog, "models").iter().filter(|model| {
         model.is_object() && !text(model, "slug").trim().is_empty()

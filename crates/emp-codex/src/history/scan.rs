@@ -1,4 +1,3 @@
-//! Rollout identity, turn boundaries and completion evidence; no file I/O.
 use super::records::{replacement_contains_encoded, session_meta_history_mode, session_meta_id};
 use super::source::RecordSource;
 use super::visible::{message_role, ordinal, record_turn_id, string_from, token};
@@ -14,11 +13,8 @@ pub(super) struct RolloutScan {
     pub(super) successful_models: Vec<(String, Option<String>)>,
     pub(super) response_roles: BTreeSet<(Option<String>, String)>,
     pub(super) saw_ordinal: bool,
-    /// Newest ordinal observed on a paginated rollout, for monotonicity.
     pub(super) last_ordinal: Option<u64>,
-    /// An ordinal regressed below the newest one: malformed pagination.
     pub(super) ordinal_regressed: bool,
-    /// A record inside the replay window lacks the ordinal Codex promises.
     pub(super) ordinal_missing: bool,
     pub(super) explicit_turns: BTreeSet<String>,
     pub(super) terminal_turns: BTreeSet<String>,
@@ -31,11 +27,7 @@ pub(super) struct RolloutScan {
     pub(super) history_closed: bool,
 }
 
-/// Track paginated ordinal monotonicity while scanning.
-///
-/// A missing ordinal on an otherwise parsed record, or an ordinal that
-/// regresses below the newest one, marks malformed pagination (checked after
-/// the scan). Forward gaps stay legal: unknown or future records may skip.
+/// Missing or regressing ordinals invalidate pagination; forward gaps remain legal.
 pub(super) fn track_ordinal(scan: &mut RolloutScan, record: &Map<String, Value>) {
     match ordinal(record) {
         Some(value) => {

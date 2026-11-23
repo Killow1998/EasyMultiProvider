@@ -1,4 +1,3 @@
-//! Database lookup, ancestor resolution and containment before opening rollouts.
 use super::records::{locate, session_meta_history_mode, session_meta_id};
 use super::source::{read_history_base, read_session_meta};
 use super::{CodexHomeHistoryReader, MAX_LINEAGE_SEGMENTS};
@@ -16,26 +15,18 @@ pub(super) struct Location {
     pub(super) source_model: Option<String>,
 }
 
-/// One rollout segment of a paginated lineage, replayed oldest first.
 pub(super) struct LineageSegment {
-    /// Rollout identifier owning the segment.
     pub(super) thread: String,
-    /// Resolved rollout file and history mode.
     pub(super) location: Location,
     /// Records at or above this ordinal belong to the next-younger segment.
     pub(super) bound: Option<u64>,
-    /// Frozen physical prefix (`history_base.end_byte_offset`); 0 disables
-    /// the byte cutoff, keeping the ordinal bound as the only boundary.
+    /// Frozen prefix (`history_base.end_byte_offset`); 0 leaves only the ordinal bound.
     pub(super) byte_offset: u64,
 }
 
 impl CodexHomeHistoryReader {
-    /// Resolve the lineage segments for a paginated rollout, child last.
-    ///
-    /// The child rollout is segment zero; each `history_base` pointer walks
-    /// one ancestor older. Cycles and unbounded chains are rejected; a
-    /// missing ancestor surfaces as `source_missing` because the visible
-    /// history would be silently incomplete otherwise.
+    /// Resolve paginated ancestors oldest first, child last; reject cycles, excessive depth and
+    /// missing ancestors (`source_missing`) rather than silently returning incomplete history.
     pub(super) fn lineage_segments(
         &self,
         database: &Path,
@@ -71,13 +62,10 @@ impl CodexHomeHistoryReader {
                 byte_offset,
             });
         }
-        // Chain was collected child-first; replay order is oldest first.
         segments.reverse();
         Ok(segments)
     }
 
-    /// Resolve a lineage ancestor either through the threads database or by
-    /// scanning the sessions tree for the rollout file name.
     fn locate_parent(&self, database: &Path, rollout_id: &str) -> Result<Location, HistoryError> {
         let roots = self.canonical_session_roots()?;
         match locate(database, rollout_id) {
@@ -203,9 +191,7 @@ impl CodexHomeHistoryReader {
             if !canonical.starts_with(root) {
                 return false;
             }
-            // `absolute` may reach the root through a symlinked or otherwise
-            // non-canonical home; strip the ancestor that resolves to the
-            // root, then require every component below it to be a real entry.
+            // Resolve home aliases to the root, then require real entries beneath it.
             let Some(relative) = absolute.ancestors().skip(1).find_map(|ancestor| {
                 (ancestor.canonicalize().ok()? == *root)
                     .then(|| absolute.strip_prefix(ancestor).ok())
@@ -236,9 +222,7 @@ impl CodexHomeHistoryReader {
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let path = entry.path();
-                // SQLite -wal/-shm sidecars share the `state_N` stem but are
-                // not queryable databases; only the exact `state_N.sqlite`
-                // file can answer the thread lookup.
+                // Only state_N.sqlite is queryable; -wal/-shm sidecars share its stem.
                 if path.extension().and_then(|extension| extension.to_str()) != Some("sqlite") {
                     return None;
                 }
@@ -251,9 +235,7 @@ impl CodexHomeHistoryReader {
             .ok_or_else(|| HistoryError::new("state_database_missing"))
     }
 
-    /// Canonical rollout path, provided it is a regular file inside the
-    /// Codex home. Checked before any open so a database row cannot point a
-    /// read at a FIFO or at a file outside the home.
+    /// Before opening, require a canonical regular file inside Codex home to reject FIFOs and escapes.
     pub(super) fn contained_rollout_path(&self, path: &Path) -> Result<PathBuf, HistoryError> {
         let home = self
             .home

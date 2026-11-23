@@ -1,7 +1,4 @@
-//! Executable trust checks applied before any inventory candidate is run.
-//!
-//! The rule is shared with quota app-server processes; see
-//! [`crate::executable_trust`].
+//! Apply [`crate::executable_trust`] before running any inventory candidate, as quota helpers do.
 use std::path::{Path, PathBuf};
 
 /// Return the canonical path of `path` if it may be executed for probing.

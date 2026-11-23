@@ -1,8 +1,3 @@
-//! Read-only Codex account catalog integration.
-//!
-//! This crate owns the filesystem and credential-derived selection rules used
-//! to resolve native and subscription models. It does not write Codex state.
-
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -28,10 +23,8 @@ const MAX_CONTEXT_WINDOW: u64 = 100_000_000;
 const MAX_OWNER_FIELD_CHARS: usize = 512;
 const AUTH_DOMAIN: &[u8] = b"emp-native-route-auth\0";
 
-/// Read the original native Codex model catalog.
-///
-/// Use the latest native source, excluding Codex caches of EMP's merged catalog.
-/// EMP refreshes its own snapshot; Codex alone owns its model-cache format.
+/// Read the latest native catalog, excluding EMP-merged caches; EMP refreshes
+/// its own snapshot while Codex owns its model-cache format.
 pub fn load_native_catalog(config: &Value) -> Value {
     let Some(config) = config.as_object() else {
         return empty_catalog();
@@ -77,8 +70,7 @@ fn load_native_catalog_from_map(config: &Map<String, Value>) -> Value {
             .and_then(Value::as_str)
             .is_some_and(|etag| etag.trim_matches('"').starts_with("emp-"))
     };
-    // A later genuine Codex refresh can seed the snapshot again. An EMP-merged
-    // cache must never feed back into the native source, regardless of its age.
+    // Only genuine Codex refreshes may reseed the native snapshot, regardless of cache age.
     let modified = |path: &Path| fs::metadata(path).and_then(|meta| meta.modified()).ok();
     let codex_is_newer = modified(&path)
         .zip(modified(&preserved_path))

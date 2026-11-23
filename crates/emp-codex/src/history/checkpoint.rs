@@ -1,4 +1,3 @@
-//! Recover the exact committed checkpoint over the same frozen lineage as resume.
 use super::location::{LineageSegment, Location};
 use super::{CodexHomeHistoryReader, ReplayContext};
 use emp_history::{HistoryAnchor, HistoryError, HistorySnapshot};
@@ -31,9 +30,7 @@ impl CodexHomeHistoryReader {
                 thread_id: Some(segment.thread),
                 ..HistoryAnchor::default()
             };
-            // The same prefix bounds apply both when looking for the identity
-            // and when replaying ancestors. Parent activity after the fork must
-            // neither match a checkpoint nor become the child's seed history.
+            // Apply the same frozen bounds to checkpoint lookup and replay to exclude post-fork activity.
             let replay = ReplayContext {
                 lineage_bound: segment.bound,
                 lineage_byte_offset: segment.byte_offset,
@@ -64,8 +61,7 @@ impl CodexHomeHistoryReader {
                         visible = snapshot.items;
                         source_model = snapshot.source_model.or(source_model);
                     } else {
-                        // The client's tail already owns everything after the
-                        // checkpoint. Remaining segments only check ambiguity.
+                        // The client owns the tail; later segments only check checkpoint ambiguity.
                         visible = replay.seed;
                     }
                 }

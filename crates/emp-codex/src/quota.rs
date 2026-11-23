@@ -1,5 +1,3 @@
-//! Safe projection of Codex app-server quota JSON-RPC output.
-
 use crate::account_auth_headers;
 use serde_json::{Map, Value, json};
 use std::env;
@@ -145,11 +143,8 @@ pub fn read_native_login_quota<'a>(
     run_quota_query(&auth, codex_binary, control, false).map(|result| result.quota)
 }
 
-/// Execute a quota read in an isolated Codex home.
-///
-/// A changed auth document is returned to the caller. The native-login helper
-/// deliberately discards it; imported-account state decides whether and how to
-/// persist it through EMP's encrypted vault.
+/// Read quota in an isolated Codex home, returning changed auth for the caller to persist;
+/// native login discards it, while imported accounts may save it in EMP's encrypted vault.
 pub fn run_quota_query<'a>(
     auth: &Value,
     codex_binary: &str,
@@ -209,8 +204,7 @@ where
     .map(|result| result.quota)
 }
 
-/// Validate and consume one native reset opportunity without mutating the
-/// native login document.
+/// Validate and consume one native reset opportunity without mutating the native login document.
 pub fn consume_native_quota_reset(
     auth_path: &Path,
     codex_binary: &str,

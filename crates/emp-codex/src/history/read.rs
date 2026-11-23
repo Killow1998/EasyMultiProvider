@@ -1,4 +1,3 @@
-//! Plain and compressed rollout orchestration; identity and replay live separately.
 use super::location::Location;
 use super::replay::{ReplayFrame, SuffixScan, replay_records, scan_suffix, snapshot_from_base};
 use super::reverse::locate_latest_compaction;
@@ -31,10 +30,7 @@ impl CodexHomeHistoryReader {
         if is_compressed_rollout(&path) {
             return self.read_compressed_rollout(anchor, location, file, captured_end, replay);
         }
-        // A lineage ancestor's `history_base.end_byte_offset` freezes the
-        // physical prefix the child forked from. A file shorter than that
-        // offset was truncated or rewritten: the frozen prefix contract is
-        // broken and replaying the remainder would be silently wrong.
+        // A file shorter than history_base.end_byte_offset has lost the child's frozen prefix.
         let byte_cap = if replay.lineage_byte_offset > 0 {
             if replay.lineage_byte_offset > captured_end {
                 return Err(HistoryError::new("lineage_prefix_truncated"));
@@ -44,18 +40,12 @@ impl CodexHomeHistoryReader {
             captured_end
         };
 
-        // Reverse base applies only to paginated resumes: the newest
-        // replacement-history compaction becomes the history base and replay
-        // covers its suffix. Fork checkpoints (exact compaction) keep the full
-        // scan because ambiguity detection must see every matching record.
+        // Paginated resumes may use reverse bases; exact fork checkpoints need full ambiguity detection.
         let reverse_base = if replay.exact_compaction.is_none()
             && !replay.force_full
             && location.mode == "paginated"
-            // A byte-capped ancestor never resumes from a reverse base: the
-            // frozen prefix is a bounded replay, not a live resume.
+            // Ancestor byte and ordinal bounds forbid bases recorded after the fork.
             && byte_cap == captured_end
-            // Neither does an ordinal-bounded ancestor: the newest checkpoint
-            // may postdate the fork and would seed history the bound excludes.
             && replay.lineage_bound.is_none()
         {
             locate_latest_compaction(&mut file, captured_end, &location.mode)?
@@ -63,9 +53,7 @@ impl CodexHomeHistoryReader {
             None
         };
         if let Some(mut base) = reverse_base {
-            // A checkpoint only replaces visible items. Scan the complete
-            // prefix for control state so older turns, models, response-role
-            // deduplication, identity/mode, and ordinals survive the base.
+            // Compactions replace only visible items; prefix control state must survive the base.
             let prefix_scan = {
                 let prefix_anchor = HistoryAnchor {
                     thread_id: anchor.thread_id.clone(),
@@ -90,8 +78,6 @@ impl CodexHomeHistoryReader {
             let suffix_start = base.suffix_start;
             let seed_turn = base.turn.clone().or(prefix_scan.last_turn.clone());
             base.turn = seed_turn.clone();
-            // Anchor inside the suffix and unchanged file: replay from base.
-            // Anchor outside the suffix or malformed suffix: full scan.
             let frame = ReplayFrame {
                 start: suffix_start,
                 end: captured_end,
@@ -127,7 +113,7 @@ impl CodexHomeHistoryReader {
             }
         }
 
-        // Reverse probing may leave the handle mid-file; restart at the top.
+        // Reverse probing may leave the handle mid-file.
         file.seek(SeekFrom::Start(0))
             .map_err(|_| HistoryError::new("source_unavailable"))?;
         let scan = {

@@ -1,4 +1,3 @@
-//! Operating system and architecture policies used by discovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RuntimeOs {
     Windows,

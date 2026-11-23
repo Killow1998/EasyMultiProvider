@@ -1,4 +1,3 @@
-//! Codex quota RPC errors and allowlisted public response projection.
 use super::projection::{mask_email, read_limits, safe_credit_snapshot};
 use super::*;
 
@@ -128,7 +127,6 @@ pub fn parse_app_server_output(output: &str) -> Result<Value, QuotaError> {
     parse_app_server_output_at(output, observed_at)
 }
 
-/// Deterministic variant used by the Python differential oracle.
 pub fn parse_app_server_output_at(output: &str, observed_at: u64) -> Result<Value, QuotaError> {
     let mut account = Map::new();
     let mut rate_limits = None;

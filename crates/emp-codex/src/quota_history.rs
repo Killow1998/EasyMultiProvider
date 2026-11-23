@@ -11,8 +11,7 @@ mod failures;
 use serde_json::{Map, Value, json};
 
 pub const SAMPLE_INTERVAL_SECONDS: i64 = 44;
-/// A query returns at most this many points per series; longer periods keep
-/// the newest sample of each evenly spaced slot.
+/// Per-series query limit; longer periods retain the newest sample in each evenly spaced slot.
 pub const MAX_POINTS_PER_SERIES: i64 = 720;
 pub const RETENTION_SECONDS: i64 = 15 * 24 * 60 * 60;
 
@@ -294,10 +293,8 @@ impl QuotaHistoryStore {
         }))
     }
 
-    /// Move samples recorded under a legacy local account key (an account id
-    /// or `@native`) to the verified upstream identity `owner`. Idempotent: a
-    /// slot `owner` already has keeps its own sample and the legacy duplicate
-    /// is dropped. Returns the number of samples moved.
+    /// Idempotently move legacy account-id or `@native` samples to verified upstream `owner`,
+    /// retaining the owner's sample in duplicate slots; returns the number moved.
     pub fn adopt_legacy_key(
         &self,
         legacy_key: &str,

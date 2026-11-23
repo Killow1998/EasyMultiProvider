@@ -1,8 +1,5 @@
-//! Trusted discovery for the optional Claude Code execution backend.
-//!
-//! Discovery checks absolute PATH entries first, then only known native,
-//! npm/nvm, and Homebrew locations. It does not source shell startup files,
-//! invoke package managers, or search recursively through a home directory.
+//! Discover trusted Claude Code executables via absolute PATH entries, then known install roots.
+//! Never source shell startup files, invoke package managers, or recursively search a home.
 
 use std::env;
 use std::ffi::OsString;

@@ -1,5 +1,3 @@
-//! Checkpoint conversion and bounded JSONL replacement writing.
-
 use super::HistoryRepairError;
 use super::paths::RolloutPaths;
 use super::replay::RolloutSummary;
@@ -98,8 +96,7 @@ fn replacement_checkpoint(
     } else if !payload.contains_key("message") {
         payload.insert("message".to_owned(), json!(""));
     }
-    // Keep the checkpoint small; the replacement follows as canonical
-    // response_item records immediately after it.
+    // Keep checkpoints small by placing canonical response_item replacements immediately after them.
     payload.insert("replacement_history".to_owned(), Value::Array(Vec::new()));
     payload.insert(
         "replacement_history_metadata".to_owned(),

@@ -1,4 +1,3 @@
-//! One operation's rollout inventory, shared by writer guards and replay.
 use super::HistoryRepairError;
 use super::inventory::{ThreadInfo, safe_rollout_path, session_roots};
 use crate::history::uuid_shape;
@@ -48,8 +47,7 @@ impl RolloutPaths {
     }
 
     pub(super) fn find(&self, id: &str) -> Result<PathBuf, HistoryRepairError> {
-        // Include misses and discovery failures: stale database paths must not
-        // cause a complete directory walk for every thread or ancestor.
+        // Cache misses and failures too, avoiding repeated directory walks for stale database paths.
         let index = self
             .discovered
             .get_or_init(|| self.discover())

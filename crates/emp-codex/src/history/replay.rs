@@ -1,4 +1,3 @@
-//! Visible replay and suffix fast path over an already bounded record source.
 use super::records::{
     replacement_entries, replacement_history, session_meta_history_mode, session_meta_id,
 };
@@ -14,29 +13,19 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 
-/// One replay pass over a rollout byte range.
-///
-/// The reverse-base path starts after a compaction record and seeds the replay
-/// with that record's replacement history plus the pre-base turn state the
-/// suffix scan cannot see. Every other path replays from the file head with an
-/// empty seed.
+/// Reverse replay starts after a compaction, seeded with replacement history and prefix control state.
 pub(super) struct ReplayFrame {
-    /// First replayed byte offset.
     pub(super) start: u64,
     /// Exclusive end offset (`captured_end` or a lineage byte cap).
     pub(super) end: u64,
-    /// Visible items rebuilt before the first replayed record.
     pub(super) seed_visible: Vec<VisibleItem>,
     /// Turn owning the seed, carried into records without a turn id.
     pub(super) seed_turn: Option<String>,
     /// Highest ordinal before `start`; `None` starts ordinal tracking fresh.
     pub(super) seed_ordinal: Option<u64>,
-    /// Turn completion states observed before `start`.
     pub(super) seed_successful: BTreeMap<String, bool>,
-    /// (turn, model) contexts observed before `start`; the replay resolves
-    /// its source model from these exactly as the full scan resolves its own.
+    /// Prefix model contexts must resolve the source model exactly as in full replay.
     pub(super) seed_models: Vec<(String, Option<String>)>,
-    /// Response roles observed before `start`.
     pub(super) seed_roles: BTreeSet<(Option<String>, String)>,
     pub(super) seed_thread_ids: BTreeSet<String>,
     pub(super) seed_history_modes: BTreeSet<String>,
@@ -59,14 +48,11 @@ impl ReplayFrame {
     }
 }
 
-/// A scan pass outcome: either the suffix fully determines the boundary or
-/// the caller must fall back to the full scan.
 pub(super) enum SuffixScan {
     Usable(Box<RolloutScan>),
     FallBack,
 }
 
-/// Forward scan of the records after a reverse-located compaction base.
 pub(super) fn scan_suffix(
     file: &mut File,
     frame: &ReplayFrame,
@@ -102,14 +88,10 @@ pub(super) fn scan_suffix(
             active_turn = explicit_turn.clone();
         }
         let turn = explicit_turn.clone().or_else(|| active_turn.clone());
-        // Ordinal integrity covers every parsed record, including the
-        // anchor hit itself; skipping it would let a suffix that contains
-        // only the anchor pass off a missing-ordinal defect.
+        // Include the anchor record in ordinal validation, even when it is the entire suffix.
         track_ordinal(&mut scan, &record);
         if scan.history_closed {
-            // The full scan stops observing once the anchor closes history;
-            // semantic state after the boundary (model contexts, roles,
-            // completion states) must not influence the fast replay either.
+            // Ignore semantic state after the anchor boundary, as full replay does.
         } else if anchor
             .turn_id
             .as_deref()
@@ -136,17 +118,11 @@ pub(super) fn scan_suffix(
     if !usable {
         return Ok(SuffixScan::FallBack);
     }
-    // The full scan reports paginated ordinal defects terminally; the suffix
-    // scan only ever sees part of the file, so any defect it does see means
-    // the base cannot be trusted and the full scan must own the outcome.
+    // Full replay owns ordinal errors because the suffix cannot validate the whole file.
     if !scan.saw_ordinal || scan.ordinal_missing || scan.ordinal_regressed {
         return Ok(SuffixScan::FallBack);
     }
-    // A replacement is excluded from history by the failed-turn filter
-    // unless its owning turn completed successfully; a turn with no
-    // task_complete at all (interrupted) is unsuccessful too. A base owned
-    // by any non-successful turn would seed visible items full replay
-    // would never produce.
+    // Failed or interrupted turns cannot seed a replacement that full replay would exclude.
     if let Some(turn) = &frame.seed_turn {
         let outcome = scan
             .successful
@@ -160,10 +136,6 @@ pub(super) fn scan_suffix(
     Ok(SuffixScan::Usable(Box::new(scan)))
 }
 
-/// Replay the frame's records into `visible`, applying rollback markers, the
-/// failed-turn filter, the response-role echo filter, and replacement-history
-/// compaction records. Returns `None` when the boundary was hit and replay
-/// must stop.
 pub(super) fn replay_records(
     source: &mut impl RecordSource,
     frame: &ReplayFrame,
@@ -172,9 +144,7 @@ pub(super) fn replay_records(
     lineage_bound: Option<u64>,
 ) -> Result<Vec<VisibleItem>, HistoryError> {
     let mut visible = frame.seed_visible.clone();
-    // The anchored turn is in flight by definition; never let the failed-turn
-    // filter swallow its records. Other turns keep the completion state that
-    // both paths observed.
+    // The anchor is still in flight, so exempt it from failed-turn filtering.
     let mut successful = frame.seed_successful.clone();
     for (turn, ok) in &scan.successful {
         successful.insert(turn.clone(), *ok);
@@ -191,7 +161,6 @@ pub(super) fn replay_records(
             return Ok(false);
         }
         if lineage_bound.is_some_and(|bound| ordinal(&record).is_some_and(|value| value >= bound)) {
-            // The lineage cutoff owns everything from this ordinal on.
             return Ok(false);
         }
         let explicit_turn = record_turn_id(&record);
@@ -199,9 +168,7 @@ pub(super) fn replay_records(
             active_turn = explicit_turn.clone();
         }
         let turn = explicit_turn.clone().or_else(|| active_turn.clone());
-        // Rollback control markers carry no turn id and must survive the
-        // failed-turn filter: an interrupted turn followed by a rollback
-        // would otherwise swallow the marker and leak the stale suffix.
+        // Turnless rollback markers must precede failed-turn filtering to remove stale suffixes.
         if token(record.get("type")) == "event_msg"
             && token(
                 record
@@ -219,9 +186,7 @@ pub(super) fn replay_records(
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
             apply_thread_rollback(&mut visible, num_turns);
-            // The rolled-back turn is destroyed; records without an explicit
-            // turn id after the marker begin fresh turns instead of inheriting
-            // the interrupted turn's failure state.
+            // Later turnless records must not inherit the rolled-back turn's failure state.
             active_turn = None;
             index += 1;
             return Ok(true);
@@ -257,7 +222,6 @@ pub(super) fn replay_records(
     Ok(visible)
 }
 
-/// Rebuild visible history from a reverse-located compaction base.
 pub(super) fn snapshot_from_base(
     file: &mut File,
     base: ReverseBase,
@@ -268,14 +232,12 @@ pub(super) fn snapshot_from_base(
     let mut frame = frame;
     frame.seed_visible = replacement_entries(base.replacement, &[], base.turn.clone())?;
     let mut source = FileRecordSource::new(file, frame.start, frame.end);
-    // The reverse base never serves a lineage-bounded or fork-checkpoint
-    // replay, so the suffix replays unbounded.
+    // Reverse replay has no lineage or fork-checkpoint bounds.
     let items = replay_records(&mut source, &frame, &scan, anchor, None)?;
     Ok(HistorySnapshot {
         thread_id: anchor.thread_id.clone().unwrap_or_default(),
         items,
-        // Suffix turns are the newest evidence; read_rollout falls back to
-        // the threads table model for anchors without a turn id.
+        // Turnless anchors fall back to the threads table model in read_rollout.
         source_model: scan.source_model(),
     })
 }

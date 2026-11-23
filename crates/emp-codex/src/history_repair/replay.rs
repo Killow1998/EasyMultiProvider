@@ -1,5 +1,3 @@
-//! Streaming rollout parsing and lineage replay for legacy history repair.
-
 use super::HistoryRepairError;
 use super::inventory::ThreadInfo;
 use super::paths::RolloutPaths;

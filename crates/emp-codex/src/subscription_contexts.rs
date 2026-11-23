@@ -1,10 +1,7 @@
-//! Validation for subscription context-window preferences.
-
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Validation failure with the legacy `ValueError` classification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubscriptionContextError(String);
 

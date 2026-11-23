@@ -1,5 +1,3 @@
-//! Isolated Codex app-server process and executable verification.
-
 use super::*;
 
 mod child;
@@ -144,8 +142,7 @@ pub(super) fn read_native_auth(path: &Path) -> Result<Value, QuotaError> {
             "quota_error",
         ));
     }
-    // Native credentials belong to Codex. The disposable helper may use the
-    // current access token, but must never rotate a refresh token it cannot save.
+    // Native quota helpers may use access tokens but must never rotate Codex-owned refresh tokens.
     let tokens = auth
         .get("tokens")
         .and_then(Value::as_object)
@@ -183,8 +180,7 @@ pub(super) fn run_isolated_quota_process<'a>(
         &directory.path().join("quota-models.json"),
         include_bytes!("process/quota-models.json"),
     )?;
-    // A quota helper never runs a model. An authoritative local catalog stops
-    // app-server's startup model refresh without sharing credential homes.
+    // A local catalog prevents startup model refresh without sharing credential homes or running a model.
     write_private(
         &directory.path().join("config.toml"),
         b"cli_auth_credentials_store = \"file\"\nmodel_catalog_json = \"quota-models.json\"\n\n[features]\nplugins = false\n",
@@ -256,15 +252,12 @@ fn app_server_command(binary: &TrustedBinary, directory: &Path) -> Result<Comman
     Ok(command)
 }
 
-/// Temporary `CODEX_HOME` directories hold a decrypted `auth.json` while one
-/// quota check runs.
+/// Temporary quota homes contain decrypted auth.json tokens.
 const CREDENTIAL_DIRECTORY_PREFIX: &str = "easy-mp-codex-account-";
-/// A quota check is bounded well below this age; older directories are
-/// leftovers of a crashed or killed EMP process and still hold live tokens.
+/// Longer than any quota check; older directories are crash leftovers containing live tokens.
 const STALE_CREDENTIAL_DIRECTORY_AGE: Duration = Duration::from_secs(60 * 60);
 
-/// Remove this user's stale credential directories left behind by an abnormal
-/// exit. Links, other users' entries and recent directories are left alone.
+/// Remove only this user's stale credential directories, excluding links and recent entries.
 fn sweep_stale_credential_directories(temp_root: &Path, now: SystemTime) {
     let Ok(entries) = fs::read_dir(temp_root) else {
         return;
@@ -303,8 +296,7 @@ fn set_private_directory(path: &Path) -> Result<(), QuotaError> {
     emp_state::create_private_directory(path).map_err(|_| quota_check_failed())
 }
 
-/// Create a new private file without following links: mode 0600 on Unix and
-/// a current-user-only DACL on Windows.
+/// Create without following links, using Unix mode 0600 or a Windows current-user-only DACL.
 fn write_private(path: &Path, value: &[u8]) -> Result<(), QuotaError> {
     emp_state::write_new_private_file(path, value).map_err(|_| quota_check_failed())
 }
@@ -440,8 +432,7 @@ fn query_child(
     if result.is_err() {
         child.stop();
     }
-    // Enforce process exit before joining readers: a helper that ignores EOF
-    // must not strand the refresh lock and shutdown drain indefinitely.
+    // Exit before joining readers so helpers ignoring EOF cannot strand refresh locks or shutdown.
     let cleanup = child.finish().map_err(|_| quota_check_failed());
     // Even a detached descendant retaining a pipe cannot strand these joins.
     stop_readers.store(true, Ordering::Release);

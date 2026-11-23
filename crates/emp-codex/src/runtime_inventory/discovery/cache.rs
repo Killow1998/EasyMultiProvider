@@ -26,8 +26,7 @@ fn digest(path: &Path) -> Option<[u8; 32]> {
     if before.length > 1024 * 1024 * 1024 {
         return None;
     }
-    // Metadata can stay unchanged after a same-length overwrite (coarse
-    // timestamps or a copy preserving mtime). It cannot cache byte identity.
+    // Same-length overwrites can preserve metadata, so it cannot cache byte identity.
     let mut file = std::fs::File::open(path).ok()?;
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];

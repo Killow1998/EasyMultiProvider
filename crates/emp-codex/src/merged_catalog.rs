@@ -1,4 +1,3 @@
-//! Codex catalog composition from already resolved native and account snapshots.
 use emp_state::normalize_reasoning_levels;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -325,8 +324,7 @@ fn apply_presentation(config: &Value, entry: &mut Value) {
         .and_then(|values| values.get(text(entry, "_emp_family")))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    // External entries do not carry the official collaboration harness.
-    // A stale preference cannot advertise an unsupported effort after refresh.
+    // External entries lack the official harness; stale preferences must not advertise unsupported efforts.
     if integer(entry.get("_emp_source_rank")) < 2
         && ultra_reasoning_levels(entry)
             .iter()

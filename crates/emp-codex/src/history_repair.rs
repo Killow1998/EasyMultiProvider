@@ -121,8 +121,7 @@ fn repair_selected(
         if inventory::has_rollouts(&home)? {
             return Err(HistoryRepairError::new("writer_coordination_unavailable"));
         }
-        // An empty home needs no migration lock. Do not manufacture evidence
-        // that a future, possibly older Codex writer supports coordination.
+        // Do not manufacture writer-coordination evidence for an empty home.
         return Ok((
             HistoryRepairLock {
                 _coordination: None,

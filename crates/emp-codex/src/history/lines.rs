@@ -8,8 +8,7 @@ use std::fs::File;
 use std::io::SeekFrom;
 use std::io::{BufRead, BufReader, Read, Seek};
 
-/// Walk every parsed record in the byte range from the current seek position
-/// to `end`, feeding each to `visit`. `Ok(false)` from `visit` stops the walk.
+/// Visit parsed records from the current position to `end`; `Ok(false)` stops the walk.
 pub(super) fn walk_records(
     file: &mut File,
     end: u64,

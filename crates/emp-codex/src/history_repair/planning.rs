@@ -1,4 +1,3 @@
-//! Shared rewrite planning for explicit and idle-history migration.
 use super::checkpoint::{has_emp1_tail_record, write_replacement_rollout};
 use super::inventory::ThreadInfo;
 use super::paths::RolloutPaths;
