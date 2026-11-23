@@ -13,6 +13,7 @@ workspace = true
 emp-domain = { path = "../emp-domain" }
 emp-protocol = { path = "../emp-protocol" }
 emp-transport = { path = "../emp-transport" }
+getrandom = "0.2.17"
 google-cloud-auth = "=1.18.0"
 serde_json.workspace = true
 sha2 = "0.10.9"

@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
 pub mod discovery;
+pub mod failure_policy;
 pub mod model_observation;
 pub mod native_http;
 pub mod native_metadata;

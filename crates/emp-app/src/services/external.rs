@@ -4,6 +4,7 @@ use crate::services::observation;
 use crate::services::providers::persist_protocol_observation;
 use crate::services::request_outcome::RequestOutcome;
 use emp_domain::{ResolvedRoute, RouteResolutionError};
+use emp_router::failure_policy;
 use emp_router::{CompleteResponse, ExternalRouter, ExternalStream, ProjectionIds, RouterError};
 use emp_transport::{FailureClass, FailurePhase, UpstreamFailure};
 use serde_json::Value;
@@ -144,7 +145,7 @@ impl Execution<'_> {
                 let fallback = retry.is_none()
                     && index + 1 < candidates.len()
                     && error.failure_reason() != Some("model_not_found")
-                    && emp_transport::protocol_fallback_allowed(error.status(), false, false);
+                    && failure_policy::protocol_fallback_allowed(error.status(), false, false);
                 if let Some(delay) = retry.or(fallback.then_some(Duration::ZERO)) {
                     outcome.retry(attempt, delay, &error, fallback);
                     if fallback {
@@ -187,12 +188,12 @@ fn retry_delay(error: &RouterError, attempt: usize, route: &ResolvedRoute) -> Op
         .trim()
         .to_ascii_lowercase()
         .ends_with(":free");
-    emp_transport::external_http_retry_allowed(&failure, attempt, false, false, free_route).then(
+    failure_policy::external_http_retry_allowed(&failure, attempt, false, false, free_route).then(
         || {
             failure
                 .retry_after_seconds
                 .map(Duration::from_secs)
-                .unwrap_or_else(|| emp_transport::external_backoff_delay(attempt))
+                .unwrap_or_else(|| failure_policy::external_backoff_delay(attempt))
         },
     )
 }
