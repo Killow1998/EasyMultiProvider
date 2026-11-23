@@ -10,6 +10,9 @@ description = "EMP native executable and local HTTP surface."
 name = "EMP"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 hotpath = { version = "=0.28.3", optional = true, default-features = false }
 base64 = "0.22"

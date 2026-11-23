@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 description = "Transactional field-level Codex configuration integration for EMP."
 
+[lints]
+workspace = true
+
 [dependencies]
 emp-state = { path = "../emp-state" }
 getrandom = "0.2.17"

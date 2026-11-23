@@ -11,6 +11,8 @@ on:
       - "contracts/*.sql"
       - "scripts/**"
       - "modules/**"
+      - "README*.md"
+      - "docs/**"
       - ".github/workflows/**"
   workflow_dispatch:
 
@@ -31,6 +33,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c # 1.93.1
         with:
           components: rustfmt, clippy
@@ -47,6 +50,7 @@ jobs:
           mkdir -p "$path"
           printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\n' "$path" "$path" "$path" >> "$GITHUB_ENV"
       - run: cargo fmt --all -- --check
+      - run: cargo xtask check
       - name: Verify frontend copy and behavior
         run: node --test crates/emp-app/tests/*_contract.cjs
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings

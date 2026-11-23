@@ -187,7 +187,7 @@ fn valid_session_persists_across_restart() {
     let (port, mut child, bootstrap_line) = spawn_emp(&config);
     let page = request(port, "/", &[]);
     assert!(page.starts_with(b"HTTP/1.1 200 OK\r\n"));
-    assert_eq!(body(&page), emp_app::WEB_INDEX_BYTES);
+    assert_eq!(body(&page), include_bytes!("../web/index.html").as_slice());
     // Fetch the shipped page's actual assets through the same listener used by
     // the browser. Feature extraction must not leave a working HTML shell with
     // missing scripts/styles or require a login to render the sign-in page.

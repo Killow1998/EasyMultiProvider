@@ -50,6 +50,16 @@ cargo +1.93.1 test --locked -p emp-codex --test history_contract
 check，再全量 clippy、test、build。`check` 跳过最终代码生成，不能替代可执行
 文件或 E2E 验收。
 
+### 确定性规则
+
+`cargo xtask check` 只读检查 crate 依赖、模组版本、黑盒测试边界、文档措辞和 main 工作流。
+workspace lints 统一禁止无理由的 `allow`、调试宏和未完成实现宏。
+新增约定优先通过架构、类型、workspace lints 或 xtask 检查落实。
+检查失败时按报错修正根因；依赖边变更须先更新结构方案 §3.2 和 xtask 允许清单。
+模组源码修改须同时更新发布版本；Rust 版本在各模组 Cargo.toml，Aero 版本在 worker.py。
+文档存量措辞的精确允许清单位于 `xtask/src/check/prose.rs`，新增正文描述当前行为。
+Linux Rust CI 执行这些规则；单元测试随已有 workspace 测试运行。
+
 前端现有检查：按变更选择文案、行为或生命周期合同。
 
 ```sh

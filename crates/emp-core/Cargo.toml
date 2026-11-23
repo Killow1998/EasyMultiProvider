@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 description = "Immutable route identities and bounded catalog values for EMP."
 
+[lints]
+workspace = true
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

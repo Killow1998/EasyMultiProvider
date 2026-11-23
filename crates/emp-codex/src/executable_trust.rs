@@ -19,7 +19,13 @@ pub(crate) enum TrustFailure {
     /// The target itself is not an acceptable executable.
     NotTrusted,
     /// The target or an ancestor can be modified by another user.
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[cfg_attr(
+        not(unix),
+        allow(
+            dead_code,
+            reason = "Writable mode-bit checks are Unix-only; the error type is shared across platforms"
+        )
+    )]
     Writable,
     #[cfg(target_os = "macos")]
     BundleVerificationFailed,
@@ -32,10 +38,14 @@ pub(crate) fn validate_executable(path: &Path) -> Result<(), TrustFailure> {
 
 fn validate_executable_with(
     path: &Path,
-    #[cfg_attr(not(unix), allow(unused_variables))] permit_writable_parent: impl Fn(
-        &Path,
-        &fs::Metadata,
-    ) -> bool,
+    #[cfg_attr(
+        not(unix),
+        allow(
+            unused_variables,
+            reason = "Only the Unix ancestor permission check consumes this policy callback"
+        )
+    )]
+    permit_writable_parent: impl Fn(&Path, &fs::Metadata) -> bool,
 ) -> Result<(), TrustFailure> {
     let metadata = fs::metadata(path).map_err(|_| TrustFailure::Unavailable)?;
     if !metadata.is_file() {

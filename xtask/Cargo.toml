@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 description = "Native packaging, package smoke tests and release checks for EMP."
 
+[lints]
+workspace = true
+
 [dependencies]
 emp-modules = { path = "../crates/emp-modules" }
 emp-state = { path = "../crates/emp-state" }

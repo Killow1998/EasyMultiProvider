@@ -87,7 +87,10 @@ pub struct ResolvedRoute {
 
 impl ResolvedRoute {
     /// Validate route fingerprints and identity fields to retain provenance.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The constructor validates every independent field of the immutable route snapshot"
+    )]
     pub fn new(
         requested_model: impl Into<String>,
         upstream_model: impl Into<String>,

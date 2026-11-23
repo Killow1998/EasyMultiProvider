@@ -27,6 +27,15 @@ license = "MIT"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 
+[workspace.lints.rust]
+unfulfilled_lint_expectations = "deny"
+
+[workspace.lints.clippy]
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
 # Keep useful application backtraces without retaining full dependency symbols.
 # Tests inherit the dev profile; use the same target directory for both.
 [profile.dev]

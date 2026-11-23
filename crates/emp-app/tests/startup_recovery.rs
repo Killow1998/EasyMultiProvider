@@ -1,5 +1,8 @@
 //! Recovery must work before the normal vault/backend exists.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "This target uses only recovery-related shared fixtures"
+)]
 mod support;
 use serde_json::json;
 use std::io::{BufRead, BufReader};

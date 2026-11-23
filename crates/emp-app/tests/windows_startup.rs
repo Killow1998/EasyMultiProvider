@@ -1,6 +1,9 @@
 #![cfg(windows)]
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "This Windows target uses only startup-related shared fixtures"
+)]
 mod support;
 
 use std::os::windows::process::CommandExt;

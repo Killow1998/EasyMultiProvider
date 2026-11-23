@@ -206,7 +206,13 @@ struct ChildTree {
 }
 
 impl ChildTree {
-    #[allow(unused_mut)]
+    #[cfg_attr(
+        not(windows),
+        allow(
+            unused_mut,
+            reason = "Only Windows needs to kill and reap the child if job assignment fails"
+        )
+    )]
     fn new(mut child: Child) -> Result<Self, &'static str> {
         #[cfg(windows)]
         {

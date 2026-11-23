@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 description = "State cryptography and filesystem vault compatibility for EMP."
 
+[lints]
+workspace = true
+
 [dependencies]
 emp-modules = { path = "../emp-modules" }
 atomic-write-file = "0.3.1"

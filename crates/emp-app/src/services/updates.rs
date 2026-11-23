@@ -33,7 +33,10 @@ impl Drop for RequestPermit {
 }
 
 impl UpdateState {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Update startup binds restart arguments, shutdown signals, diagnostics and module preparation"
+    )]
     pub(crate) fn new(
         config: &Path,
         version: &str,

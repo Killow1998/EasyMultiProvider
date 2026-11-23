@@ -156,7 +156,10 @@ impl Upstream {
     }
 
     /// Next request other than EMP's background native catalog refresh.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Only forwarding and native journey targets filter catalog refreshes"
+    )]
     pub fn next_forwarded(&self) -> UpstreamRequest {
         loop {
             let request = self.next_request();

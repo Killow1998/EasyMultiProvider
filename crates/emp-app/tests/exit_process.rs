@@ -1,5 +1,8 @@
 //! Real-process exit checks, with only synthetic configuration and loopback IO.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "This target uses only the exit-related subset of shared process fixtures"
+)]
 mod support;
 
 #[cfg(windows)]

@@ -9,6 +9,9 @@ publish = false
 name = "empmod-team"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 base64 = "0.22"
 emp-modules = { path = "../emp-modules" }

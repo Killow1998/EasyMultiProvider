@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 description = "Behavior-compatible request orchestration for EMP."
 
+[lints]
+workspace = true
+
 [dependencies]
 emp-core = { path = "../emp-core" }
 emp-protocol = { path = "../emp-protocol" }

@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 description = "Codex account and model-catalog compatibility for EMP."
 
+[lints]
+workspace = true
+
 [dependencies]
 base64 = "0.22"
 emp-state = { path = "../emp-state" }

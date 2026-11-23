@@ -1,7 +1,10 @@
 //! Actual desktop event-loop startup, with synthetic state and no browser window.
 #![cfg(any(windows, target_os = "macos"))]
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Desktop targets use a platform-specific subset of shared fixtures"
+)]
 mod support;
 
 use std::time::{Duration, Instant};

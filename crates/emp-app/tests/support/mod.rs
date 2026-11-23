@@ -17,10 +17,16 @@ mod upstream;
 mod websocket;
 
 #[cfg(target_os = "linux")]
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "Only some integration test targets use the HTTPS fixture"
+)]
 pub use https::HttpsProxy;
 
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "Integration test targets use different subsets of the shared fixtures"
+)]
 pub use self::{
     http::{Response, SseClient, http},
     process::{Emp, Workspace, emp_command},
@@ -29,7 +35,7 @@ pub use self::{
 };
 
 #[cfg(unix)]
-#[allow(unused_imports)]
+#[allow(unused_imports, reason = "Only the e2e target imports accounts")]
 pub use accounts::import_account;
 
 /// Synthetic Codex login token; `/v1/*` callers present it as a bearer token.

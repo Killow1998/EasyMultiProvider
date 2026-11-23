@@ -20,14 +20,26 @@ fn old_cli_app_and_editor_engines_reach_normal_route_validation() {
     server.shutdown().expect("shutdown");
 }
 
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "The credential refresh fixture is shared with tests gated to Unix"
+    )
+)]
 struct RefreshUpstream {
     address: SocketAddr,
     observed: mpsc::Receiver<ObservedNativeRequest>,
     worker: Option<JoinHandle<()>>,
 }
 
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "The credential refresh fixture is shared with tests gated to Unix"
+    )
+)]
 impl RefreshUpstream {
     fn start(expected_requests: usize) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind refresh upstream");
@@ -102,7 +114,13 @@ impl Drop for RefreshUpstream {
     }
 }
 
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "The account server fixture is shared with tests gated to Unix"
+    )
+)]
 fn account_server(base_url: &str, codex_binary: &str) -> (TempDir, ServerHandle, PathBuf) {
     let directory = tempfile::tempdir().expect("account temp dir");
     let root = crate::tests::credential_root(&directory);

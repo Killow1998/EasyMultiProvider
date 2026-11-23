@@ -1,3 +1,4 @@
+mod check;
 mod package;
 mod release;
 mod smoke;
@@ -18,6 +19,7 @@ pub const PRODUCT_NAME: &str = "EMP";
 const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
+  check                            check architecture, module versions, tests, docs and CI
   package [--skip-service-smoke]   build and smoke-test this platform's native package
   package-module ID [--output DIR] build one official module and its checksum
   package-smoke                    run update/install smoke tests against artifacts/
@@ -28,6 +30,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     let result = match args.first().map(String::as_str) {
+        Some("check") => check::run(rest),
         Some("package") => package::run(rest),
         Some("package-module") => package::run_module(rest),
         Some("package-smoke") => smoke::run(rest),

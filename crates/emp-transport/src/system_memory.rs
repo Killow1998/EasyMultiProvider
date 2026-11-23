@@ -34,7 +34,10 @@ pub fn system_memory_status() -> Option<MemoryStatus> {
     let mut count = libc::HOST_VM_INFO64_COUNT;
     // SAFETY: the host API writes `count` integer words into the correctly sized
     // vm_statistics64 buffer, and the host/flavor/count match Apple's ABI.
-    #[allow(deprecated)] // libc deprecates mach_host_self; its system ABI remains required here.
+    #[allow(
+        deprecated,
+        reason = "The macOS host statistics ABI requires libc's deprecated mach_host_self binding"
+    )]
     let result = unsafe {
         libc::host_statistics64(
             libc::mach_host_self(),

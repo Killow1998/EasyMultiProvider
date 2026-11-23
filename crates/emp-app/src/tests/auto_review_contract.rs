@@ -115,7 +115,13 @@ pub(super) fn make_review_server(
     (directory, server, config)
 }
 
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "The account catalog fixture is shared with tests gated to Unix"
+    )
+)]
 pub(super) fn write_owned_account_catalog(
     server: &ServerHandle,
     account: &Value,
@@ -488,14 +494,26 @@ fn http_auto_review_uses_imported_subscription_when_native_has_no_subscription()
     }
 }
 
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "The streaming fixture is shared with tests gated to Unix"
+    )
+)]
 struct ReviewStreamUpstream {
     address: SocketAddr,
     observed: mpsc::Receiver<(String, BTreeMap<String, String>, Value)>,
     worker: Option<JoinHandle<()>>,
 }
 
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "The streaming fixture is shared with tests gated to Unix"
+    )
+)]
 impl ReviewStreamUpstream {
     fn start() -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind WS upstream");

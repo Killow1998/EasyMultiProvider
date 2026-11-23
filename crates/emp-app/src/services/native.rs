@@ -79,7 +79,10 @@ pub(crate) fn open_stream_cancellable<'a>(
     )
 }
 
-#[allow(clippy::too_many_arguments)] // Native WS fallback transfers its existing receipt.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Native WS fallback must transfer its existing receipt alongside the stream inputs"
+)]
 fn open_stream_result_with_monitor<'a>(
     state: &'a ServerState,
     route: &ResolvedRoute,

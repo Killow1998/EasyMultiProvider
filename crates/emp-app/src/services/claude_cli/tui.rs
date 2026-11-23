@@ -52,7 +52,10 @@ impl Drop for Turn {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The turn executor needs routing, child identity, cancellation, accounting and streamed output"
+)]
 pub(super) fn execute(
     state: &ServerState,
     route: &ResolvedRoute,

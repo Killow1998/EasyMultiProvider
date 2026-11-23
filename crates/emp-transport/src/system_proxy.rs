@@ -26,18 +26,20 @@ pub(crate) fn capture() -> Option<ProxyEnvironment> {
 fn read_system_proxy() -> Result<Option<ProxyEnvironment>, ()> {
     #[cfg(target_os = "linux")]
     {
-        return capture_linux_gnome();
+        capture_linux_gnome()
     }
     #[cfg(target_os = "macos")]
     {
-        return capture_macos();
+        capture_macos()
     }
     #[cfg(windows)]
     {
-        return capture_windows();
+        capture_windows()
     }
-    #[allow(unreachable_code)]
-    Ok(None)
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        Ok(None)
+    }
 }
 
 fn push_unique_no_proxy(environment: &mut ProxyEnvironment, host: String) {

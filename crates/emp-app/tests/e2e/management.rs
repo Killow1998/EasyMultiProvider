@@ -31,7 +31,7 @@ fn browser_bootstrap_is_one_use_and_unlocks_management_without_secrets() {
 
     let page = emp.anonymous("GET", "/");
     assert_eq!(page.status, 200);
-    assert_eq!(page.body, emp_app::WEB_INDEX_BYTES);
+    assert_eq!(page.body, include_bytes!("../../web/index.html").as_slice());
 
     let replay = support::http(
         emp.port,
@@ -53,7 +53,7 @@ fn browser_bootstrap_is_one_use_and_unlocks_management_without_secrets() {
         "publish the actual bound listener port"
     );
     assert_eq!(config["models"].as_array().expect("models").len(), 4);
-    assert_eq!(config["emp_version"], emp_app::VERSION);
+    assert_eq!(config["emp_version"], env!("CARGO_PKG_VERSION"));
     upstream.assert_idle();
 }
 
@@ -82,7 +82,7 @@ fn support_report_is_authenticated_downloadable_and_private() {
     }
     let report = response.json();
     assert_eq!(report["schema_version"], 1);
-    assert_eq!(report["emp_version"], emp_app::VERSION);
+    assert_eq!(report["emp_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(report["configuration"]["location"], "custom");
     assert_eq!(report["configuration"]["path"], "<custom>/config.json");
     assert_eq!(report["configuration"]["exists"], true);

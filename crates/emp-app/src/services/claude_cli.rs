@@ -131,7 +131,10 @@ fn cancellation_reason(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Auth verification needs the isolated child directories and the request cancellation monitor"
+)]
 fn verify_local_subscription(
     state: &ServerState,
     executable: &emp_codex::installed_cli::InstalledClaudeCli,
