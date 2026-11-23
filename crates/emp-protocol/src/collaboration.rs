@@ -17,15 +17,6 @@ pub enum CollaborationError {
 }
 
 impl CollaborationError {
-    pub const fn python_type(self) -> &'static str {
-        match self {
-            Self::NamespaceCollision => "CollaborationNamespaceCollision",
-            Self::UnexpectedEncryptedArguments => "ValueError",
-            Self::TypeError => "TypeError",
-            Self::AttributeError => "AttributeError",
-        }
-    }
-
     pub const fn status(self) -> u16 {
         match self {
             Self::NamespaceCollision => 422,

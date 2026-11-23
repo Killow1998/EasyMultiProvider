@@ -9,10 +9,6 @@ use std::fmt;
 pub struct SubscriptionContextError(String);
 
 impl SubscriptionContextError {
-    pub const fn python_type(&self) -> &'static str {
-        "ValueError"
-    }
-
     fn exceeds_limit(slug: &str, maximum: u64) -> Self {
         Self(format!(
             "Context for {slug} exceeds the subscription catalog limit ({maximum} tokens); refresh models first",
