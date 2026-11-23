@@ -451,5 +451,4 @@ pub(crate) fn quota_refresh_cancellation(
 }
 
 #[cfg(test)]
-#[path = "accounts_delete_quota_race.rs"]
-mod delete_quota_race;
+mod tests;
