@@ -58,7 +58,7 @@ jobs:
 
   windows-exit:
     runs-on: windows-2025
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       CARGO_INCREMENTAL: 0
       RUST_TEST_THREADS: 1
@@ -71,6 +71,8 @@ jobs:
         with:
           shared-key: windows-exit-1.93.1
           cache-bin: false
+      - name: Verify private files, ACLs and the Windows vault
+        run: cargo test --locked -p emp-files -p emp-storage
       - name: Verify restoration before process exit
         run: cargo test --locked -p emp-app --lib lifecycle::shutdown::tests
       - name: Select classic console for Windows close-event tests
