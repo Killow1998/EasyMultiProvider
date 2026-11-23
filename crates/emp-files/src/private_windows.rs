@@ -41,7 +41,8 @@ impl Drop for OwnedHandle {
     }
 }
 
-struct LocalAllocation(*mut c_void);
+#[doc(hidden)]
+pub struct LocalAllocation(pub *mut c_void);
 
 impl Drop for LocalAllocation {
     fn drop(&mut self) {
@@ -52,16 +53,17 @@ impl Drop for LocalAllocation {
     }
 }
 
-struct CurrentUser {
+#[doc(hidden)]
+pub struct CurrentUser {
     _token: OwnedHandle,
     token_information: Vec<u8>,
 }
 
 impl CurrentUser {
-    fn load() -> Result<Self, FilesystemError> {
+    #[doc(hidden)]
+    pub fn load() -> Result<Self, FilesystemError> {
         let mut token = null_mut();
-        // SAFETY: output points to initialized storage and the process pseudo
-        // handle remains valid for the duration of the call.
+        // SAFETY: output storage is initialized and the process pseudo handle remains valid through the call.
         if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
             return Err(FilesystemError::KeyFileNotOwned);
         }
@@ -102,7 +104,8 @@ impl CurrentUser {
         Ok(user)
     }
 
-    fn sid(&self) -> PSID {
+    #[doc(hidden)]
+    pub fn sid(&self) -> PSID {
         // SAFETY: GetTokenInformation initialized this buffer as TOKEN_USER.
         unsafe {
             self.token_information
@@ -229,8 +232,7 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
     let mut owner: PSID = null_mut();
     let mut dacl: *mut ACL = null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
-    // SAFETY: output pointers refer to local variables; descriptor owns the
-    // returned owner and DACL pointers until LocalFree below.
+    // SAFETY: outputs refer to local variables; descriptor owns the returned owner and DACL until LocalFree.
     let status = unsafe {
         GetSecurityInfo(
             file.as_raw_handle() as HANDLE,
@@ -257,8 +259,7 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
 
     // SAFETY: ACL_SIZE_INFORMATION contains only integer fields, which permit zero initialization.
     let mut information: ACL_SIZE_INFORMATION = unsafe { zeroed() };
-    // SAFETY: dacl belongs to the live security descriptor and the output
-    // buffer has the documented structure and size.
+    // SAFETY: dacl belongs to the live descriptor; the output buffer has the documented structure and size.
     if unsafe {
         GetAclInformation(
             dacl,
@@ -276,8 +277,7 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
     if unsafe { GetAce(dacl, 0, &mut raw_ace) } == 0 || raw_ace.is_null() {
         return Err(FilesystemError::KeyFileNotPrivate);
     }
-    // SAFETY: ACCESS_ALLOWED_ACE_TYPE guarantees this layout after checking
-    // the common ACE header.
+    // SAFETY: ACCESS_ALLOWED_ACE_TYPE guarantees this layout after checking the common ACE header.
     let ace = unsafe { &*raw_ace.cast::<ACCESS_ALLOWED_ACE>() };
     if u32::from(ace.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE
         || ace.Mask & FILE_ALL_ACCESS != FILE_ALL_ACCESS
@@ -310,8 +310,7 @@ fn protect_legacy_key(file: &File, user: &CurrentUser) -> Result<(), FilesystemE
     }
     let handle = OwnedHandle(handle);
     let acl = private_acl(user.sid(), false)?;
-    // SAFETY: the handle identifies the already-validated key; acl remains live.
-    // This changes neither the key bytes nor its owner.
+    // SAFETY: handle identifies the validated key; acl remains live, and only the DACL is changed.
     let status = unsafe {
         SetSecurityInfo(
             handle.0,
@@ -329,7 +328,8 @@ fn protect_legacy_key(file: &File, user: &CurrentUser) -> Result<(), FilesystemE
     Ok(())
 }
 
-fn private_acl(sid: PSID, directory: bool) -> Result<LocalAllocation, FilesystemError> {
+#[doc(hidden)]
+pub fn private_acl(sid: PSID, directory: bool) -> Result<LocalAllocation, FilesystemError> {
     let trustee = TRUSTEE_W {
         pMultipleTrustee: null_mut(),
         MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
@@ -359,8 +359,7 @@ fn private_acl(sid: PSID, directory: bool) -> Result<LocalAllocation, Filesystem
 fn descriptor_dacl_is_protected(descriptor: PSECURITY_DESCRIPTOR) -> bool {
     let mut control = 0_u16;
     let mut revision = 0_u32;
-    // SAFETY: descriptor is returned by GetSecurityInfo and both outputs are
-    // initialized local variables.
+    // SAFETY: GetSecurityInfo returned descriptor; both outputs are initialized local variables.
     let succeeded =
         unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) };
     succeeded != 0 && control & SE_DACL_PROTECTED != 0

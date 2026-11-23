@@ -27,6 +27,7 @@ const NORMAL_BUILD: &[(&str, &str)] = &[
     ("emp-router", "emp-state"),
     ("emp-router", "emp-transport"),
     ("emp-state", "emp-core"),
+    ("emp-state", "emp-files"),
     ("emp-state", "emp-modules"),
     ("xtask", "emp-modules"),
     ("xtask", "emp-state"),

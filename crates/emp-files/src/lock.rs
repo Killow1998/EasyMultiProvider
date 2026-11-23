@@ -126,8 +126,7 @@ fn open_lock_file(path: &Path) -> Result<File, LockError> {
             .map_err(|_| LockError::OpenFailed)?;
         let name = path.file_name().ok_or(LockError::PathUnsafe)?;
         let name = CString::new(name.as_bytes()).map_err(|_| LockError::PathUnsafe)?;
-        // SAFETY: `parent_file` and `name` remain live through the call. The
-        // returned descriptor is exclusively transferred into `File`.
+        // SAFETY: parent_file and name remain live; the returned descriptor is exclusively transferred into File.
         let descriptor = unsafe {
             libc::openat(
                 parent_file.as_raw_fd(),
@@ -201,8 +200,7 @@ fn try_lock(file: &File) -> Result<TryLock, LockError> {
 fn try_lock(file: &File) -> Result<TryLock, LockError> {
     let mut overlapped = OVERLAPPED::default();
     let handle = file.as_raw_handle() as HANDLE;
-    // SAFETY: `handle` is live, the byte range and zeroed synchronous
-    // OVERLAPPED are valid, and the pointer lives through the call.
+    // SAFETY: handle is live; the byte range and zeroed synchronous OVERLAPPED remain valid through the call.
     let locked = unsafe {
         LockFileEx(
             handle,

@@ -5,12 +5,9 @@ pub mod fernet;
 pub mod filesystem;
 pub mod gateway_key;
 pub mod gemini_signatures;
-pub mod lock;
 pub mod migration;
 pub mod model_values;
 pub mod official_registry;
-#[cfg(windows)]
-mod private_windows;
 pub mod vault;
 pub mod web_session;
 
@@ -29,14 +26,14 @@ pub use config::{
     public_configuration_with_file_status, remember_resolved_protocol,
     remember_resolved_protocol_at, save_configuration, save_configuration_in_transaction,
 };
-pub use fernet::{Fernet, FernetError, FernetKey, FernetKeyError};
-pub use filesystem::{
-    FileTransaction, FilesystemError, MASTER_KEY_ENV, MASTER_KEY_FILE_ENV,
-    MAX_ENCRYPTED_FILE_BYTES, MAX_TRANSACTION_FILE_BYTES, VaultStore, atomic_write_private_state,
-    create_private_directory, read_file_limited, read_to_limit, with_file_transaction,
-    write_new_private_file,
+pub use emp_files::lock::{IntegrationFileLock, LockError};
+pub use emp_files::{
+    FileTransaction, FilesystemError, MAX_ENCRYPTED_FILE_BYTES, MAX_TRANSACTION_FILE_BYTES,
+    atomic_write_private_state, create_private_directory, lock, read_file_limited, read_to_limit,
+    with_file_transaction, write_new_private_file,
 };
-pub use lock::{IntegrationFileLock, LockError};
+pub use fernet::{Fernet, FernetError, FernetKey, FernetKeyError};
+pub use filesystem::{MASTER_KEY_ENV, MASTER_KEY_FILE_ENV, VaultStore};
 pub use migration::{
     DecryptedMigration, ExportGroup, ExportGroups, MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES,
     MIGRATION_ENVELOPE_VERSION, MIGRATION_MAGIC, MIGRATION_SCHEMA, MIGRATION_VERSION,

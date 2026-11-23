@@ -886,6 +886,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "emp-files"
+version = "0.15.4"
+dependencies = [
+ "atomic-write-file",
+ "libc",
+ "serde_json",
+ "tempfile",
+ "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
 name = "emp-history"
 version = "0.15.4"
 dependencies = [
@@ -995,9 +1007,9 @@ dependencies = [
 name = "emp-state"
 version = "0.15.4"
 dependencies = [
- "atomic-write-file",
  "base64 0.22.1",
  "emp-core",
+ "emp-files",
  "emp-modules",
  "fernet",
  "flate2",

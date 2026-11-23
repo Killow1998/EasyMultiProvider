@@ -109,8 +109,16 @@ to implement. File length is a navigation signal, not a measure of module depth.
 | `emp-router` | Protocol selection, projection and upstream execution | Retain; consolidate application attempt orchestration above it |
 | `emp-codex` | Codex catalogs, concrete history access, quota helpers and runtime discovery | Retain concrete Codex integration; reduce application callers' knowledge of its storage details |
 | `emp-integration` | Configuration leases, conflict detection and recovery | Retain transactional ownership |
-| `emp-state` | Configuration, vault, transactions, plus update/usage/diagnostic subsystems | Narrow application access first; do not create new crates merely to redistribute files |
+| `emp-files` | Private files, atomic writes, file transactions, cross-process locks and Windows ACLs | Independent of other EMP crates; preserve file formats, permissions and lock semantics |
+| `emp-state` | Configuration, vault, update/usage/diagnostic subsystems | Use `emp-files` for file operations; retain existing root, `filesystem` and `lock` API paths |
 | `emp-app` | Composition, HTTP/UI, request orchestration and mutable services | Primary refactoring target |
+
+`emp-state::filesystem::VaultStore` retains master-key sources and vault encoding.
+`emp-files` owns filesystem primitives and platform ACL implementation; its hidden
+ACL exports support the two vault legacy-key tests in
+`emp-state/src/filesystem/windows_tests.rs`. The Windows private-state CI step
+runs these alongside `emp-files::private_windows::tests`, skipping only the
+directory-reparse test that requires symlink privileges.
 
 No library crate depends on `emp-app`. The principal layering leaks are inside
 the application, where most modules can access the complete `ServerState`.

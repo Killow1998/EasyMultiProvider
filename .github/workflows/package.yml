@@ -128,7 +128,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +1.93.1 test --locked -p emp-transport --lib background_proxy_commands_never_allocate_a_console
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo +1.93.1 test --locked -p emp-state --lib private_windows::tests -- --skip detects_directory_reparse_points
+          cargo +1.93.1 test --locked -p emp-files --lib private_windows::tests -- --skip detects_directory_reparse_points
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.93.1 test --locked -p emp-state --lib filesystem::windows_tests
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
