@@ -144,9 +144,9 @@ including actual children in both directions and subsequent model switching.
 See [acceptance scope and evidence](claude-switch-failures.md#real-model-switch-acceptance-and-modularization-2026-10-19-utc).
 
 Request policy and whole-request preflight belong to
-`emp-app/services/collaboration.rs`; `collaboration/state.rs` owns bounded in-memory
+`emp-app/src/services/collaboration.rs`; `collaboration/state.rs` owns bounded in-memory
 provenance and cached recovery, while `message.rs` validates envelopes and
-`recovery.rs` resolves/accounts the helper call. `emp-protocol/tool_bridge.rs`
+`recovery.rs` resolves/accounts the helper call. `emp-protocol/src/tool_bridge.rs`
 owns external request identities, with definition adaptation and response
 restoration in sibling modules. These boundaries preserve Codex's agent lifecycle
 and keep external plaintext restoration separate from Native tool rewriting.

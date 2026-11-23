@@ -1,10 +1,9 @@
 //! The real management endpoints retain their contracts and expose partial work.
-use super::internal_events_contract::journal;
+use super::internal_events_contract::{final_journal, live_journal};
 use super::*;
 use crate::services::observation::diagnostics::Diagnostics;
 
-fn completed(root: &Path, operation: &str) -> Value {
-    let records = journal(root);
+fn completed(records: &[Value], operation: &str) -> Value {
     let done = records
         .iter()
         .rev()
@@ -64,7 +63,8 @@ fn saved_preference_and_failed_catalog_are_distinct_and_linked_to_http() {
         false
     );
     server.shutdown().unwrap();
-    let done = completed(root.path(), "catalog_preference");
+    let records = final_journal(root.path());
+    let done = completed(&records, "catalog_preference");
     assert_eq!(done["outcome"], "failed");
     assert_eq!(done["checks"]["configuration_committed"], true);
     assert_eq!(done["checks"]["preference_matches_saved"], true);
@@ -74,7 +74,6 @@ fn saved_preference_and_failed_catalog_are_distinct_and_linked_to_http() {
         "failed"
     );
     assert_eq!(done["client_effect"], "unknown");
-    let records = journal(root.path());
     assert!(
         records
             .iter()
@@ -129,13 +128,14 @@ fn rejected_commands_do_not_claim_side_effects_or_expose_input() {
     let persisted = Diagnostics::new(&canonical_root(&root).join("state"));
     assert_eq!(persisted.snapshot()["probes"], diagnostic["probes"]);
     server.shutdown().unwrap();
+    let records = final_journal(root.path());
     for operation in [
         "account_import",
         "model_discovery",
         "quota_read",
         "integration_enable",
     ] {
-        let done = completed(root.path(), operation);
+        let done = completed(&records, operation);
         assert_eq!(done["outcome"], "failed");
         assert_eq!(done["client_effect"], "unknown");
         let stages = done["stages"].as_array().unwrap();
@@ -146,7 +146,6 @@ fn rejected_commands_do_not_claim_side_effects_or_expose_input() {
             assert!(stages.is_empty());
         }
     }
-    let records = journal(root.path());
     assert_eq!(
         records
             .iter()
@@ -177,7 +176,7 @@ fn configuration_application_is_not_runtime_or_routing_verification() {
     let status: Value = serde_json::from_str(reply.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(status["configuration"]["state"], "emp_applied");
     assert_ne!(status["runtime"]["state"], "catalog_loaded");
-    let done = completed(root.path(), "integration_enable");
+    let done = completed(&live_journal(root.path()), "integration_enable");
     assert_eq!(done["outcome"], "completed");
     assert_eq!(done["checks"]["saved_configuration_matches_target"], true);
     assert!(done["checks"]["runtime_catalog_matches_target"].is_null());

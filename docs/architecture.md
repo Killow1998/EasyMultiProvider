@@ -111,15 +111,15 @@ to implement. File length is a navigation signal, not a measure of module depth.
 | `emp-codex::configuration` | Configuration leases, conflict detection and recovery | Retain transactional ownership |
 | `emp-files` | Private files, atomic writes, file transactions, cross-process locks and Windows ACLs | Independent of other EMP crates; preserve file formats, permissions and lock semantics |
 | `emp-config` | Configuration, accounts, catalog merge, official model registry and portable import/export | Depends on `emp-domain`, `emp-files` and `emp-storage`; retains existing module names |
-| `emp-storage` | Vault, usage, quota history, signatures and local management credentials | Owns persisted credentials; uses `emp-files` for file operations |
-| `emp-state` | Diagnostics and compatibility re-exports | Retains existing root, module, `filesystem` and `lock` API paths |
+| `emp-storage` | Vault, usage, quota history, diagnostic journal, signatures and local management credentials | Owns persisted credentials; uses `emp-files` for file operations |
+| `emp-state` | Compatibility re-exports | Retains existing root, module, `filesystem` and `lock` API paths |
 | `emp-updater` | Official release discovery, download, verification, extraction and recoverable installation | Depends only on `emp-files` among EMP crates; preserve release formats, installation layouts and worker protocol |
 | `emp-app` | Composition, HTTP/UI, request orchestration and mutable services | Primary refactoring target |
 
 `emp-state::filesystem::VaultStore` retains master-key sources and vault encoding.
 `emp-files` owns filesystem primitives and platform ACL implementation; its hidden
 ACL exports support the two vault legacy-key tests in
-`emp-state/src/filesystem/windows_tests.rs`. The Windows private-state CI step
+`emp-storage/src/vault/windows_tests.rs`. The Windows private-state CI step
 runs these alongside `emp-files::private_windows::tests`, skipping only the
 directory-reparse test that requires symlink privileges.
 
@@ -135,10 +135,10 @@ name limit, and `SessionScope`/`SessionMetadata` with their pure ownership rules
 ledger queries and temporary-table installation stay in `usage/ledger/`.
 `emp_modules::workspace::MAX_USAGE_MODEL_BYTES` re-exports the domain constant,
 so the SDK and state share the bound through their direct domain dependencies.
-The daily LiteLLM snapshot has two readers within `emp-state`.
-[`pricing/catalog.rs`](../crates/emp-state/src/usage/pricing/catalog.rs) extracts model
-capabilities. [`pricing/rates.rs`](../crates/emp-state/src/usage/pricing/rates.rs)
-matches model prices and calculates costs. [`pricing.rs`](../crates/emp-state/src/usage/pricing.rs)
+The daily LiteLLM snapshot has two readers within `emp-storage`.
+[`pricing/catalog.rs`](../crates/emp-storage/src/usage/pricing/catalog.rs) extracts model
+capabilities. [`pricing/rates.rs`](../crates/emp-storage/src/usage/pricing/rates.rs)
+matches model prices and calculates costs. [`pricing.rs`](../crates/emp-storage/src/usage/pricing.rs)
 persists the snapshot and tracks its revision for repricing.
 Live discovery and catalog imports share the [modality parser](../crates/emp-domain/src/model_values.rs).
 It distinguishes a missing or invalid list from an explicit text-only declaration.

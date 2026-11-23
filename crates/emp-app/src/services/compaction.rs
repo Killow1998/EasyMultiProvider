@@ -62,7 +62,7 @@ pub(crate) fn execute_summary_request(
 
     let router = ExternalRouter::new(
         &state.backend.transport.client,
-        emp_state::official_registry::snapshot(),
+        emp_state::official_registry::snapshot,
     )
     .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
     usage.candidate(route);

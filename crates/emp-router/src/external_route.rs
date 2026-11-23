@@ -5,11 +5,11 @@ const MAX_ANTHROPIC_PASSTHROUGH_BYTES: usize = 12 * 1024 * 1024;
 impl<'a> ExternalRouter<'a> {
     pub const fn new(
         client: &'a HttpClient,
-        official_models: emp_domain::official_models::OfficialModels,
+        load_official_models: fn() -> emp_domain::official_models::OfficialModels,
     ) -> Self {
         Self {
             client,
-            official_models,
+            load_official_models,
             gemini_signatures: None,
         }
     }
@@ -41,8 +41,11 @@ impl<'a> ExternalRouter<'a> {
         }
         let native_gemini = route.provider.value()["auth_mode"] == "vertex_api_key";
         if native_gemini {
-            payload =
-                vertex::gemini_request(&payload, Some(route.model.value()), &self.official_models)?;
+            payload = vertex::gemini_request(
+                &payload,
+                Some(route.model.value()),
+                self.load_official_models,
+            )?;
         }
         let encoded = request_encoding::encode_projected_request(&payload);
         drop(payload);
@@ -294,8 +297,11 @@ impl<'a> ExternalRouter<'a> {
         }
         let native_gemini = route.provider.value()["auth_mode"] == "vertex_api_key";
         if native_gemini {
-            payload =
-                vertex::gemini_request(&payload, Some(route.model.value()), &self.official_models)?;
+            payload = vertex::gemini_request(
+                &payload,
+                Some(route.model.value()),
+                self.load_official_models,
+            )?;
         } else {
             payload["stream"] = Value::Bool(true);
         }

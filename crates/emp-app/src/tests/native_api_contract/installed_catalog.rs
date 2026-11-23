@@ -162,7 +162,7 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool, s
     assert_eq!(path, "/v1/responses");
     assert_eq!(headers["authorization"], "Bearer external-fixture");
     assert_eq!(body["model"], "upstream");
-    let requests = crate::tests::internal_events_contract::journal(&root)
+    let requests = crate::tests::internal_events_contract::live_journal(&root)
         .into_iter()
         .filter(|event| event["event"] == "request_started")
         .collect::<Vec<_>>();

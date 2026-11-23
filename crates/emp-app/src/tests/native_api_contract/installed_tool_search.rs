@@ -229,7 +229,7 @@ fn tool_search(protocol: &'static str, native: bool, websocket: bool) {
     upstream.join().unwrap();
     let state = std::sync::Arc::clone(&server.state);
     server.shutdown().unwrap();
-    let journal = crate::tests::internal_events_contract::journal(&root);
+    let journal = crate::tests::internal_events_contract::final_journal(&root);
     if websocket {
         let finished = journal
             .iter()

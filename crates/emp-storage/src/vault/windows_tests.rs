@@ -32,7 +32,8 @@ fn descriptor(file: &File) -> LocalAllocation {
         )
     };
     assert_eq!(result, ERROR_SUCCESS);
-    LocalAllocation(descriptor)
+    // SAFETY: GetSecurityInfo succeeded and transferred ownership of the descriptor.
+    unsafe { LocalAllocation::from_raw(descriptor) }
 }
 
 fn set_test_acl(path: &Path, acl: &LocalAllocation, protected: bool) {
@@ -51,7 +52,7 @@ fn set_test_acl(path: &Path, acl: &LocalAllocation, protected: bool) {
                 DACL_SECURITY_INFORMATION | protection,
                 null_mut(),
                 null_mut(),
-                acl.0.cast(),
+                acl.as_ptr().cast(),
                 null(),
             )
         },
@@ -71,7 +72,7 @@ fn set_test_owner(path: &Path) {
                 path.as_mut_ptr(),
                 SE_FILE_OBJECT,
                 OWNER_SECURITY_INFORMATION,
-                user.sid(),
+                user.sid().as_ptr(),
                 null_mut(),
                 null(),
                 null(),
@@ -107,14 +108,14 @@ fn legacy_inherited_key_is_protected_without_changing_key_or_credentials() {
     fs::write(&path, &bytes).unwrap();
     set_test_owner(&path);
     let file = File::open(&path).unwrap();
-    assert!(!descriptor_dacl_is_protected(descriptor(&file).0));
+    assert!(!descriptor_dacl_is_protected(descriptor(&file).as_ptr()));
     let credentials = directory.path().join("credentials");
     let ciphertext = crate::encode_vault(&key, b"synthetic existing credential");
     fs::write(&credentials, &ciphertext).unwrap();
 
     let vault = crate::VaultStore::from_sources(None, &path).unwrap();
 
-    assert!(descriptor_dacl_is_protected(descriptor(&file).0));
+    assert!(descriptor_dacl_is_protected(descriptor(&file).as_ptr()));
     assert_eq!(fs::read(&path).unwrap(), bytes.as_bytes());
     assert_eq!(fs::read(&credentials).unwrap(), ciphertext);
     assert_eq!(
@@ -140,8 +141,10 @@ fn legacy_key_granting_another_principal_access_is_not_silently_repaired() {
         unsafe { ConvertStringSidToSidW(sid_string.as_ptr(), &mut everyone) },
         0
     );
-    let everyone = LocalAllocation(everyone);
-    let acl = private_acl(everyone.0, false).unwrap();
+    // SAFETY: ConvertStringSidToSidW succeeded and transferred ownership of a valid SID.
+    let everyone = unsafe { LocalAllocation::from_raw(everyone) };
+    // SAFETY: this allocation contains the untouched SID returned by ConvertStringSidToSidW.
+    let acl = private_acl(unsafe { everyone.sid() }, false).unwrap();
     // The inherited current-user ACE remains, alongside the explicit grant.
     set_test_acl(&path, &acl, false);
     let file = File::open(&path).unwrap();
@@ -150,6 +153,6 @@ fn legacy_key_granting_another_principal_access_is_not_silently_repaired() {
         crate::VaultStore::from_sources(None, &path),
         Err(FilesystemError::KeyFileNotPrivate)
     ));
-    assert!(!descriptor_dacl_is_protected(descriptor(&file).0));
+    assert!(!descriptor_dacl_is_protected(descriptor(&file).as_ptr()));
     assert_eq!(fs::read(&path).unwrap(), bytes.as_bytes());
 }

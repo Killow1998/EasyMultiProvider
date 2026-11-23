@@ -19,7 +19,7 @@ fn set_test_acl(path: &Path, acl: &LocalAllocation, protected: bool) {
                 DACL_SECURITY_INFORMATION | protection,
                 null_mut(),
                 null_mut(),
-                acl.0.cast(),
+                acl.as_ptr().cast(),
                 null(),
             )
         },
@@ -45,7 +45,7 @@ fn private_state_writes_do_not_require_write_owner_from_the_existing_owner() {
     let acl = private_acl(user.sid(), true).unwrap();
     let mut ace = null_mut();
     // SAFETY: acl owns an initialized ACL containing one ACE and ace is writable output storage.
-    assert_ne!(unsafe { GetAce(acl.0.cast(), 0, &mut ace) }, 0);
+    assert_ne!(unsafe { GetAce(acl.as_ptr().cast(), 0, &mut ace) }, 0);
     // SAFETY: GetAce succeeded and returned the sole ACCESS_ALLOWED_ACE in the live private_acl allocation.
     unsafe { (*ace.cast::<ACCESS_ALLOWED_ACE>()).Mask &= !WRITE_OWNER };
     set_test_acl(directory.path(), &acl, true);

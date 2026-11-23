@@ -4290,8 +4290,10 @@ dependencies = [
  "emp-modules",
  "emp-updater",
  "flate2",
+ "proc-macro2",
  "serde_json",
  "sha2 0.10.9",
+ "syn 2.0.119",
  "tar",
  "tempfile",
 ]

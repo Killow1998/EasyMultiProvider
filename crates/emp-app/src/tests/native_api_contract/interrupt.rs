@@ -225,7 +225,7 @@ fn local_and_upstream_websocket_errors_have_distinct_receipts_and_preserve_upstr
     assert_eq!(report["summary"]["failed"], 1);
     assert_eq!(report["records"][0]["error_origin"], "upstream");
     server.shutdown().unwrap();
-    let journal = crate::tests::internal_events_contract::journal(root.path());
+    let journal = crate::tests::internal_events_contract::final_journal(root.path());
     for (code, origin) in [
         ("invalid_request", "emp"),
         ("rate_limit_exceeded", "upstream"),

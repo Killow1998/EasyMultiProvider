@@ -1,5 +1,7 @@
 use super::*;
 use std::collections::BTreeMap;
+use syn::ext::IdentExt;
+use syn::visit::{self, Visit};
 
 const ALLOWED: &[(&str, usize)] = &[
     ("emp-app", 4),
@@ -27,7 +29,7 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
             let contents = read(root, path)?;
             disguised_sleep(path, &contents, errors);
             msvc_only(path, &contents, errors);
-            domain_purity(path, &contents, errors);
+            domain_purity(path, &contents, errors)?;
         }
     }
     for path in paths {
@@ -122,22 +124,101 @@ fn msvc_only(path: &str, contents: &str, errors: &mut Vec<String>) {
     }
 }
 
-const DOMAIN_IO: &[&str] = &[
-    "std::fs",
-    "std::env",
-    "std::net",
-    "std::process",
-    "rusqlite",
-    "tokio",
-];
-
-fn domain_purity(path: &str, contents: &str, errors: &mut Vec<String>) {
+fn domain_purity(path: &str, contents: &str, errors: &mut Vec<String>) -> Result {
     if !path.starts_with("crates/emp-domain/src/") {
-        return;
+        return Ok(());
     }
-    for (index, line) in contents.lines().enumerate() {
-        if let Some(api) = DOMAIN_IO.iter().find(|api| line.contains(*api)) {
-            errors.push(format!("[domain-purity] {path}:{}: emp-domain 只放值和纯规则，不能使用 {api}；把读写放进 emp-files、emp-storage 或 emp-config，由调用方传入结果", index + 1));
+    let source = syn::parse_file(contents).map_err(|error| {
+        format!(
+            "[domain-purity] {path}:{}: {error}",
+            error.span().start().line
+        )
+    })?;
+    DomainPurity { path, errors }.visit_file(&source);
+    Ok(())
+}
+
+struct DomainPurity<'a> {
+    path: &'a str,
+    errors: &'a mut Vec<String>,
+}
+
+impl DomainPurity<'_> {
+    fn check_path(&mut self, root: &syn::Ident, member: Option<&syn::Ident>) {
+        let api = match root.unraw().to_string().as_str() {
+            "std" => match member.map(|name| name.unraw().to_string()).as_deref() {
+                Some("fs") => "std::fs",
+                Some("env") => "std::env",
+                Some("net") => "std::net",
+                Some("process") => "std::process",
+                _ => return,
+            },
+            "rusqlite" => "rusqlite",
+            "tokio" => "tokio",
+            _ => return,
+        };
+        let line = member.unwrap_or(root).span().start().line;
+        let path = self.path;
+        self.errors.push(format!("[domain-purity] {path}:{line}: emp-domain 只放值和纯规则，不能使用 {api}；把读写放进 emp-files、emp-storage 或 emp-config，由调用方传入结果"));
+    }
+
+    fn check_use(&mut self, tree: &syn::UseTree, root: Option<&syn::Ident>) {
+        match tree {
+            syn::UseTree::Path(path) => {
+                self.check_import(&path.ident, root);
+                if root.is_none() && path.ident.unraw() == "std" {
+                    self.check_use(&path.tree, Some(&path.ident));
+                }
+            }
+            syn::UseTree::Name(name) => self.check_import(&name.ident, root),
+            syn::UseTree::Rename(rename) => self.check_import(&rename.ident, root),
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.check_use(item, root);
+                }
+            }
+            syn::UseTree::Glob(_) => {}
+        }
+    }
+
+    fn check_import(&mut self, name: &syn::Ident, root: Option<&syn::Ident>) {
+        match root {
+            Some(root) => self.check_path(root, Some(name)),
+            None => self.check_path(name, None),
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for DomainPurity<'_> {
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.check_use(&item.tree, None);
+        visit::visit_item_use(self, item);
+    }
+
+    fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
+        self.check_path(&item.ident, None);
+        visit::visit_item_extern_crate(self, item);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let mut segments = path.segments.iter();
+        if let Some(root) = segments.next() {
+            self.check_path(&root.ident, segments.next().map(|segment| &segment.ident));
+        }
+        visit::visit_path(self, path);
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        use syn::parse::Parser as _;
+
+        visit::visit_macro(self, invocation);
+        if let Ok(expressions) =
+            syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated
+                .parse2(invocation.tokens.clone())
+        {
+            for expression in &expressions {
+                self.visit_expr(expression);
+            }
         }
     }
 }
@@ -180,9 +261,62 @@ mod tests {
             "crates/emp-domain/src/a.rs",
             "use std::fs;\nfn f() {}\n",
             &mut errors,
-        );
-        domain_purity("crates/emp-storage/src/a.rs", "use std::fs;\n", &mut errors);
+        )
+        .unwrap();
+        domain_purity("crates/emp-storage/src/a.rs", "use std::fs;\n", &mut errors).unwrap();
         assert_eq!(errors.len(), 1);
         assert!(errors[0].starts_with("[domain-purity] crates/emp-domain/src/a.rs:1:"));
+    }
+
+    #[test]
+    fn domain_sources_reject_restricted_paths_grouped_imports_and_aliases() {
+        let source = "
+use ::std::{
+    fs as files,
+    env,
+    net::{TcpStream as Stream},
+    fmt,
+};
+use {rusqlite as sql, tokio::time as timer};
+fn f() { ::std :: process :: abort(); }
+fn g() { dbg!(std::fs::read(\"file\")); }
+";
+        let mut errors = Vec::new();
+        domain_purity("crates/emp-domain/src/a.rs", source, &mut errors).unwrap();
+        let expected = [
+            (3, "std::fs"),
+            (4, "std::env"),
+            (5, "std::net"),
+            (8, "rusqlite"),
+            (8, "tokio"),
+            (9, "std::process"),
+            (10, "std::fs"),
+        ];
+        assert_eq!(errors.len(), expected.len(), "{errors:?}");
+        for (line, api) in expected {
+            assert!(
+                errors.iter().any(|error| {
+                    error.contains(&format!("a.rs:{line}:")) && error.contains(api)
+                }),
+                "{errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn domain_sources_ignore_comments_literals_and_unrelated_paths() {
+        let source = r###"
+//! use std::{fs, env};
+/* Outer comment /* nested comment */ std::net */
+use std::{fmt, collections::BTreeMap};
+use other::std::net;
+use other::tokio;
+const NORMAL: &str = "std::fs";
+const RAW: &str = r#"use std::{fs, env}; rusqlite"#;
+fn f() { println!("std::process"); }
+"###;
+        let mut errors = Vec::new();
+        domain_purity("crates/emp-domain/src/a.rs", source, &mut errors).unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
     }
 }

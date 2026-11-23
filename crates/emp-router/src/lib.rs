@@ -213,7 +213,7 @@ pub struct ExternalStream {
 }
 
 pub struct ExternalRouter<'a> {
-    official_models: emp_domain::official_models::OfficialModels,
+    load_official_models: fn() -> emp_domain::official_models::OfficialModels,
     client: &'a HttpClient,
     gemini_signatures: Option<std::sync::Arc<dyn emp_domain::SignatureStore>>,
 }

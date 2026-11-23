@@ -141,7 +141,7 @@ pub(super) fn run(
                 .map_err(|_| ClaudeCliError::Disconnected)?;
             let router = emp_router::ExternalRouter::new(
                 &context.client,
-                emp_state::official_registry::snapshot(),
+                emp_state::official_registry::snapshot,
             );
             let mut message_id = String::new();
             let mut has_text = false;

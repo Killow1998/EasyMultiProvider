@@ -146,7 +146,7 @@ fn gemini_request_keeps_images_tools_and_parallel_result_order() {
         {"role":"tool","tool_call_id":"call_1","content":"first"}],
         "tools":[{"type":"function","function":{"name":"read","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}],
         "max_tokens":100,"reasoning_effort":"low"});
-    let body = gemini_request(&chat, None, &emp_config::official_registry::snapshot()).unwrap();
+    let body = gemini_request(&chat, None, emp_config::official_registry::snapshot).unwrap();
     assert_eq!(body["systemInstruction"]["parts"][0]["text"], "system");
     assert_eq!(
         body["contents"][0]["parts"][1]["inlineData"]["mimeType"],
@@ -183,7 +183,7 @@ fn gemini_request_keeps_images_tools_and_parallel_result_order() {
     );
     let carbon = json!({"model":"gemini-4-carbon","reasoning_effort":"high","messages":[{"role":"user","content":"hello"}]});
     assert_eq!(
-        gemini_request(&carbon, None, &emp_config::official_registry::snapshot()).unwrap()["generationConfig"]
+        gemini_request(&carbon, None, emp_config::official_registry::snapshot).unwrap()["generationConfig"]
             ["thinkingConfig"]["thinkingLevel"],
         "HIGH"
     );
@@ -195,7 +195,7 @@ fn gemini_request_keeps_images_tools_and_parallel_result_order() {
     ] {
         let request = json!({"model":model,"reasoning_effort":"xhigh","messages":[{"role":"user","content":"hello"}]});
         assert_eq!(
-            gemini_request(&request, None, &emp_config::official_registry::snapshot()).unwrap()["generationConfig"]
+            gemini_request(&request, None, emp_config::official_registry::snapshot).unwrap()["generationConfig"]
                 ["thinkingConfig"]["thinkingLevel"],
             expected,
             "{model}"

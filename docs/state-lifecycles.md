@@ -180,7 +180,7 @@ has no separate flush.
 | B05 | [Pricing ledger](../crates/emp-storage/src/usage/ledger.rs) | Unpriced record → price available → calculate and store; stop → leave pending records | I. Missing price does not mean zero cost. |
 | B06 | [Release cache](../crates/emp-updater/src/manager/catalog.rs) | Missing/stale → request or conditional request → retain/update notes; failure → keep usable cache | I. Cached notes and a pending update check can coexist. |
 | B07 | [Local Claude quota](../crates/emp-app/src/services/claude_cli/quota.rs) | Identify login → begin observation generation → accept matching usage → persist; owner change → reset current observation | I. Late results cannot become the new login's quota. |
-| B08 | [Diagnostic journal](../crates/emp-state/src/diagnostics/journal.rs) | Open part → append sanitized records → rotate/prune → continue | I. Bounded passive evidence storage; it never authorizes request retries. |
+| B08 | [Diagnostic journal](../crates/emp-storage/src/diagnostics/journal.rs) | Open part → append sanitized records → rotate/prune → continue | I. Bounded passive evidence storage; it never authorizes request retries. |
 | B09 | [Report fact cache](../crates/emp-storage/src/usage/ledger/read_cache.rs) | Empty → load timestamped facts → reuse or extend range; database version changes → rebuild; reader disconnect → interrupt/rollback | I. One disk-backed window per projection; aggregates and UI filters do not own cache state. The connection guard removes the cancellation hook before reuse. |
 
 ## WebUI lifecycles

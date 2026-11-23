@@ -79,7 +79,7 @@ fn inline_ids_recover_once_and_preserve_native_continuation_and_accounting() {
             );
             assert_eq!(stats.ws_connections, 1);
             assert_eq!(stats.http_requests, 0);
-            let journal = crate::tests::internal_events_contract::journal(directory.path());
+            let journal = crate::tests::internal_events_contract::final_journal(directory.path());
             assert_eq!(
                 journal
                     .iter()

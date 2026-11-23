@@ -5,7 +5,7 @@ mod private_windows;
 
 #[cfg(windows)]
 #[doc(hidden)]
-pub use private_windows::{CurrentUser, LocalAllocation, private_acl};
+pub use private_windows::{CurrentUser, LocalAllocation, Sid, private_acl};
 
 pub use filesystem::{
     FileTransaction, FilesystemError, MAX_ENCRYPTED_FILE_BYTES, MAX_TRANSACTION_FILE_BYTES,

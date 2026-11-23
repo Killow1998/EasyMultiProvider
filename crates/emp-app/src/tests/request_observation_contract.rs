@@ -1,5 +1,5 @@
 //! Loopback acceptance: receipts explain execution without controlling it.
-use super::internal_events_contract::journal;
+use super::internal_events_contract::live_journal;
 use super::*;
 
 #[test]
@@ -92,7 +92,7 @@ fn generated_compaction_sse_records_its_actual_terminal_event() {
 pub(super) fn finished(root: &Path, count: usize) -> Vec<Value> {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        let records = journal(root);
+        let records = live_journal(root);
         if records
             .iter()
             .filter(|r| r["event"] == "request_finished")

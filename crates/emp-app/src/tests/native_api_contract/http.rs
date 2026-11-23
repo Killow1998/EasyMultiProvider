@@ -531,7 +531,7 @@ for line in sys.stdin:
     server.shutdown().unwrap();
 
     let failed = RefreshUpstream::start(1);
-    let decisions: Vec<_> = crate::tests::internal_events_contract::journal(directory.path())
+    let decisions: Vec<_> = crate::tests::internal_events_contract::final_journal(directory.path())
         .into_iter()
         .filter(|record| record["event"] == "native_retry_decision")
         .collect();
@@ -555,7 +555,7 @@ for line in sys.stdin:
         "Bearer original-secret"
     );
     server.shutdown().unwrap();
-    let decisions: Vec<_> = crate::tests::internal_events_contract::journal(directory.path())
+    let decisions: Vec<_> = crate::tests::internal_events_contract::final_journal(directory.path())
         .into_iter()
         .filter(|record| record["event"] == "native_retry_decision")
         .collect();
@@ -588,10 +588,11 @@ fn native_endpoint_matches_retry_and_terminal_error_decisions() {
         );
         let status: u16 = wire.split_whitespace().nth(1).unwrap().parse().unwrap();
         assert_eq!(status, expected_status, "scenario {case}: {wire}");
-        let decisions: Vec<_> = crate::tests::internal_events_contract::journal(directory.path())
-            .into_iter()
-            .filter(|record| record["event"] == "native_retry_decision")
-            .collect();
+        let decisions: Vec<_> =
+            crate::tests::internal_events_contract::live_journal(directory.path())
+                .into_iter()
+                .filter(|record| record["event"] == "native_retry_decision")
+                .collect();
         assert_eq!(decisions.len(), attempts - 1, "scenario {case}");
         if let Some(decision) = decisions.first() {
             assert_eq!(decision["fields"]["retry"], true);
@@ -717,7 +718,7 @@ fn native_rejections_preserve_specific_cause_and_matching_diagnostics() {
         );
         assert!(!wire.contains("must-not-be-forwarded"), "{wire}");
         server.shutdown().unwrap();
-        let records = crate::tests::internal_events_contract::journal(directory.path());
+        let records = crate::tests::internal_events_contract::final_journal(directory.path());
         let detail = records
             .iter()
             .find(|row| row["event"] == "upstream_request_rejected")
@@ -774,7 +775,7 @@ fn imported_account_model_refusal_keeps_the_upstream_status_and_diagnostics() {
             .contains("This account cannot use gpt-6.1-sol.")
     );
     server.shutdown().unwrap();
-    let records = crate::tests::internal_events_contract::journal(directory.path());
+    let records = crate::tests::internal_events_contract::final_journal(directory.path());
     let rejection = records
         .iter()
         .find(|row| row["event"] == "upstream_request_rejected")

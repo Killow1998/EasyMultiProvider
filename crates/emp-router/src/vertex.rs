@@ -247,7 +247,7 @@ fn auth_error(message: &'static str) -> RouterError {
 pub(super) fn gemini_request(
     chat: &Value,
     capabilities: Option<&Map<String, Value>>,
-    official_models: &emp_domain::official_models::OfficialModels,
+    load_official_models: fn() -> emp_domain::official_models::OfficialModels,
 ) -> Result<Value, RouterError> {
     let declared = capabilities
         .and_then(|model| model.get("reasoning_levels"))
@@ -256,7 +256,7 @@ pub(super) fn gemini_request(
     let official_levels = if chat["reasoning_effort"].as_str().is_some() && declared.is_none() {
         let model = chat["model"].as_str().unwrap_or_default();
         let model = model.strip_prefix("google/").unwrap_or(model);
-        official_models.published_reasoning_levels("google_gemini", model)
+        load_official_models().published_reasoning_levels("google_gemini", model)
     } else {
         None
     };

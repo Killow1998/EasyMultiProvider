@@ -138,6 +138,40 @@ fn downstream_sse_disconnect_closes_the_still_gated_upstream() {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn downstream_disconnect_closes_external_sse_with_a_blocking_registry_override() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let upstream = Upstream::start();
+    let workspace = Workspace::with_routes(&upstream);
+    let registry = workspace.root.join("official-models.json");
+    let mut command = workspace.command();
+    command
+        .env("EMP_OFFICIAL_MODELS_PATH", &registry)
+        .env("PATH", workspace.root.join("empty-bin"))
+        .args(workspace.serve_arguments());
+    let emp = crate::support::Emp::spawn(command);
+    let fifo = CString::new(registry.as_os_str().as_bytes()).unwrap();
+    // SAFETY: fifo is a NUL-terminated path in the fixture's private directory.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+
+    let (first, tail, path) = stream_parts("test/model");
+    let gate = upstream.gate_stream(first, Some(tail));
+    let mut client = SseClient::responses(
+        emp.port,
+        &json!({"model":"test/model","input":"hello","stream":true}),
+    );
+    assert_eq!(upstream.next_forwarded().path, path);
+    assert_eq!(
+        next_kind(&mut client, "response.output_text.delta")["delta"],
+        "First visible answer"
+    );
+    drop(client);
+    gate.assert_closed();
+}
+
 #[test]
 fn truncated_sse_never_fabricates_a_successful_completion() {
     for model in ["native/model", "responses/model", "test/model"] {

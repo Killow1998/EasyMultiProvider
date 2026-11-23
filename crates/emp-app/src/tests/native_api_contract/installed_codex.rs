@@ -212,7 +212,7 @@ fn stream_control(native: bool, cancel: bool) {
         .recv_timeout(Duration::from_secs(15))
         .expect("Codex first inference");
     codex.wait(|value| value["method"] == "item/agentMessage/delta");
-    let before = crate::tests::internal_events_contract::journal(&root);
+    let before = crate::tests::internal_events_contract::live_journal(&root);
     assert!(
         before
             .iter()
@@ -230,7 +230,7 @@ fn stream_control(native: bool, cancel: bool) {
             1,
             "cancel must not replay inference"
         );
-        let journal = crate::tests::internal_events_contract::journal(&root);
+        let journal = crate::tests::internal_events_contract::live_journal(&root);
         assert!(
             journal
                 .iter()
@@ -253,7 +253,7 @@ fn stream_control(native: bool, cancel: bool) {
             .iter()
             .filter(|event| event["event"] == "request_started")
             .count(),
-        crate::tests::internal_events_contract::journal(&root)
+        crate::tests::internal_events_contract::live_journal(&root)
             .iter()
             .filter(|event| event["event"] == "request_started")
             .count()
@@ -273,7 +273,7 @@ fn stream_control(native: bool, cancel: bool) {
         );
         eprintln!(
             "Fixture controls: {:?}",
-            crate::tests::internal_events_contract::journal(&root)
+            crate::tests::internal_events_contract::live_journal(&root)
                 .iter()
                 .filter(|event| event["event"] == "websocket_control")
                 .collect::<Vec<_>>()
@@ -301,7 +301,7 @@ fn stream_control(native: bool, cancel: bool) {
         );
     }
     server.shutdown().unwrap();
-    let journal = crate::tests::internal_events_contract::journal(&root);
+    let journal = crate::tests::internal_events_contract::final_journal(&root);
     assert_eq!(
         journal
             .iter()

@@ -164,7 +164,7 @@ fn native_large_context_keeps_twenty_incremental_turns_for_imported_and_default_
             stats.application_bytes < initial_bytes + 128 * 1024,
             "upload must scale with new input"
         );
-        let journal = crate::tests::internal_events_contract::journal(directory.path());
+        let journal = crate::tests::internal_events_contract::final_journal(directory.path());
         let receipts = receipts(&journal);
         assert_eq!(
             receipts.len(),
@@ -314,7 +314,7 @@ fn rejected_scope_route_identity_and_foreign_prior_preserve_isolated_valid_sessi
         6,
         "rejected requests must never reach an upstream"
     );
-    let journal = crate::tests::internal_events_contract::journal(directory.path());
+    let journal = crate::tests::internal_events_contract::final_journal(directory.path());
     let failures: Vec<_> = receipts(&journal)
         .into_iter()
         .filter(|r| r["reason"].is_string())
@@ -356,7 +356,7 @@ fn one_real_state_loss_recovers_once_then_continues_twenty_times() {
         assert_eq!(stats.ws_connections, 2);
         assert_eq!(stats.http_requests, 0);
         assert_eq!(stats.generated_hashes.len(), 22);
-        let journal = crate::tests::internal_events_contract::journal(directory.path());
+        let journal = crate::tests::internal_events_contract::final_journal(directory.path());
         let failures: Vec<_> = receipts(&journal)
             .into_iter()
             .filter(|r| r["reason"].is_string())
@@ -434,7 +434,7 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
         assert_eq!(stats.ws_connections, 1);
         assert_eq!(stats.http_requests, 0);
         assert!(stats.generated_hashes.is_empty());
-        let journal = crate::tests::internal_events_contract::journal(directory.path());
+        let journal = crate::tests::internal_events_contract::final_journal(directory.path());
         if fault != Fault::SilentPrefill {
             assert_eq!(
                 receipts(&journal)[0]["reason"],

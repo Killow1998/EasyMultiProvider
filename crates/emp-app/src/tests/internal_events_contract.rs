@@ -1,19 +1,64 @@
 //! Observable command receipts, management events and privacy-safe failures.
 use super::*;
 
-/// Parses newline-terminated records only; a record still being written is left for the next poll.
-pub(super) fn journal(root: &Path) -> Vec<Value> {
+pub(super) fn live_journal(root: &Path) -> Vec<Value> {
+    read_journal(root, true)
+}
+
+pub(super) fn final_journal(root: &Path) -> Vec<Value> {
+    read_journal(root, false)
+}
+
+fn read_journal(root: &Path, complete_lines_only: bool) -> Vec<Value> {
     std::fs::read_dir(root.join("state/logs"))
         .unwrap()
         .flat_map(|entry| {
-            std::fs::read_to_string(entry.unwrap().path())
-                .unwrap()
-                .split_inclusive('\n')
-                .filter_map(|line| line.strip_suffix('\n'))
-                .map(|line| serde_json::from_str(line).unwrap())
+            let path = entry.unwrap().path();
+            let bytes = std::fs::read(&path).unwrap();
+            bytes
+                .split_inclusive(|&byte| byte == b'\n')
+                .filter(|line| !complete_lines_only || line.ends_with(b"\n"))
+                .map(|line| {
+                    serde_json::from_slice(line).unwrap_or_else(|error| {
+                        panic!(
+                            "invalid diagnostic journal record in {}: {error}",
+                            path.display()
+                        )
+                    })
+                })
                 .collect::<Vec<Value>>()
         })
         .collect()
+}
+
+#[test]
+fn final_journal_reads_a_complete_record_without_its_newline() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("state/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(
+        logs.join("events.jsonl"),
+        b"{\"id\":1}\n{\"marker\":\"PRIVATE\"}",
+    )
+    .unwrap();
+
+    assert_eq!(live_journal(root.path()), [json!({"id": 1})]);
+    assert_eq!(
+        final_journal(root.path()),
+        [json!({"id": 1}), json!({"marker": "PRIVATE"})]
+    );
+}
+
+#[test]
+#[should_panic(expected = "invalid diagnostic journal record")]
+fn final_journal_rejects_a_corrupt_last_record() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("state/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join("events.jsonl"), b"{\"id\":1}\n{\"marker\":\"\xe4").unwrap();
+
+    assert_eq!(live_journal(root.path()), [json!({"id": 1})]);
+    final_journal(root.path());
 }
 
 #[test]
@@ -35,7 +80,7 @@ fn http_journal_pairs_receipts_and_omits_query_identity_and_content() {
     server.shutdown().unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     let records = loop {
-        let records = journal(directory.path());
+        let records = final_journal(directory.path());
         if records
             .iter()
             .filter(|record| record["event"] == "http_request_completed")
@@ -106,7 +151,7 @@ fn startup_failures_are_recorded_before_backend_or_listener_exists() {
             &config,
         );
         assert!(result.is_err());
-        let records = journal(directory.path());
+        let records = final_journal(directory.path());
         let failure = records
             .iter()
             .find(|record| record["event"] == "startup_failure")
@@ -227,7 +272,7 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
     }
     drop(reader);
     server.shutdown().unwrap();
-    let records = journal(&root);
+    let records = final_journal(&root);
     assert!(
         records
             .iter()

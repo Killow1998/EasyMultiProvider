@@ -505,7 +505,7 @@ fn external_pre_output_retry_is_single_and_route_local() {
 }
 
 fn assert_retry_journal(directory: &TempDir) {
-    let records = super::internal_events_contract::journal(directory.path());
+    let records = super::internal_events_contract::final_journal(directory.path());
     let retries: Vec<_> = records
         .iter()
         .filter(|record| record["event"] == "model_retry_scheduled")

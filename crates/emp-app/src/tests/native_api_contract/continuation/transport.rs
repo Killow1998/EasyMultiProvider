@@ -57,7 +57,7 @@ fn native_failed_upload_recovers_over_http_without_replaying_or_disrupting_healt
         let mut hash = Sha256::new();
         append_input(&mut hash, &json!({"input":input}));
         assert_eq!(stats.generated_hashes[3], format!("{:x}", hash.finalize()));
-        let journal = crate::tests::internal_events_contract::journal(directory.path());
+        let journal = crate::tests::internal_events_contract::final_journal(directory.path());
         let receipts = receipts(&journal);
         assert!(
             receipts
@@ -100,7 +100,7 @@ fn native_write_and_prefill_disconnects_use_http_only_after_the_client_retries()
         let mut hash = Sha256::new();
         append_input(&mut hash, &full);
         assert_eq!(stats.generated_hashes, [format!("{:x}", hash.finalize())]);
-        let journal = crate::tests::internal_events_contract::journal(directory.path());
+        let journal = crate::tests::internal_events_contract::final_journal(directory.path());
         assert!(
             receipts(&journal)
                 .iter()
@@ -215,7 +215,7 @@ fn native_http_fallback_recovers_on_the_same_connection_after_cooldown() {
             4,
             "one execution per successful request"
         );
-        assert_private(&crate::tests::internal_events_contract::journal(
+        assert_private(&crate::tests::internal_events_contract::final_journal(
             directory.path(),
         ));
     }
@@ -345,7 +345,7 @@ fn installed_codex_recovers_a_failed_native_upload_then_resumes_websocket() {
         4,
         "one successful inference per turn"
     );
-    let journal = crate::tests::internal_events_contract::journal(directory.path());
+    let journal = crate::tests::internal_events_contract::final_journal(directory.path());
     let receipts = receipts(&journal);
     let restored = receipts[receipts.len() - 2];
     let incremental = receipts[receipts.len() - 1];

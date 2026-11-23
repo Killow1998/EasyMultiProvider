@@ -6,6 +6,7 @@ on:
     paths:
       - "crates/emp-mod-*/**"
       - "crates/emp-modules/**"
+      - "crates/emp-domain/src/usage.rs"
       - "modules/**"
       - "crates/emp-app/**"
       - "xtask/**"

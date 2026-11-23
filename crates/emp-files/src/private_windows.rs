@@ -1,6 +1,7 @@
 use super::FilesystemError;
 use std::ffi::c_void;
 use std::fs::{self, File, Metadata};
+use std::marker::PhantomData;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
@@ -42,7 +43,33 @@ impl Drop for OwnedHandle {
 }
 
 #[doc(hidden)]
-pub struct LocalAllocation(pub *mut c_void);
+/// ```compile_fail
+/// use emp_files::LocalAllocation;
+/// let _allocation = LocalAllocation(std::ptr::null_mut());
+/// ```
+pub struct LocalAllocation(*mut c_void);
+
+impl LocalAllocation {
+    /// # Safety
+    /// The pointer must be null or uniquely owned and releasable with `LocalFree`.
+    ///
+    /// ```compile_fail,E0133
+    /// let _allocation = emp_files::LocalAllocation::from_raw(std::ptr::null_mut());
+    /// ```
+    pub unsafe fn from_raw(pointer: *mut c_void) -> Self {
+        Self(pointer)
+    }
+
+    pub fn as_ptr(&self) -> *mut c_void {
+        self.0
+    }
+
+    /// # Safety
+    /// This allocation must contain a valid SID that remains unchanged for the borrow.
+    pub unsafe fn sid(&self) -> Sid<'_> {
+        Sid(self.0, PhantomData)
+    }
+}
 
 impl Drop for LocalAllocation {
     fn drop(&mut self) {
@@ -50,6 +77,15 @@ impl Drop for LocalAllocation {
             // SAFETY: security APIs return LocalAlloc-owned buffers.
             unsafe { LocalFree(self.0) };
         }
+    }
+}
+
+#[doc(hidden)]
+pub struct Sid<'a>(PSID, PhantomData<&'a ()>);
+
+impl Sid<'_> {
+    pub fn as_ptr(&self) -> PSID {
+        self.0
     }
 }
 
@@ -98,23 +134,24 @@ impl CurrentUser {
             _token: token,
             token_information,
         };
-        if user.sid().is_null() {
+        if user.sid().as_ptr().is_null() {
             return Err(FilesystemError::KeyFileNotOwned);
         }
         Ok(user)
     }
 
     #[doc(hidden)]
-    pub fn sid(&self) -> PSID {
+    pub fn sid(&self) -> Sid<'_> {
         // SAFETY: GetTokenInformation initialized this buffer as TOKEN_USER.
-        unsafe {
+        let sid = unsafe {
             self.token_information
                 .as_ptr()
                 .cast::<TOKEN_USER>()
                 .read_unaligned()
                 .User
                 .Sid
-        }
+        };
+        Sid(sid, PhantomData)
     }
 }
 
@@ -131,7 +168,7 @@ pub(super) fn set_private_directory(path: &Path) -> Result<(), FilesystemError> 
     let user = CurrentUser::load()?;
     let acl = private_acl(user.sid(), true)?;
     let mut wide = wide_path(path);
-    set_named_private_acl(&mut wide, user.sid(), acl.0.cast())
+    set_named_private_acl(&mut wide, user.sid(), acl.as_ptr().cast())
         .map_err(|_| FilesystemError::KeyDirectoryUnavailable)
 }
 
@@ -140,12 +177,12 @@ pub(super) fn set_private_file(file: &File) -> Result<(), FilesystemError> {
     let acl =
         private_acl(user.sid(), false).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
     let mut wide = path_for_file_handle(file)?;
-    set_named_private_acl(&mut wide, user.sid(), acl.0.cast())
+    set_named_private_acl(&mut wide, user.sid(), acl.as_ptr().cast())
 }
 
 fn set_named_private_acl(
     path: &mut [u16],
-    user: PSID,
+    user: Sid<'_>,
     acl: *const ACL,
 ) -> Result<(), FilesystemError> {
     let mut owner = null_mut();
@@ -163,12 +200,13 @@ fn set_named_private_acl(
             &mut descriptor,
         )
     };
-    let _descriptor = LocalAllocation(descriptor);
+    // SAFETY: the output is null or a uniquely owned GetNamedSecurityInfoW allocation.
+    let _descriptor = unsafe { LocalAllocation::from_raw(descriptor) };
     if status != ERROR_SUCCESS || owner.is_null() {
         return Err(FilesystemError::ManagedFileUnavailable);
     }
     // SAFETY: owner belongs to the live descriptor; user is the caller's live CurrentUser SID.
-    let change_owner = unsafe { EqualSid(owner, user) } == 0;
+    let change_owner = unsafe { EqualSid(owner, user.as_ptr()) } == 0;
     let information = DACL_SECURITY_INFORMATION
         | PROTECTED_DACL_SECURITY_INFORMATION
         | if change_owner {
@@ -182,7 +220,11 @@ fn set_named_private_acl(
             path.as_mut_ptr(),
             SE_FILE_OBJECT,
             information,
-            if change_owner { user } else { null_mut() },
+            if change_owner {
+                user.as_ptr()
+            } else {
+                null_mut()
+            },
             null_mut(),
             acl,
             null(),
@@ -248,9 +290,10 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
     if status != ERROR_SUCCESS || descriptor.is_null() {
         return Err(FilesystemError::KeyFileNotPrivate);
     }
-    let _descriptor = LocalAllocation(descriptor);
+    // SAFETY: the output is null or a uniquely owned GetSecurityInfo allocation.
+    let _descriptor = unsafe { LocalAllocation::from_raw(descriptor) };
     // SAFETY: both SIDs are valid while `user` and `_descriptor` are alive.
-    if owner.is_null() || unsafe { EqualSid(owner, user.sid()) } == 0 {
+    if owner.is_null() || unsafe { EqualSid(owner, user.sid().as_ptr()) } == 0 {
         return Err(FilesystemError::KeyFileNotOwned);
     }
     if dacl.is_null() {
@@ -286,7 +329,7 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
     }
     let ace_sid = (&ace.SidStart as *const u32).cast_mut().cast::<c_void>();
     // SAFETY: SidStart is the variable-length SID at the end of this ACE.
-    if unsafe { EqualSid(ace_sid, user.sid()) } == 0 {
+    if unsafe { EqualSid(ace_sid, user.sid().as_ptr()) } == 0 {
         return Err(FilesystemError::KeyFileNotPrivate);
     }
     if !descriptor_dacl_is_protected(descriptor) {
@@ -318,7 +361,7 @@ fn protect_legacy_key(file: &File, user: &CurrentUser) -> Result<(), FilesystemE
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
             null_mut(),
             null_mut(),
-            acl.0.cast(),
+            acl.as_ptr().cast(),
             null(),
         )
     };
@@ -329,13 +372,16 @@ fn protect_legacy_key(file: &File, user: &CurrentUser) -> Result<(), FilesystemE
 }
 
 #[doc(hidden)]
-pub fn private_acl(sid: PSID, directory: bool) -> Result<LocalAllocation, FilesystemError> {
+/// ```compile_fail,E0308
+/// let _acl = emp_files::private_acl(std::ptr::null_mut(), false);
+/// ```
+pub fn private_acl(sid: Sid<'_>, directory: bool) -> Result<LocalAllocation, FilesystemError> {
     let trustee = TRUSTEE_W {
         pMultipleTrustee: null_mut(),
         MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
         TrusteeForm: TRUSTEE_IS_SID,
         TrusteeType: TRUSTEE_IS_USER,
-        ptstrName: sid.cast(),
+        ptstrName: sid.as_ptr().cast(),
     };
     let access = EXPLICIT_ACCESS_W {
         grfAccessPermissions: FILE_ALL_ACCESS,
@@ -353,7 +399,8 @@ pub fn private_acl(sid: PSID, directory: bool) -> Result<LocalAllocation, Filesy
     if status != ERROR_SUCCESS || acl.is_null() {
         return Err(FilesystemError::KeyFileNotPrivate);
     }
-    Ok(LocalAllocation(acl.cast()))
+    // SAFETY: SetEntriesInAclW returned a uniquely owned ACL allocation.
+    Ok(unsafe { LocalAllocation::from_raw(acl.cast()) })
 }
 
 fn descriptor_dacl_is_protected(descriptor: PSECURITY_DESCRIPTOR) -> bool {

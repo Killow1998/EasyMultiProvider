@@ -337,7 +337,7 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     assert_eq!(server.state.connection_admission.active_websockets(), 0);
     assert!(idle_upstream.no_request());
     server.shutdown().expect("shutdown server");
-    let records = super::internal_events_contract::journal(app_directory.path());
+    let records = super::internal_events_contract::final_journal(app_directory.path());
     let admitted: Vec<_> = records
         .iter()
         .filter(|record| record["event"] == "command_admitted")
