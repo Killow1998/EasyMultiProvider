@@ -5,6 +5,8 @@
 use std::path::Path;
 use std::time::Duration;
 
+#[cfg(unix)]
+mod accounts;
 mod http;
 #[cfg(target_os = "linux")]
 mod https;
@@ -23,6 +25,10 @@ pub use self::{
     upstream::{Upstream, UpstreamRequest},
     websocket::{WebSocket, WebSocketUpstream},
 };
+
+#[cfg(unix)]
+#[allow(unused_imports)]
+pub use accounts::import_account;
 
 /// Synthetic Codex login token; `/v1/*` callers present it as a bearer token.
 pub const NATIVE_TOKEN: &str = "fixture-native-token";
