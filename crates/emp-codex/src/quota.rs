@@ -17,6 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::os::unix::fs::MetadataExt;
 
 mod process;
+pub use process::access_token_snapshot;
 pub use process::subscription_login::{LoginMethod, SubscriptionLogin};
 mod projection;
 use process::{TrustedBinary, read_native_auth, rpc_http_status, run_isolated_quota_process};

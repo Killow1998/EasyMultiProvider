@@ -37,6 +37,32 @@ fn vault(root: &Path) -> VaultStore {
     VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store")
 }
 
+/// Fails if a migration grants the receiving EMP permission to rotate shared credentials.
+#[test]
+fn migration_clears_emp_login_source_even_when_replacing_an_owned_account() {
+    let directory = tempdir().unwrap();
+    let root = root(&directory);
+    let path = root.join("config.json");
+    let vault = vault(&root);
+    let auth = json!({"tokens":{"access_token":"fixture","account_id":"owner"}});
+    let mut current = normalize_configuration(Some(&json!({"accounts":[{
+        "id":"demo","prefix":"demo","credential_source":"emp_login"
+    }]})))
+    .unwrap();
+    let auth_path = account_auth_path(&current, "demo", &path).unwrap();
+    current["accounts"][0]["auth_file"] = json!(auth_path);
+    vault.write_encrypted_json(&auth_path, &auth).unwrap();
+    let package = payload(
+        current.clone(),
+        json!([{"metadata":{"id":"demo","prefix":"demo","credential_source":"emp_login"},"auth":auth}]),
+        json!({}),
+    );
+    let (imported, _) =
+        import_migration_bundle(&current, &bundle(&package), PASSWORD, &path, &vault).unwrap();
+    assert_eq!(imported["accounts"].as_array().unwrap().len(), 1);
+    assert!(imported["accounts"][0].get("credential_source").is_none());
+}
+
 #[test]
 fn vertex_migration_keeps_distinct_projects_locations_and_auth_modes() {
     let key = json!({"type":"service_account","client_email":"fixture@example.invalid","private_key":"fixture-only"}).to_string();

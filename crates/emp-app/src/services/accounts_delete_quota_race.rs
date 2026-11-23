@@ -80,7 +80,8 @@ fn delete_cancels_inflight_quota_read_without_recreating_credentials() {
                 "name":"Racing account",
                 "prefix":"racing",
                 "auth_file":auth_path,
-            },{"id":"other","name":"Other account","prefix":"other","auth_file":other_auth_path}],
+                "credential_source":"emp_login",
+            },{"id":"other","name":"Other account","prefix":"other","auth_file":other_auth_path,"credential_source":"emp_login"}],
         }))
         .expect("encode account configuration"),
     )

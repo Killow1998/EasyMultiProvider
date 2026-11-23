@@ -254,6 +254,9 @@ pub fn normalize_account(raw: &Value) -> AccountResult<Value> {
         "model_context_windows": model_context_windows,
         "quota": quota,
     });
+    if let Some(source) = raw.get("credential_source").and_then(Value::as_str) {
+        account["credential_source"] = Value::String(source.to_owned());
+    }
     if raw.get("workspace_shared") == Some(&Value::Bool(true)) {
         account["workspace_shared"] = Value::Bool(true);
     }

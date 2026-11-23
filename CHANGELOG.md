@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.15.9 (2026-11-23)
+
+### 中文
+
+#### 问题修复
+
+- **导入 Other 订阅后，原电脑可以继续使用 Codex。** 之前，在 EMP 查询另一台电脑的订阅额度，有时会让原电脑需要重新登录。现在读取额度、后台采样、使用重置额度或遇到推理认证失败时，都会保留原电脑的登录。
+- **登录失效时，页面会告诉你如何恢复。** 从文件导入的订阅，请从原电脑重新导入最新的 `auth.json`。团队订阅请在团队空间同步。通过 EMP 官方登录添加的 Other 会自动续期，需要重新认证时可在 EMP 中再次登录。
+
+#### 升级说明
+
+仅需更新桌面端 EMP Core。0.15.8 及更早版本没有记录 Other 的登录来源，升级后已有订阅按共享登录处理。如果某个账号希望由本机 EMP 自动续期，请通过 EMP 的官方登录重新添加该 Other 订阅。
+
+### English
+
+#### Fixes
+
+- **Keep using Codex on the original computer after importing an Other subscription.** Previously, checking its quota in EMP could sign the original computer out. Quota reads, background sampling, quota resets and authentication failures during inference now preserve that login.
+- **Recover an expired login from the right place.** For a file import, re-import the latest `auth.json` from the original computer. For a team subscription, sync in Team Workspace. Other subscriptions added through EMP’s official sign-in renew automatically. If sign-in is required again, the WebUI directs you back to EMP.
+
+#### Upgrade
+
+Update desktop EMP Core only. Version 0.15.8 and earlier did not record how an Other subscription was added, so existing subscriptions are treated as shared after upgrading. To let this EMP installation renew a particular Other automatically, add it again through EMP’s official sign-in.
+
 ## 0.15.8 (2026-11-23)
 
 ### 中文

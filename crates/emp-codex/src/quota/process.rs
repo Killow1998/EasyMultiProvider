@@ -136,7 +136,7 @@ pub(super) fn read_native_auth(path: &Path) -> Result<Value, QuotaError> {
     }
     let raw = fs::read(path)
         .map_err(|_| QuotaError::new("native auth.json is unavailable", "quota_error"))?;
-    let mut auth: Value = serde_json::from_slice(&raw)
+    let auth: Value = serde_json::from_slice(&raw)
         .map_err(|_| QuotaError::new("native auth.json is unavailable", "quota_error"))?;
     if account_auth_headers(&auth).is_none() {
         return Err(QuotaError::new(
@@ -144,17 +144,27 @@ pub(super) fn read_native_auth(path: &Path) -> Result<Value, QuotaError> {
             "quota_error",
         ));
     }
-    // Native credentials belong to Codex. The disposable helper may use the
-    // current access token, but must never rotate a refresh token it cannot save.
-    let tokens = auth
-        .get("tokens")
-        .and_then(Value::as_object)
-        .unwrap_or(auth.as_object().unwrap())
-        .clone();
-    auth["tokens"] = Value::Object(tokens);
-    auth["auth_mode"] = Value::String("chatgptAuthTokens".to_owned());
-    auth["tokens"]["refresh_token"] = Value::String(String::new());
-    Ok(auth)
+    Ok(access_token_snapshot(&auth))
+}
+
+/// Build a disposable quota snapshot from a validated ChatGPT auth document.
+pub fn access_token_snapshot(auth: &Value) -> Value {
+    let mut auth = auth.clone();
+    if let Some(object) = auth.as_object_mut() {
+        object.remove("refresh_token");
+        let mut tokens = object
+            .get("tokens")
+            .and_then(Value::as_object)
+            .unwrap_or(object)
+            .clone();
+        tokens.insert("refresh_token".into(), Value::String(String::new()));
+        object.insert("tokens".into(), Value::Object(tokens));
+        object.insert(
+            "auth_mode".into(),
+            Value::String("chatgptAuthTokens".into()),
+        );
+    }
+    auth
 }
 
 pub(super) fn run_isolated_quota_process<'a>(
