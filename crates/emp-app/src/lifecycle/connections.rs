@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 mod tests;
 
-const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+pub(crate) const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
 pub(super) fn accept(listener: TcpListener, state: Arc<ServerState>) {
     let mut last_error = None;

@@ -4,6 +4,11 @@ mod cli;
 mod error;
 mod http;
 mod lifecycle;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "H08 connects the server runtime")
+)]
+mod server;
 mod services;
 mod startup_recovery;
 mod tray;

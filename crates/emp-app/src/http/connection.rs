@@ -69,7 +69,7 @@ pub(crate) fn handle_connection(
     request.source = Some(&source);
     observation.received(request);
     let path = request.raw_path();
-    if request.method == RequestMethod::Get && path == "/api/accounts/events" {
+    if request.releases_request_permit() {
         let _ = request_permit.take();
     }
     if (path.starts_with("/v1/models") || path.starts_with("/v1/responses"))

@@ -14,6 +14,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
 hotpath = { version = "=0.28.3", optional = true, default-features = false }
 base64 = "0.22"
 emp-codex = { path = "../emp-codex" }
@@ -28,6 +29,8 @@ emp-transport = { path = "../emp-transport" }
 emp-updater = { path = "../emp-updater" }
 getrandom = "0.2.17"
 hmac = "0.12.1"
+hyper = { version = "=1.11.1", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio", "service"] }
 if-addrs = "=0.15.0"
 libc = "0.2.189"
 polling = { version = "=3.11.0", default-features = false }
@@ -41,7 +44,8 @@ sha2 = "0.10.9"
 shlex = "2.0.1"
 tempfile = "3.27"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
-tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tower = { version = "=0.5.3", default-features = false, features = ["util"] }
 url = "2.5.7"
 
 [features]
@@ -60,6 +64,7 @@ rcgen = "0.14.10"
 ring = "=0.17.14"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustls = "0.23"
+tokio = { version = "1.53.1", features = ["test-util"] }
 zstd = "=0.13.3"
 
 [target.'cfg(windows)'.dependencies]

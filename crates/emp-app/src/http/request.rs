@@ -15,7 +15,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 use std::time::Instant;
 
-const MAX_HEADER_BYTES: usize = 8 * 1024;
+pub(crate) const MAX_HEADER_BYTES: usize = 8 * 1024;
 
 pub(crate) const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const REQUEST_HEAD_DEADLINE: Duration = Duration::from_secs(30);
@@ -99,6 +99,19 @@ impl<'a> Request<'a> {
             .map_or(self.target, |(path, _)| path)
     }
 
+    pub(crate) fn releases_request_permit(&self) -> bool {
+        self.method == RequestMethod::Get && self.raw_path() == "/api/accounts/events"
+    }
+
+    pub(crate) fn validate_body_framing(&self) -> Result<(), BodyError> {
+        if self.header_count("Content-Length") > 1 || self.header_count("Transfer-Encoding") > 0 {
+            return Err(BodyError::Invalid(
+                "duplicate Content-Length or unsupported Transfer-Encoding".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     /// The management session presented in the `X-EMP-Session` header.
     /// Cookies are never consulted: browsers share them across local ports.
     pub(crate) fn session_token(&self) -> Option<String> {
@@ -169,6 +182,20 @@ pub(crate) fn read_request_head(stream: &mut TcpStream) -> Option<RequestHead> {
     head
 }
 
+pub(crate) fn request_head_end(request: &[u8], previous_len: usize) -> Result<Option<usize>, ()> {
+    let search_start = previous_len.saturating_sub(3);
+    match request[search_start..]
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+    {
+        Some(offset) if search_start + offset <= MAX_HEADER_BYTES => {
+            Ok(Some(search_start + offset + 4))
+        }
+        _ if request.len() <= MAX_HEADER_BYTES + 3 => Ok(None),
+        _ => Err(()),
+    }
+}
+
 pub(crate) fn read_request_head_before(
     stream: &mut TcpStream,
     deadline: Instant,
@@ -180,20 +207,14 @@ pub(crate) fn read_request_head_before(
         if count == 0 {
             break;
         }
+        let previous_len = request.len();
         request.extend_from_slice(&buffer[..count]);
-        if let Some(separator) = request.windows(4).position(|window| window == b"\r\n\r\n") {
-            if separator > MAX_HEADER_BYTES {
-                return None;
-            }
-            let body_prefix = request.split_off(separator + 4);
-            request.truncate(separator + 4);
+        if let Some(end) = request_head_end(&request, previous_len).ok()? {
+            let body_prefix = request.split_off(end);
             return Some(RequestHead {
                 head: String::from_utf8(request).ok()?,
                 body_prefix,
             });
-        }
-        if request.len() > MAX_HEADER_BYTES + 3 {
-            return None;
         }
     }
     None
@@ -331,11 +352,7 @@ pub(crate) fn read_json_body(
             "Content-Type must be application/json".to_owned(),
         ));
     }
-    if request.header_count("Content-Length") > 1 || request.header_count("Transfer-Encoding") > 0 {
-        return Err(BodyError::Invalid(
-            "duplicate Content-Length or unsupported Transfer-Encoding".to_owned(),
-        ));
-    }
+    request.validate_body_framing()?;
     let raw_length = request.header("Content-Length").unwrap_or("0");
     if raw_length.starts_with('-') {
         if raw_length.parse::<i128>().is_ok_and(|value| value < 0) {
