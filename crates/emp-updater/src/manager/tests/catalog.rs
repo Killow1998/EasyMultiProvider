@@ -109,10 +109,7 @@ fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
     );
     let edited_cache = std::fs::read(&cache_path).unwrap();
     for expected in ["check_failed", "update_failed", "invalid_release"] {
-        assert_eq!(
-            restarted.check().unwrap_err(),
-            crate::UpdateError(expected)
-        );
+        assert_eq!(restarted.check().unwrap_err(), crate::UpdateError(expected));
         assert_eq!(
             restarted.snapshot().release_notes,
             "Edited same-version notes"

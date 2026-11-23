@@ -5,10 +5,7 @@ use std::time::Duration;
 pub(super) const MAX_RETRIES: u8 = 3;
 
 impl UpdateManager {
-    pub(crate) fn retry_network(
-        &self,
-        mut operation: impl FnMut() -> Result<()>,
-    ) -> Result<()> {
+    pub(crate) fn retry_network(&self, mut operation: impl FnMut() -> Result<()>) -> Result<()> {
         if let Ok(mut snapshot) = self.0.snapshot.lock() {
             snapshot.retry_count = 0;
         }

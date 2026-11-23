@@ -2,8 +2,8 @@ use super::*;
 use std::collections::BTreeMap;
 
 const ALLOWED: &[(&str, usize)] = &[
-    ("emp-app", 13),
-    ("emp-codex", 3),
+    ("emp-app", 4),
+    ("emp-codex", 0),
     ("emp-core", 0),
     ("emp-history", 0),
     ("emp-integration", 0),

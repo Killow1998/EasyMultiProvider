@@ -85,10 +85,14 @@ pub(super) fn check(root: &Path, errors: &mut Vec<String>) -> Result {
     }
     let metadata: Value = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("[arch] cargo metadata JSON: {error}"))?;
-    dependencies(&metadata, errors)
+    dependencies(&metadata, TRANSITIONAL, errors)
 }
 
-fn dependencies(metadata: &Value, errors: &mut Vec<String>) -> Result {
+fn dependencies(
+    metadata: &Value,
+    transitional: &[(&str, &str, &str)],
+    errors: &mut Vec<String>,
+) -> Result {
     let packages = metadata["packages"]
         .as_array()
         .ok_or("[arch] cargo metadata 缺少 packages")?;
@@ -131,7 +135,7 @@ fn dependencies(metadata: &Value, errors: &mut Vec<String>) -> Result {
             }
         }
     }
-    forbidden(&edges, TRANSITIONAL, errors);
+    forbidden(&edges, transitional, errors);
     Ok(())
 }
 
@@ -216,7 +220,7 @@ mod tests {
                 {"id": to, "name": to, "manifest_path": format!("/workspace/{to}/Cargo.toml"), "dependencies": []}
             ]});
             let mut errors = Vec::new();
-            dependencies(&metadata, &mut errors).unwrap();
+            dependencies(&metadata, &[], &mut errors).unwrap();
             assert_eq!(errors.is_empty(), valid, "{from} → {to}: {errors:?}");
             if !valid {
                 assert!(errors[0].contains(&format!("{from} → {to}")));
