@@ -207,6 +207,11 @@ fn prepare_external_request(
         Some(Value::Object(reasoning)) => reasoning,
         _ => Map::new(),
     };
+    if let Some(input) = body.get_mut("input")
+        && let Some(effort) = take_effort_updates(input)
+    {
+        reasoning.insert("effort".into(), effort);
+    }
     if !responses_capable || !supported || policy == SummaryPolicy::Hide {
         reasoning.remove("summary");
     } else if policy == SummaryPolicy::Show {
@@ -216,6 +221,26 @@ fn prepare_external_request(
         body.insert("reasoning".to_owned(), Value::Object(reasoning));
     }
     Ok(())
+}
+
+fn take_effort_updates(input: &mut Value) -> Option<Value> {
+    let mut latest = None;
+    let mut keep = |item: &mut Value| {
+        if item["type"] == "configuration_update"
+            && let Some(effort) = item.pointer_mut("/reasoning/effort")
+            && (effort.is_string() || effort.is_number())
+        {
+            latest = Some(effort.take());
+            return false;
+        }
+        true
+    };
+    if let Some(items) = input.as_array_mut() {
+        items.retain_mut(keep);
+    } else if input.is_object() && !keep(input) {
+        *input = Value::Array(Vec::new());
+    }
+    latest
 }
 
 fn summary_policy(

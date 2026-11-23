@@ -72,6 +72,7 @@ impl ServerState {
 }
 
 pub(crate) struct BackendState {
+    pub(crate) history_summaries: emp_history::context::SummaryCache,
     pub(crate) modules: Arc<crate::services::modules::Modules>,
     pub(crate) team: crate::services::team::TeamState,
     pub(crate) aero_callers: crate::services::modules::aero::Callers,
@@ -193,6 +194,7 @@ impl BackendState {
             Err(error) => return Err(error),
         };
         Ok(Self {
+            history_summaries: Default::default(),
             modules: Arc::new(modules),
             aero_callers: Default::default(),
             team: crate::services::team::TeamState::open(

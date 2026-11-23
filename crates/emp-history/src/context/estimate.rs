@@ -200,7 +200,7 @@ impl IncrementalEstimate {
     }
 }
 
-fn payload_view(payload: &Value, protocol: &str) -> Option<Value> {
+pub(super) fn payload_view(payload: &Value, protocol: &str) -> Option<Value> {
     let root = payload.as_object()?;
     let fields = protocol_fields(protocol)?;
     Some(Value::Object(

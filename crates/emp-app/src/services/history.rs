@@ -133,10 +133,27 @@ pub(crate) fn prepare_destination_context(
     };
     let mut summary_failure = None;
     let mut activity_guard = None;
-    let compacted = emp_history::context::compact_with(
+    let lineage = body
+        .as_object()
+        .and_then(|root| emp_history::request_history_anchor(root, incoming).ok())
+        .and_then(|anchor| anchor.forked_from_thread_id.or(anchor.thread_id));
+    let scope = lineage.as_deref().map(|thread| {
+        [
+            thread,
+            candidate.provider_id.as_str(),
+            candidate.endpoint_fingerprint.as_str(),
+            candidate.deployment_identity.as_str(),
+            candidate.upstream_model.as_str(),
+            candidate.protocol.as_config_str(),
+        ]
+    });
+    let compacted = emp_history::context::compact_with_cache(
         &body,
         candidate.model.value(),
         safe_budget,
+        scope
+            .as_ref()
+            .map(|scope| (&state.backend.history_summaries, scope.as_slice())),
         |summary_body| {
             let (ids, request_id) = match (projection_ids(), crate::util::random_hex(8)) {
                 (Ok(ids), Ok(request_id)) => (ids, request_id),
