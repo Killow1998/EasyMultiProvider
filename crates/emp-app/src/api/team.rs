@@ -1,20 +1,21 @@
+use crate::server::http::error::JsonReply;
 use crate::server::http::management::ManagementSession;
 use crate::{
     app::ServerState,
     http::{
         request::{Request, read_json_body},
-        response::{body_error_response, json_error_response, response, status_text},
+        response::body_error_response,
     },
     services::team::{Command, Failure},
 };
 use serde_json::Value;
 use std::net::TcpStream;
 
-pub(crate) fn read(state: &ServerState) -> Vec<u8> {
+pub(crate) fn read(state: &ServerState) -> JsonReply {
     render(state.backend.team.local_status())
 }
 
-pub(crate) fn notices(state: &ServerState) -> Vec<u8> {
+pub(crate) fn notices(state: &ServerState) -> JsonReply {
     render(Ok(state.backend.team.notices()))
 }
 
@@ -36,29 +37,24 @@ pub(crate) fn mutate(
         .raw_path()
         .strip_prefix("/api/team/")
         .expect("team path");
-    render(
-        state
-            .backend
-            .team
-            .command(state, Command::parse(operation), &body),
-    )
+    command(state, Command::parse(operation), &body).wire_response()
 }
 
-fn render(result: Result<Value, Failure>) -> Vec<u8> {
-    let headers = [("Cache-Control", "no-store")];
+pub(crate) fn command(state: &ServerState, command: Option<Command>, body: &Value) -> JsonReply {
+    render(state.backend.team.command(state, command, body))
+}
+
+fn render(result: Result<Value, Failure>) -> JsonReply {
     match result {
-        Ok(payload) => response(
-            "HTTP/1.1 200 OK",
-            "application/json",
-            &serde_json::to_vec(&payload).expect("workspace payload"),
-            &headers,
+        Ok(payload) => JsonReply::new(
+            200,
+            serde_json::to_vec(&payload).expect("workspace payload"),
         ),
-        Err(Failure(status, code)) => json_error_response(
+        Err(Failure(status, code)) => JsonReply::error(
             status,
-            status_text(status),
             "Workspace request could not be completed",
             Some(&code),
-            &headers,
         ),
     }
+    .with_header("Cache-Control", "no-store")
 }

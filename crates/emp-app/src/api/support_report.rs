@@ -2,7 +2,7 @@
 //! never cross this boundary.
 
 use crate::app::ServerState;
-use crate::http::response::{json_error_response, response, status_text};
+use crate::server::http::error::JsonReply;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -467,28 +467,17 @@ fn build_support_report(state: &ServerState) -> Result<Value, ()> {
     }))
 }
 
-pub(crate) fn read(state: &ServerState) -> Vec<u8> {
+pub(crate) fn read(state: &ServerState) -> JsonReply {
     let report = match build_support_report(state) {
         Ok(report) => report,
         Err(()) => {
-            return json_error_response(
-                503,
-                status_text(503),
-                "Support report is unavailable",
-                None,
-                &[],
-            );
+            return JsonReply::error(503, "Support report is unavailable", None);
         }
     };
     let body = serde_json::to_vec(&report).expect("support report is JSON serializable");
-    response(
-        "HTTP/1.1 200 OK",
-        "application/json",
-        &body,
-        &[(
-            "Content-Disposition",
-            "attachment; filename=\"EMP-support-report.json\"",
-        )],
+    JsonReply::new(200, body).with_header(
+        "Content-Disposition",
+        "attachment; filename=\"EMP-support-report.json\"",
     )
 }
 

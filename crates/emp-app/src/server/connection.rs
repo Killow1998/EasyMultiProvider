@@ -2,8 +2,8 @@ use super::{
     ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
     head::GuardedHead,
     http::{
-        accounts, catalog, error::EntryWire, modules::ModulePanel, proxy::RequestAccess, settings,
-        usage,
+        accounts, catalog, error::EntryWire, inspection, modules::ModulePanel,
+        proxy::RequestAccess, settings, team, usage,
     },
     run_blocking,
 };
@@ -129,6 +129,9 @@ pub(super) async fn drive_candidate(
     } else if settings::matches(request)
         || catalog::matches(request)
         || module_or_update_read(request)
+        || team::matches(request)
+        || (request.method == RequestMethod::Get
+            && inspection::read_handler(request.raw_path()).is_some())
     {
         (true, false)
     } else if accounts::matches(request) {

@@ -388,17 +388,17 @@ fn gateway_and_decision_module_gates_precede_management_authentication() {
 }
 
 #[cfg(unix)]
-#[test]
-fn module_panel_matches_legacy_wire_for_origin_and_revision() {
-    use emp_modules::{HOST_API, Hello, Module, PROTOCOL, Reply};
+fn install_panel_fixture(
+    directory: &std::path::Path,
+    module: emp_modules::Module,
+    panel: &str,
+) -> String {
+    use emp_modules::{HOST_API, Hello, PROTOCOL, Reply};
     use sha2::{Digest, Sha256};
     use std::{fs, os::unix::fs::PermissionsExt};
 
-    let directory = tempfile::tempdir().unwrap();
-    let modules = directory.path().join("state/modules");
+    let modules = directory.join("state/modules");
     fs::create_dir_all(&modules).unwrap();
-    let module = Module::Gateway;
-    let panel = "export const panel = \"fixture\";\n";
     let hello = serde_json::to_string(&Hello {
         module,
         version: crate::VERSION.into(),
@@ -416,13 +416,21 @@ fn module_panel_matches_legacy_wire_for_origin_and_revision() {
         "#!/bin/sh\nprintf '%s\\n' '{hello}'\nread -r line\nprintf '%s\\n' '{reply}'\nwhile read -r line; do :; done\n"
     );
     let revision = format!("{:x}", Sha256::digest(&worker));
-    let executable = modules.join(format!("gateway-{revision}"));
+    let executable = modules.join(format!("{}-{revision}", module.id()));
     fs::write(&executable, worker).unwrap();
     fs::set_permissions(executable, fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(modules.join("modules.json"), json!({
-        "gateway":{"enabled":true,"versions":{},"artifact":{"digest":revision,"version":module.version()}}
+        (module.id()):{"enabled":true,"versions":{},"artifact":{"digest":revision,"version":module.version()}}
     }).to_string()).unwrap();
+    revision
+}
 
+#[cfg(unix)]
+#[test]
+fn module_panel_matches_legacy_wire_for_origin_and_revision() {
+    let directory = tempfile::tempdir().unwrap();
+    let panel = "export const panel = \"fixture\";\n";
+    let revision = install_panel_fixture(directory.path(), emp_modules::Module::Gateway, panel);
     Fixture::with_directory(directory).run_candidate(async |fixture, address| {
         let port = fixture.port();
         let same_origin = format!("Origin: http://localhost:{port}");
@@ -481,6 +489,284 @@ fn module_panel_matches_legacy_wire_for_origin_and_revision() {
                 200,
             )
             .await;
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn team_reads_match_legacy_wire_on_candidate_listener() {
+    use emp_modules::Module;
+
+    let directory = tempfile::tempdir().unwrap();
+    install_panel_fixture(directory.path(), Module::Team, "export const panel = {};");
+    let state_root = directory.path().join("state");
+    let workspace_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let member_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let vault = emp_state::VaultStore::from_sources(None, &state_root.join("master.key")).unwrap();
+    vault
+        .write_encrypted_json(
+            &state_root.join("team-profile.json"),
+            &json!({
+                "session": {
+                    "base": "https://team.invalid",
+                    "token": "fixture-team-session",
+                    "identity": {
+                "workspace": {"id":workspace_id},
+                "member": {"id":member_id,"publish":true},
+                        "native_usage": {"private":true},
+                    },
+                },
+                "imported": {},
+            }),
+        )
+        .unwrap();
+    std::fs::write(state_root.join("team-budget-notices.json"), json!([
+        {"workspace":workspace_id,"member":member_id,"day":1,"at":2,"reached":true,"used":10,"limit":10},
+        {"workspace":workspace_id,"member":"cccccccccccccccccccccccccccccccc","day":1,"at":2,"reached":true,"used":20,"limit":20},
+    ]).to_string()).unwrap();
+
+    Fixture::with_directory(directory).run_candidate(async |fixture, address| {
+        let port = fixture.port();
+        let session = fixture.session();
+        let foreign_origin = "Origin: https://foreign.invalid";
+        for (path, cache_headers) in [
+            ("/api/team/status", 2),
+            ("/api/team/notices", 2),
+            ("/api/team/publish_source", 2),
+        ] {
+            let post = path.ends_with("/publish_source");
+            let signed = [&*session, "Accept: text/event-stream"];
+            let valid = |target: &str, headers: &[&str]| {
+                if post {
+                    json_request(port, target, headers, b"{}")
+                } else {
+                    request(port, "GET", target, headers, b"")
+                }
+            };
+            let reply = fixture.parity(address, &valid(path, &signed), 200).await;
+            let head = str::from_utf8(&reply)
+                .unwrap()
+                .split_once("\r\n\r\n")
+                .unwrap()
+                .0;
+            assert_eq!(
+                head.lines()
+                    .filter(|line| *line == "Cache-Control: no-store")
+                    .count(),
+                cache_headers
+            );
+            let body = json_body(&reply);
+            match path {
+                "/api/team/status" => {
+                    assert_eq!(body["joined"], true);
+                    assert_eq!(body["identity"]["member"]["id"], member_id);
+                    assert!(body["identity"].get("native_usage").is_none());
+                    assert!(!body.to_string().contains("fixture-team-session"));
+                }
+                "/api/team/notices" => {
+                    assert_eq!(body.as_array().unwrap().len(), 1);
+                    assert_eq!(body[0]["used"], 10);
+                }
+                _ => assert_eq!(body, json!({})),
+            }
+            for (headers, status) in [
+                ([].as_slice(), 401),
+                ([&*session, &*session].as_slice(), 401),
+                (
+                    [&*session, foreign_origin].as_slice(),
+                    if post { 401 } else { 403 },
+                ),
+            ] {
+                fixture.parity(address, &valid(path, headers), status).await;
+            }
+            fixture
+                .parity(
+                    address,
+                    &valid(&format!("{path}/missing"), &[&session]),
+                    if post { 400 } else { 404 },
+                )
+                .await;
+            fixture
+                .parity(address, &request(port, "HEAD", path, &[&session], b""), 404)
+                .await;
+        }
+        let path = "/api/team/publish_source";
+        fixture
+            .parity(address, &json_request(port, path, &[&session], b"[]"), 400)
+            .await;
+        fixture
+            .parity(address, &json_request(port, path, &[], b"[]"), 401)
+            .await;
+
+        fixture
+            .legacy
+            .state
+            .backend
+            .modules
+            .mark_unavailable(Module::Team, "fixture-disabled");
+        for request in [
+            request(port, "GET", "/api/team/status", &[&session], b""),
+            request(port, "GET", "/api/team/notices", &[&session], b""),
+            json_request(port, path, &[], b"[]"),
+        ] {
+            let reply = fixture.parity(address, &request, 404).await;
+            assert_eq!(json_body(&reply)["error"]["code"], "module_disabled");
+        }
+    });
+}
+
+#[test]
+fn inspection_reads_match_legacy_wire_on_candidate_listener() {
+    let fixture = Fixture::new();
+    let auth = &fixture.legacy.state.backend.accounts.native_auth_path;
+    std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+    std::fs::write(auth, br#"{"tokens":{"access_token":"parity-private-token","account_id":"parity-private-account"}}"#).unwrap();
+    fixture
+        .legacy
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap()["image_routing"]["credit"] = json!({
+        "provider":"parity-provider","cycle_started_at":1,"expires_at":4_102_444_800_i64,
+        "budget_cents":250,"percent":80,
+    });
+    fixture.run_candidate(async |fixture, address| {
+        let port = fixture.port();
+        let session = fixture.session();
+        for (path, field, cache_headers) in [
+            ("/api/diagnostics", "capacity", 1),
+            ("/api/support-report", "schema_version", 1),
+            ("/api/capabilities", "capabilities", 1),
+            ("/api/models/vision-test-image", "data_url", 2),
+            ("/api/models/audio-test-sound", "data", 2),
+            ("/api/image-credit", "limit_nanos", 2),
+        ] {
+            let wire = request(
+                port,
+                "GET",
+                path,
+                &[&session, "Accept: text/event-stream"],
+                b"",
+            );
+            let reply = if path == "/api/support-report" {
+                let (old, new) = tokio::join!(
+                    exchange_wire(fixture.legacy.local_addr(), &wire, false),
+                    exchange_wire(address, &wire, false),
+                );
+                assert_eq!(
+                    support_report_without_timestamp(&old),
+                    support_report_without_timestamp(&new)
+                );
+                new
+            } else {
+                fixture.parity(address, &wire, 200).await
+            };
+            assert_status(&reply, 200);
+            let text = str::from_utf8(&reply).unwrap();
+            let head = text.split_once("\r\n\r\n").unwrap().0;
+            assert_eq!(
+                head.lines()
+                    .filter(|line| *line == "Cache-Control: no-store")
+                    .count(),
+                cache_headers
+            );
+            let body = json_body(&reply);
+            assert!(!body[field].is_null(), "{path} omitted {field}");
+            match path {
+                "/api/support-report" => {
+                    assert!(head.contains(
+                        "\r\nContent-Disposition: attachment; filename=\"EMP-support-report.json\""
+                    ));
+                    for private in [
+                        "parity-private-token",
+                        "parity-private-account",
+                        fixture.directory.path().to_str().unwrap(),
+                    ] {
+                        assert!(!text.contains(private), "support report exposed {private}");
+                    }
+                }
+                "/api/models/vision-test-image" => {
+                    assert!(
+                        body[field]
+                            .as_str()
+                            .unwrap()
+                            .starts_with("data:image/png;base64,iVBOR")
+                    );
+                }
+                "/api/models/audio-test-sound" => {
+                    assert_eq!(body["format"], "wav");
+                    assert!(body[field].as_str().unwrap().starts_with("UklGR"));
+                }
+                "/api/image-credit" => assert_eq!(body[field], 2_000_000_000_i64),
+                _ => {}
+            }
+            for (headers, status) in [
+                ([].as_slice(), 401),
+                ([&*session, &*session].as_slice(), 401),
+                (
+                    [&*session, "Origin: https://foreign.invalid"].as_slice(),
+                    403,
+                ),
+            ] {
+                fixture
+                    .parity(address, &request(port, "GET", path, headers, b""), status)
+                    .await;
+            }
+            fixture
+                .parity(
+                    address,
+                    &request(port, "GET", &format!("{path}/missing"), &[&session], b""),
+                    404,
+                )
+                .await;
+            fixture
+                .parity(address, &request(port, "HEAD", path, &[&session], b""), 404)
+                .await;
+        }
+    });
+}
+
+fn support_report_without_timestamp(reply: &[u8]) -> String {
+    let body = json_body(reply);
+    let timestamp = body["generated_at"].as_str().unwrap();
+    time::OffsetDateTime::parse(timestamp, &time::format_description::well_known::Rfc3339).unwrap();
+    let (head, body) = str::from_utf8(reply)
+        .unwrap()
+        .split_once("\r\n\r\n")
+        .unwrap();
+    let body_with_fixed_time = body.replacen(
+        &format!(r#""generated_at":"{timestamp}""#),
+        r#""generated_at":"2000-01-01T00:00:00Z""#,
+        1,
+    );
+    let length = format!("\r\nContent-Length: {}\r\n", body.len());
+    assert!(head.contains(&length));
+    let head = head.replace(
+        &length,
+        &format!("\r\nContent-Length: {}\r\n", body_with_fixed_time.len()),
+    );
+    format!("{head}\r\n\r\n{body_with_fixed_time}")
+}
+
+#[test]
+fn account_event_stream_still_uses_legacy_subscription() {
+    Fixture::new().run_candidate(async |fixture, address| {
+        let wire = request(fixture.port(), "GET", "/api/accounts/events", &[&fixture.session(), "Accept: text/event-stream"], b"");
+        let expected = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\n{}Connection: close\r\n\r\nevent: quota-updated\ndata: {{}}\n\n",
+            str::from_utf8(crate::http::response::SECURITY_HEADERS).unwrap()
+        );
+        for endpoint in [fixture.legacy.local_addr(), address] {
+            timeout(Duration::from_secs(15), async {
+                let mut stream = TcpStream::connect(endpoint).await.unwrap();
+                stream.write_all(&wire).await.unwrap();
+                let mut prefix = vec![0; expected.len()];
+                stream.read_exact(&mut prefix).await.unwrap();
+                assert_eq!(str::from_utf8(&prefix).unwrap(), expected);
+            }).await.expect("account event stream prefix");
+        }
     });
 }
 

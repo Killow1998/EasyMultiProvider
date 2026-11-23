@@ -5,16 +5,15 @@ use crate::http::response::{
     body_error_response, cross_origin_response, json_error_response, response, status_text,
     unauthorized_response,
 };
+use crate::server::http::error::JsonReply;
 use crate::services::observation::diagnostics::schema;
 use serde_json::{Value, json};
 use std::net::TcpStream;
 
-pub(crate) fn read(state: &ServerState) -> Vec<u8> {
-    response(
-        "HTTP/1.1 200 OK",
-        "application/json",
-        &serde_json::to_vec(&state.backend.diagnostics.snapshot()).expect("diagnostic snapshot"),
-        &[],
+pub(crate) fn read(state: &ServerState) -> JsonReply {
+    JsonReply::new(
+        200,
+        serde_json::to_vec(&state.backend.diagnostics.snapshot()).expect("diagnostic snapshot"),
     )
 }
 pub(crate) fn client_event(

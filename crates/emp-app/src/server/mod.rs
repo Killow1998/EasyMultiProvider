@@ -159,7 +159,9 @@ pub(crate) async fn serve_candidate(
             .merge(http::catalog::routes())
             .merge(http::updates::routes())
             .merge(http::modules::routes())
-            .merge(http::gateway::routes()),
+            .merge(http::gateway::routes())
+            .merge(http::inspection::routes())
+            .merge(http::team::routes()),
         state.clone(),
     );
     let control = Arc::new(ServerControl {

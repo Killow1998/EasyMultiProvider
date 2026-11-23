@@ -1,5 +1,6 @@
 use super::{
     error::{EntryError, JsonReply},
+    proxy::RequestAccess,
     raw_head,
 };
 use crate::app::ServerState;
@@ -10,9 +11,10 @@ use crate::http::{
 use crate::server::run_blocking;
 use crate::util::system_now;
 use axum::{
-    extract::FromRequestParts,
+    extract::{FromRequestParts, State},
     http::request::Parts,
     response::{IntoResponse, Response},
+    routing::{MethodRouter, get},
 };
 use std::sync::Arc;
 
@@ -116,6 +118,20 @@ pub(crate) fn exchange(
 }
 
 pub(crate) struct ManagementSession(pub(crate) String);
+
+pub(crate) type ManagementRead = fn(&ServerState) -> JsonReply;
+
+pub(super) fn read_route(read: ManagementRead) -> MethodRouter<Arc<ServerState>> {
+    get(
+        move |_access: RequestAccess,
+              _session: ManagementSession,
+              State(state): State<Arc<ServerState>>| async move {
+            run_blocking(move || read(&state))
+                .await
+                .map_err(|_| EntryError::internal())
+        },
+    )
+}
 
 impl ManagementSession {
     pub(crate) fn require(

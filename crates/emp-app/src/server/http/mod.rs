@@ -3,10 +3,12 @@ pub(crate) mod body;
 pub(super) mod catalog;
 pub(crate) mod error;
 pub(super) mod gateway;
+pub(crate) mod inspection;
 pub(crate) mod management;
 pub(crate) mod modules;
 pub(crate) mod proxy;
 pub(crate) mod settings;
+pub(crate) mod team;
 pub(super) mod updates;
 pub(crate) mod usage;
 

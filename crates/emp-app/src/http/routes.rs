@@ -1,7 +1,6 @@
 use crate::api::accounts::AccountRead;
 use crate::api::catalog;
 use crate::api::gateway::GatewayRead;
-use crate::api::inspection;
 use crate::api::provider_quota;
 use crate::app::ServerState;
 use crate::http::request::Request;
@@ -16,6 +15,7 @@ use crate::server::http::management::{ManagementSession, exchange, page_origin};
 use crate::server::http::modules::ModulePanel;
 use crate::server::http::proxy::require_model_catalog;
 use crate::server::http::settings::SettingsRead;
+use crate::server::http::{inspection, team};
 use crate::services::accounts::delete_account_state;
 use crate::web::ui_response;
 
@@ -100,14 +100,10 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         if request.method == RequestMethod::Get && path == "/api/updates" {
             return crate::api::updates::read(state).wire_response();
         }
-        if request.method == RequestMethod::Get && path == "/api/team/status" {
-            return crate::api::team::read(state);
-        }
-        if request.method == RequestMethod::Get && path == "/api/team/notices" {
-            return crate::api::team::notices(state);
-        }
-        if request.method == RequestMethod::Get && path == "/api/image-credit" {
-            return crate::api::images::credit_status(state);
+        if request.method == RequestMethod::Get
+            && let Some(read) = team::read_handler(path).or_else(|| inspection::read_handler(path))
+        {
+            return read(state).wire_response();
         }
         if request.method == RequestMethod::Get && path == "/api/modules" {
             return crate::api::modules::read(state).wire_response();
@@ -117,26 +113,10 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         {
             return read.read(request, state).wire_response();
         }
-        if request.method == RequestMethod::Get && path == "/api/support-report" {
-            return crate::api::support_report::read(state);
-        }
-        if request.method == RequestMethod::Get && path == "/api/diagnostics" {
-            return crate::api::diagnostics::read(state);
-        }
         if request.method == RequestMethod::Get
             && let Some(read) = SettingsRead::for_path(path)
         {
             return read.read(state).wire_response();
-        }
-        if request.method == RequestMethod::Get
-            && matches!(
-                path,
-                "/api/models/vision-test-image"
-                    | "/api/models/audio-test-sound"
-                    | "/api/capabilities"
-            )
-        {
-            return inspection::read_request(request, state);
         }
         if request.method == RequestMethod::Get && catalog::provider_models_path(path) {
             return catalog::provider_models_request(path, state).wire_response();
