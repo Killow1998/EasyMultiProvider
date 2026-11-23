@@ -1,11 +1,15 @@
 use super::{
     ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
     head::GuardedHead,
-    http::{accounts, catalog, error::EntryWire, proxy::RequestAccess, settings, usage},
+    http::{
+        accounts, catalog, error::EntryWire, modules::ModulePanel, proxy::RequestAccess, settings,
+        usage,
+    },
     run_blocking,
 };
 use crate::{
-    http::request::{MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE},
+    api::gateway::GatewayRead,
+    http::request::{MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE, RequestMethod},
     services::{connection_admission::ConnectionPermit, observation::http::HttpObservation},
 };
 use axum::{Router, extract::ConnectInfo, http::StatusCode};
@@ -122,7 +126,10 @@ pub(super) async fn drive_candidate(
     let request = head.raw.request();
     let (half_close, watch_report) = if usage::matches(request) {
         (true, usage::Report::for_path(request.raw_path()).is_some())
-    } else if settings::matches(request) || catalog::matches(request) {
+    } else if settings::matches(request)
+        || catalog::matches(request)
+        || module_or_update_read(request)
+    {
         (true, false)
     } else if accounts::matches(request) {
         (false, false)
@@ -322,4 +329,12 @@ async fn drive_http(
     if written && let Some(session) = upgrade {
         session.await;
     }
+}
+
+fn module_or_update_read(request: crate::http::request::Request<'_>) -> bool {
+    let path = request.raw_path();
+    request.method == RequestMethod::Get
+        && (matches!(path, "/api/updates" | "/api/modules")
+            || GatewayRead::for_path(path).is_some()
+            || ModulePanel::for_path(path).is_some())
 }

@@ -1,15 +1,13 @@
 use crate::app::ServerState;
 use crate::http::request::{Request, read_json_body};
 use crate::http::response::{body_error_response, json_error_response, response, status_text};
+use crate::server::http::error::JsonReply;
 use crate::server::http::management::ManagementSession;
 use std::net::TcpStream;
 
-pub(crate) fn read(request: Request<'_>, state: &ServerState, now: f64) -> Vec<u8> {
-    if let Err(error) = ManagementSession::require(request, state, now) {
-        return error.wire_response();
-    }
+pub(crate) fn read(state: &ServerState) -> JsonReply {
     let body = serde_json::to_vec(&state.updates.snapshot()).unwrap_or_else(|_| b"{}".to_vec());
-    response("HTTP/1.1 200 OK", "application/json", &body, &[])
+    JsonReply::new(200, body)
 }
 
 pub(crate) fn start(

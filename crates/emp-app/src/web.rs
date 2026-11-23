@@ -102,33 +102,6 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
     ))
 }
 
-pub(crate) fn module_asset_response(
-    request: crate::http::request::Request<'_>,
-    state: &crate::app::ServerState,
-) -> Option<Vec<u8>> {
-    use emp_modules::Module;
-    let id = request
-        .raw_path()
-        .strip_prefix("/assets/module-")?
-        .strip_suffix(".js")?;
-    let module = Module::ALL.into_iter().find(|module| module.id() == id)?;
-    let revision = request.target.split_once('?').and_then(|(_, query)| {
-        query
-            .split('&')
-            .find_map(|part| part.strip_prefix("revision="))
-    });
-    let panel = state.backend.modules.panel(module, revision);
-    Some(match panel {
-        Some(source) => response(
-            "HTTP/1.1 200 OK",
-            "text/javascript; charset=utf-8",
-            source.as_bytes(),
-            &[("Cache-Control", "no-store")],
-        ),
-        None => response("HTTP/1.1 404 Not Found", "text/plain", b"", &[]),
-    })
-}
-
 /// Serve secret-free UI without authentication; its script exchanges a one-use bootstrap
 /// token for a session in origin-scoped storage, and responses expire legacy cookies.
 pub(crate) fn ui_response() -> Vec<u8> {

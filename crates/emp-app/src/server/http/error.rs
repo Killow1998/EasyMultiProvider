@@ -26,11 +26,14 @@ pub(crate) enum EntryError {
     Recovery(u16, &'static str),
 }
 
-pub(crate) struct JsonReply {
+pub(crate) struct HttpReply {
     status: u16,
+    content_type: &'static str,
     body: Vec<u8>,
     extra_header: Option<(&'static str, Cow<'static, str>)>,
 }
+
+pub(crate) type JsonReply = HttpReply;
 
 #[derive(Clone)]
 pub(in crate::server) struct EntryWire(pub(in crate::server) Bytes);
@@ -68,10 +71,11 @@ pub(super) async fn present_entry_errors(
     response
 }
 
-impl JsonReply {
+impl HttpReply {
     pub(crate) fn new(status: u16, body: Vec<u8>) -> Self {
         Self {
             status,
+            content_type: "application/json",
             body,
             extra_header: None,
         }
@@ -90,6 +94,11 @@ impl JsonReply {
         self
     }
 
+    pub(super) fn with_content_type(mut self, content_type: &'static str) -> Self {
+        self.content_type = content_type;
+        self
+    }
+
     pub(crate) fn wire_response(&self) -> Vec<u8> {
         let header = self
             .extra_header
@@ -97,23 +106,25 @@ impl JsonReply {
             .map(|(name, value)| (*name, value.as_ref()));
         response(
             &format!("HTTP/1.1 {} {}", self.status, status_text(self.status)),
-            "application/json",
+            self.content_type,
             &self.body,
             header.as_slice(),
         )
     }
 }
 
-impl IntoResponse for JsonReply {
+impl IntoResponse for HttpReply {
     fn into_response(self) -> Response {
         let wire = EntryWire(Bytes::from(self.wire_response()));
         let mut builder = Response::builder()
             .status(StatusCode::from_u16(self.status).expect("EMP HTTP status"))
-            .header("content-type", "application/json")
+            .header("content-type", self.content_type)
             .header("content-length", self.body.len())
-            .header("cache-control", "no-store")
             .header("connection", "close")
             .extension(wire);
+        if self.content_type == "application/json" {
+            builder = builder.header("cache-control", "no-store");
+        }
         for line in std::str::from_utf8(SECURITY_HEADERS)
             .expect("security headers")
             .lines()

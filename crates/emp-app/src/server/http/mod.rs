@@ -2,9 +2,12 @@ pub(crate) mod accounts;
 pub(crate) mod body;
 pub(super) mod catalog;
 pub(crate) mod error;
+pub(super) mod gateway;
 pub(crate) mod management;
+pub(crate) mod modules;
 pub(crate) mod proxy;
 pub(crate) mod settings;
+pub(super) mod updates;
 pub(crate) mod usage;
 
 use super::head::RawRequestHead;

@@ -134,7 +134,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        Self::with_directory(tempfile::tempdir().unwrap())
+    }
+
+    fn with_directory(directory: tempfile::TempDir) -> Self {
         let legacy = LegacyServer::start_with_config(
             LOOPBACK.ip(),
             0,
@@ -245,6 +248,240 @@ impl Fixture {
         assert_status(&reply, status);
         reply
     }
+}
+
+#[test]
+fn update_module_and_gateway_reads_match_legacy_wire() {
+    let fixture = Fixture::new();
+    let backend = &fixture.legacy.state.backend;
+    let device = backend
+        .gateway_clients
+        .issue(
+            "Parity device",
+            None,
+            &backend.configuration.vault,
+            &backend.modules,
+        )
+        .unwrap();
+    let device = serde_json::to_value(device).unwrap();
+    let routes = [
+        ("/api/updates", "current_version", json!(crate::VERSION), 1),
+        (
+            "/api/modules",
+            "modules",
+            json!(backend.modules.status()),
+            2,
+        ),
+        ("/api/gateway", "api_key", json!(backend.gateway_key), 2),
+        (
+            "/api/gateway/clients",
+            "clients",
+            json!(backend.gateway_clients.list()),
+            2,
+        ),
+        (
+            "/api/gateway/usage?group=device&start=0&end=10",
+            "rows",
+            json!([{
+                "caller_id":device["id"], "caller_name":"Parity device", "calls":0,
+                "input_tokens":0, "output_tokens":0, "cost_nanos":0,
+                "reported_calls":0, "priced_calls":0, "models":[]
+            }]),
+            2,
+        ),
+        (
+            "/api/decisions/connection",
+            "api_key",
+            json!(backend.gateway_key),
+            2,
+        ),
+    ];
+    let bearer = format!("Authorization: Bearer {}", backend.gateway_key);
+    fixture.run_candidate(async |fixture, address| {
+        let session = fixture.session();
+        let port = fixture.port();
+        for (path, field, expected, cache_headers) in routes {
+            let wire = request(
+                port,
+                "GET",
+                path,
+                &[&session, "Accept: text/event-stream"],
+                b"",
+            );
+            let reply = assert_wire_parity(fixture.legacy.local_addr(), address, &wire, true).await;
+            assert_status(&reply, 200);
+            assert_eq!(json_body(&reply)[field], expected);
+            assert_eq!(
+                str::from_utf8(&reply)
+                    .unwrap()
+                    .matches("\r\nCache-Control: no-store\r\n")
+                    .count(),
+                cache_headers,
+            );
+            let missing = format!("{}/missing", path.split('?').next().unwrap());
+            for (method, path, headers, status) in [
+                ("GET", path, [&*bearer].as_slice(), 401),
+                ("GET", path, [&*session, &*session].as_slice(), 401),
+                (
+                    "GET",
+                    path,
+                    [&*session, "Origin: https://foreign.invalid"].as_slice(),
+                    403,
+                ),
+                ("GET", &missing, [&*session].as_slice(), 404),
+                ("HEAD", path, [&*session].as_slice(), 404),
+            ] {
+                fixture
+                    .parity(address, &request(port, method, path, headers, b""), status)
+                    .await;
+            }
+        }
+        let reply = fixture
+            .parity(
+                address,
+                &request(
+                    port,
+                    "GET",
+                    "/api/gateway/usage?start=invalid",
+                    &[&session],
+                    b"",
+                ),
+                400,
+            )
+            .await;
+        assert_eq!(
+            json_body(&reply)["error"]["message"],
+            "Invalid report period"
+        );
+    });
+}
+
+#[test]
+fn gateway_and_decision_module_gates_precede_management_authentication() {
+    let fixture = Fixture::new();
+    let modules = &fixture.legacy.state.backend.modules;
+    modules.mark_unavailable(emp_modules::Module::Gateway, "test");
+    modules.mark_unavailable(emp_modules::Module::Decision, "test");
+    fixture.run_candidate(async |fixture, address| {
+        for path in [
+            "/api/gateway",
+            "/api/gateway/clients",
+            "/api/gateway/usage?start=invalid",
+            "/api/decisions/connection",
+        ] {
+            let reply = fixture
+                .parity(
+                    address,
+                    &request(
+                        fixture.port(),
+                        "GET",
+                        path,
+                        &["Origin: https://foreign.invalid"],
+                        b"",
+                    ),
+                    404,
+                )
+                .await;
+            assert_eq!(json_body(&reply)["error"]["code"], "module_disabled");
+        }
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn module_panel_matches_legacy_wire_for_origin_and_revision() {
+    use emp_modules::{HOST_API, Hello, Module, PROTOCOL, Reply};
+    use sha2::{Digest, Sha256};
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let directory = tempfile::tempdir().unwrap();
+    let modules = directory.path().join("state/modules");
+    fs::create_dir_all(&modules).unwrap();
+    let module = Module::Gateway;
+    let panel = "export const panel = \"fixture\";\n";
+    let hello = serde_json::to_string(&Hello {
+        module,
+        version: crate::VERSION.into(),
+        module_version: Some(module.version().into()),
+        protocol: PROTOCOL,
+        host_api: Some(HOST_API),
+    })
+    .unwrap();
+    let reply = serde_json::to_string(&Reply {
+        value: json!(panel),
+        error: None,
+    })
+    .unwrap();
+    let worker = format!(
+        "#!/bin/sh\nprintf '%s\\n' '{hello}'\nread -r line\nprintf '%s\\n' '{reply}'\nwhile read -r line; do :; done\n"
+    );
+    let revision = format!("{:x}", Sha256::digest(&worker));
+    let executable = modules.join(format!("gateway-{revision}"));
+    fs::write(&executable, worker).unwrap();
+    fs::set_permissions(executable, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(modules.join("modules.json"), json!({
+        "gateway":{"enabled":true,"versions":{},"artifact":{"digest":revision,"version":module.version()}}
+    }).to_string()).unwrap();
+
+    Fixture::with_directory(directory).run_candidate(async |fixture, address| {
+        let port = fixture.port();
+        let same_origin = format!("Origin: http://localhost:{port}");
+        let path = format!("/assets/module-gateway.js?revision={revision}");
+        let reply = fixture
+            .parity(
+                address,
+                &request(port, "GET", &path, &[&same_origin], b""),
+                200,
+            )
+            .await;
+        let (head, body) = str::from_utf8(&reply)
+            .unwrap()
+            .split_once("\r\n\r\n")
+            .unwrap();
+        assert!(head.contains("\r\nContent-Type: text/javascript; charset=utf-8\r\n"));
+        assert!(head.contains("\r\nCache-Control: no-store\r\n"));
+        assert_eq!(body, panel);
+        let stale = fixture
+            .parity(
+                address,
+                &request(
+                    port,
+                    "GET",
+                    "/assets/module-gateway.js?revision=old",
+                    &[],
+                    b"",
+                ),
+                404,
+            )
+            .await;
+        let (head, body) = str::from_utf8(&stale)
+            .unwrap()
+            .split_once("\r\n\r\n")
+            .unwrap();
+        assert!(head.contains("\r\nContent-Type: text/plain\r\n"));
+        assert!(body.is_empty());
+        for (method, path, headers) in [
+            (
+                "GET",
+                &*path,
+                ["Origin: https://foreign.invalid"].as_slice(),
+            ),
+            ("GET", "/assets/module-unknown.js", [].as_slice()),
+            ("HEAD", &*path, [].as_slice()),
+        ] {
+            let reply = fixture
+                .parity(address, &request(port, method, path, headers, b""), 404)
+                .await;
+            assert_eq!(json_body(&reply)["error"]["message"], "not found");
+        }
+        fixture
+            .parity(
+                address,
+                &request(port, "GET", "/assets/module-settings.js", &[], b""),
+                200,
+            )
+            .await;
+    });
 }
 
 async fn proxy_probe(

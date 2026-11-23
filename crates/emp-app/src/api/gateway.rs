@@ -3,8 +3,9 @@ use crate::{
     app::ServerState,
     http::{
         request::{Request, RequestMethod, query_values, read_json_body},
-        response::{body_error_response, json_error_response, response, status_text},
+        response::{body_error_response, json_error_response, status_text},
     },
+    server::http::error::JsonReply,
 };
 use emp_state::usage::ledger::UsageLedger;
 use serde::Serialize;
@@ -12,10 +13,32 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::net::TcpStream;
 
-pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
-    if request.raw_path().ends_with("/clients") {
-        return json_response(&json!({"clients":state.backend.gateway_clients.list()}));
+pub(crate) enum GatewayRead {
+    Connection,
+    Clients,
+    Usage,
+}
+
+impl GatewayRead {
+    pub(crate) fn for_path(path: &str) -> Option<Self> {
+        match path {
+            "/api/gateway" | "/api/decisions/connection" => Some(Self::Connection),
+            "/api/gateway/clients" => Some(Self::Clients),
+            "/api/gateway/usage" => Some(Self::Usage),
+            _ => None,
+        }
     }
+
+    pub(crate) fn read(self, request: Request<'_>, state: &ServerState) -> JsonReply {
+        match self {
+            Self::Connection => json_reply(&json!({"api_key":state.backend.gateway_key})),
+            Self::Clients => json_reply(&json!({"clients":state.backend.gateway_clients.list()})),
+            Self::Usage => read_usage(request, state),
+        }
+    }
+}
+
+fn read_usage(request: Request<'_>, state: &ServerState) -> JsonReply {
     let now = crate::util::system_now();
     let number = |name, default| {
         query_values(request.target, name)
@@ -25,7 +48,7 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
     let (start, end) = match (number("start", now - 86400.0), number("end", now)) {
         (Ok(start), Ok(end)) if UsageLedger::valid_period(start, end, "all") => (start, end),
         _ => {
-            return json_error_response(400, status_text(400), "Invalid report period", None, &[]);
+            return JsonReply::error(400, "Invalid report period", None);
         }
     };
     let by_device = query_values(request.target, "group")
@@ -74,15 +97,9 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
                     rows.push(row);
                 }
             }
-            json_response(&report)
+            json_reply(&report)
         }
-        Err(_) => json_error_response(
-            503,
-            status_text(503),
-            "Caller usage is unavailable",
-            None,
-            &[],
-        ),
+        Err(_) => JsonReply::error(503, "Caller usage is unavailable", None),
     }
 }
 
@@ -114,7 +131,7 @@ pub(crate) fn mutate(
         backend
             .gateway_clients
             .remove(id, &backend.configuration.vault, &backend.modules)
-            .map(|()| json_response(&json!({"ok":true})))
+            .map(|()| json_reply(&json!({"ok":true})))
     } else {
         let id = match body.get("id") {
             None => None,
@@ -137,10 +154,10 @@ pub(crate) fn mutate(
                 &backend.configuration.vault,
                 &backend.modules,
             )
-            .map(|client| json_response(&client))
+            .map(|client| json_reply(&client))
     };
     match result {
-        Ok(response) => response,
+        Ok(reply) => reply.wire_response(),
         Err(error) => {
             let (status, message) = if error.kind() == std::io::ErrorKind::InvalidInput {
                 (400, error.to_string())
@@ -152,11 +169,7 @@ pub(crate) fn mutate(
     }
 }
 
-fn json_response(value: &impl Serialize) -> Vec<u8> {
-    response(
-        "HTTP/1.1 200 OK",
-        "application/json",
-        &serde_json::to_vec(value).expect("gateway response"),
-        &[("Cache-Control", "no-store")],
-    )
+fn json_reply(value: &impl Serialize) -> JsonReply {
+    JsonReply::new(200, serde_json::to_vec(value).expect("gateway response"))
+        .with_header("Cache-Control", "no-store")
 }

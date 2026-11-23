@@ -13,6 +13,7 @@ use axum::{
     extract::{ConnectInfo, FromRequestParts},
     http::request::Parts,
 };
+use emp_modules::Module;
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
@@ -189,11 +190,37 @@ pub(crate) struct RequestAccess {
     _permit: Option<RequestPermit>,
 }
 
+fn required_module(path: &str) -> Option<Module> {
+    match path {
+        "/v1/decisions"
+        | "/v1/systemone"
+        | "/api/decisions/models"
+        | "/api/decisions/connection" => Some(Module::Decision),
+        "/api/gateway" | "/api/gateway/clients" | "/api/gateway/usage" => Some(Module::Gateway),
+        _ if path.starts_with("/api/team/") => Some(Module::Team),
+        _ => None,
+    }
+}
+
 impl RequestAccess {
     pub(crate) fn require(request: Request<'_>, state: &ServerState) -> Result<Self, EntryError> {
+        Self::require_with_module(request, state, required_module(request.raw_path()))
+    }
+
+    fn require_with_module(
+        request: Request<'_>,
+        state: &ServerState,
+        module: Option<Module>,
+    ) -> Result<Self, EntryError> {
         let path = request.raw_path();
-        if let Some(error) = crate::api::modules::unavailable(path, state) {
-            return Err(error);
+        if let Some(module) = module
+            && !state.backend.modules.active(module)
+        {
+            return Err(EntryError::Json(
+                404,
+                "This EMP module is not active",
+                Some("module_disabled"),
+            ));
         }
         if (request.method == RequestMethod::Post && !path.starts_with("/api/updates/"))
             || request.method == RequestMethod::Delete
@@ -217,7 +244,16 @@ impl FromRequestParts<Arc<ServerState>> for RequestAccess {
         parts: &mut Parts,
         state: &Arc<ServerState>,
     ) -> Result<Self, EntryError> {
-        Self::require(raw_head(&parts.extensions)?.request(), state)
+        let raw = raw_head(&parts.extensions)?;
+        let request = raw.request();
+        let Some(module) = required_module(request.raw_path()) else {
+            return Self::require_with_module(request, state, None);
+        };
+        let raw = raw.clone();
+        let state = state.clone();
+        run_blocking(move || Self::require_with_module(raw.request(), &state, Some(module)))
+            .await
+            .map_err(|_| EntryError::internal())?
     }
 }
 
