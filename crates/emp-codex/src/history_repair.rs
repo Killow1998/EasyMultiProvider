@@ -8,9 +8,6 @@ use std::path::{Path, PathBuf};
 
 const REPAIR_DIRECTORY: &str = "easy-multi-provider/integration/history-repair";
 
-#[path = "history_repair/background.rs"]
-mod background;
-pub use background::IdleHistoryRepair;
 #[path = "history_repair/checkpoint.rs"]
 mod checkpoint;
 #[path = "history_repair/coordination.rs"]

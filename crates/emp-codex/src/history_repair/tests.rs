@@ -21,9 +21,6 @@ const GRANDCHILD_ID: &str = "33333333-3333-4333-8333-333333333333";
 #[path = "restore_delay_tests.rs"]
 mod restore_delay;
 
-#[path = "background_tests.rs"]
-mod background;
-
 struct Fixture {
     _temporary: tempfile::TempDir,
     home: PathBuf,
@@ -1006,6 +1003,46 @@ fn idle_restore_of_an_empty_home_does_not_create_writer_coordination() {
     assert_eq!((report.threads_repaired, report.threads_deferred), (0, 0));
     assert!(!temporary.path().join(LOCK_DIRECTORY).exists());
     assert!(!temporary.path().join(REPAIR_DIRECTORY).exists());
+}
+
+#[test]
+fn closed_failed_turns_remain_readable_after_conversion() {
+    let fixture = fixture(false, false, false);
+    let mut bytes = fixture.parent_plain.clone();
+    append_record(
+        &mut bytes,
+        18,
+        record(
+            "event_msg",
+            json!({"type":"task_started","turn_id":"failed"}),
+        ),
+    );
+    append_record(
+        &mut bytes,
+        19,
+        record(
+            "event_msg",
+            json!({"type":"task_complete","turn_id":"failed","error":{"message":"upstream unavailable"}}),
+        ),
+    );
+    fs::write(&fixture.parent_path, &bytes).unwrap();
+    let (_lock, report) = repair_before_native_restore(&fixture.home).unwrap();
+    assert_eq!((report.threads_repaired, report.threads_deferred), (1, 0));
+    assert!(fs::read(&fixture.parent_path).unwrap().starts_with(&bytes));
+    let records = records(&fs::read(&fixture.parent_path).unwrap());
+    let history = streamed_history(&records, latest_checkpoint(&records));
+    assert!(history.iter().any(|item| {
+        item["content"]
+            .to_string()
+            .contains("Portable EMP summary: keep the task plan")
+    }));
+    assert!(
+        records
+            .iter()
+            .rev()
+            .take(4)
+            .any(|item| item["payload"]["error"]["message"] == "upstream unavailable")
+    );
 }
 
 #[test]

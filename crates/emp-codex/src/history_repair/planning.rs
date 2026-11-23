@@ -58,13 +58,13 @@ pub(super) fn plan_rewrite(
     let lineage_directory = workspace.join(format!("lineage-{thread_id}"));
     let mut snapshot = ContextSnapshot::new(&lineage_directory)?;
     let rollout = replay_closed_lineage(paths, &mut snapshot, info, None, &mut Vec::new())?;
-    if has_emp1_tail_record(paths, &mut snapshot)? {
+    if has_emp1_tail_record(&mut snapshot)? {
         return Err(HistoryRepairError::new(
             "unsupported_emp_checkpoint_location",
         ));
     }
     let replacement_path = workspace.join(format!("replacement-{thread_id}.spool"));
-    let changed = write_replacement_rollout(paths, &rollout, &mut snapshot, &replacement_path)?;
+    let changed = write_replacement_rollout(&rollout, &mut snapshot, &replacement_path)?;
     drop(snapshot);
     fs::remove_dir_all(&lineage_directory)
         .map_err(|_| HistoryRepairError::new("repair_spool_cleanup_failed"))?;

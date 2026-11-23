@@ -194,7 +194,7 @@ pub(super) fn replay_closed_lineage(
             visiting,
         )?;
     }
-    let rollout = stream_rollout(paths, &header, snapshot, bound)?;
+    let rollout = stream_rollout(&header, snapshot, bound)?;
     if snapshot.turns.has_open_turns()? {
         return Err(HistoryRepairError::new("unfinished_turn_in_history"));
     }
@@ -203,7 +203,6 @@ pub(super) fn replay_closed_lineage(
 }
 
 fn stream_rollout(
-    paths: &RolloutPaths,
     header: &RolloutHeader,
     snapshot: &mut ContextSnapshot,
     bound: Option<HistoryBound>,
@@ -226,7 +225,6 @@ fn stream_rollout(
     let mut last_ordinal = None;
 
     loop {
-        paths.check_cancelled()?;
         let Some(terminated) = read_repair_line(&mut reader, &mut line)? else {
             break;
         };

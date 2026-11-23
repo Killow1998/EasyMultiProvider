@@ -1566,28 +1566,15 @@ inside the same process after a response ETag changed. This verifies catalog
 refresh, not replacement of an already-open picker or a provider's physical
 context capacity.
 
-While this instance owns an active integration, legacy EMP checkpoints migrate
-quietly in the background. The worker waits 15 seconds after startup, starts
-each step only between model requests, and handles one rollout at a time with
-500 ms between steps and 60 seconds between sweeps. An in-memory size/mtime
-cache avoids rescanning unchanged, successfully inspected files. Discovery is
-refreshed between sweeps, so missing files and active conversations can return.
-The migration queue is an owning iterator; there is no separate index or clone
-of each queued thread. Closed-lineage replay owns the unfinished-turn check for
-both explicit restore and background migration.
-Scanning and replay use a disposable spool without holding Codex's writer
-coordination lock or publishing a recoverable transaction. Commit acquires that
-lock nonblockingly, rechecks active writers and fork lineages, and reuses the
-existing snapshot hashes, transactional backups and atomic publication. Changed
-or busy histories wait for a later sweep. Closed failed turns preserve their
-error records and are eligible; unfinished turns and rollback/interruption
-remain excluded. Scan/replay/copy loops observe shutdown. The worker emits only
-diagnostic events, with no WebUI notification or required history-check action.
+EMP does not migrate saved checkpoints in the background.
 
-Explicit Native restoration and normal Quit also convert eligible idle EMP
-checkpoints before restoring configuration. They share the existing bounded,
-append-only migration and transaction backups; native opaque reasoning and tool
-call/result pairs remain intact. A nonblocking Codex coordination lock protects
+Explicit Native restoration, normal WebUI Quit and `EMP restore` still attempt
+to convert eligible idle EMP checkpoints before restoring configuration. They
+share the existing bounded, append-only migration and transaction backups;
+native opaque reasoning and tool call/result pairs remain intact. Closed failed
+turns preserve their error
+records and remain eligible; closed-lineage replay excludes unfinished turns
+and rollback/interruption. A nonblocking Codex coordination lock protects
 the conversion and configuration restore. Active writers, their ancestors and
 dependent descendants remain unchanged. The report distinguishes confirmed EMP
 checkpoints awaiting conversion (`threads_deferred`) from histories not yet
@@ -1599,7 +1586,7 @@ checkpoints and **Check history** for unverified/skipped history, retaining the
 normal **Enable EMP** button. Older combined deferred counts are read as
 unclassified, rather than presented as confirmed pending conversions.
 The outcome survives restart in a home-scoped private report. HTTP,
-tray and offline Restore use the same operation. Background migration adds no
+tray and offline Restore use the same operation. History conversion makes no
 model request. Explicit restoration scans closed history; the first
 conversion of a large home may take time. WebUI and tray copy identify the
 operation while it runs; repeated menu actions remain disabled.
@@ -1610,11 +1597,10 @@ Inside `emp-codex`, `history_repair.rs` coordinates the operation and retains
 its public entry points. `inventory.rs` owns read-only database discovery and
 path validation. `paths.rs` shares one lazily discovered directory inventory
 across writer guards, selection and replay, including failed/missing lookups.
-It lasts for one restore or background sweep; a later sweep discovers returned files anew.
+It lasts for one repair invocation; later invocations discover returned files anew.
 Resolved paths are still checked for unsafe paths, symlinks and ambiguity.
 `coordination.rs` owns writer exclusion and active-fork protection;
-`selection.rs` finds affected checkpoints; `background.rs` owns progressive
-inspection and split scan/commit scheduling; and `planning.rs` stages selected
+`selection.rs` finds affected checkpoints; `planning.rs` stages selected
 rewrites. Replay, checkpoint conversion, spool storage and transaction recovery
 retain separate owners. These modules import their concrete dependencies
 directly rather than relying on imports forwarded through the controller.

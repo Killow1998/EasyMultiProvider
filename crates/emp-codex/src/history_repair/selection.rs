@@ -108,7 +108,7 @@ impl<'a> MarkerScanner<'a> {
                 path: path.clone(),
                 mode: None,
             };
-            let index = scan_rollout(self.paths, &info, path, None)?;
+            let index = scan_rollout(&info, path, None)?;
             self.indexes.insert(thread_id.to_owned(), index);
         }
 
@@ -130,7 +130,7 @@ impl<'a> MarkerScanner<'a> {
                     path: path.clone(),
                     mode: Some(mode.clone()),
                 };
-                scan_rollout(self.paths, &info, path, Some(bound))?.prefix
+                scan_rollout(&info, path, Some(bound))?.prefix
             }
         } else {
             index.prefix
@@ -175,7 +175,7 @@ pub(super) fn select_affected_rollouts<'a>(
 
     for info in infos {
         let path = paths.resolve(info)?;
-        let index = scan_rollout(paths, info, path, None)?;
+        let index = scan_rollout(info, path, None)?;
         if !seen_paths.insert(index.path.clone()) {
             return Err(HistoryRepairError::new("rollout_path_conflict"));
         }
@@ -201,7 +201,6 @@ pub(super) fn select_affected_rollouts<'a>(
 }
 
 fn scan_rollout(
-    paths: &RolloutPaths,
     info: &ThreadInfo,
     path: PathBuf,
     bound: Option<HistoryBound>,
@@ -248,7 +247,6 @@ fn scan_rollout(
     let mut prefix = MarkerTransform::identity();
 
     loop {
-        paths.check_cancelled()?;
         let Some(terminated) = read_bounded_line(&mut reader, &mut line, &mut file_bytes)? else {
             break;
         };

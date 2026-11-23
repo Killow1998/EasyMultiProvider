@@ -248,19 +248,20 @@ EMP is designed to keep provider changes from turning into a different coding cl
 EMP preserves native Codex sessions, `resume`, WebSockets, compression, and MCP where supported. Shared HTTP upstream requests negotiate gzip, Brotli, Zstandard and deflate responses with streaming decoding and decoded-body limits. During live provider switching, it reconstructs Codex-owned visible history instead of forwarding provider-private opaque state.
 
 While EMP is active, it converts EMP-owned checkpoints in each request when
-switching to a native model. It also quietly migrates saved EMP checkpoints one
-idle conversation at a time, preserving original history and native ciphertext.
-**Restore Native**, normal Web UI quit, and `EMP restore` also convert eligible
-idle histories before restoring configuration. Active conversations are left
-untouched until they become idle.
+switching to a native model. It does not migrate saved histories in the
+background. **Restore Native**, normal Web UI quit, and `EMP restore` still make
+a best-effort attempt to convert eligible idle histories before restoring
+configuration, preserving original history and native ciphertext. Active
+conversations are left untouched.
 **Restore Native** keeps EMP and its management page running; **Enable EMP**
 can apply integration again in the same process. **Quit EMP** restores native
 settings and then ends the service.
 The Web UI waits for active requests before restoring or quitting. Idle
 WebSocket connections close normally. Closing the terminal or receiving an OS
-exit notification restores EMP-owned settings before waiting for background
-work; an active turn can be interrupted. Windows logoff and shutdown are handled
-inside EMP before termination, while canceling shutdown leaves EMP running.
+exit notification restores EMP-owned settings without converting history, then
+waits for background work; an active turn can be interrupted. Windows logoff and
+shutdown are handled inside EMP before termination, while canceling shutdown
+leaves EMP running.
 Force-killing a process or losing power gives it no opportunity to run cleanup.
 
 For a specific old conversation that still contains EMP compaction data after
@@ -270,9 +271,10 @@ EMP is disabled, close that conversation and run:
 EMP migrate-history --thread-id CONVERSATION_UUID
 ```
 
-This migrates only the selected conversation, backs up changed history, and
-preserves its parent and other conversations. It rejects migration while the
-selected conversation is being written. Reopen Codex to load native settings,
+This command automatically backs up changed history and migrates only the
+selected conversation without interactive prompts. It preserves the parent and
+other conversations. It rejects migration while the selected conversation is
+being written. Reopen Codex to load native settings,
 then resume the same conversation. `CODEX_HOME` selects the Codex home as usual.
 The tool converts EMP-owned checkpoints. Use the original Native Codex route
 to resume a turn that still needs encrypted agent messages.

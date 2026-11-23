@@ -351,11 +351,6 @@ impl ServerHandle {
             handle.spawn_worker("emp-runtime-watch", |state| {
                 crate::services::runtime::watch_runtime(&state);
             })?;
-            if !cfg!(test) {
-                handle.spawn_worker("emp-history-migration", |state| {
-                    crate::services::integration::history_migration::run(state);
-                })?;
-            }
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             handle.spawn_worker("emp-heap-reclaim", super::memory::run)?;
             Ok::<(), AppError>(())
