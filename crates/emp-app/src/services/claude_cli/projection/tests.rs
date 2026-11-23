@@ -4,7 +4,7 @@ use super::*;
 #[path = "tool_history_tests.rs"]
 mod tool_history;
 use crate::services::claude_cli::ClaudeCliError;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 
 #[test]
 fn removes_only_responses_reasoning_items_and_preserves_user_fields() {
@@ -373,11 +373,11 @@ fn test_route() -> ResolvedRoute {
     ResolvedRoute::new(
         "m",
         "upstream-m",
-        emp_core::RouteSource::ExplicitModel,
+        emp_domain::RouteSource::ExplicitModel,
         provider,
         model,
-        emp_core::Protocol::AnthropicMessages,
-        emp_core::Dialect::PortableResponses,
+        emp_domain::Protocol::AnthropicMessages,
+        emp_domain::Dialect::PortableResponses,
         "p",
         format!("sha256:{}", "a".repeat(64)),
         "deployment",

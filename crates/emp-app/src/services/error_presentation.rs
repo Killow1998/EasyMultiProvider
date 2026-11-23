@@ -1,5 +1,5 @@
 use crate::app::ServerState;
-use emp_core::{Dialect, ResolvedRoute};
+use emp_domain::{Dialect, ResolvedRoute};
 use serde_json::Value;
 
 #[derive(Clone)]

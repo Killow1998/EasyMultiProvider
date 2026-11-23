@@ -3,7 +3,7 @@
 //! text, non-stream replies are re-framed as a single completed event, and a
 //! truncated stream fails with a stable error instead of a silent success.
 
-use emp_core::{Dialect, Protocol, ResolvedRoute, RouteSource};
+use emp_domain::{Dialect, Protocol, ResolvedRoute, RouteSource};
 use emp_router::{ExternalRouter, ProjectionIds};
 use emp_transport::{FailureClass, HttpClient, HttpClientPolicy};
 use serde_json::{Map, Value, json};

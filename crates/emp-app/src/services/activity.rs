@@ -1,5 +1,5 @@
 use super::management_events::{Change, ManagementEvents};
-use emp_core::{ResolvedRoute, RouteSource};
+use emp_domain::{ResolvedRoute, RouteSource};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const NORMAL_BUILD: &[(&str, &str)] = &[
     ("emp-app", "emp-codex"),
-    ("emp-app", "emp-core"),
+    ("emp-app", "emp-domain"),
     ("emp-app", "emp-history"),
     ("emp-app", "emp-integration"),
     ("emp-app", "emp-modules"),
@@ -16,20 +16,20 @@ const NORMAL_BUILD: &[(&str, &str)] = &[
     ("emp-codex", "emp-history"),
     ("emp-codex", "emp-state"),
     ("emp-codex", "emp-transport"),
-    ("emp-history", "emp-core"),
+    ("emp-history", "emp-domain"),
     ("emp-integration", "emp-state"),
     ("emp-mod-aggregate", "emp-modules"),
     ("emp-mod-decision", "emp-modules"),
     ("emp-mod-gateway", "emp-modules"),
     ("emp-mod-team", "emp-modules"),
     ("emp-mod-team", "emp-state"),
-    ("emp-router", "emp-core"),
+    ("emp-modules", "emp-domain"),
+    ("emp-router", "emp-domain"),
     ("emp-router", "emp-protocol"),
     ("emp-router", "emp-state"),
     ("emp-router", "emp-transport"),
-    ("emp-state", "emp-core"),
+    ("emp-state", "emp-domain"),
     ("emp-state", "emp-files"),
-    ("emp-state", "emp-modules"),
     ("emp-state", "emp-storage"),
     ("emp-storage", "emp-files"),
     ("emp-updater", "emp-files"),
@@ -208,10 +208,10 @@ mod tests {
     #[test]
     fn arch_checks_dependency_kinds_against_snapshot() {
         for (from, to, kind, valid) in [
-            ("emp-app", "emp-core", Value::Null, true),
-            ("emp-app", "emp-core", json!("build"), true),
+            ("emp-app", "emp-domain", Value::Null, true),
+            ("emp-app", "emp-domain", json!("build"), true),
             ("emp-app", "emp-mod-decision", json!("dev"), true),
-            ("emp-core", "emp-app", Value::Null, false),
+            ("emp-domain", "emp-app", Value::Null, false),
             ("emp-app", "emp-mod-decision", Value::Null, false),
         ] {
             let metadata = json!({"workspace_members": [from, to], "packages": [

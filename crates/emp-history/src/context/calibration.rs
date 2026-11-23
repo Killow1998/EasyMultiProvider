@@ -1,7 +1,7 @@
 use super::SAFETY_RESERVE_TOKENS;
 use super::budget::{context_window, positive_integer};
-use emp_core::capability_view::safe_id;
-use emp_core::{deployment_identity, endpoint_fingerprint};
+use emp_domain::capability_view::safe_id;
+use emp_domain::{deployment_identity, endpoint_fingerprint};
 use serde_json::{Map, Value, json};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 

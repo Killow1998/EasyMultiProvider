@@ -17,7 +17,7 @@ pub(crate) mod tui;
 
 use crate::app::ServerState;
 use crate::services::disconnect::{DisconnectMonitor, DisconnectRace};
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_router::CompleteResponse;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

@@ -1,7 +1,7 @@
 //! Capability records shown in the web UI: users must see what a model can
 //! do without exposing provider credentials or trusting unverified claims.
 
-use emp_core::capability_view::capability_record;
+use emp_domain::capability_view::capability_record;
 use serde_json::{Value, json};
 
 fn provider(value: Value) -> serde_json::Map<String, Value> {

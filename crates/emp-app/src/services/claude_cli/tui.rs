@@ -7,7 +7,7 @@ mod transcript;
 
 use super::{Cancellation, ClaudeCliCompletion, ClaudeCliError, cancellation_reason, projection};
 use crate::{app::ServerState, services::disconnect::DisconnectMonitor};
-use emp_core::{Protocol, ResolvedRoute};
+use emp_domain::{Protocol, ResolvedRoute};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, hash_map::DefaultHasher},

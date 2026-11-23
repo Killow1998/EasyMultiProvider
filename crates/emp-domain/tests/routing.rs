@@ -1,7 +1,7 @@
 //! Routing results users see in Codex and the web UI: model selection,
 //! account prefixes, forward fallback, and the dialect each provider gets.
 
-use emp_core::{Dialect, RouteSource, resolve_route_without_catalog};
+use emp_domain::{Dialect, RouteSource, resolve_route_without_catalog};
 use serde_json::{Value, json};
 
 fn config() -> Value {
@@ -81,8 +81,8 @@ fn unqualified_names_fall_back_to_a_single_forward_provider_or_fail() {
 
 #[test]
 fn endpoints_are_fingerprinted_without_credentials_query_or_fragments() {
-    use emp_core::endpoint_fingerprint;
-    use emp_core::normalize_endpoint;
+    use emp_domain::endpoint_fingerprint;
+    use emp_domain::normalize_endpoint;
 
     assert_eq!(
         normalize_endpoint(Some(
@@ -117,8 +117,8 @@ fn endpoints_are_fingerprinted_without_credentials_query_or_fragments() {
 
 #[test]
 fn dialect_and_deployment_identity_come_from_provider_metadata() {
-    use emp_core::classify_dialect;
-    use emp_core::deployment_identity;
+    use emp_domain::classify_dialect;
+    use emp_domain::deployment_identity;
 
     let anthropic = serde_json::from_value::<serde_json::Map<String, Value>>(json!({
         "protocol": "anthropic_messages"

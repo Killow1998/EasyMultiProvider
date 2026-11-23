@@ -7,7 +7,7 @@ use crate::{
     MAX_UPSTREAM_BODY_BYTES, MAX_UPSTREAM_ERROR_BYTES, ProjectionIds, RouterError, RouterErrorKind,
     endpoint, response_json_stream_events, retry_after,
 };
-use emp_core::{Dialect, Protocol, ResolvedRoute};
+use emp_domain::{Dialect, Protocol, ResolvedRoute};
 use emp_protocol::collaboration::{
     CollaborationError, prepare_collaboration, restore_collaboration,
 };

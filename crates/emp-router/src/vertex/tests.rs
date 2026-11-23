@@ -1,5 +1,5 @@
 use super::*;
-use emp_core::RouteSource;
+use emp_domain::RouteSource;
 use serde_json::json;
 use std::sync::Arc;
 

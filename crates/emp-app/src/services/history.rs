@@ -3,7 +3,7 @@ use crate::services::compaction::compaction_summary_body;
 use crate::services::compaction::has_trailing_compaction_trigger;
 use crate::services::compaction::response_output_text;
 use crate::util::projection_ids;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_history::HistoryError;
 use emp_router::RouterError;
 use emp_router::project_external_payload;
@@ -23,7 +23,7 @@ pub(crate) fn prepare_history(
     emp_history::prepare_owned(
         body,
         incoming,
-        route.dialect == emp_core::Dialect::CodexNative,
+        route.dialect == emp_domain::Dialect::CodexNative,
         &reader,
     )
 }
@@ -77,7 +77,7 @@ pub(crate) fn prepare_destination_context(
     incoming: &BTreeMap<String, String>,
     mut monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
 ) -> Result<Value, DestinationPrepareError> {
-    if route.dialect == emp_core::Dialect::CodexNative {
+    if route.dialect == emp_domain::Dialect::CodexNative {
         if body.get("previous_response_id").is_none_or(Value::is_null)
             && let Some(payload) = crate::services::context::payload(state, route, &body)
         {

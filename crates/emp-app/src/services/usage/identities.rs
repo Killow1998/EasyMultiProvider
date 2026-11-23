@@ -1,7 +1,7 @@
 //! Capture account labels while the exact credential headers are selected.
 use crate::app::ServerState;
 use base64::Engine;
-use emp_core::{ResolvedRoute, RouteSource};
+use emp_domain::{ResolvedRoute, RouteSource};
 use serde_json::Value;
 use std::collections::BTreeMap;
 

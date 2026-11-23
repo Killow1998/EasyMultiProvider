@@ -140,3 +140,15 @@ impl ResolvedRoute {
 }
 
 pub mod capability_view;
+pub mod model_values;
+pub mod session;
+mod usage;
+
+pub use model_values::{
+    IMAGE_MODALITY, MAX_MODALITIES, MAX_MODALITY_ID_BYTES, TEXT_MODALITY, codex_input_modalities,
+    input_modalities_known, input_modalities_metadata_source, normalize_input_modalities,
+    normalize_output_modalities, normalize_reasoning_levels, normalize_supported_protocols,
+    output_modalities_known, output_modalities_metadata_source, supported_protocols_known,
+};
+pub use session::{SessionMetadata, SessionScope};
+pub use usage::MAX_USAGE_MODEL_BYTES;

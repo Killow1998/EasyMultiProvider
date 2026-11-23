@@ -4,7 +4,7 @@ use crate::services::request_facts::memory_kind;
 use crate::services::request_preparation::{
     PreparedRequest, RequestOperation, RequestPreparationError, prepare_with_config,
 };
-use emp_core::{Dialect, RouteSource};
+use emp_domain::{Dialect, RouteSource};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Mutex;

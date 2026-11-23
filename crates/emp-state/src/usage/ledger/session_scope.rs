@@ -1,90 +1,26 @@
-//! Conversation ownership is metadata; original usage events and prices stay immutable.
 use super::*;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-#[derive(Default)]
-pub struct SessionScope(pub BTreeMap<String, SessionMetadata>);
-
-#[derive(Default)]
-pub struct SessionMetadata {
-    pub name: String,
-    pub kind: String,
-    pub parents: BTreeSet<String>,
-}
-
-impl SessionScope {
-    pub fn observe(&mut self, id: &str, parent: &str, kind: &str) {
-        if !valid(id) {
-            return;
-        }
-        if valid(parent) {
-            self.0.entry(parent.into()).or_default();
-        }
-        let node = self.0.entry(id.into()).or_default();
-        if valid(parent) {
-            node.parents.insert(parent.into());
-        }
-        if matches!(
-            kind,
-            "conversation"
-                | "subagent"
-                | "review"
-                | "sidechat"
-                | "compaction"
-                | "memory_extraction"
-                | "memory_consolidation"
-        ) {
-            node.kind = kind.into();
-        }
-    }
-
-    pub fn root(&self, id: &str) -> Option<&str> {
-        let mut current = self.0.get_key_value(id)?;
-        let mut visited = BTreeSet::new();
-        for _ in 0..64 {
-            if current.1.kind == "memory_consolidation" {
-                return None;
-            }
-            if !visited.insert(current.0) || current.1.parents.len() > 1 {
-                return None;
-            }
-            if let Some(parent) = current.1.parents.first() {
-                current = self.0.get_key_value(parent)?;
-            } else {
-                return (current.1.kind == "conversation"
-                    || (current.1.kind.is_empty() && !current.1.name.is_empty()))
-                .then_some(current.0.as_str());
-            }
-        }
-        None
-    }
-
-    pub(super) fn install(&self, connection: &Connection) -> Result<()> {
-        connection.execute_batch(
-            "CREATE TEMP TABLE conversation_scope (
+pub(super) fn install(scope: &SessionScope, connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        "CREATE TEMP TABLE conversation_scope (
              thread_id TEXT PRIMARY KEY,root_id TEXT NOT NULL,name TEXT NOT NULL,kind TEXT NOT NULL)",
-        )?;
-        let mut statement =
-            connection.prepare("INSERT INTO conversation_scope VALUES (?,?,?,?)")?;
-        for (id, node) in &self.0 {
-            let root = self.root(id).unwrap_or("");
-            let kind = if node.kind.is_empty() {
-                if id == root {
-                    "conversation"
-                } else {
-                    "related"
-                }
+    )?;
+    let mut statement = connection.prepare("INSERT INTO conversation_scope VALUES (?,?,?,?)")?;
+    for (id, node) in &scope.0 {
+        let root = scope.root(id).unwrap_or("");
+        let kind = if node.kind.is_empty() {
+            if id == root {
+                "conversation"
             } else {
-                &node.kind
-            };
-            statement.execute(params![id, root, node.name, kind])?;
-        }
-        Ok(())
+                "related"
+            }
+        } else {
+            &node.kind
+        };
+        statement.execute(params![id, root, node.name, kind])?;
     }
-}
-
-fn valid(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control)
+    Ok(())
 }
 
 impl UsageLedger {

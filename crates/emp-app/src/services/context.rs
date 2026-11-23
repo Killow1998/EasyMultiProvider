@@ -1,12 +1,12 @@
 //! Persist content-free context evidence after an observed request outcome.
 use crate::app::ServerState;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use serde_json::Value;
 
 pub(crate) fn payload(state: &ServerState, route: &ResolvedRoute, body: &Value) -> Option<Value> {
     if crate::services::claude_cli::selected(route) {
         crate::services::claude_cli::context_estimation_payload(body).ok()
-    } else if route.dialect == emp_core::Dialect::CodexNative {
+    } else if route.dialect == emp_domain::Dialect::CodexNative {
         let body = body.as_object()?;
         let plaintext = {
             let config = state.backend.configuration.read().ok()?;

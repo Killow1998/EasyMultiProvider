@@ -1,8 +1,8 @@
+pub use emp_domain::MAX_USAGE_MODEL_BYTES;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const NATIVE_SHARE: &str = "subscription:@native";
-pub const MAX_USAGE_MODEL_BYTES: usize = 512;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

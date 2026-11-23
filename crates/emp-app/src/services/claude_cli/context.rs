@@ -1,5 +1,5 @@
 use super::{ClaudeCliError, media};
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use serde_json::{Value, json};
 
 pub(crate) fn context_estimation_payload(body: &Value) -> Result<Value, ClaudeCliError> {

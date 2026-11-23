@@ -1,6 +1,6 @@
 use crate::api::failure_response::{safe_failure_reason, stream_error_code};
 use crate::services::observation::continuation::ContinuationReason;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_transport::{FailureClass, public_failure_message};
 use serde_json::Value;
 

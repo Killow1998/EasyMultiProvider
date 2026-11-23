@@ -162,7 +162,7 @@ impl TeamState {
     pub(crate) fn usage_scope(
         &self,
         state: &ServerState,
-        route: &emp_core::ResolvedRoute,
+        route: &emp_domain::ResolvedRoute,
     ) -> Option<Value> {
         if route.provider_id == "codex-native" || !state.backend.modules.active(Module::Team) {
             return None;
@@ -239,7 +239,7 @@ impl TeamState {
     pub(crate) fn check_model_route(
         &self,
         state: &ServerState,
-        route: &emp_core::ResolvedRoute,
+        route: &emp_domain::ResolvedRoute,
         tier: Option<&str>,
     ) -> std::result::Result<(), RequestDenied> {
         if route.provider.value().get("implicit_native") == Some(&Value::Bool(true)) {

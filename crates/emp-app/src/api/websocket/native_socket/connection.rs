@@ -37,7 +37,7 @@ pub(super) struct NativeUpstreamConnection {
 impl NativeSession {
     pub(in crate::api::websocket) fn check_scope(
         &self,
-        dialect: emp_core::Dialect,
+        dialect: emp_domain::Dialect,
         scope: &(Option<String>, Option<String>),
         previous: Option<&Value>,
         facts: &mut NativeContinuation,
@@ -51,7 +51,7 @@ impl NativeSession {
             .last_response_id
             .as_ref()
             .map(|_| scope == &self.last_scope);
-        let reason = if facts.has_prior && dialect != emp_core::Dialect::CodexNative {
+        let reason = if facts.has_prior && dialect != emp_domain::Dialect::CodexNative {
             Some(ContinuationReason::UnsupportedDialect)
         } else if facts.has_prior && facts.scope_matches == Some(false) {
             Some(ContinuationReason::ScopeMismatch)

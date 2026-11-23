@@ -83,8 +83,8 @@ pub(crate) fn profile<'a>(config: &'a Value, model: &str) -> Option<&'a Value> {
     let existing = emp_state::config::resolve_client_model(config, model);
     let existing = existing.as_deref().unwrap_or(model);
     (matches!(
-        emp_core::resolve_route_without_catalog(config, existing),
-        Err(emp_core::RouteResolutionError::UnknownModel(_))
+        emp_domain::resolve_route_without_catalog(config, existing),
+        Err(emp_domain::RouteResolutionError::UnknownModel(_))
     ) && !config["model_groups"]
         .as_array()
         .is_some_and(|groups| groups.iter().any(|group| group["id"] == existing)))

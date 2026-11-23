@@ -18,7 +18,7 @@ pub fn is_concrete_reasoning_effort(value: &str) -> bool {
 }
 
 /// Trim Unicode whitespace, including the four C0 file separators.
-pub(crate) fn trim_whitespace(value: &str) -> &str {
+pub fn trim_whitespace(value: &str) -> &str {
     value.trim_matches(|character: char| {
         matches!(
             character,

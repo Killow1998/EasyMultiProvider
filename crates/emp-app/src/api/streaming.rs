@@ -14,7 +14,7 @@ use crate::services::native;
 use crate::services::observation::request::RequestObservation;
 use crate::services::providers::persist_protocol_observation;
 use crate::util::random_hex;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_router::ExternalStream;
 use emp_router::ProjectionIds;
 use emp_router::RouterError;

@@ -46,7 +46,7 @@ flowchart TB
 
 | 模块 | 职责 |
 | --- | --- |
-| `emp-core` | 来源、模型和路由的共同定义 |
+| `emp-domain` | 来源、模型、路由、用量上限和会话元数据的公共值与纯规则 |
 | `emp-state` | 配置、凭据存储、事务、用量和日志存储 |
 | `emp-codex` | Codex 目录、历史读取、额度辅助进程和运行状态 |
 | `emp-integration` | 接入配置的占用关系、冲突判断和恢复 |
@@ -54,6 +54,11 @@ flowchart TB
 | `emp-router` | 协议选择与上游调度 |
 | `emp-protocol` | 不同模型协议的格式转换和流式状态 |
 | `emp-transport` | 连接、代理、TLS、传输限制和收发 |
+
+`emp-state` 与 `emp-modules` 直接依赖 `emp-domain` 的公共值契约。
+模型值与会话类型仍可从原有 state 路径访问；账本查询和临时表安装留在 state。
+SDK 的 `emp_modules::workspace::MAX_USAGE_MODEL_BYTES` 重导出 domain 中的 512 字节上限。
+domain 不依赖其他 EMP crate，也不访问文件、环境变量、网络或数据库。
 
 `emp-app` 中的操作服务负责把这些能力按原有顺序组织起来。
 接口层不再亲自串联发现、额度重置、迁移、接入恢复和退出步骤。

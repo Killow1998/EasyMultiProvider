@@ -1,7 +1,7 @@
 //! Freeze image account choice per turn; never replay an ambiguous image outcome.
 use crate::app::ServerState;
 use crate::services::request_preparation::{RequestOperation, prepare_request};
-use emp_core::{Dialect, ResolvedRoute, RouteSource, resolved_route_from_parts};
+use emp_domain::{Dialect, ResolvedRoute, RouteSource, resolved_route_from_parts};
 use emp_router::native_http::NativeHttpError;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, VecDeque};

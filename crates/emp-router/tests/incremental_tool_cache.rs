@@ -1,5 +1,5 @@
 //! Loaded tool schemas must not invalidate a supported endpoint's prefix.
-use emp_core::{Dialect, Protocol, ResolvedRoute, RouteSource};
+use emp_domain::{Dialect, Protocol, ResolvedRoute, RouteSource};
 use emp_router::project_external_payload;
 use serde_json::{Value, json};
 

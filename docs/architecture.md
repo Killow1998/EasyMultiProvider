@@ -102,7 +102,7 @@ to implement. File length is a navigation signal, not a measure of module depth.
 
 | Module | Existing responsibility | Decision |
 | --- | --- | --- |
-| `emp-core` | Route identities, bounded opaque model/provider data, capability views | Retain; preserve unknown fields |
+| `emp-domain` | Route identities, model value rules, capability views, usage bounds and session metadata | Pure shared values; preserve unknown fields |
 | `emp-protocol` | Responses, Chat and Anthropic projections and stream state | Retain protocol-specific state machines |
 | `emp-history` | History preparation, tool pairing, context and compaction algorithms | Retain the `HistoryReader` interface and pure algorithms |
 | `emp-transport` | HTTP pools, proxy/TLS policy, admission, framing and WebSocket pump | Retain; profile resource ownership before changing execution model |
@@ -126,13 +126,22 @@ live in [`emp-updater/src/`](../crates/emp-updater/src/); the Windows update-pro
 CI step selects `emp-updater`'s `process::tests`. Update behavior is described in
 [`self-update.md`](self-update.md).
 
+`emp-domain` has no EMP crate dependencies and performs no filesystem, environment,
+network or database access. It owns the model value rules, the 512-byte usage model
+name limit, and `SessionScope`/`SessionMetadata` with their pure ownership rules.
+`emp-state` re-exports the model and session contracts at their existing paths;
+ledger queries and temporary-table installation stay in `usage/ledger/`.
+`emp_modules::workspace::MAX_USAGE_MODEL_BYTES` re-exports the domain constant,
+so the SDK and state share the bound through their direct domain dependencies.
+
 No library crate depends on `emp-app`. The principal layering leaks are inside
 the application, where most modules can access the complete `ServerState`.
 
 Production SQL projections live in [`contracts/`](../contracts/README.md) and
 are compiled into `emp-state`. State compatibility and normalization fixtures
 live beside their consumers in
-[`emp-state/tests/data/`](../crates/emp-state/tests/data/); Rust integration
+[`emp-state/tests/data/`](../crates/emp-state/tests/data/) and
+[`emp-domain/tests/data/`](../crates/emp-domain/tests/data/); Rust integration
 tests load them directly with `include_str!`, without a Python process.
 
 Transport memory admission accepts the macOS VM statistics prefix through
@@ -1458,7 +1467,7 @@ plugin bus, universal internal message schema or new product capability.
 | Crate | Responsibility |
 | --- | --- |
 | `emp-app` | Listener/UI, application composition, request workflows and mutable service owners |
-| `emp-core` | Route identity and model/provider capability views |
+| `emp-domain` | Route identity, model/provider capability values, usage bounds and session metadata |
 | `emp-router` | Upstream request/stream execution and protocol selection |
 | `emp-protocol` | Responses, Chat and Anthropic projections and tool/stream state machines |
 | `emp-transport` | Connections, proxy/TLS, HTTP framing, SSE and WebSocket transport |

@@ -1,5 +1,5 @@
 use super::*;
-use emp_modules::workspace::MAX_USAGE_MODEL_BYTES;
+use emp_domain::MAX_USAGE_MODEL_BYTES;
 
 fn report_model(model: &str) -> &str {
     &model[..model.floor_char_boundary(MAX_USAGE_MODEL_BYTES)]

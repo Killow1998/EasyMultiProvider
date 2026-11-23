@@ -123,12 +123,12 @@ pub(crate) fn request(
             );
         }
         let model = body["model"].as_str().expect("validated model");
-        let route = match emp_core::resolved_route_from_parts(
+        let route = match emp_domain::resolved_route_from_parts(
             model,
             provider.as_object().expect("normalized provider").clone(),
             serde_json::from_value(serde_json::json!({"id":model,"upstream_id":model}))
                 .expect("model object"),
-            emp_core::RouteSource::ExplicitModel,
+            emp_domain::RouteSource::ExplicitModel,
         ) {
             Ok(route) => route,
             Err(_) => {

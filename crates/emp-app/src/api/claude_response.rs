@@ -2,7 +2,7 @@ use crate::http::response::{response, status_text};
 use crate::services::claude_cli::failure_stage;
 use crate::services::claude_cli::{ClaudeCliError, failure_details};
 use crate::services::failure_feedback;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use serde_json::{Value, json};
 
 pub(crate) fn http_response(error: &ClaudeCliError) -> Vec<u8> {
@@ -65,7 +65,7 @@ fn websocket_value_with_route(error: &ClaudeCliError, route: Option<&ResolvedRou
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emp_core::{Dialect, Protocol, RouteSource};
+    use emp_domain::{Dialect, Protocol, RouteSource};
 
     fn route() -> ResolvedRoute {
         let provider = serde_json::json!({

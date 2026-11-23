@@ -10,7 +10,7 @@ description = "Behavior-compatible request orchestration for EMP."
 workspace = true
 
 [dependencies]
-emp-core = { path = "../emp-core" }
+emp-domain = { path = "../emp-domain" }
 emp-protocol = { path = "../emp-protocol" }
 emp-state = { path = "../emp-state" }
 emp-transport = { path = "../emp-transport" }

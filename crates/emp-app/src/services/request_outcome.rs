@@ -2,7 +2,7 @@
 //! downstream delivery receipts cannot rewrite this upstream outcome.
 use super::request_facts;
 use crate::app::ServerState;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_state::usage::{account_owner, reported_usage};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

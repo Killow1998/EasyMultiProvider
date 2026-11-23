@@ -2,7 +2,7 @@ use super::*;
 use serde_json::json;
 
 fn route(context_window: u64) -> ResolvedRoute {
-    emp_core::resolved_route_from_parts(
+    emp_domain::resolved_route_from_parts(
         "claude/model",
         json!({
             "id":"claude", "protocol":"anthropic_messages", "auth_mode":"api_key",
@@ -19,7 +19,7 @@ fn route(context_window: u64) -> ResolvedRoute {
         .as_object()
         .unwrap()
         .clone(),
-        emp_core::RouteSource::ExplicitModel,
+        emp_domain::RouteSource::ExplicitModel,
     )
     .unwrap()
 }

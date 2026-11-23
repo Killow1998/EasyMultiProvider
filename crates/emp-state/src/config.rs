@@ -10,7 +10,7 @@ use crate::model_values::{
     normalize_reasoning_levels, normalize_supported_protocols, output_modalities_known,
     supported_protocols_known, trim_whitespace,
 };
-use emp_core::{deployment_identity, endpoint_fingerprint};
+use emp_domain::{deployment_identity, endpoint_fingerprint};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;

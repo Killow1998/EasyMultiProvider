@@ -4,7 +4,7 @@ use crate::lifecycle::ServerHandle;
 use crate::services::auto_review::{automatic_review_candidates, resolve_auto_review_route};
 use crate::services::request_outcome::RequestOutcome;
 use emp_codex::{account_auth_headers, native_catalog_owner};
-use emp_core::{ResolvedRoute, RouteResolutionError};
+use emp_domain::{ResolvedRoute, RouteResolutionError};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -21,7 +21,7 @@ fn resolve_shared_route(
     if let Some(route) = resolve_auto_review_route(&server.state, config, requested_model) {
         return route;
     }
-    emp_core::resolve_route(config, requested_model, |config, slug, account| {
+    emp_domain::resolve_route(config, requested_model, |config, slug, account| {
         crate::services::catalog::subscription_model(&server.state, config, slug, account)
     })
 }

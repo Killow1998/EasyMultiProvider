@@ -1,5 +1,5 @@
 use crate::app::ServerState;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_state::VaultStore;
 use emp_state::provider_api_key;
 use emp_state::remember_resolved_protocol;

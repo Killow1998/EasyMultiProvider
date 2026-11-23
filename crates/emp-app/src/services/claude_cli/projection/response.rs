@@ -1,7 +1,7 @@
 use super::tools::{ToolKind, available_tools, resolve_tool};
 use crate::services::claude_cli::ClaudeCliError;
 use crate::util::random_hex;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_protocol::tool_bridge::ExternalTools;
 use emp_router::CompleteResponse;
 use serde_json::{Value, json};

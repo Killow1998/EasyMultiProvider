@@ -1,4 +1,4 @@
-use emp_state::{
+use emp_domain::{
     codex_input_modalities, input_modalities_known, input_modalities_metadata_source,
     normalize_input_modalities, normalize_output_modalities, normalize_reasoning_levels,
     normalize_supported_protocols, output_modalities_known, output_modalities_metadata_source,

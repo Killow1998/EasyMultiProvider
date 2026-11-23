@@ -5,7 +5,7 @@ use crate::app::ServerState;
 use crate::services::accounts::{native_auth_document, native_subscription_headers};
 use crate::services::subscription_quota::headroom as quota_headroom;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use emp_core::{ResolvedRoute, RouteResolutionError, RouteSource, resolved_route_from_parts};
+use emp_domain::{ResolvedRoute, RouteResolutionError, RouteSource, resolved_route_from_parts};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 

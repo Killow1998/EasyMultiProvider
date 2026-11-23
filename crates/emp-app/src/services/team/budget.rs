@@ -1,6 +1,6 @@
 use super::{Failure, RequestDenied, TeamState, transport::request};
 use crate::app::ServerState;
-use emp_core::{ResolvedRoute, RouteSource};
+use emp_domain::{ResolvedRoute, RouteSource};
 use emp_modules::{
     Module,
     team::{BudgetStatuses, Operation},

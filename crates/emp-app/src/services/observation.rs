@@ -3,7 +3,7 @@ pub(crate) mod continuation;
 pub(crate) mod operation;
 use crate::app::ServerState;
 use crate::util::system_now;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 pub(crate) mod http;

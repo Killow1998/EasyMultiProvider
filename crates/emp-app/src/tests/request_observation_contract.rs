@@ -540,7 +540,7 @@ fn ledger_keeps_execution_facts_after_activity_eviction() {
         .lock()
         .unwrap()
         .clone();
-    let route = emp_core::resolve_route_without_catalog(&config, "demo/model").unwrap();
+    let route = emp_domain::resolve_route_without_catalog(&config, "demo/model").unwrap();
     let body = json!({"model":"demo/model","input":"private-fixture"});
     let headers = BTreeMap::from([("x-emp-request-id".into(), "long-request".into())]);
     let mut outcome =

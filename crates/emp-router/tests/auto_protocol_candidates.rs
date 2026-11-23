@@ -2,11 +2,11 @@
 //! provider is configured as `auto` and EMP decides which wire protocol to
 //! try first, including when a previously observed protocol is honored.
 
-use emp_core::{RouteSource, deployment_identity, endpoint_fingerprint, resolved_route_from_parts};
+use emp_domain::{RouteSource, deployment_identity, endpoint_fingerprint, resolved_route_from_parts};
 use emp_router::protocol_candidates;
 use serde_json::json;
 
-fn route(provider: serde_json::Value, model: serde_json::Value) -> emp_core::ResolvedRoute {
+fn route(provider: serde_json::Value, model: serde_json::Value) -> emp_domain::ResolvedRoute {
     resolved_route_from_parts(
         model["id"].as_str().expect("model id"),
         provider.as_object().expect("provider object").clone(),

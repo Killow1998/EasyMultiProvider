@@ -5,7 +5,7 @@ use super::super::duplex::{Duplex, Message};
 use super::errors::native_stream_error_value_for_route;
 use crate::services::observation::continuation::ContinuationReason;
 use crate::services::request_outcome::RequestOutcome;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_transport::{ClientWebSocket, FailureClass};
 use serde_json::Value;
 

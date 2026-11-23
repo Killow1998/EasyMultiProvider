@@ -1,4 +1,4 @@
-use emp_core::{Dialect, Protocol, ResolvedRoute};
+use emp_domain::{Dialect, Protocol, ResolvedRoute};
 use emp_protocol::anthropic_projection::{
     AnthropicIds, AnthropicStream, response_from_anthropic, responses_to_anthropic,
 };

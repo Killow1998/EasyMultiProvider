@@ -47,7 +47,7 @@ pub(crate) fn read_request(request: Request<'_>, state: &ServerState) -> Vec<u8>
                 else {
                     continue;
                 };
-                let mut record = emp_core::capability_view::capability_record(provider, model);
+                let mut record = emp_domain::capability_view::capability_record(provider, model);
                 let protocol = record["capabilities"]["effective_protocol"]["value"]
                     .as_str()
                     .unwrap_or("unknown");

@@ -809,7 +809,7 @@ version = "0.15.4"
 dependencies = [
  "base64 0.22.1",
  "emp-codex",
- "emp-core",
+ "emp-domain",
  "emp-history",
  "emp-integration",
  "emp-mod-aggregate",
@@ -877,7 +877,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "emp-core"
+name = "emp-domain"
 version = "0.15.4"
 dependencies = [
  "serde",
@@ -903,7 +903,7 @@ name = "emp-history"
 version = "0.15.4"
 dependencies = [
  "base64 0.22.1",
- "emp-core",
+ "emp-domain",
  "serde",
  "serde_json",
  "time",
@@ -970,6 +970,7 @@ dependencies = [
 name = "emp-modules"
 version = "0.1.0"
 dependencies = [
+ "emp-domain",
  "serde",
  "serde_json",
 ]
@@ -990,7 +991,7 @@ dependencies = [
 name = "emp-router"
 version = "0.15.4"
 dependencies = [
- "emp-core",
+ "emp-domain",
  "emp-protocol",
  "emp-state",
  "emp-transport",
@@ -1009,9 +1010,8 @@ name = "emp-state"
 version = "0.15.4"
 dependencies = [
  "base64 0.22.1",
- "emp-core",
+ "emp-domain",
  "emp-files",
- "emp-modules",
  "emp-storage",
  "getrandom 0.2.17",
  "libc",

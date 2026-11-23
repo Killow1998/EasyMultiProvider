@@ -70,8 +70,8 @@ pub fn assess_with_input_estimate(
         _ => "allow",
     };
     ContextAssessment {
-        provider_id: emp_core::capability_view::safe_id(provider.get("id"), "unknown"),
-        model_id: emp_core::capability_view::safe_id(model.get("id"), "unknown"),
+        provider_id: emp_domain::capability_view::safe_id(provider.get("id"), "unknown"),
+        model_id: emp_domain::capability_view::safe_id(model.get("id"), "unknown"),
         input_estimate,
         output_reserve,
         context_limit,

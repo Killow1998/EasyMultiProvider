@@ -1,6 +1,6 @@
 //! Resolve a conversation's source before authentication or history preparation.
 use crate::app::ServerState;
-use emp_core::{ResolvedRoute, RouteResolutionError, RouteSource, resolve_route};
+use emp_domain::{ResolvedRoute, RouteResolutionError, RouteSource, resolve_route};
 use emp_modules::{
     Command, Module,
     aggregate::{BindingPlan, Candidate, Policy, Request, Source},
@@ -215,7 +215,7 @@ pub(super) fn resolve(
                 }
             }
         }
-        route.model = emp_core::OpaqueJson::new(model).map_err(|_| unavailable())?;
+        route.model = emp_domain::OpaqueJson::new(model).map_err(|_| unavailable())?;
         Ok(route)
     })())
 }

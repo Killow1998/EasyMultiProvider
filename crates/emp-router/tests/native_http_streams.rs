@@ -2,7 +2,7 @@
 //! headers rewritten, bad JSON frames are skipped, collaboration tool calls
 //! survive in plaintext mode, and 401/429 openings surface as errors.
 
-use emp_core::{Dialect, Protocol, ResolvedRoute, RouteSource};
+use emp_domain::{Dialect, Protocol, ResolvedRoute, RouteSource};
 use emp_router::native_http::{NativeHttpError, NativeRouter};
 use emp_router::native_request::{NativeAuth, request_headers};
 use emp_transport::{HttpClient, HttpClientPolicy};

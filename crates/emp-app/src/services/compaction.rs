@@ -2,7 +2,7 @@ use crate::app::ServerState;
 use crate::util::random_hex;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_router::CompleteResponse;
 use emp_router::ExternalRouter;
 use emp_router::ProjectionIds;
@@ -18,7 +18,7 @@ const MAX_EXTERNAL_COMPACTION_SUMMARY_CHARS: usize = 256 * 1024;
 
 pub(crate) enum CompactionError {
     InvalidSummary(&'static str),
-    Route(emp_core::RouteResolutionError),
+    Route(emp_domain::RouteResolutionError),
     Execution(SummaryExecutionError),
 }
 

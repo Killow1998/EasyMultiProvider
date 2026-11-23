@@ -108,7 +108,7 @@ pub(super) fn body_with_supported_effort<'a>(
 #[cfg(test)]
 mod body_with_supported_effort_tests {
     use super::{Dialect, Protocol, body_with_supported_effort};
-    use emp_core::{ResolvedRoute, RouteSource};
+    use emp_domain::{ResolvedRoute, RouteSource};
     use serde_json::json;
     use std::borrow::Cow;
 

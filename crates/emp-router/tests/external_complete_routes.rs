@@ -3,7 +3,7 @@
 //! credentials per protocol, tool calls and reasoning kept out of the answer
 //! text, and upstream errors surfaced with stable classes.
 
-use emp_core::{Dialect, Protocol, ResolvedRoute, RouteSource};
+use emp_domain::{Dialect, Protocol, ResolvedRoute, RouteSource};
 use emp_protocol::portable_responses::terminal_observation;
 use emp_router::{ExternalRouter, ProjectionIds};
 use emp_transport::{FailureClass, HttpClient, HttpClientPolicy};

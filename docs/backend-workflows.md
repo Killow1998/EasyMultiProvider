@@ -13,7 +13,7 @@ routes, confirmations, source selection, retries and error contracts remain.
 
 | Module | Owns | Application boundary / decision |
 | --- | --- | --- |
-| `emp-core` | Route identities, provider/model values and capabilities | Shared typed facts; retain opaque upstream fields. |
+| `emp-domain` | Route identities, provider/model values and capabilities, usage bounds and session metadata | Pure shared facts; retain opaque upstream fields. |
 | `emp-state` | Configuration, vault, file transactions, usage and diagnostic storage | Configuration and account commands own writes; HTTP adapters do not hydrate credentials or coordinate transactions. |
 | `emp-codex` | Concrete Codex history, catalogs, quota helpers and runtime observations | Catalog, account/quota and integration services own the complete user operation. |
 | `emp-integration` | Configuration leases, conflict detection, restoration | Integration commands own apply/restore/search/runtime sequencing; the lease manager retains transactional authority. |
@@ -22,7 +22,11 @@ routes, confirmations, source selection, retries and error contracts remain.
 | `emp-protocol` | Responses/Chat/Anthropic projection and stream state | Keep the concrete protocol machines; do not impose one universal wire pipeline. |
 | `emp-transport` | Connections, TLS/proxy policy, limits, framing and socket lifecycle | Executors use the existing transport; wire adapters own downstream delivery evidence. |
 
-Crate dependency directions are unchanged. No library depends on `emp-app`. The useful
+`emp-state` and `emp-modules` depend directly on `emp-domain` for shared model,
+session and usage contracts. Ledger persistence stays in `emp-state`, which
+re-exports model and session values at their existing paths. The SDK re-exports
+the usage model name limit at `emp_modules::workspace::MAX_USAGE_MODEL_BYTES`.
+No library depends on `emp-app`. The useful
 consolidation is complete-operation ownership in the application, not merging
 independent protocol, persistence and transport implementations into one crate.
 
@@ -133,7 +137,7 @@ flowchart TD
   R --> D
   D --> P[emp-protocol]
   D --> T[emp-transport]
-  R --> K[emp-core: route facts]
+  R --> K[emp-domain: route facts]
   API -. HTTP result .-> J[Existing diagnostic journal]
   R -. request / upstream result .-> J
   C -. helper and worker result .-> J
@@ -149,7 +153,7 @@ flowchart TD
   API --> R[Request preparation / history / concrete executors]
   API --> M[Account / settings / catalog / quota commands]
   API --> L[Integration commands / shutdown preparation]
-  R --> K[emp-core: route facts]
+  R --> K[emp-domain: route facts]
   R --> H[emp-history]
   R --> D[emp-router]
   D --> P[emp-protocol]

@@ -3,7 +3,7 @@ use crate::services::catalog::response_catalog_etag;
 use crate::services::disconnect::DisconnectMonitor;
 use crate::services::disconnect::DisconnectRace;
 use crate::services::request_outcome::RequestOutcome;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_router::ProjectionIds;
 use emp_router::native_http::NativeRouter;
 use emp_router::native_http::NativeStream;

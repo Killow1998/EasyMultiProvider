@@ -152,7 +152,7 @@ pub(super) fn scoped_source(
         return Ok(source.to_owned());
     };
     connection.execute_batch("DROP TABLE IF EXISTS conversation_scope")?;
-    scope.install(connection)?;
+    session_scope::install(scope, connection)?;
     Ok(format!(
         "(SELECT s.*,COALESCE((SELECT MIN(m.root_id) FROM usage_sessions e
           LEFT JOIN conversation_scope m ON m.thread_id=e.session_id WHERE e.event_id=s.id

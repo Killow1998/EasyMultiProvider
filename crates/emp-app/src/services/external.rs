@@ -3,7 +3,7 @@ use crate::services::disconnect::{DisconnectMonitor, DisconnectRace, raced};
 use crate::services::observation;
 use crate::services::providers::persist_protocol_observation;
 use crate::services::request_outcome::RequestOutcome;
-use emp_core::{ResolvedRoute, RouteResolutionError};
+use emp_domain::{ResolvedRoute, RouteResolutionError};
 use emp_router::{CompleteResponse, ExternalRouter, ExternalStream, ProjectionIds, RouterError};
 use emp_transport::{FailureClass, FailurePhase, UpstreamFailure};
 use serde_json::Value;

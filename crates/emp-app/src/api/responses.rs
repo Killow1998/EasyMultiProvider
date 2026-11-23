@@ -205,7 +205,7 @@ pub(crate) fn responses_request(
         }
     };
     observation.phase(Phase::Execute);
-    if route.dialect != emp_core::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
+    if route.dialect != emp_domain::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
         let started = std::time::Instant::now();
         let mut usage = crate::services::request_outcome::RequestOutcome::new(
             state,
@@ -422,7 +422,7 @@ pub(crate) fn responses_request(
             &[],
         ));
     }
-    if route.dialect == emp_core::Dialect::CodexNative {
+    if route.dialect == emp_domain::Dialect::CodexNative {
         if python_truthy(body.get("stream")) {
             let _activity_guard = state.backend.activity.begin(
                 crate::services::activity::ActivityIdentity::from_route(&route),

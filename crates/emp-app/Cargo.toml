@@ -17,7 +17,7 @@ workspace = true
 hotpath = { version = "=0.28.3", optional = true, default-features = false }
 base64 = "0.22"
 emp-codex = { path = "../emp-codex" }
-emp-core = { path = "../emp-core" }
+emp-domain = { path = "../emp-domain" }
 emp-history = { path = "../emp-history" }
 emp-integration = { path = "../emp-integration" }
 emp-modules = { path = "../emp-modules" }

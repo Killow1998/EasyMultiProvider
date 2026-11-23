@@ -4,7 +4,6 @@ pub mod discovery_merge;
 pub mod filesystem;
 pub mod gateway_key;
 pub mod migration;
-pub mod model_values;
 pub mod official_registry;
 pub mod web_session;
 
@@ -22,6 +21,13 @@ pub use config::{
     normalize_provider_id, normalize_subscription_search, observed_at_now, provider_api_key,
     public_configuration_with_file_status, remember_resolved_protocol,
     remember_resolved_protocol_at, save_configuration, save_configuration_in_transaction,
+};
+pub use emp_domain::model_values;
+pub use emp_domain::{
+    IMAGE_MODALITY, MAX_MODALITIES, MAX_MODALITY_ID_BYTES, TEXT_MODALITY, codex_input_modalities,
+    input_modalities_known, input_modalities_metadata_source, normalize_input_modalities,
+    normalize_output_modalities, normalize_reasoning_levels, normalize_supported_protocols,
+    output_modalities_known, output_modalities_metadata_source, supported_protocols_known,
 };
 pub use emp_files::lock::{IntegrationFileLock, LockError};
 pub use emp_files::{
@@ -43,12 +49,6 @@ pub use migration::{
     decrypt_migration_bundle, encode_migration, export_migration_bundle,
     export_migration_bundle_with_summary, import_migration_bundle, parse_envelope,
     select_export_config,
-};
-pub use model_values::{
-    IMAGE_MODALITY, MAX_MODALITIES, MAX_MODALITY_ID_BYTES, TEXT_MODALITY, codex_input_modalities,
-    input_modalities_known, input_modalities_metadata_source, normalize_input_modalities,
-    normalize_output_modalities, normalize_reasoning_levels, normalize_supported_protocols,
-    output_modalities_known, output_modalities_metadata_source, supported_protocols_known,
 };
 pub use web_session::{
     WEB_SESSION_LIFETIME_SECONDS, WEB_SESSION_TOKEN_BYTES, WEB_SESSION_TOKEN_LENGTH, WebSession,

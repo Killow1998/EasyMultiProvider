@@ -2,7 +2,7 @@
 //! Responses endpoint, credential refresh on 401, reasoning-effort fallback,
 //! context-length and rate-limit surfacing, and the single network retry.
 
-use emp_core::{Dialect, Protocol, ResolvedRoute, RouteSource};
+use emp_domain::{Dialect, Protocol, ResolvedRoute, RouteSource};
 use emp_router::native_http::{NativeHttpError, NativeRouter};
 use emp_router::native_request::{NativeAuth, request_headers};
 use emp_transport::{HttpClient, HttpClientPolicy, decode_content};

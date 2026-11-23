@@ -133,7 +133,7 @@ fn execute_compact_request(
         Err(error) => return destination_error_response(error, observation),
     };
     observation.phase(Phase::Execute);
-    if route.dialect == emp_core::Dialect::CodexNative {
+    if route.dialect == emp_domain::Dialect::CodexNative {
         return crate::api::native_response::complete_response(native::compact(
             state, &route, &config, &body, &incoming,
         ));

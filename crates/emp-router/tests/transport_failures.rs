@@ -1,5 +1,5 @@
 //! Exercise real dial failures through both routing paths and delivery modes.
-use emp_core::{Dialect, Protocol, ResolvedRoute, RouteSource};
+use emp_domain::{Dialect, Protocol, ResolvedRoute, RouteSource};
 use emp_router::{ExternalRouter, ProjectionIds, native_http::NativeRouter};
 use emp_transport::{FailureClass, HttpClient, HttpClientPolicy, ProxyPolicy, TimeoutPolicy};
 use serde_json::json;

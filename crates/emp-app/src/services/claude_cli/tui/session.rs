@@ -1,7 +1,7 @@
 use super::super::{Cancellation, ClaudeCliError, media, projection};
 use super::{protocol, terminal::Terminal, transcript::Metrics};
 use crate::app::ServerState;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use portable_pty::CommandBuilder;
 use serde_json::{Value, json};
 use std::{

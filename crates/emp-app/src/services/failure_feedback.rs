@@ -1,6 +1,6 @@
 //! Public explanation for a failed request using its immutable selected route.
 
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_router::native_http::NativeHttpError;
 use emp_transport::{
     FailureClass, normalize_error_class, public_failure_message, status_error_class,

@@ -1,10 +1,10 @@
 [package]
 publish = false
-name = "emp-core"
+name = "emp-domain"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Immutable route identities and bounded catalog values for EMP."
+description = "路由、模型、计量和会话的公共值契约与纯规则"
 
 [lints]
 workspace = true

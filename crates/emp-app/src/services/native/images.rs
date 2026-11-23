@@ -88,11 +88,11 @@ pub(crate) fn execute(
                     && !name.eq_ignore_ascii_case("chatgpt-account-id")
             });
         }
-        let mut auth = if route.source == emp_core::RouteSource::ForwardProvider {
+        let mut auth = if route.source == emp_domain::RouteSource::ForwardProvider {
             super::auth::ResolvedHeaders {
                 headers: emp_router::upstream_headers(
                     route.provider.value(),
-                    emp_core::Protocol::Responses,
+                    emp_domain::Protocol::Responses,
                     &incoming,
                 )
                 .map_err(|error| NativeHttpError::router(error.status(), error.to_string()))?,

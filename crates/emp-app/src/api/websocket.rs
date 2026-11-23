@@ -53,7 +53,7 @@ impl ObservedWebSocket<'_, '_> {
     fn reject(
         &mut self,
         state: &ServerState,
-        route: &emp_core::ResolvedRoute,
+        route: &emp_domain::ResolvedRoute,
         body: &Value,
         headers: &BTreeMap<String, String>,
         event: &Value,
@@ -130,7 +130,7 @@ impl ObservedWebSocket<'_, '_> {
 
 struct Turn {
     config: Value,
-    route: emp_core::ResolvedRoute,
+    route: emp_domain::ResolvedRoute,
     body: Value,
     headers: BTreeMap<String, String>,
     ids: emp_router::ProjectionIds,
@@ -631,7 +631,7 @@ pub(crate) fn serve_responses_websocket(
             scope: request_scope,
         };
         let (native_turn_activity, native_usage) =
-            if turn.route.dialect == emp_core::Dialect::CodexNative {
+            if turn.route.dialect == emp_domain::Dialect::CodexNative {
                 match native_session.serve(state, &turn, &mut websocket, monitor_stream.as_ref()) {
                     NativeTurnResult::Finished => continue,
                     NativeTurnResult::Closed => return,
@@ -665,7 +665,7 @@ pub(crate) fn serve_responses_websocket(
             |websocket, monitor| {
                 if crate::services::claude_cli::selected(&turn.route) {
                     claude::serve(state, &turn, websocket, monitor)
-                } else if turn.route.dialect == emp_core::Dialect::CodexNative {
+                } else if turn.route.dialect == emp_domain::Dialect::CodexNative {
                     http_stream::serve_native(
                         state,
                         &turn,

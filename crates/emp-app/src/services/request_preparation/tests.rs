@@ -1,5 +1,5 @@
 use super::*;
-use emp_core::{RouteSource, resolved_route_from_parts};
+use emp_domain::{RouteSource, resolved_route_from_parts};
 use serde_json::json;
 
 fn case(

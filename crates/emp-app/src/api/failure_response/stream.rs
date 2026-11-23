@@ -1,6 +1,6 @@
 use super::routed_message;
 use crate::services::error_origin;
-use emp_core::ResolvedRoute;
+use emp_domain::ResolvedRoute;
 use emp_router::{RouterError, RouterErrorKind};
 use emp_transport::{FailureClass, public_failure_message};
 use serde_json::Value;
