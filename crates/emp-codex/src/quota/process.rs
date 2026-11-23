@@ -149,17 +149,20 @@ pub(super) fn read_native_auth(path: &Path) -> Result<Value, QuotaError> {
 
 /// Build a disposable quota snapshot from a validated ChatGPT auth document.
 pub fn access_token_snapshot(auth: &Value) -> Value {
-    let tokens = auth
-        .get("tokens")
-        .and_then(Value::as_object)
-        .unwrap_or(auth.as_object().unwrap())
-        .clone();
     let mut auth = auth.clone();
-    auth["tokens"] = Value::Object(tokens);
-    auth["auth_mode"] = Value::String("chatgptAuthTokens".to_owned());
-    auth["tokens"]["refresh_token"] = Value::String(String::new());
     if let Some(object) = auth.as_object_mut() {
         object.remove("refresh_token");
+        let mut tokens = object
+            .get("tokens")
+            .and_then(Value::as_object)
+            .unwrap_or(object)
+            .clone();
+        tokens.insert("refresh_token".into(), Value::String(String::new()));
+        object.insert("tokens".into(), Value::Object(tokens));
+        object.insert(
+            "auth_mode".into(),
+            Value::String("chatgptAuthTokens".into()),
+        );
     }
     auth
 }

@@ -1537,8 +1537,9 @@ subscriptions, migration imports, unknown sources and existing records without
 the field. Shared quota reads, background samples and resets use the same
 access-token snapshot as Native, with `allow_refresh=false` and no persist
 callback. Neither authentication errors nor workspace-discovery retry hints
-authorize a refresh. Authentication errors mark the account invalid and ask the
-user to re-import the latest auth.json from its original host. Inference and
+authorize a refresh. A confirmed quota authentication failure marks the account
+invalid. The WebUI directs users to re-import auth.json from its original host,
+sync a Team subscription, or sign in again for an EMP-managed Other. Inference and
 image 401s also skip shared-account refreshes and return authentication failure.
 RPC `refreshToken=false` alone does not prevent Codex's auth manager from
 proactively rotating stale credentials; the snapshot removes that capability.

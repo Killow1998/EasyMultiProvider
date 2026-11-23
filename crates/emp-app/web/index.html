@@ -1052,8 +1052,14 @@ const subscriptionSettings=createSubscriptionSettings({getState:()=>state,cloneS
 function editAccount(id,navigation={}) { return subscriptionSettings.open(id,navigation); }
 function quotaErrorText(error, id) {
   const code = error.payload?.error?.code;
+  if (code === 'quota_auth_required') {
+    if (id === state.native_account?.id) return tr("core.the_current_codex_login_is_no_longer_valid_sign");
+    const source = state.accounts.find(account => account.id === id)?.credential_source;
+    if (source === 'team') return tr("core.quota_sync_team_subscription");
+    if (source === 'emp_login') return tr("core.quota_sign_in_other_again");
+    return tr("core.the_imported_credentials_are_no_longer_valid_sign_in");
+  }
   const messages = {
-    quota_auth_required: id === state.native_account?.id ? tr("core.the_current_codex_login_is_no_longer_valid_sign") : tr("core.the_imported_credentials_are_no_longer_valid_sign_in"),
     quota_access_denied: tr("core.quota_access_denied_403_check_account_permissions_or_network"),
     quota_rate_limited: tr("core.quota_queries_are_rate_limited_429_try_again_later"),
     quota_transport_error: tr("core.codex_could_not_reach_chatgpt_workspace_routing_check_dns"),
