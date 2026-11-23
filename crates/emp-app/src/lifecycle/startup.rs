@@ -1,4 +1,4 @@
-use super::{ServerHandle, UpdateStartupMarkers, connections};
+use super::{ServerHandle, UpdateStartupMarkers};
 use crate::app::{BackendState, ServerState};
 use crate::cli::is_loopback;
 use crate::error::AppError;
@@ -305,7 +305,7 @@ impl ServerHandle {
             shutdown_wake,
             catalog_refresh: crate::services::account_catalog::CatalogRefreshState::default(),
             sessions,
-            connection_admission: ConnectionAdmission::new(admission),
+            connection_admission: Arc::new(ConnectionAdmission::new(admission)),
             bootstrap: BootstrapToken {
                 token: URL_SAFE_NO_PAD.encode(random),
                 used: AtomicBool::new(false),
@@ -332,9 +332,26 @@ impl ServerHandle {
             _service_owner: service_owner,
         };
         let started = (|| {
+            #[cfg(any(test, not(feature = "server-candidate")))]
             handle.spawn_worker("emp-http", move |state| {
-                connections::accept(listener, state);
+                super::connections::accept(listener, state);
             })?;
+            #[cfg(all(feature = "server-candidate", not(test)))]
+            {
+                listener.set_nonblocking(true)?;
+                let listener = {
+                    let _entered = handle.state.backend.transport.runtime.enter();
+                    tokio::net::TcpListener::from_std(listener)?
+                };
+                handle.spawn_worker("emp-http", move |state| {
+                    state
+                        .backend
+                        .transport
+                        .runtime
+                        .block_on(crate::server::serve_candidate(listener, Arc::clone(&state)))
+                        .expect("HTTP server worker");
+                })?;
+            }
             if enable_catalog_refresh_worker {
                 handle.spawn_worker("emp-catalog-refresh", |state| {
                     crate::services::account_catalog::run_refresh_worker(&state);

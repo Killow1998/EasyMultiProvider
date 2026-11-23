@@ -58,14 +58,17 @@ async fn accept_retries_interrupted_immediately_and_other_errors_after_backoff()
         io::ErrorKind::PermissionDenied,
     ]
     .into_iter();
-    let (accepted, accepted_at) = accept_with_retry(|| {
-        attempts.push(Instant::now() - start);
-        std::future::ready(
-            failures
-                .next()
-                .map_or(Ok("socket"), |kind| Err(kind.into())),
-        )
-    })
+    let (accepted, accepted_at) = accept_with_retry(
+        || {
+            attempts.push(Instant::now() - start);
+            std::future::ready(
+                failures
+                    .next()
+                    .map_or(Ok("socket"), |kind| Err(kind.into())),
+            )
+        },
+        |_| {},
+    )
     .await;
     assert_eq!(accepted, "socket");
     let retry = Duration::from_millis(100);

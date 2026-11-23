@@ -32,7 +32,8 @@ pub(crate) struct ServerState {
     pub(crate) shutdown_wake: Arc<tokio::sync::Notify>,
     pub(crate) catalog_refresh: crate::services::account_catalog::CatalogRefreshState,
     pub(crate) sessions: Arc<SessionStore>,
-    pub(crate) connection_admission: crate::services::connection_admission::ConnectionAdmission,
+    pub(crate) connection_admission:
+        Arc<crate::services::connection_admission::ConnectionAdmission>,
     pub(crate) bootstrap: BootstrapToken,
     pub(crate) reopen_bootstrap: Mutex<Option<BootstrapToken>>,
     pub(crate) backend: BackendState,

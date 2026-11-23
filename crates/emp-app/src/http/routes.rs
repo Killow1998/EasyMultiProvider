@@ -1,3 +1,4 @@
+use crate::api::accounts::AccountRead;
 use crate::api::catalog;
 use crate::api::inspection;
 use crate::api::integration::read_integration_request;
@@ -6,7 +7,6 @@ use crate::http::auth::same_origin;
 use crate::http::request::Request;
 use crate::http::request::RequestMethod;
 use crate::http::request::percent_decode;
-use crate::http::request::query_values;
 use crate::http::response::health_response;
 use crate::http::response::json_error_response;
 use crate::http::response::not_found_response;
@@ -14,10 +14,7 @@ use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::server::http::management::{ManagementSession, exchange, page_origin};
 use crate::server::http::proxy::require_model_catalog;
-use crate::services::accounts::accounts_snapshot;
 use crate::services::accounts::delete_account_state;
-use crate::services::quota::QuotaHistoryResponseError;
-use crate::services::quota::quota_history_response;
 use crate::web::ui_response;
 
 pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f64) -> Vec<u8> {
@@ -154,24 +151,17 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         }
         if request.method == RequestMethod::Get
             && (path == "/api/config"
-                || ((path.starts_with("/api/accounts/") || path.starts_with("/api/providers/"))
-                    && path.ends_with("/models")))
+                || (path.starts_with("/api/providers/") && path.ends_with("/models")))
         {
             return catalog::read_management_request(request, state);
         }
-        if request.method == RequestMethod::Get && path == "/api/accounts" {
-            let Some(snapshot) = accounts_snapshot(state) else {
-                return json_error_response(
-                    500,
-                    status_text(500),
-                    "internal server error",
-                    None,
-                    &[],
-                );
+        if request.method == RequestMethod::Get
+            && let Some(read) = AccountRead::for_path(path)
+        {
+            return match read.read(request, state, now) {
+                Ok(reply) => reply.wire_response(),
+                Err(error) => error.wire_response(),
             };
-            let body =
-                serde_json::to_vec(&snapshot).expect("account snapshot is JSON serializable");
-            return response("HTTP/1.1 200 OK", "application/json", &body, &[]);
         }
         if request.method == RequestMethod::Get
             && let Some(id) = path
@@ -187,47 +177,6 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         }
         if request.method == RequestMethod::Get && path == "/api/integration" {
             return read_integration_request(state);
-        }
-        if request.method == RequestMethod::Get
-            && let Some(raw_account) = path
-                .strip_prefix("/api/accounts/")
-                .and_then(|rest| rest.strip_suffix("/quota-history"))
-        {
-            if raw_account.is_empty() {
-                return not_found_response();
-            }
-            let account_id = percent_decode(raw_account, false);
-            let range = query_values(request.target, "range")
-                .into_iter()
-                .find(|value| !value.is_empty())
-                .unwrap_or_else(|| "1d".to_owned());
-            let bound = |name| {
-                query_values(request.target, name)
-                    .into_iter()
-                    .find_map(|value| value.parse::<f64>().ok())
-                    .filter(|value| value.is_finite())
-                    .map(|value| value.trunc() as i64)
-            };
-            let period = bound("start").zip(bound("end"));
-            return match quota_history_response(
-                state,
-                &account_id,
-                &range,
-                period,
-                now.trunc() as i64,
-            ) {
-                Ok(payload) => {
-                    let body = serde_json::to_vec(&payload)
-                        .expect("quota history snapshot is serializable");
-                    response("HTTP/1.1 200 OK", "application/json", &body, &[])
-                }
-                Err(QuotaHistoryResponseError::History(error)) => {
-                    json_error_response(400, status_text(400), &error.to_string(), None, &[])
-                }
-                Err(QuotaHistoryResponseError::Account(error)) => {
-                    json_error_response(404, status_text(404), &error.to_string(), None, &[])
-                }
-            };
         }
         if request.method == RequestMethod::Delete
             && let Some(raw_account) = path.strip_prefix("/api/accounts/")

@@ -51,12 +51,7 @@ pub(crate) fn health_response() -> Vec<u8> {
 }
 
 pub(crate) fn not_found_response() -> Vec<u8> {
-    response(
-        "HTTP/1.1 404 Not Found",
-        "application/json",
-        b"{\"error\":{\"message\":\"not found\"}}",
-        &[],
-    )
+    EntryError::NotFound.wire_response()
 }
 
 pub(crate) fn unauthorized_response() -> Vec<u8> {

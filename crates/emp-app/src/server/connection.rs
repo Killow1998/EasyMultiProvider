@@ -1,8 +1,10 @@
 use super::http::error::EntryWire;
-use super::{ServerControl, ServerMode, ShutdownReason, ShutdownSignal, head::GuardedHead};
+use super::{
+    ServerControl, ServerMode, ShutdownReason, ShutdownSignal, head::GuardedHead, run_blocking,
+};
 use crate::{
     http::request::{MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE},
-    services::connection_admission::ConnectionPermit,
+    services::{connection_admission::ConnectionPermit, observation::http::HttpObservation},
 };
 use axum::{Router, extract::ConnectInfo, http::StatusCode};
 use hyper::{
@@ -65,6 +67,62 @@ impl ConnectionContext {
     }
 }
 
+pub(super) async fn drive_candidate(
+    mut io: tokio::net::TcpStream,
+    peer: SocketAddr,
+    accepted: Instant,
+    router: Router,
+    control: Arc<ServerControl>,
+    permit: ConnectionPermit,
+) {
+    let state = control
+        .candidate
+        .as_ref()
+        .expect("candidate listener state");
+    let observation_state = Arc::clone(state);
+    let Ok(mut observation) = run_blocking(move || HttpObservation::new(&observation_state)).await
+    else {
+        return;
+    };
+    if io.set_nodelay(true).is_err() {
+        let _ = run_blocking(move || observation.failure("socket_setup_failed")).await;
+        return;
+    }
+    let head = match GuardedHead::read(&mut io, accepted + REQUEST_HEAD_DEADLINE).await {
+        Ok(head) => head,
+        Err(error) => {
+            let bytes = error.wire_response();
+            let result = io.write_all(&bytes).await;
+            let _ = io.shutdown().await;
+            let _ = run_blocking(move || observation.response_finished(&bytes, result)).await;
+            return;
+        }
+    };
+    let request = head.raw.request();
+    if !super::http::accounts::matches(request) {
+        match io.into_std() {
+            Ok(stream) => {
+                let raw = head.into_legacy();
+                crate::lifecycle::connections::spawn_request(state, move |state| {
+                    crate::http::connection::handle_connection(
+                        stream,
+                        state,
+                        permit,
+                        Some(raw),
+                        observation,
+                    );
+                });
+            }
+            Err(_) => {
+                let _ = run_blocking(move || observation.failure("socket_setup_failed")).await;
+            }
+        }
+        return;
+    }
+    observation.received(request);
+    drive_http(io, peer, router, control, permit, head, Some(observation)).await;
+}
+
 pub(super) async fn drive(
     mut io: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
     peer: SocketAddr,
@@ -73,12 +131,8 @@ pub(super) async fn drive(
     control: Arc<ServerControl>,
     permit: ConnectionPermit,
 ) {
-    let head_timeout = match control.mode {
-        ServerMode::Http => REQUEST_HEAD_DEADLINE,
-        ServerMode::Recovery => Duration::from_secs(3),
-    };
     let mode = control.mode;
-    let head = match GuardedHead::read(&mut io, accepted + head_timeout).await {
+    let head = match GuardedHead::read(&mut io, accepted + mode.head_timeout()).await {
         Ok(head) => head,
         Err(response) => {
             if matches!(mode, ServerMode::Http) {
@@ -88,6 +142,28 @@ pub(super) async fn drive(
             return;
         }
     };
+    drive_http(io, peer, router, control, permit, head, None).await;
+}
+
+impl ServerMode {
+    fn head_timeout(self) -> Duration {
+        match self {
+            Self::Http => REQUEST_HEAD_DEADLINE,
+            Self::Recovery => Duration::from_secs(3),
+        }
+    }
+}
+
+async fn drive_http(
+    io: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    peer: SocketAddr,
+    router: Router,
+    control: Arc<ServerControl>,
+    permit: ConnectionPermit,
+    head: GuardedHead,
+    observation: Option<HttpObservation>,
+) {
+    let mode = control.mode;
     let permit = if head.release_request_permit {
         drop(permit);
         None
@@ -136,21 +212,29 @@ pub(super) async fn drive(
             Ok::<_, std::convert::Infallible>(response)
         }
     });
-    let written = http1::Builder::new()
+    let result = http1::Builder::new()
         .keep_alive(false)
         .allow_multiple_spaces_in_request_line_delimiters(true)
         .max_buf_size(MAX_HEADER_BYTES + 4)
         .max_headers(MAX_HEADER_BYTES / 4)
         .timer(TokioTimer::new())
-        .header_read_timeout(head_timeout)
+        .header_read_timeout(mode.head_timeout())
         .auto_date_header(false)
         .serve_connection(
             TokioIo::new(head.replay(io, Arc::clone(&wire_response), mode)),
             TowerToHyperService::new(service),
         )
         .with_upgrades()
-        .await
-        .is_ok();
+        .await;
+    let written = result.is_ok();
+    if let Some(mut observation) = observation {
+        let _ = run_blocking(move || {
+            if let Some(Some(wire)) = wire_response.get() {
+                observation.response_finished(wire, result.map_err(std::io::Error::other));
+            }
+        })
+        .await;
+    }
 
     if stop_after_write.into_inner() {
         context.control.stop(if written {

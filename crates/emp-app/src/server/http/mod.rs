@@ -1,3 +1,4 @@
+pub(crate) mod accounts;
 pub(crate) mod body;
 pub(crate) mod error;
 pub(crate) mod management;

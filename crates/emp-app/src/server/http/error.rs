@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 pub(crate) enum EntryError {
     InvalidHead,
+    NotFound,
     ManagementSession,
     CrossOrigin(&'static str),
     Json(u16, &'static str, Option<&'static str>),
@@ -129,6 +130,7 @@ impl EntryError {
     fn reply(self) -> JsonReply {
         match self {
             Self::InvalidHead => plain(400, "invalid HTTP request"),
+            Self::NotFound => plain(404, "not found"),
             Self::ManagementSession => plain(401, "management session is required"),
             Self::CrossOrigin(message) => plain(403, message),
             Self::Json(status, message, code) => {

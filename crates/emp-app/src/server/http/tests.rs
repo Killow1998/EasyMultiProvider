@@ -233,6 +233,83 @@ async fn proxy_probe(
 }
 
 #[test]
+fn account_reads_match_legacy_wire_on_the_candidate_listener() {
+    let fixture = Fixture::new();
+    let state = &fixture.legacy.state;
+    let auth_path = &state.backend.accounts.native_auth_path;
+    std::fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        auth_path,
+        br#"{"tokens":{"access_token":"fixture-token","account_id":"fixture-owner"}}"#,
+    )
+    .unwrap();
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let candidate = tokio::spawn(crate::server::serve_candidate(listener, state.clone()));
+            let session = fixture.session();
+            let port = fixture.port();
+            for (path, field, missing, missing_status) in [
+                ("/api/accounts", "accounts", "/api/accounts/absent", 404),
+                (
+                    "/api/accounts/%40native/models",
+                    "models",
+                    "/api/accounts/absent/models",
+                    400,
+                ),
+                (
+                    "/api/accounts/%40native/quota-history?range=all",
+                    "series",
+                    "/api/accounts/absent/quota-history",
+                    404,
+                ),
+            ] {
+                let reply = fixture
+                    .parity(address, &request(port, "GET", path, &[&session], b""), 200)
+                    .await;
+                assert!(json_body(&reply)[field].is_array());
+                for (method, path, headers, status) in [
+                    ("GET", path, [].as_slice(), 401),
+                    ("GET", path, [&*session, &*session].as_slice(), 401),
+                    (
+                        "GET",
+                        path,
+                        [&*session, "Origin: https://other.invalid"].as_slice(),
+                        403,
+                    ),
+                    ("GET", missing, [&*session].as_slice(), missing_status),
+                    ("HEAD", path, [&*session].as_slice(), 404),
+                ] {
+                    fixture
+                        .parity(address, &request(port, method, path, headers, b""), status)
+                        .await;
+                }
+            }
+            for (path, status) in [
+                ("/api/accounts/models", 400),
+                ("/api/accounts//quota-history", 404),
+                ("/api/accounts/%40native/quota-history?range=invalid", 400),
+            ] {
+                fixture
+                    .parity(
+                        address,
+                        &request(port, "GET", path, &[&session], b""),
+                        status,
+                    )
+                    .await;
+            }
+            state.request_shutdown();
+            candidate.await.unwrap().unwrap();
+        });
+    fixture.legacy.shutdown().unwrap();
+}
+
+#[test]
 fn identity_rejections_stop_before_fake_upstream_and_body() {
     Fixture::new().run(async |fixture, new| {
         let port = fixture.port();

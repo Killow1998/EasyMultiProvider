@@ -51,6 +51,7 @@ url = "2.5.7"
 [features]
 hotpath = ["dep:hotpath", "hotpath/hotpath", "emp-transport/hotpath"]
 hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
+server-candidate = []
 
 [lib]
 path = "src/lib.rs"

@@ -14,6 +14,7 @@ use crate::api::search::native_search_request;
 use crate::api::websocket::serve_responses_websocket;
 use crate::app::ServerState;
 use crate::http::request::REQUEST_READ_TIMEOUT;
+use crate::http::request::RequestHead;
 use crate::http::request::RequestMethod;
 use crate::http::request::parse_request;
 use crate::http::request::percent_decode;
@@ -22,6 +23,7 @@ use crate::http::response::bad_request_response;
 use crate::http::routes::route_request_at;
 use crate::server::http::proxy::{RequestAccess, request_source};
 use crate::services::connection_admission::ConnectionPermit;
+use crate::services::observation::http::HttpObservation;
 use crate::util::system_now;
 use std::net::Shutdown;
 use std::net::TcpStream;
@@ -29,9 +31,12 @@ use std::net::TcpStream;
 pub(crate) fn handle_connection(
     mut stream: TcpStream,
     state: &ServerState,
-    mut request_permit: Option<ConnectionPermit>,
+    request_permit: ConnectionPermit,
+    head: Option<RequestHead>,
+    observation: HttpObservation,
 ) {
-    let mut observation = crate::services::observation::http::HttpObservation::new(state);
+    let mut request_permit = Some(request_permit);
+    let mut observation = observation;
     if stream.set_nonblocking(false).is_err()
         || stream.set_nodelay(true).is_err()
         || stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT)).is_err()
@@ -39,7 +44,7 @@ pub(crate) fn handle_connection(
         observation.failure("socket_setup_failed");
         return;
     }
-    let raw = match read_request_head(&mut stream) {
+    let raw = match head.or_else(|| read_request_head(&mut stream)) {
         Some(raw) => raw,
         None => {
             observation.write_response(&mut stream, &bad_request_response());

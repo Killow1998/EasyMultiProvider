@@ -83,6 +83,15 @@ impl HttpObservation {
             .as_ref()
             .and_then(|model| model.errors().http(bytes));
         let bytes = formatted.as_deref().unwrap_or(bytes);
+        let result = if bytes.is_empty() {
+            Ok(())
+        } else {
+            stream.write_all(bytes).and_then(|()| stream.flush())
+        };
+        self.response_finished(bytes, result);
+    }
+
+    pub(crate) fn response_finished(&mut self, bytes: &[u8], result: std::io::Result<()>) {
         if bytes.is_empty() {
             self.fields["response_bytes"] = json!(0);
             self.fields["result"] = json!("no_response");
@@ -100,7 +109,6 @@ impl HttpObservation {
             Some(500..=599) => "failed",
             _ => "responded",
         });
-        let result = stream.write_all(bytes).and_then(|()| stream.flush());
         if matches!(
             self.fields["path"].as_str(),
             Some("/v1/decisions" | "/v1/systemone")

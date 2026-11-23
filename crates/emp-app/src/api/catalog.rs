@@ -204,18 +204,7 @@ pub(crate) fn read_management_request(request: Request<'_>, state: &ServerState)
             Err(_) => internal_error(),
         };
     }
-    let id = percent_decode(
-        request
-            .raw_path()
-            .strip_prefix("/api/accounts/")
-            .and_then(|path| path.strip_suffix("/models"))
-            .unwrap_or_default(),
-        false,
-    );
-    match crate::services::catalog::subscription_options(state, &config, &id) {
-        Ok(models) => json_response(&json!({"models":models})),
-        Err(message) => config_error(message),
-    }
+    config_error("Subscription account is unavailable")
 }
 
 fn json_response(value: &Value) -> Vec<u8> {

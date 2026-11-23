@@ -2,7 +2,8 @@ pub(crate) mod connection;
 pub(crate) mod head;
 pub(crate) mod http;
 
-use crate::lifecycle::connections::ACCEPT_RETRY;
+use crate::app::ServerState;
+use crate::lifecycle::connections::{ACCEPT_RETRY, AcceptLog, request_rejected};
 use crate::services::connection_admission::ConnectionAdmission;
 use axum::Router;
 use std::{io, net::SocketAddr, sync::Arc};
@@ -51,6 +52,7 @@ struct ServerControl {
     mode: ServerMode,
     admission: Arc<ConnectionAdmission>,
     shutdown: watch::Sender<Option<ShutdownReason>>,
+    candidate: Option<Arc<ServerState>>,
 }
 
 impl ServerControl {
@@ -59,6 +61,7 @@ impl ServerControl {
             admission,
             mode: ServerMode::Http,
             shutdown: watch::Sender::new(None),
+            candidate: None,
         }
     }
 
@@ -145,6 +148,18 @@ impl Drop for ServerHandle {
     }
 }
 
+pub(crate) async fn serve_candidate(
+    listener: TcpListener,
+    state: Arc<ServerState>,
+) -> Result<(), JoinError> {
+    let router = http::with_entry_state(http::accounts::routes(), state.clone());
+    let control = Arc::new(ServerControl {
+        candidate: Some(state.clone()),
+        ..ServerControl::new(state.connection_admission.clone())
+    });
+    serve(listener, router, control).await
+}
+
 async fn serve(
     listener: TcpListener,
     router: Router,
@@ -153,25 +168,50 @@ async fn serve(
     let mut connections = JoinSet::new();
     let mut worker_failure = None;
     let shutdown = control.signal();
+    let mut accept_log = AcceptLog::default();
+    let app_shutdown = async {
+        match &control.candidate {
+            Some(state) => state.wait_for_shutdown().await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::pin!(app_shutdown);
     'accepting: loop {
-        let accept = accept_with_retry(|| listener.accept());
+        let accept = accept_with_retry(
+            || listener.accept(),
+            |accepted| {
+                if let Some(state) = &control.candidate {
+                    accept_log.record(state, accepted);
+                }
+            },
+        );
         tokio::pin!(accept);
         loop {
             tokio::select! {
                 biased;
                 _ = shutdown.clone().wait() => break 'accepting,
+                _ = &mut app_shutdown => {
+                    control.stop(ShutdownReason::Requested);
+                    break 'accepting;
+                }
                 completed = connections.join_next(), if !connections.is_empty() => {
                     if let Some(Err(error)) = completed {
                         worker_failure.get_or_insert(error);
                     }
                 }
                 ((stream, peer), accepted) = &mut accept => {
-                    if let Some(permit) = control.admission.acquire_request()
-                        && stream.set_nodelay(true).is_ok()
-                    {
-                        connections.spawn(connection::drive(
-                            stream, peer, accepted, router.clone(), Arc::clone(&control), permit,
-                        ));
+                    if let Some(permit) = control.admission.acquire_request() {
+                        if control.candidate.is_some() {
+                            connections.spawn(connection::drive_candidate(
+                                stream, peer, accepted, router.clone(), Arc::clone(&control), permit,
+                            ));
+                        } else if stream.set_nodelay(true).is_ok() {
+                            connections.spawn(connection::drive(
+                                stream, peer, accepted, router.clone(), Arc::clone(&control), permit,
+                            ));
+                        }
+                    } else if let Some(state) = &control.candidate {
+                        request_rejected(state, "connection_capacity");
                     }
                     break;
                 }
@@ -189,9 +229,12 @@ async fn serve(
 
 async fn accept_with_retry<T, F: Future<Output = io::Result<T>>>(
     mut accept: impl FnMut() -> F,
+    mut record: impl FnMut(&io::Result<T>),
 ) -> (T, Instant) {
     loop {
-        match accept().await {
+        let result = accept().await;
+        record(&result);
+        match result {
             Ok(connection) => return (connection, Instant::now()),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                 tokio::task::consume_budget().await;

@@ -50,6 +50,13 @@ pub(super) struct GuardedHead {
 }
 
 impl GuardedHead {
+    pub(super) fn into_legacy(self) -> crate::http::request::RequestHead {
+        crate::http::request::RequestHead {
+            head: self.raw.0.to_string(),
+            body_prefix: self.body_prefix,
+        }
+    }
+
     pub(super) async fn read(
         io: &mut (impl AsyncRead + Unpin),
         deadline: Instant,
