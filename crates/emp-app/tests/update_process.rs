@@ -1235,10 +1235,7 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
             Instant::now() < restart_deadline,
             "old EMP did not return after rollback"
         );
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "回滚服务以固定间隔轮询健康状态"
-        )]
+        #[expect(clippy::disallowed_methods, reason = "回滚服务以固定间隔轮询健康状态")]
         thread::sleep(Duration::from_millis(20));
     }
     let rolled_back = request(emp.port, "GET", "/api/updates", Some(&emp.session), None);

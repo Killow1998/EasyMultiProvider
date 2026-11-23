@@ -518,8 +518,9 @@ impl Team {
                 .as_array()
                 .expect("models")
                 .iter()
-                .any(|row| row["id"] == route),
-            "shared subscription missing from models"
+                .any(|row| row["id"] == MODEL),
+            "shared subscription model missing from the pooled catalog: {}",
+            listed.text()
         );
         route
     }

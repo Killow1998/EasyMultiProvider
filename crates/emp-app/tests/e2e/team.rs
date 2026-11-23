@@ -119,11 +119,8 @@ fn m03_two_devices_forward_shared_subscription_and_keep_personal_data_after_unin
     let personal_call = fixture.local_call(1, &personal_request);
     assert_eq!(personal_call["provider_id"], "personal");
     assert!(personal_call["account_id"].is_null());
-    let before = report(
-        &fixture.devices[1],
-        "/api/usage?start=0&end=4102444800&provider=personal",
-    );
-    assert_eq!(before["totals"]["requests"], 1);
+    let before = report(&fixture.devices[1], "/api/usage?start=0&end=4102444800");
+    assert_eq!(before["totals"]["requests"], 2);
     let config = report(&fixture.devices[1], "/api/config");
     let personal = config["providers"]
         .as_array()
@@ -156,10 +153,7 @@ fn m03_two_devices_forward_shared_subscription_and_keep_personal_data_after_unin
             .expect("personal native credentials after uninstall"),
         native_auth
     );
-    let after = report(
-        &fixture.devices[1],
-        "/api/usage?start=0&end=4102444800&provider=personal",
-    );
+    let after = report(&fixture.devices[1], "/api/usage?start=0&end=4102444800");
     assert_eq!(after["totals"], before["totals"]);
     assert_eq!(fixture.local_call(1, &personal_request), personal_call);
     fixture.call(
