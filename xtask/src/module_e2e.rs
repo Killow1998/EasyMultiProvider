@@ -5,13 +5,19 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const MODULES: [&str; 4] = ["decision", "gateway", "aggregate", "team"];
+const USAGE: &str = "usage: cargo xtask module-e2e [--skip-aero] [--features <emp-app features>]";
 
 pub fn run(args: &[String]) -> Result {
-    let skip_aero = match args {
-        [] => false,
-        [flag] if flag == "--skip-aero" => true,
-        _ => return Err("usage: cargo xtask module-e2e [--skip-aero]".into()),
-    };
+    let mut skip_aero = false;
+    let mut features = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match (arg.as_str(), features.is_none()) {
+            ("--skip-aero", _) if !skip_aero => skip_aero = true,
+            ("--features", true) => features = Some(rest.next().ok_or(USAGE)?.clone()),
+            _ => return Err(USAGE.into()),
+        }
+    }
     if !cfg!(unix) {
         return Err("module-e2e requires Unix process inspection; CI runs it on Linux".into());
     }
@@ -59,6 +65,9 @@ pub fn run(args: &[String]) -> Result {
     test.args(["test", "--locked", "-p", "emp-app", "--test", "e2e"])
         .env("EMP_E2E_MODULE_NEXT_DIR", &next)
         .env_remove("EMP_E2E_AERO_PACKAGE");
+    if let Some(features) = &features {
+        test.args(["--features", features]);
+    }
     if !skip_aero {
         let output = temporary.path().join("aero");
         execute(
