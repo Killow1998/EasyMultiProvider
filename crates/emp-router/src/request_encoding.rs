@@ -25,9 +25,7 @@ fn unescaped_json_size(value: &Value) -> usize {
 }
 
 pub(super) fn encode_projected_request(value: &Value) -> Vec<u8> {
-    // serde_json::to_vec grows from a small initial buffer. A 128 MiB history
-    // can leave a nearly 256 MiB buffer live beside both parsed JSON trees.
-    // This lower bound is exact for ordinary text and safely grows for escapes.
+    // Preallocate a lower bound (exact for ordinary text) to avoid doubling large history buffers.
     let mut encoded = Vec::with_capacity(unescaped_json_size(value));
     serde_json::to_writer(&mut encoded, value).expect("JSON value into memory");
     encoded

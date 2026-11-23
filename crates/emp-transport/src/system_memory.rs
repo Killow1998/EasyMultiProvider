@@ -1,5 +1,3 @@
-//! Small, dependency-light system memory probes used for request admission.
-
 use crate::MemoryStatus;
 
 #[cfg(target_os = "linux")]

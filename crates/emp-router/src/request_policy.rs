@@ -1,4 +1,3 @@
-//! Validation and reasoning-effort policy shared by complete and streamed requests.
 use super::{
     Dialect, FailureClass, Protocol, ResolvedRoute, RouterError, RouterErrorKind, invalid_request,
 };

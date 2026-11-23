@@ -1,4 +1,3 @@
-//! Restores request-owned tool identities on complete and streamed responses.
 use super::ExternalTools;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

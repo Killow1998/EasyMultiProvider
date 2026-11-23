@@ -1,4 +1,3 @@
-//! Python-compatible plaintext collaboration transport for native Responses.
 //! Existing ciphertext is never decoded or relabelled as a plaintext task.
 
 use crate::json_truthy;
@@ -21,7 +20,6 @@ impl CollaborationError {
     pub const fn status(self) -> u16 {
         match self {
             Self::NamespaceCollision => 422,
-            // The Python HTTP handler exposes ValueError as a bad request.
             Self::UnexpectedEncryptedArguments => 400,
             _ => 500,
         }
@@ -47,8 +45,7 @@ impl fmt::Display for CollaborationError {
 }
 impl std::error::Error for CollaborationError {}
 
-// Iterating Python dict/string values yields keys/characters, which cannot be
-// tool objects. Preserve those no-ops while retaining non-iterable failures.
+// Object and string containers remain no-ops; other non-array values remain errors.
 fn object_iter(value: &Value) -> Result<Option<&[Value]>, CollaborationError> {
     match value {
         Value::Array(values) => Ok(Some(values)),
@@ -82,7 +79,7 @@ fn history_containers(body: &Map<String, Value>) -> impl Iterator<Item = &Map<St
         .filter_map(Value::as_object)
 }
 
-/// Content-free diagnostics. Ignore malformed non-list tools like Python.
+/// Content-free diagnostics ignore malformed non-list tools.
 pub fn collaboration_summary(body: &Map<String, Value>) -> Value {
     let mut native = 0;
     let mut emp = 0;
@@ -110,7 +107,6 @@ pub fn collaboration_summary(body: &Map<String, Value>) -> Value {
 }
 
 fn project_tools(container: &mut Map<String, Value>) -> Result<bool, CollaborationError> {
-    // Validate Python's iteration before mutably borrowing the array.
     tools(container)?;
     let Some(values) = container.get_mut("tools").and_then(Value::as_array_mut) else {
         return Ok(false);
@@ -161,8 +157,7 @@ fn project_tools(container: &mut Map<String, Value>) -> Result<bool, Collaborati
     Ok(changed)
 }
 
-/// Change only plaintext-capable tool transport metadata. Generated additional
-/// tool IDs are deterministic UUID5 values and must match Python exactly.
+/// Change only plaintext-capable metadata, preserving the deterministic UUID5 tool-ID format.
 pub fn prepare_collaboration(body: &mut Map<String, Value>) -> Result<(), CollaborationError> {
     // Collision detection covers every tool container before any projection.
     let mut collision = false;
@@ -321,8 +316,7 @@ fn python_number(number: &serde_json::Number) -> String {
     rendered
 }
 
-// JSON schema IDs depend on Python's default spaces and ensure_ascii=True,
-// including surrogate pairs. Do not replace this with compact serde JSON.
+// Schema IDs require spaced JSON with ASCII escaping and UTF-16 surrogate pairs.
 pub(crate) fn python_json(value: &Value) -> String {
     match value {
         Value::Number(number) => python_number(number),

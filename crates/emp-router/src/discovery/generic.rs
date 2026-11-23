@@ -1,5 +1,3 @@
-//! Generic provider model discovery and projection.
-
 use super::*;
 
 pub async fn discover_generic_models(

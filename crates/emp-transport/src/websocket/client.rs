@@ -1,5 +1,3 @@
-//! Upstream WebSocket client lifecycle and frame I/O.
-
 use super::compression::{DecompressionError, PerMessageDeflate};
 use super::network::{ReadWrite, ReadyReader, read_http_head, websocket_connection};
 use super::{

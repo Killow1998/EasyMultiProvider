@@ -1,4 +1,3 @@
-//! Validated thread, turn and window anchors from Codex request metadata.
 use crate::{HistoryAnchor, HistoryError};
 use serde_json::{Map, Value};
 

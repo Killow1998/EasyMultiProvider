@@ -1,5 +1,3 @@
-//! Upstream rejection details and external route error conversion.
-
 use crate::{RouterError, RouterErrorKind};
 use emp_protocol::ProtocolError;
 use emp_protocol::anthropic_projection::AnthropicError;

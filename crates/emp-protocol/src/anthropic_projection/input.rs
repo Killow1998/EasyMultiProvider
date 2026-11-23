@@ -1,4 +1,3 @@
-//! Anthropic message content, image data and paired tool history.
 use super::tools::request_tool_arguments;
 use super::{
     ANTHROPIC_IMAGE_MEDIA_TYPES, AnthropicError, COMPACTION_PREFIX, COMPACTION_SUMMARY_PREFIX,

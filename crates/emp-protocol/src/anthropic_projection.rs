@@ -1,5 +1,3 @@
-//! Bounded Responses <-> Anthropic Messages projections.
-
 use serde_json::Value;
 
 const COMPACTION_PREFIX: &str = "emp1:";

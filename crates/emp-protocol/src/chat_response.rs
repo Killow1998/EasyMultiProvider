@@ -1,5 +1,3 @@
-//! Complete Chat Completions responses projected into Responses output.
-
 use super::*;
 
 fn tool_item(

@@ -1,4 +1,3 @@
-//! Downstream frame I/O; no upstream dialing, proxy or compression policy.
 use super::{MAX_RESPONSES_WEBSOCKET_BYTES, WebSocketError, frame_length_prefix};
 use crate::{
     MAX_PROXY_REQUEST_BYTES, RequestBudget, RequestLimits,

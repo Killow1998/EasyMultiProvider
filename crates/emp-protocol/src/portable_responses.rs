@@ -1,8 +1,5 @@
-//! Portable history and output policy for external model protocols.
-//!
-//! External gateways receive a complete, stateless history. Plaintext
-//! reasoning is never returned to Codex, while explicitly enabled opaque state
-//! and bounded summaries can cross the protocol boundary.
+//! External gateways receive complete stateless history; only explicitly enabled opaque state
+//! and bounded summaries can cross back to Codex, never plaintext reasoning.
 
 use serde_json::Value;
 use std::fmt;

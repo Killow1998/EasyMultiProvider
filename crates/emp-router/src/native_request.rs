@@ -1,6 +1,5 @@
-//! Native request headers after the application resolves the credential owner.
-//! This layer never reads credentials or treats the caller's bearer as an
-//! account selection; the account/implicit-native decision is request-local.
+//! The application resolves request-local credential ownership; this layer never reads credentials
+//! or uses the caller's bearer to select an account.
 
 use crate::{EMP_VERSION, RouterError, RouterErrorKind};
 use emp_transport::FailureClass;

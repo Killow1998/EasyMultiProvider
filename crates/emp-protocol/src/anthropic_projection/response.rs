@@ -1,5 +1,3 @@
-//! Complete Anthropic response projection and its usage/tool helpers.
-
 use super::stream::AnthropicIds;
 use super::{AnthropicError, required_upstream_string, upstream_error};
 use crate::json_truthy;
@@ -113,7 +111,6 @@ pub(super) fn custom_tool_input(arguments: &str) -> String {
     }
 }
 
-/// Build a completed assistant output item.
 pub(super) fn output_message(id: &str, text: &str) -> Value {
     serde_json::json!({
         "id": id, "type": "message", "status": "completed", "role": "assistant",
@@ -121,10 +118,7 @@ pub(super) fn output_message(id: &str, text: &str) -> Value {
     })
 }
 
-/// Project one complete Anthropic Messages response into Responses JSON.
-///
-/// Stable generated IDs are supplied by the caller so concurrent turns cannot
-/// share a fixed fixture identifier and tests remain deterministic.
+/// Project Anthropic replies using caller-supplied IDs unique to each concurrent turn.
 pub fn response_from_anthropic(
     value: &Value,
     requested_model: &str,

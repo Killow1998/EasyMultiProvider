@@ -1,5 +1,3 @@
-//! Incremental Responses SSE projection and custom tool state.
-
 use super::response::project_response;
 use super::response::{custom_tool_ids, custom_tool_input, project_reasoning_item};
 use super::{PortableProjectionError, error, python_string};

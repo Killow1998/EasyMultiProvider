@@ -1,4 +1,3 @@
-//! Integration operations: status, enable, restore and recovery under the lease lock.
 use crate::fields::{conflict_names, relation, set_states, states, validate_value};
 use crate::files::{absolute, atomic_write};
 use crate::storage::random_hex;

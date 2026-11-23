@@ -1,5 +1,3 @@
-//! Bounded, single-owner upstream WebSocket pump.
-
 use crate::websocket::{ClientWebSocket, ClientWebSocketError};
 use crate::{RequestBudget, RequestLimits, TransportKind};
 use std::fmt;

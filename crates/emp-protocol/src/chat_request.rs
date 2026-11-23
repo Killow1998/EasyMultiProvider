@@ -1,5 +1,3 @@
-//! Responses request projection onto the OpenAI Chat Completions dialect.
-
 use super::{ProtocolError, json_truthy, request_error};
 use crate::tool_definitions::custom_tool_arguments;
 use base64::Engine as _;

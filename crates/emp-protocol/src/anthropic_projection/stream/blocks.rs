@@ -1,4 +1,3 @@
-//! Content block admission, delta parsing and bounded text/tool accumulation.
 use super::super::response::custom_tool_id;
 use super::super::{AnthropicError, required_upstream_string, upstream_error};
 use super::{
@@ -8,8 +7,7 @@ use super::{
 use serde_json::{Map, Value, json};
 
 impl AnthropicStream {
-    /// Register a block. Only blocks with an output index participate in the
-    /// ordered output stream; suppressed reasoning is stored but not ordered.
+    /// Only indexed blocks enter the ordered output stream; suppressed reasoning remains stored.
     fn insert_block_state(
         &mut self,
         raw_index: usize,

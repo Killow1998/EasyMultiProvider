@@ -1,4 +1,3 @@
-//! WebSocket public types and shared RFC 6455 handshake/framing primitives.
 use crate::websocket_pump::FrameDecoder;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use compression::PerMessageDeflate;

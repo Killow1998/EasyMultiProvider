@@ -1,5 +1,3 @@
-//! Decision catalogs stay separate from conversation-model discovery.
-
 use super::*;
 
 pub async fn discover_decision_models_with_plan(

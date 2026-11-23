@@ -1,4 +1,3 @@
-//! Destination limits and assessment; independent of compaction and transport.
 use super::estimate::estimate_protocol_payload_tokens;
 use super::{SAFETY_RESERVE_TOKENS, calibration};
 use serde_json::{Map, Value};

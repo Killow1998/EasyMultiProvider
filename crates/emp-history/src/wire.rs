@@ -1,4 +1,3 @@
-//! Project visible items into Codex-compatible request items.
 use crate::{CHECKPOINT_PREFIX, VisibleItem};
 use serde_json::{Map, Value, json};
 

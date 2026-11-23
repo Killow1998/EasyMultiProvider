@@ -1,4 +1,3 @@
-//! Responses request controls and Anthropic request assembly.
 use super::input::{instruction_text, messages};
 use super::tools::{tool_choice, tools};
 use super::{AnthropicError, request_error};

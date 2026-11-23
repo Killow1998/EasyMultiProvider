@@ -1,4 +1,3 @@
-//! RFC 7692 negotiation and bounded compression, independent of socket I/O.
 use super::ClientWebSocketError;
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
 
@@ -136,12 +135,8 @@ impl PerMessageDeflate {
             let consumed =
                 usize::try_from(self.decompressor.total_in() - before_in).unwrap_or(encoded.len());
             if status == Status::StreamEnd {
-                // The peer finished the DEFLATE stream with a BFINAL block
-                // (RFC 7692 section 7.2.3.4). Only the synthetic empty-block
-                // tail may remain, optionally after the single 0x00 octet the
-                // RFC's own example sends (an empty non-final stored-block
-                // header); any other payload bytes after the end of the
-                // stream are malformed. The next message starts a new stream.
+                // RFC 7692 section 7.2.3.4 permits only the synthetic empty-block tail after BFINAL,
+                // optionally preceded by 0x00; reject other trailing bytes and reset for the next message.
                 self.decompressor.reset(false);
                 if !matches!(payload.get(consumed..), Some([] | [0x00])) {
                     return Err(DecompressionError::Invalid);

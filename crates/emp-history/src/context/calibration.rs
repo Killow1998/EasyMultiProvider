@@ -1,4 +1,3 @@
-//! Reuse persisted, identity-bound observations when reporting and budgeting context.
 use super::SAFETY_RESERVE_TOKENS;
 use super::budget::{context_window, positive_integer};
 use emp_core::capability_view::safe_id;
@@ -41,8 +40,7 @@ fn fresh(value: Option<&Value>) -> bool {
     let age = OffsetDateTime::now_utc() - stamp;
     !age.is_negative() && age.whole_seconds() <= 24 * 60 * 60
 }
-/// Confidence of a failure seen once, far below the known window; it is kept
-/// as evidence but only lowers limits once a second failure corroborates it.
+/// A lone far-below-window failure remains evidence until a nearby failure corroborates it.
 const UNCONFIRMED_FAILURE_CONFIDENCE: f64 = 0.5;
 const FAILURE_CORROBORATION_PERCENT: u64 = 5;
 const MIN_FAILURE_CORROBORATION_TOKENS: u64 = 256;
@@ -88,9 +86,7 @@ pub(super) fn limits(
                 .all(|(key, value)| item.get(key) == Some(value))
         })
         .cloned();
-    // A failure estimate is an input estimate (Python contract), so
-    // `failure - 1` is already an input ceiling; reserves are not subtracted
-    // again. Calibration data is shared with Python through the config file.
+    // Failure estimates already bound input; do not subtract output reserves from failure - 1 again.
     let failure = calibration
         .as_ref()
         .filter(|value| fresh(value.get("smallest_failure_observed_at")) && confirmed(value))
@@ -130,10 +126,8 @@ pub fn status(provider: &Map<String, Value>, model: &Map<String, Value>, protoco
     result
 }
 
-/// Store numeric input estimates bound to the upstream deployment. Ignore
-/// failures where input plus output reserve exceeds the known window: these
-/// cannot establish an input ceiling. Far-below-window failures require a
-/// corroborating nearby explicit failure.
+/// Bind input estimates to the deployment; input plus output beyond the known window cannot prove a ceiling,
+/// and far-below-window failures need corroborating nearby explicit failure evidence.
 pub fn update(
     provider: &Map<String, Value>,
     model: &mut Map<String, Value>,

@@ -1,4 +1,3 @@
-//! Close paired text/tool blocks and synthesize their final output events.
 use super::super::response::{custom_tool_input, output_message, tool_arguments};
 use super::super::{AnthropicError, upstream_error};
 use super::{AnthropicBlockKind, AnthropicStream, tool_item};

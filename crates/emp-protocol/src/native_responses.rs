@@ -1,6 +1,5 @@
-//! Native history projection preserves opaque state and unknown fields.
-//! Only complete foreign tool pairs, EMP summaries and plaintext reasoning
-//! are adapted for the native upstream.
+//! Preserve opaque native state and unknown fields; adapt only complete foreign tool pairs,
+//! EMP summaries and plaintext reasoning.
 
 use crate::portable_responses::{
     COMPACTION_PREFIX, COMPACTION_SUMMARY_PREFIX, PortableProjectionError, decode_compaction,
@@ -12,9 +11,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeProjectionError {
     Projection(PortableProjectionError),
-    /// Python raises TypeError before projection when a type cannot be hashed.
-    /// The HTTP owner must preserve its generic 500 boundary, not turn it into
-    /// a retryable protocol error or silently forward the malformed history.
+    /// Unhashable item types remain generic HTTP 500 failures, never retryable projection errors.
     UnhashableItemType,
 }
 

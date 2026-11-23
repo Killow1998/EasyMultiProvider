@@ -1,5 +1,3 @@
-//! Limits and accounting for reusable idle connections.
-
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

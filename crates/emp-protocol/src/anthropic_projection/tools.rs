@@ -1,4 +1,3 @@
-//! Anthropic tool schema, arguments, namespace and tool-choice projection.
 use super::{AnthropicError, request_error, required_string};
 use crate::tool_definitions::{custom_tool_parameters, description, raw_tools};
 use serde_json::{Map, Value};

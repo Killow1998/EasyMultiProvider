@@ -1,4 +1,3 @@
-//! Chunk packing, summary requests and Python-compatible tool serialization.
 use super::units::{flatten, tool_role};
 use crate::context::estimate::{IncrementalEstimate, JsonCost, json_cost};
 use serde_json::{Value, json};
@@ -121,9 +120,7 @@ pub(super) fn summary_item(item: Value) -> Value {
     }
 }
 
-/// Python's summary oracle embeds tool records with `json.dumps` defaults,
-/// including one space after commas and colons. Keep that text shape so
-/// request packing uses the same serialized size and submits equivalent data.
+/// Tool-record JSON keeps spaces after commas and colons so packing matches the submitted text size.
 pub(super) fn python_json_text(value: &Value) -> String {
     fn append(value: &Value, output: &mut String) {
         match value {

@@ -1,4 +1,3 @@
-//! Native Responses failure translation and public error shapes.
 use emp_protocol::collaboration::CollaborationError;
 use emp_protocol::native_responses::NativeProjectionError;
 use emp_transport::{

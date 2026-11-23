@@ -1,4 +1,3 @@
-//! A per-command reply confirms worker execution, separately from queue admission.
 use super::PumpCommand;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 

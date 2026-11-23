@@ -1,6 +1,3 @@
-//! Conservative context assessment and request-local compaction.
-//! Estimation, limit calibration and compaction each own their internal policy.
-
 mod budget;
 mod calibration;
 mod compaction;

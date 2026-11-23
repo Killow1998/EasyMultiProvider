@@ -1,5 +1,3 @@
-//! Request and response projection between Codex and external model protocols.
-
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -110,10 +108,7 @@ pub struct ChatProjection {
     pub unknown_fields: Vec<UnknownField>,
 }
 
-/// Request-local identifiers supplied by the router's secure ID source.
-///
-/// Requiring these values keeps protocol projection deterministic in tests and
-/// prevents a shared fixed identifier from crossing concurrent Codex turns.
+/// Request-local IDs from the router's secure source prevent identity reuse across concurrent turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatIds {
     response: String,

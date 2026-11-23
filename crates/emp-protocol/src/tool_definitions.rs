@@ -1,5 +1,3 @@
-//! Shared namespace traversal and custom-input schema for external protocols.
-
 use serde_json::{Map, Value, json};
 
 pub(crate) struct RawTool<'a> {

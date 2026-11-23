@@ -1,5 +1,3 @@
-//! Anthropic SSE stream state and event synthesis.
-
 use super::response::{anthropic_usage, incomplete_reason};
 use super::{AnthropicError, stream_error, upstream_error};
 use crate::json_truthy;
@@ -66,10 +64,7 @@ struct AnthropicBlockState {
     kind: AnthropicBlockKind,
 }
 
-/// Pure Anthropic Messages stream state machine.
-///
-/// The transport supplies already parsed JSON events. This type owns event
-/// ordering, block validation, usage accumulation and terminal truth.
+/// Consume parsed JSON events while owning ordering, block validation, usage and terminal state.
 #[derive(Clone)]
 pub struct AnthropicStream {
     ids: AnthropicIds,

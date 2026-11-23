@@ -1,4 +1,3 @@
-//! Managed TOML fields and lease comparison; no filesystem or runtime access.
 use crate::{FieldState, IMAGE_MCP_FIELD, IntegrationError, LeaseRecord, MANAGED_FIELDS};
 use std::collections::BTreeMap;
 

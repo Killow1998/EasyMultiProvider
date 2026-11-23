@@ -1,4 +1,3 @@
-//! Stateless Responses input, media, instructions and portable checkpoints.
 use super::{
     COMPACTION_PREFIX, COMPACTION_SUMMARY_PREFIX, PortableProjectionError, error, python_string,
 };
@@ -166,8 +165,7 @@ fn custom_arguments(value: Option<&Value>) -> Result<String, PortableProjectionE
 }
 
 pub(crate) fn decode_compaction(value: &str) -> Option<String> {
-    // Python translates the URL-safe alphabet before strict decoding, so mixed
-    // alphabets are valid too. It does not reject nonzero unused padding bits.
+    // Accept mixed base64 alphabets and nonzero unused padding bits for compatibility.
     let encoded = value
         .strip_prefix(COMPACTION_PREFIX)?
         .replace('-', "+")

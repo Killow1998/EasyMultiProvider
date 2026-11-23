@@ -1,5 +1,4 @@
-//! Ownership of the local inference credential. Callers serialize mutations
-//! with the integration operation lock; an existing login always wins.
+//! Serialize credential mutations with the integration operation lock; existing logins take precedence.
 use crate::IntegrationError;
 use serde_json::{Value, json};
 use std::fs;

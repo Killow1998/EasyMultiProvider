@@ -1,7 +1,5 @@
-//! Read-only continuity for histories owned by Codex.
-//!
-//! EMP only materializes the visible prefix hidden by one native compaction
-//! item. It never writes a parallel transcript or copies hidden reasoning.
+//! Materialize only the visible prefix hidden by one native compaction item;
+//! never write a parallel transcript or copy hidden reasoning.
 
 use serde_json::{Map, Value};
 use std::fmt;

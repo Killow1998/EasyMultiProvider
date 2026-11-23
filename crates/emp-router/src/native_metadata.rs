@@ -63,8 +63,7 @@ fn allowed_header(name: &str) -> bool {
     RESPONSE_HEADER_NAMES.contains(&name) || is_rate_header(name) || is_rate_limit_name_header(name)
 }
 
-// Python casefold differs from lowercase for Unicode aliases. These exceptions
-// follow the Python oracle's Unicode 16.0.0 data; Cherokee folds to uppercase.
+// Use Unicode 16.0.0 case folding for aliases; Cherokee folds to uppercase.
 fn casefold_string(value: &str) -> String {
     let mut result = String::with_capacity(value.len());
     for character in value.chars() {

@@ -1,4 +1,3 @@
-//! Repository automation for EMP, run as `cargo xtask <command>`.
 mod package;
 mod release;
 mod smoke;

@@ -1,7 +1,3 @@
-//! Request orchestration for one immutable EMP route.
-//!
-//! Executes complete and streamed Responses, Chat Completions and Anthropic requests.
-
 use emp_core::{Dialect, Protocol, ResolvedRoute};
 use emp_protocol::anthropic_projection::{
     AnthropicIds, AnthropicStream, response_from_anthropic, responses_to_anthropic,
@@ -160,7 +156,6 @@ pub struct CompleteResponse {
 }
 
 /// An upstream response forwarded without decoding or protocol projection.
-/// This is used only by adapters that must preserve a native provider request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PassthroughResponse {
     pub status: u16,
@@ -222,11 +217,8 @@ pub struct ExternalRouter<'a> {
     gemini_signatures: Option<std::sync::Arc<emp_state::gemini_signatures::GeminiSignatures>>,
 }
 
-/// Return concrete candidates for one frozen route.
-///
-/// A saved observation is trusted only when the endpoint, deployment and raw
-/// upstream model identities still match. This function never mutates saved
-/// configuration; persistence remains owned by the application state layer.
+/// Order candidates without mutating configuration; trust observations only when endpoint, deployment
+/// and raw upstream model identities still match the frozen route.
 pub fn protocol_candidates(route: &ResolvedRoute) -> Vec<Protocol> {
     if route.protocol != Protocol::Auto {
         return vec![route.protocol];
@@ -273,9 +265,8 @@ pub fn protocol_candidates(route: &ResolvedRoute) -> Vec<Protocol> {
         .collect()
 }
 
-/// Return a saved protocol only when its endpoint, deployment, and upstream
-/// model identities still match this frozen route. Candidate order based on a
-/// URL suffix is not an observation and must not be treated as one.
+/// Return a saved protocol only when endpoint, deployment and upstream model identities match;
+/// URL-suffix candidate ordering is not an observation.
 pub fn observed_protocol(route: &ResolvedRoute) -> Option<Protocol> {
     let upstream = route
         .model

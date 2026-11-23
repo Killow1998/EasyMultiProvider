@@ -1,4 +1,3 @@
-//! Lease validation, durable writes and path/lock checks; no integration dispatch.
 use crate::files::{MAX_CODEX_CONFIG_BYTES, MAX_LEASE_BYTES, absolute, read_text_limited};
 use crate::{
     FieldRecovery, FieldState, IMAGE_MCP_FIELD, IntegrationError, IntegrationManager, LeaseRecord,

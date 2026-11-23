@@ -1,8 +1,3 @@
-//! Bounded transport primitives for EMP.
-//!
-//! Owns HTTP/WebSocket I/O, content decoding and wire-size admission.
-//! Protocol projection remains in `emp-protocol`.
-
 use serde_json::{Map, Value};
 use std::fmt;
 
@@ -99,11 +94,8 @@ impl fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
-/// Incrementally parses JSON objects from SSE `data:` fields.
-///
-/// Network chunk boundaries are deliberately invisible. `[DONE]` ends only
-/// its own event because some compatible gateways append a real terminal
-/// event after it. Unknown SSE fields and comments are ignored as in Python.
+/// Parse SSE data JSON across network chunks, ignoring unknown fields and comments;
+/// `[DONE]` ends only its event because compatible gateways may send a terminal event afterward.
 #[derive(Debug, Clone)]
 pub struct SseJsonParser {
     limit: usize,

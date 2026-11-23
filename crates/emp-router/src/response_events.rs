@@ -1,8 +1,5 @@
-//! Pull-based synthesis for a complete Responses JSON reply.
-//! Keep one source response and construct only the event the consumer requests.
-//! Already-delivered bytes consume no space here. Validate the source once;
-//! transport writes provide backpressure, and dropping the iterator cancels
-//! synthesis without producing the remaining events.
+//! Lazily synthesize one event per pull from a single validated response; dropping the
+//! iterator cancels synthesis, and transport writes provide backpressure.
 use super::{ProjectionIds, RouterError};
 use emp_protocol::portable_responses::validate_responses_body;
 use serde_json::{Map, Value, json};

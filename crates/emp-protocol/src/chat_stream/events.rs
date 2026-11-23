@@ -1,5 +1,3 @@
-//! Event construction and bounded delta accumulation for Chat streams.
-
 use super::*;
 
 impl ChatStream {

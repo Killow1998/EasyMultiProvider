@@ -1,5 +1,3 @@
-//! Windows icon/version resources: write the .rc script, compile it with the
-//! SDK's rc.exe, and verify the resources inside the built PE executable.
 use crate::Result;
 use std::fs;
 use std::path::{Path, PathBuf};

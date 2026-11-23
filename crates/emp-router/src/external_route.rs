@@ -1,5 +1,3 @@
-//! Complete and streamed external request execution.
-
 use super::*;
 
 const MAX_ANTHROPIC_PASSTHROUGH_BYTES: usize = 12 * 1024 * 1024;
@@ -150,10 +148,8 @@ impl<'a> ExternalRouter<'a> {
         })
     }
 
-    /// Send a native Anthropic Messages request through EMP's configured
-    /// transport and credentials while preserving its body and response bytes.
-    /// Only the configured upstream model and routing/auth headers are owned
-    /// by EMP; protocol headers emitted by the caller are allow-listed.
+    /// Preserve native Anthropic request and response bytes through configured transport and credentials;
+    /// EMP owns only the upstream model and routing/auth headers, and allow-lists caller protocol headers.
     pub async fn execute_anthropic_passthrough(
         &self,
         route: &ResolvedRoute,
@@ -213,8 +209,7 @@ impl<'a> ExternalRouter<'a> {
         }
 
         let mut upstream_body = body.clone();
-        // [1m] selects CLI context behavior; it is not part of an API model ID.
-        // Keep custom gateway mappings, but do not reintroduce the stripped tag.
+        // Strip the CLI-only [1m] tag while preserving custom gateway model mappings.
         let model = route.upstream_model.as_str();
         let suffix = model.len().saturating_sub(4);
         let model = if model

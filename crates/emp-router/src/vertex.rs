@@ -1,5 +1,3 @@
-//! Vertex AI routing and Google Cloud credentials.
-
 use super::*;
 use google_cloud_auth::credentials::{self, AccessTokenCredentials};
 use sha2::{Digest, Sha256};

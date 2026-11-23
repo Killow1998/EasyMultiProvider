@@ -1,4 +1,3 @@
-//! Request-local checkpoint decoding and visible history preparation.
 use crate::tool_pairs::normalize_tool_pairs;
 use crate::wire::{content_text, message, wire_item};
 use crate::{

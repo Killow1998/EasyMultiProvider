@@ -1,5 +1,3 @@
-//! Incremental external stream processing and Responses event synthesis.
-
 use super::*;
 
 impl ExternalStream {

@@ -1,5 +1,3 @@
-//! Terminal and output-item validation for portable Responses.
-
 use super::{ResponsesValidationError, TerminalObservation};
 use serde_json::{Map, Value};
 

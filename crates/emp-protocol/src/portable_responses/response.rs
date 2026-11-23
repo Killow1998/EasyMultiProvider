@@ -1,5 +1,3 @@
-//! Complete Responses projection from external upstream output.
-
 use super::tools::raw_tools;
 use super::{PLAINTEXT_REASONING_FIELDS, PortableProjectionError, error};
 use serde_json::{Map, Value, json};

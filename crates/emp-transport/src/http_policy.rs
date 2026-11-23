@@ -107,8 +107,7 @@ impl ProxyOrigin {
             host
         };
         let origin = format!("{}://{}:{}", target.scheme, host, port);
-        // Pool identity includes proxy credentials exactly as Python's manager
-        // key does, but only the digest survives planning or diagnostics.
+        // Pool identity includes proxy credentials, but planning and diagnostics retain only their digest.
         let token = safe_token(raw.to_owned());
         Ok(Self::Proxy { origin, token })
     }

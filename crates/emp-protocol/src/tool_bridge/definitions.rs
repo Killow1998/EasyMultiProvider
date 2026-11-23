@@ -1,4 +1,3 @@
-//! Projects supported tool definitions and explicit tool choices.
 use super::ExternalTools;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

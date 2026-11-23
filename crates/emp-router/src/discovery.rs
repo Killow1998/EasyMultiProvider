@@ -1,5 +1,3 @@
-//! Bounded model discovery for OpenAI-compatible provider catalogs.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use emp_state::{
@@ -348,8 +346,7 @@ fn created_timestamp(value: Option<&Value>) -> i64 {
     }
 }
 
-/// Python's `datetime.fromisoformat(date).timestamp()` interprets a date-only
-/// value at local midnight, including the offset in force on that date.
+/// Date-only values use local midnight with the offset in force on that date.
 fn local_date_timestamp(value: &str) -> Option<i64> {
     let bytes = value.as_bytes();
     if bytes.len() != 10

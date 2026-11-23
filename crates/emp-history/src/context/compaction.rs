@@ -29,8 +29,7 @@ where
         .remove(crate::ACTIVE_INPUT_START)
         .and_then(|value| value.as_u64())
         .and_then(|value| usize::try_from(value).ok());
-    // Every body built below replaces `input`; keep the key (and its position)
-    // but drop the original array so it is never cloned or re-serialised again.
+    // Preserve the input key's position but drop the old array to avoid cloning or serializing it again.
     let mut source = match projected.get_mut("input").map(Value::take) {
         Some(Value::Array(items)) => items,
         Some(Value::Object(item)) => vec![Value::Object(item)],

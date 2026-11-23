@@ -1,5 +1,3 @@
-//! Anthropic provider model discovery and projection.
-
 use super::*;
 
 pub async fn discover_anthropic_models(

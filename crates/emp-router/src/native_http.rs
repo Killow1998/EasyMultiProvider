@@ -1,6 +1,5 @@
-//! Complete native Responses HTTP forwarding over the shared connection pool.
-//! A request is projected once; retries retain that projection and credential
-//! snapshot except for explicit account refresh and effort fallback.
+//! Project each native request once; retries retain the request and credential snapshot
+//! except for explicit account refresh and effort fallback.
 
 use crate::discovery::python_json_error_message;
 use crate::native_metadata::{native_response_headers, rewrite_native_model_event};
@@ -212,8 +211,7 @@ impl<'a> NativeRouter<'a> {
         }
     }
 
-    /// Report decisions without depending on an application logger or exposing
-    /// request bodies, account credentials or upstream error text.
+    /// Report retry decisions without exposing request bodies, credentials or upstream error text.
     pub fn with_retry_observer(
         mut self,
         observer: &'a (dyn Fn(NativeRetryDecision) + Sync),

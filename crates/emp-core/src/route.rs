@@ -6,7 +6,6 @@ use url::{Host, Url};
 
 const DEFAULT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
-/// A configuration-resolution failure for user-selectable models.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteResolutionError {
     ProviderUnavailable(String),
@@ -46,9 +45,8 @@ impl From<ValidationError> for RouteResolutionError {
     }
 }
 
-/// Canonicalize an HTTP endpoint without retaining credentials, query data or
-/// fragments. The raw path is normalized lexically so Unicode path bytes hash
-/// exactly like Python's `urlsplit` plus `posixpath.normpath` implementation.
+/// Strip credentials, query and fragments, preserving raw Unicode path bytes
+/// under lexical normalization so endpoint fingerprints remain compatible.
 pub fn normalize_endpoint(endpoint: Option<&str>) -> String {
     let Some(input) = endpoint.map(str::trim).filter(|value| !value.is_empty()) else {
         return String::new();
@@ -166,8 +164,7 @@ fn protocol(provider: &Map<String, Value>) -> Result<Protocol, RouteResolutionEr
     }
 }
 
-/// Resolve the upstream identifier exactly once from a frozen provider/model
-/// snapshot.
+/// Resolve the upstream identifier once from a frozen provider/model snapshot.
 pub fn resolved_upstream_model(
     provider: &Map<String, Value>,
     model: &Map<String, Value>,
@@ -246,9 +243,7 @@ impl ResolvedRoute {
     }
 }
 
-/// Resolve an immutable request route from normalized configuration. Native
-/// catalog access is injected so `emp-core` remains free of filesystem and
-/// credential ownership.
+/// Resolve an immutable route using injected native catalog access, without filesystem or credential ownership.
 pub fn resolve_route<F>(
     config: &Value,
     model_id: &str,
@@ -349,10 +344,8 @@ where
         );
     }
 
-    // A single native forward provider is a fallback for an unqualified model
-    // name. Slash-qualified IDs belong to an explicit model or account route;
-    // refusing the fallback prevents stale and unknown account prefixes from
-    // being silently sent with the caller's forwarded credentials.
+    // Slash-qualified IDs require an explicit model/account route; forwarding unknown account prefixes
+    // through the single-provider fallback could send the caller's credentials to the wrong route.
     if model_id.contains('/') {
         return Err(RouteResolutionError::UnknownModel(model_id.to_owned()));
     }

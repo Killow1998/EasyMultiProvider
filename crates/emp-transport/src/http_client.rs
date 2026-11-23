@@ -123,11 +123,8 @@ impl HttpClientConfig {
         Ok(())
     }
 
-    /// Trust only roots supplied through [`Self::add_root_certificate_der`].
-    ///
-    /// The default merges configured roots with the platform trust store. This
-    /// opt-in mode is useful for hermetic deployments and deterministic TLS
-    /// tests where the platform verifier must not participate.
+    /// Trust only roots supplied through [`Self::add_root_certificate_der`], excluding platform roots;
+    /// the default mode merges configured roots with the platform trust store.
     pub fn use_only_configured_root_certificates(&mut self) -> Result<(), HttpTransportError> {
         if self.root_certificates.is_empty() {
             return Err(HttpTransportError::new(HttpTransportErrorKind::ClientBuild));
@@ -234,9 +231,7 @@ impl HttpClient {
             .await
     }
 
-    /// Open a request without following redirects and return redirect responses
-    /// as ordinary upstream statuses. This is for protocols that must preserve
-    /// a 3xx handshake rather than treating it as a transport failure.
+    /// Return redirects as ordinary upstream statuses, preserving protocols with 3xx handshakes.
     pub async fn open_status(
         &self,
         method: HttpMethod,
@@ -256,12 +251,8 @@ impl HttpClient {
         .await
     }
 
-    /// Follow bounded redirects only while they remain on the initial origin.
-    ///
-    /// Scheme, host, and effective port must all match the initial URL. This
-    /// prevents caller credentials, including provider-specific API-key
-    /// headers, from being forwarded to another origin or across a downgrade.
-    /// Redirects remain disabled for the default [`Self::open`] path.
+    /// Follow bounded redirects only on the initial scheme, host and effective port to prevent credential leaks;
+    /// default [`Self::open`] requests never follow redirects.
     pub async fn open_following_redirects(
         &self,
         method: HttpMethod,

@@ -1,5 +1,3 @@
-// Bounded, Python-compatible classifier for explicit context-length failures.
-
 use regex::Regex;
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -47,10 +45,7 @@ fn ordered_context_statement(text: &str) -> bool {
         .is_match(text)
 }
 
-// Upstream error payloads are small; these bounds keep hostile or merely large
-// bodies (for example a streamed event carrying a whole response) from making
-// classification super-linear. Real error payloads are read with a 4 KiB
-// prefix, so the per-text cap does not lose evidence on error paths.
+// Bound classification work for large bodies while retaining the 4 KiB error prefix.
 const MAX_EVIDENCE_TEXT_CHARS: usize = 4 * 1024;
 const MAX_EVIDENCE_TOTAL_CHARS: usize = 64 * 1024;
 const MAX_EVIDENCE_DEPTH: usize = 32;
@@ -76,8 +71,7 @@ fn truncated_chars(text: &str, limit: usize) -> &str {
         .map_or(text, |(offset, _)| &text[..offset])
 }
 
-/// Whether the Python rendering of `value` stays within `limit` characters,
-/// visiting at most about `limit` nodes/characters before giving up.
+/// Bound rendering work by the remaining node/character budget.
 fn renders_within(value: &Value, limit: &mut usize) -> bool {
     let cost = match value {
         Value::String(text) => text.len().saturating_add(2),
@@ -112,9 +106,7 @@ fn renders_within(value: &Value, limit: &mut usize) -> bool {
     }
 }
 
-/// Lowercased Python `str()` of a value, bounded to the examined prefix.
-/// Composite values too large to render cheaply are skipped; their nested
-/// keys are still inspected structurally.
+/// Skip oversized composite rendering; nested keys remain structurally searchable.
 fn evidence_text(item: &Value) -> Option<String> {
     match item {
         Value::String(text) => Some(truncated_chars(text, MAX_EVIDENCE_TEXT_CHARS).to_lowercase()),

@@ -1,5 +1,3 @@
-//! Google generateContent conversion for Vertex connections.
-
 use super::*;
 use serde_json::json;
 

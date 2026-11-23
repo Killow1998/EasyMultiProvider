@@ -1,4 +1,3 @@
-//! Build and smoke-test one native EMP distribution into `artifacts/`.
 use crate::{
     PRODUCT_NAME, Result, VERSION, copy, make_executable, project_root, run_command, windows,
 };

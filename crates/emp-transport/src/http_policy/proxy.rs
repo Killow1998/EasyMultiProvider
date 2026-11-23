@@ -1,5 +1,3 @@
-//! Environment, system, and explicit proxy selection.
-
 use super::*;
 use std::sync::Arc;
 
@@ -290,9 +288,7 @@ impl ProxyPolicy {
         Self::dynamic_with_resolver(|| ProxyEnvironment::capture_current().environment)
     }
 
-    /// Build a policy with an injectable resolver. Existing request plans keep
-    /// the resolved proxy URL they were created with; later plans call this
-    /// resolver again.
+    /// Existing request plans keep their proxy; new plans call this resolver again.
     pub fn dynamic_with_resolver<F>(resolver: F) -> Self
     where
         F: Fn() -> ProxyEnvironment + Send + Sync + 'static,

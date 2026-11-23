@@ -18,10 +18,8 @@ impl<'de> Deserialize<'de> for OpaqueJson {
 }
 
 impl OpaqueJson {
-    /// Maximum serialized provider or model snapshot size.
     pub const MAX_BYTES: usize = 64 * 1024 * 1024;
 
-    /// Validate and retain an opaque JSON object.
     pub fn new(value: Map<String, Value>) -> Result<Self, OpaqueJsonError> {
         Self::with_limit(value, Self::MAX_BYTES)
     }
@@ -78,7 +76,6 @@ impl fmt::Display for OpaqueJsonError {
 
 impl std::error::Error for OpaqueJsonError {}
 
-/// Validation failures for immutable route records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     EmptyField(&'static str),

@@ -137,16 +137,14 @@ fn contains_image(value: &Value, depth: usize) -> Option<bool> {
     }
 }
 
-/// Serialized size of one JSON value in the token estimator's terms: bytes
-/// after image redaction plus the number of redacted images.
+/// Token-estimation cost: serialized bytes after image redaction and the redacted image count.
 #[derive(Clone, Copy, Default)]
 pub(super) struct JsonCost {
     bytes: u64,
     images: u64,
 }
 
-/// Mirrors `estimate_json_tokens` for a value nested `depth` levels deep, so
-/// per-item costs sum to the estimate of the enclosing array.
+/// Per-item costs at `depth` sum to the enclosing array's token estimate.
 pub(super) fn json_cost(value: &Value, depth: usize) -> Option<JsonCost> {
     match contains_image(value, depth)? {
         false => Some(JsonCost {
@@ -164,8 +162,7 @@ pub(super) fn json_cost(value: &Value, depth: usize) -> Option<JsonCost> {
     }
 }
 
-/// Token estimate of a request whose `input` array grows one item at a time,
-/// computed without re-serialising the request for every candidate.
+/// Incremental input token estimates avoid re-serializing the request for each candidate.
 #[derive(Clone, Copy)]
 pub(super) struct IncrementalEstimate {
     total: Option<JsonCost>,
@@ -185,7 +182,6 @@ impl IncrementalEstimate {
         let mut total = self.total?;
         let mut items = self.items;
         for cost in costs {
-            // One separating comma per item beyond the first.
             let comma = u64::from(items > 0);
             total.bytes = total.bytes.checked_add(cost.bytes)?.checked_add(comma)?;
             total.images = total.images.saturating_add(cost.images);

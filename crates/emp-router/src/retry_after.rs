@@ -1,5 +1,3 @@
-//! Normalize upstream retry advice before it affects routing or public headers.
-
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
 
 /// Accept bounded numeric or HTTP-date retry advice and round up to seconds.
@@ -23,8 +21,7 @@ fn parse_at(value: Option<&str>, now: OffsetDateTime) -> Option<u64> {
     (delay.is_finite() && delay >= 0.0 && delay <= u64::MAX as f64).then(|| delay.ceil() as u64)
 }
 
-// Python's email.utils.parsedate_to_datetime also accepts the obsolete
-// RFC 850 HTTP-date form. It is still sent by some gateways.
+// Some gateways still send the obsolete RFC 850 HTTP-date form.
 fn parse_rfc850(value: &str) -> Option<OffsetDateTime> {
     let (weekday, rest) = value.split_once(", ")?;
     if !matches!(

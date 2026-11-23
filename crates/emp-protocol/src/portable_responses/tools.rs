@@ -1,4 +1,3 @@
-//! Portable Responses tool schemas and projection errors.
 use super::{PortableProjectionError, error, python_string};
 use crate::tool_definitions::{RawTool, collect_tools, custom_tool_parameters};
 use serde_json::{Map, Value, json};

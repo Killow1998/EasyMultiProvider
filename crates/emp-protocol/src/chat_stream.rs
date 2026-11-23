@@ -1,5 +1,3 @@
-//! Stateful Chat Completions stream projection.
-
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

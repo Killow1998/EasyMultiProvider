@@ -1,6 +1,3 @@
-//! Immutable route identities and bounded provider/model snapshots shared by
-//! routing, protocol projection and catalog presentation.
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fmt;
@@ -18,7 +15,6 @@ pub use route::{
     resolved_upstream_model,
 };
 
-/// How a route was selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteSource {
@@ -38,9 +34,7 @@ pub enum Dialect {
     AnthropicMessages,
 }
 
-/// A configured protocol identity.  `Auto` is retained because route
-/// resolution is an observation over configuration; concrete protocol
-/// selection happens later and may attempt multiple transports.
+/// Keep Auto until protocol negotiation, which may try multiple transports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Protocol {
@@ -75,11 +69,8 @@ fn valid_deployment_identity(value: &str) -> bool {
         })
 }
 
-/// Immutable route snapshot produced after configuration resolution.
-///
-/// Provider and model snapshots are opaque so unknown configuration fields are
-/// preserved.  Request-local changes must clone those snapshots rather than
-/// mutating the route.
+/// Immutable route snapshot preserving unknown provider/model fields;
+/// request-local changes must clone snapshots rather than mutate the route.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedRoute {
     pub requested_model: String,
@@ -95,8 +86,7 @@ pub struct ResolvedRoute {
 }
 
 impl ResolvedRoute {
-    /// Construct and validate a route.  Fingerprints and identity fields are
-    /// checked so later components cannot silently lose their provenance.
+    /// Validate route fingerprints and identity fields to retain provenance.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         requested_model: impl Into<String>,

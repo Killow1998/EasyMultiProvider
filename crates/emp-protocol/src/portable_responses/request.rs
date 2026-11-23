@@ -1,4 +1,3 @@
-//! Top-level Responses request policy and portable request assembly.
 use super::input::portable_input;
 use super::tools::{portable_tools, raw_tools};
 use super::{PortableProjectionError, error};

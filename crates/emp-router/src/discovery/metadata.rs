@@ -1,8 +1,6 @@
-//! Gemini model-specific limit lookup used by the management UI.
 use super::*;
 
-/// Fetch the limits for a single Gemini model, matching the UI's metadata
-/// operation. Other provider families do not publish this standard endpoint.
+/// Fetch per-model Gemini limits from the metadata endpoint unavailable to other provider families.
 pub async fn model_metadata(
     client: &HttpClient,
     provider: &Map<String, Value>,

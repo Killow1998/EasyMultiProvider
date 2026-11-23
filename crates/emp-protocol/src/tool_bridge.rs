@@ -67,9 +67,7 @@ impl ExternalTools {
         }
     }
 
-    /// Borrow ordinary request bodies that require no tool namespace bridge.
-    /// Tool-bearing requests retain the existing owned projection and identity
-    /// bookkeeping used by response restoration.
+    /// Borrow bridge-free requests; otherwise own the projection and response-restoration identities.
     pub fn prepare_or_borrow<'a>(
         &mut self,
         body: &'a Value,

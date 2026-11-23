@@ -1,10 +1,7 @@
-//! Native Responses SSE framing and stream state.
-
 use super::*;
 
 fn may_carry_context_error(event: &Value) -> bool {
-    // OpenAI-compatible gateways also stream bare `{"error":{...}}` events
-    // without a `type`; ordinary content events never carry an error object.
+    // Gateways may send {"error": {...}} without a type; content events never carry an error object.
     matches!(
         event.get("type").and_then(Value::as_str),
         Some("error" | "response.failed" | "response.incomplete")
@@ -72,9 +69,7 @@ impl NativeStream {
             self.raw_body.extend_from_slice(chunk);
         }
         self.line_buffer.extend_from_slice(chunk);
-        // Scan each byte once: lines are consumed through a moving offset and
-        // the buffer is compacted a single time per chunk. Bytes left over
-        // from previous chunks are already known to contain no newline.
+        // Scan only new bytes and compact once per chunk to keep framing linear.
         let buffer = std::mem::take(&mut self.line_buffer);
         let mut start = 0;
         let mut scan = self.line_scanned.min(buffer.len());
