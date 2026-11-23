@@ -75,7 +75,11 @@ impl OfficialModels {
     }
 
     /// Refresh known modalities without resetting saved limits or reasoning settings.
-    pub fn enrich_saved_models(&self, provider: &Map<String, Value>, models: Vec<Value>) -> Vec<Value> {
+    pub fn enrich_saved_models(
+        &self,
+        provider: &Map<String, Value>,
+        models: Vec<Value>,
+    ) -> Vec<Value> {
         enrich_models(provider, models, true, &self.registry)
     }
 
@@ -383,4 +387,3 @@ fn normalize_url(value: &str) -> String {
     };
     format!("{}://{host}{port}{path}", value.scheme())
 }
-

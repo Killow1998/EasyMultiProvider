@@ -24,9 +24,9 @@ pub fn request_for_model(
                 let id = result["tool_call_id"]
                     .as_str()
                     .expect("projected tool result ID");
-                let (name, order) = names.get(id).ok_or_else(|| {
-                    request_error("Gemini tool result has no corresponding call")
-                })?;
+                let (name, order) = names
+                    .get(id)
+                    .ok_or_else(|| request_error("Gemini tool result has no corresponding call"))?;
                 responses.push((*order, json!({"functionResponse":{"name":name,"response":{"result":result["content"]}}})));
                 current = if messages.peek().is_some_and(|next| next["role"] == "tool") {
                     messages.next()

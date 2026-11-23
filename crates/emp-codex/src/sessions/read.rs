@@ -12,7 +12,7 @@ pub(crate) use visible::{token, uuid_shape};
 mod checkpoint;
 mod lines;
 mod location;
-mod read;
+mod reader;
 mod records;
 mod replay;
 mod reverse;

@@ -74,9 +74,8 @@ pub(crate) fn details(status: u16, content_type: &str, raw: &[u8]) -> (Option<St
     if detail.trim().is_empty() {
         detail = "Upstream returned an empty error response.".to_owned();
     }
-    detail = emp_domain::redaction::redact_sensitive_text(&format!(
-        "HTTP {status}{metadata}: {detail}"
-    ));
+    detail =
+        emp_domain::redaction::redact_sensitive_text(&format!("HTTP {status}{metadata}: {detail}"));
     detail = detail.split_whitespace().collect::<Vec<_>>().join(" ");
     if detail.chars().count() > 512 {
         detail = detail

@@ -595,7 +595,10 @@ fn declared_source(declared: bool) -> Value {
 fn discovered_modalities(raw: Option<&Value>) -> (Vec<String>, Value) {
     match parse_modalities(raw) {
         Some(values) => (values, source("advertised")),
-        None => (vec![emp_domain::TEXT_MODALITY.to_owned()], source("unknown")),
+        None => (
+            vec![emp_domain::TEXT_MODALITY.to_owned()],
+            source("unknown"),
+        ),
     }
 }
 

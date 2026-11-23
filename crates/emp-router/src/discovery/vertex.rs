@@ -18,10 +18,8 @@ pub(super) async fn discover(
                 "Vertex API Key is not configured",
             ));
         }
-        let models = official_models.enrich_discovered_models(
-            provider,
-            api_key_candidates(vertex_models, official_models),
-        );
+        let models = official_models
+            .enrich_discovered_models(provider, api_key_candidates(vertex_models, official_models));
         if provider["vertex"]["project"] == "" {
             return verify_express_models(client, provider, models).await;
         }
