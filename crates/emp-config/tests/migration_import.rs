@@ -139,7 +139,8 @@ fn reimporting_an_external_connection_keeps_all_published_names() {
     let reloaded = load_configuration(Some(&path)).unwrap();
     for name in ["Old name", "Current", "Remote old", "Imported"] {
         assert_eq!(
-            emp_config::config::resolve_client_model(&reloaded, &format!("{name}/model")).as_deref(),
+            emp_config::config::resolve_client_model(&reloaded, &format!("{name}/model"))
+                .as_deref(),
             Some("local/model"),
             "{name}"
         );

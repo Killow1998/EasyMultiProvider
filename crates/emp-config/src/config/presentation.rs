@@ -29,7 +29,8 @@ pub(super) fn normalize_memory_effort<'a>(
     match raw {
         None => Ok(""),
         Some(Value::String(effort))
-            if effort.is_empty() || emp_domain::model_values::is_concrete_reasoning_effort(effort) =>
+            if effort.is_empty()
+                || emp_domain::model_values::is_concrete_reasoning_effort(effort) =>
         {
             Ok(effort)
         }
