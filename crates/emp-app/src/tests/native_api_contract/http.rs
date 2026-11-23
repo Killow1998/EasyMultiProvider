@@ -504,7 +504,7 @@ fn shared_account_401_never_enters_credential_refresh() {
         );
         assert_eq!(std::fs::read(&auth_path).unwrap(), original);
         server.shutdown().unwrap();
-        let events = crate::tests::internal_events_contract::journal(directory.path());
+        let events = crate::tests::internal_events_contract::final_journal(directory.path());
         assert!(!events.iter().any(|event| event["event"] == "quota_refresh"));
     }
 }
