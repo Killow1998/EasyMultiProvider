@@ -12,8 +12,7 @@ pub(super) fn run(state: Arc<ServerState>) {
                 _ = interval.tick() => {}
             }
             if state.backend.activity.is_idle() {
-                // Idle is a scheduling hint; malloc_trim is thread-safe and
-                // releases only whole free pages, including arena interiors.
+                // SAFETY: malloc_trim is thread-safe and only releases free allocator pages.
                 unsafe { libc::malloc_trim(0) };
             }
         }

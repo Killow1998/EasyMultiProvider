@@ -243,7 +243,6 @@ pub(crate) fn request(
             }
         }
         outcome.observe_upstream(&reported);
-        // HTTP status is authoritative, including bodies that contain a status field.
         outcome.http_status(status);
     }
     outcome.finish();

@@ -454,7 +454,6 @@ fn merge_import(
 /// A decrypted, validated `.emp` bundle, ready for [`apply_migration_import`].
 pub struct DecryptedMigration(ValidatedImport);
 
-/// Validate an already decrypted selection before the existing import transaction.
 pub fn validate_migration_payload(payload: &Value) -> MigrationResult<DecryptedMigration> {
     validate_import_payload(payload).map(DecryptedMigration)
 }
@@ -482,7 +481,6 @@ pub fn preview_migration_import(
     merge_import(current, validated, config_path, vault, preview_auth)
 }
 
-/// Decrypt, validate, merge and durably import a `.emp` bundle.
 pub fn import_migration_bundle(
     current: &Value,
     bundle: &[u8],

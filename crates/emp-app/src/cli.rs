@@ -179,7 +179,6 @@ fn serve(
         emp_state::config::resolve_user_path(config.parent().unwrap_or(std::path::Path::new(".")))
             .join(config.file_name().ok_or(AppError::ServerStopped)?);
     loop {
-        // Invalid saved configuration must still reach the recovery UI.
         let configured =
             emp_state::load_configuration(Some(&config)).unwrap_or_else(|_| serde_json::json!({}));
         let host = host
@@ -204,7 +203,6 @@ fn serve(
             return Err(error);
         }
         if crate::startup_recovery::external_key() {
-            // Developer overrides cannot be repaired by clearing local state.
             eprintln!(
                 "EMP uses an external master key override. Correct EASY_MULTI_PROVIDER_MASTER_KEY or EASY_MULTI_PROVIDER_MASTER_KEY_FILE before restarting. Local settings were not reset."
             );
@@ -298,7 +296,6 @@ pub(crate) fn run() -> Result<ExitCode, String> {
                 .map_err(|error| error.to_string());
         }
         Cli::MigrateConfig { source, target } => {
-            // The installer reports the backup directory printed here.
             let backup = migrate::migrate(&source, &target)
                 .map_err(|error| format!("configuration migration failed: {error}"))?;
             if let Some(backup) = backup {

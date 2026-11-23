@@ -34,7 +34,6 @@ pub(super) fn restore_memory_usage(
     for record in missing {
         let mut event: Value = serde_json::from_str(record["facts"].as_str().ok_or(UsageError)?)
             .map_err(|_| UsageError)?;
-        // Older receipts retained the turn/model under their request-field names.
         if event["usage_turn"].is_null() {
             event["usage_turn"] = event["turn_id"].clone();
         }
@@ -50,8 +49,7 @@ pub(super) fn restore_memory_usage(
     Ok(())
 }
 
-// Explicit fields only: no prompts, arbitrary errors, credentials or response bodies.
-fn facts(event: &Value) -> Value {
+fn allowlisted_facts(event: &Value) -> Value {
     let mut result = Map::new();
     for field in [
         "request_id",
@@ -256,7 +254,7 @@ impl UsageLedger {
         if id.is_empty() || id.len() > 256 || !started.is_finite() || !finished.is_finite() {
             return Err(UsageError);
         }
-        let mut record = facts(event);
+        let mut record = allowlisted_facts(event);
         if let Ok(values) = self.values(event, finished)
             && let Some(SqlValue::Text(id)) = values.first()
         {

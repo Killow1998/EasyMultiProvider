@@ -70,7 +70,6 @@ fn load_native_catalog_from_map(config: &Map<String, Value>) -> Value {
             .and_then(Value::as_str)
             .is_some_and(|etag| etag.trim_matches('"').starts_with("emp-"))
     };
-    // Only genuine Codex refreshes may reseed the native snapshot, regardless of cache age.
     let modified = |path: &Path| fs::metadata(path).and_then(|meta| meta.modified()).ok();
     let codex_is_newer = modified(&path)
         .zip(modified(&preserved_path))

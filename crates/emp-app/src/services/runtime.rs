@@ -81,7 +81,7 @@ pub(crate) fn sync_runtime(
     verify: bool,
 ) -> Result<RuntimeSyncResult, String> {
     let integration = &state.backend.integration;
-    let operation = integration
+    let snapshot_operation = integration
         .manager
         .operation_lock()
         .map_err(|error| error.to_string())?;
@@ -150,9 +150,7 @@ pub(crate) fn sync_runtime(
         }
         (data.intent.clone(), data.expected.clone())
     };
-    // Runtime discovery can wait on another process. Only the local snapshot
-    // needs the integration operation lock.
-    drop(operation);
+    drop(snapshot_operation);
     let result = if !verify && !confirmed {
         RuntimeSyncResult::new(
             "reload_required",
@@ -283,19 +281,15 @@ pub(crate) fn mark_active_pending(state: &ServerState, detail: &str) {
     }
 }
 
-/// Codex asks for the model list before it swaps the new one in.
-const CODEX_SETTLE: Duration = Duration::from_secs(2);
-/// A Codex still on an old catalog keeps sending requests; check it at most this often.
-const CODEX_RECHECK_GAP: Duration = Duration::from_secs(30);
+const CODEX_CATALOG_APPLY_DELAY: Duration = Duration::from_secs(2);
+const CODEX_CATALOG_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Wake the runtime watcher on Codex traffic and publish results through the page's event stream.
 #[derive(Default)]
 pub(crate) struct RuntimeWatch {
     pending: Mutex<bool>,
     wake: Condvar,
 }
 
-/// Codex just reached EMP, so it may have restarted with EMP's settings.
 pub(crate) fn codex_contacted(state: &ServerState) {
     let watch = &state.backend.integration.watch;
     if let Ok(mut pending) = watch.pending.lock() {
@@ -338,9 +332,9 @@ pub(crate) fn watch_runtime(state: &ServerState) {
             };
         }
         let gap = last_check.map_or(Duration::ZERO, |at| {
-            CODEX_RECHECK_GAP.saturating_sub(at.elapsed())
+            CODEX_CATALOG_RECHECK_INTERVAL.saturating_sub(at.elapsed())
         });
-        let deadline = Instant::now() + CODEX_SETTLE.max(gap);
+        let deadline = Instant::now() + CODEX_CATALOG_APPLY_DELAY.max(gap);
         loop {
             if state.shutdown.load(Ordering::Acquire) {
                 return;

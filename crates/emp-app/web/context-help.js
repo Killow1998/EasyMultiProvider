@@ -1,4 +1,3 @@
-// Describe the same catalog budget Codex reads; never treat the trigger as a compression ratio.
 function createContextHelp({getState, tr}) {
   const number = value => Math.floor(value).toLocaleString('en-US');
   function budget(model, tokens, {custom = false, external = false} = {}) {

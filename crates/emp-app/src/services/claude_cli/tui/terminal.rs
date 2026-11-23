@@ -100,7 +100,7 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         #[cfg(unix)]
         if let Some(pid) = self.child.process_id() {
-            // The PTY child owns its session; no user's terminal group is targeted.
+            // SAFETY: kill accepts scalar arguments; the PTY child owns the targeted process group.
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }

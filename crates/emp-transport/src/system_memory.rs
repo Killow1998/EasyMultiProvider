@@ -59,16 +59,16 @@ fn mac_status_from_statistics(
     count: libc::mach_msg_type_number_t,
     page_size: u64,
 ) -> Option<MemoryStatus> {
-    // Older kernels return a shorter revision. Only require the fields we read.
-    const REQUIRED_WORDS: usize = (std::mem::offset_of!(libc::vm_statistics64, inactive_count)
-        + std::mem::size_of::<libc::natural_t>())
-    .div_ceil(std::mem::size_of::<libc::integer_t>());
-    if result != libc::KERN_SUCCESS || (count as usize) < REQUIRED_WORDS {
+    const WORDS_THROUGH_INACTIVE_COUNT: usize =
+        (std::mem::offset_of!(libc::vm_statistics64, inactive_count)
+            + std::mem::size_of::<libc::natural_t>())
+        .div_ceil(std::mem::size_of::<libc::integer_t>());
+    if result != libc::KERN_SUCCESS || (count as usize) < WORDS_THROUGH_INACTIVE_COUNT {
         return None;
     }
-    // libc models Apple's packed structure. Read fields unaligned to avoid
-    // creating references to packed members.
+    // SAFETY: addr_of! and read_unaligned read the initialized packed counter without creating a reference.
     let free_pages = unsafe { std::ptr::addr_of!(statistics.free_count).read_unaligned() } as u64;
+    // SAFETY: addr_of! and read_unaligned read the initialized packed counter without creating a reference.
     let inactive_pages =
         unsafe { std::ptr::addr_of!(statistics.inactive_count).read_unaligned() } as u64;
     let available = bytes_from_pages(free_pages, inactive_pages, page_size)?;

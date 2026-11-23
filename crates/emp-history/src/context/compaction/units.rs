@@ -1,4 +1,3 @@
-//! Atomic turn and tool-pair boundaries; a tool result stays with its call.
 use serde_json::Value;
 use std::collections::BTreeSet;
 

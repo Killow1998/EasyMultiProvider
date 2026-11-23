@@ -1,5 +1,3 @@
-// One statistics window owns common filters, reads, refresh and chart disposal.
-// Call details and model performance keep their existing report owner/pagination.
 function createStatistics({api,$,tr,esc,getState,getLanguage,openModal,callReports,serviceName,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport}) {
   const {number,seconds,tps,rate,outcomes,bindOutcomes} = callReports;
   const chart=createPerformanceChart({esc,tr,getLanguage,number,seconds,tps});

@@ -17,6 +17,7 @@ const SIDEBAND_MANAGED_FIELDS: [&str; 3] = [
 ];
 const LEASE_SCHEMA: &str = "easy-multi-provider.integration-lease";
 const LEGACY_LEASE_VERSION: u64 = 2;
+const SIDEBAND_LEASE_VERSION: u64 = 3;
 const LEASE_VERSION: u64 = 4;
 
 impl IntegrationManager {
@@ -61,11 +62,14 @@ impl IntegrationManager {
             .map_err(|_| IntegrationError("unable to read integration lease"))?;
         let lease_fields: &[&str] = match lease.version {
             LEGACY_LEASE_VERSION => &LEGACY_MANAGED_FIELDS,
-            3 => &SIDEBAND_MANAGED_FIELDS,
+            SIDEBAND_LEASE_VERSION => &SIDEBAND_MANAGED_FIELDS,
             _ => &MANAGED_FIELDS,
         };
         let known_shape = lease.schema == LEASE_SCHEMA
-            && matches!(lease.version, LEGACY_LEASE_VERSION | 3 | LEASE_VERSION)
+            && matches!(
+                lease.version,
+                LEGACY_LEASE_VERSION | SIDEBAND_LEASE_VERSION | LEASE_VERSION
+            )
             && lease.config_path == absolute(&self.config_path)?.to_string_lossy()
             && matches!(
                 lease.status.as_str(),
@@ -93,13 +97,12 @@ impl IntegrationManager {
     pub(super) fn write_lease(&self, lease: &LeaseRecord) -> Result<(), IntegrationError> {
         let mcp_override = lease.status != "restored"
             && lease.fields[IMAGE_MCP_FIELD].original != lease.fields[IMAGE_MCP_FIELD].applied;
-        // Ordinary and restored leases remain readable by older EMP versions.
         let mut legacy;
         let persisted = if mcp_override {
             lease
         } else {
             legacy = lease.clone();
-            legacy.version = 3;
+            legacy.version = SIDEBAND_LEASE_VERSION;
             legacy
                 .fields
                 .retain(|name, _| SIDEBAND_MANAGED_FIELDS.contains(&name.as_str()));

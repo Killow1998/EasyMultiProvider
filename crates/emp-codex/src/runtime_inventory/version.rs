@@ -117,7 +117,8 @@ fn probe(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+        command.creation_flags(CREATE_NO_WINDOW);
     }
     if let Some(directory) = launch_directory {
         match super::launcher::path_with_node(&directory, inherited_path.clone()) {

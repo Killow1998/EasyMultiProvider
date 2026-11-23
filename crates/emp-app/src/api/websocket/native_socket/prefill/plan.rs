@@ -1,4 +1,3 @@
-//! Pure whole-item boundaries. Borrow history; allocate only the current wire batch.
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 use std::io::{self, Write};
@@ -67,11 +66,8 @@ impl<'a> Prefill<'a> {
         let mut boundaries = Vec::new();
         for (index, item) in input.iter().enumerate() {
             match item["type"].as_str().unwrap_or("message") {
-                // Codex's server-owned search results have no client call/output
-                // obligation. Preserve each opaque item without manufacturing a pair.
                 "tool_search_call" | "tool_search_output" if item["execution"] == "server" => {}
                 "web_search_call" | "image_generation_call" if item["status"] == "completed" => {}
-                // App page context is injected without a tool invocation.
                 "function_call_output"
                     if item.get("call_id").is_none()
                         && item["namespace"] == "agent"
@@ -89,7 +85,6 @@ impl<'a> Prefill<'a> {
                         return None;
                     }
                 }
-                // Unknown tool protocols may have dependencies we cannot infer.
                 kind if kind.ends_with("_call") || kind.ends_with("_output") => return None,
                 _ => {}
             }

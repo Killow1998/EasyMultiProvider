@@ -1,4 +1,3 @@
-// Service-owned lifetime summaries and service-type/model usage breakdowns.
 function createServiceUsage({esc, tr, number, dateTime, renderLifetime}) {
   const fields = ['requests', 'reported_requests', 'priced_requests', 'unpriced_requests', 'input_reports', 'output_reports',
     'input_tokens', 'output_tokens', 'cost_nanos', 'cache_reports', 'cached_input_tokens',

@@ -224,8 +224,6 @@ impl NativeSession {
                             .ok()
                             .is_some_and(|value| value["type"] == "response.interrupt")
                         {
-                            // The active upstream owns response_id validation and
-                            // interrupt acknowledgement. Preserve all control fields.
                             if let Err(error) = client.send_text(&text) {
                                 websocket.observation.native_continuation().transport_error =
                                     Some(error.to_string());
@@ -236,8 +234,6 @@ impl NativeSession {
                                 "request_id":crate::services::observation::request::request_id(request_headers)
                             }));
                         } else {
-                            // Preserve the next request for the ordinary route and
-                            // scope checks; never dispatch two turns concurrently.
                             *pending_request = Some(text);
                         }
                         continue;
@@ -250,8 +246,6 @@ impl NativeSession {
                     if emp_protocol::native_responses::remove_inline_input_ids(&mut retry_payload)
                         > 0
                     {
-                        // A 400 before response creation has not executed the task.
-                        // Keep this adaptation local to the selected upstream socket.
                         replay_allowed = false;
                         upstream.replay_inline_ids = true;
                         usage.native_retry(emp_router::native_http::NativeRetryDecision {
@@ -308,7 +302,6 @@ impl NativeSession {
                         .map(str::to_owned);
                 }
                 usage.observe_upstream(&event);
-                // Only successful generated turns calibrate native WebSocket context.
                 if request_body.get("generate") != Some(&Value::Bool(false))
                     && crate::services::context::outcome(&event) == Some(true)
                 {
@@ -344,8 +337,6 @@ impl NativeSession {
                 && client.peer_close_code() == Some(1009)
                 && previous.is_none()
             {
-                // A pre-event size rejection permits full HTTP/zstd replay.
-                // Incremental turns still require previous-response recovery.
                 native_connections.defer(route_key.clone());
                 *native_upstream = None;
                 *last_native_response_id = None;

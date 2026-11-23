@@ -45,8 +45,7 @@ impl IntegrationManager {
         self
     }
 
-    /// Exit handlers have an OS deadline; interactive operations retain the
-    /// normal timeout. This only changes waiting, never lock ownership.
+    /// Set the lock-acquisition wait timeout without changing lock ownership.
     pub fn with_lock_timeout(mut self, timeout: Duration) -> Self {
         self.lock_timeout = timeout;
         self
@@ -255,9 +254,8 @@ impl IntegrationManager {
         self.restore_inner(false)
     }
 
-    /// Exit removes only unchanged overrides belonging to this instance. An
-    /// externally edited field is retained and reported as a conflict, without
-    /// leaving our other fields pointing to a listener that is about to stop.
+    /// Restore only unchanged overrides owned by this instance;
+    /// retain and report externally edited fields as conflicts.
     pub fn restore_owned_fields(&self) -> Result<IntegrationResult, IntegrationError> {
         self.restore_inner(true)
     }

@@ -97,7 +97,6 @@ impl Iterator for ResponseEvents {
         loop {
             match self.phase {
                 Phase::Created => {
-                    // Copy metadata without first cloning the entire output array.
                     let mut created: Map<String, Value> = self
                         .response
                         .as_object()

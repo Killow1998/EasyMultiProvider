@@ -1,5 +1,3 @@
-//! Reserve the projected JSON size before writing large conversation histories.
-
 use serde_json::Value;
 
 fn unescaped_json_size(value: &Value) -> usize {
@@ -25,7 +23,6 @@ fn unescaped_json_size(value: &Value) -> usize {
 }
 
 pub(super) fn encode_projected_request(value: &Value) -> Vec<u8> {
-    // Preallocate a lower bound (exact for ordinary text) to avoid doubling large history buffers.
     let mut encoded = Vec::with_capacity(unescaped_json_size(value));
     serde_json::to_writer(&mut encoded, value).expect("JSON value into memory");
     encoded

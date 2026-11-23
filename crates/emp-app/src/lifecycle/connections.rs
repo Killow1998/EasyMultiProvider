@@ -27,9 +27,6 @@ pub(super) fn accept(listener: TcpListener, state: Arc<ServerState>) {
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) => {
-                // EMFILE/ENFILE and transient accept errors must not silently
-                // drop the listener while existing WebSockets keep running.
-                // Rate-limit diagnostics and back off instead of spinning.
                 if last_error.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(5)) {
                     state.backend.diagnostics.journal.event("warning", "listener_accept_failed", &serde_json::json!({
                         "os_error":error.raw_os_error(), "error_kind":format!("{:?}", error.kind()),

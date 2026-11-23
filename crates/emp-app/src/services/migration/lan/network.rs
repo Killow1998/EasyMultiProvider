@@ -3,7 +3,6 @@ use if_addrs::{IfOperStatus, Interface};
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 
 fn route_address() -> Option<Ipv4Addr> {
-    // UDP connect selects a route without sending a packet.
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
     match socket.local_addr().ok()?.ip() {
@@ -47,7 +46,6 @@ fn select(interfaces: Vec<Interface>, route: Option<Ipv4Addr>) -> Option<Ipv4Add
                     .any(|part| name.contains(part));
             Some((virtual_network, Some(address) != route, address))
         })
-        // Prefer a LAN interface over a VPN/TUN default route.
         .min()
         .map(|(_, _, address)| address)
 }

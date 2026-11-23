@@ -152,7 +152,6 @@ pub(crate) fn run_server(
         );
         let bootstrap_url = server.bootstrap_url();
         println!("Open in browser: {bootstrap_url}");
-        // Update and rollback keep the existing browser session and tab.
         let initial_launch = markers.ready_path.is_none() && !markers.rolled_back;
         if open_browser && initial_launch && !crate::cli::desktop::open_browser(&bootstrap_url) {
             println!("Browser did not open automatically; use the URL above.");
@@ -164,8 +163,6 @@ pub(crate) fn run_server(
         }
         Ok::<bool, std::io::Error>(signals.external_exit())
     });
-    // Only the updater's own handoff retains integration. Closing a terminal
-    // during an update still restores native routing before this process exits.
     let handoff =
         matches!(result, Ok(false)) && server.state.updates.snapshot().state == "installing";
     if handoff {

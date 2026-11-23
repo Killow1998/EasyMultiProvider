@@ -84,7 +84,6 @@ pub(super) fn resolve(
             ("hidden_models", "visibility"),
             ("model_context_windows", "context"),
         ] {
-            // Omitted settings (e.g. disabled context transfer) keep the destination.
             if record["metadata"].get(field).is_none() {
                 selected[field] = existing[field].clone();
                 continue;
@@ -127,7 +126,6 @@ pub(super) fn resolve(
         }
         record["metadata"]["hidden_models"] = selected["hidden_models"].clone();
         record["metadata"]["model_context_windows"] = selected["model_context_windows"].clone();
-        // Update every verified reference, while retaining credentials and route IDs.
         for (peer, auth) in &credentials {
             if emp_state::same_account_auth(auth, &record["auth"]) {
                 result.updates.insert(peer.clone(), selected.clone());
@@ -135,7 +133,6 @@ pub(super) fn resolve(
         }
         owners.insert(owner,json!({"name":label,"hidden_models":selected["hidden_models"],"model_context_windows":selected["model_context_windows"]}));
     }
-    // Multiple entries for one incoming identity commit the same chosen settings.
     for record in result.payload["accounts"]
         .as_array_mut()
         .into_iter()

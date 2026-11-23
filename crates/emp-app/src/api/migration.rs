@@ -92,7 +92,6 @@ pub(crate) fn management_migration_request(
         .expect("export confirmation is JSON serializable");
         return response("HTTP/1.1 200 OK", "application/json", &body, &[]);
     } else if request.raw_path() == "/api/migration/export" {
-        // Credential exports consume a confirmation issued by a separate request.
         let confirmation = body
             .get("confirmation")
             .and_then(Value::as_str)

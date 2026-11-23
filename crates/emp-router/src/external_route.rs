@@ -134,7 +134,6 @@ impl<'a> ExternalRouter<'a> {
                 == Some(true),
         )
         .map_err(portable_response_error)?;
-        // Custom-call projection changes the required fields of the output item.
         if route.protocol == Protocol::Responses {
             validate_responses_body(&projected, true).map_err(responses_validation_error)?;
         }
@@ -209,7 +208,6 @@ impl<'a> ExternalRouter<'a> {
         }
 
         let mut upstream_body = body.clone();
-        // Strip the CLI-only [1m] tag while preserving custom gateway model mappings.
         let model = route.upstream_model.as_str();
         let suffix = model.len().saturating_sub(4);
         let model = if model

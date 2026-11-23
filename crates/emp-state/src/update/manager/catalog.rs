@@ -141,7 +141,6 @@ impl UpdateManager {
             .as_deref()
             .map(|path| path.with_file_name("update-release.json"))
         {
-            // A cache write failure must not discard the successful network result.
             if let Some(cached) = &cached {
                 if let Ok(raw) = serde_json::to_vec(cached)
                     && raw.len() <= MAX_RELEASE_BYTES
@@ -245,8 +244,6 @@ impl UpdateManager {
         if !url.path().ends_with("/releases") {
             return;
         }
-        // Notes are optional; a failed or oversized older page cannot block an update.
-        // The first page owns the ETag. Completed history survives its 304 response.
         for page in 2..=5 {
             if cached.history_complete(&current) {
                 break;

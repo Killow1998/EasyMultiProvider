@@ -1,5 +1,3 @@
-// Tunnel transport shares selection and import ownership with file migration. The window only holds the
-// choices; the code, the receiver request and its approve/decline actions surface in the notification island.
 function lanMigrationControls(rows, flags) {
   return `<div class="tabs migration-tabs" role="tablist" aria-label="${esc(tr('lan.tunnel'))}">
       <button type="button" role="tab" id="lan_tab_send" aria-controls="lan_send_panel" aria-selected="true">${tr('lan.send_title')}</button>
@@ -33,7 +31,6 @@ function createLanMigration({active,selections,options,openPreview}) {
   function withdraw(){if(island)notifications.withdraw(island.id);island=null;}
   const clock=seconds=>Math.floor(seconds/60)+':'+String(Math.max(0,seconds)%60).padStart(2,'0');
   function copy(){navigator.clipboard.writeText($('lan_share_code').value).then(()=>notice(tr('lan.copied')),error=>notice(error.message,true));}
-  // One persistent island notice per transfer state; the remaining time ticks inside it.
   function announce(candidate,result){
     const kind=['waiting','confirmation','sending'].includes(result.status)?result.status:null;
     if(!kind){
@@ -121,7 +118,6 @@ function createLanMigration({active,selections,options,openPreview}) {
       candidate.received=null;
       candidate.receiver=Array.from(crypto.getRandomValues(new Uint8Array(32)),n=>n.toString(16).padStart(2,'0')).join('');
     }
-    // Back returns to this form; the one-use code has already been consumed.
     if(candidate.received){openPreview(candidate,candidate.received);return;}
     const controller=new AbortController();receiving=controller;update(candidate);
     $('lan_receive_status').textContent=tr('lan.connecting');

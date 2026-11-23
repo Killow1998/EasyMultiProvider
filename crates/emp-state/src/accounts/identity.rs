@@ -88,9 +88,8 @@ pub fn account_auth_identity(auth: &Value) -> String {
     })
 }
 
-/// Compare account and user identity without treating a shared workspace as a user.
-/// Legacy opaque credentials retain account-ID matching; contradictory known
-/// users/accounts never merge. Exact access tokens are the final fallback.
+/// Conflicting known users/accounts never merge; a shared workspace alone is not a user identity.
+/// Opaque credentials match by account ID, then fall back to exact access tokens.
 pub fn same_account_auth(left: &Value, right: &Value) -> bool {
     let left = auth_identities(left);
     let right = auth_identities(right);

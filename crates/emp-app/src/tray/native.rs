@@ -1,4 +1,3 @@
-//! Shared native menu for Windows and macOS; each keeps its OS event loop.
 use super::{Action, Snapshot, icon};
 use std::sync::mpsc::SyncSender;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};

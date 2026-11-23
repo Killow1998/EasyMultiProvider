@@ -32,7 +32,9 @@ impl<P: Pipe> CancellablePipe<P> {
         #[cfg(unix)]
         {
             let fd = pipe.as_raw_fd();
+            // SAFETY: the live pipe owns fd; F_GETFL takes no additional argument.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            // SAFETY: the live pipe owns fd; F_SETFL takes the integer flags value.
             if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
             {
                 return Err(io::Error::last_os_error());
@@ -51,6 +53,7 @@ impl<P: Pipe> Read for CancellablePipe<P> {
                     Foundation::ERROR_BROKEN_PIPE, System::Pipes::PeekNamedPipe,
                 };
                 let mut available = 0;
+                // SAFETY: the pipe handle is live, available is writable, and unused outputs are null.
                 if unsafe {
                     PeekNamedPipe(
                         self.pipe.as_raw_handle(),

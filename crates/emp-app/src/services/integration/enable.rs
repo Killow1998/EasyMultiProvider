@@ -51,8 +51,6 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
         return Err(EnableError::EmptyCatalog);
     }
     let (catalog_path, _) = refresh_catalog(state).map_err(|_| EnableError::Unavailable(503))?;
-    // Subscription authentication uses Codex's online model discovery.
-    // API-only engines retain the catalog-file compatibility fallback.
     let dynamic = native_subscription_headers(&state.backend.accounts.native_auth_path).is_some();
     let base_url = &state.base_url;
     let path = catalog_path.to_string_lossy();

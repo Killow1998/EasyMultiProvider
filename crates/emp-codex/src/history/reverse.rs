@@ -84,17 +84,14 @@ pub(super) fn locate_latest_compaction(
             match rollout_json_line(&line, terminated) {
                 Ok(Some(record)) => {
                     if token(record.get("type")).as_str() == "compacted" {
-                        // Always replace the candidate: an ineligible newest compaction forbids older bases.
                         let replacement = replacement_history(&record)?;
                         let eligible = replacement.is_some()
                             && payload_window_number(&record).is_some()
                             && (history_mode == "paginated"
                                 || payload_resume_metadata(&record).is_some())
-                            // Opaque compactions need pre-compaction history from full replay.
                             && !replacement.as_ref().is_some_and(|items| {
                                 items.iter().any(|item| {
-                                    item.get("type").and_then(Value::as_str)
-                                        == Some("compaction")
+                                    item.get("type").and_then(Value::as_str) == Some("compaction")
                                         && item
                                             .get("encrypted_content")
                                             .and_then(Value::as_str)
@@ -102,7 +99,6 @@ pub(super) fn locate_latest_compaction(
                                 })
                             });
                         let base_ordinal = ordinal(&record);
-                        // Paginated suffix monotonicity needs the base's ordinal.
                         let has_seed_ordinal =
                             history_mode != "paginated" || base_ordinal.is_some();
                         candidate = (eligible && has_seed_ordinal).then(|| ReverseBase {
@@ -115,7 +111,6 @@ pub(super) fn locate_latest_compaction(
                     }
                 }
                 Ok(None) => {}
-                // Malformed complete lines are reported by the full scan.
                 Err(HistoryError { .. }) if terminated => return Ok(None),
                 Err(error) => return Err(error),
             }

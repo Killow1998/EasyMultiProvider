@@ -1,4 +1,3 @@
-// Request outcome formatting and dialog lifecycle shared by report views.
 function createCallOutcomes({esc,tr,number,time}) {
   const n=value=>typeof value === 'number' && Number.isFinite(value) && value>=0 ? value : null;
   function outcomes(summary) {

@@ -35,7 +35,6 @@ pub(super) fn resolve_tool<'a>(
     if let Some(tool) = available.get(&exact) {
         return Some(tool);
     }
-    // Restore only unambiguous existing tool spellings within the requested kind and scope.
     let mut matches = available.iter().filter(|tool| {
         tool.kind == kind
             && (namespace.is_empty() || namespace == tool.namespace)

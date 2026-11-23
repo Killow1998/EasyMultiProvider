@@ -33,8 +33,6 @@ struct ReplayContext<'a> {
     lineage_bound: Option<u64>,
     lineage_byte_offset: u64,
     seed: Vec<VisibleItem>,
-    /// `true` disables the reverse-base fast path; production always uses
-    /// `false` (auto). Exposed only for same-input fast/full parity tests.
     force_full: bool,
 }
 
@@ -66,10 +64,7 @@ impl CodexHomeHistoryReader {
         self.read_visible_history_with_strategy(anchor, false)
     }
 
-    /// Test seam: replays the same durable rollout with the reverse-base
-    /// fast path disabled, so the differential contract suite can prove the
-    /// two strategies agree on byte-identical inputs. Production callers
-    /// always use [`Self::read_visible_history`].
+    /// With `force_full`, bypass reverse-compaction replay.
     #[doc(hidden)]
     pub fn read_visible_history_with_strategy(
         &self,
@@ -92,8 +87,6 @@ impl CodexHomeHistoryReader {
                 },
             );
         }
-        // Replay ancestors oldest first into the child's history; self-contained compactions
-        // replace it, while opaque compactions resolve against the merged pre-compaction history.
         let segments = self.lineage_segments(&database, &location.path, thread)?;
         let mut visible = Vec::<VisibleItem>::new();
         let mut source_model = None;
@@ -169,8 +162,6 @@ impl HistoryReader for CodexHomeHistoryReader {
         let mut snapshot =
             match self.read_committed_checkpoint(&database, location, source_thread, compaction) {
                 Ok(snapshot) => snapshot,
-                // Non-paginated rollouts may use visible summaries without remote identities;
-                // paginated histories require the exact durable checkpoint to preserve newer work.
                 Err(error) if legacy && error.reason() == "compaction_identity_missing" => {
                     match resumed.filter(|snapshot| {
                         snapshot.items.iter().any(|item| {

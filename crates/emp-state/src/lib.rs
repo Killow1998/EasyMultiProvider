@@ -1,5 +1,3 @@
-//! Vault and migration formats remain compatible with existing EMP data.
-
 pub mod accounts;
 pub mod config;
 pub mod discovery_merge;

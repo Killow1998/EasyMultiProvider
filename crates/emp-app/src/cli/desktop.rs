@@ -1,4 +1,3 @@
-//! Non-shell browser launcher for desktop starts.
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 fn variable(name: &str) -> Option<String> {
@@ -15,7 +14,7 @@ fn launch(arguments: &[String]) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     }
     let Ok(mut child) = command
         .args(arguments)
@@ -34,7 +33,6 @@ fn launch(arguments: &[String]) -> bool {
             Ok(None) => {}
         }
         if Instant::now() >= deadline {
-            // The browser belongs to the desktop, not EMP's service lifetime.
             std::thread::spawn(move || {
                 let _ = child.wait();
             });
@@ -43,8 +41,7 @@ fn launch(arguments: &[String]) -> bool {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
-/// Absolute rundll32 path. A bare name would be searched in the application
-/// directory first, letting a planted `rundll32.exe` beside EMP run instead.
+/// Uses the system directory to exclude executables planted beside EMP.
 fn windows_rundll32() -> String {
     windows_system_directory()
         .join("rundll32.exe")
@@ -133,7 +130,7 @@ fn xdg_open_path() -> &'static str {
     "/usr/bin/xdg-open"
 }
 
-/// Keep failures visible when desktop launchers do not allocate a terminal.
+/// Shows failures even when the desktop launcher provides no terminal.
 pub(crate) fn show_error(title: &str, message: &str) {
     #[cfg(windows)]
     {

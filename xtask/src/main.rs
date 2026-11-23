@@ -97,8 +97,7 @@ pub fn make_executable(_path: &Path) -> Result {
     Ok(())
 }
 
-/// A path without symlink components. macOS exposes its temporary directory
-/// through /var -> /private/var, and EMP rejects key paths through symlinks;
+/// Resolve symlink components on Unix so EMP can accept key paths, including macOS temporary paths.
 /// Windows keeps the plain absolute form rather than a `\\?\` path.
 pub fn physical(path: &Path) -> Result<PathBuf> {
     let resolved = if cfg!(windows) {

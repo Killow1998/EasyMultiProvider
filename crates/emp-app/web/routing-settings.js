@@ -1,4 +1,3 @@
-// Route preferences share one dialog; changes apply only after Save succeeds.
 function createRoutingSettings({api, getState, cloneState, persistState, openModal, closeModal, $, esc, tr}) {
   const memoryStages = [
     {field:'memory_extraction_model', effort:'memory_extraction_effort', defaultEffort:'low', id:'routing_memory_extraction_model', kind:'memory_extraction', defaultKey:'extract_model', label:'models.memory_extraction_model', help:'models.memory_extraction_help'},

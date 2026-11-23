@@ -44,8 +44,6 @@ fn project(stdout: &[u8]) -> Result<Vec<Value>, &'static str> {
         if !seen.insert(id) {
             continue;
         }
-        // Only model fields enter the saved list; account info and other startup
-        // output never reach the management UI or persisted cache.
         let mut model = json!({"upstream_id":id,"display_name":row["displayName"].as_str().unwrap_or(id),
             "supported_protocols":["anthropic_messages"],"capability_sources":{}});
         if let Some(effort) = row["supportsEffort"].as_bool() {

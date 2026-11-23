@@ -1,4 +1,3 @@
-// Feature state is private; the page supplies current data and UI operations.
 function createManagementClient({tr, fetch, storage, window}) {
   const SESSION_STORAGE_KEY = 'emp_management_session_v1';
   let sessionToken = '';
@@ -28,7 +27,6 @@ function createManagementClient({tr, fetch, storage, window}) {
     [['context_length_exceeded'], "core.the_input_exceeds_the_model_context_window"],
     [['content_filter'], "core.the_model_service_blocked_the_content"],
   ];
-  // Turns an api() failure into a sentence that says whether the key, the network or the service is at fault.
   function upstreamErrorText(error, fallback = '') {
     if (error?.session) return error.message;
     const detail = error?.payload?.error || {};
@@ -69,14 +67,12 @@ function createManagementClient({tr, fetch, storage, window}) {
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {error:{message:text || tr("core.the_server_returned_an_invalid_response")}}; }
     if (!response.ok) {
-      // Upstream failures carry error.type; EMP's own 401s mean this page lost its session.
       const session = response.status === 401 && SESSION_ERRORS.includes(data.error?.message);
       if (session) clearSessionToken();
       const error = new Error(session ? tr("core.this_page_is_no_longer_signed_in_emp_may") : tr(data.error?.message || response.statusText || `HTTP ${response.status}`));
       error.session = session;
       error.payload = data;
       error.status = response.status;
-      // Every caller shows error.message, so give upstream failures their readable text here.
       error.message = upstreamErrorText(error, error.message);
       throw error;
     }

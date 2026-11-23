@@ -20,7 +20,6 @@ struct CustomStreamState {
     arguments: String,
 }
 
-/// Request-local projection state for one external Responses SSE stream.
 #[derive(Debug, Clone)]
 pub struct PortableStreamProjector {
     suppressed_item_ids: BTreeSet<String>,

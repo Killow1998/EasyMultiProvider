@@ -1,4 +1,3 @@
-//! Public API price snapshots and Decimal-compatible per-request estimates.
 use super::decimal::Decimal;
 use super::token_count;
 use serde_json::{Map, Value, json};
@@ -258,9 +257,8 @@ impl PriceData {
         );
     }
 }
-/// Resolve a request to a price entry: a user alias for the route or upstream
-/// name wins. A reported upstream ID is authoritative; only legacy route-only
-/// records need their EMP account/provider prefix removed.
+/// User aliases take precedence over reported upstream IDs.
+/// Account/provider prefixes are removed only from route-only records.
 fn price_source<'a>(
     event: &Value,
     prices: &'a Map<String, Value>,
@@ -398,7 +396,6 @@ impl PriceCatalog {
             quote["cost_nanos"] = Value::Null;
             quote["rates"] = json!({});
         }
-        // Preserve the ledger's legacy placeholder; readers must check price_issue.
         if matches!(
             quote["price_issue"].as_str(),
             Some("unknown_model" | "missing_rate")

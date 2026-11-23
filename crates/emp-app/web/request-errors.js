@@ -1,5 +1,3 @@
-// Consume content-free request receipts already present in activity-updated.
-// No polling, new backend endpoint, upstream message or credential is needed.
 let presentationRequestReceipts = new Map(), presentationRequestOrder = 0;
 let presentationRequestOutcomes = new Map();
 function presentationRequestServiceKey(record) {
@@ -31,7 +29,6 @@ function presentationRequestError(record) {
 }
 function presentationUpdateServiceRequestErrors() {
   for(const button of document.querySelectorAll('#services .presentation-service-icon')) {
-    // Quota/login errors retain priority and their own recovery lifecycle.
     if(button.hasAttribute('data-error-message') && !button.hasAttribute('data-request-error'))continue;
     const key=button.dataset.activityKind+':'+button.dataset.activityId;
     const record=presentationRequestOutcomes.get(key)?.record;

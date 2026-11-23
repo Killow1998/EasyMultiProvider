@@ -61,7 +61,6 @@ impl QuotaHistoryStore {
                 groups.push(json!({"start_at":at,"end_at":at,"count":1,"diagnostics":details}));
             }
         }
-        // Retain recent grouped incidents within the same bounded response budget.
         if groups.len() > MAX_POINTS_PER_SERIES as usize {
             groups.drain(..groups.len() - MAX_POINTS_PER_SERIES as usize);
         }

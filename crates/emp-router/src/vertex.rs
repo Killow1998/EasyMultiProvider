@@ -89,7 +89,6 @@ impl GeminiContext {
                         .pointer("/extra_content/google/thought_signature")
                         .is_none()
                 {
-                    // Google accepts this marker for tool history created by another model.
                     call["extra_content"]["google"]["thought_signature"] =
                         Value::String("skip_thought_signature_validator".to_owned());
                 }

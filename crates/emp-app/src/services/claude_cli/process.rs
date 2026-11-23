@@ -128,7 +128,7 @@ fn run_with_timeout_policy(
             }
             thread::sleep(CHILD_POLL);
         }
-        // Kill the process group/job before joining pipes that descendants may still hold.
+        // Stop descendants before joining pipes they may still hold open.
         tree.stop();
         let status = tree.wait().ok();
         let input_ok = input_task.join().unwrap_or(false);
@@ -220,10 +220,13 @@ impl ChildTree {
             use windows_sys::Win32::System::JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW,
             };
+            // SAFETY: Null security attributes and name are valid for an unnamed job.
             let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            // SAFETY: The null check guards the job handle; child owns the live process handle.
             if job.is_null() || unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) } == 0
             {
                 if !job.is_null() {
+                    // SAFETY: The failed assignment leaves this non-null job handle owned here.
                     unsafe { windows_sys::Win32::Foundation::CloseHandle(job) };
                 }
                 let _ = child.kill();
@@ -251,16 +254,19 @@ impl ChildTree {
         }
         self.stopped = true;
         #[cfg(unix)]
+        // SAFETY: kill accepts scalar arguments; process_group(0) gives this child its own group.
         unsafe {
             libc::kill(-(self.child.id() as i32), libc::SIGTERM);
         }
         #[cfg(windows)]
         if !self.job.is_null() {
+            // SAFETY: ChildTree owns this live job handle until Drop.
             unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1) };
         }
         #[cfg(unix)]
         {
             thread::sleep(Duration::from_millis(100));
+            // SAFETY: kill accepts scalar arguments; the negative child ID targets its process group.
             unsafe {
                 libc::kill(-(self.child.id() as i32), libc::SIGKILL);
             }
@@ -281,6 +287,7 @@ impl Drop for ChildTree {
         }
         #[cfg(windows)]
         if !self.job.is_null() {
+            // SAFETY: ChildTree owns this job handle and closes it exactly once here.
             unsafe { windows_sys::Win32::Foundation::CloseHandle(self.job) };
         }
     }

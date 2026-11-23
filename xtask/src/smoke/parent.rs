@@ -115,8 +115,6 @@ impl Parent {
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        // Retain the Child handle; Windows can still open this process object.
-        // The updater must recognize it as exited without waiting for us to drop it.
         Ok(())
     }
 }

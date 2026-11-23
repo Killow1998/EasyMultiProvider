@@ -14,7 +14,6 @@ pub(super) trait ReadWrite: Read + Write + Send {
     fn poll_read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         self.set_nonblocking(true)?;
         let result = self.read(buffer);
-        // Restore blocking writes so Windows receive timeouts cannot damage whole-frame writes.
         self.set_nonblocking(false)?;
         result
     }

@@ -29,7 +29,6 @@ where
         .remove(crate::ACTIVE_INPUT_START)
         .and_then(|value| value.as_u64())
         .and_then(|value| usize::try_from(value).ok());
-    // Preserve the input key's position but drop the old array to avoid cloning or serializing it again.
     let mut source = match projected.get_mut("input").map(Value::take) {
         Some(Value::Array(items)) => items,
         Some(Value::Object(item)) => vec![Value::Object(item)],
@@ -95,8 +94,6 @@ where
         .unwrap_or(1024);
     let output_limit = configured_output.min((safe_budget / 8).max(1));
     let placeholder = "x".repeat(usize::try_from(output_limit.saturating_mul(2)).unwrap_or(2048));
-    // The tentative body is the placeholder checkpoint, the retained units,
-    // then the active turn and suffix; units only add their own items.
     let mut tail = IncrementalEstimate::new(
         &input_view_value(&final_body(
             &projected,

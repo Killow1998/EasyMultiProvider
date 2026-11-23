@@ -1,5 +1,4 @@
-//! Size connection admission against this process's descriptor budget, not the
-//! operating system's global limits. Never lower an inherited limit.
+//! Size admission against this process's descriptor budget; preserve higher inherited limits.
 use crate::services::connection_admission::ConnectionAdmissionConfig;
 use std::sync::OnceLock;
 
@@ -11,9 +10,7 @@ type FileLimit = u64;
 #[cfg(unix)]
 const PREFERRED_LIMIT: FileLimit = 4096;
 const RESERVED_DESCRIPTORS: FileLimit = 64;
-// Both admission pools can be full. Allow four descriptors per slot in each
-// pool (downstream, upstream and cancellation/monitor clones), plus the reserve.
-const DESCRIPTORS_PER_POOL_SLOT: FileLimit = 8;
+const DESCRIPTORS_PER_SLOT_ACROSS_BOTH_POOLS: FileLimit = 8;
 
 #[derive(Clone, Copy)]
 pub(super) struct DescriptorBudget {
@@ -29,7 +26,8 @@ impl DescriptorBudget {
         mut config: ConnectionAdmissionConfig,
     ) -> ConnectionAdmissionConfig {
         if let Some(limit) = self.soft {
-            let maximum = (limit.saturating_sub(RESERVED_DESCRIPTORS) / DESCRIPTORS_PER_POOL_SLOT)
+            let maximum = (limit.saturating_sub(RESERVED_DESCRIPTORS)
+                / DESCRIPTORS_PER_SLOT_ACROSS_BOTH_POOLS)
                 .max(1)
                 .min(usize::MAX as FileLimit) as usize;
             for pool in [&mut config.requests, &mut config.websockets] {
@@ -52,9 +50,8 @@ fn prepare_once() -> DescriptorBudget {
         rlim_cur: 0,
         rlim_max: 0,
     };
+    // SAFETY: limit is writable storage for one rlimit and RLIMIT_NOFILE is a valid resource.
     if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
-        // If querying fails, use a conservative admission budget rather than
-        // assuming unlimited descriptors. Startup remains available.
         return DescriptorBudget {
             before: None,
             soft: Some(256),
@@ -76,6 +73,7 @@ fn prepare_once() -> DescriptorBudget {
             rlim_cur: target,
             rlim_max: limit.rlim_max,
         };
+        // SAFETY: wanted is initialized and lives through the call for the valid RLIMIT_NOFILE resource.
         if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &wanted) } == 0 {
             limit = wanted;
             raised = true;

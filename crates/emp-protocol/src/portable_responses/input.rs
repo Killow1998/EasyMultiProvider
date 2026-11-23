@@ -165,16 +165,17 @@ fn custom_arguments(value: Option<&Value>) -> Result<String, PortableProjectionE
 }
 
 pub(crate) fn decode_compaction(value: &str) -> Option<String> {
-    // Accept mixed base64 alphabets and nonzero unused padding bits for compatibility.
-    let encoded = value
+    let normalized_base64_alphabet = value
         .strip_prefix(COMPACTION_PREFIX)?
         .replace('-', "+")
         .replace('_', "/");
-    let engine = GeneralPurpose::new(
+    let trailing_bits_compatible_decoder = GeneralPurpose::new(
         &base64::alphabet::STANDARD,
         GeneralPurposeConfig::new().with_decode_allow_trailing_bits(true),
     );
-    let decoded = engine.decode(encoded).ok()?;
+    let decoded = trailing_bits_compatible_decoder
+        .decode(normalized_base64_alphabet)
+        .ok()?;
     let summary = String::from_utf8(decoded).ok()?;
     (!summary.is_empty()).then_some(summary)
 }

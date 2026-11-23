@@ -13,7 +13,6 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 
-/// Reverse replay starts after a compaction, seeded with replacement history and prefix control state.
 pub(super) struct ReplayFrame {
     pub(super) start: u64,
     /// Exclusive end offset (`captured_end` or a lineage byte cap).
@@ -88,10 +87,8 @@ pub(super) fn scan_suffix(
             active_turn = explicit_turn.clone();
         }
         let turn = explicit_turn.clone().or_else(|| active_turn.clone());
-        // Include the anchor record in ordinal validation, even when it is the entire suffix.
         track_ordinal(&mut scan, &record);
         if scan.history_closed {
-            // Ignore semantic state after the anchor boundary, as full replay does.
         } else if anchor
             .turn_id
             .as_deref()
@@ -110,7 +107,6 @@ pub(super) fn scan_suffix(
     scan.total_records = index;
     validate_scan_thread(&scan, anchor.thread_id.as_deref(), expected_mode)?;
     let usable = if anchor.turn_id.is_some() {
-        // Anchor turn predates the compaction base: full scan required.
         scan.anchor_boundary.is_some()
     } else {
         scan.explicit_turns.is_subset(&scan.terminal_turns)
@@ -118,11 +114,9 @@ pub(super) fn scan_suffix(
     if !usable {
         return Ok(SuffixScan::FallBack);
     }
-    // Full replay owns ordinal errors because the suffix cannot validate the whole file.
     if !scan.saw_ordinal || scan.ordinal_missing || scan.ordinal_regressed {
         return Ok(SuffixScan::FallBack);
     }
-    // Failed or interrupted turns cannot seed a replacement that full replay would exclude.
     if let Some(turn) = &frame.seed_turn {
         let outcome = scan
             .successful
@@ -144,7 +138,6 @@ pub(super) fn replay_records(
     lineage_bound: Option<u64>,
 ) -> Result<Vec<VisibleItem>, HistoryError> {
     let mut visible = frame.seed_visible.clone();
-    // The anchor is still in flight, so exempt it from failed-turn filtering.
     let mut successful = frame.seed_successful.clone();
     for (turn, ok) in &scan.successful {
         successful.insert(turn.clone(), *ok);
@@ -168,7 +161,6 @@ pub(super) fn replay_records(
             active_turn = explicit_turn.clone();
         }
         let turn = explicit_turn.clone().or_else(|| active_turn.clone());
-        // Turnless rollback markers must precede failed-turn filtering to remove stale suffixes.
         if token(record.get("type")) == "event_msg"
             && token(
                 record
@@ -186,7 +178,6 @@ pub(super) fn replay_records(
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
             apply_thread_rollback(&mut visible, num_turns);
-            // Later turnless records must not inherit the rolled-back turn's failure state.
             active_turn = None;
             index += 1;
             return Ok(true);
@@ -232,12 +223,10 @@ pub(super) fn snapshot_from_base(
     let mut frame = frame;
     frame.seed_visible = replacement_entries(base.replacement, &[], base.turn.clone())?;
     let mut source = FileRecordSource::new(file, frame.start, frame.end);
-    // Reverse replay has no lineage or fork-checkpoint bounds.
     let items = replay_records(&mut source, &frame, &scan, anchor, None)?;
     Ok(HistorySnapshot {
         thread_id: anchor.thread_id.clone().unwrap_or_default(),
         items,
-        // Turnless anchors fall back to the threads table model in read_rollout.
         source_model: scan.source_model(),
     })
 }

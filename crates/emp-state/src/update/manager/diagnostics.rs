@@ -41,8 +41,6 @@ pub(in crate::update) fn save(path: Option<&Path>, diagnostic: &UpdateDiagnostic
     let Ok(raw) = serde_json::to_vec(diagnostic) else {
         return;
     };
-    // Even when the state directory cannot be written, the console retains the
-    // same fixed-field receipt. No OS error's Display text enters either log.
     eprintln!("EMP update failure: {}", String::from_utf8_lossy(&raw));
     if let Some(path) = path
         && let Err(error) = crate::atomic_write_private_state(path, &raw)

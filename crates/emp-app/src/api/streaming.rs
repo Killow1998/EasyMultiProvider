@@ -71,8 +71,7 @@ pub(crate) fn write_stream_frames(
     stream.flush()
 }
 
-/// A downstream writer and its passive receipt travel together. The writer
-/// returns every original I/O result, leaving decisions to the existing relay.
+/// Records downstream delivery while returning the writer's original I/O results.
 pub(crate) struct ObservedSse<'a> {
     stream: &'a mut TcpStream,
     observation: &'a mut RequestObservation,

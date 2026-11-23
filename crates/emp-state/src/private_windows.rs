@@ -136,7 +136,6 @@ pub(super) fn set_private_file(file: &File) -> Result<(), FilesystemError> {
     let user = CurrentUser::load().map_err(|_| FilesystemError::ManagedFileUnavailable)?;
     let acl =
         private_acl(user.sid(), false).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
-    // Rust write handles lack WRITE_DAC; use the open file's resolved name to set its DACL.
     let mut wide = path_for_file_handle(file)?;
     set_named_private_acl(&mut wide, user.sid(), acl.0.cast())
 }
@@ -165,8 +164,7 @@ fn set_named_private_acl(
     if status != ERROR_SUCCESS || owner.is_null() {
         return Err(FilesystemError::ManagedFileUnavailable);
     }
-    // File owners can change DACLs without WRITE_OWNER; request ownership changes only when needed.
-    // Older updater directories may grant their creator Modify rather than FullControl.
+    // SAFETY: owner belongs to the live descriptor; user is the caller's live CurrentUser SID.
     let change_owner = unsafe { EqualSid(owner, user) } == 0;
     let information = DACL_SECURITY_INFORMATION
         | PROTECTED_DACL_SECURITY_INFORMATION
@@ -257,8 +255,7 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
         return Err(FilesystemError::KeyFileNotPrivate);
     }
 
-    // Only repair an inherited legacy ACL with exactly one full-control allow ACE for this user;
-    // access granted to any other principal is a separate security failure.
+    // SAFETY: ACL_SIZE_INFORMATION contains only integer fields, which permit zero initialization.
     let mut information: ACL_SIZE_INFORMATION = unsafe { zeroed() };
     // SAFETY: dacl belongs to the live security descriptor and the output
     // buffer has the documented structure and size.
@@ -299,7 +296,7 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
 }
 
 fn protect_legacy_key(file: &File, user: &CurrentUser) -> Result<(), FilesystemError> {
-    // Reopen the validated object for DACL access so a substituted pathname cannot redirect the repair.
+    // SAFETY: file owns a live handle; ReOpenFile returns a separately owned handle to the same file.
     let handle = unsafe {
         ReOpenFile(
             file.as_raw_handle() as HANDLE,

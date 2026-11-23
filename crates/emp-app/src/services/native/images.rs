@@ -83,7 +83,6 @@ pub(crate) fn execute(
     let result = (|| {
         let mut incoming = incoming.clone();
         if route.provider.value().get("implicit_native") == Some(&Value::Bool(true)) {
-            // A fixed Native choice must never fall back to the caller's account.
             incoming.retain(|name, _| {
                 !name.eq_ignore_ascii_case("authorization")
                     && !name.eq_ignore_ascii_case("chatgpt-account-id")
@@ -204,7 +203,6 @@ pub(crate) fn execute(
                 .image_routes
                 .observe(&route, status, &headers, value.as_ref());
             if let Some(value) = value.as_mut() {
-                // Correlate image accounting and receipts without a Responses ID or image-body changes.
                 if let Some(object) = value.as_object_mut()
                     && !object.contains_key("id")
                     && let Some(id) = receipt_id

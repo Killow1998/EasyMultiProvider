@@ -100,8 +100,6 @@ impl ExternalStream {
         if !self.saw_sse {
             self.raw_body.extend_from_slice(chunk);
         }
-        // Do not parse beyond a terminal even when the same network chunk has
-        // trailing data. A malformed tail cannot invalidate a completed turn.
         for line in chunk.split_inclusive(|byte| *byte == b'\n') {
             let frames = self
                 .parser

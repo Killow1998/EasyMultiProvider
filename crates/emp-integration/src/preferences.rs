@@ -96,7 +96,6 @@ impl CodexPreferences {
         extraction: &str,
         consolidation: &str,
     ) -> Result<(), IntegrationError> {
-        // Independent journals must both be attempted, including during rollback.
         let background = self.apply_background(enabled);
         let memory = self.apply_memory(extraction, consolidation);
         background.and(memory)
@@ -211,7 +210,6 @@ impl CodexPreferences {
         self.save_lease(&lease)
     }
     pub fn restore(&self) -> Result<(), IntegrationError> {
-        // An external edit to one optional group must not skip the other restore.
         let background = self.restore_current();
         let memory = self.memories().restore_current();
         background.and(memory)

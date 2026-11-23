@@ -33,11 +33,8 @@ pub const MIN_IMPORT_PASSWORD_BYTES: usize = 8;
 /// Maximum password length after trimming, in UTF-8 bytes.
 pub const MAX_PASSWORD_BYTES: usize = 4096;
 pub const SALT_BYTES: usize = 16;
-/// Fixed scrypt N parameter of legacy v1 envelopes.
 pub const SCRYPT_N: u64 = 16384;
-/// Fixed scrypt r parameter of legacy v1 envelopes.
 pub const SCRYPT_R: u64 = 8;
-/// Fixed scrypt p parameter of legacy v1 envelopes.
 pub const SCRYPT_P: u64 = 1;
 pub const SCRYPT_V2_N: u64 = 131072;
 pub const SCRYPT_V2_R: u64 = 8;

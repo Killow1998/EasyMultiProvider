@@ -1,4 +1,3 @@
-// Owns data and outstanding work for one usage window.
 function createUsageReport({api, $, tr, esc, getState, getLanguage, persistState, openModal,
   serviceUsage, callReports, eventsConnected, periods}) {
   const {periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg} = periods;
@@ -83,7 +82,6 @@ function createUsageReport({api, $, tr, esc, getState, getLanguage, persistState
   function zoomUsage(start,end) {
     setPeriod('usage', {preset:'', start:Math.max(start,usagePayload.start), end:Math.min(end,usagePayload.end)}, {user:true});
   }
-  // History rows only know the route they were recorded under, so that route is the source.
   const usageRowSource = row => row.category === 'unknown' && row.owner.startsWith('history:') ? tr("reports.historical_route") : usageSource(row.category);
   function usageOwner(row) {
     if (row.owner.startsWith('history:')) return row.category === 'unknown' ? row.owner.slice(8) : tr("reports.historical_route_2") + row.owner.slice(8);
@@ -92,7 +90,6 @@ function createUsageReport({api, $, tr, esc, getState, getLanguage, persistState
     if (row.owner.startsWith('credential:')) return (row.owner_name || row.owner.slice(11,19)) + tr("reports.identity_unconfirmed");
     return tr("reports.legacy_record_or_route_account_identity_unconfirmed");
   }
-  // Models without a public price cost 0 unless they are priced as another model.
   function usagePricingEditor(data) {
     const aliases = getState()?.pricing_aliases || {};
     const counts = new Map((data.unpriced_models || []).map(row => [row.route_model, row.requests]));

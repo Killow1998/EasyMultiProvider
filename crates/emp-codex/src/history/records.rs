@@ -202,7 +202,6 @@ pub(super) fn replacement_history(
                 .ok_or_else(|| HistoryError::new("invalid_replacement_history"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    // Positional replacement metadata requires a parallel array to preserve item identity.
     if let Some(metadata) = payload
         .get("replacement_history_metadata")
         .filter(|value| !value.is_null())

@@ -62,7 +62,6 @@ impl ServerState {
     }
 
     pub(crate) async fn wait_for_shutdown(&self) {
-        // Register before checking the flag: shutdown may race this waiter.
         let notified = self.shutdown_wake.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();

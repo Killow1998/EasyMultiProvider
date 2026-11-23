@@ -1,4 +1,3 @@
-//! Pair visible tool calls and outputs; synthesize aborted outputs where required.
 use crate::{HistoryError, VisibleItem};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;

@@ -163,16 +163,12 @@ pub(super) fn replacing_account_credentials<T>(
     let configuration = &state.backend.configuration;
     let mut account_ids = configured_ids(&configuration.snapshot().ok()?);
     loop {
-        // Refresh locks before the configuration lock, the order quota
-        // refreshes use.
         let locks = quota_refresh_locks(state, account_ids.iter().map(String::as_str))?;
         let guards = locks
             .iter()
             .map(|lock| lock.lock().ok())
             .collect::<Option<Vec<_>>>()?;
         let mut config = configuration.edit().ok()?;
-        // An account added between listing and locking would run
-        // unprotected: lock again until every configured account is held.
         let current_ids = configured_ids(&config);
         if !current_ids.iter().all(|id| account_ids.contains(id)) {
             drop(config);
@@ -249,8 +245,6 @@ pub(crate) struct CredentialOperationGate {
     idle: Condvar,
 }
 
-/// Held while an operation may rotate a credential; see
-/// [`CredentialOperationGate`].
 pub(crate) struct CredentialOperation<'a>(&'a CredentialOperationGate);
 
 impl CredentialOperationGate {

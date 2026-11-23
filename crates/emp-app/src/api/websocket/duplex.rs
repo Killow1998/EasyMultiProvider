@@ -1,4 +1,3 @@
-//! Read either side of a native turn without a polling worker or event queue.
 use emp_transport::{ClientWebSocket, WebSocketConnection, WebSocketPoll};
 use polling::{Event, Events, Poller};
 use serde_json::Value;
@@ -99,7 +98,6 @@ impl Duplex {
         read_downstream: bool,
     ) -> io::Result<Option<Message>> {
         loop {
-            // A stream of buffered upstream messages must not starve an interrupt.
             self.wait(Some(Duration::ZERO))?;
             let remaining = self
                 .idle
@@ -128,7 +126,6 @@ impl Duplex {
                 match client.poll_receive_text_ready().map_err(io::Error::other)? {
                     WebSocketPoll::Text(text) => {
                         self.last_upstream = Instant::now();
-                        // Match Codex: skip malformed or unrelated JSON events.
                         if let Ok(value @ Value::Object(_)) = serde_json::from_str(&text) {
                             return Ok(Some(Message::Upstream(value)));
                         }

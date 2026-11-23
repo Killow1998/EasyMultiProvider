@@ -1,4 +1,3 @@
-// Service presentation composed with the existing account, model and migration owners.
 function shadowHelp(message, label = '?', tone = 'info') {
   return `<button type="button" class="shadow-help" data-shadow-tone="${tone}" data-shadow-help="${esc(message)}" aria-label="${esc(message)}">${label}</button>`;
 }
@@ -80,7 +79,6 @@ function installServicePresentation() {
   document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!bubble.hidden){if(bubble.contains(document.activeElement))owner?.focus();hide();event.stopImmediatePropagation();}},true);
   window.addEventListener('scroll',event=>{
     if(bubble.contains(event.target))return;
-    // Focusing an off-screen help button scrolls its dialog after focusin.
     if(owner?.contains(document.activeElement)||bubble.contains(document.activeElement))position();
     else hide();
   },true);

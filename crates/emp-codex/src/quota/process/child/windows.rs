@@ -23,6 +23,7 @@ pub(super) struct Job(OwnedHandle);
 
 impl Job {
     pub(super) fn stop(&self) {
+        // SAFETY: self owns a live job handle with termination access.
         unsafe { TerminateJobObject(self.0.as_raw_handle(), 1) };
     }
 }
@@ -31,16 +32,18 @@ fn own(handle: HANDLE) -> io::Result<OwnedHandle> {
     if handle.is_null() || handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
-    // Each caller transfers a newly created handle to exactly one owner.
+    // SAFETY: callers transfer newly created handles; the check above excludes invalid values.
     Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
 pub(super) fn spawn(command: &mut Command) -> io::Result<(Child, Job)> {
+    // SAFETY: null attributes and name request an unnamed job with default security.
     let job = Job(own(unsafe {
         CreateJobObjectW(std::ptr::null(), std::ptr::null())
     })?);
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: job is live and limits matches the selected information class and byte size.
     if unsafe {
         SetInformationJobObject(
             job.0.as_raw_handle(),
@@ -52,11 +55,10 @@ pub(super) fn spawn(command: &mut Command) -> io::Result<(Child, Job)> {
     {
         return Err(io::Error::last_os_error());
     }
-    // Suspend before assigning the job: npm launchers must not be able to
-    // spawn unowned children between CreateProcess and assignment.
     let mut child = command
         .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW)
         .spawn()?;
+    // SAFETY: both handles remain owned and live through assignment.
     let assigned =
         unsafe { AssignProcessToJobObject(job.0.as_raw_handle(), child.as_raw_handle()) };
     let result = if assigned == 0 {
@@ -74,23 +76,26 @@ pub(super) fn spawn(command: &mut Command) -> io::Result<(Child, Job)> {
 }
 
 fn resume_primary_thread(pid: u32) -> io::Result<()> {
-    // std::process retains the process handle, not the initial thread handle.
-    // A suspended fresh process has only its initial thread to resume.
+    // SAFETY: thread snapshots ignore the process ID argument and return a new owned handle.
     let snapshot = own(unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) })?;
     let mut entry = THREADENTRY32 {
         dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
         ..Default::default()
     };
+    // SAFETY: snapshot is live and entry is writable with dwSize set to its structure size.
     let mut found = unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) };
     while found != 0 {
         if entry.th32OwnerProcessID == pid {
+            // SAFETY: the ID comes from the snapshot; zero disables handle inheritance.
             let thread = own(unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) })?;
+            // SAFETY: thread is a live handle opened with THREAD_SUSPEND_RESUME access.
             return if unsafe { ResumeThread(thread.as_raw_handle()) } == u32::MAX {
                 Err(io::Error::last_os_error())
             } else {
                 Ok(())
             };
         }
+        // SAFETY: snapshot remains live and entry remains writable with the required dwSize.
         found = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) };
     }
     Err(io::Error::new(

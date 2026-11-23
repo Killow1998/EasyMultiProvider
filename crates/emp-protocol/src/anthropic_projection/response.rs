@@ -13,7 +13,6 @@ fn token_count(value: Option<&Value>) -> Option<u64> {
     }
 }
 
-/// Project Anthropic input, cache, and output usage into Responses usage fields.
 pub fn anthropic_usage(usage: &Value) -> Value {
     let Some(usage) = usage.as_object() else {
         return Value::Object(Map::new());

@@ -1,7 +1,6 @@
 use super::*;
 
 fn may_carry_context_error(event: &Value) -> bool {
-    // Gateways may send {"error": {...}} without a type; content events never carry an error object.
     matches!(
         event.get("type").and_then(Value::as_str),
         Some("error" | "response.failed" | "response.incomplete")
@@ -60,8 +59,6 @@ impl NativeStream {
     }
 
     fn consume_chunk(&mut self, chunk: &[u8]) -> Result<(), RouterError> {
-        // Keep bytes only while a non-SSE response might be ordinary JSON.
-        // Delivered SSE frames and comment heartbeats do not occupy this buffer.
         if !self.saw_data && !self.declared_sse {
             if chunk.len() > MAX_UPSTREAM_BODY_BYTES.saturating_sub(self.raw_body.len()) {
                 return Err(crate::upstream_body_too_large());
@@ -69,7 +66,6 @@ impl NativeStream {
             self.raw_body.extend_from_slice(chunk);
         }
         self.line_buffer.extend_from_slice(chunk);
-        // Scan only new bytes and compact once per chunk to keep framing linear.
         let buffer = std::mem::take(&mut self.line_buffer);
         let mut start = 0;
         let mut scan = self.line_scanned.min(buffer.len());

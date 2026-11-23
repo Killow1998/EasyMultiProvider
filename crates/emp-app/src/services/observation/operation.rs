@@ -67,9 +67,8 @@ impl OperationObservation {
         result
     }
 
-    // Fixed vocabulary only; never journal bodies, paths, upstream error text, config or credentials.
-    pub(crate) fn fact(&mut self, name: &'static str, value: &'static str) {
-        self.fields["facts"][name] = json!(value);
+    pub(crate) fn fact(&mut self, fixed_name: &'static str, fixed_value: &'static str) {
+        self.fields["facts"][fixed_name] = json!(fixed_value);
     }
 
     /// None means unobserved, not a mismatch. Checks never determine execution.

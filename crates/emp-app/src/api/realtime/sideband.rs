@@ -19,8 +19,7 @@ use std::time::Duration;
 pub(crate) const MAX_REALTIME_SIDEBAND_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const NATIVE_SIDEBAND_BASE: &str = "wss://api.openai.com/v1/live/";
 
-/// All immutable state needed after the downstream WebSocket handshake has
-/// been validated. Ownership of the permit follows the eventual relay.
+/// Created after handshake validation; its admission permit transfers to the relay.
 pub(crate) struct PreparedSideband {
     pub(crate) accept: String,
     pub(crate) url: String,
@@ -391,8 +390,6 @@ fn serve_realtime_sideband_with_connector(
     }
     shutdown_pump(&mut pump, 1000, "");
     if let Some(receipt) = pending_confirmation {
-        // A close can arrive before the relay next polls the reply. Joining
-        // the socket owner above makes this a final result, not queue admission.
         let _ = observe_confirmation(state, &connection_id, &receipt);
     }
 }

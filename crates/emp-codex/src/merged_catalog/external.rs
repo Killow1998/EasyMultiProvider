@@ -5,13 +5,14 @@ use super::{
 use emp_state::{codex_input_modalities, normalize_reasoning_levels};
 use serde_json::{Map, Value, json};
 
+const UNKNOWN_MODEL_TRUNCATION_BYTES: u64 = 10_000;
+
 pub(super) fn entry(model: &Value, template: &Value, provider: &Value) -> Value {
     let claude_cli = text(provider, "execution_backend") == "claude_cli";
     let mut entry = Map::new();
-    // Use Codex's required unknown-model fallback unless a supplied template overrides it.
     entry.insert(
         "truncation_policy".to_owned(),
-        json!({"mode":"bytes", "limit":10_000}),
+        json!({"mode":"bytes", "limit":UNKNOWN_MODEL_TRUNCATION_BYTES}),
     );
     for field in [
         "base_instructions",
@@ -151,7 +152,6 @@ pub(super) fn entry(model: &Value, template: &Value, provider: &Value) -> Value 
         entry["context_window"] = json!(context);
         entry["max_context_window"] = json!(context);
         entry["auto_compact_token_limit"] = json!(context * 4 / 5);
-        // State Codex's window percentage so labels and controls reflect its usable context.
         entry["effective_context_window_percent"] = model
             .get("effective_context_window_percent")
             .filter(|value| {

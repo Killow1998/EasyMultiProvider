@@ -59,6 +59,16 @@ forwarded immediately, and the upstream remains responsible for its own account
 concurrency and 429 policy. The process-wide listener boundaries above still
 protect the local Python service from exhausting threads and memory.
 
+Connection admission reserves 64 file descriptors plus eight per slot across
+the request and WebSocket pools together: four per pool cover downstream,
+upstream and cancellation/monitor clones. A failed descriptor-limit query
+uses a finite budget of 256; inherited higher limits remain intact.
+
+On Linux/glibc, startup sets the mmap threshold before application threads
+start, and large temporary buffers release free allocator pages before another
+projection. Idle activity is only a scheduling hint for the periodic trim;
+glibc's trim operation is thread-safe.
+
 ## Claude Code adapter
 
 All Claude CLI children share one process admission gate, including inference,
@@ -101,6 +111,14 @@ the active turn and tool pairs retain their existing protection.
 Requests exceeding the shared byte ceiling are rejected before inference.
 Provider image and context limits remain the provider's own limits; increasing
 EMP's adapter allowance does not increase the model's context window.
+
+## History compaction estimates
+
+Compaction preserves the input key's position and counts the checkpoint,
+retained units, active turn and suffix exactly once in its incremental estimate.
+An observed failure gives an input-only ceiling of
+`smallest_failure_estimate - 1`; output reserves are subtracted only from the
+configured context window.
 
 ## Failure status classification
 

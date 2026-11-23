@@ -30,7 +30,6 @@ impl CodexHomeHistoryReader {
                 thread_id: Some(segment.thread),
                 ..HistoryAnchor::default()
             };
-            // Apply the same frozen bounds to checkpoint lookup and replay to exclude post-fork activity.
             let replay = ReplayContext {
                 lineage_bound: segment.bound,
                 lineage_byte_offset: segment.byte_offset,
@@ -61,7 +60,6 @@ impl CodexHomeHistoryReader {
                         visible = snapshot.items;
                         source_model = snapshot.source_model.or(source_model);
                     } else {
-                        // The client owns the tail; later segments only check checkpoint ambiguity.
                         visible = replay.seed;
                     }
                 }

@@ -28,6 +28,7 @@ pub(super) fn notify_budget(
     {
         *target = source;
     }
+    // SAFETY: notification is initialized with its ABI size and NUL-terminated text and lives through the call.
     unsafe { Shell_NotifyIconW(NIM_MODIFY, &notification) };
 }
 

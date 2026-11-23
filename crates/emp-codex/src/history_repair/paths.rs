@@ -32,7 +32,6 @@ impl RolloutPaths {
     }
 
     pub(super) fn find(&self, id: &str) -> Result<PathBuf, HistoryRepairError> {
-        // Cache misses and failures too, avoiding repeated directory walks for stale database paths.
         let index = self
             .discovered
             .get_or_init(|| self.discover())

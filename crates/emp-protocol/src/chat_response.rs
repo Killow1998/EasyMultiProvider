@@ -41,7 +41,6 @@ fn tool_item(
     Ok(item)
 }
 
-/// Project one complete Chat Completions response into Responses JSON.
 pub fn response_from_chat(
     value: &Value,
     requested_model: &str,

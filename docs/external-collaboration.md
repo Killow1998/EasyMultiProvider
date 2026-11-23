@@ -164,6 +164,13 @@ receive a deterministic new ID because Codex derives their identity from their
 schema. WebSocket output restoration also applies to incremental requests that
 omit inherited tool definitions.
 
+Schema identities use UUID5/SHA-1 for deterministic identity, not security.
+Their input retains spaced, sorted-key JSON with ASCII escaping and UTF-16
+surrogate pairs; changing that encoding changes tool IDs. Reserved-namespace
+collisions are checked across all tool containers before projection. Array
+iteration accepts objects and strings without iterating them; other non-array
+values passed to that iterator are errors.
+
 The external Responses projection maps readable agent messages to user messages.
 Unrecovered encrypted messages are rejected rather than sent as incomplete tasks.
 Mixed-provider inherited histories can still encounter separate history

@@ -1,4 +1,3 @@
-// Feature state is private; the page supplies current data and UI operations.
 function createSettings({getState, cloneState, persistState, openModal, api, notice, modules = null, $, esc, t, tr, quotaDisplay, help, contextHelp, openAppIcon, presentationOptions = () => '', collaborationHelp = () => ''}) {
   async function openDecisionConnection(back) {
     if (modules?.active('gateway') !== false) return modules.openOptions('gateway', back);

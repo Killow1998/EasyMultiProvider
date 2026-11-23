@@ -164,7 +164,6 @@ fn protocol(provider: &Map<String, Value>) -> Result<Protocol, RouteResolutionEr
     }
 }
 
-/// Resolve the upstream identifier once from a frozen provider/model snapshot.
 pub fn resolved_upstream_model(
     provider: &Map<String, Value>,
     model: &Map<String, Value>,
@@ -344,8 +343,6 @@ where
         );
     }
 
-    // Slash-qualified IDs require an explicit model/account route; forwarding unknown account prefixes
-    // through the single-provider fallback could send the caller's credentials to the wrong route.
     if model_id.contains('/') {
         return Err(RouteResolutionError::UnknownModel(model_id.to_owned()));
     }

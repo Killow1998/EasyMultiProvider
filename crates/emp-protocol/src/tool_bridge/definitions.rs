@@ -68,8 +68,6 @@ impl ExternalTools {
                     continue;
                 }
                 Some("web_search") => {
-                    // Codex executes this server-side tool. An external
-                    // provider cannot execute it, so omit its schema.
                     continue;
                 }
                 Some("function" | "custom") => {

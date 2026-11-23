@@ -98,13 +98,12 @@ pub(super) fn decode(value: &Value) -> Result<Option<Item>, IntegrationError> {
 }
 
 pub(super) fn same(left: &Value, right: &Value) -> Result<bool, IntegrationError> {
-    fn normalize(item: &mut Item) -> Result<(), IntegrationError> {
+    fn trim_whitespace_decor(item: &mut Item) -> Result<(), IntegrationError> {
         let decor = match item {
             Item::Value(value) => value.decor_mut(),
             Item::Table(table) => table.decor_mut(),
             _ => return Err(IntegrationError("invalid Codex preference lease value")),
         };
-        // Rendering an inline table can add padding, while comments remain significant.
         if decor
             .prefix()
             .and_then(|value| value.as_str())
@@ -121,7 +120,7 @@ pub(super) fn same(left: &Value, right: &Value) -> Result<bool, IntegrationError
         }
         if let Some(table) = item.as_table_like_mut() {
             for (_, value) in table.iter_mut() {
-                normalize(value)?;
+                trim_whitespace_decor(value)?;
             }
         }
         Ok(())
@@ -130,7 +129,7 @@ pub(super) fn same(left: &Value, right: &Value) -> Result<bool, IntegrationError
         let Some(mut item) = decode(value)? else {
             return Ok(None);
         };
-        normalize(&mut item)?;
+        trim_whitespace_decor(&mut item)?;
         let mut document = DocumentMut::new();
         document["value"] = item;
         Ok(Some(document.to_string()))

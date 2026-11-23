@@ -8,8 +8,7 @@ pub struct HistoryDiagnostic {
 }
 
 impl HistoryError {
-    /// Only known codes may enter diagnostics. Sanitizing arbitrary text is not
-    /// sufficient: even an alphanumeric string could contain private content.
+    /// Accept only known codes: arbitrary alphanumeric text can contain private content.
     pub fn diagnostic(&self) -> HistoryDiagnostic {
         macro_rules! classify {
             ($($category:literal => [$($reason:literal),+ $(,)?]),+ $(,)?) => {

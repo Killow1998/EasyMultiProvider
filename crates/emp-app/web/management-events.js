@@ -1,4 +1,3 @@
-// One owner for the management SSE connection and reconnect lifecycle.
 function createManagementEvents({management,isRunning,onEvent,onStart,onDisconnect}) {
   let quotaEventsController = null, quotaEventsConnected = false;
   let leading = false;

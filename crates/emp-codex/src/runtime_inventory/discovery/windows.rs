@@ -43,7 +43,6 @@ pub(super) fn windows_npm_native_candidate(
     }
     let prefix = launcher.parent()?;
     let package = platform.cli_optional_package();
-    // npm places codex.cmd beside node_modules globally, or under node_modules/.bin locally.
     let package_root = if prefix
         .file_name()
         .is_some_and(|name| name.eq_ignore_ascii_case(".bin"))
@@ -56,13 +55,12 @@ pub(super) fn windows_npm_native_candidate(
     } else {
         prefix.join("node_modules/@openai/codex")
     };
-    // Match official resolution order: package-local dependencies, hoisted dependencies, vendored binary.
-    let roots = [
+    let ordered_dependency_roots = [
         package_root.join("node_modules/@openai").join(package),
         package_root.parent()?.join(package),
         package_root.join("vendor"),
     ];
-    roots.into_iter().find_map(|root| {
+    ordered_dependency_roots.into_iter().find_map(|root| {
         let vendor_root = if root.ends_with("vendor") {
             root
         } else {
@@ -97,6 +95,7 @@ pub(super) fn registered_windows_codex_package_root(
         .collect::<Vec<_>>();
     let mut count = 0;
     let mut buffer_length = 0;
+    // SAFETY: family is NUL-terminated; zero capacities and null buffers query required sizes.
     let status = unsafe {
         FindPackagesByPackageFamily(
             family.as_ptr(),
@@ -124,6 +123,7 @@ pub(super) fn registered_windows_codex_package_root(
     let expected_buffer_length = buffer_length;
     let mut package_names = vec![std::ptr::null_mut(); count as usize];
     let mut buffer = vec![0_u16; buffer_length as usize];
+    // SAFETY: family is NUL-terminated and both writable buffers match the supplied capacities.
     let status = unsafe {
         FindPackagesByPackageFamily(
             family.as_ptr(),
@@ -160,6 +160,7 @@ pub(super) fn registered_windows_codex_package_root(
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
     let mut path_length = 0;
+    // SAFETY: full_name is NUL-terminated; zero path_length and a null buffer query the size.
     let status = unsafe {
         GetPackagePathByFullName(full_name.as_ptr(), &mut path_length, std::ptr::null_mut())
     };
@@ -167,6 +168,7 @@ pub(super) fn registered_windows_codex_package_root(
         return None;
     }
     let mut path = vec![0_u16; path_length as usize];
+    // SAFETY: full_name is NUL-terminated and path has path_length writable UTF-16 units.
     let status = unsafe {
         GetPackagePathByFullName(full_name.as_ptr(), &mut path_length, path.as_mut_ptr())
     };

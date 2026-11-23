@@ -88,10 +88,8 @@ impl ManagementEvents {
 }
 
 impl Subscription<'_> {
-    /// The first call requests all snapshots. A timeout returns no changes;
-    /// closing the feed drains a pending Quit before ending the subscription.
-    /// Checking and waiting share the publisher's lock, including changes
-    /// arriving before this call.
+    /// First call requests all snapshots; timeouts return no changes and closing drains a pending Quit.
+    /// Checks and waits use the publisher's lock, including changes that arrived before the call.
     pub(crate) fn next(&mut self, timeout: Duration) -> Option<Changes> {
         let state = self.feed.state.lock().ok()?;
         let (state, _) = self

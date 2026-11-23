@@ -127,7 +127,6 @@ pub(super) fn resolve(
                     else {
                         continue;
                     };
-                    // Borrow the stable configuration record, not the request-local route snapshot.
                     let quota = config["accounts"]
                         .as_array()
                         .into_iter()
@@ -200,7 +199,6 @@ pub(super) fn resolve(
         let mut model = route.model.value().clone();
         model.insert("_emp_aggregate_source".into(), json!(source));
         model.insert("_emp_aggregate_owner".into(), json!(owner));
-        // Match the conservative window advertised for this aggregate.
         if let Some(entry) = super::catalog::server_catalog(state, config)["models"]
             .as_array()
             .into_iter()

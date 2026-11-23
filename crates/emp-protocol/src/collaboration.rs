@@ -45,7 +45,6 @@ impl fmt::Display for CollaborationError {
 }
 impl std::error::Error for CollaborationError {}
 
-// Object and string containers remain no-ops; other non-array values remain errors.
 fn object_iter(value: &Value) -> Result<Option<&[Value]>, CollaborationError> {
     match value {
         Value::Array(values) => Ok(Some(values)),
@@ -159,7 +158,6 @@ fn project_tools(container: &mut Map<String, Value>) -> Result<bool, Collaborati
 
 /// Change only plaintext-capable metadata, preserving the deterministic UUID5 tool-ID format.
 pub fn prepare_collaboration(body: &mut Map<String, Value>) -> Result<(), CollaborationError> {
-    // Collision detection covers every tool container before any projection.
     let mut collision = false;
     for container in std::iter::once(&*body).chain(history_containers(body)) {
         collision |= tools(container)?
@@ -187,7 +185,8 @@ pub fn prepare_collaboration(body: &mut Map<String, Value>) -> Result<(), Collab
                             .any(|tool| tool.get("name").and_then(Value::as_str) == Some(NAMESPACE))
                     {
                         let name = python_str(id) + &python_json(&container["tools"]);
-                        container.insert("id".to_owned(), Value::String(tool_schema_id(&name)));
+                        container
+                            .insert("id".to_owned(), Value::String(uuid5_tool_schema_id(&name)));
                     }
                 } else if item.get("type").and_then(Value::as_str) == Some("function_call")
                     && item.get("namespace").and_then(Value::as_str) == Some("collaboration")
@@ -268,8 +267,7 @@ pub fn restore_collaboration(value: &Value) -> Result<Value, CollaborationError>
     Ok(result)
 }
 
-fn tool_schema_id(name: &str) -> String {
-    // UUID5 uses SHA-1 for identity, not security or credential hashing.
+fn uuid5_tool_schema_id(name: &str) -> String {
     let namespace_url = [
         0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30,
         0xc8,
@@ -316,7 +314,6 @@ fn python_number(number: &serde_json::Number) -> String {
     rendered
 }
 
-// Schema IDs require spaced JSON with ASCII escaping and UTF-16 surrogate pairs.
 pub(crate) fn python_json(value: &Value) -> String {
     match value {
         Value::Number(number) => python_number(number),

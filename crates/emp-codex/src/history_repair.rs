@@ -118,7 +118,6 @@ fn repair_selected(
         if inventory::has_rollouts(&home)? {
             return Err(HistoryRepairError::new("writer_coordination_unavailable"));
         }
-        // Do not manufacture writer-coordination evidence for an empty home.
         return Ok((
             HistoryRepairLock {
                 _coordination: None,

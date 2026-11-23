@@ -59,7 +59,6 @@ pub(crate) fn record_payload(
     else {
         return;
     };
-    // Keep the request's identity even when configuration changed in flight.
     let mut observed = route.model.value().clone();
     if let Some(calibrations) = model.get("context_calibrations") {
         observed.insert("context_calibrations".into(), calibrations.clone());

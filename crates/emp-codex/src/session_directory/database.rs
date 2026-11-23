@@ -98,7 +98,6 @@ pub(super) fn read(home: &Path, scope: &mut SessionScope) {
                                 && origin.as_deref().is_none_or(str::is_empty)
                                 && scope.0.get(&id).is_some_and(|node| !node.kind.is_empty())
                             {
-                                // An older title-only database cannot contradict explicit request metadata.
                                 kind = "";
                             }
                             if described.insert(id.clone()) {

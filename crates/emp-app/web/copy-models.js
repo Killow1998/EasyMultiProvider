@@ -1,4 +1,3 @@
-// Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
   "models.openai_image_credit": ["优先使用 OpenAI API 赠金", "Prefer OpenAI API credits"],
   "models.credit_service": ["OpenAI 生图赠金", "OpenAI Image Credits"],

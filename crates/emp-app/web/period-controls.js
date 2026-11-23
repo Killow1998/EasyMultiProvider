@@ -1,4 +1,3 @@
-// Shared period controls and time axis, so every time-based panel reads the same way.
 function periodLocalInput(date) { return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0,16); }
 const PERIOD_SECONDS = {'1h':3600, '1d':86400, '7d':7*86400, '15d':15*86400, '30d':30*86400};
 const periodPickers = {};
@@ -38,7 +37,6 @@ function applyCustomPeriod(id) {
   return setPeriod(id, {preset:'', start, end}, {user:true});
 }
 function editPeriod(id) { const picker = periodPickers[id]; if (picker) { picker.preset = ''; markPeriodPreset(id); } }
-// A preset period slides forward to now on refresh; a custom period stays fixed.
 function refreshPeriod(id, user = true) {
   const picker = periodPickers[id]; if (!picker) return;
   if (picker.preset) Object.assign(picker, periodPresetRange(picker.preset));
@@ -56,7 +54,6 @@ function timeAxisTicks(start, end, maxTicks = 8) {
   }
   return ticks;
 }
-// Round local-time ticks under a chart; `x` maps a Unix time to the chart's x coordinate.
 function timeAxisSvg(start, end, x, y, left, right) {
   return timeAxisTicks(start, end).map(tick => {
     const position = x(tick.at), anchor = position-left < 24 ? 'start' : right-position < 24 ? 'end' : 'middle';

@@ -28,8 +28,6 @@ impl ExternalTools {
                     "spawn_agent" | "send_message" | "followup_task"
                 )
             {
-                // Codex distinguishes readable agent messages using an explicit
-                // empty list; omitting it makes even plaintext look encrypted.
                 if item.get("encrypted_function_args").is_some_and(|value| {
                     !value.is_null() && !value.as_array().is_some_and(Vec::is_empty)
                 }) {

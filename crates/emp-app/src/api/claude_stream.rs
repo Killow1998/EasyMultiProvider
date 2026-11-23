@@ -86,7 +86,6 @@ impl<F: FnMut(&Value) -> io::Result<()>> LiveText<F> {
         let output = response["output"]
             .as_array_mut()
             .expect("validated CLI response");
-        // CLI repeats its last public message in the final proposal.
         if let Some(last) = self.items.last() {
             let final_text = last.completed();
             output.retain(|item| {

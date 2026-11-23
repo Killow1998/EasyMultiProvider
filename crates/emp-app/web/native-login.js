@@ -1,4 +1,3 @@
-// Native replacement and subscription import own separate pending login jobs.
 function createNativeLogin({onImported}) {
   let timer=null, view=null;
   function stop() {clearTimeout(timer);view=null;}

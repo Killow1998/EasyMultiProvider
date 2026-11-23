@@ -1,4 +1,3 @@
-// Startup recovery copy, independent of the normal management page.
 registerUiCopy({
   "recovery.languageChinese": ["简体中文","简体中文"],
   "recovery.languageEnglish": ["English","English"],

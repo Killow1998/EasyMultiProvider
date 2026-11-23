@@ -20,7 +20,7 @@ function createNotifications({$, tr, getLanguage}) {
       return Array.isArray(ids) ? ids : [];
     } catch (_) { return []; }
   }
-  // Lucide info / circle-alert icons (ISC); the message itself is always plain text.
+  // Lucide info / circle-alert icons (ISC).
   function icon(error) {
     return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/>${error ? '<path d="M12 8v4M12 16h.01"/>' : '<path d="M12 16v-4M12 8h.01"/>'}</svg>`;
   }
@@ -34,7 +34,7 @@ function createNotifications({$, tr, getLanguage}) {
     } catch (_) { return items; }
   }
   function save() {
-    try { localStorage.setItem(storageKey, JSON.stringify(items)); } catch (_) { /* Still usable without browser storage. */ }
+    try { localStorage.setItem(storageKey, JSON.stringify(items)); } catch (_) {}
   }
   const isOpen = () => inbox.matches(':popover-open');
   function refresh() {
@@ -64,8 +64,6 @@ function createNotifications({$, tr, getLanguage}) {
       body.append(text,time); row.append(symbol,body); list.append(row);
     }
   }
-  // Persistent notices carry actions (copy, approve, decline) and stay until their owner withdraws them.
-  // They stack: the newest shows, and resolving it reveals the next. Ordinary notices pass over briefly.
   let stickies = [];
   const top = () => stickies.at(-1) || null;
   const showingSticky = () => stickies.some(item => item.id === currentId);
@@ -78,9 +76,6 @@ function createNotifications({$, tr, getLanguage}) {
     button.onclick = () => action.run?.();
     return button;
   });
-  // Several persistent notices share one island: the oldest three show as rows with their own actions,
-  // and each resolved row lets the next waiting notice slide in. Grouped notices (join requests) keep this
-  // layout even when only one is left, so the island does not change shape between requests.
   const stacked = () => stickies.length > 1 || stickies.some(item => item.group);
   function displayStack() {
     const fresh = island.dataset.stack !== 'true' || island.hidden;
@@ -153,19 +148,17 @@ function createNotifications({$, tr, getLanguage}) {
       entrance = island.animate([{opacity:0,transform:'translate(-50%, -8px) scale(.97)'},{opacity:1,transform:'translate(-50%, 0) scale(1)'}],{duration:250,easing:'ease-out'});
     }
     if (item.persist) return;
-    // The bar is the timer: pausing it also pauses dismissal, without a second clock.
     countdown = $('notification_progress').animate([{transform:'scaleX(1)'},{transform:'scaleX(0)'}],{duration:item.error ? 10000 : 5000,fill:'forwards'});
     countdown.onfinish = () => { hide(); restore(); };
     pauseWhenReading();
   }
-  // `quiet` is for text another live region (the dialog status) already announces.
   function show(message, error = false, {quiet = false, actions = null, persist = false, group = null} = {}) {
     if (!message) return null;
     const item = {id:`${Date.now()}-${Math.random().toString(36).slice(2)}`, message:String(message).slice(0,10000), time:Date.now(), error:Boolean(error), read:isOpen()};
     if (persist) {
       const entry = {...item, quiet, actions, persist:true, group};
       stickies.push(entry);
-      if (currentId && !showingSticky()) return item.id;  // a passing notice finishes first, then restore() shows it
+      if (currentId && !showingSticky()) return item.id;
       display(entry);
       return item.id;
     }

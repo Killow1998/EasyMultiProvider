@@ -41,7 +41,7 @@ pub(super) fn ico(image: &super::Image) -> Result<Vec<u8>, Box<dyn std::error::E
             .write_header()?
             .write_image_data(&resize(&image.rgba, image.size, 256))?;
     }
-    // Vista+ ICO permits a PNG payload. Zero width/height bytes mean 256 pixels.
+    // ICO encodes 256-pixel dimensions as zero and accepts PNG payloads.
     let mut ico = vec![0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 32, 0];
     ico.extend_from_slice(&(png.len() as u32).to_le_bytes());
     ico.extend_from_slice(&22_u32.to_le_bytes());

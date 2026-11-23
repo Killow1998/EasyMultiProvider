@@ -240,6 +240,8 @@ becoming unnamed user conversations. The shared accounting selection reconciles
 live and historical observations before aggregation. Cache
 reads/writes and reasoning remain subsets of input/output, not extra tokens to
 add to the total.
+Global memory consolidation remains unassigned because it can read many chats;
+the thread that launched it does not establish conversation ownership.
 
 Token and USD displays use lowercase **k/m/b** for thousands, millions and
 billions; hover to see the full recorded value. This affects presentation only.
@@ -258,6 +260,9 @@ records and their aggregates. Only a percentage and progress bar appear beside
 Query/Refresh; changing filters or closing the window cancels the older stream.
 Call reports reuse parsed facts and model aggregates within each query; record
 pricing is looked up after pagination.
+Progress accounts for four full row passes: materialization, summary, model groups
+and time periods. Summary and failure groups cover the full filtered range,
+independently of record pagination.
 
 Amounts are API-equivalent estimates, not subscription charges or invoices.
 No known price displays **—**; a known zero rate displays **US$0**. An asterisk
@@ -287,6 +292,13 @@ instead of resolving the current `account`/`account_id` credential. These choice
 are mutually exclusive; owner filters are bounded and cannot contain control
 characters. Shadow uses this to calculate account-scoped snapshot reports without
 copying credentials or guessing account identity from historical labels.
+
+Quota trends mark observation gaps beyond the greater of 180 seconds or three
+sampling intervals. A scheduled reset inside a gap uses the prior deadline;
+an early reset uses the first changed observation, and views longer than two
+days divide into local days to keep reset markers readable.
+Bar and ring quota views share the same buckets and remaining/used preference;
+changing that preference leaves stored samples intact.
 
 ## What is counted
 
@@ -422,6 +434,8 @@ markups. It does not prove that EMP changes cache hit rates versus native use.
 `crates/emp-codex/src/usage_history.rs` reconciles live receipts with Codex history;
 checkpoints skip unchanged files. Account identity and compatible turn metadata
 determine whether historical and live records describe one call.
+Each report projection reuses one disk-backed row window rather than retaining
+an in-memory copy for each filter.
 
 `state/usage.sqlite3` and `state/api_prices.json` live beside the EMP config.
 The ledger survives restarts and does not expire with the diagnostic ring or

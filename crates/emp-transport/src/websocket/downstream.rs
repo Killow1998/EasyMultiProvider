@@ -15,9 +15,7 @@ pub struct WebSocketConnection<'a, S> {
     peer_close_code: Option<u16>,
     frame_decoder: Option<FrameDecoder>,
     max_message_bytes: usize,
-    // A temporary read owner may answer ping/close while the turn writes output.
-    // Keep each entire frame atomic across both socket handles.
-    write_closed: Arc<Mutex<bool>>,
+    frame_write_closed: Arc<Mutex<bool>>,
 }
 
 impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
@@ -28,7 +26,7 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
             peer_close_code: None,
             frame_decoder: Some(FrameDecoder::new(MAX_PROXY_REQUEST_BYTES)),
             max_message_bytes: MAX_PROXY_REQUEST_BYTES,
-            write_closed: Arc::new(Mutex::new(false)),
+            frame_write_closed: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -63,7 +61,7 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
             peer_close_code: self.peer_close_code,
             frame_decoder: Some(decoder),
             max_message_bytes: self.max_message_bytes,
-            write_closed: Arc::clone(&self.write_closed),
+            frame_write_closed: Arc::clone(&self.frame_write_closed),
         })
     }
 
@@ -71,7 +69,9 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
         &mut self,
         mut reader: WebSocketConnection<'_, T>,
     ) -> Result<(), WebSocketError> {
-        if self.frame_decoder.is_some() || !Arc::ptr_eq(&self.write_closed, &reader.write_closed) {
+        if self.frame_decoder.is_some()
+            || !Arc::ptr_eq(&self.frame_write_closed, &reader.frame_write_closed)
+        {
             return Err(WebSocketError::new(1011, "unrelated websocket reader"));
         }
         self.frame_decoder = reader.frame_decoder.take();
@@ -88,11 +88,11 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
     }
 
     fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> Result<(), WebSocketError> {
-        let mut write_closed = self
-            .write_closed
+        let mut frame_write_closed = self
+            .frame_write_closed
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if self.closed || *write_closed {
+        if self.closed || *frame_write_closed {
             return Err(WebSocketError::new(1006, "websocket closed"));
         }
         let mut header = Vec::with_capacity(10);
@@ -104,7 +104,7 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
             .and_then(|_| self.stream.write_all(payload))
             .and_then(|_| self.stream.flush())
             .map_err(|_| WebSocketError::new(1006, "websocket closed"));
-        *write_closed |= opcode == 8 || result.is_err();
+        *frame_write_closed |= opcode == 8 || result.is_err();
         result
     }
 
@@ -163,8 +163,8 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
             1011,
             "websocket read owner is elsewhere",
         ))?;
-        let poll =
-            read(decoder, self.stream, &self.write_closed).map_err(map_downstream_frame_error)?;
+        let poll = read(decoder, self.stream, &self.frame_write_closed)
+            .map_err(map_downstream_frame_error)?;
         self.finish_poll(poll)
     }
 
@@ -240,11 +240,11 @@ fn map_downstream_frame_error(error: FrameDecodeError) -> WebSocketError {
 
 impl WebSocketConnection<'_, TcpStream> {
     pub fn poll_text_ready(&mut self) -> Result<WebSocketPoll<String>, WebSocketError> {
-        self.poll_with(|decoder, stream, write_closed| {
+        self.poll_with(|decoder, stream, frame_write_closed| {
             decoder.poll(
                 &mut ReadyReader {
                     stream,
-                    write_closed,
+                    frame_write_closed,
                 },
                 true,
                 false,
@@ -261,13 +261,13 @@ impl WebSocketConnection<'_, TcpStream> {
 
 struct ReadyReader<'a> {
     stream: &'a mut TcpStream,
-    write_closed: &'a Mutex<bool>,
+    frame_write_closed: &'a Mutex<bool>,
 }
 
 impl Read for ReadyReader<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         let _writer = self
-            .write_closed
+            .frame_write_closed
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         self.stream.set_nonblocking(true)?;

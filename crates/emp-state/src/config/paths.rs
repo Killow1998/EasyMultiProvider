@@ -255,9 +255,8 @@ fn canonical_secret_paths(config: &mut Value, config_path: &Path) -> Result<(), 
     Ok(())
 }
 
-/// Resolve normalized store and managed paths relative to `config_path.parent`, expanding `~`.
-/// Missing components are retained and existing links are followed;
-/// the final managed input path itself must not be a symlink.
+/// Resolve store and managed paths from `config_path.parent`, expanding `~` and following existing links.
+/// Missing components are retained, but the final managed input path must not be a symlink.
 pub fn canonicalize_private_paths(config: &mut Value, config_path: &Path) -> ConfigResult<()> {
     canonical_account_paths(config, config_path)?;
     canonical_secret_paths(config, config_path)

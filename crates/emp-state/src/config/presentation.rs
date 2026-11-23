@@ -1,5 +1,3 @@
-//! Browser-safe configuration projection and catalog controls.
-
 use super::*;
 
 pub(super) fn normalize_memory_model<'a>(

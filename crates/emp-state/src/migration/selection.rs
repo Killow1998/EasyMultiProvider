@@ -1,4 +1,3 @@
-//! Pure selection of services, model visibility and optional subscription preferences.
 use super::{MigrationError, MigrationResult};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};

@@ -1,4 +1,3 @@
-// Owns account detail reads and alias interaction; routing and configuration stay outside.
 function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage, persistState,
   uiIcon, renderInfo, confirmRemoval, notice,
   onRemoved, closeModal, syncSavedCatalog}) {
@@ -6,7 +5,6 @@ function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage
   const removing = new Set();
   const usage = new Map(), maxAge = 60_000;
   let revision = 0;
-  // Closing details detaches the view, not the account's shared read.
   function stop() { current = null; }
   function findAccount(id) { return [getState().native_account, ...(getState().accounts || [])].filter(Boolean).find(account => account.id === id); }
   const identity = account => JSON.stringify([account?.auth_mode, account?.credential_set, account?.credential_status, account?.quota?.account_label]);
@@ -47,7 +45,6 @@ function createAccountDetails({getState, $, tr, esc, api, services, serviceUsage
         }
       } finally {
         entry.pending = null;
-        // A usage event during the read needs one follow-up, never a cancelled restart.
         if (succeeded && ownsView(entry) && startedRevision !== revision) void readUsage(entry);
       }
     })();

@@ -463,7 +463,6 @@ impl FrameDecoder {
         } else {
             None
         };
-        // Copy the smaller side so small coalesced frames do not inherit large buffers.
         let mut payload = if self.buffer.len() - total_length <= payload_length {
             let remainder = self.buffer.split_off(total_length);
             let mut payload = std::mem::replace(&mut self.buffer, remainder);

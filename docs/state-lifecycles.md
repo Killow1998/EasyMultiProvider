@@ -30,6 +30,40 @@ not mean every transition is enforced by a type.
 | R08 | [Update worker](../crates/emp-state/src/update/worker.rs) | `waiting_for_exit` → `replacing` → `starting` → `waiting_for_startup` → `complete`; failure → restore / rollback / recovery | E. Persisted phases survive process replacement. Keep separate from the WebUI polling lifecycle. |
 | R09 | [Startup recovery](../crates/emp-app/src/startup_recovery.rs), [reset transaction](../crates/emp-app/src/startup_recovery/reset.rs) | Unreadable configuration → recovery UI → staged rebuild → install / rollback; interrupted rebuild → resume | M. Staging files and recovery markers are transaction state, not disposable UI flags. |
 
+Shutdown waiters register with `Notify` before checking the shutdown flag; the
+quota sampler checks its condition and receives shutdown notification under the
+same mutex. `ExitSignals` retains the runtime until its callback task is joined
+and keeps signal receivers registered throughout shutdown.
+
+Normal exit restores owned native routing before draining admitted handlers,
+workers and credential operations, then flushes rotated credentials before
+releasing the service lock; an unsaved rotation makes shutdown fail. Only the
+updater's own handoff preserves integration, while update and rollback retain
+the current browser session and tab.
+
+Recovery holds `state/service.lock`, rejects configuration symlinks/reparse
+points and keeps the lock inode in place during file moves. A missing key with
+existing credentials opens recovery; external-key overrides are handled by
+their owner rather than local-state reset.
+
+Recovery writes its pending marker before moving files, reuses the transaction
+archive with separate attempt directories after interruption, and resumes
+recovery on partial state. Cleanup removes only the generated transaction
+directory after commit, without following contained symlinks; the recovery
+listener also leaves an occupied service port with its current owner.
+Recovery actions have no request body and reject ambiguous framing that could
+leave bytes to be interpreted as another command.
+
+Desktop browser children may outlive EMP; a separate waiter reaps them after
+the launch deadline. With an explicit CLI command, Windows attaches to the
+parent console and preserves inherited redirected handles.
+
+Configuration recovery attempts both optional preference journals even if one
+conflicts or fails; comparisons ignore whitespace-only decoration while preserving
+comments, including leading comments when the first managed field is removed.
+Integration leases accept versions 2, 3 and 4; writes use version 4 for an active
+image-MCP override and otherwise version 3 for older EMP readers.
+
 ## Identity, accounts and route selection
 
 | ID | Owner | Phases / transition triggers | Representation and boundary |
@@ -44,6 +78,21 @@ not mean every transition is enforced by a type.
 | I08 | [Auto Review feedback](../crates/emp-app/src/services/auto_review/state.rs) | Eligible → unavailable result → cooldown → expiry or success → eligible | I. Feedback owns routing eligibility; telemetry does not. |
 | I09 | [Aggregate routing](../crates/emp-app/src/services/aggregate_routing.rs), [affinity ledger](../crates/emp-state/src/usage/ledger/affinity.rs) | Unbound conversation → select source → sticky account → unavailable → select replacement | I. Source policy applies at assignment; ordinary turns retain affinity. |
 | I10 | [Image routing](../crates/emp-app/src/services/native/images/routing.rs), [affinity](../crates/emp-app/src/services/native/images/routing/affinity.rs) | Select image account → bind turn → reuse / reject unavailable destination | I. The account supplying image quota is not necessarily the Runtime's login account. |
+
+Session rotation persists the replacement before discarding the current
+in-memory session, retaining existing logins if persistence fails. Gateway
+credentials authorize forwarded API clients, while browser management requires
+its origin-scoped session; credential export consumes a confirmation issued
+by a separate request.
+Tray Reopen issues a fresh single-use link without persisting another
+credential or making the initial ten-minute startup link reusable.
+
+Quota cleanup finishes the helper and terminates its children even after a
+successful launcher exit, then signals pipe readers to stop before joining them
+so detached descendants cannot hold shutdown or refresh locks indefinitely.
+Windows helpers start suspended, join the owned job before running, and resume
+their sole initial thread through a thread snapshot because `std::process::Child`
+retains the process handle rather than the initial thread handle.
 
 ## Migration
 
@@ -65,6 +114,8 @@ KDF parameters must match its version; bundle input cannot choose the cost.
 Credentials are re-encrypted under the destination vault on import. Private
 files/directories retain Unix 0600/0700 or the restricted Windows ACL/owner
 rules, including symlink/reparse-point checks and transactional rollback.
+Transaction snapshots revalidate the opened file's metadata after checking its
+path, rejecting substituted links or special files before reading their contents.
 
 ## Requests, transports and model execution
 
@@ -86,6 +137,11 @@ rules, including symlink/reparse-point checks and transactional rollback.
 | Q14 | [Realtime](../crates/emp-app/src/api/realtime/mod.rs), [sideband](../crates/emp-app/src/api/realtime/sideband.rs) | Create call → sideband relay → close/error | I. Keep call resource lifetime distinct from ordinary Responses turns. |
 | Q15 | [SSE parser](../crates/emp-transport/src/lib.rs) | Partial bytes → lines → event boundary → JSON frame / error / finish | I. Parser buffering is independent of Q09 response completion. |
 
+The management SSE connection releases its integration admission permit before
+entering the stream, so it cannot block native restoration. Realtime sideband
+shutdown joins the socket owner before inspecting the final confirmation
+receipt, preserving the distinction between queued and delivered writes.
+
 ## History, parsing and accounting
 
 | ID | Owner | Phases / transition triggers | Representation and boundary |
@@ -98,6 +154,20 @@ rules, including symlink/reparse-point checks and transactional rollback.
 | H06 | [Usage scanner](../crates/emp-codex/src/usage_history.rs), [usage service](../crates/emp-app/src/services/usage.rs) | Idle → scan/index progress → persist cursor/result → idle; stop → end worker | M. Scan progress, available old results and pricing completeness are independent. |
 | H07 | [Model observations](../crates/emp-router/src/model_observation.rs) | Observe headers / first event → collect model, effort and timing → reconcile terminal metadata | I. Conflicting observations and missing observations are different results. |
 | H08 | [Chat text](../crates/emp-protocol/src/chat_text.rs) | Accumulate marker prefix / backticks → emit text, enter/leave code span, or reject tool markup | I. Stream chunk boundaries must not become user-visible content boundaries; code fences are parser state. |
+
+Paginated history replays ancestors oldest first within frozen byte and ordinal
+bounds; only the newest eligible compaction can seed reverse replay, which
+preserves prefix control/model state, checks ordinals through the anchor, and
+uses full replay for opaque checkpoints, missing anchors or invalid seed/suffix
+state, while legacy non-paginated histories may use visible summaries.
+Rollback precedes failed-turn filtering and clears the inherited active turn;
+exact checkpoint lookup and replay share fork bounds, and later segments check
+checkpoint ambiguity while the client supplies the post-checkpoint tail.
+
+History repair keeps replacement arrays empty in checkpoints and writes the
+canonical response items immediately afterward to bound checkpoint size.
+Windows publication uses `MOVEFILE_WRITE_THROUGH`; its directory-sync operation
+has no separate flush.
 
 ## Background publication and caches
 
@@ -133,6 +203,34 @@ rules, including symlink/reparse-point checks and transactional rollback.
 | U14 | [Tutorials](../crates/emp-app/web/tutorials.js) | Select tutorial → load/show animation → select another / close / open larger view | I. Selection and resource lifetime belong to the tutorial view. |
 | U15 | [Settings](../crates/emp-app/web/settings.js), [routing](../crates/emp-app/web/routing-settings.js), [aggregate](../crates/emp-mod-aggregate/web/aggregate-settings.js), [decision](../crates/emp-mod-decision/web/decision-settings.js), [connections](../crates/emp-app/web/service-connections.js) | Open draft → edit → validate → save → publish result or retain draft | I. Settings values are configuration, not independent lifecycle phases. Keep per-form save ownership. |
 | U16 | [Recovery UI](../crates/emp-app/web/recovery.html) | Load recovery state → ready → confirm → busy → finished / retryable error | I. Confirmation and terminal restart/exit are distinct; no normal management session is assumed. |
+
+Report filters cancel the current read before debounce; closing account
+details detaches the view without canceling its shared account read, and a
+usage event during that read schedules one follow-up. Migration preview
+cancellation leaves a committed import's result available; LAN Back restores
+the form after consuming its one-use code, and tutorial selection replaces
+the image owner to isolate late load/error callbacks.
+
+Failed report reads retain prior data, missing measurements stay distinct
+from measured zero, and preset periods refresh toward now while custom periods
+remain fixed. Context help shows the catalog's usable window (95% by default),
+with the compaction trigger expressed as a budget rather than a compression
+ratio.
+
+Service editors keep saved keys on the server and exclude their masked
+placeholder from submitted values; an unchecked image capability stays unknown
+until confirmed. Quota/login errors retain their recovery lifecycle and take
+priority over transient request errors.
+
+Persistent notification actions stay until their owner withdraws them;
+grouped requests retain their layout even when one remains, while passing
+notices finish before persistent content returns. The notification animation
+owns dismissal timing and pauses it while read; `quiet` avoids repeating text
+already announced by the dialog status live region.
+
+Release notes use maintained language sections and preserve rich/nested
+content during aggregation. UI effects use one 15 fps owner for persistent
+textures and align sprite clipping with device pixels at fractional zoom.
 
 ## Changes selected in this audit
 

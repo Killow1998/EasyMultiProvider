@@ -42,7 +42,6 @@ impl SessionScope {
         let mut current = self.0.get_key_value(id)?;
         let mut visited = BTreeSet::new();
         for _ in 0..64 {
-            // Global memory work may read many chats; its launcher is not its owner.
             if current.1.kind == "memory_consolidation" {
                 return None;
             }

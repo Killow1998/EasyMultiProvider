@@ -42,7 +42,7 @@ pub(super) fn automatic(
         .and_then(|auth| emp_codex::account_auth_headers(&auth))
         .map(|_| ("@native", native_quota.as_ref(), &Value::Null));
     let team_active = state.backend.modules.active(emp_modules::Module::Team);
-    let mut best: Option<(&str, Option<f64>)> = None;
+    let mut first_highest_headroom: Option<(&str, Option<f64>)> = None;
     for (id, quota, account) in native.into_iter().chain(imported) {
         let source = state.backend.team.subscription_source(state, id, account);
         if limited.contains_key(id)
@@ -59,17 +59,18 @@ pub(super) fn automatic(
         if remaining.is_some_and(|value| value <= 0.0) {
             continue;
         }
-        // Read balances once: known positive beats unknown, with Native/account order breaking ties.
-        if best.is_none_or(|(_, current)| remaining > current) {
-            best = Some((id, remaining));
+        if first_highest_headroom.is_none_or(|(_, current)| remaining > current) {
+            first_highest_headroom = Some((id, remaining));
         }
     }
-    best.map(|(id, _)| (*id).to_owned()).ok_or_else(|| {
-        NativeHttpError::router(
-            429,
-            "No enabled subscription account has image quota available",
-        )
-    })
+    first_highest_headroom
+        .map(|(id, _)| (*id).to_owned())
+        .ok_or_else(|| {
+            NativeHttpError::router(
+                429,
+                "No enabled subscription account has image quota available",
+            )
+        })
 }
 
 pub(super) fn account_route(

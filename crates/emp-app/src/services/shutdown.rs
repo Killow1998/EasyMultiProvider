@@ -46,8 +46,6 @@ pub(crate) fn prepare_quit(
             };
             return Err(ShutdownError { code, message });
         }
-        // A previous listener can own an applied lease. Restoring only our
-        // lease is not sufficient evidence that Codex can run without EMP.
         let native = receipt
             .step("verify_native_configuration", || {
                 state.backend.integration.manager.status()

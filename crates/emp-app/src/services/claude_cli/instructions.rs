@@ -16,7 +16,6 @@ pub(super) fn take(transcript: &mut Value) -> Result<String, &'static str> {
     };
     match input {
         Value::Array(items) => {
-            // Validate before removing anything; preserve the remaining history order.
             for item in items.iter().filter(|item| instruction_role(item).is_some()) {
                 append(
                     &mut prompt,

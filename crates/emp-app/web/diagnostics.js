@@ -1,4 +1,3 @@
-// Feature state is private; the page supplies current data and UI operations.
 function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t, tr, modelName, serviceName, localTimeText, notice}) {
   let diagnosticsRequest = 0;
   let supportReportRequest = 0;

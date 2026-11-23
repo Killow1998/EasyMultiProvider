@@ -49,8 +49,7 @@ impl NativeContinuation {
         after: emp_transport::WebSocketTraffic,
         compression: bool,
     ) {
-        // Text application payloads only, excluding WS framing/control,
-        // handshakes, TLS, proxies and IP overhead.
+        // Byte counts cover text application payloads, excluding framing and lower transport layers.
         self.upstream_decoded_bytes_sent = delta(before.decoded_sent, after.decoded_sent);
         self.upstream_encoded_bytes_sent = delta(before.encoded_sent, after.encoded_sent);
         self.upstream_decoded_bytes_received =

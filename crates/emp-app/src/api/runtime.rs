@@ -7,8 +7,7 @@ use crate::http::response::{
 use crate::services::runtime::compatibility_snapshot;
 use std::net::TcpStream;
 
-/// Reports whether EMP can resolve a trusted Claude Code CLI installation.
-/// This is deliberately a path-only availability check: it never starts the CLI.
+/// Resolves a trusted Claude Code CLI path without starting the CLI.
 pub(crate) fn claude_cli_availability_request() -> Vec<u8> {
     let available = emp_codex::installed_cli::resolve_claude_cli().is_some();
     let guidance = if available {

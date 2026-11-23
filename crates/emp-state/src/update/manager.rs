@@ -234,21 +234,15 @@ impl UpdateManager {
         })))
     }
 
-    // Read current environment/system settings for each network attempt. A proxy
-    // enabled after EMP starts must also apply to the next update.
-    fn client(&self) -> Result<Client> {
-        // Native system-proxy support uses the same environment-first precedence
-        // on Windows and macOS. Never substitute an untrusted download mirror.
+    fn client_for_network_attempt(&self) -> Result<Client> {
         let mut client_builder = Client::builder()
             .https_only(!self.0.endpoints.allow_loopback_http)
             .redirect(reqwest::redirect::Policy::none())
-            // One owner for the visible retry budget, including body failures.
             .retry(reqwest::retry::never())
             .connect_timeout(Duration::from_secs(20))
             .timeout(Duration::from_secs(600))
             .user_agent(format!("EMP/{}", self.snapshot().current_version));
         if self.0.endpoints.allow_loopback_http {
-            // Injected local release fixtures must bypass any ambient HTTP proxy.
             client_builder = client_builder.no_proxy();
         }
         client_builder
@@ -359,7 +353,8 @@ fn probe_candidate_version_observed(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+        command.creation_flags(CREATE_NO_WINDOW);
     }
     #[cfg(windows)]
     let mut child =

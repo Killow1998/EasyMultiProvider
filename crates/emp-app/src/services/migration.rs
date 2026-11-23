@@ -185,13 +185,11 @@ pub(crate) fn import(
             let bundle = STANDARD
                 .decode(encoded)
                 .map_err(|_| MigrationError::invalid("migration bundle is not valid base64"))?;
-            // Decrypting (scrypt) needs no configuration; keep it outside the locks.
             let decrypted = receipt
                 .step("decrypt_bundle", || {
                     decrypt_migration_bundle(&bundle, password)
                 })
                 .map_err(MigrationError::invalid)?;
-            // Account publication serializes credential replacement with refresh and config writes.
             let summary = receipt.step("commit_bundle", || {
                 crate::services::accounts::import_account_bundle(state, decrypted)
                     .ok_or(MigrationError::Internal)?

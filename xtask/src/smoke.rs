@@ -116,7 +116,6 @@ fn update_in(
     if relative.is_empty() {
         copy(binary, &installed)?;
     } else {
-        // Install from the real DMG, including its launcher, Info.plist and icon.
         let initial = root.join("initial-package");
         fs::create_dir(&initial).map_err(error)?;
         let initial_package = initial.join(&package_name);
@@ -371,7 +370,6 @@ fn stop_processes_under(root: &Path) {
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .status();
     }
-    // Let the OS release file handles before the temporary tree is removed.
     std::thread::sleep(Duration::from_secs(1));
 }
 

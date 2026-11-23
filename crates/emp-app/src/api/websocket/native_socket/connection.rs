@@ -1,4 +1,3 @@
-//! One session owns its route identity, scope, socket and reconnect suppression.
 use super::super::ObservedWebSocket;
 use super::NativeSession;
 use crate::app::ServerState;
@@ -85,8 +84,6 @@ impl NativeSession {
             .client
             .websocket_proxy_for(&plan.url);
         let endpoint_matches = native_upstream.as_ref().map(|upstream| {
-            // Incremental turns inherit their socket's tool catalog. A policy
-            // change requires full-history recovery on a fresh connection.
             upstream.url == plan.url
                 && upstream.plaintext_collaboration == plan.plaintext_collaboration
                 && proxy.as_ref().is_ok_and(|proxy| proxy == &upstream.proxy)
@@ -164,7 +161,6 @@ impl NativeSession {
                     if error.is_upgrade_rejection() {
                         facts.handshake_status = Some(error.status());
                     }
-                    // Only explicit protocol rejection lasts for this downstream connection.
                     if matches!(error.status(), 400 | 404 | 405 | 415 | 426 | 501) {
                         http_only_routes.insert(route_key.clone());
                     }

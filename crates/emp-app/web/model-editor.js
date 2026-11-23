@@ -1,4 +1,3 @@
-// Model draft and async metadata belong to the editor that opened them.
 function createModelEditor({getState, $, tr, esc, api, persistState, openModal, closeModal, notice, help, contextHelp,
   upstreamErrorText, testModelAudio, testModelVision, movePresentation, format}) {
   const {visionStatus, modalityLabel, compactContext, usableContext} = format;
@@ -9,7 +8,6 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
   let modalReasoningSupport = null;
   let modalReasoningSummarySupport = null;
   let editingModelId = '';
-  // Modalities with a test the edit panel can run against the saved model.
   let modalVisionStatus = 'unknown';
   let modalModalitiesEdited = false;
   let modalReasoningEdited = false;
@@ -129,7 +127,6 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
     const collision = getState().models.find(m => m.id === id && m.id !== editingModelId);
     if (collision) throw new Error(tr("models.that_model_route_already_exists_and_cannot_overwrite_another"));
     const imageChecked = Boolean(document.querySelector('[data-modality][value="image"]:checked'));
-    // Unchecked image keeps "unknown" until the user or a test has confirmed it either way.
     const vision = imageChecked ? 'supported' : (modalVisionStatus === 'unknown' ? 'unknown' : 'unsupported');
     const kept = (previous?.input_modalities || []).filter(value => !COMMON_MODALITIES.includes(value));
     const modalities = [...new Set([...document.querySelectorAll('[data-modality]:checked')].map(input => input.value).concat(kept))].filter(value => value !== 'image');

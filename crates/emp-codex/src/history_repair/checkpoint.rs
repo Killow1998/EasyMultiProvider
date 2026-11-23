@@ -93,7 +93,6 @@ fn replacement_checkpoint(
     } else if !payload.contains_key("message") {
         payload.insert("message".to_owned(), json!(""));
     }
-    // Keep checkpoints small by placing canonical response_item replacements immediately after them.
     payload.insert("replacement_history".to_owned(), Value::Array(Vec::new()));
     payload.insert(
         "replacement_history_metadata".to_owned(),

@@ -30,7 +30,6 @@ impl CodexHomeHistoryReader {
         if is_compressed_rollout(&path) {
             return self.read_compressed_rollout(anchor, location, file, captured_end, replay);
         }
-        // A file shorter than history_base.end_byte_offset has lost the child's frozen prefix.
         let byte_cap = if replay.lineage_byte_offset > 0 {
             if replay.lineage_byte_offset > captured_end {
                 return Err(HistoryError::new("lineage_prefix_truncated"));
@@ -40,11 +39,9 @@ impl CodexHomeHistoryReader {
             captured_end
         };
 
-        // Paginated resumes may use reverse bases; exact fork checkpoints need full ambiguity detection.
         let reverse_base = if replay.exact_compaction.is_none()
             && !replay.force_full
             && location.mode == "paginated"
-            // Ancestor byte and ordinal bounds forbid bases recorded after the fork.
             && byte_cap == captured_end
             && replay.lineage_bound.is_none()
         {
@@ -53,7 +50,6 @@ impl CodexHomeHistoryReader {
             None
         };
         if let Some(mut base) = reverse_base {
-            // Compactions replace only visible items; prefix control state must survive the base.
             let prefix_scan = {
                 let prefix_anchor = HistoryAnchor {
                     thread_id: anchor.thread_id.clone(),
@@ -113,7 +109,6 @@ impl CodexHomeHistoryReader {
             }
         }
 
-        // Reverse probing may leave the handle mid-file.
         file.seek(SeekFrom::Start(0))
             .map_err(|_| HistoryError::new("source_unavailable"))?;
         let scan = {

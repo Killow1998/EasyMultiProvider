@@ -70,11 +70,8 @@ pub(crate) fn handle_connection(
     observation.received(request);
     let path = request.raw_path();
     if request.method == RequestMethod::Get && path == "/api/accounts/events" {
-        // This long-lived management stream carries no Codex traffic. Keeping
-        // its admission permit would make the UI block native restoration.
         let _ = request_permit.take();
     }
-    // The management page carries a session; Codex does not.
     if (path.starts_with("/v1/models") || path.starts_with("/v1/responses"))
         && request.session_token().is_none()
     {
@@ -329,7 +326,6 @@ pub(crate) fn handle_connection(
                         .sessions
                         .contains(request.session_token().as_deref(), now) =>
             {
-                // Keep the monitor alive until the SQLite read has finished or aborted.
                 let mut monitor =
                     crate::services::disconnect::DisconnectMonitor::start(&stream).ok();
                 let cancelled = monitor.as_mut().map(|monitor| monitor.cancellation());

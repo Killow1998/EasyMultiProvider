@@ -1,4 +1,3 @@
-// Shared call facts and formatting for usage, performance and request details.
 function createCallReports({api, getActivity, getState, openModal, $, esc, tr, modelDisplayName, serviceName, getLanguage, periodPickerHtml, registerPeriodPicker}) {
   let current = null, timer = null, disposeOutcomes = () => {};
   const n = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
@@ -117,7 +116,6 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, m
   function live() { if (current?.report && $(current.id)) render($(current.id).querySelector('[data-call-content]'),current.report); }
   function stop() { performance.stop(); disposeOutcomes(); disposeOutcomes = () => {}; current?.query.cancel(); current = null; if (timer !== null) clearTimeout(timer); timer = null; }
   function mount(id, filters = {}, performance = false, report = null) {
-    // Embedded statistics already fetched the first page with these filters.
     if (report && current?.id === id) {
       if (JSON.stringify(current.filters) !== JSON.stringify(filters)) {
         current.query.cancel();

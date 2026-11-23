@@ -1,4 +1,3 @@
-//! Apply [`crate::executable_trust`] before running any inventory candidate, as quota helpers do.
 use std::path::{Path, PathBuf};
 
 /// Return the canonical path of `path` if it may be executed for probing.

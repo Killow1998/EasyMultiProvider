@@ -45,7 +45,6 @@ pub(super) fn facts(
                 "unknown".into()
             });
         }
-        // Server search results are owned by the upstream, not a Codex tool pair.
         if matches!(
             item_type.as_str(),
             "tool_search_call" | "tool_search_output"
@@ -226,7 +225,6 @@ pub(super) fn reasoning_effort(
         .and_then(|metadata| metadata["x-codex-turn-metadata"].as_str())
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         .unwrap_or_default();
-    // Lite pins root effort; turn metadata also covers unchanged incremental turns.
     let effort = metadata
         .get("reasoning_effort")
         .or_else(|| {

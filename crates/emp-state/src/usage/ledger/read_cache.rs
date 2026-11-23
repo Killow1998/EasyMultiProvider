@@ -25,7 +25,6 @@ impl CachedRows {
         let std::ops::Range { start, end } = range;
         if slot.is_none() {
             let connection = ledger.connect()?;
-            // Keep one disk-backed window per projection, not a RAM copy per filter.
             connection.execute_batch("PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-2048")?;
             *slot = Some(Self {
                 connection,

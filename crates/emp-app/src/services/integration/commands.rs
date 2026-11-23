@@ -63,7 +63,6 @@ pub(crate) fn execute(
         }
     })
     .unwrap_or_else(|reply| reply);
-    // Invalidate the WebUI snapshot even when follow-up fails after a config commit.
     if matches!(operation, "enable" | "restore" | "reload" | "verify") {
         state
             .backend
@@ -248,7 +247,6 @@ fn execute_inner(
     };
     receipt.check("configuration_command_succeeded", Some(result.ok()));
     if result.ok() {
-        // Record route ownership before fallible follow-up so exit can restore after failed rollback.
         let active = result.state == "active";
         state
             .backend
@@ -287,7 +285,6 @@ fn execute_inner(
             record_runtime_result(receipt, result);
         }
         let runtime_sync_failed = runtime_sync.is_err();
-        // Restore is committed; a secondary runtime observation failure must leave EMP available.
         if runtime_sync_failed && operation != "restore" {
             return unavailable(409);
         }
@@ -344,7 +341,7 @@ fn record_runtime_result(
         "runtime_catalog_matches_target",
         match result.state {
             "emp_loaded" if result.verified => Some(true),
-            "native_loaded" => Some(true), // only absence of previous EMP model IDs
+            "native_loaded" => Some(true),
             "reload_required" => Some(false),
             _ => None,
         },

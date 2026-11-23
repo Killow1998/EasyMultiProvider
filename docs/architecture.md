@@ -147,6 +147,10 @@ for one request-local configuration, credential hydration, route selection and
 summary policy. History/context preparation and transport presentation remain
 at their existing boundaries.
 
+Slash-qualified model IDs require an explicit model/account match so an unknown
+account prefix cannot reach the single-provider fallback with the caller's
+credentials.
+
 Aggregation resolves inside this preparation boundary, using the same snapshot
 and caller headers. It has no separate request dispatcher or preliminary group
 lookup. Memory jobs may select an account first, then pass their snapshot into
@@ -203,6 +207,12 @@ Preserve refresh-lock -> configuration-lock -> history-store-lock ordering,
 transaction rollback and credential-rotation draining. A failed validation or
 commit must not publish success. Keep flexible stored JSON and opaque upstream
 fields; typed commands/results need not impose a closed schema on provider data.
+
+Provider origin, Claude local-login mode or Vertex authentication-mode changes
+invalidate the managed secret; credentials for a new origin must be explicitly
+supplied in that request.
+Switching to Claude CLI local login clears the carried provider URL, masked key
+and managed key-file reference.
 
 ### 3. Management events borrow the quota module's synchronization
 

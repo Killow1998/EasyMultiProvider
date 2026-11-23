@@ -110,7 +110,6 @@ impl RequestObservation {
         &self,
         mut incoming: BTreeMap<String, String>,
     ) -> BTreeMap<String, String> {
-        // A caller's case variant must not shadow EMP's correlation identifier.
         incoming.retain(|name, _| {
             !name.eq_ignore_ascii_case("x-emp-request-id")
                 && !name.eq_ignore_ascii_case("x-emp-probe")
@@ -280,7 +279,6 @@ impl RequestObservation {
     }
 
     pub(crate) fn buffered_error(&mut self, body: &[u8], delivered: bool) {
-        // Only own bounded error JSON is inspected, never a successful reply.
         if body.len() <= 64 * 1024
             && let Ok(event) = serde_json::from_slice(body)
         {

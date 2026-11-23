@@ -39,6 +39,9 @@ layout, desktop metadata, platform icons, and SHA-256 sidecars under
 Cargo-derived file/product versions into the executable, and the build reads
 the final PE resources back to verify them.
 
+Source-path remaps order parent roots before nested roots because rustc applies
+the last matching prefix.
+
 Desktop launch owns the system-tray entry. Windows uses the GUI subsystem;
 explicit CLI commands attach to an existing parent console while preserving
 redirected output. Background browser, proxy and version helpers use
@@ -69,6 +72,8 @@ candidate that must roll back. On macOS it installs from the real `.dmg`. On
 Linux it also installs the archive with `install-user.sh` into an isolated
 desktop-user home. The packaged runtime and its install/update scripts do not
 require Python.
+The update smoke retains the exited parent's process handle so Windows update
+detection must distinguish an exited process object from a running process.
 The Linux bootstrap installers (`EMP-linux-x86_64-install.sh` and
 `EMP-linux-arm64-install.sh`) use `curl`, `tar`, `gzip` and `sha256sum`. The
 script selects the archive for the host architecture, resolves the latest

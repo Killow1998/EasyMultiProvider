@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::{Duration, Instant};
 
-/// Default connection timeout for HTTP and WebSocket transports.
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(300);
 pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -107,8 +106,7 @@ impl ProxyOrigin {
             host
         };
         let origin = format!("{}://{}:{}", target.scheme, host, port);
-        // Pool identity includes proxy credentials, but planning and diagnostics retain only their digest.
-        let token = safe_token(raw.to_owned());
+        let token = proxy_credentials_digest(raw.to_owned());
         Ok(Self::Proxy { origin, token })
     }
 
@@ -457,7 +455,7 @@ fn validate_header_value(value: &str) -> HttpResult<()> {
     Ok(())
 }
 
-fn safe_token(value: String) -> String {
+fn proxy_credentials_digest(value: String) -> String {
     let digest = Sha256::digest(value.as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }

@@ -1,4 +1,3 @@
-// Shared report presentation. Existing report queries and metric calculations stay intact.
 function createPerformanceView({esc, tr, getLanguage, number, seconds, tps, rate, outcomes, bindOutcomes, definition}) {
   const chart = createPerformanceChart({esc,tr,getLanguage,number,seconds,tps});
   let dispose = () => {};

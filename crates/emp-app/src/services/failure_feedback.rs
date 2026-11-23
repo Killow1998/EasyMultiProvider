@@ -79,7 +79,6 @@ pub(crate) fn message(
 
 pub(crate) fn annotate_native(error: &mut NativeHttpError, route: &ResolvedRoute) {
     let Some(reason) = error.body["error"]["failure_reason"].as_str() else {
-        // A local preparation or credential error has no upstream evidence.
         return;
     };
     let class = normalize_error_class(

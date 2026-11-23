@@ -971,6 +971,10 @@ visibility alone does not establish a model's coding-worker quality. See
 [capability ownership](official-model-registry-spec.md#catalog-capability-and-identity-contracts)
 and [collaboration modes](external-collaboration.md).
 
+Chat tool-result messages carry text only; projected media follows all paired
+results as a user message. Portable compaction decoding accepts mixed Base64
+alphabets and nonzero unused padding bits while preserving existing checkpoints.
+
 ## Protocol decisions
 
 - **Windows loopback discovery:** the development candidate advertises
@@ -1045,6 +1049,10 @@ EMP_TEST_CODEX_CLI=/path/to/codex cargo test -p emp-app --lib \
 ```
 
 ## Runtime discovery and update acceptance
+
+Windows App cache candidates are hashed against the registered official engine
+on every comparison; file size and modification time cannot establish byte
+identity because overwrites can preserve both.
 
 The existing inert installation matrix covers CLI, App and IDE paths on Windows,
 Linux, Intel macOS and Apple Silicon macOS. Host metadata is checked separately

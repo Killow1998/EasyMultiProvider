@@ -191,7 +191,6 @@ impl CodexHomeHistoryReader {
             if !canonical.starts_with(root) {
                 return false;
             }
-            // Resolve home aliases to the root, then require real entries beneath it.
             let Some(relative) = absolute.ancestors().skip(1).find_map(|ancestor| {
                 (ancestor.canonicalize().ok()? == *root)
                     .then(|| absolute.strip_prefix(ancestor).ok())
@@ -222,7 +221,6 @@ impl CodexHomeHistoryReader {
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let path = entry.path();
-                // Only state_N.sqlite is queryable; -wal/-shm sidecars share its stem.
                 if path.extension().and_then(|extension| extension.to_str()) != Some("sqlite") {
                     return None;
                 }

@@ -93,8 +93,6 @@ impl ServerHandle {
         open_browser: bool,
         markers: UpdateStartupMarkers,
     ) -> Result<Self, AppError> {
-        // Unit-test servers do not start a network worker by default; the
-        // catalog loopback integration fixture opts in explicitly below.
         Self::start_with_config_options_inner(StartupContext {
             host,
             port,

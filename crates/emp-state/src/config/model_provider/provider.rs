@@ -198,7 +198,6 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     if !route_names.is_empty() {
         normalized["route_names"] = serde_json::json!(route_names);
     }
-    // Absent backends keep the historic shape; explicitly configured backends round-trip.
     if raw.contains_key("execution_backend") {
         normalized["execution_backend"] = Value::String(execution_backend.to_owned());
     }

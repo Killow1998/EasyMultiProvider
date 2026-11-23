@@ -33,9 +33,8 @@ pub fn assess(
     assess_with_input_estimate(provider, model, protocol, payload, input_estimate)
 }
 
-/// Assess an already measured input, or an unavailable bounded estimate.
-/// An unavailable estimate with a known budget must still reach compaction;
-/// estimating a destination is not permission to send an oversized request.
+/// With a known budget, an unavailable estimate still requires compaction
+/// and does not authorize oversized input.
 pub fn assess_with_input_estimate(
     provider: &Map<String, Value>,
     model: &Map<String, Value>,

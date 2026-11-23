@@ -741,6 +741,7 @@ fn move_file_write_through(
     if replace_existing {
         flags |= MOVEFILE_REPLACE_EXISTING;
     }
+    // SAFETY: both paths are NUL-terminated UTF-16 buffers that remain live for the call.
     let result = unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), flags) };
     if result == 0 {
         Err(std::io::Error::last_os_error())
@@ -758,8 +759,6 @@ fn sync_directory(path: &Path) -> Result<(), HistoryRepairError> {
 
 #[cfg(not(unix))]
 fn sync_directory(_path: &Path) -> Result<(), HistoryRepairError> {
-    // Windows has no directory-fsync equivalent; every publication or
-    // replacement instead uses MOVEFILE_WRITE_THROUGH.
     Ok(())
 }
 

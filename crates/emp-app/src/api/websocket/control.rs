@@ -36,7 +36,7 @@ impl Control {
         let interruption = event["type"] == "response.incomplete"
             && event["response"]["incomplete_details"]["reason"] == "interrupted";
         if self.interrupted.load(Ordering::Acquire) && !interruption {
-            return Ok(false); // discard_partial_items: no further output is delivered.
+            return Ok(false);
         }
         websocket.send_json(event)?;
         if event["type"] == "response.created" {
@@ -126,9 +126,9 @@ pub(super) fn run(
             let mut sender = Some(sender);
             let mut pending = None;
             let mut events = Events::with_capacity(std::num::NonZeroUsize::new(1).unwrap());
-            let mut ready = true; // includes frames prefetched by the previous turn.
+            let mut read_without_wait = true;
             while !stopped.load(Ordering::Acquire) {
-                if !ready {
+                if !read_without_wait {
                     events.clear();
                     match readiness.poller.wait(&mut events, None) {
                         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -136,12 +136,12 @@ pub(super) fn run(
                         Ok(_) => {},
                     }
                     if stopped.load(Ordering::Acquire) { break; }
-                    ready = events.iter().any(|event| event.readable);
-                    if !ready { continue; }
+                    read_without_wait = events.iter().any(|event| event.readable);
+                    if !read_without_wait { continue; }
                 }
                 match reader.poll_text_ready() {
                     Ok(WebSocketPoll::Pending) => {
-                        ready = false;
+                        read_without_wait = false;
                         if readiness.poller.modify(&readiness.socket, Event::readable(0)).is_err() { break; }
                     }
                     Ok(WebSocketPoll::Ping(payload)) => {
@@ -192,8 +192,6 @@ pub(super) fn run(
             if pending.is_none() && !stopped.load(Ordering::Acquire)
                 && let Some(sender) = sender.take()
             { let _ = sender.send(()); }
-            // Retain the sender when a next request is queued: its Drop must not
-            // signal a disconnect while inference is still running.
             (reader, pending, sender)
         });
         let stop = Stop(&stopped, &readiness.poller);

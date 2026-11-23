@@ -24,8 +24,7 @@ pub(super) fn prepare_exit(
     state.backend.integration.restore_owned_on_exit()
 }
 
-/// Also runs on a startup error or Rust stack unwind, while this process still
-/// owns its files. No other process or later startup performs this cleanup.
+/// Restores this process's owned configuration on startup failure or stack unwind.
 pub(super) struct RestoreBeforeExit {
     state: Arc<ServerState>,
     armed: bool,
@@ -79,12 +78,8 @@ impl ServerHandle {
     }
 
     fn shutdown_inner(self, preserve_integration: bool) -> Result<(), AppError> {
-        // Routing must be native before worker/credential drains. Windows can
-        // terminate us after its console-close deadline even if work is busy.
         let restoration = prepare_exit(&self.state, preserve_integration);
         self.state.catalog_refresh.stop();
-        // Restore first, then allow admitted handlers to flush their final
-        // receipts before process exit. OS exit callbacks only run prepare_exit.
         let admitted_work_drained = if let Some(gate) = self
             .state
             .connection_admission
@@ -100,16 +95,11 @@ impl ServerHandle {
         } else {
             Err(AppError::ServerStopped)
         });
-        // Request threads are not joined (streams may outlive shutdown), so
-        // quota checks that may rotate a credential are drained explicitly
-        // before the final save below.
         let credential_operations = &self.state.backend.accounts.credential_operations;
         let _ = credential_operations.close_and_drain(Duration::ZERO);
         let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_millis(100));
         self.state.backend.usage.stop();
         let accounts = &self.state.backend.accounts;
-        // The same mutex must cover the condition check and notification,
-        // otherwise shutdown can arrive just before a worker starts waiting.
         self.state.backend.management_events.close();
         if let Ok(_wait) = accounts.quota_sampler_wait.lock() {
             accounts.quota_sampler_condition.notify_all();
@@ -118,9 +108,6 @@ impl ServerHandle {
         for worker in self.workers {
             let _: () = worker.join().map_err(|_| AppError::ServerStopped)?;
         }
-        // Last chance to save credentials Codex rotated: the stored copies
-        // may already be invalid upstream.
-        // A shutdown that loses them is not a clean exit.
         let unfinished = credential_operations.close_and_drain(CREDENTIAL_DRAIN_TIMEOUT);
         let unsaved = unfinished + crate::services::quota::flush_pending_rotations(&self.state);
         drop(self._service_owner);
@@ -131,7 +118,6 @@ impl ServerHandle {
         match restoration {
             Ok(()) => Err(unsaved),
             Err(error) => {
-                // Only one error is returned; do not let it hide this one.
                 eprintln!("{unsaved}");
                 Err(error)
             }

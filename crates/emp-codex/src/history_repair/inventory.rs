@@ -1,4 +1,3 @@
-//! Read-only discovery and validation of Codex history sources.
 use super::HistoryRepairError;
 use crate::history::{CodexHomeHistoryReader, uuid_shape};
 use rusqlite::{Connection, OpenFlags};

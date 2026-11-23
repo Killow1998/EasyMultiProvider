@@ -1,4 +1,3 @@
-// Bills reuse reconciled usage. Detail requests belong to the currently open row.
 function createSessionBills({api,tr,esc,number,getLanguage}) {
   let current=null, searchTimer=null;
   const time=value=>new Date(value*1000).toLocaleString(getLanguage()==='en'?'en-US':'zh-CN',{hour12:false});
@@ -81,7 +80,6 @@ function createSessionBills({api,tr,esc,number,getLanguage}) {
       if (!event.target.hasAttribute('data-bill-search')) return;
       clearTimeout(searchTimer);
       selected.search=event.target.value;selected.offset=0;
-      // Cancel before the debounce so a stale result cannot win while typing.
       selected.query.cancel();cancelDetails();
       searchTimer=setTimeout(()=>{searchTimer=null;if(current===selected) void load();},250);
     };

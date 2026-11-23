@@ -70,8 +70,8 @@ fn pack(
     if input_budget == 0 {
         return Err(oversize);
     }
-    // The empty request already holds the prompt; units are inserted before it.
-    let empty = IncrementalEstimate::new(&summary_body(model, &[], prompt, output_limit), 1);
+    let prompt_only_estimate =
+        IncrementalEstimate::new(&summary_body(model, &[], prompt, output_limit), 1);
     let fits = |estimate: &IncrementalEstimate, costs: &Option<Vec<JsonCost>>| {
         costs.as_ref().is_some_and(|costs| {
             estimate
@@ -81,7 +81,7 @@ fn pack(
     };
     let mut chunks = Vec::new();
     let mut current = Vec::new();
-    let mut estimate = empty;
+    let mut estimate = prompt_only_estimate;
     for unit in units {
         let costs = unit
             .iter()
@@ -94,7 +94,7 @@ fn pack(
         } else {
             chunks.push(std::mem::take(&mut current));
             current.push(unit.clone());
-            estimate = empty;
+            estimate = prompt_only_estimate;
             if !fits(&estimate, &costs) {
                 return Err(oversize);
             }

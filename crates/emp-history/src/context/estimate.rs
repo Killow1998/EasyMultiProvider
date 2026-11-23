@@ -162,7 +162,6 @@ pub(super) fn json_cost(value: &Value, depth: usize) -> Option<JsonCost> {
     }
 }
 
-/// Incremental input token estimates avoid re-serializing the request for each candidate.
 #[derive(Clone, Copy)]
 pub(super) struct IncrementalEstimate {
     total: Option<JsonCost>,

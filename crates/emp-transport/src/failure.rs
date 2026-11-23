@@ -411,7 +411,6 @@ pub fn external_backoff_delay(attempt: usize) -> Duration {
     const BASE_MS: u64 = 500;
     const CAP_MS: u64 = 8_000;
     let mut nonce = [0u8; 1];
-    // Jitter shrinks the delay by 0–25%; getrandom failure falls back to 0.
     let jitter_byte = getrandom::getrandom(&mut nonce)
         .ok()
         .map(|_| nonce[0])

@@ -45,7 +45,6 @@ impl RedirectOrigin {
     }
 
     fn matches(&self, url: &Url) -> bool {
-        // `Url::host_str` brackets IPv6 literals; the route host may not.
         let unbracketed = |host: &str| {
             host.strip_prefix('[')
                 .and_then(|host| host.strip_suffix(']'))
@@ -66,8 +65,6 @@ impl RedirectOrigin {
     fn policy(self) -> Policy {
         Policy::custom(move |attempt| {
             if attempt.previous().len() >= 10 || !self.matches(attempt.url()) {
-                // Returning the redirect response leaves the caller in control
-                // and ensures request credentials never reach another origin.
                 attempt.stop()
             } else {
                 attempt.follow()

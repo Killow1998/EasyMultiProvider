@@ -264,12 +264,12 @@ impl UsageHistoryScanner {
         }
         let routes = routes(config);
         let home = emp_state::config::resolve_user_path(home);
-        // Compare paths in the same representation. Windows canonicalize()
-        // adds the extended-length prefix to rollout paths, which a resolved
-        // CODEX_HOME path does not necessarily have.
-        let home = home.canonicalize().unwrap_or(home);
-        for directory in [home.join("sessions"), home.join("archived_sessions")] {
-            self.scan_directory(ledger, &home, &directory, &routes);
+        let canonical_home = home.canonicalize().unwrap_or(home);
+        for directory in [
+            canonical_home.join("sessions"),
+            canonical_home.join("archived_sessions"),
+        ] {
+            self.scan_directory(ledger, &canonical_home, &directory, &routes);
         }
         let mut status = self.status.lock().expect("usage history status");
         status["last_scan_at"] = json!(now);

@@ -4,7 +4,6 @@ function compactContext(value) {
   if (tokens >= 1000) return Math.round(tokens / 1000) + 'K';
   return String(Math.round(tokens));
 }
-// Codex only uses this share of a model's window (its own default is 95%).
 function usableContext(model) {
   const maximum = Number(model?.context_window || 0); const percent = Number(model?.effective_context_window_percent) || 95;
   return maximum > 0 ? Math.max(1, Math.round(maximum * Math.min(percent, 100) / 100)) : 0;

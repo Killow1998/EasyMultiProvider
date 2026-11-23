@@ -56,7 +56,6 @@ pub(crate) fn delete_account_state(
                 .iter()
                 .map(|lock| lock.lock().map_err(|_| "internal server error".to_owned()))
                 .collect::<Result<Vec<_>, _>>()?;
-            // Held until the result is stored; see `import_account_state`.
             let mut config = state
                 .backend
                 .configuration
@@ -100,8 +99,6 @@ pub(crate) fn delete_account_state(
                     Ok(expected)
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            // Legacy rows keyed by this id must reach the identity they belong to,
-            // or be dropped, before the id becomes free for a different account.
             receipt
                 .step("settle_history", || {
                     for id in &ids {

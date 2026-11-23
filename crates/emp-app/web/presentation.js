@@ -1,5 +1,3 @@
-// Presentation layout and settings; data writes and error presentation have their own owners.
-// Bar and ring views use the same quota buckets and remaining/used preference.
 function presentationQuotaMeters(account, busy = false, animate = false) {
   if (document.body.dataset.quotaStyle === 'bar') return quotaMetersHtml(account,busy,animate);
   let buckets = quotaDisplayBuckets(account);

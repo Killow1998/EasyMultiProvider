@@ -1,4 +1,3 @@
-// Quota trend owns its reads, timer, chart state and window interactions.
 function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compactWindowText,localTimeText,utcOffsetLabel,subscriptionPlanKey,subscriptionPlanLabel,subscriptionPlanColor,periods}) {
   const {periodPickerHtml,registerPeriodPicker,periodPickers,setPeriod,periodPresetRange,refreshPeriod,timeAxisTicks,timeAxisSvg} = periods;
   let activeQuotaAccountId = '', activeQuotaServiceKind = 'accounts', activeQuotaPool = false, quotaHistoryTimer = null,
@@ -17,7 +16,6 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
     return '';
   }
   function quotaValidPoint(point) { return point.observed_at != null && point.remaining_percent != null && Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent)); }
-  // Samples further apart than this leave a period with no record.
   function quotaGapLimit(payload) { return Math.max(180, 3 * (Number(payload?.interval_seconds) || 44)); }
   function quotaResetBoundaries(series, start, end) {
     const boundaries = new Map();
@@ -29,23 +27,19 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
         if (!(reset > 0)) continue;
         if (previous && Math.abs(reset-Number(previous.resets_at)) > 60) {
           const priorReset = Number(previous.resets_at);
-          // A reset inside the observation gap is timed by the prior deadline.
-          // Early resets can only be located at the first changed observation.
-          const scheduled = priorReset > Number(previous.observed_at) && priorReset <= Number(point.observed_at);
-          const at = scheduled ? priorReset : Number(point.observed_at);
-          if (at > start && at < end) boundaries.set(at, {at, kind:scheduled ? 'reset' : 'observed'});
+          const scheduledResetBetweenSamples = priorReset > Number(previous.observed_at) && priorReset <= Number(point.observed_at);
+          const at = scheduledResetBetweenSamples ? priorReset : Number(point.observed_at);
+          if (at > start && at < end) boundaries.set(at, {at, kind:scheduledResetBetweenSamples ? 'reset' : 'observed'});
         }
         previous = point;
       }
     }
     return [...boundaries.values()].sort((a,b) => a.at-b.at);
   }
-  // Dividers mark quota resets (and days on long periods); clicking a section zooms into it.
   function quotaChartSections(series, view) {
-    // Over long spans reset lines would crowd the chart, so divide by day instead.
-    const long = view.end - view.start > 2*86400;
-    const boundaries = long ? [] : quotaResetBoundaries(series, view.start, view.end);
-    if (long) {
+    const useDailySections = view.end - view.start > 2*86400;
+    const boundaries = useDailySections ? [] : quotaResetBoundaries(series, view.start, view.end);
+    if (useDailySections) {
       const next = new Date(view.start*1000); next.setHours(0,0,0,0); next.setDate(next.getDate()+1);
       while (next.getTime()/1000 < view.end) { boundaries.push({at:next.getTime()/1000, kind:'day'}); next.setDate(next.getDate()+1); }
     }
@@ -62,7 +56,6 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
     return `${new Date(start*1000).toLocaleString([],options)} — ${new Date(end*1000).toLocaleString([],options)}`;
   }
   let quotaChartData = {points:[], gaps:[]};
-  // Draw at the modal's real width so text keeps its size instead of scaling with the SVG.
   function quotaChartWidth() { return Math.round(Math.max(628, Math.min(1200, ($('modal_body')?.clientWidth || 628) - 2))); }
   function quotaGapReason(gap) {
     const incidents = (quotaHistoryPayload?.failures || []).filter(item => Number(item.start_at) < gap.end && Number(item.end_at) >= gap.start);
@@ -78,12 +71,10 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
     const minTime = view.start, maxTime = view.end, span = Math.max(1, maxTime - minTime);
     const percent = value => Math.max(0, Math.min(100, Number(value)));
     const values = points.map(point => quotaDisplay.value(point.remaining_percent)); const minValue = Math.min(...values); const maxValue = Math.max(...values);
-    // Round percent gridlines (every 5, 10, 20 or 25 points).
     const tickStep = [5, 10, 20, 25].find(step => (Math.ceil(maxValue/step) - Math.floor(minValue/step)) * step / step <= 5) || 25;
     const axisMin = Math.max(0, Math.floor(minValue/tickStep)*tickStep - (minValue % tickStep === 0 && minValue > 0 ? tickStep : 0)); const axisMax = Math.min(100, Math.max(axisMin + tickStep, Math.ceil(maxValue/tickStep)*tickStep)); const axisSpan = axisMax - axisMin;
     const width = quotaChartWidth(), left = 46, right = width - 18, top = 18, bottom = 218; const x = time => left + ((Number(time) - minTime) / span) * (right - left); const y = value => bottom - ((percent(value) - axisMin) / axisSpan) * (bottom - top);
     const grid = Array.from({length:Math.round(axisSpan/tickStep)+1}, (_, index) => axisMin + tickStep * index).map(value => `<line x1="${left}" y1="${y(value)}" x2="${right}" y2="${y(value)}" stroke="var(--border)"/><text x="${left-7}" y="${y(value)+4}" text-anchor="end" fill="var(--muted)" font-size="11">${Number(value.toFixed(2))}%</text>`).join('');
-    // Periods without samples are shaded and labelled rather than left blank.
     const times = [...new Set(points.map(point => Number(point.observed_at)))].sort((a,b) => a-b);
     const gaps = []; let cursor = view.start;
     for (const time of times) { if (time - cursor > gapLimit) gaps.push({start:cursor, end:time}); cursor = time; }
@@ -91,7 +82,6 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
     const middle = (top+bottom)/2;
     const gapMarks = `<defs><pattern id="quota-gap-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" class="quota-gap-base"/><line x1="0" y1="0" x2="0" y2="6" class="quota-gap-stripe"/></pattern></defs>` + gaps.map(gap => {
       const x1 = x(gap.start), width = x(gap.end) - x1, center = (x1+width/2).toFixed(1);
-      // Wide gaps get a horizontal label; narrow ones a vertical one.
       const reason = esc(quotaGapReason(gap));
       const label = width >= 72 ? `<text class="quota-gap-label" x="${center}" y="${middle+4}" text-anchor="middle">${reason}</text>` : width >= 14 ? `<text class="quota-gap-label" x="${center}" y="${middle}" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 ${center} ${middle})">${reason}</text>` : '';
       return `<rect class="quota-gap" x="${x1.toFixed(1)}" y="${top}" width="${Math.max(0,width).toFixed(1)}" height="${bottom-top}" fill="url(#quota-gap-hatch)"/>${label}`;
@@ -184,7 +174,6 @@ function createQuotaHistory({api,$,tr,esc,openModal,quotaDisplay,afterRead,compa
     setPeriod('quota_history', {preset:'', start:Number(target.dataset.start), end:Number(target.dataset.end)}, {user:true, zoom:true});
   }
   function backQuotaHistory() { const previous = quotaHistoryZoom.pop(); if (previous) setPeriod('quota_history', previous.preset ? {...previous, ...periodPresetRange(previous.preset)} : previous, {user:true, zoom:true}); }
-  // One query owner cancels stale reads and closes with the trend window.
   function loadQuotaHistory(user = false) {
     const period = periodPickers.quota_history; if (!period || !query) return;
     quotaHistoryLoadingVisible = user;

@@ -58,14 +58,13 @@ impl LocalQuota {
             ("seven_day", "secondary", 10080),
         ] {
             let bucket = &usage["rate_limits"][name];
-            let Some(used) = bucket["utilization"]
+            let Some(used_percent) = bucket["utilization"]
                 .as_f64()
-                .filter(|used| used.is_finite() && *used >= 0.0)
+                .filter(|used_percent| used_percent.is_finite() && *used_percent >= 0.0)
             else {
                 continue;
             };
-            // get_usage reports percentages and RFC 3339 dates.
-            let reset = match bucket.get("resets_at") {
+            let reset_unix_seconds = match bucket.get("resets_at") {
                 Some(Value::String(date)) => match time::OffsetDateTime::parse(
                     date,
                     &time::format_description::well_known::Rfc3339,
@@ -78,7 +77,7 @@ impl LocalQuota {
             };
             windows.insert(
                 kind.into(),
-                json!({"used_percent":used,"window_minutes":minutes,"resets_at":reset}),
+                json!({"used_percent":used_percent,"window_minutes":minutes,"resets_at":reset_unix_seconds}),
             );
         }
         if windows.is_empty() {

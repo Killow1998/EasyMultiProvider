@@ -38,7 +38,6 @@ impl QueuedCommand {
 
     pub(super) fn acknowledge(&self, bytes: usize, result: Result<(), u16>) {
         if let Some((id, reply)) = &self.reply {
-            // A dropped requester must never block the socket owner.
             let _ = reply.try_send(WriteAcknowledgement {
                 id: *id,
                 bytes,
@@ -55,8 +54,7 @@ pub enum ConfirmationError {
     WriteFailed(u16),
 }
 
-/// A successful queue send is admission; this receipt confirms the socket write.
-/// It does not claim that the remote application accepted or executed a turn.
+/// Confirms the socket write after queue admission, not remote acceptance or execution.
 /// Consume the terminal result once, then drop the receipt.
 pub struct WriteReceipt {
     id: u64,

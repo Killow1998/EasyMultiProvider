@@ -6,7 +6,6 @@ use std::io::Write;
 
 pub const HEALTH_JSON_BYTES: &[u8] = b"{\"status\":\"ok\"}";
 
-/// Framing and sniffing protections sent with every framed response.
 pub(crate) const SECURITY_HEADERS: &[u8] = b"X-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\nX-Content-Type-Options: nosniff\r\n";
 
 pub(crate) fn response(

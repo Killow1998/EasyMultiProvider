@@ -1,4 +1,3 @@
-// Pure list projection and markup; no reads, timers, requests or persistence.
 function createMigrationView(getState) {
   function mergeRules() {
     return [
@@ -163,7 +162,6 @@ function createMigrationView(getState) {
         <span class="migration-service-label"><strong>${esc(row.name)}</strong><small>${serviceType(row)}</small></span></span></label>`;
   }
   function bodyHtml(candidate) {
-    // Two transports: a file (export or import) and the LAN tunnel. Every mode button keeps data-migration-mode.
     if(candidate.mode==='choose')return `<div id="shadow_migration"><div id="migration_chooser" class="migration-methods">
       <div class="migration-method" role="group" aria-labelledby="migration_method_file"><span class="migration-method-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><rect x="9" y="12" width="6" height="5" rx="1"/><path d="M10.5 12v-1.2a1.5 1.5 0 0 1 3 0V12"/></svg></span>
         <strong id="migration_method_file">${tr('transfers.file_method')}</strong><small>${tr('transfers.file_entry')}</small>

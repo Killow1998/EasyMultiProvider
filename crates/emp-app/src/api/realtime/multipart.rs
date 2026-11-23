@@ -133,8 +133,6 @@ fn read_realtime_call_with_reader(
             )
             .closing()
         })?;
-    // Each read is idle-bounded by the socket timeout; the deadline bounds a
-    // peer that keeps trickling bytes.
     let deadline = request_body_deadline(length);
     while prefix.len() < length {
         if Instant::now() >= deadline {

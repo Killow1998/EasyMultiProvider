@@ -40,7 +40,6 @@ fn fresh(value: Option<&Value>) -> bool {
     let age = OffsetDateTime::now_utc() - stamp;
     !age.is_negative() && age.whole_seconds() <= 24 * 60 * 60
 }
-/// A lone far-below-window failure remains evidence until a nearby failure corroborates it.
 const UNCONFIRMED_FAILURE_CONFIDENCE: f64 = 0.5;
 const FAILURE_CORROBORATION_PERCENT: u64 = 5;
 const MIN_FAILURE_CORROBORATION_TOKENS: u64 = 256;
@@ -86,21 +85,22 @@ pub(super) fn limits(
                 .all(|(key, value)| item.get(key) == Some(value))
         })
         .cloned();
-    // Failure estimates already bound input; do not subtract output reserves from failure - 1 again.
-    let failure = calibration
+    let observed_input_ceiling = calibration
         .as_ref()
         .filter(|value| fresh(value.get("smallest_failure_observed_at")) && confirmed(value))
         .and_then(|value| positive_integer(value.get("smallest_failure_estimate")))
         .map(|value| value - 1);
-    let base = context
+    let window_input_budget = context
         .zip(reserves)
         .map(|(limit, reserve)| limit.saturating_sub(reserve));
-    let input = if failure.is_some_and(|failure| base.is_none_or(|base| failure <= base)) {
+    let input = if observed_input_ceiling
+        .is_some_and(|ceiling| window_input_budget.is_none_or(|budget| ceiling <= budget))
+    {
         source = "observed".to_owned();
         confidence = 1.0;
-        failure
+        observed_input_ceiling
     } else {
-        base
+        window_input_budget
     };
     Limits {
         context,
@@ -191,7 +191,6 @@ pub fn update(
             Some(old) if !confirmed(&current) && corroborates_failure(old, estimate) => {
                 Some((old.min(estimate), 1.0))
             }
-            // Replace unrelated unconfirmed evidence without applying it.
             Some(_) if !confirmed(&current) => Some((estimate, UNCONFIRMED_FAILURE_CONFIDENCE)),
             Some(old) if plausible && estimate < old => Some((estimate, 1.0)),
             Some(_) => None,

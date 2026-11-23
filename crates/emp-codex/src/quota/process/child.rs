@@ -39,8 +39,8 @@ impl QuotaChild {
             return;
         }
         self.stopped = true;
-        // A successful launcher exit does not imply its children exited.
         #[cfg(unix)]
+        // SAFETY: kill takes no pointers; the negative child PID selects the group created by spawn.
         unsafe {
             libc::kill(-(self.process.id() as i32), libc::SIGKILL);
         }

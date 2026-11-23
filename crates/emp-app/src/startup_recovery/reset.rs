@@ -23,8 +23,6 @@ pub(super) fn rebuild_with(
 ) -> Result<(Option<PathBuf>, bool), &'static str> {
     let root = config.parent().ok_or("unsafe_path")?;
     let state = root.join("state");
-    // The service lock validates the state ancestors. Also reject a config
-    // symlink/reparse point; recovery must never follow it to unrelated data.
     if let Ok(metadata) = fs::symlink_metadata(config)
         && (!metadata.is_file() || linked(&metadata))
     {
@@ -41,12 +39,10 @@ pub(super) fn rebuild_with(
         root.join(format!(
             "recovery-{}-{}",
             if keep_backup { "backup" } else { "staging" },
-            // A random directory is only used for a new transaction.
             nonce
         ))
     });
     create_private_directory(&backup).map_err(|_| "backup_failed")?;
-    // Keep all attempts in one archive so interrupted file moves never overwrite prior attempts.
     let attempt = if resuming {
         backup.join(format!("attempt-{nonce}"))
     } else {
@@ -70,7 +66,6 @@ pub(super) fn rebuild_with(
         .map_err(|_| "backup_failed")?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| "backup_failed")?;
-    // Interrupted file moves must reopen recovery instead of starting defaults with partial state.
     if let Some(bytes) = &previous_marker {
         write_new_private_file(&attempt.join("previous-reset.json"), bytes)
             .map_err(|_| "prepare_failed")?;
@@ -97,8 +92,6 @@ pub(super) fn rebuild_with(
             move_file(config.to_path_buf(), attempt.join("config.json"))?;
         }
         for entry in entries {
-            // Keep the lock inode in place: another EMP must not obtain a new
-            // lock file while this instance is rearranging its private state.
             if entry.file_name() != "service.lock" && entry.file_name() != "recovery-reset.json" {
                 move_file(entry.path(), old_state.join(entry.file_name()))?;
             }
@@ -125,8 +118,6 @@ pub(super) fn rebuild_with(
     if keep_backup {
         return Ok((Some(backup), false));
     }
-    // Only the generated transaction directory is removed, after commit.
-    // remove_dir_all does not follow symlinks contained in this directory.
     match fs::remove_dir_all(&backup) {
         Ok(()) => Ok((None, false)),
         Err(_) => Ok((Some(backup), true)),

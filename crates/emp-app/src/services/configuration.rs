@@ -76,8 +76,6 @@ impl ConfigurationState {
         Ok(())
     }
 
-    // Mutations belong to services, not HTTP handlers. Read access deliberately
-    // has no DerefMut; retaining a guard is necessary for account/catalog races.
     pub(super) fn edit(&self) -> Result<ConfigurationEdit<'_>, ()> {
         Ok(ConfigurationEdit {
             current: self.read()?,

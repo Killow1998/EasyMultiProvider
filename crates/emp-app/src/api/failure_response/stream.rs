@@ -1,5 +1,3 @@
-//! SSE and WebSocket share the error detail, not an intermediate wire envelope.
-
 use super::routed_message;
 use crate::services::error_origin;
 use emp_core::ResolvedRoute;
@@ -96,7 +94,6 @@ fn error_detail(error: &RouterError, route: Option<&ResolvedRoute>, output_start
                 detail["message"].as_str().unwrap_or_default()
             ));
         }
-        // Codex reads streamed and wrapped WebSocket retry advice here.
         detail["headers"] = serde_json::json!({"Retry-After": delay.to_string()});
     }
     detail

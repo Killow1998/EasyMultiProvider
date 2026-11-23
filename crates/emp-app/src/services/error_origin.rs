@@ -19,7 +19,6 @@ pub(crate) fn claude(error: &ClaudeCliError) -> &'static str {
         ClaudeCliError::ShuttingDown => "emp",
         ClaudeCliError::Failure(_) => match failure_stage(error) {
             "input_validation" | "relay_validation" | "relay_request" => "emp",
-            // CLI failures can wrap a service rejection; keep the observed boundary.
             _ => "claude_cli",
         },
     }

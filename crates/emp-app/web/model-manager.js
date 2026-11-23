@@ -1,4 +1,3 @@
-// Service-local model operations; preview isolation is supplied by its transport adapter.
 function createProviderModelManager({getState,cloneState,$,tr,esc,api,persistState,openModal,notice,modelSort,compactContext,capabilitySummary,uiIcon,testModel,createEditor,isPreview}) {
   let active=null, editor=null;
   function stop(){active?.controller.abort();active=null;editor?.stop();editor=null;}

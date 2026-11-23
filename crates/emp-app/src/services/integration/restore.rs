@@ -84,13 +84,13 @@ pub(super) fn read_history_restore(
             && outcome["report"].is_object()
             && outcome["report"]["threads_skipped"].is_null()
         {
-            // Legacy deferred counts cover uninspected histories, not confirmed checkpoint repairs.
-            let count = outcome["report"]["threads_deferred"].as_u64().unwrap_or(0);
+            let unclassified_histories =
+                outcome["report"]["threads_deferred"].as_u64().unwrap_or(0);
             outcome["status"] = "unchecked".into();
             outcome["report"]["threads_deferred"] = 0.into();
-            outcome["report"]["threads_skipped"] = count.into();
+            outcome["report"]["threads_skipped"] = unclassified_histories.into();
             outcome["report"]["skipped_reasons"] =
-                serde_json::json!({"legacy_report_unclassified":count});
+                serde_json::json!({"legacy_report_unclassified":unclassified_histories});
         }
         outcome
     } else {
@@ -139,7 +139,6 @@ impl IntegrationState {
         let _operation = manager
             .operation_lock()
             .map_err(|_| AppError::NativeRestoreBlocked("integration_busy"))?;
-        // Recheck ownership under the operation lock: a pre-shutdown enable may have finished.
         let owned = self.owned.load(Ordering::Acquire);
         if !owned && !exiting {
             return Ok(());
@@ -154,10 +153,7 @@ impl IntegrationState {
                 Ok(())
             };
         }
-        // Persisted lease identity is authoritative if enable unwound before publishing its flag.
         let search = if exiting {
-            // Attempt both restores, each checking ownership, before returning a search error
-            // so optional search edits cannot block routing restoration.
             self.search.restore()
         } else {
             Ok(())

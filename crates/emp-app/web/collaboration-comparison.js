@@ -1,5 +1,3 @@
-// 2026-10-18, Codex 0.163.0, ten paired rounds plus gap-filling controls. See docs/external-collaboration.md.
-// Each cell stores paired TPS/time ranges and its valid pair count.
 const collaborationMeasurements = [
   {model:'GPT-5.6 Sol', off:{tps:[1,1],time:[1,1],samples:10}, on_demand:{tps:[0.96,1.12],time:[0.91,1.95],samples:10}, on:{tps:[0.36,0.42],time:[1.88,2.19],samples:10}},
   {model:'GPT-5.6 Luna', off:{tps:[1,1],time:[1,1],samples:11}, on_demand:{tps:[0.98,1.08],time:[0.91,1.09],samples:10}, on:{tps:[0.27,0.30],time:[2.26,2.52],samples:10}},
@@ -13,7 +11,6 @@ const collaborationMeasurements = [
   {model:'Haiku 5.5', external:true, on_demand:{tps:[0.95,1.07],time:[0.88,1.18],samples:10}, on:{tps:[1,1],time:[1,1],samples:10}}
 ];
 
-// Same-subscription controls: medians of 20 matched pairs per effort.
 const subscriptionMeasurements = [
   {effort:'low', tps:0.9709,ttft:0.9689,time:1.0286,samples:20},
   {effort:'medium', tps:1.0053,ttft:0.9567,time:0.9796,samples:20},
@@ -28,8 +25,6 @@ function subscriptionComparison() {
   return `<h3 id="subscription-comparison-title">${tr('models.subscription_comparison_title')}</h3><p class="collaboration-takeaway">${tr('models.subscription_comparison_takeaway')}</p><p>${tr('models.subscription_comparison_baseline')}</p><p>${tr('models.subscription_comparison_guide')}</p><div class="collaboration-table" tabindex="0" role="region" aria-labelledby="subscription-comparison-title"><table aria-labelledby="subscription-comparison-title"><thead><tr><th scope="col">${tr('models.subscription_comparison_effort')}</th>${columns.map(metric => `<th scope="col">${tr('models.subscription_comparison_'+metric)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div><p>${tr('models.subscription_comparison_context',{date:'2026-10-18',version:'0.163.0',count:20})}</p>`;
 }
 
-// 2026-10-23 UTC, standalone 0.164.0 Code Mode, GPT-6.1 Sol xhigh.
-// Three samples per arm; these are ratios of medians, not paired-ratio medians.
 function codeModeComparison() {
   const baseline = {tps:54.12654564662915, ttft:8.05089005397167, time:47.58282882999629};
   const measured = [

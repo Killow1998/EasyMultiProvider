@@ -46,9 +46,8 @@ pub fn observed_at_now() -> String {
     }
 }
 
-/// Return a normalized configuration with one successful automatic protocol
-/// observation applied. Explicit providers and missing identities are left
-/// unchanged.
+/// Apply a successful automatic protocol observation to normalized configuration.
+/// Explicit providers and missing identities remain unchanged.
 pub fn remember_resolved_protocol_at(
     config: &Value,
     provider_id: &str,
@@ -331,8 +330,6 @@ fn merge_web_update_at_time(
                         "provider.base_url must be empty for Claude CLI local login",
                     ));
                 }
-                // The browser may carry the old CPA URL and masked key while
-                // changing this provider's auth mode. Drop all CPA credentials.
                 provider.insert("base_url".to_owned(), Value::String(String::new()));
                 provider.insert("api_key".to_owned(), Value::String(String::new()));
                 provider.insert("api_key_file".to_owned(), Value::String(String::new()));
@@ -355,8 +352,6 @@ fn merge_web_update_at_time(
                     return Err(ConfigError::new("provider.api_key_file is managed by EMP"));
                 }
                 if credential_changed {
-                    // The managed secret belongs to the previous origin or
-                    // auth mode. Saving an explicit new key recreates it.
                     provider.insert("api_key_file".to_owned(), Value::String(String::new()));
                 } else if old_file.is_some_and(json_truthy) {
                     provider.insert(
@@ -573,7 +568,6 @@ pub fn merge_web_update(current: &Value, incoming: &Value) -> ConfigResult<Value
     merge_web_update_at_time(current, incoming, observed_at_now)
 }
 
-/// Apply the same merge with a fixed timestamp for deterministic compatibility tests.
 pub fn merge_web_update_with_time(
     current: &Value,
     incoming: &Value,

@@ -6,7 +6,6 @@ pub fn call_state(event: &Value) -> &'static str {
     } else if event["error_class"] == "client_disconnect" {
         "cancelled"
     } else if event["error_code"] == "previous_response_not_found" {
-        // A request to resend history is neither successful nor a model failure.
         "recovery_required"
     } else if event["success"] == true {
         "completed"
@@ -23,6 +22,4 @@ pub fn call_state(event: &Value) -> &'static str {
     }
 }
 
-// Correct legacy receipts on read without rewriting accounting or inferring retry relationships;
-// successful upstream accounting remains independent of downstream write failure.
 pub(super) const REPORT_CALLS: &str = include_str!("../../../../contracts/call-outcomes.sql");

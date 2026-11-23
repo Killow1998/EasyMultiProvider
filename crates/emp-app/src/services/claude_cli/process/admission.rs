@@ -45,9 +45,7 @@ impl Admission {
                 return Err(reason);
             }
             let available = memory();
-            // Reserve estimated memory for admitted children as well: several
-            // spawns can arrive before the OS accounts for their allocations.
-            let maximum = available.map_or(1, |status| {
+            let maximum_admitted_children = available.map_or(1, |status| {
                 status
                     .available
                     .min(status.total.unwrap_or(usize::MAX))
@@ -58,7 +56,7 @@ impl Admission {
                 .active
                 .lock()
                 .map_err(|_| "claude_cli_capacity_unavailable")?;
-            if *active < maximum {
+            if *active < maximum_admitted_children {
                 *active += 1;
                 return Ok(Permit(self));
             }

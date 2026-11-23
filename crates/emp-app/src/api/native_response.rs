@@ -1,4 +1,3 @@
-//! Native wire rendering; forwarding services preserve status, body and headers.
 use crate::http::response::{response, status_text};
 use emp_router::native_http::{NativeCompleteResponse, NativeHttpError};
 

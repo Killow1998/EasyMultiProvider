@@ -1,7 +1,5 @@
-//! Codex executables must be canonical regular files; Unix targets must be executable and not set-id.
-//! Unix entries and ancestors must be root/user-owned with no foreign write access.
-//! Sticky directories protect root/user-owned children; writable groups must have only root/user
-//! members, counting both primary and supplementary membership.
+//! Canonical regular executables require trusted owners and ancestors; Unix targets cannot be set-id.
+//! Sticky entries and writable groups are trusted only when they exclude foreign users, including primary group members.
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -31,7 +29,6 @@ pub(crate) enum TrustFailure {
     BundleVerificationFailed,
 }
 
-/// Validate a canonical absolute executable path.
 pub(crate) fn validate_executable(path: &Path) -> Result<(), TrustFailure> {
     validate_executable_with(path, |_, _| false)
 }
@@ -130,7 +127,6 @@ fn foreign_writable(
         return true;
     }
     let mode = info.mode();
-    // The trusted directory owner limits replacement to root, the current user and the entry owner.
     let sticky_protects_entry = mode & 0o1000 != 0
         && info.is_dir()
         && entry_uid.is_some_and(|uid| trusted_owner(uid, current_uid));
@@ -140,7 +136,6 @@ fn foreign_writable(
     mode & 0o002 != 0 || (mode & 0o020 != 0 && !private_groups.contains(info.gid()))
 }
 
-/// Groups whose write permission grants no other user access.
 #[cfg(unix)]
 struct PrivateGroups {
     current_uid: u32,
@@ -167,7 +162,6 @@ impl PrivateGroups {
             return false;
         };
         let trusted = |uid: u32| trusted_owner(uid, self.current_uid);
-        // Primary-group members need not appear in the group's member list.
         if accounts
             .iter()
             .any(|(_, uid, primary)| *primary == gid && !trusted(*uid))
@@ -195,7 +189,6 @@ fn enumerate_accounts() -> Option<Vec<(Vec<u8>, u32, u32)>> {
     unsafe {
         libc::setpwent();
         let accounts = collect_entries(|| {
-            // getpwent uses NULL for both EOF and errors; errno distinguishes them.
             *errno_location() = 0;
             let entry = libc::getpwent();
             if entry.is_null() {
@@ -236,20 +229,18 @@ use libc::__error as errno_location;
 /// Supplementary members of `gid`; `None` when the group cannot be resolved.
 #[cfg(unix)]
 fn group_members(gid: u32) -> Option<Vec<Vec<u8>>> {
-    // getgrgid_r places the gr_mem pointer array inside `buffer`; macOS does
-    // not realign it, so allocate words and still read members unaligned.
-    let mut buffer = vec![0u64; 64 * 1024 / std::mem::size_of::<u64>()];
+    let mut aligned_group_buffer = vec![0u64; 64 * 1024 / std::mem::size_of::<u64>()];
     // SAFETY: an all-zero group is a valid out-parameter for getgrgid_r.
     let mut entry: libc::group = unsafe { std::mem::zeroed() };
     let mut result = std::ptr::null_mut();
-    // SAFETY: every pointer is valid for the call and `buffer` outlives the
+    // SAFETY: every pointer is valid for the call and `aligned_group_buffer` outlives the
     // member strings copied out below.
     let status = unsafe {
         libc::getgrgid_r(
             gid,
             &mut entry,
-            buffer.as_mut_ptr().cast::<libc::c_char>(),
-            buffer.len() * std::mem::size_of::<u64>(),
+            aligned_group_buffer.as_mut_ptr().cast::<libc::c_char>(),
+            aligned_group_buffer.len() * std::mem::size_of::<u64>(),
             &mut result,
         )
     };
@@ -261,8 +252,8 @@ fn group_members(gid: u32) -> Option<Vec<Vec<u8>>> {
     if cursor.is_null() {
         return Some(members);
     }
-    // SAFETY: gr_mem is a NULL-terminated array of NUL-terminated strings
-    // inside `buffer`.
+    // SAFETY: gr_mem is a NULL-terminated array of NUL-terminated strings in the live buffer;
+    // read_unaligned handles member pointers that getgrgid_r may leave unaligned on macOS.
     unsafe {
         loop {
             let member = cursor.read_unaligned();

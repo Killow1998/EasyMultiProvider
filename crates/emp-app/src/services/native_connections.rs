@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-// Transient only, never serialized or included in diagnostics.
 pub(crate) type RouteKey = (String, Option<String>, BTreeMap<String, String>);
 
 #[derive(Default)]

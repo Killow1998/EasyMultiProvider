@@ -42,7 +42,6 @@ impl ToolTimings {
             let Ok(path) = reader.contained_rollout_path(&location.path) else {
                 continue;
             };
-            // Compressed/paginated fragments without explicit timing stay unknown.
             if path.extension().is_none_or(|ext| ext != "jsonl") {
                 continue;
             }

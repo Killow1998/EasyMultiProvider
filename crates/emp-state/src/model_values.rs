@@ -87,7 +87,6 @@ pub fn normalize_input_modalities(value: Option<&Value>) -> Vec<String> {
     parse_modalities(value).unwrap_or_else(|| vec![TEXT_MODALITY.to_owned()])
 }
 
-/// Return whether a discovery payload contains a valid input modality list.
 pub fn input_modalities_known(value: Option<&Value>) -> bool {
     parse_modalities(value).is_some()
 }
@@ -121,7 +120,6 @@ pub fn normalize_output_modalities(value: Option<&Value>) -> Vec<String> {
     parse_modalities(value).unwrap_or_else(|| vec![TEXT_MODALITY.to_owned()])
 }
 
-/// Return whether a discovery payload contains a valid output modality list.
 pub fn output_modalities_known(value: Option<&Value>) -> bool {
     parse_modalities(value).is_some()
 }
@@ -153,7 +151,6 @@ pub fn normalize_supported_protocols(value: Option<&Value>) -> Vec<String> {
     result
 }
 
-/// Return whether a valid non-empty concrete protocol list is present.
 pub fn supported_protocols_known(value: Option<&Value>) -> bool {
     !normalize_supported_protocols(value).is_empty()
 }

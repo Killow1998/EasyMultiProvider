@@ -1,8 +1,4 @@
-// One temporary sprite sheet: paint the wave once, then move its texture.
-// Geometry/palette changes rebuild it; hover frames only change transform.
 function installInteractions() {
-  // Chromium may retain :focus-visible after a pointer-opened dialog focuses
-  // a text field. Keep focus for navigation; show its outline only for keys.
   const modality=document.documentElement.dataset;
   modality.inputModality='pointer';
   const layer=document.createElement('div');
@@ -63,7 +59,6 @@ function installInteractions() {
     if(!rect.width || !rect.height || rect.bottom<0 || rect.top>innerHeight || rect.right<0 || rect.left>innerWidth) return hide();
     const pad=4, radius=Math.min(parseFloat(getComputedStyle(target).borderRadius)||0,rect.height/2)+1;
     width=rect.width+pad*2; height=rect.height+pad*2;
-    // Pixel-align the clip with each atlas row, including fractional zoom sizes.
     const scale=Math.min(devicePixelRatio||1,2); height=Math.ceil(height*scale)/scale;
     layer.style.cssText=`left:${rect.left-pad}px;top:${rect.top-pad}px;width:${width}px;height:${height}px`;
     layer.hidden=false;
@@ -74,7 +69,6 @@ function installInteractions() {
     svg.setAttribute('width',width);svg.setAttribute('height',height);
     svg.style.cssText='position:absolute;visibility:hidden;pointer-events:none';
     svg.innerHTML=`<rect x="3" y="3" width="${width-6}" height="${height-6}" rx="${radius}"/>`;
-    // Chromium requires a rendered SVG when measuring a geometric outline.
     layer.append(svg);
     try {
       const outline=svg.firstChild, length=outline.getTotalLength(), count=Math.max(12,Math.round(length/6));

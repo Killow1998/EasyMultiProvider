@@ -1,4 +1,3 @@
-//! Native WebSocket wire errors; routing and retry decisions remain with the turn.
 use crate::api::failure_response::{safe_failure_reason, stream_error_code};
 use crate::services::observation::continuation::ContinuationReason;
 use emp_core::ResolvedRoute;

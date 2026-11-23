@@ -1,4 +1,3 @@
-// Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
   "transfers.release_improvements": ["新增与改进","New and improved"],
   "transfers.release_fixes": ["问题修复","Fixes"],

@@ -1,5 +1,3 @@
-//! Standard Fernet wire format via RustCrypto, without a platform OpenSSL dependency.
-
 use base64::{Engine, engine::general_purpose::URL_SAFE};
 use fernet::Fernet as FernetToken;
 use std::fmt;
@@ -34,7 +32,6 @@ impl FernetKey {
         })
     }
 
-    /// Expose the encoded key only at the crypto boundary.
     pub(crate) fn encoded(&self) -> &str {
         self.encoded.as_str()
     }
@@ -76,7 +73,7 @@ impl Fernet {
         self.token.encrypt(plaintext).into_bytes()
     }
 
-    /// Decrypt without a TTL.
+    /// Decrypt without a TTL or dependence on the receiver's clock; authentication remains required.
     pub fn decrypt(&self, token: &[u8]) -> Result<Zeroizing<Vec<u8>>, FernetError> {
         let token = std::str::from_utf8(token).map_err(|_| FernetError::DecryptFailed)?;
         let header = URL_SAFE
@@ -88,8 +85,6 @@ impl Fernet {
                 .and_then(|bytes| bytes.try_into().ok())
                 .ok_or(FernetError::DecryptFailed)?,
         );
-        // fernet-rs applies a 60s future-clock check even without a TTL. Evaluate
-        // at the token's time; the library still verifies its HMAC and padding.
         self.token
             .decrypt_at_time(token, None, timestamp.saturating_sub(60))
             .map(Zeroizing::new)

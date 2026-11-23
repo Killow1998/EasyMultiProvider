@@ -34,7 +34,6 @@ pub(super) fn remember(connection: &Connection, id: &str, session: &str) -> Resu
 }
 
 pub(super) fn source() -> String {
-    // Ambiguous fork/copy evidence stays unassigned to avoid billing one event to multiple sessions.
     format!(
         "(SELECT u.id,u.observed_at,u.category,u.owner,u.model,u.route_model,u.cost_nanos,u.price_issue,{},
           COALESCE((SELECT MIN(s.session_id) FROM usage_sessions s
@@ -154,7 +153,6 @@ pub(super) fn scoped_source(
     };
     connection.execute_batch("DROP TABLE IF EXISTS conversation_scope")?;
     scope.install(connection)?;
-    // Fork copies may have several leaf owners, but one agreed conversation.
     Ok(format!(
         "(SELECT s.*,COALESCE((SELECT MIN(m.root_id) FROM usage_sessions e
           LEFT JOIN conversation_scope m ON m.thread_id=e.session_id WHERE e.event_id=s.id

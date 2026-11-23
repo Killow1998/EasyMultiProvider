@@ -4,6 +4,8 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+const MAX_ENGINE_HASH_BYTES: u64 = 1024 * 1024 * 1024;
+
 fn no_redirect(path: &Path) -> bool {
     path.ancestors().all(|part| {
         let Ok(meta) = std::fs::symlink_metadata(part) else {
@@ -22,11 +24,9 @@ fn no_redirect(path: &Path) -> bool {
 }
 fn digest(path: &Path) -> Option<[u8; 32]> {
     let before = ExecutableIdentity::read(path)?;
-    // Bound hashing of the known engine asset, not user conversation data.
-    if before.length > 1024 * 1024 * 1024 {
+    if before.length > MAX_ENGINE_HASH_BYTES {
         return None;
     }
-    // Same-length overwrites can preserve metadata, so it cannot cache byte identity.
     let mut file = std::fs::File::open(path).ok()?;
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -95,7 +95,7 @@ pub(super) fn verified_candidates(resource: &Path, cache_root: &Path) -> Vec<Pat
             verified.push(path);
         }
     }
-    verified.sort(); // Stable selection only among independently verified identical bytes.
+    verified.sort();
     verified
 }
 

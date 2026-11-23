@@ -15,7 +15,6 @@ pub(crate) fn update(
         request_id,
         "configuration_update",
         |receipt| {
-            // Integration commands acquire this lock before configuration reads.
             let _operation = state
                 .backend
                 .integration
@@ -93,7 +92,6 @@ pub(crate) fn update(
             }
             drop(current);
             crate::services::account_catalog::request_refresh(state, false);
-            // The usage worker applies changed pricing aliases and re-prices old rows.
             receipt.fact("subscription_refresh", "requested");
             if let Ok(id) = receipt.step("queue_usage_scan", || {
                 state.backend.usage.queue_scan(state).ok_or(())

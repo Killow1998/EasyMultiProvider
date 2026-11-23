@@ -15,7 +15,6 @@ pub(super) fn serve(
         ids,
         ..
     } = turn;
-    // Expose an ID before CLI startup, so Codex can steer while waiting.
     let id = ids.response_id().to_owned();
     if websocket
         .send_json(&serde_json::json!({"type":"response.created", "response":{

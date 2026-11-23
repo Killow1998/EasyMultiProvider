@@ -1,4 +1,3 @@
-// A view of existing accounts/providers; storage and route identities stay with their owners.
 function createServiceList({getState, $, esc, tr, presets, icon, activity, accountSummary, quotaMeters,
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
   usageSummary, notice, balances, poolQuotas, settingsConflict = () => false, serviceIcon = (kind,id,label,brand,cpa) => activity(kind,id,label)+icon(brand,cpa), updateServiceErrors = () => {}, onMount = () => {}}) {

@@ -85,8 +85,6 @@ impl ObservedWebSocket<'_, '_> {
         if event["type"] != "response.completed" {
             return self.send(event, upstream);
         }
-        // Codex sends full input when the completion has no resumable ID.
-        // Keep the original ID for accounting and late interrupt recognition.
         let id = std::mem::replace(&mut event["response"]["id"], Value::String(String::new()));
         let result = self.send(event, upstream);
         *self.last_response_id = id.as_str().map(str::to_owned);
@@ -232,9 +230,6 @@ pub(crate) fn serve_responses_websocket(
         let next = match native_session.pending_request.take() {
             Some(text) => Ok(Some(text)),
             None => loop {
-                // Drain idle persistent sockets on an explicit native restore.
-                // Active turns stay in their executor until completion; a
-                // restore timeout reopens admission without interrupting them.
                 if state.connection_admission.is_quiescing()
                     || state.shutdown.load(std::sync::atomic::Ordering::Acquire)
                 {
@@ -282,8 +277,6 @@ pub(crate) fn serve_responses_websocket(
         let decoded_bytes = text.len() as u64;
         let decoded = serde_json::from_str::<Value>(&text);
         drop(text);
-        // A steering frame can race the preceding terminal event. It is a
-        // control message, never another inference or a failed model request.
         if let Ok(value) = &decoded
             && value["type"] == "response.interrupt"
         {
@@ -650,9 +643,6 @@ pub(crate) fn serve_responses_websocket(
             .and_then(|value| value.as_bool())
             .unwrap_or(true);
         if !generate {
-            // HTTP and CLI adapters do not retain a server-side response.
-            // Codex treats an empty response id as a non-resumable warmup and
-            // sends the full first request, rather than an incremental one.
             if websocket.warmup().is_err() {
                 return;
             }

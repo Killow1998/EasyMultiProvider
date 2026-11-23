@@ -37,16 +37,14 @@ impl ExternalTools {
             }
         }
         if self.preserve_loads {
-            // Keep loading boundaries for destinations that support them, but never
-            // offer an obsolete schema or a removed tool alongside the active one.
-            let keep = |tool: &Value| active.get(&tool_key(tool)) == Some(tool);
+            let is_active_schema = |tool: &Value| active.get(&tool_key(tool)) == Some(tool);
             if let Some(tools) = body["tools"].as_array_mut() {
-                tools.retain(&keep);
+                tools.retain(&is_active_schema);
             }
             if let Some(items) = body["input"].as_array_mut() {
                 for item in items.iter_mut().filter(|i| i["type"] == "additional_tools") {
                     if let Some(tools) = item["tools"].as_array_mut() {
-                        tools.retain(&keep);
+                        tools.retain(&is_active_schema);
                     }
                 }
                 items.retain(|item| {
@@ -90,16 +88,14 @@ pub fn removed_tool_names(item: &Value) -> impl Iterator<Item = &str> {
                         .filter_map(|line| line.strip_prefix("- "))
                         .collect(),
                 ),
-                None => default_removal_names(text),
+                None => parse_complete_default_removal_notice(text),
                 _ => None,
             }
         })
         .flatten()
 }
 
-fn default_removal_names(text: &str) -> Option<Vec<&str>> {
-    // Codex strips internal metadata for custom providers. Accept its complete
-    // default notice grammar there, never a quoted fragment or a user message.
+fn parse_complete_default_removal_notice(text: &str) -> Option<Vec<&str>> {
     const HEADERS: &[&str] = &[
         "The following tools are no longer available. Do not call them:",
         "The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:",

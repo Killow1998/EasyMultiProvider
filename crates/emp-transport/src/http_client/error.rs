@@ -91,8 +91,6 @@ fn classify_source(error: &(dyn Error + 'static), proxy_connect: bool) -> HttpTr
         if error.is::<rustls::Error>() {
             return HttpTransportErrorKind::TlsFailure;
         }
-        // hyper-util's DNS wrapper has no public discriminator. Match only its
-        // exact fixed message, never OS/localized text or arbitrary URL content.
         let message = error.to_string();
         if matches!(
             message.as_str(),
@@ -100,14 +98,11 @@ fn classify_source(error: &(dyn Error + 'static), proxy_connect: bool) -> HttpTr
         ) {
             return HttpTransportErrorKind::DnsFailure;
         }
-        // hyper-util's SOCKS Inner error does not expose source(). This fixed
-        // marker denotes failure to reach the proxy, not its upstream reply.
         if proxy_connect && message == "SOCKS error: failed to create underlying connection" {
             return HttpTransportErrorKind::ProxyUnavailable;
         }
         if let Some(error) = error.downcast_ref::<io::Error>() {
             refused |= error.kind() == io::ErrorKind::ConnectionRefused;
-            // io::Error::source can skip the contained error itself.
             if let Some(inner) = error.get_ref() {
                 source = Some(inner);
                 continue;

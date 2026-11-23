@@ -1,5 +1,3 @@
-//! Preserve the distinct HTTP, SSE and WebSocket error contracts.
-
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::services::error_origin;
@@ -230,8 +228,6 @@ fn pre_output_router_error_response_with_route(
     http_error(error.status(), detail, error.retry_after_seconds())
 }
 
-// HTTP responses keep Retry-After in the actual header. The compatibility field
-// remains available to older clients; no other upstream headers are exposed.
 fn http_error(status: u16, mut detail: Value, retry_after: Option<u64>) -> Vec<u8> {
     if let Some(delay) = retry_after {
         detail["retry_after_seconds"] = Value::from(delay);

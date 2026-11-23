@@ -1,7 +1,6 @@
 use crate::http::auth::CLEAR_LEGACY_SESSION_COOKIE;
 use crate::http::response::response;
 
-/// The browser page and its feature assets ship with the same executable.
 pub const WEB_INDEX_BYTES: &[u8] = include_bytes!("../web/index.html");
 
 pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {

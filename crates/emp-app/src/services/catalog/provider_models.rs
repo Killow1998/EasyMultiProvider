@@ -41,9 +41,7 @@ pub(super) fn provider(state: &ServerState, config: &Value, id: &str) -> Option<
     Some(provider)
 }
 
-fn identity(provider: &Value) -> String {
-    // Connection identity only; renaming a service keeps its saved model list.
-    // Credentials are used in memory, and only the digest is stored on disk.
+fn connection_identity_digest(provider: &Value) -> String {
     let mut fields: Vec<_> = [
         "id",
         "base_url",
@@ -85,11 +83,9 @@ pub(super) fn load(state: &ServerState, provider: &Value) -> Option<SavedModels>
     }
     let bytes = read_file_limited(&path, emp_state::MAX_TRANSACTION_FILE_BYTES).ok()?;
     let mut saved: SavedModels = serde_json::from_slice(&bytes).ok()?;
-    if saved.identity != identity(provider) {
+    if saved.identity != connection_identity_digest(provider) {
         return None;
     }
-    // An application upgrade must also update previews from older discovery
-    // caches, without refetching upstream or discarding advertised restrictions.
     saved.models =
         emp_state::official_registry::enrich_saved_models(provider.as_object()?, saved.models);
     Some(saved)
@@ -101,7 +97,7 @@ pub(super) fn save(
     models: Vec<Value>,
 ) -> Result<SavedModels, ()> {
     let saved = SavedModels {
-        identity: identity(provider),
+        identity: connection_identity_digest(provider),
         updated_at: emp_state::observed_at_now(),
         models,
     };
@@ -111,8 +107,9 @@ pub(super) fn save(
 }
 
 pub(super) fn unchanged(state: &ServerState, config: &Value, expected: &Value) -> bool {
-    provider(state, config, expected["id"].as_str().unwrap_or_default())
-        .is_some_and(|current| identity(&current) == identity(expected))
+    provider(state, config, expected["id"].as_str().unwrap_or_default()).is_some_and(|current| {
+        connection_identity_digest(&current) == connection_identity_digest(expected)
+    })
 }
 
 #[cfg(test)]

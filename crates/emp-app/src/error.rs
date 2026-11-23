@@ -18,8 +18,7 @@ pub(crate) enum AppError {
     Filesystem(FilesystemError),
     Transport(emp_transport::HttpTransportError),
     RequestLimits(RequestLimitsError),
-    /// Rotated account credentials still unsaved at shutdown; the stored
-    /// copies may already be invalid upstream.
+    /// Shutdown left rotated credentials unsaved; persisted copies may be invalid upstream.
     CredentialsUnsaved(usize),
 }
 

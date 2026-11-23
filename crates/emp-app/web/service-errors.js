@@ -1,4 +1,3 @@
-// Service artwork and error bubble lifecycle.
 let presentationIconSequence = 0;
 function serviceActivityIcon(kind, id, label, brand, cpa = false, error = null) {
   const template = document.createElement('template');
@@ -43,7 +42,6 @@ function presentationUpdateServiceErrorLabels() {
     button.setAttribute('aria-label',activityDescription(button.dataset.activityLabel,activitySummaryForIndicator(button))+'; '+button.dataset.errorTitle+': '+button.dataset.errorMessage);
   }
 }
-// One body-level bubble avoids clipping in the horizontally scrollable service list.
 function installServiceErrors() {
   const bubble = document.createElement('div');
   bubble.id = 'presentation-service-error'; bubble.className = 'presentation-service-error';

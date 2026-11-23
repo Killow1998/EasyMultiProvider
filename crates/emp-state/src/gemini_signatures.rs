@@ -1,5 +1,3 @@
-//! Persistent Gemini tool signatures used to resume Codex conversations.
-
 use rusqlite::{Connection, OptionalExtension, params};
 use std::io;
 use std::path::PathBuf;

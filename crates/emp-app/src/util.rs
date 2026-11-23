@@ -47,8 +47,7 @@ pub(crate) fn python_truthy(value: Option<&Value>) -> bool {
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 pub(crate) fn release_large_temporary_pages(size: usize) {
     if size >= emp_transport::REQUEST_GROWTH_QUANTUM {
-        // The parsed value or projected request owns its text. Return pages
-        // from its now-free temporary before another large projection.
+        // SAFETY: malloc_trim is thread-safe and only releases free allocator pages.
         unsafe { libc::malloc_trim(0) };
     }
 }

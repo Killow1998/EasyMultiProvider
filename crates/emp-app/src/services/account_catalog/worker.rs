@@ -65,10 +65,7 @@ fn refresh_due_sources(state: &ServerState, force: bool) {
             FetchAndPersistOutcome::Stopped => return,
             FetchAndPersistOutcome::PersistenceError(
                 PersistError::RuntimeChanged | PersistError::SourceChanged,
-            ) => {
-                // A delete, re-import, login switch or backend change raced
-                // the request. The next scan gets the current source identity.
-            }
+            ) => {}
             FetchAndPersistOutcome::PersistenceError(PersistError::Internal) => {
                 state
                     .catalog_refresh

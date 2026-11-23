@@ -1,8 +1,9 @@
 use serde_json::Value;
 
-/// Audio entered Codex's supported client contract in the 0.168 series.
+const FIRST_AUDIO_CLIENT_MINOR: u64 = 168;
+
 pub fn for_client_version(mut catalog: Value, version: Option<&str>) -> Value {
-    let audio = version
+    let supports_audio = version
         .and_then(|version| {
             let mut parts = version.split('.');
             Some((
@@ -10,8 +11,8 @@ pub fn for_client_version(mut catalog: Value, version: Option<&str>) -> Value {
                 parts.next()?.parse::<u64>().ok()?,
             ))
         })
-        .is_some_and(|(major, minor)| major > 0 || minor >= 168);
-    if !audio {
+        .is_some_and(|(major, minor)| major > 0 || minor >= FIRST_AUDIO_CLIENT_MINOR);
+    if !supports_audio {
         for model in catalog["models"].as_array_mut().expect("model catalog") {
             if let Some(modes) = model
                 .get_mut("input_modalities")

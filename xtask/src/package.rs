@@ -411,7 +411,6 @@ fn package_path_remap_flags(root: &Path) -> Result<Vec<String>> {
             .to_owned();
         remaps.push((path, format!("--remap-path-prefix={source}={destination}")));
     }
-    // Rustc applies the last matching prefix, so nested roots must follow their parents.
     remaps.sort_by(|(left, _), (right, _)| {
         left.components().count().cmp(&right.components().count())
     });
@@ -485,8 +484,6 @@ pub fn reserve_loopback_port() -> Result<u16> {
         .port())
 }
 
-/// Starts the packaged service in an isolated home, then checks health, the
-/// served Web UI bytes, the one-use bootstrap exchange and a session request.
 fn smoke_service(root: &Path, executable: &Path, target: Target) -> Result {
     let temporary = crate::temporary_directory("emp-package-smoke-")?;
     let home = crate::physical(temporary.path())?;
@@ -566,8 +563,6 @@ fn smoke_service(root: &Path, executable: &Path, target: Target) -> Result {
                 continue;
             }
         }
-        // The page carries no secrets; its script exchanges the one-use
-        // bootstrap token for a header session.
         let (status, body) = http(port, "GET", "/", &[])?;
         if status != 200 {
             return Err(format!("packaged UI returned HTTP {status}"));
@@ -709,7 +704,6 @@ fn write_zip(build_root: &Path, output: &Path, executable: &Path, target: Target
         executable,
         target,
     )?;
-    // Windows ships bsdtar, which writes zip archives selected by `--format`.
     let system_root = std::env::var_os("SystemRoot").ok_or("SystemRoot is not set")?;
     run_command(
         Command::new(Path::new(&system_root).join("System32/tar.exe"))

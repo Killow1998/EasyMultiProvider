@@ -142,7 +142,6 @@ pub(super) fn read_native_auth(path: &Path) -> Result<Value, QuotaError> {
             "quota_error",
         ));
     }
-    // Native quota helpers may use access tokens but must never rotate Codex-owned refresh tokens.
     let tokens = auth
         .get("tokens")
         .and_then(Value::as_object)
@@ -180,7 +179,6 @@ pub(super) fn run_isolated_quota_process<'a>(
         &directory.path().join("quota-models.json"),
         include_bytes!("process/quota-models.json"),
     )?;
-    // A local catalog prevents startup model refresh without sharing credential homes or running a model.
     write_private(
         &directory.path().join("config.toml"),
         b"cli_auth_credentials_store = \"file\"\nmodel_catalog_json = \"quota-models.json\"\n\n[features]\nplugins = false\n",
@@ -270,7 +268,6 @@ fn sweep_stale_credential_directories(temp_root: &Path, now: SystemTime) {
         {
             continue;
         }
-        // DirEntry metadata does not follow links.
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
@@ -278,6 +275,7 @@ fn sweep_stale_credential_directories(temp_root: &Path, now: SystemTime) {
             continue;
         }
         #[cfg(unix)]
+        // SAFETY: getuid has no preconditions and cannot fail.
         if metadata.uid() != unsafe { libc::getuid() } {
             continue;
         }
@@ -432,9 +430,7 @@ fn query_child(
     if result.is_err() {
         child.stop();
     }
-    // Exit before joining readers so helpers ignoring EOF cannot strand refresh locks or shutdown.
     let cleanup = child.finish().map_err(|_| quota_check_failed());
-    // Even a detached descendant retaining a pipe cannot strand these joins.
     stop_readers.store(true, Ordering::Release);
     let _ = stdout_worker.join();
     let _ = stderr_worker.join();

@@ -371,8 +371,10 @@ fn local_date_timestamp(value: &str) -> Option<i64> {
     local.tm_mday = i32::from(day);
     local.tm_isdst = -1;
     #[cfg(unix)]
+    // SAFETY: local is an initialized, writable tm; mktime may normalize its fields and infer DST.
     let seconds = unsafe { libc::mktime(&mut local) as i64 };
     #[cfg(windows)]
+    // SAFETY: local is an initialized, writable tm matching the CRT ABI; _mktime64 may normalize it.
     let seconds = unsafe { _mktime64(&mut local) };
     #[cfg(not(any(unix, windows)))]
     let seconds = 0;
@@ -380,6 +382,7 @@ fn local_date_timestamp(value: &str) -> Option<i64> {
 }
 
 #[cfg(windows)]
+// SAFETY: _mktime64 uses the CRT C ABI with a writable tm pointer and a signed 64-bit result.
 unsafe extern "C" {
     fn _mktime64(local: *mut libc::tm) -> i64;
 }

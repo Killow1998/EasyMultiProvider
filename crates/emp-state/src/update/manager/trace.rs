@@ -1,4 +1,3 @@
-//! Stage timings share the application's bounded journal, including successful updates.
 use super::{UpdateDiagnostic, UpdateManager, json};
 use std::time::{Duration, Instant};
 

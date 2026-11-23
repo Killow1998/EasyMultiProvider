@@ -103,8 +103,8 @@ fn query(
         params_from_iter(args),
         |row| row.get(0),
     )?;
-    // Materialization, summary, model groups and periods each visit every selected row.
-    let total = count * 4;
+    const FULL_ROW_PASSES: i64 = 4;
+    let total = count * FULL_ROW_PASSES;
     let batch = (total / 100).max(1);
     progress(0, total)?;
     let completed = std::cell::Cell::new(0);
@@ -147,7 +147,6 @@ fn query(
             AVG(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tokens_per_second,
             COUNT(CASE WHEN state='completed' THEN json_extract(facts,'$.generation_tokens_per_second') END) AS tps_samples
             FROM {calls}"), &[])?;
-    // Aggregate the full filtered range, independently of record pagination.
     let failures = rows(connection, &format!("SELECT
             COALESCE(json_extract(facts,'$.error_origin'),json_extract(delivery,'$.error_origin'),'unknown') AS origin,
             COALESCE(json_extract(facts,'$.error_code'),json_extract(delivery,'$.error_code'),json_extract(facts,'$.failure_reason'),json_extract(facts,'$.error_class'),'unknown') AS code,

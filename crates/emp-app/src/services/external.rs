@@ -94,7 +94,6 @@ struct Execution<'a> {
 }
 
 impl Execution<'_> {
-    // The same outcome survives opening retries and transfers to a stream relay.
     fn run<T>(
         &self,
         mut monitor: Option<&mut DisconnectMonitor>,

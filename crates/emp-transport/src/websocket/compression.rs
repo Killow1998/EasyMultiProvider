@@ -135,8 +135,6 @@ impl PerMessageDeflate {
             let consumed =
                 usize::try_from(self.decompressor.total_in() - before_in).unwrap_or(encoded.len());
             if status == Status::StreamEnd {
-                // RFC 7692 section 7.2.3.4 permits only the synthetic empty-block tail after BFINAL,
-                // optionally preceded by 0x00; reject other trailing bytes and reset for the next message.
                 self.decompressor.reset(false);
                 if !matches!(payload.get(consumed..), Some([] | [0x00])) {
                     return Err(DecompressionError::Invalid);

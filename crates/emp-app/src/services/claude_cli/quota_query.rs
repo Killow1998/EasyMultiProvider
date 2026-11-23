@@ -5,8 +5,6 @@ use crate::app::ServerState;
 use serde_json::{Value, json};
 
 pub(crate) fn refresh(state: &ServerState) -> Result<Value, &'static str> {
-    // All local-login providers share one OS login. Concurrent clicks reuse the
-    // result completed while they waited, rather than querying once per alias.
     let requested_at = crate::util::system_now();
     let _guard = state
         .backend
@@ -65,8 +63,6 @@ fn query(state: &ServerState) -> Result<Value, &'static str> {
 }
 
 pub(crate) fn history(state: &ServerState, start: i64, end: i64) -> Result<Value, &'static str> {
-    // Resolve the current login even after EMP restarted; keep old identities in
-    // separate history keys when Claude logs out or changes account.
     with_login(state, false, |_, _, _| {
         state.backend.claude_quota.history(start, end)
     })

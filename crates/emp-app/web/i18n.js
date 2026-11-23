@@ -1,4 +1,3 @@
-// All product copy is registered before the page creates its controllers.
 const uiCopy = Object.create(null);
 function registerUiCopy(entries) { Object.assign(uiCopy, entries); }
 function translateUiCopy(key, language, values = {}) {

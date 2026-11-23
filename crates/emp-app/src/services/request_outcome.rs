@@ -51,8 +51,6 @@ impl<'a> RequestOutcome<'a> {
         owner: Option<&str>,
         operation: &str,
     ) -> Self {
-        // Codex startup prewarm tokenizes its input but does not run inference.
-        // Use the explicit wire flag, never output_tokens == 0 as a heuristic.
         let memory_kind = request_facts::memory_kind(body, incoming);
         let operation = if operation == "responses" && body["generate"] == false {
             "prewarm"
@@ -243,8 +241,9 @@ impl<'a> RequestOutcome<'a> {
             .as_object_mut()
             .unwrap()
             .extend(reported_usage(event));
-        if kind.is_empty() && self.event["dialect"] == "codex_native" {
-            // Native complete responses retain their HTTP boundary verbatim.
+        let preserve_native_http_boundary =
+            kind.is_empty() && self.event["dialect"] == "codex_native";
+        if preserve_native_http_boundary {
         } else if response["status"] == "completed" || kind == "response.completed" {
             self.status(200, "none");
         } else if response["status"] == "incomplete" || kind == "response.incomplete" {
@@ -325,7 +324,6 @@ impl<'a> RequestOutcome<'a> {
         }
         self.source_clock = true;
         self.first_token = observation.first_output;
-        // Content timing changes per delta without changing model declarations.
         self.models.last_content = observation.last_content;
         if self.models != *observation {
             self.models = observation.clone();

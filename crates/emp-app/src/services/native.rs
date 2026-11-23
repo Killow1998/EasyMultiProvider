@@ -220,7 +220,6 @@ fn buffered(
                     );
                 }
             }
-            // EMP's current catalog identity supersedes an upstream's catalog.
             replace_catalog_etag(state, &mut result.headers);
             Ok(result)
         }

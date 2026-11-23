@@ -127,7 +127,6 @@ fn reasoning_levels(model: &Value) -> Vec<&str> {
         .collect()
 }
 
-// Match Codex's Ultra resolution: advertised override, max, then last concrete preset.
 fn ultra_default_effort(model: &Value) -> Option<&str> {
     let levels = array(model, "supported_reasoning_levels");
     if !levels.iter().any(|level| text(level, "effort") == "ultra") {

@@ -1,5 +1,3 @@
-// Report windows share one request lifecycle. Changing filters cancels the old
-// request; only the newest result may update the window. Errors keep its data.
 function createReportQuery({api, onState, onResult}) {
   let revision = 0, controller = null;
   async function run(path, options = {}) {

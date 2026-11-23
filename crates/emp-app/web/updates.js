@@ -1,4 +1,3 @@
-// Update metadata, polling and presentation have one cancellable window owner.
 function createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage,releaseHistoryText,visible,openLink,copyText,isPreview,reload}) {
 let updatePollTimer = null;
 let updatePollGeneration = 0;
@@ -95,7 +94,6 @@ async function checkUpdateHint() {
     let info = await api('/api/updates');
     renderUpdateHint(info);
     if (['idle','current','no_release','error'].includes(info.state)) info = await api('/api/updates/check', {method:'POST', body:'{}'});
-    // Only wait for this check to finish; no permanent background polling.
     for (let attempt = 0; info.state === 'checking' && attempt < 25; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 1000));
       info = await api('/api/updates');

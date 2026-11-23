@@ -72,7 +72,6 @@ fn run(
     write_private(&dir.path().join("config.toml"), b"cli_auth_credentials_store = \"file\"\nmodel_catalog_json = \"quota-models.json\"\n[features]\nplugins = false\n").map_err(|_| "login_storage_failed")?;
     let mut command =
         app_server_command(binary, dir.path()).map_err(|_| "login_engine_start_failed")?;
-    // Login errors may contain sensitive upstream details; expose only mapped codes.
     command.stderr(Stdio::null());
     let mut child = QuotaChild::spawn(&mut command).map_err(|_| "login_engine_start_failed")?;
     let stop = Arc::new(AtomicBool::new(false));

@@ -1,4 +1,3 @@
-// Ultra keeps Codex's collaboration behavior; this changes its concrete effort.
 function createUltraSettings({getState, cloneState, persistState, openModal, closeModal, $, esc, tr, help}) {
   function models(state) {
     const eligible = (state.catalog_models || []).filter(model => model.ultra_reasoning_levels?.length);

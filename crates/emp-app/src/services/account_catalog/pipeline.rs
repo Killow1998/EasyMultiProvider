@@ -273,9 +273,8 @@ pub(crate) fn persist_fetched_catalog(
     Ok(catalog)
 }
 
-/// Retain omitted models only for the same account/backend so partial discovery
-/// cannot invalidate selectable models mid-conversation; discovery is not inference
-/// authorization, and fresh entries (including supported_in_api=false) take precedence.
+/// Retain omitted models only for the same account/backend; fresh entries, including supported_in_api=false, win.
+/// Discovery does not authorize inference.
 fn retain_known_models(catalog: &mut Value, previous: &Value, source: &RefreshSource) -> usize {
     let matches_source = |field: &str, expected: &str| {
         previous

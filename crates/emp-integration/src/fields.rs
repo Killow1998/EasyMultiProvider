@@ -28,13 +28,12 @@ pub(super) fn set_states(
     document: String,
     desired: &BTreeMap<String, FieldState>,
 ) -> Result<String, IntegrationError> {
-    // Keep leading comments when the first managed field is removed.
-    let header_len: usize = document
+    let leading_comments_len: usize = document
         .split_inclusive('\n')
         .take_while(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))
         .map(str::len)
         .sum();
-    let (header, body) = document.split_at(header_len);
+    let (leading_comments, body) = document.split_at(leading_comments_len);
     let mut parsed = body
         .parse::<toml_edit::DocumentMut>()
         .map_err(|_| IntegrationError("unable to parse Codex TOML config"))?;
@@ -79,12 +78,15 @@ pub(super) fn set_states(
         }
     }
     let rendered = parsed.to_string();
-    let newline = if !header.is_empty() && !header.ends_with('\n') && !rendered.is_empty() {
+    let newline = if !leading_comments.is_empty()
+        && !leading_comments.ends_with('\n')
+        && !rendered.is_empty()
+    {
         "\n"
     } else {
         ""
     };
-    Ok(format!("{header}{newline}{rendered}"))
+    Ok(format!("{leading_comments}{newline}{rendered}"))
 }
 
 pub(super) fn relation(current: &BTreeMap<String, FieldState>, lease: &LeaseRecord) -> String {

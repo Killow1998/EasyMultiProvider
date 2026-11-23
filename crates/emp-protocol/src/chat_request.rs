@@ -399,7 +399,6 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
                 let content = match chat_content(item.get("output").or(Some(&empty_output)))? {
                     text @ Value::String(_) if pending_tool_media.is_empty() => text,
                     content => {
-                        // Chat tool messages accept text only. Attach media after all paired results.
                         pending_tool_media.push(serde_json::json!({
                             "type": "text", "text": format!("Tool result for {call_id}:\n"),
                         }));

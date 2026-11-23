@@ -1,4 +1,3 @@
-// Native SVG time chart; missing latency samples stay missing, rather than zero.
 function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
   const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
   const label = metric => metric === 'tokens' ? 'Token' : metric === 'cost_nanos' ? tr("reports.api_estimate_usd") : metric === 'calls' ? tr("reports.calls_3") : metric === 'ttft_ms' ? 'TTFT' : 'TPS';

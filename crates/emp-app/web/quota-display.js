@@ -1,4 +1,3 @@
-// A display preference, like language/theme. Stored quota samples remain unchanged.
 function createQuotaDisplay({read, save}) {
   let mode = read('emp.quotaDisplay', 'remaining') === 'used' ? 'used' : 'remaining';
   function value(remaining) {

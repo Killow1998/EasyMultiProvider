@@ -6,7 +6,6 @@ pub(crate) fn codex_base_url(address: SocketAddr) -> String {
 }
 
 fn base_url_for_platform(address: SocketAddr, windows: bool) -> String {
-    // Use localhost: installed Windows Codex may proxy 127.* despite its exception.
     if windows && address.ip() == IpAddr::V4(Ipv4Addr::LOCALHOST) {
         format!("http://localhost:{}/v1", address.port())
     } else {

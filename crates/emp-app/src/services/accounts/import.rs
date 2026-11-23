@@ -121,7 +121,6 @@ pub(crate) fn import_account_state(
                 identity_only,
             } = resolve(state, body)?;
             let account_id = account_id.as_str();
-            // Serialize credential writes with quota refresh and token rotation.
             receipt.subject(account_id);
             let refresh_lock = quota_refresh_lock(state, account_id)
                 .ok_or_else(|| "internal server error".to_owned())?;
@@ -210,7 +209,6 @@ pub(crate) fn import_account_state(
                 .flatten()
                 .any(|account| account["id"] == account_id)
             {
-                // Attribute legacy usage before replacing its credentials.
                 receipt
                     .step("settle_history", || {
                         crate::services::quota::settle_legacy_quota_history(

@@ -52,8 +52,6 @@ fn open_vault_with(
         paths.push(clients);
     }
     let key = state_root.join("master.key");
-    // Never create a replacement key silently when a saved credential still
-    // refers to the lost key. The recovery page must explain the decision.
     let inline_key = external
         && std::env::var_os(emp_state::filesystem::MASTER_KEY_ENV)
             .is_some_and(|v| !v.to_string_lossy().trim().is_empty());

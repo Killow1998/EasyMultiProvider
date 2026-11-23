@@ -87,8 +87,6 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         if !same_origin {
             return cross_origin_response("cross-origin Web UI request rejected");
         }
-        // The page carries no secrets; its script exchanges the bootstrap
-        // token for an origin-scoped session sent as a request header.
         return ui_response();
     }
 
@@ -209,7 +207,6 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
                     .into_iter()
                     .find(|value| !value.is_empty())
                     .unwrap_or_else(|| "1d".to_owned());
-                // An explicit start/end (Unix seconds, like /api/usage) overrides `range`.
                 let bound = |name| {
                     query_values(request.target, name)
                         .into_iter()
@@ -262,7 +259,6 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
     not_found_response()
 }
 
-/// Exchange the single-use bootstrap token for the management session.
 fn bootstrap_session(request: Request<'_>, state: &ServerState, now: f64) -> Vec<u8> {
     let Some(supplied) = (request.header_count(BOOTSTRAP_HEADER) == 1)
         .then(|| request.header(BOOTSTRAP_HEADER))
@@ -271,8 +267,6 @@ fn bootstrap_session(request: Request<'_>, state: &ServerState, now: f64) -> Vec
     else {
         return unauthorized_response();
     };
-    // A tray click issues one fresh link, without persisting another credential
-    // or turning the original ten-minute startup link into a reusable secret.
     let reopened = state.reopen_bootstrap.lock().ok();
     let bootstrap = if state.bootstrap.matches(supplied, now) {
         &state.bootstrap

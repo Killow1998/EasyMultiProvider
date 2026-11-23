@@ -22,8 +22,7 @@ const PRIMARY_ARTIFACTS: [&str; 14] = [
     "EMP-macos-arm64.dmg",
 ];
 
-/// The downloads shown on the release page. The Linux installer reads the
-/// archive's checksum sidecar.
+/// Public downloads include archive checksum sidecars required by the Linux installer.
 const PUBLIC_ARTIFACTS: [&str; 9] = [
     "EMP-linux-x86_64-install.sh",
     "EMP-linux-x86_64.tar.gz",

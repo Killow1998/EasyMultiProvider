@@ -324,7 +324,6 @@ fn apply_presentation(config: &Value, entry: &mut Value) {
         .and_then(|values| values.get(text(entry, "_emp_family")))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    // External entries lack the official harness; stale preferences must not advertise unsupported efforts.
     if integer(entry.get("_emp_source_rank")) < 2
         && ultra_reasoning_levels(entry)
             .iter()

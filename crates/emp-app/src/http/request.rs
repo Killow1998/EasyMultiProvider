@@ -17,9 +17,7 @@ use std::time::Instant;
 
 const MAX_HEADER_BYTES: usize = 8 * 1024;
 
-/// Idle limit for any single read while a request is being received.
 pub(crate) const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
-/// Overall limit for receiving the request line and headers.
 pub(crate) const REQUEST_HEAD_DEADLINE: Duration = Duration::from_secs(30);
 /// Overall limit for receiving a request body, extended for large uploads.
 const REQUEST_BODY_DEADLINE: Duration = Duration::from_secs(120);
@@ -350,7 +348,6 @@ pub(crate) fn read_json_body(
     let length = raw_length
         .parse::<u128>()
         .map_err(|_| BodyError::Invalid("invalid Content-Length".to_owned()))?;
-    // Management keeps a fixed ceiling; generation also has model-specific budgets.
     let management = request.raw_path().starts_with("/api/");
     let limit = if management {
         5 * 1024 * 1024

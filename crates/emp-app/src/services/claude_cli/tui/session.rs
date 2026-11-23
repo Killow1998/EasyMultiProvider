@@ -73,9 +73,9 @@ pub(super) fn run(
         if Instant::now() >= deadline {
             return Err(ClaudeCliError::Failure("claude_cli_timeout"));
         }
-        // Discovery returns before the CLI registers commands; autocomplete acknowledges readiness.
-        let prompt_ready = terminal.pump(CONTEXT_PROMPT_DESCRIPTION.as_bytes())?;
-        if prompt_listed && !submitted && prompt_ready {
+        let autocomplete_acknowledged_prompt =
+            terminal.pump(CONTEXT_PROMPT_DESCRIPTION.as_bytes())?;
+        if prompt_listed && !submitted && autocomplete_acknowledged_prompt {
             terminal.write(b"\r")?;
             submitted = true;
         }

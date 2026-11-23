@@ -43,8 +43,7 @@ struct Migration {
 }
 
 impl Migration {
-    /// Stages a referenced file that lives under the source directory and
-    /// returns the value pointing at its new location.
+    /// Copies source-local references into staging and rewrites their paths.
     fn copy_reference(&self, value: &Value) -> io::Result<Value> {
         let Some(text) = value.as_str().filter(|text| !text.trim().is_empty()) else {
             return Ok(value.clone());

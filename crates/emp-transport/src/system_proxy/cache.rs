@@ -28,8 +28,6 @@ impl SystemProxyCache {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.reading {
-            // Only a cold cache waits: sending direct before the first proxy
-            // answer can make startup requests fail on proxy-only networks.
             if state.last_attempt.is_none() {
                 state = self
                     .ready

@@ -1,6 +1,8 @@
 use super::RequestOutcome;
 use serde_json::{Value, json};
 
+const MIN_GENERATION_MEASUREMENT_MS: u64 = 100;
+
 fn request_tokens_per_second(output_tokens: &Value, duration_ms: &Value) -> Option<f64> {
     let tokens = output_tokens
         .as_u64()
@@ -19,8 +21,7 @@ fn generation_tokens_per_second(
     reasoning_tokens: &Value,
     duration_ms: &Value,
 ) -> Option<f64> {
-    // A few milliseconds of batched delivery cannot measure generation speed.
-    if duration_ms.as_u64()? < 100 {
+    if duration_ms.as_u64()? < MIN_GENERATION_MEASUREMENT_MS {
         return None;
     }
     let output = output_tokens

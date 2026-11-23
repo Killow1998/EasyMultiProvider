@@ -19,7 +19,7 @@ pub fn created(pid: u32) -> Option<f64> {
                 line.strip_prefix("btime ")
                     .and_then(|value| value.parse::<f64>().ok())
             })?;
-        // sysconf has no side effects; the kernel defines the process clock tick.
+        // SAFETY: _SC_CLK_TCK is a valid sysconf selector and requires no pointer arguments.
         let frequency = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
         (frequency > 0).then_some(boot + ticks / frequency as f64)
     }
@@ -27,6 +27,7 @@ pub fn created(pid: u32) -> Option<f64> {
     {
         let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
         let size = std::mem::size_of::<libc::proc_bsdinfo>();
+        // SAFETY: info provides a writable proc_bsdinfo buffer of the advertised size.
         let read = unsafe {
             libc::proc_pidinfo(
                 pid as i32,
@@ -39,6 +40,7 @@ pub fn created(pid: u32) -> Option<f64> {
         if read != size as i32 {
             return None;
         }
+        // SAFETY: proc_pidinfo reported that it initialized the entire proc_bsdinfo buffer.
         let info = unsafe { info.assume_init() };
         Some(info.pbi_start_tvsec as f64 + info.pbi_start_tvusec as f64 / 1e6)
     }
@@ -51,6 +53,7 @@ pub fn created(pid: u32) -> Option<f64> {
                 PROCESS_SYNCHRONIZE, WaitForSingleObject,
             },
         };
+        // SAFETY: OpenProcess takes scalar arguments and returns a handle checked before use.
         let process = unsafe {
             OpenProcess(
                 PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
@@ -65,6 +68,7 @@ pub fn created(pid: u32) -> Option<f64> {
             dwLowDateTime: 0,
             dwHighDateTime: 0,
         }; 4];
+        // SAFETY: process is live and the four FILETIME outputs occupy distinct writable storage.
         let result = unsafe {
             GetProcessTimes(
                 process,
@@ -74,10 +78,9 @@ pub fn created(pid: u32) -> Option<f64> {
                 &mut times[3],
             )
         };
-        // Windows retains a terminated process object while a launcher/debugger
-        // still holds its handle. Creation time is not a liveness check, and the
-        // exit time is undefined for a running process. Test its signal instead.
+        // SAFETY: process is a live handle opened with PROCESS_SYNCHRONIZE access.
         let running = unsafe { WaitForSingleObject(process, 0) } == WAIT_TIMEOUT;
+        // SAFETY: this function owns process and has completed all queries using it.
         unsafe { CloseHandle(process) };
         if result == 0 || !running {
             return None;
@@ -109,6 +112,7 @@ impl QuietLaunch {
         };
         let mut previous = 0;
         let quiet = SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX;
+        // SAFETY: the flags are valid and previous is writable for this synchronous call.
         if unsafe { SetThreadErrorMode(GetThreadErrorMode() | quiet, &mut previous) } == 0 {
             return Err(UpdateError("worker_failed"));
         }
@@ -118,6 +122,7 @@ impl QuietLaunch {
 #[cfg(windows)]
 impl Drop for QuietLaunch {
     fn drop(&mut self) {
+        // SAFETY: previous was obtained from SetThreadErrorMode; its optional output may be null.
         unsafe {
             windows_sys::Win32::System::Diagnostics::Debug::SetThreadErrorMode(
                 self.previous,
@@ -135,7 +140,6 @@ pub(super) fn spawn_quiet_reporting(
     command: &mut Command,
     report: impl FnOnce(std::io::Error) -> UpdateError,
 ) -> Result<Child> {
-    // Capture the original CreateProcess error before restoring thread error mode.
     let _quiet_launch = QuietLaunch::begin()?;
     command.spawn().map_err(report)
 }
@@ -190,13 +194,16 @@ pub fn spawn(
             Foundation::CloseHandle,
             System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW},
         };
+        // SAFETY: null attributes and name request an unnamed job with default security.
         let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if job.is_null() {
             let _ = child.kill();
             let _ = child.wait();
             return Err(UpdateError("worker_failed"));
         }
+        // SAFETY: job is newly owned and child retains its live process handle through the call.
         if unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) } == 0 {
+            // SAFETY: job is owned here and will not be used after this failed assignment.
             unsafe { CloseHandle(job) };
             let _ = child.kill();
             let _ = child.wait();
@@ -215,11 +222,13 @@ impl OwnedChild {
             return;
         }
         #[cfg(unix)]
+        // SAFETY: the child starts in its own process group; kill takes only scalar arguments.
         unsafe {
             libc::kill(-(self.child.id() as i32), libc::SIGTERM);
         }
         #[cfg(windows)]
         if !self.job.is_null() {
+            // SAFETY: self owns this job handle until drop and termination does not close it.
             unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1) };
         }
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -228,6 +237,7 @@ impl OwnedChild {
         }
         if self.child.try_wait().ok().flatten().is_none() {
             #[cfg(unix)]
+            // SAFETY: the child starts in its own process group; kill takes only scalar arguments.
             unsafe {
                 libc::kill(-(self.child.id() as i32), libc::SIGKILL);
             }
@@ -254,6 +264,7 @@ impl OwnedChild {
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         if !self.job.is_null() {
+            // SAFETY: this is the uniquely owned job handle, released exactly once on drop.
             unsafe { windows_sys::Win32::Foundation::CloseHandle(self.job) };
         }
     }

@@ -270,8 +270,6 @@ impl UpdateManager {
         } else {
             "worker"
         });
-        // The helper runs the protocol understood by this manager version. A separate copy also
-        // lets Windows replace the original executable after its parent exits.
         self.stage("prepare_worker");
         fs::copy(&self.0.executable, &worker)
             .map_err(|error| self.io_error("prepare_worker", error))?;
@@ -364,7 +362,7 @@ impl UpdateManager {
         transport_error: &'static str,
         etag: Option<&str>,
     ) -> Result<Response> {
-        let client = self.client()?;
+        let client = self.client_for_network_attempt()?;
         let mut url = Url::parse(raw_url).map_err(|_| UpdateError("invalid_download_url"))?;
         for redirect in 0..=MAX_REDIRECTS {
             self.validate_url(&url)?;

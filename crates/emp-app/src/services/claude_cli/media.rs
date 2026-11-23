@@ -132,8 +132,7 @@ fn preflight_part(part: &Value) -> Result<(), &'static str> {
 pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
     let mut transcript = projection::normalized_transcript(body);
     let system_prompt = super::instructions::take(&mut transcript)?;
-    // Structured history needs stable block boundaries so appending a turn
-    // does not invalidate the entire cached user message.
+    // Stable history block boundaries preserve cached prefixes when a turn is appended.
     if !matches!(
         transcript.get("input"),
         Some(Value::Array(_) | Value::Object(_))

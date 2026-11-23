@@ -27,12 +27,11 @@ fn version(value: &str) -> Option<String> {
 pub(super) fn host_version(source: &str, binary: &Path) -> Option<String> {
     match source {
         "codex_app" => {
-            // The outer host, not its nested CodexCLI engine bundle.
-            let bundle = binary
+            let host_bundle = binary
                 .ancestors()
                 .filter(|p| p.extension().is_some_and(|s| s == "app"))
                 .last()?;
-            let bytes = bounded_bytes(&bundle.join("Contents/Info.plist"))?;
+            let bytes = bounded_bytes(&host_bundle.join("Contents/Info.plist"))?;
             let document = plist::Value::from_reader(std::io::Cursor::new(bytes)).ok()?;
             version(
                 document

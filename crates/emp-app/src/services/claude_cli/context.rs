@@ -18,8 +18,6 @@ pub(crate) fn assess_context(
             &payload,
         )),
         Err(error @ ClaudeCliError::Failure("claude_cli_input_too_large")) => {
-            // Oversized reconstructed history may still be compacted by the planner;
-            // keep the estimate unknown instead of rejecting or trusting a partial projection.
             let assessment = emp_history::context::assess_with_input_estimate(
                 route.provider.value(),
                 route.model.value(),

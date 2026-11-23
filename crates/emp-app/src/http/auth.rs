@@ -11,21 +11,17 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-/// Single-use bootstrap tokens expire if the printed URL is never opened.
 pub(crate) const BOOTSTRAP_LIFETIME_SECONDS: f64 = 10.0 * 60.0;
 
 /// Export confirmations are issued immediately before a secret-bearing export.
 pub(crate) const EXPORT_CONFIRMATION_LIFETIME_SECONDS: f64 = 60.0;
 pub(crate) const EXPORT_CONFIRMATION_OPERATION: &str = "/api/migration/export";
 
-/// Management requests carry the origin-scoped session token in this header.
 pub(crate) const SESSION_HEADER: &str = "X-EMP-Session";
 
-/// The Web UI presents the single-use bootstrap token in this header.
 pub(crate) const BOOTSTRAP_HEADER: &str = "X-EMP-Bootstrap";
 
-/// Browsers send cookies to every port on the same host, so management no
-/// longer uses one. Responses that serve the UI expire any legacy cookie.
+/// UI responses expire the legacy cookie; management sessions use origin-scoped headers.
 pub(crate) const CLEAR_LEGACY_SESSION_COOKIE: &str =
     "emp_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
 
@@ -47,8 +43,7 @@ impl BootstrapToken {
             .is_ok()
     }
 
-    /// Return a consumed token whose session could not be established, so
-    /// the same sign-in link can be retried once the fault clears.
+    /// Releases a consumed token after session creation fails so the sign-in link can be retried.
     pub(crate) fn release(&self) {
         self.used.store(false, Ordering::Release);
     }
@@ -86,12 +81,9 @@ impl SessionStore {
         session.matches_at(supplied, now)
     }
 
-    /// Replace the persisted session after a successful bootstrap, so every
-    /// browser login receives a fresh token and earlier ones stop working.
+    /// A successful bootstrap persists a fresh token and invalidates earlier browser sessions.
     pub(crate) fn rotate(&self, now: f64) -> Option<(String, u64)> {
         let mut session = self.session.lock().ok()?;
-        // Persist the new session before discarding the old one so failed rotations
-        // leave existing browser logins valid.
         let backup = self.path.with_extension("rotating");
         let had_previous = match std::fs::rename(&self.path, &backup) {
             Ok(()) => true,
@@ -145,8 +137,7 @@ impl SessionStore {
         Some(token)
     }
 
-    /// Consume the pending confirmation. Any presented value, correct or not,
-    /// spends it so a guessed or replayed value never gets a second attempt.
+    /// Any presented value consumes the confirmation, including an incorrect guess or replay.
     pub(crate) fn consume_export_confirmation(
         &self,
         supplied: &str,
@@ -352,8 +343,6 @@ pub(crate) fn proxy_identity(
                     .identify(value, &state.backend.modules)
             }
         });
-    // Forwarded API clients have their own Host/port. Browser management remains
-    // origin-scoped and never accepts this credential in place of its session.
     if gateway.is_some() && request.header("Origin").is_none() {
         return gateway;
     }

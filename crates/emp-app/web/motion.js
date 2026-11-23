@@ -1,4 +1,3 @@
-// Static glyph mask + one moving green layer, rather than a fill animation per dot.
 function enhanceLogo(svg) {
   if (!svg?.childElementCount) return;
   const mask=svg.cloneNode(true); mask.removeAttribute('id'); mask.removeAttribute('class');
@@ -11,7 +10,6 @@ function enhanceLogo(svg) {
     }
   }
   const image=`url("data:image/svg+xml,${encodeURIComponent(mask.outerHTML)}")`;
-  // A redrawn wordmark (EMP ↔ EMPT) keeps its shell and only refreshes the mask.
   const existing=svg.parentElement.classList.contains('presentation-logo-shell')&&svg.parentElement.querySelector('.presentation-logo-wave');
   if(existing){existing.style.setProperty('--logo-mask',image);return;}
   const shell=document.createElement('span'); shell.className='presentation-logo-shell';
@@ -20,7 +18,6 @@ function enhanceLogo(svg) {
   const color=document.createElement('span');color.dataset.presentationMotion='logo';wave.append(color);
   svg.replaceWith(shell); shell.append(svg,wave);
 }
-// One 15fps owner for the persistent textures; no independent CSS frame loops.
 function installMotion(refreshCountdowns) {
   const tracked=new Set(), motion=matchMedia('(prefers-reduced-motion:reduce)');
   let effects=[], raf=null, frameTimer=null, last=-Infinity, timer=null;

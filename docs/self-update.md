@@ -23,8 +23,10 @@ languages use the maintained release text, rendered as text rather than HTML.
 Older pages are read only when needed, up to five 100-entry pages and a 4 MiB
 cache bound. A full page containing only previews does not end pagination. The
 serialized cache is also checked before writing: oversized metadata leaves the
-last durable cache intact while its valid network result remains usable. Missing
-older notes link to the release history and never prevent an otherwise valid
+last durable cache intact while its valid network result remains usable. Failed
+cache writes also preserve the successful network result. The first release-index
+page owns the ETag; its 304 response retains completed history. Missing older
+notes link to the release history and never prevent an otherwise valid
 update. A later check can complete a partial cache even when
 the first page returns 304. Old single-release caches remain readable; their ETag
 is not reused against the new index endpoint.
@@ -75,6 +77,8 @@ whose owner and sole FullControl grant are the current user can inherit that
 grant from its private state directory. On first load, EMP protects that key's
 DACL without changing the key bytes or its owner. A key granting another
 principal access is still rejected rather than silently treated as private.
+Legacy-key protection reopens the validated file handle for DACL access, keeping
+the repair attached to that object if its pathname is substituted.
 
 Private-state and updater writes preserve an already-correct owner. They request
 DACL changes without also requesting ownership changes, so an ordinary user's
@@ -125,6 +129,9 @@ accepted requests finish. Idle WebSocket connections do not count as running mod
 requests. If requests do not finish within five minutes, installation is cancelled
 and the gate reopens. The helper waits for the old packaged process to exit, then
 replaces only the validated sibling installation and starts it in a visible window.
+
+The helper is a separate copy of the running manager's executable, sharing its
+plan protocol and allowing Windows to replace the original after the parent exits.
 
 An exited process no longer counts as running just because its launcher retains
 a Windows process handle. The native package check starts an old EMP, exits it

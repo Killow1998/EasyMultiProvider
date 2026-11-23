@@ -359,7 +359,6 @@ impl<'a> NativeRouter<'a> {
             prepare_collaboration(payload.as_object_mut().expect("projected object"))
                 .map_err(collaboration_error)?;
         }
-        // Native Lite rejects some Zstd requests containing inline images.
         let compress = !has_inline_image(&payload["input"]);
         let mut data = encoded(&payload, compress)?;
         let deadline = Instant::now() + self.client.policy().timeout_policy().non_stream_wall_clock;

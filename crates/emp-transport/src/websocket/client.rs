@@ -276,6 +276,7 @@ impl ClientWebSocket {
         payload: &[u8],
         compressed: bool,
     ) -> Result<(), ClientWebSocketError> {
+        const MASK_ALIGNED_WRITE_CHUNK_BYTES: usize = 64 * 1024;
         let mut mask = [0u8; 4];
         getrandom::getrandom(&mut mask).map_err(|_| {
             ClientWebSocketError::new(500, "native websocket randomness is unavailable")
@@ -285,7 +286,7 @@ impl ClientWebSocket {
         frame.push(0x80 | prefix[0]);
         frame.extend(&prefix[1..]);
         frame.extend_from_slice(&mask);
-        let first = payload.len().min(64 * 1024);
+        let first = payload.len().min(MASK_ALIGNED_WRITE_CHUNK_BYTES);
         frame.extend(
             payload[..first]
                 .iter()
@@ -295,8 +296,7 @@ impl ClientWebSocket {
         self.stream
             .write_all(&frame)
             .and_then(|()| {
-                // 64 KiB chunks preserve the four-byte mask alignment.
-                for chunk in payload[first..].chunks(64 * 1024) {
+                for chunk in payload[first..].chunks(MASK_ALIGNED_WRITE_CHUNK_BYTES) {
                     frame.clear();
                     frame.extend(
                         chunk
@@ -477,7 +477,6 @@ impl ClientWebSocket {
     }
 
     fn map_frame_error(&mut self, error: FrameDecodeError) -> ClientWebSocketError {
-        // A failed/partial frame cannot be measured as a complete text payload.
         self.traffic.decoded_received = None;
         self.traffic.encoded_received = None;
         match error {

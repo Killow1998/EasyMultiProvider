@@ -1,4 +1,3 @@
-//! Bounded package streaming and digest verification.
 use super::manager::UpdateManager;
 use super::release::{Asset, MAX_PACKAGE_BYTES};
 use super::{Result, UpdateError};
@@ -20,8 +19,6 @@ where
     if asset.size == 0 || asset.size > MAX_PACKAGE_BYTES {
         return Err(UpdateError("invalid_package_size"));
     }
-    // Reserve our own file once. Each network retry truncates this handle,
-    // resetting both byte count and digest without trusting a partial download.
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -76,7 +73,6 @@ fn download_attempt(
         .map_err(|error| manager.io_error("sync_package", error))?;
     manager.trace_download(size, asset.size, started.elapsed(), "received");
     if size < asset.size {
-        // A complete HTTP response can still have a truncated package body.
         manager.incomplete_download();
         return Err(UpdateError("update_failed"));
     }

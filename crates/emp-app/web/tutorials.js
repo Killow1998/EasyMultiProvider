@@ -35,7 +35,6 @@ function createTutorials({openModal, $, tr, esc, getLanguage}) {
     }
     const url = `/assets/tutorial-${asset}.gif`;
     fullSize.href = url;
-    // Replace the whole image owner so late load/error events cannot change a new selection.
     media.innerHTML = `<div class="tutorial-placeholder"><p role="status">${esc(tr('tutorials.loading'))}</p><button type="button" class="secondary" hidden></button></div>`;
     const placeholder = media.firstElementChild, status = placeholder.querySelector('p'), action = placeholder.querySelector('button');
     function play() {

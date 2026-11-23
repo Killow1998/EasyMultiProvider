@@ -27,7 +27,6 @@ fn sanitize_private_reasoning_items(body: &mut Value) {
 }
 
 pub(super) fn proposal_schema() -> Value {
-    // The MCP context carries the catalog; validate proposed identities against it.
     json!({
         "type":"object",
         "additionalProperties":false,
@@ -60,7 +59,6 @@ pub(super) fn effort(body: &Value) -> Result<Option<&'static str>, &'static str>
     else {
         return Ok(None);
     };
-    // Omitted or null effort requests no CLI override; the string "none" does.
     if value.is_null() {
         return Ok(None);
     }

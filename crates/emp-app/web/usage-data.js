@@ -1,4 +1,3 @@
-// Reported zero and missing usage remain distinct across tables and bills.
 function createUsageValues({tr,esc,number}) {
   const count=(row,field,coverage,html=true)=>{
     if (!row[coverage]) return '—';
@@ -12,7 +11,6 @@ function createUsageValues({tr,esc,number}) {
   return {count,tokens,usd};
 }
 
-// All chart groupings project the same reconciled rows; grouping cannot alter totals.
 function createUsageData({tr,esc,number,serviceName}) {
   const palette = ['#537de0','#279e9b','#c98730','#a371ce','#d2637d','#559746','#d65c46','#b0942d'];
   const serviceColors = new Map();

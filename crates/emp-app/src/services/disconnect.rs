@@ -8,6 +8,9 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+const SPURIOUS_READINESS_PEEK_TIMEOUT: Duration = Duration::from_millis(50);
+const UNREAD_DOWNSTREAM_BACKOFF: Duration = Duration::from_millis(10);
+
 /// A registered clone never reads downstream bytes. It is deregistered and its
 /// shared socket timeout restored before the clone is closed.
 struct Probe {
@@ -20,8 +23,7 @@ impl Probe {
     fn new(stream: &TcpStream, poller: Arc<Poller>) -> std::io::Result<Self> {
         let stream = stream.try_clone()?;
         let previous_timeout = stream.read_timeout()?;
-        // SAFETY: Probe owns the stream and always deletes its registration in
-        // Drop, including early errors and worker unwinding.
+        // SAFETY: Probe owns the stream and deregisters it in Drop before closing it.
         unsafe {
             poller.add(&stream, Event::readable(0))?;
         }
@@ -30,11 +32,9 @@ impl Probe {
             poller,
             previous_timeout,
         };
-        // Readiness can be spurious. Bound only that exceptional peek; ordinary
-        // idle waits are interruptible and do not wake on a socket timer.
         probe
             .stream
-            .set_read_timeout(Some(Duration::from_millis(50)))?;
+            .set_read_timeout(Some(SPURIOUS_READINESS_PEEK_TIMEOUT))?;
         Ok(probe)
     }
 
@@ -57,9 +57,7 @@ impl Probe {
             }
             match self.stream.peek(&mut byte) {
                 Ok(0) => return Ok(true),
-                // A pipelined request or WS frame belongs to the connection
-                // reader. Leave it intact and avoid a readability busy loop.
-                Ok(_) => thread::park_timeout(Duration::from_millis(10)),
+                Ok(_) => thread::park_timeout(UNREAD_DOWNSTREAM_BACKOFF),
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -137,9 +135,7 @@ impl DisconnectMonitor {
         })
     }
 
-    // Context assessment is normally synchronous and never calls race(). Do
-    // not spawn (then join) a socket reader unless a caller actually awaits I/O.
-    fn activate(&mut self) {
+    fn start_worker_for_io(&mut self) {
         let Some((probe, sender)) = self.pending.take() else {
             return;
         };
@@ -154,12 +150,12 @@ impl DisconnectMonitor {
     }
 
     pub(crate) fn cancellation(&mut self) -> Arc<AtomicBool> {
-        self.activate();
+        self.start_worker_for_io();
         Arc::clone(&self.cancelled)
     }
 
     pub(crate) async fn race<F: Future>(&mut self, future: F) -> DisconnectRace<F::Output> {
-        self.activate();
+        self.start_worker_for_io();
         tokio::select! {
             biased;
             _ = &mut self.disconnected => DisconnectRace::Disconnected,
@@ -187,7 +183,6 @@ impl Drop for DisconnectMonitor {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
-            // Cover both the readiness wait and the unread-data backoff.
             let _ = self.wake.notify();
             worker.thread().unpark();
             let _ = worker.join();

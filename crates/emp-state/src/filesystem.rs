@@ -583,7 +583,6 @@ impl FileTransaction {
                 if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
                     return Err(FilesystemError::ManagedFileNotRegular);
                 }
-                // Recheck the opened handle to reject links or special files substituted after path validation.
                 let mut file = open_nofollow_for_read(&path).map_err(|error| {
                     if error.kind() == std::io::ErrorKind::NotFound {
                         FilesystemError::ManagedFileUnavailable

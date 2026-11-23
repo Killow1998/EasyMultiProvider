@@ -78,8 +78,6 @@ pub(crate) fn prepare_destination_context(
     mut monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
 ) -> Result<Value, DestinationPrepareError> {
     if route.dialect == emp_core::Dialect::CodexNative {
-        // Incremental native input has unknown history completeness. Codex owns
-        // its existing chain; never judge the delta as a full conversation.
         if body.get("previous_response_id").is_none_or(Value::is_null)
             && let Some(payload) = crate::services::context::payload(state, route, &body)
         {

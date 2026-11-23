@@ -63,8 +63,7 @@ fn allowed_header(name: &str) -> bool {
     RESPONSE_HEADER_NAMES.contains(&name) || is_rate_header(name) || is_rate_limit_name_header(name)
 }
 
-// Use Unicode 16.0.0 case folding for aliases; Cherokee folds to uppercase.
-fn casefold_string(value: &str) -> String {
+fn unicode_16_casefold_string(value: &str) -> String {
     let mut result = String::with_capacity(value.len());
     for character in value.chars() {
         match character {
@@ -209,14 +208,13 @@ fn rewrite_model_value(value: Value, requested_model: &str, upstream_model: &str
         return value;
     }
     let text = value.as_str().expect("string model value");
-    if casefold_string(text) == casefold_string(upstream_model) {
+    if unicode_16_casefold_string(text) == unicode_16_casefold_string(upstream_model) {
         Value::String(requested_model.to_owned())
     } else {
         value
     }
 }
 
-/// Rewrite model-valued native headers in a JSON headers object.
 pub fn rewrite_native_model_headers(
     headers: &Value,
     requested_model: &str,

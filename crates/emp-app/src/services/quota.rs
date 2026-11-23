@@ -64,7 +64,6 @@ fn save_account_quota_state(
             "quota_error",
         ));
     };
-    // The sampler runs every 44 s; leave config.json alone when nothing changed.
     let unchanged = account.get("credential_status").and_then(Value::as_str) == Some(status)
         && quota.is_none_or(|quota| account.get("quota") == Some(quota));
     if unchanged {
@@ -108,7 +107,6 @@ fn save_rotated_credential(
     vault.write_encrypted_json(auth_path, auth).map_err(|_| ())
 }
 
-/// Stored credentials shared by an imported account's quota refresh and reset.
 struct AccountCredentials<'a> {
     state: &'a ServerState,
     auth_file: String,
@@ -270,9 +268,8 @@ pub(crate) fn flush_pending_rotations(state: &ServerState) -> usize {
     unsaved
 }
 
-/// Adopt an imported account's legacy ID-keyed rows into its credential identity.
-/// Those rows used that entry's credentials; success includes no rows to move.
-/// Never adopt `@native`: the current login cannot identify historical logins.
+/// Adopt an imported account's legacy rows into its credential identity; no rows is also success.
+/// Excludes `@native`, whose current login cannot identify historical logins.
 pub(crate) fn adopt_legacy_quota_history(state: &ServerState, account_id: &str) -> bool {
     if account_id == "@native" {
         return false;
@@ -295,9 +292,8 @@ fn adopt_owned_legacy_quota_history(
     })
 }
 
-/// Adopt or delete legacy rows before freeing/reassigning an account ID, so its
-/// next owner cannot inherit them. Run with final validation and commit under
-/// the configuration lock; on error, the caller must not reassign the ID.
+/// Adopt or delete legacy rows under the configuration lock before freeing or reassigning an account ID.
+/// Final validation and commit must hold that lock; on error, the caller must not reassign the ID.
 pub(crate) fn settle_legacy_quota_history(
     state: &ServerState,
     config: &Value,

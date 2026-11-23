@@ -12,8 +12,7 @@ pub(super) struct ExitSignals {
     external: Arc<AtomicBool>,
     #[cfg(windows)]
     _session: super::windows::SessionEvents,
-    // Keep the runtime alive until Drop joins any in-flight exit callback.
-    state: Arc<ServerState>,
+    runtime_owner: Arc<ServerState>,
 }
 
 impl ExitSignals {
@@ -39,8 +38,6 @@ impl ExitSignals {
                 })
                 .await;
             }
-            // Keep the receivers registered until shutdown completes. A second
-            // close notification must not fall through to the default handler.
             let _ = stopped.await;
         });
         Ok(Self {
@@ -49,7 +46,7 @@ impl ExitSignals {
             external,
             #[cfg(windows)]
             _session: session,
-            state,
+            runtime_owner: state,
         })
     }
 
@@ -63,10 +60,8 @@ impl Drop for ExitSignals {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        // run_server owns this guard outside block_on. Do not detach a local
-        // restore or drop its runtime on a blocking worker during process exit.
         let _ = self
-            .state
+            .runtime_owner
             .backend
             .transport
             .runtime

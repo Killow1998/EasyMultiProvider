@@ -1,6 +1,5 @@
-//! With user32 loaded, logoff/shutdown requires a hidden top-level window:
-//! message-only windows miss WM_ENDSESSION, and console handlers miss logoff.
-//! Finish cleanup before returning from WM_ENDSESSION.
+//! Receive logoff/shutdown through a hidden top-level window when user32 is loaded.
+//! Message-only windows miss WM_ENDSESSION; cleanup finishes before its callback returns.
 use crate::app::ServerState;
 use std::io;
 use std::ptr::null_mut;
@@ -107,7 +106,6 @@ impl Drop for SessionEvents {
 }
 
 fn restore_before_exit(exit: &ExitState) {
-    // No Rust unwind may cross a Win32 callback boundary.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         exit.external.store(true, Ordering::Release);
         let state = &exit.state;
@@ -134,7 +132,6 @@ unsafe extern "system" fn window_proc(
             SetWindowLongPtrW(window, GWLP_USERDATA, creation.lpCreateParams as isize);
         }
         match message {
-            // Query is not a commitment: another app or the user can cancel.
             WM_QUERYENDSESSION => 1,
             WM_ENDSESSION if wparam == 0 => 0,
             WM_ENDSESSION | WM_CLOSE => {

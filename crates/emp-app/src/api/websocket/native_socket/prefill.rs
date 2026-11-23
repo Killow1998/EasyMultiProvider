@@ -76,8 +76,6 @@ impl Prefill<'_> {
                     }
                 };
                 let kind = event["type"].as_str().unwrap_or("");
-                // A peer that generates during prefill must never cause an
-                // automatic replay, a second tool execution, or false success.
                 if kind.starts_with("response.output")
                     || kind.starts_with("response.function")
                     || event["response"]["output"]

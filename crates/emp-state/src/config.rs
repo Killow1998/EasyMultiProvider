@@ -579,8 +579,6 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
     let image_routing = image_routing::normalize(raw.get("image_routing"))?;
     let memory_model =
         presentation::normalize_memory_model(raw.get("memory_model"), "memory_model")?;
-    // Older configurations used one model for both stages. An explicit empty
-    // extraction preference instead restores that stage's original Codex setting.
     let memory_extraction_model = presentation::normalize_memory_model(
         raw.get("memory_extraction_model")
             .or_else(|| raw.get("memory_model")),
@@ -649,7 +647,6 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "zh" | "zh-CN" => Value::String("zh-CN".into()),
         _ => return Err(ConfigError::new("language must be en or zh-CN")),
     };
-    // Unset settings start enabled; explicit user choices remain authoritative.
     for key in ["auto_enable_on_start", "auto_review_fallback"] {
         normalized[key] = match raw.get(key) {
             None => Value::Bool(true),

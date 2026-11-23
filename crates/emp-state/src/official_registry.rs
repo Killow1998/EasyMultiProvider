@@ -1,5 +1,3 @@
-//! Shared model capability defaults for discovery and saved configuration.
-
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read;
@@ -145,8 +143,6 @@ pub fn enrich_saved_models(provider: &Map<String, Value>, models: Vec<Value>) ->
 
 fn enrich_models(provider: &Map<String, Value>, models: Vec<Value>, saved: bool) -> Vec<Value> {
     let registry = registry();
-    // Relays inherit published modalities, not the publisher's deployment limits.
-    // Claude CLI has its own published reasoning defaults.
     let claude_cli =
         provider.get("execution_backend").and_then(Value::as_str) == Some("claude_cli");
     let provider_key = if claude_cli {

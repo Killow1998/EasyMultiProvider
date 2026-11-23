@@ -114,8 +114,6 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
             return Err(());
         }
     }
-    // Automatic activation may apply only to a clean native configuration. Recovery
-    // conflicts and leases owned by another listener retain the existing guard.
     let auto_enable = state
         .backend
         .configuration
@@ -132,7 +130,6 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
     {
         let enabled = match super::integration::enable::apply(state) {
             Ok(enabled) => enabled,
-            // A fresh install with no discovered models stays available for setup.
             Err(super::integration::enable::EnableError::EmptyCatalog) => return Ok(()),
             Err(super::integration::enable::EnableError::Unavailable(_)) => return Err(()),
         };

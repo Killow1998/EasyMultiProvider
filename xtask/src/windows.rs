@@ -286,13 +286,13 @@ pub fn validate_executable(executable: &Path, version: &str) -> Result {
     {
         return Err("Windows package is missing icon or version resources".to_owned());
     }
-    // Type -> name -> language -> data entry.
     let mut node = types
         .iter()
         .find(|(id, _, _)| *id == Some(RT_VERSION))
         .map(|(_, directory, offset)| (*directory, *offset))
         .ok_or("Windows package has no version resource")?;
-    for _ in 0..2 {
+    const VERSION_RESOURCE_NAME_AND_LANGUAGE_LEVELS: usize = 2;
+    for _ in 0..VERSION_RESOURCE_NAME_AND_LANGUAGE_LEVELS {
         let (directory, offset) = node;
         if !directory {
             return Err("Windows version resource has an unexpected layout".to_owned());

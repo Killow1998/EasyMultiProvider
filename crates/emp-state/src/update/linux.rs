@@ -1,4 +1,3 @@
-//! Read-only detection of Linux installations managed by the system package manager.
 use super::release::parse_version;
 use super::{Result, UpdateError};
 use std::ffi::CString;

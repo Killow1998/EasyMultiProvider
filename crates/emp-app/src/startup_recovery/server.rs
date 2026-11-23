@@ -18,7 +18,6 @@ pub(crate) fn run(config: &Path, error: &AppError, open_browser: bool) -> Result
         Duration::from_millis(20),
     )
     .map_err(|_| AppError::ServiceOwned)?;
-    // A recovery listener never displaces an existing service on the target port.
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     let token = crate::util::random_hex(32)?;
@@ -141,8 +140,6 @@ fn serve(
             send(&mut stream, 200, serde_json::json!({"reason":reason}));
             continue;
         }
-        // Actions have no body. Reject ambiguous framing instead of leaving
-        // unread bytes that could be interpreted as another command.
         if request.method != RequestMethod::Post
             || request.header_count("Content-Length") != 1
             || request.header("Content-Length") != Some("0")

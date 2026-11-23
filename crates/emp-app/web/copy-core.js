@@ -1,4 +1,3 @@
-// Simplified Chinese and English UI copy. Keep placeholders identical in both locales.
 registerUiCopy({
   'core.service_name_contains_slash':['账号和服务名称不能包含 /，请修改名称。','Account and service names cannot contain /. Choose another name.'],
   'core.service_name_already_in_use':['名称已被其他服务或旧会话使用，请更换名称。','This name is used by another service or an existing conversation. Choose another name.'],

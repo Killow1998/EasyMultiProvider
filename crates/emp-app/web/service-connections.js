@@ -1,4 +1,3 @@
-// Connection drafts depend only on service state, their own controls and saving.
 function createServiceConnections({getState,getLanguage=()=> 'en',cloneState,$,tr,esc,api,openModal,closeModal,persistState,notice,presets,protocolLabel,authLabel,randomId,confirmRemoval}) {
 function normalizedIdentity(value) { return String(value || '').trim().toLocaleLowerCase(); }
 function providerIdentityTaken(id) {
@@ -50,7 +49,6 @@ async function refreshClaudeCliAvailability() {
     status.textContent = tr("services.could_not_check_claude_code_cli_availability_reload_this");
   }
 }
-// Saved keys stay server-side; the six-star placeholder is never a submitted value.
 function apiKeyField(id, saved) {
   return `<label>${tr("common.api_key")}<input id="${id}" type="text" placeholder="${saved ? '******' : ''}" onfocus="this.placeholder=''" autocomplete="off" spellcheck="false" autocapitalize="off"></label>`;
 }
