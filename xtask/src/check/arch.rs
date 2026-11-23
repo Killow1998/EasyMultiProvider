@@ -38,6 +38,24 @@ const DEV: &[(&str, &str)] = &[
     ("emp-app", "emp-mod-gateway"),
 ];
 
+const FORBIDDEN: &[(&str, &str, &str)] = &[
+    ("emp-server", "emp-app", "服务端不能依赖桌面壳"),
+    ("emp-server", "emp-mod-*", "生产服务端不链接任何模组"),
+    ("emp-mod-*", "emp-server", "模组只经宿主协议访问 Core"),
+    ("emp-mod-*", "emp-app", "模组只经宿主协议访问 Core"),
+    (
+        "emp-router",
+        "emp-config",
+        "路由只接收已解析的请求，不读配置",
+    ),
+    ("emp-router", "emp-storage", "路由不直接读写存储"),
+    ("emp-updater", "emp-config", "更新器只依赖文件层"),
+    ("emp-updater", "emp-storage", "更新器只依赖文件层"),
+    ("emp-updater", "emp-codex", "更新器只依赖文件层"),
+    ("emp-files", "emp-*", "文件层是叶子"),
+    ("emp-domain", "emp-*", "领域值是叶子"),
+];
+
 pub(super) fn check(root: &Path, errors: &mut Vec<String>) -> Result {
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .current_dir(root)
@@ -105,7 +123,50 @@ fn dependencies(metadata: &Value, errors: &mut Vec<String>) -> Result {
             }
         }
     }
+    forbidden(&edges, errors);
     Ok(())
+}
+
+fn matches(pattern: &str, name: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => name.starts_with(prefix),
+        None => pattern == name,
+    }
+}
+
+fn forbidden(edges: &BTreeSet<(&str, &str, bool)>, errors: &mut Vec<String>) {
+    let mut graph = BTreeMap::<&str, Vec<&str>>::new();
+    for &(from, to, dev) in edges {
+        if !dev {
+            graph.entry(from).or_default().push(to);
+        }
+    }
+    for &start in graph.keys() {
+        let mut parent = BTreeMap::from([(start, start)]);
+        let mut queue = std::collections::VecDeque::from([start]);
+        while let Some(node) = queue.pop_front() {
+            for &next in graph.get(node).into_iter().flatten() {
+                if parent.contains_key(next) {
+                    continue;
+                }
+                parent.insert(next, node);
+                queue.push_back(next);
+                let Some((_, _, reason)) = FORBIDDEN
+                    .iter()
+                    .find(|(from, to, _)| matches(from, start) && matches(to, next))
+                else {
+                    continue;
+                };
+                let (mut path, mut node) = (vec![next], next);
+                while node != start {
+                    node = parent[node];
+                    path.push(node);
+                }
+                path.reverse();
+                errors.push(format!("[arch] 禁止的依赖 {start} ⇢ {next}（{}）：{reason}。这是 PLAN §3.2 的硬性约束，不能靠加允许清单绕过", path.join(" → ")));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -135,5 +196,27 @@ mod tests {
                 assert!(errors[0].contains("PLAN §3.2"));
             }
         }
+    }
+
+    #[test]
+    fn forbidden_dependencies_are_checked_transitively_and_ignore_dev_edges() {
+        let edges = BTreeSet::from([
+            ("emp-router", "emp-mid", false),
+            ("emp-mid", "emp-storage", false),
+            ("emp-files", "emp-domain", false),
+            ("emp-domain", "emp-mod-team", true),
+            ("emp-app", "emp-storage", false),
+        ]);
+        let mut errors = Vec::new();
+        forbidden(&edges, &mut errors);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors.iter().any(|error| {
+            error.contains("emp-router ⇢ emp-storage（emp-router → emp-mid → emp-storage）")
+        }));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("emp-files ⇢ emp-domain（emp-files → emp-domain）"))
+        );
     }
 }
