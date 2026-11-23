@@ -7,7 +7,7 @@ pub(super) fn read(
     filter: &UsageSeriesFilter,
     now: f64,
     cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> Vec<u8> {
+) -> JsonReply {
     let value = |name: &str| query_values(request.target, name).first().cloned();
     let number =
         |name: &str, default: usize| value(name).map_or(Ok(default), |raw| raw.parse::<usize>());
@@ -38,17 +38,8 @@ pub(super) fn read(
         now,
         cancelled,
     ) else {
-        return unavailable();
+        return JsonReply::error(503, "Session usage is unavailable", None);
     };
     payload["history"] = state.backend.usage.status();
     json_response(200, &payload)
-}
-fn unavailable() -> Vec<u8> {
-    json_error_response(
-        503,
-        status_text(503),
-        "Session usage is unavailable",
-        None,
-        &[],
-    )
 }

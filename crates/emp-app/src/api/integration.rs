@@ -1,15 +1,13 @@
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
 use crate::http::request::{Request, read_json_body};
-use crate::http::response::{
-    body_error_response, cross_origin_response, json_error_response, response, status_text,
-    unauthorized_response,
-};
+use crate::http::response::{body_error_response, cross_origin_response, unauthorized_response};
+use crate::server::http::error::JsonReply;
 use crate::services::integration::commands::{self, Body, Reply};
 use serde_json::Value;
 use std::net::TcpStream;
 
-pub(crate) fn read_integration_request(state: &ServerState) -> Vec<u8> {
+pub(crate) fn read_integration_request(state: &ServerState) -> JsonReply {
     render(commands::read(state))
 }
 
@@ -36,24 +34,20 @@ pub(crate) fn management_integration_request(
     let operation = request.raw_path().rsplit('/').next().unwrap_or_default();
     let confirmed = body.get("confirm_reload") == Some(&Value::Bool(true));
     let reply = commands::execute(request.observation_id, state, operation, confirmed, 1);
-    render(reply)
+    render(reply).wire_response()
 }
 
-fn render(reply: Reply) -> Vec<u8> {
+fn render(reply: Reply) -> JsonReply {
     match reply.body {
-        Body::Summary(value) => response(
-            &format!("HTTP/1.1 {} {}", reply.status, status_text(reply.status)),
-            "application/json",
-            &serde_json::to_vec(&value).expect("integration summary"),
-            &[],
-        ),
-        Body::Unavailable => json_error_response(
+        Body::Summary(value) => JsonReply::new(
             reply.status,
-            status_text(reply.status),
+            serde_json::to_vec(&value).expect("integration summary"),
+        ),
+        Body::Unavailable => JsonReply::error(
+            reply.status,
             "integration state is unavailable",
             (reply.status == 503).then_some("integration_unavailable"),
-            &[],
         ),
-        Body::NotFound => json_error_response(404, status_text(404), "not found", None, &[]),
+        Body::NotFound => JsonReply::error(404, "not found", None),
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::http::response::{json_error_response, status_text};
 use crate::services::events::sse_frame;
 use std::io::Write;
 
@@ -37,7 +38,7 @@ pub(crate) fn stream(
         {
             owner.clone()
         }
-        _ => return stream.write_all(&invalid()),
+        _ => return stream.write_all(&invalid().wire_response()),
     };
     let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream)?;
     let writer = stream.try_clone()?;

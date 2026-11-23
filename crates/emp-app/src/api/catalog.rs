@@ -8,6 +8,7 @@ use crate::http::response::body_error_response;
 use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
+use crate::server::http::error::{EntryError, JsonReply};
 use crate::server::http::management::ManagementSession;
 use crate::services::catalog::refresh_for_management;
 use crate::services::catalog::server_catalog;
@@ -45,7 +46,7 @@ pub(crate) fn management_request(
             state,
             &body,
         ) {
-            Ok(()) => read_management_request(request, state),
+            Ok(()) => read_configuration(state).wire_response(),
             Err(error) => change_error(error),
         };
     }
@@ -171,18 +172,21 @@ pub(crate) fn models_request(request: Request<'_>, state: &ServerState) -> Vec<u
     json_response(&json!({"object":"list","data":models}))
 }
 
-/// Caller has already checked the browser session and same-origin boundary.
-pub(crate) fn read_management_request(request: Request<'_>, state: &ServerState) -> Vec<u8> {
+pub(crate) fn read_configuration(state: &ServerState) -> JsonReply {
     let config = match state.backend.configuration.read() {
         Ok(config) => config.clone(),
-        Err(_) => return internal_error(),
+        Err(_) => return EntryError::internal().reply(),
     };
-    if request.raw_path() == "/api/config" {
-        let mut public = crate::services::catalog::public_configuration(state, &config);
-        public["provider_balances"] = crate::services::provider_balance::snapshot(state, &config);
-        public["provider_quotas"] = crate::services::cpa_quota::snapshot(state, &config);
-        public["app_icon"] = state.backend.app_icon.snapshot().metadata();
-        return json_response(&public);
+    let mut public = crate::services::catalog::public_configuration(state, &config);
+    public["provider_balances"] = crate::services::provider_balance::snapshot(state, &config);
+    public["provider_quotas"] = crate::services::cpa_quota::snapshot(state, &config);
+    public["app_icon"] = state.backend.app_icon.snapshot().metadata();
+    JsonReply::new(200, serde_json::to_vec(&public).expect("JSON response"))
+}
+
+pub(crate) fn read_management_request(request: Request<'_>, state: &ServerState) -> Vec<u8> {
+    if state.backend.configuration.read().is_err() {
+        return internal_error();
     }
     if let Some(id) = request
         .raw_path()

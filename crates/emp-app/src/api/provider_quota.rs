@@ -1,4 +1,3 @@
-//! Provider-owned quota reads behind the management session boundary.
 use crate::{
     app::ServerState,
     http::{
@@ -6,6 +5,7 @@ use crate::{
         request::{Request, percent_decode, query_values, read_json_body},
         response::*,
     },
+    server::http::error::{EntryError, JsonReply},
 };
 use serde_json::Value;
 use std::net::TcpStream;
@@ -59,16 +59,25 @@ pub(crate) fn refresh(
         .map(|id| percent_decode(id, false))
         .unwrap_or_default();
     if local_provider(state, &id) {
-        return reply(crate::services::claude_cli::quota_query::refresh(state));
+        return reply(crate::services::claude_cli::quota_query::refresh(state)).wire_response();
     }
     match crate::services::cpa_quota::refresh(state, &id, force) {
-        Some(value) => reply(Ok(value)),
+        Some(value) => reply(Ok(value)).wire_response(),
         None => not_found_response(),
     }
 }
 
-/// Called only after the common GET management-session check.
-pub(crate) fn history(request: Request<'_>, state: &ServerState, id: &str, now: f64) -> Vec<u8> {
+pub(crate) fn history_id(path: &str) -> Option<&str> {
+    path.strip_prefix("/api/providers/")?
+        .strip_suffix("/quota-history")
+}
+
+pub(crate) fn history(
+    request: Request<'_>,
+    state: &ServerState,
+    raw_id: &str,
+    now: f64,
+) -> JsonReply {
     let bound = |key| {
         query_values(request.target, key)
             .into_iter()
@@ -77,33 +86,23 @@ pub(crate) fn history(request: Request<'_>, state: &ServerState, id: &str, now: 
     let end = bound("end").unwrap_or(now as i64);
     let start = bound("start").unwrap_or(end.saturating_sub(86400));
     if end <= start {
-        return json_error_response(
-            400,
-            status_text(400),
-            "invalid quota history period",
-            None,
-            &[],
-        );
+        return JsonReply::error(400, "invalid quota history period", None);
     }
-    if local_provider(state, id) {
+    let id = percent_decode(raw_id, false);
+    if local_provider(state, &id) {
         return reply(crate::services::claude_cli::quota_query::history(
             state, start, end,
         ));
     }
-    match crate::services::cpa_quota::history(state, id, start, end) {
+    match crate::services::cpa_quota::history(state, &id, start, end) {
         Some(result) => reply(result),
-        None => not_found_response(),
+        None => EntryError::NotFound.reply(),
     }
 }
 
-fn reply(result: Result<Value, &'static str>) -> Vec<u8> {
+fn reply(result: Result<Value, &'static str>) -> JsonReply {
     match result {
-        Ok(value) => response(
-            "HTTP/1.1 200 OK",
-            "application/json",
-            &serde_json::to_vec(&value).expect("quota JSON"),
-            &[],
-        ),
-        Err(code) => json_error_response(503, status_text(503), code, Some(code), &[]),
+        Ok(value) => JsonReply::new(200, serde_json::to_vec(&value).expect("quota JSON")),
+        Err(code) => JsonReply::error(503, code, Some(code)),
     }
 }

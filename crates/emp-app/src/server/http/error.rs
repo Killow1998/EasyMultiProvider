@@ -77,6 +77,10 @@ impl JsonReply {
         }
     }
 
+    pub(crate) fn error(status: u16, message: &str, code: Option<&str>) -> Self {
+        Self::new(status, json_error_body(message, code))
+    }
+
     pub(crate) fn with_header(mut self, name: &'static str, value: &'static str) -> Self {
         self.extra_header = Some((name, value));
         self
@@ -127,15 +131,13 @@ impl EntryError {
         self.reply().wire_response()
     }
 
-    fn reply(self) -> JsonReply {
+    pub(crate) fn reply(self) -> JsonReply {
         match self {
             Self::InvalidHead => plain(400, "invalid HTTP request"),
             Self::NotFound => plain(404, "not found"),
             Self::ManagementSession => plain(401, "management session is required"),
             Self::CrossOrigin(message) => plain(403, message),
-            Self::Json(status, message, code) => {
-                JsonReply::new(status, json_error_body(message, code))
-            }
+            Self::Json(status, message, code) => JsonReply::error(status, message, code),
             Self::Updating => JsonReply::new(
                 503,
                 json_error_body(

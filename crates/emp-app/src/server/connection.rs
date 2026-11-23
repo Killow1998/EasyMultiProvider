@@ -1,6 +1,9 @@
 use super::http::error::EntryWire;
 use super::{
-    ServerControl, ServerMode, ShutdownReason, ShutdownSignal, head::GuardedHead, run_blocking,
+    ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
+    head::GuardedHead,
+    http::{accounts, settings, usage},
+    run_blocking,
 };
 use crate::{
     http::request::{MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE},
@@ -16,7 +19,7 @@ use hyper_util::{
     service::TowerToHyperService,
 };
 use std::{
-    net::SocketAddr,
+    net::{SocketAddr, TcpStream},
     pin::Pin,
     sync::{
         Arc, Mutex, OnceLock,
@@ -31,6 +34,12 @@ use tower::ServiceExt;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ShutdownAfterResponse;
+
+struct CandidateRequest {
+    observation: HttpObservation,
+    report_socket: Option<Arc<TcpStream>>,
+    half_close: bool,
+}
 
 type UpgradeSession = Pin<Box<dyn Future<Output = ()> + Send>>;
 
@@ -99,7 +108,9 @@ pub(super) async fn drive_candidate(
         }
     };
     let request = head.raw.request();
-    if !super::http::accounts::matches(request) {
+    let usage_read = usage::matches(request);
+    let settings_read = settings::matches(request);
+    if !usage_read && !settings_read && !accounts::matches(request) {
         match io.into_std() {
             Ok(stream) => {
                 let raw = head.into_legacy();
@@ -120,7 +131,27 @@ pub(super) async fn drive_candidate(
         return;
     }
     observation.received(request);
-    drive_http(io, peer, router, control, permit, head, Some(observation)).await;
+    let (io, report_socket) = if usage_read && usage::Report::for_path(request.raw_path()).is_some()
+    {
+        match io.into_std().and_then(|stream| {
+            let report_socket = stream.try_clone().ok().map(Arc::new);
+            Ok((tokio::net::TcpStream::from_std(stream)?, report_socket))
+        }) {
+            Ok(connection) => connection,
+            Err(_) => {
+                let _ = run_blocking(move || observation.failure("socket_setup_failed")).await;
+                return;
+            }
+        }
+    } else {
+        (io, None)
+    };
+    let candidate = CandidateRequest {
+        observation,
+        report_socket,
+        half_close: usage_read || settings_read,
+    };
+    drive_http(io, peer, router, control, permit, head, Some(candidate)).await;
 }
 
 pub(super) async fn drive(
@@ -161,9 +192,13 @@ async fn drive_http(
     control: Arc<ServerControl>,
     permit: ConnectionPermit,
     head: GuardedHead,
-    observation: Option<HttpObservation>,
+    candidate: Option<CandidateRequest>,
 ) {
     let mode = control.mode;
+    let half_close = candidate.as_ref().is_some_and(|request| request.half_close);
+    let report_socket = candidate
+        .as_ref()
+        .and_then(|request| request.report_socket.as_ref());
     let permit = if head.release_request_permit {
         drop(permit);
         None
@@ -187,6 +222,9 @@ async fn drive_http(
             request.extensions_mut().insert(ConnectInfo(peer));
             request.extensions_mut().insert(raw.clone());
             request.extensions_mut().insert(context.clone());
+            if let Some(socket) = report_socket {
+                request.extensions_mut().insert(Arc::clone(socket));
+            }
             let response = router.oneshot(request).await?;
             let _ = wire_response.set(
                 response
@@ -214,6 +252,7 @@ async fn drive_http(
     });
     let result = http1::Builder::new()
         .keep_alive(false)
+        .half_close(half_close)
         .allow_multiple_spaces_in_request_line_delimiters(true)
         .max_buf_size(MAX_HEADER_BYTES + 4)
         .max_headers(MAX_HEADER_BYTES / 4)
@@ -227,7 +266,10 @@ async fn drive_http(
         .with_upgrades()
         .await;
     let written = result.is_ok();
-    if let Some(mut observation) = observation {
+    if let Some(CandidateRequest {
+        mut observation, ..
+    }) = candidate
+    {
         let _ = run_blocking(move || {
             if let Some(Some(wire)) = wire_response.get() {
                 observation.response_finished(wire, result.map_err(std::io::Error::other));

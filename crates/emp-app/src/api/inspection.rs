@@ -1,6 +1,7 @@
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::response::{json_error_response, response, status_text};
+use crate::server::http::error::JsonReply;
 use crate::web::{AUDIO_TEST_WAV_BYTES, VISION_TEST_IMAGE_BYTES};
 use base64::Engine as _;
 use serde_json::json;
@@ -57,24 +58,6 @@ pub(crate) fn read_request(request: Request<'_>, state: &ServerState) -> Vec<u8>
             }
             (json!({"capabilities":records}), vec![])
         }
-        "/api/request-limits" => {
-            let snapshot = match state.backend.transport.request_limits.snapshot() {
-                Ok(snapshot) => snapshot,
-                Err(_) => {
-                    return json_error_response(
-                        503,
-                        status_text(503),
-                        "request limits are unavailable",
-                        None,
-                        &[],
-                    );
-                }
-            };
-            (
-                serde_json::to_value(snapshot).expect("limit snapshot is serializable"),
-                vec![],
-            )
-        }
         _ => unreachable!("inspection paths are selected by the HTTP dispatcher"),
     };
     response(
@@ -83,4 +66,14 @@ pub(crate) fn read_request(request: Request<'_>, state: &ServerState) -> Vec<u8>
         &serde_json::to_vec(&payload).expect("inspection JSON"),
         &headers,
     )
+}
+
+pub(crate) fn request_limits(state: &ServerState) -> JsonReply {
+    match state.backend.transport.request_limits.snapshot() {
+        Ok(snapshot) => {
+            let value = serde_json::to_value(snapshot).expect("limit snapshot is serializable");
+            JsonReply::new(200, serde_json::to_vec(&value).expect("inspection JSON"))
+        }
+        Err(_) => JsonReply::error(503, "request limits are unavailable", None),
+    }
 }

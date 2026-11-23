@@ -3,6 +3,8 @@ pub(crate) mod body;
 pub(crate) mod error;
 pub(crate) mod management;
 pub(crate) mod proxy;
+pub(crate) mod settings;
+pub(crate) mod usage;
 
 use super::head::RawRequestHead;
 use crate::app::ServerState;

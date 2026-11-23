@@ -157,6 +157,24 @@ impl Fixture {
         self.legacy.shutdown().unwrap();
     }
 
+    fn run_candidate(self, test: impl AsyncFnOnce(&Self, SocketAddr)) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let state = &self.legacy.state;
+                let candidate =
+                    tokio::spawn(crate::server::serve_candidate(listener, state.clone()));
+                test(&self, address).await;
+                state.request_shutdown();
+                candidate.await.unwrap().unwrap();
+            });
+        self.legacy.shutdown().unwrap();
+    }
+
     fn router(&self) -> Router {
         let management_calls = self.upstream.clone();
         let proxy_calls = self.upstream.clone();
@@ -307,6 +325,194 @@ fn account_reads_match_legacy_wire_on_the_candidate_listener() {
             candidate.await.unwrap().unwrap();
         });
     fixture.legacy.shutdown().unwrap();
+}
+
+#[test]
+fn usage_and_settings_reads_match_legacy_wire_on_candidate_listener() {
+    let fixture = Fixture::new();
+    fixture
+        .legacy
+        .state
+        .backend
+        .configuration
+        .test_config()
+        .lock()
+        .unwrap()["providers"] = json!([{
+        "id": "fixture-cpa",
+        "name": "Fixture CPA",
+        "base_url": "http://127.0.0.1:9",
+        "execution_backend": "claude_cli",
+        "enabled": false,
+    }]);
+    fixture.run_candidate(async |fixture, address| {
+        let port = fixture.port();
+        let session = fixture.session();
+        for (path, field, invalid, invalid_status) in [
+            (
+                "/api/usage?start=1&end=10",
+                "totals",
+                "/api/usage?start=invalid",
+                400,
+            ),
+            (
+                "/api/calls?start=1&end=10",
+                "records",
+                "/api/calls?limit=0",
+                400,
+            ),
+            (
+                "/api/providers/fixture%2Dcpa/quota-history?start=1&end=10",
+                "account_ids",
+                "/api/providers/absent/quota-history?start=1&end=10",
+                404,
+            ),
+            ("/api/config", "models", "/api/config/absent", 404),
+            (
+                "/api/integration",
+                "configuration",
+                "/api/integration/absent",
+                404,
+            ),
+            (
+                "/api/runtime/claude-cli",
+                "available",
+                "/api/runtime/claude-cli/absent",
+                404,
+            ),
+            (
+                "/api/request-limits",
+                "baseline_bytes",
+                "/api/request-limits/absent",
+                404,
+            ),
+        ] {
+            let reply = fixture
+                .parity(address, &request(port, "GET", path, &[&session], b""), 200)
+                .await;
+            assert!(
+                !json_body(&reply)[field].is_null(),
+                "missing {field} for {path}"
+            );
+            assert!(
+                reply
+                    .windows(b"\r\nCache-Control: no-store\r\n".len())
+                    .any(|line| line == b"\r\nCache-Control: no-store\r\n")
+            );
+            for (method, path, headers, status) in [
+                ("GET", path, [].as_slice(), 401),
+                ("GET", path, [&*session, &*session].as_slice(), 401),
+                (
+                    "GET",
+                    path,
+                    [&*session, "Origin: https://other.invalid"].as_slice(),
+                    403,
+                ),
+                ("GET", invalid, [&*session].as_slice(), invalid_status),
+                ("HEAD", path, [&*session].as_slice(), 404),
+            ] {
+                fixture
+                    .parity(address, &request(port, method, path, headers, b""), status)
+                    .await;
+            }
+        }
+        for (path, status) in [
+            ("/api/usage?account_id=absent", 404),
+            (
+                "/api/providers/fixture-cpa/quota-history?start=10&end=1",
+                400,
+            ),
+            ("/api/providers//quota-history?start=1&end=10", 404),
+            (
+                "/api/providers/fixture/cpa/quota-history?start=10&end=1",
+                400,
+            ),
+        ] {
+            fixture
+                .parity(
+                    address,
+                    &request(port, "GET", path, &[&session], b""),
+                    status,
+                )
+                .await;
+        }
+    });
+}
+
+#[test]
+fn report_event_streams_remain_on_the_legacy_listener() {
+    Fixture::new().run_candidate(async |fixture, address| {
+        let session = fixture.session();
+        let accept = "Accept: text/event-stream";
+        for path in [
+            "/api/calls?start=1&end=10",
+            "/api/usage?lifetime=%74rue&owner=fixture",
+        ] {
+            let reply = fixture
+                .parity(
+                    address,
+                    &request(fixture.port(), "GET", path, &[&session, accept], b""),
+                    200,
+                )
+                .await;
+            let reply = str::from_utf8(&reply).unwrap();
+            assert!(reply.contains("\r\nContent-Type: text/event-stream\r\n"));
+            assert!(reply.contains("event: progress\n"));
+            assert!(reply.contains("event: result\n"));
+        }
+        for (path, accept, field) in [
+            ("/api/usage?start=1&end=10", accept, "totals"),
+            (
+                "/api/usage?lifetime=true&lifetime=true&owner=fixture",
+                accept,
+                "groups",
+            ),
+            (
+                "/api/calls?start=1&end=10",
+                "Accept: text/event-stream, application/json",
+                "records",
+            ),
+        ] {
+            let reply = fixture
+                .parity(
+                    address,
+                    &request(fixture.port(), "GET", path, &[&session, accept], b""),
+                    200,
+                )
+                .await;
+            assert!(!json_body(&reply)[field].is_null());
+        }
+    });
+}
+
+#[test]
+fn closing_report_input_cancels_legacy_and_candidate_json_queries() {
+    let fixture = Fixture::new();
+    let ledger = &fixture.legacy.state.backend.usage.ledger;
+    ledger.query(1.0, 10.0, "all", system_now(), None).unwrap();
+    let database =
+        rusqlite::Connection::open(fixture.directory.path().join("state/usage.sqlite3")).unwrap();
+    database.execute_batch(
+        "WITH RECURSIVE records(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM records WHERE n<20000)
+         INSERT INTO call_records(request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,state,facts)
+         SELECT n,'responses',2,3,'fixture','','model','','completed','{}' FROM records;
+         WITH RECURSIVE records(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM records WHERE n<20000)
+         INSERT INTO usage_events(id,observed_at,category,owner,model,service_tier,operation,rates,origin,usage_turn,route_model,match_key)
+         SELECT n,2,'external','fixture','model','','responses','{}','realtime','','model','' FROM records;",
+    ).unwrap();
+    drop(database);
+    fixture.run_candidate(async |fixture, address| {
+        let session = fixture.session();
+        for (path, message) in [
+            ("/api/usage?start=1&end=10", "Usage history is unavailable"),
+            ("/api/calls?start=1&end=10", "Call history is unavailable"),
+        ] {
+            let wire = request(fixture.port(), "GET", path, &[&session], b"");
+            let reply = assert_wire_parity(fixture.legacy.local_addr(), address, &wire, true).await;
+            assert_status(&reply, 503);
+            assert_eq!(json_body(&reply)["error"]["message"], message);
+            fixture.parity(address, &wire, 200).await;
+        }
+    });
 }
 
 #[test]

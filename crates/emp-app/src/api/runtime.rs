@@ -4,11 +4,12 @@ use crate::http::request::{Request, read_json_body};
 use crate::http::response::{
     body_error_response, cross_origin_response, response, unauthorized_response,
 };
+use crate::server::http::error::JsonReply;
 use crate::services::runtime::compatibility_snapshot;
 use std::net::TcpStream;
 
 /// Resolves a trusted Claude Code CLI path without starting the CLI.
-pub(crate) fn claude_cli_availability_request() -> Vec<u8> {
+pub(crate) fn claude_cli_availability_request() -> JsonReply {
     let available = emp_codex::installed_cli::resolve_claude_cli().is_some();
     let guidance = if available {
         "Claude Code CLI is available to EMP."
@@ -20,7 +21,7 @@ pub(crate) fn claude_cli_availability_request() -> Vec<u8> {
         "guidance": guidance,
     }))
     .expect("Claude CLI availability JSON");
-    response("HTTP/1.1 200 OK", "application/json", &body, &[])
+    JsonReply::new(200, body)
 }
 
 pub(crate) fn management_request(

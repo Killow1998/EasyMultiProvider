@@ -4,10 +4,8 @@ mod sessions;
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
 use crate::http::request::{Request, query_values, read_json_body};
-use crate::http::response::{
-    body_error_response, cross_origin_response, json_error_response, response, status_text,
-    unauthorized_response,
-};
+use crate::http::response::{body_error_response, cross_origin_response, unauthorized_response};
+use crate::server::http::error::JsonReply;
 use crate::services::accounts::{
     account_catalog_headers, native_subscription_headers, quota_owner_key,
 };
@@ -24,7 +22,7 @@ pub(crate) fn read(
     request: Request<'_>,
     state: &ServerState,
     cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> Vec<u8> {
+) -> JsonReply {
     let now = system_now();
     let parse = |name: &str, default: f64| {
         query_values(request.target, name)
@@ -59,13 +57,7 @@ pub(crate) fn read(
         Some(id) => match quota_owner_key(state, &id) {
             Ok(owner) => Some(owner),
             Err(_) => {
-                return json_error_response(
-                    404,
-                    status_text(404),
-                    "Account usage is unavailable",
-                    None,
-                    &[],
-                );
+                return JsonReply::error(404, "Account usage is unavailable", None);
             }
         },
         None => explicit_owner,
@@ -130,13 +122,7 @@ pub(crate) fn read(
         }
     };
     let Ok(mut payload) = result else {
-        return json_error_response(
-            503,
-            status_text(503),
-            "Usage history is unavailable",
-            None,
-            &[],
-        );
+        return JsonReply::error(503, "Usage history is unavailable", None);
     };
     let config = state
         .backend
@@ -169,26 +155,15 @@ pub(crate) fn scan(
         return body_error_response(error);
     }
     let Some(id) = state.backend.usage.queue_scan(state) else {
-        return json_error_response(503, status_text(503), "EMP is shutting down", None, &[]);
+        return JsonReply::error(503, "EMP is shutting down", None).wire_response();
     };
     let mut status = state.backend.usage.status();
     status["command_id"] = json!(id);
-    json_response(202, &status)
+    json_response(202, &status).wire_response()
 }
-fn invalid() -> Vec<u8> {
-    json_error_response(
-        400,
-        status_text(400),
-        "Invalid usage period or category",
-        None,
-        &[],
-    )
+fn invalid() -> JsonReply {
+    JsonReply::error(400, "Invalid usage period or category", None)
 }
-fn json_response(status: u16, payload: &Value) -> Vec<u8> {
-    response(
-        &format!("HTTP/1.1 {status} {}", status_text(status)),
-        "application/json",
-        &serde_json::to_vec(payload).expect("usage JSON"),
-        &[],
-    )
+fn json_response(status: u16, payload: &Value) -> JsonReply {
+    JsonReply::new(status, serde_json::to_vec(payload).expect("usage JSON"))
 }

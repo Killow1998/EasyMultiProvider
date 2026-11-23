@@ -1,9 +1,8 @@
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
 use crate::http::request::{Request, query_values};
-use crate::http::response::{
-    cross_origin_response, json_error_response, response, status_text, unauthorized_response,
-};
+use crate::http::response::{cross_origin_response, unauthorized_response};
+use crate::server::http::error::JsonReply;
 use crate::services::events::sse_frame;
 use emp_state::usage::ledger::{CallFilter, UsageError};
 use serde_json::{Value, json};
@@ -14,24 +13,13 @@ pub(crate) fn read(
     request: Request<'_>,
     state: &ServerState,
     cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> Vec<u8> {
+) -> JsonReply {
     let Some(filter) = call_filter(request) else {
         return invalid();
     };
     match query(state, &filter, |_, _| Ok(()), cancelled) {
-        Ok(report) => response(
-            "HTTP/1.1 200 OK",
-            "application/json",
-            &serde_json::to_vec(&report).expect("call report"),
-            &[],
-        ),
-        Err(_) => json_error_response(
-            503,
-            status_text(503),
-            "Call history is unavailable",
-            None,
-            &[],
-        ),
+        Ok(report) => JsonReply::new(200, serde_json::to_vec(&report).expect("call report")),
+        Err(_) => JsonReply::error(503, "Call history is unavailable", None),
     }
 }
 
@@ -51,7 +39,7 @@ pub(crate) fn stream(
         return stream.write_all(&unauthorized_response());
     }
     let Some(filter) = call_filter(request) else {
-        return stream.write_all(&invalid());
+        return stream.write_all(&invalid().wire_response());
     };
     let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream)?;
     let progress_stream = stream.try_clone()?;
@@ -183,6 +171,6 @@ fn query(
     }
     Ok(report)
 }
-fn invalid() -> Vec<u8> {
-    json_error_response(400, status_text(400), "Invalid call filter", None, &[])
+fn invalid() -> JsonReply {
+    JsonReply::error(400, "Invalid call filter", None)
 }

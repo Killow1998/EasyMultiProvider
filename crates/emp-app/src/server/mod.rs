@@ -152,7 +152,12 @@ pub(crate) async fn serve_candidate(
     listener: TcpListener,
     state: Arc<ServerState>,
 ) -> Result<(), JoinError> {
-    let router = http::with_entry_state(http::accounts::routes(), state.clone());
+    let router = http::with_entry_state(
+        http::accounts::routes()
+            .merge(http::usage::routes())
+            .merge(http::settings::routes()),
+        state.clone(),
+    );
     let control = Arc::new(ServerControl {
         candidate: Some(state.clone()),
         ..ServerControl::new(state.connection_admission.clone())
