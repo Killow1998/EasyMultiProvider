@@ -9,7 +9,7 @@ use std::os::unix::fs::symlink;
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
-        "../../../contracts/state/python-private-path-canonicalization.json"
+        "data/python-private-path-canonicalization.json"
     ))
     .expect("valid private-path fixture")
 }

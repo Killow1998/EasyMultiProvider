@@ -8,10 +8,8 @@ use tempfile::tempdir;
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-config-load.json"
-    ))
-    .expect("valid config-load fixture")
+    serde_json::from_str(include_str!("data/python-config-load.json"))
+        .expect("valid config-load fixture")
 }
 
 fn temp_path(directory: &tempfile::TempDir) -> PathBuf {

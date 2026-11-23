@@ -2,10 +2,8 @@ use emp_state::{merge_web_update_with_time, normalize_configuration};
 use serde_json::{Value, json};
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-web-update-merge.json"
-    ))
-    .expect("valid Web-update merge fixture")
+    serde_json::from_str(include_str!("data/python-web-update-merge.json"))
+        .expect("valid Web-update merge fixture")
 }
 
 #[test]

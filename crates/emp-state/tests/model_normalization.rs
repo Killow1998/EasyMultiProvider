@@ -2,10 +2,8 @@ use emp_state::normalize_model;
 use serde_json::{Value, json};
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-model-normalization.json"
-    ))
-    .expect("valid model normalization fixture")
+    serde_json::from_str(include_str!("data/python-model-normalization.json"))
+        .expect("valid model normalization fixture")
 }
 
 #[test]

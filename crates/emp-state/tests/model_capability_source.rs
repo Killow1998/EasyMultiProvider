@@ -2,10 +2,8 @@ use emp_state::normalize_model_capability_sources;
 use serde_json::Value;
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-model-capability-sources.json"
-    ))
-    .expect("valid model capability-source fixture")
+    serde_json::from_str(include_str!("data/python-model-capability-sources.json"))
+        .expect("valid model capability-source fixture")
 }
 
 fn case_values<'a>(fixture: &'a Value, case: &'a Value) -> &'a Value {

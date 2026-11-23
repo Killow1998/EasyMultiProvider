@@ -2,10 +2,8 @@ use emp_state::{normalize_account, normalize_context_windows, normalize_hidden_m
 use serde_json::{Value, json};
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-account-normalization.json"
-    ))
-    .expect("valid synthetic account fixture")
+    serde_json::from_str(include_str!("data/python-account-normalization.json"))
+        .expect("valid synthetic account fixture")
 }
 
 #[test]

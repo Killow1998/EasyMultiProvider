@@ -4,10 +4,8 @@ use serde_json::{Value, json};
 /// Frozen provider fixture. Failure cases assert the stable key fragment
 /// (`provider.<field>`) instead of the full sentence.
 fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-provider-normalization.json"
-    ))
-    .expect("valid provider fixture")
+    serde_json::from_str(include_str!("data/python-provider-normalization.json"))
+        .expect("valid provider fixture")
 }
 
 fn error_fragment(input: &Value) -> String {

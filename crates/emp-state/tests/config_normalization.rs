@@ -4,10 +4,8 @@ use serde_json::{Value, json};
 /// Frozen data users' disks may already contain. Expected values come from the
 /// fixture; failure cases assert the error kind plus one stable key fragment.
 fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-config-normalization.json"
-    ))
-    .expect("valid full configuration fixture")
+    serde_json::from_str(include_str!("data/python-config-normalization.json"))
+        .expect("valid full configuration fixture")
 }
 
 fn error_fragment(case: &Value) -> &'static str {

@@ -2,10 +2,8 @@ use emp_state::normalize_context_calibrations;
 use serde_json::Value;
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-context-calibrations.json"
-    ))
-    .expect("valid context calibration fixture")
+    serde_json::from_str(include_str!("data/python-context-calibrations.json"))
+        .expect("valid context calibration fixture")
 }
 
 #[test]

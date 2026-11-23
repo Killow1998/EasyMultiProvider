@@ -8,7 +8,7 @@ on:
       - ".cargo/**"
       - "crates/**"
       - "xtask/**"
-      - "contracts/**"
+      - "contracts/*.sql"
       - "scripts/**"
       - "modules/**"
       - ".github/workflows/**"

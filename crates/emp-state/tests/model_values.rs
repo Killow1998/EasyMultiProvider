@@ -7,10 +7,8 @@ use emp_state::{
 use serde_json::{Value, json};
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-capability-model-values.json"
-    ))
-    .expect("valid capability model-value fixture")
+    serde_json::from_str(include_str!("data/python-capability-model-values.json"))
+        .expect("valid capability model-value fixture")
 }
 
 #[test]

@@ -27,10 +27,8 @@ struct CryptoFixture {
 }
 
 fn fixture() -> CryptoFixture {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-crypto-interop.json"
-    ))
-    .expect("valid crypto fixture")
+    serde_json::from_str(include_str!("data/python-crypto-interop.json"))
+        .expect("valid crypto fixture")
 }
 
 fn b64(value: &str) -> Vec<u8> {

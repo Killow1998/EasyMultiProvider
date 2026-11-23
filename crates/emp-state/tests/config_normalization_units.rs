@@ -8,10 +8,8 @@ use serde_json::{Value, json};
 /// Frozen config/ETag fixture. Value expectations come from the fixture;
 /// failure cases assert error kind plus one stable key fragment.
 fn fixture() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../contracts/state/python-config-etag-normalization.json"
-    ))
-    .expect("valid synthetic config/ETag fixture")
+    serde_json::from_str(include_str!("data/python-config-etag-normalization.json"))
+        .expect("valid synthetic config/ETag fixture")
 }
 
 #[test]

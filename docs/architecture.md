@@ -115,6 +115,12 @@ to implement. File length is a navigation signal, not a measure of module depth.
 No library crate depends on `emp-app`. The principal layering leaks are inside
 the application, where most modules can access the complete `ServerState`.
 
+Production SQL projections live in [`contracts/`](../contracts/README.md) and
+are compiled into `emp-state`. State compatibility and normalization fixtures
+live beside their consumers in
+[`emp-state/tests/data/`](../crates/emp-state/tests/data/); Rust integration
+tests load them directly with `include_str!`, without a Python process.
+
 Transport memory admission accepts the macOS VM statistics prefix through
 `inactive_count`, the last field used by the probe. The required word count is
 derived from that field's ABI offset; it is independent of newer, unused fields
