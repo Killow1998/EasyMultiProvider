@@ -69,14 +69,14 @@ fn fixture(base: SocketAddr, executable: &Path) -> Fixture {
     }
 }
 
-struct Pair<'a> {
-    old: &'a Fixture,
-    new: &'a Fixture,
-    candidate: SocketAddr,
+pub(super) struct Pair<'a> {
+    pub(super) old: &'a Fixture,
+    pub(super) new: &'a Fixture,
+    pub(super) candidate: SocketAddr,
 }
 
 impl Pair<'_> {
-    async fn parity(
+    pub(super) async fn parity(
         &self,
         make: impl Fn(u16, &str) -> Vec<u8>,
         status: u16,
@@ -94,7 +94,7 @@ impl Pair<'_> {
         json_body(&reply)
     }
 
-    async fn post(&self, path: &str, body: &[u8], status: u16) -> Value {
+    pub(super) async fn post(&self, path: &str, body: &[u8], status: u16) -> Value {
         self.parity(
             |port, session| json_request(port, path, &[session], body),
             status,
@@ -103,7 +103,7 @@ impl Pair<'_> {
         .await
     }
 
-    async fn read(&self, path: &str) -> Value {
+    pub(super) async fn read(&self, path: &str) -> Value {
         self.parity(
             |port, session| request(port, "GET", path, &[session], b""),
             200,
@@ -174,7 +174,7 @@ async fn send_models(mut stream: TcpStream, slug: &str) {
     stream.write_all(body.as_bytes()).await.unwrap();
 }
 
-fn normalize_body(reply: Vec<u8>, transform: impl FnOnce(&str) -> String) -> Vec<u8> {
+pub(super) fn normalize_body(reply: Vec<u8>, transform: impl FnOnce(&str) -> String) -> Vec<u8> {
     let reply = String::from_utf8(reply).unwrap();
     let (head, body) = reply.split_once("\r\n\r\n").unwrap();
     let length = format!("Content-Length: {}\r\n", body.len());

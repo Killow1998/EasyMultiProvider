@@ -30,6 +30,7 @@ pub(crate) enum EntryError {
 
 pub(crate) struct HttpReply {
     status: u16,
+    status_text: &'static str,
     content_type: &'static str,
     body: Bytes,
     extra_headers: Vec<(&'static str, Cow<'static, str>)>,
@@ -77,6 +78,7 @@ impl HttpReply {
     pub(crate) fn new(status: u16, body: impl Into<Bytes>) -> Self {
         Self {
             status,
+            status_text: status_text(status),
             content_type: "application/json",
             body: body.into(),
             extra_headers: Vec::new(),
@@ -101,9 +103,14 @@ impl HttpReply {
         self
     }
 
+    pub(super) fn with_status_text(mut self, status_text: &'static str) -> Self {
+        self.status_text = status_text;
+        self
+    }
+
     pub(crate) fn wire_response(&self) -> Vec<u8> {
         response_with_headers(
-            &format!("HTTP/1.1 {} {}", self.status, status_text(self.status)),
+            &format!("HTTP/1.1 {} {}", self.status, self.status_text),
             self.content_type,
             &self.body,
             self.extra_headers

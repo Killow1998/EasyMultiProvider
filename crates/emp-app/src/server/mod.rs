@@ -154,6 +154,11 @@ pub(crate) async fn serve_candidate(
 ) -> Result<(), JoinError> {
     let router = http::with_entry_state(
         http::accounts::routes()
+            .route(
+                http::management::SESSION_PATH,
+                http::management::session_route(),
+            )
+            .merge(http::login::routes())
             .merge(http::usage::routes())
             .merge(http::settings::routes())
             .merge(http::catalog::routes())

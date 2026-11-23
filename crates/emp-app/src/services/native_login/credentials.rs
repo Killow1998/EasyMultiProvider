@@ -1,28 +1,15 @@
 use super::*;
 
-pub(super) fn switch(
-    state: &ServerState,
-    operation: &str,
-    body: &Value,
-) -> Result<Value, &'static str> {
-    let auth = match operation {
-        "use-api-key" => {
-            let key = body["api_key"]
-                .as_str()
-                .map(str::trim)
-                .filter(|key| {
-                    !key.is_empty()
-                        && key.len() <= 16384
-                        && key.bytes().all(|byte| byte.is_ascii_graphic())
-                })
-                .ok_or("login_invalid_api_key")?;
-            json!({"auth_mode":"apikey","OPENAI_API_KEY":key})
-        }
-        "use-account" => {
-            let id = body["account_id"]
-                .as_str()
-                .ok_or("login_account_required")?;
-            if state.backend.team.shared_subscription(id) {
+pub(super) enum Source {
+    ApiKey(String),
+    Account(String),
+}
+
+pub(super) fn switch(state: &ServerState, source: Source) -> Result<Value, &'static str> {
+    let auth = match source {
+        Source::ApiKey(key) => json!({"auth_mode":"apikey","OPENAI_API_KEY":key}),
+        Source::Account(id) => {
+            if state.backend.team.shared_subscription(&id) {
                 return Err("login_account_required");
             }
             let config = state
@@ -47,7 +34,6 @@ pub(super) fn switch(
                 .map_err(|_| "login_credentials_missing")?;
             emp_state::validate_auth_json(&stored).map_err(|_| "login_credentials_invalid")?
         }
-        _ => unreachable!("validated credential operation"),
     };
     let expected = local_auth::read(&state.backend.accounts.native_auth_path)
         .map_err(|_| "login_auth_unreadable")?;
@@ -81,5 +67,42 @@ pub(super) fn install(
     native_login_changed(state);
     Ok(
         json!({"status":"completed","restart_required":true,"integration_updated":integration_updated}),
+    )
+}
+pub(super) fn use_local_key(
+    state: &ServerState,
+    action: AccountAction,
+) -> Result<Value, &'static str> {
+    let manager = &state.backend.integration.manager;
+    let _operation = manager.operation_lock().map_err(|_| "login_busy")?;
+    let path = &state.backend.accounts.native_auth_path;
+    let auth = local_auth::read(path)
+        .map_err(|_| "login_auth_unreadable")?
+        .ok_or("login_auth_unreadable")?;
+    let active = manager.status().map_err(|_| "login_busy")?.relation == "applied";
+    let retained = match action {
+        AccountAction::Keep => retained::import_native(state, &auth)?,
+        AccountAction::Remove => retained::Selection::Removed,
+    };
+    let mut files = emp_state::FileTransaction::new();
+    files
+        .remember(&retained::path(state))
+        .map_err(|_| "login_storage_failed")?;
+    retained.save(state).map_err(|_| "login_storage_failed")?;
+    if !local_auth::replace_with_local(path, &auth, &state.backend.gateway_key)
+        .map_err(|_| "login_storage_failed")?
+    {
+        return Err("login_auth_changed");
+    }
+    files.commit();
+    if let Ok(mut quota) = state.backend.accounts.native_quota.lock() {
+        *quota = None;
+    }
+    let integration_updated = !active
+        || (manager.restore().is_ok_and(|result| result.ok())
+            && crate::services::integration::enable::apply(state).is_ok_and(|result| result.ok()));
+    native_login_changed(state);
+    Ok(
+        json!({"status":"completed", "restart_required":true, "integration_updated":integration_updated}),
     )
 }

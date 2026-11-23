@@ -28,94 +28,103 @@ struct Pending {
     started: Instant,
 }
 
+pub(crate) struct LoginOperation {
+    importing: bool,
+    command: LoginCommand,
+}
+
+enum LoginCommand {
+    Start(Result<LoginStart, &'static str>),
+    Status,
+    Cancel,
+    UseCredentials(Result<credentials::Source, &'static str>),
+    UseLocalKey(Result<AccountAction, &'static str>),
+    Unknown,
+}
+
+struct LoginStart {
+    method: LoginMethod,
+    account_name: Option<String>,
+}
+
+enum AccountAction {
+    Keep,
+    Remove,
+}
+
+impl LoginOperation {
+    pub(crate) fn parse(operation: &str, body: &Value, importing: bool) -> Self {
+        let command = match operation {
+            "start" => LoginCommand::Start(LoginStart::parse(body, importing)),
+            "status" => LoginCommand::Status,
+            "cancel" => LoginCommand::Cancel,
+            "use-api-key" if !importing => LoginCommand::UseCredentials(
+                body["api_key"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|key| {
+                        !key.is_empty()
+                            && key.len() <= 16384
+                            && key.bytes().all(|byte| byte.is_ascii_graphic())
+                    })
+                    .map(|key| credentials::Source::ApiKey(key.to_owned()))
+                    .ok_or("login_invalid_api_key"),
+            ),
+            "use-account" if !importing => LoginCommand::UseCredentials(
+                body["account_id"]
+                    .as_str()
+                    .map(|id| credentials::Source::Account(id.to_owned()))
+                    .ok_or("login_account_required"),
+            ),
+            "use-local-key" if !importing => {
+                LoginCommand::UseLocalKey(match body["account_action"].as_str() {
+                    Some("keep") => Ok(AccountAction::Keep),
+                    Some("remove") => Ok(AccountAction::Remove),
+                    _ => Err("login_invalid_action"),
+                })
+            }
+            _ => LoginCommand::Unknown,
+        };
+        Self { importing, command }
+    }
+}
+
 pub(crate) fn execute(
     state: &ServerState,
-    operation: &str,
-    body: &Value,
-    importing: bool,
+    operation: LoginOperation,
 ) -> Result<Value, &'static str> {
-    let session = if importing {
+    let session = if operation.importing {
         &state.backend.account_login
     } else {
         &state.backend.native_login
     };
     let mut login = session.0.lock().map_err(|_| "login_busy")?;
-    if !importing && matches!(operation, "use-api-key" | "use-account") {
-        if matches!(*login, LoginState::Pending(_)) {
-            return Err("login_busy");
-        }
-        let result = credentials::switch(state, operation, body)?;
-        *login = LoginState::Idle;
-        return Ok(result);
-    }
-    if !importing && operation == "use-local-key" {
-        if matches!(*login, LoginState::Pending(_)) {
-            return Err("login_busy");
-        }
-        let keep = match body["account_action"].as_str() {
-            Some("keep") => true,
-            Some("remove") => false,
-            _ => return Err("login_invalid_action"),
-        };
-        let manager = &state.backend.integration.manager;
-        let _operation = manager.operation_lock().map_err(|_| "login_busy")?;
-        let path = &state.backend.accounts.native_auth_path;
-        let auth = local_auth::read(path)
-            .map_err(|_| "login_auth_unreadable")?
-            .ok_or("login_auth_unreadable")?;
-        let active = manager.status().map_err(|_| "login_busy")?.relation == "applied";
-        let retained = if keep {
-            retained::import_native(state, &auth)?
-        } else {
-            retained::Selection::Removed
-        };
-        let mut files = emp_state::FileTransaction::new();
-        files
-            .remember(&retained::path(state))
-            .map_err(|_| "login_storage_failed")?;
-        retained.save(state).map_err(|_| "login_storage_failed")?;
-        if !local_auth::replace_with_local(path, &auth, &state.backend.gateway_key)
-            .map_err(|_| "login_storage_failed")?
+    match operation.command {
+        LoginCommand::UseCredentials(_) | LoginCommand::UseLocalKey(_)
+            if matches!(*login, LoginState::Pending(_)) =>
         {
-            return Err("login_auth_changed");
+            return Err("login_busy");
         }
-        files.commit();
-        if let Ok(mut quota) = state.backend.accounts.native_quota.lock() {
-            *quota = None;
+        LoginCommand::UseCredentials(source) => {
+            let result = credentials::switch(state, source?)?;
+            *login = LoginState::Idle;
+            return Ok(result);
         }
-        let integration_updated = !active
-            || (manager.restore().is_ok_and(|result| result.ok())
-                && crate::services::integration::enable::apply(state)
-                    .is_ok_and(|result| result.ok()));
-        native_login_changed(state);
-        *login = LoginState::Idle;
-        return Ok(
-            json!({"status":"completed", "restart_required":true, "integration_updated":integration_updated}),
-        );
-    }
-    match operation {
-        "start" if !matches!(*login, LoginState::Pending(_)) => {
-            let method = match body["method"].as_str() {
-                None | Some("device") => LoginMethod::DeviceCode,
-                Some("browser") => LoginMethod::Browser,
-                _ => return Err("login_invalid_method"),
-            };
-            let (expected, account_name) = if importing {
-                let name = body["name"]
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty() && name.chars().count() <= 256)
-                    .ok_or("login_name_required")?;
-                if name.contains('/') {
-                    return Err("login_name_contains_slash");
-                }
-                (None, Some(name.to_owned()))
+        LoginCommand::UseLocalKey(action) => {
+            let result = credentials::use_local_key(state, action?)?;
+            *login = LoginState::Idle;
+            return Ok(result);
+        }
+        LoginCommand::Start(start) if !matches!(*login, LoginState::Pending(_)) => {
+            let LoginStart {
+                method,
+                account_name,
+            } = start?;
+            let expected = if account_name.is_some() {
+                None
             } else {
-                (
-                    local_auth::read(&state.backend.accounts.native_auth_path)
-                        .map_err(|_| "login_auth_unreadable")?,
-                    None,
-                )
+                local_auth::read(&state.backend.accounts.native_auth_path)
+                    .map_err(|_| "login_auth_unreadable")?
             };
             let helper = (|| {
                 let engine = crate::services::runtime::helper_binary(state)?;
@@ -141,11 +150,11 @@ pub(crate) fn execute(
                 started: Instant::now(),
             });
         }
-        "cancel" => {
+        LoginCommand::Cancel => {
             *login = LoginState::Cancelled;
         }
-        "start" | "status" => {}
-        _ => return Err("login_unknown_operation"),
+        LoginCommand::Start(_) | LoginCommand::Status => {}
+        LoginCommand::Unknown => return Err("login_unknown_operation"),
     }
     if let LoginState::Pending(pending) = &*login {
         let result = if pending.started.elapsed() > Duration::from_secs(16 * 60) {
@@ -194,6 +203,33 @@ pub(crate) fn execute(
         LoginState::Failed(code) => json!({"status":"failed","code":code}),
         LoginState::Cancelled => json!({"status":"cancelled"}),
     })
+}
+
+impl LoginStart {
+    fn parse(body: &Value, importing: bool) -> Result<Self, &'static str> {
+        let method = match body["method"].as_str() {
+            None | Some("device") => LoginMethod::DeviceCode,
+            Some("browser") => LoginMethod::Browser,
+            _ => return Err("login_invalid_method"),
+        };
+        let account_name = if importing {
+            let name = body["name"]
+                .as_str()
+                .map(str::trim)
+                .filter(|name| !name.is_empty() && name.chars().count() <= 256)
+                .ok_or("login_name_required")?;
+            if name.contains('/') {
+                return Err("login_name_contains_slash");
+            }
+            Some(name.to_owned())
+        } else {
+            None
+        };
+        Ok(Self {
+            method,
+            account_name,
+        })
+    }
 }
 
 fn native_login_changed(state: &ServerState) {
@@ -260,9 +296,7 @@ mod tests {
         }
         let result = execute(
             &server.state,
-            "use-local-key",
-            &json!({"account_action":"keep"}),
-            false,
+            LoginOperation::parse("use-local-key", &json!({"account_action":"keep"}), false),
         )
         .unwrap();
         assert_eq!(result["integration_updated"], true);
@@ -285,14 +319,16 @@ mod tests {
         assert!(emp_state::same_account_auth(&retained, &original));
         execute(
             &server.state,
-            "start",
-            &json!({"name":"EMP login"}),
-            importing,
+            LoginOperation::parse("start", &json!({"name":"EMP login"}), importing),
         )
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            let status = execute(&server.state, "status", &json!({}), importing).unwrap();
+            let status = execute(
+                &server.state,
+                LoginOperation::parse("status", &json!({}), importing),
+            )
+            .unwrap();
             if status["status"] == "completed" {
                 assert_eq!(status["restart_required"], !importing);
                 break;

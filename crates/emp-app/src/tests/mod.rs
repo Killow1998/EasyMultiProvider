@@ -92,6 +92,8 @@ mod retry_advice_contract;
 mod session_boundary_contract;
 mod stream_boundary_contract;
 mod websocket_capacity_contract;
+#[cfg(unix)]
+pub(crate) use websocket_capacity_contract::wait_for;
 
 fn canonical_root(directory: &TempDir) -> PathBuf {
     directory

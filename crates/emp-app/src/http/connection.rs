@@ -22,6 +22,7 @@ use crate::http::routes::route_request_at;
 use crate::server::http::accounts::AccountWriteRoute;
 use crate::server::http::proxy::{RequestAccess, request_source};
 use crate::server::http::usage::Report;
+use crate::server::http::{error::EntryError, login};
 use crate::services::connection_admission::ConnectionPermit;
 use crate::services::observation::http::HttpObservation;
 use crate::util::system_now;
@@ -80,6 +81,12 @@ pub(crate) fn handle_connection(
     let now = system_now();
     let response = if let Some(route) = AccountWriteRoute::for_request(request) {
         Some(route.legacy(&mut stream, request, raw.body_prefix, state, now))
+    } else if login::matches(request) {
+        Some(
+            login::legacy(&mut stream, request, raw.body_prefix, state, now)
+                .unwrap_or_else(EntryError::reply)
+                .wire_response(),
+        )
     } else {
         match (request.method, path) {
             (RequestMethod::Post, path) if path.starts_with("/api/team/") => Some(
@@ -98,18 +105,6 @@ pub(crate) fn handle_connection(
             (RequestMethod::Post, "/v1/decisions" | "/v1/systemone") => Some(
                 crate::api::decisions::request(&mut stream, request, raw.body_prefix, state, now),
             ),
-            (RequestMethod::Post, path)
-                if path.starts_with("/api/native/login/")
-                    || path.starts_with("/api/accounts/login/") =>
-            {
-                Some(crate::api::native_login::request(
-                    &mut stream,
-                    request,
-                    raw.body_prefix,
-                    state,
-                    now,
-                ))
-            }
             (RequestMethod::Post, "/api/updates/check" | "/api/updates/install") => Some(
                 crate::api::updates::start(&mut stream, request, raw.body_prefix, state, now),
             ),

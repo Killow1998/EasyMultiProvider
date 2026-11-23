@@ -5,7 +5,7 @@ use super::{
         accounts::{self, AccountWriteRoute},
         catalog,
         error::EntryWire,
-        inspection, pages,
+        inspection, login, management, pages,
         proxy::RequestAccess,
         settings, team, usage,
     },
@@ -133,6 +133,8 @@ pub(super) async fn drive_candidate(
     let (half_close, watch_report) = if usage::matches(request) {
         (true, usage::Report::for_path(request.raw_path()).is_some())
     } else if account_write.is_some()
+        || login::matches(request)
+        || (request.method == RequestMethod::Post && request.raw_path() == management::SESSION_PATH)
         || settings::matches(request)
         || catalog::matches(request)
         || module_or_update_read(request)

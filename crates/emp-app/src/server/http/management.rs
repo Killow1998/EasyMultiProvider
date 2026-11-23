@@ -8,13 +8,13 @@ use crate::http::{
     auth::{BOOTSTRAP_HEADER, CLEAR_LEGACY_SESSION_COOKIE, SESSION_HEADER, constant_time_eq},
     request::{Request, RequestMethod},
 };
-use crate::server::run_blocking;
+use crate::server::{connection::ConnectionContext, run_blocking};
 use crate::util::system_now;
 use axum::{
+    Extension,
     extract::{FromRequestParts, State},
     http::request::Parts,
-    response::{IntoResponse, Response},
-    routing::{MethodRouter, get},
+    routing::{MethodRouter, get, post},
 };
 use std::sync::Arc;
 
@@ -75,46 +75,25 @@ fn parse_origin(origin: &str, port: u16) -> Option<bool> {
     Some((host == "127.0.0.1" || host == "localhost") && origin_port == port)
 }
 
-pub(crate) fn exchange(
-    request: Request<'_>,
-    state: &ServerState,
-    now: f64,
+pub(crate) const SESSION_PATH: &str = "/api/session";
+
+pub(in crate::server) fn session_route() -> MethodRouter<Arc<ServerState>> {
+    post(exchange_session)
+}
+
+async fn exchange_session(
+    access: RequestAccess,
+    exchange: BootstrapExchange,
+    State(state): State<Arc<ServerState>>,
+    Extension(connection): Extension<ConnectionContext>,
 ) -> Result<JsonReply, EntryError> {
-    if !same_origin(request, state.port) {
-        return Err(EntryError::CrossOrigin("management session is required"));
-    }
-    let Some(supplied) = (request.header_count(BOOTSTRAP_HEADER) == 1)
-        .then(|| request.header(BOOTSTRAP_HEADER))
-        .flatten()
-        .filter(|value| !value.is_empty() && value.is_ascii())
-    else {
-        return Err(EntryError::ManagementSession);
-    };
-    let reopened = state.reopen_bootstrap.lock().ok();
-    let bootstrap = if state.bootstrap.matches(supplied, now) {
-        &state.bootstrap
-    } else if let Some(token) = reopened
-        .as_ref()
-        .and_then(|guard| guard.as_ref())
-        .filter(|token| token.matches(supplied, now))
-    {
-        token
-    } else {
-        return Err(EntryError::ManagementSession);
-    };
-    if !bootstrap.consume() {
-        return Err(EntryError::ManagementSession);
-    }
-    let Some((token, expires_in)) = state.sessions.rotate(now) else {
-        bootstrap.release();
-        return Err(EntryError::internal());
-    };
-    let body = serde_json::to_vec(&serde_json::json!({
-        "session": token,
-        "expires_in": expires_in,
-    }))
-    .expect("session response is JSON serializable");
-    Ok(JsonReply::new(200, body).with_header("Set-Cookie", CLEAR_LEGACY_SESSION_COOKIE))
+    connection.retain_request_access(access);
+    run_blocking(move || {
+        let _connection = connection;
+        exchange.execute(&state, system_now())
+    })
+    .await
+    .map_err(|_| EntryError::internal())?
 }
 
 pub(crate) struct ManagementSession(pub(crate) String);
@@ -170,7 +149,47 @@ impl FromRequestParts<Arc<ServerState>> for ManagementSession {
     }
 }
 
-pub(crate) struct BootstrapExchange(JsonReply);
+pub(crate) struct BootstrapExchange(String);
+
+impl BootstrapExchange {
+    pub(crate) fn parse(request: Request<'_>, port: u16) -> Result<Self, EntryError> {
+        if !same_origin(request, port) {
+            return Err(EntryError::CrossOrigin("management session is required"));
+        }
+        (request.header_count(BOOTSTRAP_HEADER) == 1)
+            .then(|| request.header(BOOTSTRAP_HEADER))
+            .flatten()
+            .filter(|value| !value.is_empty() && value.is_ascii())
+            .map(|value| Self(value.to_owned()))
+            .ok_or(EntryError::ManagementSession)
+    }
+
+    pub(crate) fn execute(self, state: &ServerState, now: f64) -> Result<JsonReply, EntryError> {
+        let reopened = state.reopen_bootstrap.lock().ok();
+        let bootstrap = if state.bootstrap.matches(&self.0, now) {
+            &state.bootstrap
+        } else if let Some(token) = reopened
+            .as_ref()
+            .and_then(|guard| guard.as_ref())
+            .filter(|token| token.matches(&self.0, now))
+        {
+            token
+        } else {
+            return Err(EntryError::ManagementSession);
+        };
+        if !bootstrap.consume() {
+            return Err(EntryError::ManagementSession);
+        }
+        let Some((token, expires_in)) = state.sessions.rotate(now) else {
+            bootstrap.release();
+            return Err(EntryError::internal());
+        };
+        let body = serde_json::json!({"session":token,"expires_in":expires_in})
+            .to_string()
+            .into_bytes();
+        Ok(JsonReply::new(200, body).with_header("Set-Cookie", CLEAR_LEGACY_SESSION_COOKIE))
+    }
+}
 
 impl FromRequestParts<Arc<ServerState>> for BootstrapExchange {
     type Rejection = EntryError;
@@ -179,18 +198,7 @@ impl FromRequestParts<Arc<ServerState>> for BootstrapExchange {
         parts: &mut Parts,
         state: &Arc<ServerState>,
     ) -> Result<Self, EntryError> {
-        let raw = raw_head(&parts.extensions)?.clone();
-        let state = state.clone();
-        run_blocking(move || exchange(raw.request(), &state, system_now()))
-            .await
-            .map_err(|_| EntryError::internal())?
-            .map(Self)
-    }
-}
-
-impl IntoResponse for BootstrapExchange {
-    fn into_response(self) -> Response {
-        self.0.into_response()
+        Self::parse(raw_head(&parts.extensions)?.request(), state.port)
     }
 }
 

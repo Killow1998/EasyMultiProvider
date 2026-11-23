@@ -17,7 +17,7 @@ fn server_with_admission(admission: ConnectionAdmissionConfig) -> (TempDir, Serv
     (directory, server)
 }
 
-fn wait_for(timeout: Duration, mut ready: impl FnMut() -> bool) {
+pub(crate) fn wait_for(timeout: Duration, mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if ready() {

@@ -2,8 +2,9 @@ use super::{
     body::{JsonBody, RealtimeBody, read_json_body_with_limits},
     error::{EntryError, JsonReply},
     management::{
-        BootstrapExchange, ManagementSession, PageOrigin, RecoveryAccess, RecoveryMutation,
-        RecoveryOrigin, RecoverySession, consume_export_confirmation, issue_export_confirmation,
+        ManagementSession, PageOrigin, RecoveryAccess, RecoveryMutation, RecoveryOrigin,
+        RecoverySession, SESSION_PATH, consume_export_confirmation, issue_export_confirmation,
+        session_route,
     },
     proxy::{ModelCatalog, ProxyCaller, RequestAccess},
     with_entry_state,
@@ -63,6 +64,8 @@ pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input
 
 #[cfg(unix)]
 mod account_writes;
+#[cfg(unix)]
+mod login_writes;
 
 pub(crate) async fn assert_wire_parity(
     old: SocketAddr,
@@ -200,7 +203,7 @@ impl Fixture {
         let management_calls = self.upstream.clone();
         let proxy_calls = self.upstream.clone();
         let router = Router::new()
-            .route("/api/session", post(|_access: RequestAccess, exchange: BootstrapExchange| async move { exchange }))
+            .route(SESSION_PATH, session_route())
             .route("/api/language", post(move |_access: RequestAccess, _session: ManagementSession, body: JsonBody| async move {
                 management_calls.fetch_add(1, Ordering::Relaxed);
                 #[derive(Deserialize)]

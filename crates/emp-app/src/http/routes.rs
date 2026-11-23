@@ -6,7 +6,8 @@ use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::request::RequestMethod;
 use crate::http::response::not_found_response;
-use crate::server::http::management::{ManagementSession, exchange};
+use crate::server::http::error::EntryError;
+use crate::server::http::management::{BootstrapExchange, ManagementSession, SESSION_PATH};
 use crate::server::http::modules::ModulePanel;
 use crate::server::http::proxy::require_model_catalog;
 use crate::server::http::settings::SettingsRead;
@@ -34,11 +35,11 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             Err(error) => error.wire_response(),
         };
     }
-    if request.method == RequestMethod::Post && path == "/api/session" {
-        return match exchange(request, state, now) {
-            Ok(reply) => reply.wire_response(),
-            Err(error) => error.wire_response(),
-        };
+    if request.method == RequestMethod::Post && path == SESSION_PATH {
+        return BootstrapExchange::parse(request, state.port)
+            .and_then(|exchange| exchange.execute(state, now))
+            .unwrap_or_else(EntryError::reply)
+            .wire_response();
     }
 
     if path.starts_with("/api/") {

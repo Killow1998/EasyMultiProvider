@@ -4,6 +4,7 @@ pub(super) mod catalog;
 pub(crate) mod error;
 pub(super) mod gateway;
 pub(crate) mod inspection;
+pub(crate) mod login;
 pub(crate) mod management;
 pub(crate) mod modules;
 pub(crate) mod pages;
