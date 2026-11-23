@@ -139,9 +139,10 @@ examples and ordinary `<think>` / `<tool_call>` documentation remain text.
 Only structured tool calls are executed; malformed text is not reinterpreted as
 an executable command. Existing reasoning-field suppression remains unchanged.
 
-- All `emp-protocol` tests pass. The focused `user_journeys chat_` checks pass
-  five actual-EMP process journeys, covering HTTP/SSE phases, tool-result
-  continuation, reasoning/usage separation, refusal and damaged tool output.
+- All `emp-protocol` tests pass. The focused
+  `cargo test -p emp-app --test e2e chat_` checks pass five actual-EMP process
+  journeys, covering HTTP/SSE phases, tool-result continuation, reasoning/usage
+  separation, refusal and damaged tool output.
 - Real-provider candidate checks complete **50 model requests across 30 user
   turns**, including GLM Flash and DeepSeek code/tool interactions. A dedicated
   progress-message case persists **four commentary and four final messages** for
