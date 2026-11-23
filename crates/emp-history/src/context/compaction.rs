@@ -1,20 +1,37 @@
-//! Request-local compaction: retain the active turn, compact only visible history.
 use super::budget::positive_integer;
-use super::estimate::{IncrementalEstimate, estimate_json_tokens, json_cost};
+#[cfg(test)]
+use super::estimate::estimate_json_tokens;
+use super::estimate::{
+    IncrementalEstimate, estimate_protocol_payload_tokens, json_cost, payload_view,
+};
 use serde_json::{Map, Value};
 use summary::{map_reduce, message};
 use units::{flatten, split_atomic_units, visible_candidate};
 
+mod cache;
+pub use cache::SummaryCache;
 mod summary;
 mod units;
 
-/// Upper bound on atomic history units considered for one destination compaction.
 const MAX_COMPACTION_UNITS: usize = 50_000;
 
 pub fn compact_with<F>(
     body: &Value,
     model: &Map<String, Value>,
     safe_budget: u64,
+    summarize: F,
+) -> Result<Value, &'static str>
+where
+    F: FnMut(&Value) -> Result<String, ()>,
+{
+    compact_with_cache(body, model, safe_budget, None, summarize)
+}
+
+pub fn compact_with_cache<F>(
+    body: &Value,
+    model: &Map<String, Value>,
+    safe_budget: u64,
+    cache: Option<(&SummaryCache, &[&str])>,
     mut summarize: F,
 ) -> Result<Value, &'static str>
 where
@@ -29,8 +46,6 @@ where
         .remove(crate::ACTIVE_INPUT_START)
         .and_then(|value| value.as_u64())
         .and_then(|value| usize::try_from(value).ok());
-    // Every body built below replaces `input`; keep the key (and its position)
-    // but drop the original array so it is never cloned or re-serialised again.
     let mut source = match projected.get_mut("input").map(Value::take) {
         Some(Value::Array(items)) => items,
         Some(Value::Object(item)) => vec![Value::Object(item)],
@@ -49,7 +64,8 @@ where
     };
     let (candidate, active) =
         if let Some(index) = active_start.filter(|index| *index <= source.len()) {
-            let active = source.split_off(units::paired_boundary(&source, index));
+            let cut = units::active_turn_boundary(&source, index);
+            let active = source.split_off(cut);
             (source, active)
         } else if !suffix.is_empty() {
             (source, Vec::new())
@@ -60,26 +76,27 @@ where
                 None => (Vec::new(), Vec::new()),
             }
         };
-    let before = input_view_value(&final_body(
+    let fits_budget = |request: &Value| {
+        estimate_protocol_payload_tokens(request, "responses")
+            .is_some_and(|tokens| tokens <= safe_budget)
+    };
+    if fits_budget(&final_body(
         &projected,
         None,
         std::slice::from_ref(&candidate),
         &active,
         &suffix,
-    ));
-    if estimate_json_tokens(&before).is_some_and(|estimate| estimate <= safe_budget) {
+    )) {
         projected.insert(
             "input".to_owned(),
             Value::Array([candidate, active, suffix].concat()),
         );
         return Ok(Value::Object(projected));
     }
-    drop(before);
-    let active_only = input_view_value(&final_body(&projected, None, &[], &active, &suffix));
-    if estimate_json_tokens(&active_only).is_none_or(|estimate| estimate > safe_budget) {
+    if !fits_budget(&final_body(&projected, None, &[], &active, &suffix)) {
         return Err("compaction_unit_too_large");
     }
-    let units = split_atomic_units(
+    let mut units = split_atomic_units(
         &candidate
             .into_iter()
             .filter(visible_candidate)
@@ -89,6 +106,18 @@ where
     if units.len() > MAX_COMPACTION_UNITS {
         return Err("compaction_unit_too_large");
     }
+    let prefixes = cache.map(|(cache, scope)| (cache, cache::prefixes(scope, safe_budget, &units)));
+    if let Some((cache, keys)) = &prefixes
+        && let Some((covered, summary)) = cache.longest_match(keys)
+    {
+        let remaining = units.split_off(covered);
+        let resumed = final_body(&projected, Some(&summary), &remaining, &active, &suffix);
+        if fits_budget(&resumed) {
+            return Ok(resumed);
+        }
+        units = vec![vec![checkpoint(&summary)]];
+        units.extend(remaining);
+    }
     let configured_output = positive_integer(projected.get("max_output_tokens"))
         .or_else(|| positive_integer(projected.get("max_tokens")))
         .or_else(|| positive_integer(model.get("max_output_tokens")))
@@ -96,8 +125,6 @@ where
         .unwrap_or(1024);
     let output_limit = configured_output.min((safe_budget / 8).max(1));
     let placeholder = "x".repeat(usize::try_from(output_limit.saturating_mul(2)).unwrap_or(2048));
-    // The tentative body is the placeholder checkpoint, the retained units,
-    // then the active turn and suffix; units only add their own items.
     let mut tail = IncrementalEstimate::new(
         &input_view_value(&final_body(
             &projected,
@@ -141,12 +168,18 @@ where
         )?)
     };
     let result = final_body(&projected, summary.as_deref(), retained, &active, &suffix);
-    if estimate_json_tokens(&input_view_value(&result))
-        .is_none_or(|estimate| estimate > safe_budget)
-    {
+    if !fits_budget(&result) {
         return Err("compaction_result_over_budget");
     }
+    if let (Some((cache, keys)), Some(summary)) = (prefixes, summary) {
+        let covered = keys.len() - kept;
+        cache.insert(keys[covered - 1], covered, summary);
+    }
     Ok(result)
+}
+
+fn checkpoint(summary: &str) -> Value {
+    message(&format!("{}\n\n{summary}", crate::CHECKPOINT_PREFIX))
 }
 
 fn final_body(
@@ -158,10 +191,7 @@ fn final_body(
 ) -> Value {
     let mut input = Vec::new();
     if let Some(summary) = summary {
-        input.push(message(&format!(
-            "{}\n\n{summary}",
-            crate::CHECKPOINT_PREFIX
-        )));
+        input.push(checkpoint(summary));
     }
     input.extend(flatten(tail));
     input.extend_from_slice(active);
@@ -172,15 +202,7 @@ fn final_body(
 }
 
 fn input_view_value(body: &Value) -> Value {
-    let Some(root) = body.as_object() else {
-        return Value::Null;
-    };
-    Value::Object(
-        ["input", "instructions", "tools", "text", "response_format"]
-            .into_iter()
-            .filter_map(|key| root.get(key).cloned().map(|value| (key.to_owned(), value)))
-            .collect(),
-    )
+    payload_view(body, "responses").expect("Responses request object")
 }
 
 #[cfg(test)]

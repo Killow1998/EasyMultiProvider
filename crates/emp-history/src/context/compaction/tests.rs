@@ -152,6 +152,101 @@ fn compaction_keeps_recent_tool_pairs_and_preserves_summary_shape() {
 }
 
 #[test]
+fn completed_turns_after_a_checkpoint_can_be_summarized() {
+    let final_answer =
+        json!({"type":"message","role":"assistant","phase":"final_answer","content":"done"});
+    let mut input = vec![message("checkpoint history")];
+    for n in 0..12 {
+        input.push(message(&format!("older turn {n} {}", "x".repeat(500))));
+        input.push(final_answer.clone());
+    }
+    let active = vec![
+        json!({"type":"message","role":"developer","content":"side conversation instructions"}),
+        message("current question"),
+        json!({"type":"message","role":"assistant","phase":"commentary","content":"in progress"}),
+        json!({"type":"function_call","name":"lookup","call_id":"active","arguments":"{}"}),
+        json!({"type":"function_call_output","call_id":"active","output":"current result"}),
+        message("additional instructions"),
+    ];
+    input.extend_from_slice(&active);
+    let request = json!({"input":input,"_emp_active_input_start":1,"max_output_tokens":32});
+    let mut summaries = 0;
+    let compacted = compact_with(&request, &Map::new(), 1_200, |request| {
+        summaries += 1;
+        assert!(
+            !request
+                .to_string()
+                .contains("side conversation instructions")
+        );
+        Ok("older turns summarized".into())
+    })
+    .unwrap();
+    assert!(summaries > 0);
+    assert!(compacted["input"].as_array().unwrap().ends_with(&active));
+}
+
+#[test]
+fn shared_prefix_is_reused_and_extended_without_mixing_branch_history() {
+    let cache = SummaryCache::default();
+    let compact = |history: &[Value], question: &str, route: &str, answer: &str| {
+        let mut input = history.to_vec();
+        input.push(message(question));
+        let mut calls = Vec::new();
+        let request =
+            json!({"input":input, "_emp_active_input_start":history.len(), "max_output_tokens":32});
+        let result = compact_with_cache(
+            &request,
+            &Map::new(),
+            1200,
+            Some((&cache, &["parent", route])),
+            |body| {
+                calls.push(body.to_string());
+                Ok(answer.to_owned())
+            },
+        )
+        .unwrap();
+        (result, calls)
+    };
+    let history: Vec<_> = (0..20)
+        .map(|n| message(&format!("parent item {n}: {}", "x".repeat(420))))
+        .collect();
+    let (first, calls) = compact(&history, "first question", "model", "parent summary");
+    assert!(calls.len() > 1);
+    assert!(first["input"][0].to_string().contains("parent summary"));
+
+    let mut extended = history.clone();
+    extended.extend((0..12).map(|_| message(&format!("private history {}", "y".repeat(420)))));
+    let (later, calls) = compact(&extended, "follow-up", "model", "private summary");
+    assert!(!calls.is_empty());
+    assert!(calls.iter().any(|call| call.contains("parent summary")));
+    assert!(calls.iter().all(|call| !call.contains("parent item 0:")));
+    assert!(later["input"][0].to_string().contains("private summary"));
+    assert!(
+        compact(&extended, "next question", "model", "unused")
+            .1
+            .is_empty()
+    );
+
+    let (sibling, calls) = compact(&history, "sibling question", "model", "unused");
+    assert!(calls.is_empty());
+    assert!(sibling["input"][0].to_string().contains("parent summary"));
+    assert!(!sibling.to_string().contains("private"));
+
+    let mut changed = history.clone();
+    changed[0] = message("edited parent item");
+    assert!(
+        !compact(&changed, "sibling question", "model", "new summary")
+            .1
+            .is_empty()
+    );
+    assert!(
+        !compact(&history, "first question", "another model", "new summary")
+            .1
+            .is_empty()
+    );
+}
+
+#[test]
 fn explicit_active_start_cannot_split_a_tool_exchange_during_compaction() {
     let body = json!({
         "input":[

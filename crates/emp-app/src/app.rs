@@ -74,6 +74,7 @@ impl ServerState {
 }
 
 pub(crate) struct BackendState {
+    pub(crate) history_summaries: emp_history::context::SummaryCache,
     pub(crate) modules: Arc<crate::services::modules::Modules>,
     pub(crate) team: crate::services::team::TeamState,
     pub(crate) aero_callers: crate::services::modules::aero::Callers,
@@ -196,6 +197,7 @@ impl BackendState {
             Err(error) => return Err(error),
         };
         Ok(Self {
+            history_summaries: Default::default(),
             modules: Arc::new(modules),
             guides: Arc::new(crate::services::hot_adapter::Guides::open(
                 state_root.join("hot-adapter/guide"),

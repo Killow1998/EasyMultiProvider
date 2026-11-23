@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.15.8 (2026-11-23)
+
+### 中文
+
+#### 问题修复
+
+- **在长对话旁继续提问。** 用外部模型打开 Codex 侧边对话时，0.15.7 可能因历史过长返回 HTTP 413。现在 EMP 可以把已结束的轮次压缩成摘要，同时保留当前轮次的指令、工具调用和结果。
+- **中途切换思考强度。** Codex 把新档位记在对话历史里时，外部模型请求曾可能返回 HTTP 422。现在外部请求会使用最后选定的档位，按目标模型支持的方式发送。
+
+#### 改进
+
+- **减少重复压缩。** 首次处理长历史仍可能需要多次摘要请求。只要 EMP 持续运行，追问或从同一父对话另开侧边对话时，如果目标路由、可用上下文和已压缩的那段历史都相同，就可以复用已有摘要。
+
+从 0.15.7 升级只需更新桌面端 EMP Core。
+
+### English
+
+#### Fixes
+
+- **Continue a long conversation in a side chat.** In 0.15.7, a Codex side chat using an external model could fail with HTTP 413. EMP can now summarize completed turns while keeping the current turn's instructions, tool calls and results together.
+- **Switch reasoning effort mid-conversation.** An external request could fail with HTTP 422 when Codex recorded an effort change in the conversation history. EMP now sends the latest selected effort in the format supported by the destination model.
+
+#### Improvements
+
+- **Fewer repeat summary calls.** The first pass over a long history can still take several requests. While EMP is running, follow-ups and sibling side chats can reuse a summary when the destination route, input budget and summarized history match.
+
+To upgrade from 0.15.7, update desktop EMP Core.
+
 ## 0.15.7 (2026-11-23)
 
 ### 中文

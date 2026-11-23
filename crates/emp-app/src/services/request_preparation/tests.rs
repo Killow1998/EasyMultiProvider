@@ -188,6 +188,54 @@ fn cases() -> Vec<Value> {
 }
 
 #[test]
+fn codex_effort_updates_survive_external_projection_and_native_pass_through() {
+    let call = json!({"type":"function_call","call_id":"call_1","name":"probe","arguments":"{}"});
+    let result = json!({"type":"function_call_output","call_id":"call_1","output":"done"});
+    let body = json!({"reasoning":{"effort":"low","summary":"detailed"},"input":[
+        {"type":"configuration_update","reasoning":{"effort":"medium"}},
+        call,
+        {"type":"configuration_update","reasoning":{"effort":"high"}},
+        result
+    ]});
+    for (name, protocol) in [
+        ("native-unchanged", "responses"),
+        ("responses", "responses"),
+        ("chat", "chat_completions"),
+        ("anthropic", "anthropic_messages"),
+    ] {
+        let fixture = case(name, protocol, None, Some("shared"), None, true);
+        let mut route = resolved_route_from_parts(
+            fixture["route"].as_str().unwrap(),
+            fixture["provider"].as_object().unwrap().clone(),
+            fixture["model"].as_object().unwrap().clone(),
+            RouteSource::ExplicitModel,
+        )
+        .unwrap();
+        let mut request = body.clone();
+        prepare_external_request(
+            &fixture["config"],
+            &mut route,
+            request.as_object_mut().unwrap(),
+        )
+        .unwrap();
+        if name == "native-unchanged" {
+            assert_eq!(request, body);
+            continue;
+        }
+        assert_eq!(request["input"], json!([call, result]));
+        let wire = emp_router::project_external_payload(&route, &request).unwrap();
+        match protocol {
+            "chat_completions" => assert_eq!(wire["reasoning_effort"], "high"),
+            "anthropic_messages" => assert_eq!(wire["output_config"]["effort"], "high"),
+            _ => assert_eq!(
+                wire["reasoning"],
+                json!({"effort":"high","summary":"detailed"})
+            ),
+        }
+    }
+}
+
+#[test]
 fn external_request_preparation_applies_summary_policy_once_and_keeps_unknown_fields() {
     for fixture in cases() {
         let mut route = resolved_route_from_parts(

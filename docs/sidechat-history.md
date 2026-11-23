@@ -22,7 +22,10 @@ When projecting an inherited checkpoint, explicit Codex items keep their places.
 EMP matches overlapping records by item type and ID. A client tool call and its
 output can come from different sides of the checkpoint. EMP pairs them across
 the combined request before filling missing results. If the destination needs
-another compaction, the cut moves back to keep calls with their active outputs.
+another compaction, a final assistant answer followed by new user input marks
+a completed turn in the supplied tail. Earlier turns can enter the summary.
+Instructions and tool activity after that answer stay with the current turn.
+A tool exchange spanning the cut moves the boundary back to its call.
 A completed server-side tool search contributes its tool declarations to external
 protocols without creating a client tool invocation.
 
@@ -47,6 +50,34 @@ Side chat without the previous history-reconstruction or item-ID errors.
 Updated Windows and Intel macOS packages passed packaging checks; the Mac DMG
 also passed packaged update and rollback scenarios.
 
+A Windows loopback replay with a frozen parent history reproduced the v0.15.7
+HTTP 413 before the mock upstream received any calls. With completed turns
+eligible for compaction and a 467,368-token window, the same history reached
+the mock through 18 summary calls and one final request with intact tool pairs.
+EMP keeps a bounded in-memory cache of summaries. Reuse requires the same
+thread lineage, destination route, input budget and an exact match for the
+complete summarized prefix. A follow-up keeps its recent turns, and a sibling
+can reuse the common prefix without importing messages from the other branch.
+Restarting EMP clears the cache. Its summaries never modify Codex rollouts.
+
+Codex can pin a request's initial reasoning effort and send subsequent changes
+as ordered `configuration_update` input items. For Native routes EMP preserves
+these items. For external routes it applies the last supplied effort to the
+request before history reconstruction, context estimation and protocol conversion.
+The destination's existing effort and summary policies still apply.
+
+An isolated Codex 0.171.0 app-server ran two turns with effort set to `low`
+and then `high`. With effort updates enabled in the client and model catalog,
+the Native mock received a `low` baseline plus an ordered `high` update on
+the second turn. The Chat Completions mock received `reasoning_effort: high`.
+
+A Windows loopback replay included all 552 inherited items and synthetic side
+questions. The top-level effort was deliberately set to `low`. Both archived
+controls specified `xhigh`. Before the fix, EMP returned 422 before reaching
+the mock. After the fix, all three final Chat Completions requests carried
+`xhigh` and paired tools. The first needed 18 summary calls, the follow-up
+and sibling needed zero, and the sibling contained only its own branch markers.
+
 ## Official source references
 
 Reviewed at `rust-v0.153.4`; the fork metadata fields also exist in `rust-v0.152.1`:
@@ -60,3 +91,7 @@ Codex 0.171.0 restores replacement history before replaying its suffix and
 pairs client tool calls over the resulting timeline.
 [Rollout reconstruction](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/core/src/session/rollout_reconstruction.rs)
 and [tool normalization](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/core/src/context_manager/normalize.rs).
+
+Codex pins and updates effort in [session reasoning settings](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/core/src/session/reasoning_effort.rs).
+The [request builder](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/core/src/client.rs#L1199-L1215)
+filters control items for unsupported models and deduplicates adjacent updates for supported ones.

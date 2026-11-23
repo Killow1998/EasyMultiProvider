@@ -12,3 +12,4 @@ time = { version = "0.3.55", features = ["parsing"] }
 base64 = "0.22"
 serde_json = { workspace = true }
 serde.workspace = true
+sha2 = "0.10.9"
