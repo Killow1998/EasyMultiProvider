@@ -33,9 +33,17 @@ struct Client {
     api_key: Option<String>,
 }
 
+#[cfg(all(test, unix))]
+type SaveGate = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
 pub(crate) struct GatewayClients {
     path: PathBuf,
     clients: Mutex<Vec<Client>>,
+    #[cfg(all(test, unix))]
+    save_gate: Mutex<Option<SaveGate>>,
 }
 
 impl GatewayClients {
@@ -43,6 +51,8 @@ impl GatewayClients {
         Self {
             path,
             clients: Mutex::new(Vec::new()),
+            #[cfg(all(test, unix))]
+            save_gate: Mutex::default(),
         }
     }
 
@@ -67,6 +77,8 @@ impl GatewayClients {
         Ok(Self {
             path,
             clients: Mutex::new(clients),
+            #[cfg(all(test, unix))]
+            save_gate: Mutex::default(),
         })
     }
 
@@ -192,12 +204,30 @@ impl GatewayClients {
         self.save(vault, &mut clients, updated)
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn gate_next_save_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (reached, ready) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *self.save_gate.lock().unwrap() = Some((reached, released));
+        (ready, release)
+    }
+
     fn save(
         &self,
         vault: &emp_state::VaultStore,
         clients: &mut Vec<Client>,
         updated: Vec<Client>,
     ) -> io::Result<()> {
+        #[cfg(all(test, unix))]
+        if let Some((reached, released)) = self.save_gate.lock().unwrap().take() {
+            let _ = reached.send(());
+            let _ = released.blocking_recv();
+        }
         vault
             .write_encrypted_json(&self.path, &serde_json::to_value(&updated)?)
             .map_err(io::Error::other)?;

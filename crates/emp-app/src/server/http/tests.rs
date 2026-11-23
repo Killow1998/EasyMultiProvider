@@ -70,6 +70,8 @@ mod catalog_writes;
 mod local_writes;
 #[cfg(unix)]
 mod login_writes;
+#[cfg(unix)]
+mod module_writes;
 
 pub(crate) async fn assert_wire_parity(
     old: SocketAddr,

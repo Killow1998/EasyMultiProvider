@@ -16,7 +16,7 @@ use crate::http::request::RequestHead;
 use crate::http::request::RequestMethod;
 use crate::http::request::parse_request;
 use crate::http::request::percent_decode;
-use crate::http::request::read_request_head;
+use crate::http::request::{read_json_body, read_request_head};
 use crate::http::response::bad_request_response;
 use crate::http::routes::route_request_at;
 use crate::server::http::accounts::AccountWriteRoute;
@@ -24,7 +24,13 @@ use crate::server::http::catalog::CatalogWriteRoute;
 use crate::server::http::local_writes::LocalWriteRoute;
 use crate::server::http::proxy::{RequestAccess, request_source};
 use crate::server::http::usage::Report;
-use crate::server::http::{error::EntryError, login};
+use crate::server::http::{
+    error::EntryError,
+    gateway::{self, GatewayClientWrite},
+    login,
+    management::ManagementSession,
+    modules::{self, ModuleAction},
+};
 use crate::services::connection_admission::ConnectionPermit;
 use crate::services::observation::http::HttpObservation;
 use crate::util::system_now;
@@ -108,16 +114,19 @@ pub(crate) fn handle_connection(
             (RequestMethod::Post, path) if path.starts_with("/api/team/") => Some(
                 crate::api::team::mutate(&mut stream, request, raw.body_prefix, state, now),
             ),
-            (RequestMethod::Post, "/api/modules") => Some(crate::api::modules::mutate(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                now,
-            )),
-            (RequestMethod::Post | RequestMethod::Delete, "/api/gateway/clients") => Some(
-                crate::api::gateway::mutate(&mut stream, request, raw.body_prefix, state, now),
-            ),
+            (RequestMethod::Post, modules::PATH)
+            | (RequestMethod::Post | RequestMethod::Delete, gateway::CLIENTS_PATH) => {
+                let reply = ManagementSession::require(request, state, now).and_then(|_| {
+                    let body = read_json_body(&mut stream, request, raw.body_prefix, state)?;
+                    if path == modules::PATH {
+                        Ok(ModuleAction::parse(body)?.execute(state))
+                    } else {
+                        let remove = request.method == RequestMethod::Delete;
+                        Ok(GatewayClientWrite::parse(body, remove)?.execute(state))
+                    }
+                });
+                Some(reply.unwrap_or_else(EntryError::reply).wire_response())
+            }
             (RequestMethod::Post, "/v1/decisions" | "/v1/systemone") => Some(
                 crate::api::decisions::request(&mut stream, request, raw.body_prefix, state, now),
             ),

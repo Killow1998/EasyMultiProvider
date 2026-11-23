@@ -2,7 +2,7 @@ pub(crate) mod accounts;
 pub(crate) mod body;
 pub(crate) mod catalog;
 pub(crate) mod error;
-pub(super) mod gateway;
+pub(crate) mod gateway;
 pub(crate) mod inspection;
 pub(crate) mod local_writes;
 pub(crate) mod login;

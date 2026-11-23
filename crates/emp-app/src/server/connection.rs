@@ -5,9 +5,9 @@ use super::{
         accounts::{self, AccountWriteRoute},
         catalog::{self, CatalogWriteRoute},
         error::EntryWire,
-        inspection,
+        gateway, inspection,
         local_writes::LocalWriteRoute,
-        login, management, pages,
+        login, management, modules, pages,
         proxy::RequestAccess,
         settings, team, usage,
     },
@@ -146,6 +146,8 @@ pub(super) async fn drive_candidate(
         || (request.method == RequestMethod::Post && request.raw_path() == management::SESSION_PATH)
         || settings::matches(request)
         || catalog::matches(request)
+        || modules::matches_write(request)
+        || gateway::matches_write(request)
         || module_or_update_read(request)
         || pages::matches(request)
         || team::matches(request)

@@ -1,17 +1,12 @@
-use crate::server::http::management::ManagementSession;
 use crate::{
     app::ServerState,
-    http::{
-        request::{Request, RequestMethod, query_values, read_json_body},
-        response::{body_error_response, json_error_response, status_text},
-    },
+    http::request::{Request, query_values},
     server::http::error::JsonReply,
 };
 use emp_state::usage::ledger::UsageLedger;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 
 pub(crate) enum GatewayRead {
     Connection,
@@ -103,73 +98,7 @@ fn read_usage(request: Request<'_>, state: &ServerState) -> JsonReply {
     }
 }
 
-pub(crate) fn mutate(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-) -> Vec<u8> {
-    if let Err(error) = ManagementSession::require(request, state, now) {
-        return error.wire_response();
-    }
-    let body = match read_json_body(stream, request, prefix, state) {
-        Ok(body) => body,
-        Err(error) => return body_error_response(error),
-    };
-    let backend = &state.backend;
-    let result = if request.method == RequestMethod::Delete {
-        let Some(id) = body["id"].as_str() else {
-            return json_error_response(
-                400,
-                status_text(400),
-                "A device key ID is required",
-                None,
-                &[],
-            );
-        };
-        backend
-            .gateway_clients
-            .remove(id, &backend.configuration.vault, &backend.modules)
-            .map(|()| json_reply(&json!({"ok":true})))
-    } else {
-        let id = match body.get("id") {
-            None => None,
-            Some(Value::String(id)) => Some(id.as_str()),
-            Some(_) => {
-                return json_error_response(
-                    400,
-                    status_text(400),
-                    "A device key ID is required",
-                    None,
-                    &[],
-                );
-            }
-        };
-        backend
-            .gateway_clients
-            .issue(
-                body["name"].as_str().unwrap_or_default(),
-                id,
-                &backend.configuration.vault,
-                &backend.modules,
-            )
-            .map(|client| json_reply(&client))
-    };
-    match result {
-        Ok(reply) => reply.wire_response(),
-        Err(error) => {
-            let (status, message) = if error.kind() == std::io::ErrorKind::InvalidInput {
-                (400, error.to_string())
-            } else {
-                (503, "Gateway clients could not be saved".into())
-            };
-            json_error_response(status, status_text(status), &message, None, &[])
-        }
-    }
-}
-
-fn json_reply(value: &impl Serialize) -> JsonReply {
+pub(crate) fn json_reply(value: &impl Serialize) -> JsonReply {
     JsonReply::new(200, serde_json::to_vec(value).expect("gateway response"))
         .with_header("Cache-Control", "no-store")
 }
