@@ -292,7 +292,7 @@ mod tests {
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            let status = execute(&server.state, "status", &json!({}), false).unwrap();
+            let status = execute(&server.state, "status", &json!({}), importing).unwrap();
             if status["status"] == "completed" {
                 assert_eq!(status["restart_required"], !importing);
                 break;

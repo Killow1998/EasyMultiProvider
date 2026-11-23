@@ -18,8 +18,7 @@ impl QuotaFixture {
         let root = credential_root(&directory);
         let config_path = root.join("config.json");
         let auth_path = root.join("state/accounts/demo/auth.json.enc");
-        let mut account =
-            json!({"id":"demo","name":"Demo","prefix":"demo","auth_file":auth_path});
+        let mut account = json!({"id":"demo","name":"Demo","prefix":"demo","auth_file":auth_path});
         if let Some(source) = source {
             account["credential_source"] = source.into();
         }
@@ -228,7 +227,10 @@ fn emp_login_retries_quota_reads_and_resets_and_saves_rotation() {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0]["refresh"], false);
         assert_eq!(calls[1]["refresh"], true);
-        assert_eq!(calls[0]["auth"]["tokens"]["refresh_token"], "original-refresh");
+        assert_eq!(
+            calls[0]["auth"]["tokens"]["refresh_token"],
+            "original-refresh"
+        );
         let saved = fixture
             .server
             .state

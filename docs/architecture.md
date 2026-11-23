@@ -1550,21 +1550,16 @@ Other accounts matching the current Native identity retain their existing
 Native snapshot path regardless of source.
 `login.existing_other` remains unchanged: selecting an Other as Native copies
 its full credentials into local `~/.codex/auth.json`. Local Codex may subsequently
-rotate that shared refresh token and invalidate the original host's copy; Xian
-owns the decision on changing this flow.
+rotate that shared refresh token and invalidate the original host's copy. This is
+intended: choosing an Other as Native explicitly hands the login to local Codex.
 `quota_catalog_download` exercises actual installed engines against a synthetic
 TLS backend: native/shared reads and resets never call OAuth or change source
 credential bytes, managed Other rotation is saved,
 and startup does not request `/models`. Removing the local catalog configuration
 must expose a `/models` request.
 
-The Other credential-source fix is implemented in the
-`EasyMultiProvider-otherauth` worktree based on `835ea02` (Core 0.15.8).
 Regression cases are in `other_auth_contract`, native login/HTTP/image contracts,
 state normalization/settings/migration tests and `quota_catalog_download`.
-Point has not run builds, tests or EMP here; coz owns execution and commit on
-the validation host. The installed-engine case remains explicitly ignored by
-default and needs `EMP_TEST_CODEX_CLI` when coz runs it.
 
 Execution facts now belong to the request's `RequestOutcome`: each dispatch
 increments its own attempt count and records its protocol/model; scheduled

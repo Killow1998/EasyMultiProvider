@@ -158,7 +158,12 @@ fn quota_is_cloned_without_retaining_input_references() {
 /// Fails if normalization drops EMP ownership or silently grants it to legacy/unknown sources.
 #[test]
 fn credential_source_survives_normalization_without_defaulting_to_emp_login() {
-    for source in [None, Some("emp_login"), Some("import"), Some("future-source")] {
+    for source in [
+        None,
+        Some("emp_login"),
+        Some("import"),
+        Some("future-source"),
+    ] {
         let mut account = serde_json::json!({"id":"demo","prefix":"demo"});
         if let Some(source) = source {
             account["credential_source"] = source.into();

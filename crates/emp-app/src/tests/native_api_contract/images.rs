@@ -19,17 +19,22 @@ fn shared_image_account_401_never_enters_credential_refresh() {
         .test_config()
         .lock()
         .unwrap()["image_routing"] = json!({"mode":"account","account_id":"selected"});
-    let auth_path = server.state.backend.configuration.snapshot().unwrap()["accounts"][0]
-        ["auth_file"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    select_turn(&server, "selected/gpt-6.1-sol", "shared-image-turn", false);
+    upstream.next();
+    let auth_path =
+        server.state.backend.configuration.snapshot().unwrap()["accounts"][0]["auth_file"]
+            .as_str()
+            .unwrap()
+            .to_owned();
     let original = std::fs::read(&auth_path).unwrap();
     let response = post(
         &server,
         "/v1/images/generations",
         br#"{"model":"gpt-image-2","prompt":"fixture"}"#,
-        &[&session_header(&server)],
+        &[
+            &session_header(&server),
+            "x-codex-image-turn-id: shared-image-turn",
+        ],
     );
     assert!(
         response.starts_with("HTTP/1.1 401 Unauthorized"),

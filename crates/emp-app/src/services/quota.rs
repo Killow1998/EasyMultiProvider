@@ -401,13 +401,9 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
             return run_quota_query(&access_token_snapshot(auth), &binary, control, false)
                 .map(|result| result.quota);
         }
-        run_quota_query_persisting(
-            auth,
-            &binary,
-            control,
-            refresh,
-            |refreshed| credentials.persist(refreshed),
-        )
+        run_quota_query_persisting(auth, &binary, control, refresh, |refreshed| {
+            credentials.persist(refreshed)
+        })
     };
     let auth = read_auth()?;
     if native_auth_document(&state.backend.accounts.native_auth_path)

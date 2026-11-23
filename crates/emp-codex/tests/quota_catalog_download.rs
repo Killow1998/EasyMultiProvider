@@ -125,7 +125,11 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
             );
             let _ = stream.write_all(&body);
         }
-        (paths, shared_usage_authenticated, shared_reset_authenticated)
+        (
+            paths,
+            shared_usage_authenticated,
+            shared_reset_authenticated,
+        )
     });
     let launcher = root.path().join("codex");
     // Only the test launcher changes the backend URL. The production helper
