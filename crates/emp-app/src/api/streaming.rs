@@ -177,8 +177,17 @@ pub(crate) fn serve_external_stream(
         Err(crate::services::external::ExternalRequestError::Disconnected) => return Ok(()),
         Err(error) => return Err(crate::api::failure_response::external_open_error(error)),
     };
-    let completed = relay_external_stream(
-        downstream, state, &candidate, body, usage, upstream, monitor,
+    let completed = relay_stream(
+        RelayContext {
+            downstream,
+            state,
+            route: &candidate,
+            body,
+            response_headers: &BTreeMap::new(),
+            usage,
+        },
+        ExternalRelay { upstream },
+        monitor,
     )?;
     if completed {
         persist_protocol_observation(state, &candidate);
@@ -218,7 +227,20 @@ pub(crate) fn serve_native_stream(
         ),
     };
     let (upstream, usage) = upstream;
-    relay_native_stream(downstream, state, route, body, usage, upstream, monitor).map(|_| ())
+    let response_headers = upstream.headers.clone();
+    relay_stream(
+        RelayContext {
+            downstream,
+            state,
+            route,
+            body,
+            response_headers: &response_headers,
+            usage,
+        },
+        NativeRelay { upstream },
+        monitor,
+    )
+    .map(|_| ())
 }
 
 /// Native and external streams share delivery, cancellation and failure handling.
@@ -434,53 +456,6 @@ fn relay_stream(
             }
         }
     }
-}
-
-fn relay_native_stream(
-    downstream: ObservedSse<'_>,
-    state: &ServerState,
-    route: &ResolvedRoute,
-    body: &Value,
-    usage: crate::services::request_outcome::RequestOutcome<'_>,
-    upstream: NativeStream,
-    monitor: Option<DisconnectMonitor>,
-) -> Result<bool, Vec<u8>> {
-    let response_headers = upstream.headers.clone();
-    relay_stream(
-        RelayContext {
-            downstream,
-            state,
-            route,
-            body,
-            response_headers: &response_headers,
-            usage,
-        },
-        NativeRelay { upstream },
-        monitor,
-    )
-}
-
-fn relay_external_stream(
-    downstream: ObservedSse<'_>,
-    state: &ServerState,
-    route: &ResolvedRoute,
-    body: &Value,
-    usage: crate::services::request_outcome::RequestOutcome<'_>,
-    upstream: ExternalStream,
-    monitor: Option<DisconnectMonitor>,
-) -> Result<bool, Vec<u8>> {
-    relay_stream(
-        RelayContext {
-            downstream,
-            state,
-            route,
-            body,
-            response_headers: &BTreeMap::new(),
-            usage,
-        },
-        ExternalRelay { upstream },
-        monitor,
-    )
 }
 
 pub(crate) fn serve_generated_response(
