@@ -2,11 +2,11 @@
 use crate::app::ServerState;
 use crate::services::accounts::native_subscription_headers;
 use crate::services::catalog::{refresh_catalog, server_catalog};
-use emp_integration::IntegrationResult;
+use emp_codex::configuration::IntegrationResult;
 
 pub(crate) fn image_mcp_required(auth: &serde_json::Value) -> bool {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    if emp_integration::local_auth::is_local(auth) {
+    if emp_codex::configuration::local_auth::is_local(auth) {
         return true;
     }
     auth["tokens"]["id_token"]
@@ -63,7 +63,7 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
             && lease.fields["openai_base_url"].applied.value.as_deref() == Some(base_url)
             && (lease.fields["model_catalog_json"].applied.value.as_deref() == Some(path.as_ref())
                 || (!lease.fields["model_catalog_json"].applied.present
-                    && lease.fields[emp_integration::REALTIME_SIDEBAND_FIELD]
+                    && lease.fields[emp_codex::configuration::REALTIME_SIDEBAND_FIELD]
                         .applied
                         .value
                         .as_deref()
@@ -78,18 +78,19 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
         }
     }
     let auth_path = &state.backend.accounts.native_auth_path;
-    let created = emp_integration::local_auth::ensure(auth_path, &state.backend.gateway_key)
-        .map_err(|_| EnableError::Unavailable(409))?;
+    let created =
+        emp_codex::configuration::local_auth::ensure(auth_path, &state.backend.gateway_key)
+            .map_err(|_| EnableError::Unavailable(409))?;
     if created && refresh_catalog(state).is_err() {
-        emp_integration::local_auth::restore(auth_path)
+        emp_codex::configuration::local_auth::restore(auth_path)
             .map_err(|_| EnableError::Unavailable(409))?;
         return Err(EnableError::Unavailable(503));
     }
-    let auth = emp_integration::local_auth::read(auth_path)
+    let auth = emp_codex::configuration::local_auth::read(auth_path)
         .map_err(|_| EnableError::Unavailable(409))?
         .ok_or(EnableError::Unavailable(409))?;
     let image_mcp = if image_mcp_required(&auth) {
-        Some(emp_integration::ImageMcpConfig {
+        Some(emp_codex::configuration::ImageMcpConfig {
             command: std::env::current_exe()
                 .map_err(|_| EnableError::Unavailable(409))?
                 .to_string_lossy()
@@ -117,7 +118,7 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
         )
         .map_err(|_| EnableError::Unavailable(409));
     if created && !result.as_ref().is_ok_and(|result| result.ok()) {
-        emp_integration::local_auth::restore(auth_path)
+        emp_codex::configuration::local_auth::restore(auth_path)
             .map_err(|_| EnableError::Unavailable(409))?;
     }
     result

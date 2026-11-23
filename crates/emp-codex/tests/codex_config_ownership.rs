@@ -1,7 +1,7 @@
 //! EMP owns only the leased config fields. Provider-specific settings survive
 //! enable, restore and crash recovery.
 
-use emp_integration::IntegrationManager;
+use emp_codex::configuration::IntegrationManager;
 use std::fs;
 
 fn manager(directory: &std::path::Path) -> IntegrationManager {
@@ -124,11 +124,11 @@ fn image_mcp_updates_and_restores_only_its_owned_entry() {
                 .ok()
         );
         let original = manager.status().unwrap().lease.unwrap().fields
-            [emp_integration::IMAGE_MCP_FIELD]
+            [emp_codex::configuration::IMAGE_MCP_FIELD]
             .original
             .clone();
         for command in ["EMP-one", "EMP-two"] {
-            let settings = emp_integration::ImageMcpConfig {
+            let settings = emp_codex::configuration::ImageMcpConfig {
                 command: command.into(),
                 key_file: "/fixture/state/gateway-key".into(),
             };
@@ -174,7 +174,7 @@ fn image_mcp_updates_and_restores_only_its_owned_entry() {
                 .ok()
         );
         assert_eq!(
-            manager.status().unwrap().fields[emp_integration::IMAGE_MCP_FIELD],
+            manager.status().unwrap().fields[emp_codex::configuration::IMAGE_MCP_FIELD],
             original
         );
         assert!(manager.restore().unwrap().ok());
@@ -201,7 +201,7 @@ fn search_feature_toggle_and_restore_round_trips_both_field_shapes() {
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("config.toml");
     fs::write(&config, "model = \"work/gpt-5\"\n").unwrap();
-    let search = emp_integration::search::SearchFeatureManager::new(
+    let search = emp_codex::configuration::search::SearchFeatureManager::new(
         config.clone(),
         directory.path().join("state/search-lease.json"),
     );
@@ -224,8 +224,9 @@ fn search_feature_toggle_and_restore_round_trips_both_field_shapes() {
 #[test]
 fn runtime_records_round_trip_and_offline_snapshots_stay_truthful() {
     let directory = tempfile::tempdir().unwrap();
-    let store =
-        emp_integration::runtime::RuntimeStore::new(directory.path().join("state/runtime.json"));
+    let store = emp_codex::configuration::runtime::RuntimeStore::new(
+        directory.path().join("state/runtime.json"),
+    );
     assert!(store.load().unwrap().is_none());
 
     let record = store
@@ -249,11 +250,11 @@ fn runtime_records_round_trip_and_offline_snapshots_stay_truthful() {
     );
 
     // Offline status never claims a live verification happened.
-    let snapshot = emp_integration::runtime::offline_snapshot(Some(&record), "stale");
+    let snapshot = emp_codex::configuration::runtime::offline_snapshot(Some(&record), "stale");
     assert_eq!(snapshot["state"], "reload_required");
     assert_eq!(snapshot["verified"], false);
     assert_eq!(snapshot["last_known"]["state"], "reload_required");
-    let empty = emp_integration::runtime::offline_snapshot(None, "stale");
+    let empty = emp_codex::configuration::runtime::offline_snapshot(None, "stale");
     assert_eq!(empty["state"], "not_checked");
     assert_eq!(empty["last_known"], serde_json::Value::Null);
 }

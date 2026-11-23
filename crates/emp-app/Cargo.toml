@@ -19,7 +19,6 @@ base64 = "0.22"
 emp-codex = { path = "../emp-codex" }
 emp-domain = { path = "../emp-domain" }
 emp-history = { path = "../emp-history" }
-emp-integration = { path = "../emp-integration" }
 emp-modules = { path = "../emp-modules" }
 emp-protocol = { path = "../emp-protocol" }
 emp-router = { path = "../emp-router" }

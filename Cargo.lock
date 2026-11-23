@@ -811,7 +811,6 @@ dependencies = [
  "emp-codex",
  "emp-domain",
  "emp-history",
- "emp-integration",
  "emp-mod-aggregate",
  "emp-mod-decision",
  "emp-mod-gateway",
@@ -860,6 +859,7 @@ dependencies = [
  "emp-history",
  "emp-state",
  "emp-transport",
+ "getrandom 0.2.17",
  "libc",
  "plist",
  "rcgen",
@@ -872,6 +872,7 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "time",
+ "toml_edit 0.23.10+spec-1.0.0",
  "windows-sys 0.61.2",
  "zstd 0.13.3",
 ]
@@ -907,19 +908,6 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
-]
-
-[[package]]
-name = "emp-integration"
-version = "0.15.7"
-dependencies = [
- "emp-state",
- "getrandom 0.2.17",
- "serde",
- "serde_json",
- "tempfile",
- "time",
- "toml_edit 0.23.10+spec-1.0.0",
 ]
 
 [[package]]

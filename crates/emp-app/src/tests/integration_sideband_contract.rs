@@ -49,11 +49,11 @@ fn startup_migrates_active_v2_native_lease_and_restores_user_sideband() {
         lease["fields"]
             .as_object_mut()
             .expect("lease fields")
-            .remove(emp_integration::REALTIME_SIDEBAND_FIELD);
+            .remove(emp_codex::configuration::REALTIME_SIDEBAND_FIELD);
         lease["fields"]
             .as_object_mut()
             .unwrap()
-            .remove(emp_integration::IMAGE_MCP_FIELD);
+            .remove(emp_codex::configuration::IMAGE_MCP_FIELD);
         std::fs::write(
             lease_path,
             serde_json::to_vec(&lease).expect("legacy lease JSON"),
@@ -67,11 +67,11 @@ fn startup_migrates_active_v2_native_lease_and_restores_user_sideband() {
                 .expect("migrated lease JSON");
         assert_eq!(migrated["version"], 3);
         assert_eq!(
-            migrated["fields"][emp_integration::REALTIME_SIDEBAND_FIELD]["original"],
+            migrated["fields"][emp_codex::configuration::REALTIME_SIDEBAND_FIELD]["original"],
             json!({"present":true,"value":"https://voice.example/v1"})
         );
         assert_eq!(
-            migrated["fields"][emp_integration::REALTIME_SIDEBAND_FIELD]["applied"],
+            migrated["fields"][emp_codex::configuration::REALTIME_SIDEBAND_FIELD]["applied"],
             json!({"present":true,"value":server.state.base_url.as_str()})
         );
         let active = std::fs::read_to_string(manager.config_path()).expect("active config");
@@ -131,7 +131,7 @@ fn startup_activates_a_clean_native_configuration_by_default_and_respects_opt_ou
                     .unwrap()
                     .contains("model_provider = \"emp\"")
             );
-            assert!(status.fields[emp_integration::IMAGE_MCP_FIELD].present);
+            assert!(status.fields[emp_codex::configuration::IMAGE_MCP_FIELD].present);
             let manager = &server.state.backend.integration.manager;
             let path = status.fields["model_catalog_json"].value.as_deref();
             assert!(
@@ -146,7 +146,7 @@ fn startup_activates_a_clean_native_configuration_by_default_and_respects_opt_ou
             lease["fields"]
                 .as_object_mut()
                 .unwrap()
-                .remove(emp_integration::IMAGE_MCP_FIELD);
+                .remove(emp_codex::configuration::IMAGE_MCP_FIELD);
             std::fs::write(manager.lease_path(), serde_json::to_vec(&lease).unwrap()).unwrap();
             crate::services::startup::reconcile(&server.state).unwrap();
             let migrated = manager.status().unwrap();
@@ -155,7 +155,7 @@ fn startup_activates_a_clean_native_configuration_by_default_and_respects_opt_ou
                     .unwrap()
                     .contains("model_provider = \"emp\"")
             );
-            assert!(migrated.fields[emp_integration::IMAGE_MCP_FIELD].present);
+            assert!(migrated.fields[emp_codex::configuration::IMAGE_MCP_FIELD].present);
         }
         server.shutdown().unwrap();
         assert_eq!(

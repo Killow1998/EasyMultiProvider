@@ -13,8 +13,8 @@ use tokio::runtime::Builder as RuntimeBuilder;
 
 use crate::http::auth::BootstrapToken;
 use crate::http::auth::SessionStore;
+use emp_codex::configuration::IntegrationManager;
 use emp_codex::quota_history::QuotaHistoryStore;
-use emp_integration::IntegrationManager;
 use emp_transport::HttpClient;
 use emp_transport::RequestLimits;
 use serde_json::Value;

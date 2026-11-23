@@ -2,7 +2,7 @@ use crate::app::ServerState;
 use crate::services::integration::integration_summary_with_result;
 use crate::services::observation::operation::{OperationObservation, observe};
 use crate::services::runtime::sync_runtime;
-use emp_integration::IntegrationResult;
+use emp_codex::configuration::IntegrationResult;
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -264,8 +264,9 @@ fn execute_inner(
                 .step("rollback_configuration", || manager.restore())
                 .is_ok_and(|result| result.ok())
             {
-                let _ =
-                    emp_integration::local_auth::restore(&state.backend.accounts.native_auth_path);
+                let _ = emp_codex::configuration::local_auth::restore(
+                    &state.backend.accounts.native_auth_path,
+                );
             }
             return unavailable(409);
         }

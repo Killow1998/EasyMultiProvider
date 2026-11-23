@@ -1,8 +1,8 @@
 //! Isolated subscription jobs share the official helper. Imported subscriptions
 //! use the existing account transaction; native replacement checks ownership.
 use crate::app::ServerState;
+use emp_codex::configuration::local_auth;
 use emp_codex::quota::{LoginMethod, SubscriptionLogin};
-use emp_integration::local_auth;
 use serde_json::{Value, json};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};

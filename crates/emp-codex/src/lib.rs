@@ -6,6 +6,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod configuration;
 mod executable_trust;
 pub use executable_trust::PreparedExecutable;
 pub mod history;

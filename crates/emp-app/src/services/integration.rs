@@ -2,13 +2,13 @@ pub(crate) mod commands;
 pub(crate) mod enable;
 pub(crate) mod endpoint;
 mod restore;
-use emp_integration::IntegrationManager;
+use emp_codex::configuration::IntegrationManager;
 pub(crate) use restore::restore_native_configuration;
 use std::sync::atomic::AtomicBool;
 
 use crate::app::ServerState;
 use crate::services::runtime::RuntimeState;
-use emp_integration::{IntegrationResult, IntegrationStatus};
+use emp_codex::configuration::{IntegrationResult, IntegrationStatus};
 use serde_json::Value;
 
 pub(crate) fn integration_summary_with_result(
@@ -240,8 +240,8 @@ fn suppress_unsettled_runtime(
 pub(crate) struct IntegrationState {
     exit_restore: std::sync::Mutex<()>,
     pub(crate) manager: IntegrationManager,
-    pub(crate) search: emp_integration::search::SearchFeatureManager,
-    pub(crate) preferences: emp_integration::preferences::CodexPreferences,
+    pub(crate) search: emp_codex::configuration::search::SearchFeatureManager,
+    pub(crate) preferences: emp_codex::configuration::preferences::CodexPreferences,
     pub(crate) owned: AtomicBool,
     codex_home: std::path::PathBuf,
     history_restore: std::sync::Mutex<Value>,
@@ -265,11 +265,11 @@ impl IntegrationState {
         let history_restore = restore::read_history_restore(&manager, &codex_home);
         Self {
             exit_restore: std::sync::Mutex::new(()),
-            preferences: emp_integration::preferences::CodexPreferences::new(
+            preferences: emp_codex::configuration::preferences::CodexPreferences::new(
                 manager.config_path().to_owned(),
                 manager.lease_path().with_file_name("compaction.json"),
             ),
-            search: emp_integration::search::SearchFeatureManager::new(
+            search: emp_codex::configuration::search::SearchFeatureManager::new(
                 manager.config_path().to_owned(),
                 manager.lease_path().with_file_name("search.json"),
             ),

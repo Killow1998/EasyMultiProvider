@@ -1,5 +1,5 @@
 //! Serialize credential mutations with the integration operation lock; existing logins take precedence.
-use crate::IntegrationError;
+use super::IntegrationError;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};

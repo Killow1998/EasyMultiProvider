@@ -1,5 +1,5 @@
 //! Compare-and-restore ownership of optional Codex preferences.
-use crate::{
+use super::{
     IntegrationError, MAX_CODEX_CONFIG_BYTES, MAX_LEASE_BYTES, absolute, read_text_limited,
 };
 use serde_json::{Value, json};

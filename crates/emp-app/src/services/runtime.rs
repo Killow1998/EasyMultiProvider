@@ -1,8 +1,8 @@
 //! Runtime observations are separate from applied configuration and service health.
 use crate::app::ServerState;
 use crate::services::catalog::client_catalog;
+use emp_codex::configuration::runtime::{RuntimeStore, offline_snapshot};
 use emp_codex::runtime_probe::{RuntimeSyncResult, observe};
-use emp_integration::runtime::{RuntimeStore, offline_snapshot};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;

@@ -79,7 +79,8 @@ pub(super) fn prepare_with_config(
         .project_subscription_credentials(state, &mut config);
     hydrate_provider_keys(&mut config, &state.backend.configuration.vault);
     if let Some(config) = config.as_object_mut() {
-        if emp_integration::local_auth::mode(&state.backend.accounts.native_auth_path) == "api_key"
+        if emp_codex::configuration::local_auth::mode(&state.backend.accounts.native_auth_path)
+            == "api_key"
         {
             let endpoint = config
                 .get("codex_base_url")

@@ -67,7 +67,7 @@ fn loopback_upgrade_preserves_native_settings_and_static_catalogs() {
                 (!dynamic).then_some(catalog.as_str())
             );
             assert_eq!(
-                status.fields[emp_integration::REALTIME_SIDEBAND_FIELD]
+                status.fields[emp_codex::configuration::REALTIME_SIDEBAND_FIELD]
                     .value
                     .as_deref(),
                 Some(if dynamic || owned_sideband {

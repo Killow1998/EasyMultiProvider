@@ -1,5 +1,5 @@
-use crate::IntegrationError;
-use crate::storage::now;
+use super::IntegrationError;
+use super::storage::now;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -64,7 +64,7 @@ impl RuntimeStore {
     }
 
     pub fn load(&self) -> Result<Option<RuntimeRecord>, IntegrationError> {
-        let bytes = match emp_state::read_file_limited(&self.path, crate::MAX_LEASE_BYTES) {
+        let bytes = match emp_state::read_file_limited(&self.path, super::MAX_LEASE_BYTES) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(IntegrationError("runtime recovery record is unreadable")),

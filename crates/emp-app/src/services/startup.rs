@@ -66,7 +66,7 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
             ) || dynamic
                 && lease.fields["openai_base_url"].applied.value.as_deref() == Some(base_url)
                 && (lease.fields["model_catalog_json"].applied.present
-                    || lease.fields[emp_integration::REALTIME_SIDEBAND_FIELD]
+                    || lease.fields[emp_codex::configuration::REALTIME_SIDEBAND_FIELD]
                         .applied
                         .value
                         .as_deref()
@@ -79,7 +79,7 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
             };
             let sideband = (dynamic
                 || is_previous_loopback_url(
-                    lease.fields[emp_integration::REALTIME_SIDEBAND_FIELD]
+                    lease.fields[emp_codex::configuration::REALTIME_SIDEBAND_FIELD]
                         .applied
                         .value
                         .as_deref(),
@@ -98,12 +98,13 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
             }
             mark_pending(state, "emp", "EMP configuration applied")?;
         }
-        let auth = emp_integration::local_auth::read(&state.backend.accounts.native_auth_path)
-            .map_err(|_| ())?
-            .unwrap_or_default();
+        let auth =
+            emp_codex::configuration::local_auth::read(&state.backend.accounts.native_auth_path)
+                .map_err(|_| ())?
+                .unwrap_or_default();
         if (crate::services::integration::enable::image_mcp_required(&auth)
             || result.lease.as_ref().is_some_and(|lease| {
-                lease.fields[emp_integration::IMAGE_MCP_FIELD]
+                lease.fields[emp_codex::configuration::IMAGE_MCP_FIELD]
                     .applied
                     .present
             }))
@@ -139,8 +140,9 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
         integration.owned.store(true, Ordering::Release);
         if super::integration::sync_features(state).is_err() {
             if manager.restore().is_ok_and(|result| result.ok()) {
-                let _ =
-                    emp_integration::local_auth::restore(&state.backend.accounts.native_auth_path);
+                let _ = emp_codex::configuration::local_auth::restore(
+                    &state.backend.accounts.native_auth_path,
+                );
             }
             return Err(());
         }

@@ -1,5 +1,5 @@
 //! Lease the optional image MCP entry without changing the model server.
-use crate::{FieldState, IntegrationError};
+use super::{FieldState, IntegrationError};
 use toml_edit::{DocumentMut, Item, Table};
 
 pub(super) fn state(document: &DocumentMut) -> Result<FieldState, IntegrationError> {
@@ -17,7 +17,7 @@ pub(super) fn state(document: &DocumentMut) -> Result<FieldState, IntegrationErr
     Ok(FieldState::value(encoded.to_string()))
 }
 
-pub(super) fn definition(base_url: &str, settings: &crate::ImageMcpConfig) -> FieldState {
+pub(super) fn definition(base_url: &str, settings: &super::ImageMcpConfig) -> FieldState {
     let mut document = DocumentMut::new();
     let mut server = Table::new();
     server["command"] = toml_edit::value(&settings.command);

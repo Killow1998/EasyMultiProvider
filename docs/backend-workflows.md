@@ -4,19 +4,19 @@
 
 [State lifecycle map: owners, transitions and verification](state-lifecycles.md)
 
-This is the current implementation contract for the eight library crates and
+This is the current implementation contract for the library crates and
 their composition in `emp-app`. It supersedes proposals to add availability
 gates, cooldowns or recovery probes as part of this refactor. The existing UI,
 routes, confirmations, source selection, retries and error contracts remain.
 
-## Ownership of all eight modules
+## Library ownership
 
 | Module | Owns | Application boundary / decision |
 | --- | --- | --- |
 | `emp-domain` | Route identities, provider/model values and capabilities, usage bounds and session metadata | Pure shared facts; retain opaque upstream fields. |
 | `emp-state` | Configuration, vault, file transactions, usage and diagnostic storage | Configuration and account commands own writes; HTTP adapters do not hydrate credentials or coordinate transactions. |
 | `emp-codex` | Concrete Codex history, catalogs, quota helpers and runtime observations | Catalog, account/quota and integration services own the complete user operation. |
-| `emp-integration` | Configuration leases, conflict detection, restoration | Integration commands own apply/restore/search/runtime sequencing; the lease manager retains transactional authority. |
+| `emp-codex::configuration` | Configuration leases, conflict detection, restoration | Integration commands own apply/restore/search/runtime sequencing; the lease manager retains transactional authority. |
 | `emp-history` | History/context preparation and compaction algorithms | Existing request preparation and history services retain ownership; preserve tool pairing and continuation behavior. |
 | `emp-router` | Protocol selection, projection and upstream dispatch | Existing native/external/Claude executors retain retry and outcome decisions. Provider discovery now belongs to the catalog service. |
 | `emp-protocol` | Responses/Chat/Anthropic projection and stream state | Keep the concrete protocol machines; do not impose one universal wire pipeline. |
@@ -132,7 +132,7 @@ flowchart TD
   API --> S[emp-state: configuration / vault]
   API --> D[emp-router: discovery]
   API --> C[emp-codex: quota / runtime]
-  API --> I[emp-integration: leases / restore]
+  API --> I[emp-codex configuration: leases / restore]
   R --> H[emp-history]
   R --> D
   D --> P[emp-protocol]
@@ -161,7 +161,7 @@ flowchart TD
   M --> S[emp-state: configuration / vault / transactions]
   M --> C[emp-codex: catalogs / quota / history access]
   M --> D
-  L --> I[emp-integration: leases / restoration]
+  L --> I[emp-codex configuration: leases / restoration]
   L --> C
   API -. HTTP request ID / actual write .-> J[Existing bounded journal]
   R -. request ID / attempts / upstream outcome .-> J

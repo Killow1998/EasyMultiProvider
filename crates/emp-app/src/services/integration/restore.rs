@@ -1,16 +1,22 @@
 //! Restore this service's configuration before its listener goes away.
 use super::IntegrationState;
 use crate::error::AppError;
-use emp_integration::IntegrationManager;
+use emp_codex::configuration::IntegrationManager;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 pub(crate) fn restore_native_configuration(
     manager: &IntegrationManager,
-    search: &emp_integration::search::SearchFeatureManager,
-    preferences: &emp_integration::preferences::CodexPreferences,
+    search: &emp_codex::configuration::search::SearchFeatureManager,
+    preferences: &emp_codex::configuration::preferences::CodexPreferences,
     home: &std::path::Path,
-) -> Result<(emp_integration::IntegrationResult, serde_json::Value), &'static str> {
+) -> Result<
+    (
+        emp_codex::configuration::IntegrationResult,
+        serde_json::Value,
+    ),
+    &'static str,
+> {
     if manager
         .status()
         .map_err(|_| "integration_status_unavailable")?
@@ -58,7 +64,7 @@ pub(crate) fn restore_native_configuration(
         .restore()
         .map_err(|_| "native_configuration_restore_failed")?;
     if result.ok() {
-        emp_integration::local_auth::restore(&home.join("auth.json"))
+        emp_codex::configuration::local_auth::restore(&home.join("auth.json"))
             .map_err(|_| "native_authentication_restore_failed")?;
     }
     drop(history_lock);
@@ -102,7 +108,7 @@ impl IntegrationState {
     pub(crate) fn restore_native_configuration(
         &self,
         manager: &IntegrationManager,
-    ) -> Result<emp_integration::IntegrationResult, &'static str> {
+    ) -> Result<emp_codex::configuration::IntegrationResult, &'static str> {
         let (result, report) = restore_native_configuration(
             manager,
             &self.search,
@@ -176,7 +182,7 @@ impl IntegrationState {
                 "native_configuration_conflict",
             ));
         }
-        emp_integration::local_auth::restore(&self.codex_home.join("auth.json"))
+        emp_codex::configuration::local_auth::restore(&self.codex_home.join("auth.json"))
             .map_err(|_| AppError::NativeRestoreBlocked("native_authentication_restore_failed"))?;
         search
             .map_err(|_| AppError::NativeRestoreBlocked("search_configuration_restore_failed"))?;

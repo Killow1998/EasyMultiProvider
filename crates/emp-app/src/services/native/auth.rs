@@ -82,7 +82,7 @@ pub(super) fn resolve_headers(
         let document = native_auth_document(&state.backend.accounts.native_auth_path);
         if document
             .as_ref()
-            .is_some_and(emp_integration::local_auth::is_local)
+            .is_some_and(emp_codex::configuration::local_auth::is_local)
         {
             return Err(NativeHttpError::router(
                 503,

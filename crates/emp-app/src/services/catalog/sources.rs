@@ -51,7 +51,7 @@ impl CatalogSources {
         let duplicates = emp_state::duplicate_account_status(native_auth.as_ref(), &credentials);
         let native_is_local_key = native_auth
             .as_ref()
-            .is_some_and(emp_integration::local_auth::is_local);
+            .is_some_and(emp_codex::configuration::local_auth::is_local);
         Self {
             native,
             accounts,

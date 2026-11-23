@@ -1,4 +1,4 @@
-use crate::{FieldState, IMAGE_MCP_FIELD, IntegrationError, LeaseRecord, MANAGED_FIELDS};
+use super::{FieldState, IMAGE_MCP_FIELD, IntegrationError, LeaseRecord, MANAGED_FIELDS};
 use std::collections::BTreeMap;
 
 pub(super) fn states(document: &str) -> Result<BTreeMap<String, FieldState>, IntegrationError> {
@@ -9,7 +9,7 @@ pub(super) fn states(document: &str) -> Result<BTreeMap<String, FieldState>, Int
         .into_iter()
         .map(|name| {
             if name == IMAGE_MCP_FIELD {
-                return crate::image_mcp::state(&parsed).map(|state| (name.to_owned(), state));
+                return super::image_mcp::state(&parsed).map(|state| (name.to_owned(), state));
             }
             let state = match parsed.get(name) {
                 None => FieldState::absent(),
@@ -41,7 +41,7 @@ pub(super) fn set_states(
     for name in MANAGED_FIELDS {
         let state = &desired[name];
         if name == IMAGE_MCP_FIELD {
-            crate::image_mcp::set(&mut parsed, state)?;
+            super::image_mcp::set(&mut parsed, state)?;
             continue;
         }
         if !state.present {

@@ -1,4 +1,4 @@
-use crate::IntegrationError;
+use super::IntegrationError;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn absolute(path: &Path) -> Result<PathBuf, IntegrationError> {

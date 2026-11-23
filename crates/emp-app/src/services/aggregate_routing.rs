@@ -85,7 +85,7 @@ pub(super) fn resolve(
                         .as_str()
                         .filter(|key| !key.is_empty())
                     {
-                        let source = if emp_integration::local_auth::is_local(&auth) {
+                        let source = if emp_codex::configuration::local_auth::is_local(&auth) {
                             Source::LocalNativeApiKey
                         } else {
                             Source::NativeApiKey

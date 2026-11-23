@@ -1,9 +1,9 @@
 //! Offline doctor/restore commands; they never start a server or model request.
 use crate::http::auth::codex_auth_path;
 use crate::services::integration::restore_native_configuration;
-use emp_integration::runtime::{RuntimeStore, offline_snapshot};
-use emp_integration::search::SearchFeatureManager;
-use emp_integration::{IntegrationManager, IntegrationResult, IntegrationStatus};
+use emp_codex::configuration::runtime::{RuntimeStore, offline_snapshot};
+use emp_codex::configuration::search::SearchFeatureManager;
+use emp_codex::configuration::{IntegrationManager, IntegrationResult, IntegrationStatus};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -65,7 +65,7 @@ impl Control {
             let (result, history_restore) = restore_native_configuration(
                 &manager,
                 &search,
-                &emp_integration::preferences::CodexPreferences::new(
+                &emp_codex::configuration::preferences::CodexPreferences::new(
                     manager.config_path().to_owned(),
                     state_dir.join("compaction.json"),
                 ),

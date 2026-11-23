@@ -116,7 +116,7 @@ fn image_turn(edit: bool, sign_in: SignIn) {
                     Some(catalog_path.to_str().unwrap()),
                     true,
                     None,
-                    Some(&emp_integration::ImageMcpConfig {
+                    Some(&emp_codex::configuration::ImageMcpConfig {
                         command: std::env::var("EMP_TEST_EMP_BIN")
                             .expect("select the built EMP binary"),
                         key_file: server

@@ -108,7 +108,7 @@ to implement. File length is a navigation signal, not a measure of module depth.
 | `emp-transport` | HTTP pools, proxy/TLS policy, admission, framing and WebSocket pump | Retain; profile resource ownership before changing execution model |
 | `emp-router` | Protocol selection, projection and upstream execution | Retain; consolidate application attempt orchestration above it |
 | `emp-codex` | Codex catalogs, concrete history access, quota helpers and runtime discovery | Retain concrete Codex integration; reduce application callers' knowledge of its storage details |
-| `emp-integration` | Configuration leases, conflict detection and recovery | Retain transactional ownership |
+| `emp-codex::configuration` | Configuration leases, conflict detection and recovery | Retain transactional ownership |
 | `emp-files` | Private files, atomic writes, file transactions, cross-process locks and Windows ACLs | Independent of other EMP crates; preserve file formats, permissions and lock semantics |
 | `emp-state` | Configuration, vault, usage and diagnostic subsystems | Use `emp-files` for file operations; retain existing root, `filesystem` and `lock` API paths |
 | `emp-updater` | Official release discovery, download, verification, extraction and recoverable installation | Depends only on `emp-files` among EMP crates; preserve release formats, installation layouts and worker protocol |
@@ -961,7 +961,7 @@ These are display fallbacks; selecting the default restores the original setting
 and does not pin either model in `config.toml`. Recheck these two constants when
 updating Codex compatibility. Extraction and consolidation overrides are independent.
 
-External-only onboarding uses `emp-integration::local_auth` under the existing
+External-only onboarding uses `emp_codex::configuration::local_auth` under the existing
 integration operation lock. When `auth.json` is absent, a private ownership
 journal stages an `emp-local-` API credential and publishes it without overwriting
 an existing file. Restore removes only an unchanged, owned credential. Caller
@@ -1036,7 +1036,7 @@ upstream, authentication cancellation/replacement and two isolated EMP instances
 Shadow keeps real source data read-only; its onboarding/LAN entries use the same
 product UI and backend with explicitly synthetic device login and loopback peers.
 
-`emp-integration::preferences::CodexPreferences` owns only async-compaction and
+`emp_codex::configuration::preferences::CodexPreferences` owns only async-compaction and
 the two memory model keys through separate compare-and-restore journals. Writes
 share the integration operation lock; restore and exit retain unrelated TOML,
 comments, thresholds and memory permissions. A prepared write records its prior
@@ -1479,11 +1479,10 @@ plugin bus, universal internal message schema or new product capability.
 | `emp-protocol` | Responses, Chat and Anthropic projections and tool/stream state machines |
 | `emp-transport` | Connections, proxy/TLS, HTTP framing, SSE and WebSocket transport |
 | `emp-history` | History pairing, context budgeting and compaction algorithms |
-| `emp-codex` | Concrete Codex runtime/catalog/history/quota integration |
+| `emp-codex` | Concrete Codex runtime/catalog/history/quota integration; configuration leases, conflict detection and restoration in `configuration` |
 | `emp-state` | Persisted configuration, credentials, accounting and diagnostics storage |
-| `emp-integration` | Codex configuration leases, conflict detection and restoration |
 
-Crate dependencies are acyclic, and none of the eight libraries depends on
+Crate dependencies are acyclic, and none of the libraries depends on
 `emp-app`. `xtask` is build/release tooling, not a runtime crate. The complete
 source dependency graph is defined by the Cargo manifests.
 

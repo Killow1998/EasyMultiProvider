@@ -1,5 +1,5 @@
-use crate::files::{MAX_CODEX_CONFIG_BYTES, MAX_LEASE_BYTES, absolute, read_text_limited};
-use crate::{
+use super::files::{MAX_CODEX_CONFIG_BYTES, MAX_LEASE_BYTES, absolute, read_text_limited};
+use super::{
     FieldRecovery, FieldState, IMAGE_MCP_FIELD, IntegrationError, IntegrationManager, LeaseRecord,
     MANAGED_FIELDS, REALTIME_SIDEBAND_FIELD,
 };

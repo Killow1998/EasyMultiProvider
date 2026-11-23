@@ -1,7 +1,7 @@
-use crate::fields::{conflict_names, relation, set_states, states, validate_value};
-use crate::files::{absolute, atomic_write};
-use crate::storage::random_hex;
-use crate::{
+use super::fields::{conflict_names, relation, set_states, states, validate_value};
+use super::files::{absolute, atomic_write};
+use super::storage::random_hex;
+use super::{
     FieldState, IMAGE_MCP_FIELD, IntegrationError, IntegrationResult, IntegrationStatus,
     LeaseRecord, REALTIME_SIDEBAND_FIELD,
 };
@@ -125,7 +125,7 @@ impl IntegrationManager {
         catalog: Option<&str>,
         service_ready: bool,
         realtime_sideband_base_url: Option<&str>,
-        image_mcp: Option<&crate::ImageMcpConfig>,
+        image_mcp: Option<&super::ImageMcpConfig>,
     ) -> Result<IntegrationResult, IntegrationError> {
         if !service_ready {
             return Err(IntegrationError(
@@ -169,7 +169,7 @@ impl IntegrationManager {
                 IMAGE_MCP_FIELD.to_owned(),
                 image_mcp.map_or_else(
                     || original[IMAGE_MCP_FIELD].clone(),
-                    |settings| crate::image_mcp::definition(base_url, settings),
+                    |settings| super::image_mcp::definition(base_url, settings),
                 ),
             ),
         ]);

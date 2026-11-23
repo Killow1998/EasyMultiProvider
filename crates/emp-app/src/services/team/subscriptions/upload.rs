@@ -31,7 +31,7 @@ fn upload_source(state: &ServerState) -> Result<Upload> {
     let Some(auth) = document else {
         return Ok(Upload::SignIn);
     };
-    if !emp_integration::local_auth::is_local(&auth) {
+    if !emp_codex::configuration::local_auth::is_local(&auth) {
         let Some(mut snapshot) = subscription(&auth).filter(|snapshot| snapshot.expires_at > now)
         else {
             return Ok(Upload::SignIn);
