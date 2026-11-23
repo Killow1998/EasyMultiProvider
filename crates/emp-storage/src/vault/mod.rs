@@ -1,5 +1,9 @@
 //! Vault envelope encoding and decoding: `easy-multi-provider-v1\n` + Fernet.
 
+pub mod fernet;
+mod store;
+pub use store::{MASTER_KEY_ENV, MASTER_KEY_FILE_ENV, VaultStore};
+
 use crate::fernet::{Fernet, FernetError, FernetKey};
 use std::fmt;
 use zeroize::Zeroizing;

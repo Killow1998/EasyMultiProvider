@@ -28,7 +28,7 @@ impl GeminiSignatures {
             let parent = self.path.parent().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "signature path has no parent")
             })?;
-            crate::filesystem::create_private_directory(parent).map_err(io::Error::other)?;
+            emp_files::create_private_directory(parent).map_err(io::Error::other)?;
             let conn = Connection::open(&self.path).map_err(io::Error::other)?;
             #[cfg(unix)]
             {

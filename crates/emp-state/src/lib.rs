@@ -1,14 +1,11 @@
 pub mod accounts;
 pub mod config;
 pub mod discovery_merge;
-pub mod fernet;
 pub mod filesystem;
 pub mod gateway_key;
-pub mod gemini_signatures;
 pub mod migration;
 pub mod model_values;
 pub mod official_registry;
-pub mod vault;
 pub mod web_session;
 
 pub use accounts::{
@@ -32,8 +29,11 @@ pub use emp_files::{
     atomic_write_private_state, create_private_directory, lock, read_file_limited, read_to_limit,
     with_file_transaction, write_new_private_file,
 };
-pub use fernet::{Fernet, FernetError, FernetKey, FernetKeyError};
-pub use filesystem::{MASTER_KEY_ENV, MASTER_KEY_FILE_ENV, VaultStore};
+pub use emp_storage::{
+    Fernet, FernetError, FernetKey, FernetKeyError, MASTER_KEY_ENV, MASTER_KEY_FILE_ENV,
+    VAULT_MAGIC, VaultError, VaultResult, VaultStore, decode_vault, encode_vault, fernet,
+    gemini_signatures, vault,
+};
 pub use migration::{
     DecryptedMigration, ExportGroup, ExportGroups, MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES,
     MIGRATION_ENVELOPE_VERSION, MIGRATION_MAGIC, MIGRATION_SCHEMA, MIGRATION_VERSION,
@@ -50,7 +50,6 @@ pub use model_values::{
     normalize_output_modalities, normalize_reasoning_levels, normalize_supported_protocols,
     output_modalities_known, output_modalities_metadata_source, supported_protocols_known,
 };
-pub use vault::{VAULT_MAGIC, VaultError, VaultResult, decode_vault, encode_vault};
 pub use web_session::{
     WEB_SESSION_LIFETIME_SECONDS, WEB_SESSION_TOKEN_BYTES, WEB_SESSION_TOKEN_LENGTH, WebSession,
     WebSessionError, load_or_create_web_session, web_session_path,

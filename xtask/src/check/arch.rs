@@ -30,6 +30,8 @@ const NORMAL_BUILD: &[(&str, &str)] = &[
     ("emp-state", "emp-core"),
     ("emp-state", "emp-files"),
     ("emp-state", "emp-modules"),
+    ("emp-state", "emp-storage"),
+    ("emp-storage", "emp-files"),
     ("emp-updater", "emp-files"),
     ("xtask", "emp-modules"),
     ("xtask", "emp-updater"),
@@ -60,7 +62,7 @@ const FORBIDDEN: &[(&str, &str, &str)] = &[
 ];
 
 /// Forbidden paths that still exist until the named PLAN step removes them.
-const TRANSITIONAL: &[(&str, &str, &str)] = &[];
+const TRANSITIONAL: &[(&str, &str, &str)] = &[("emp-router", "emp-storage", "C7")];
 
 pub(super) fn check(root: &Path, errors: &mut Vec<String>) -> Result {
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))

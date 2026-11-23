@@ -1012,7 +1012,7 @@ dependencies = [
  "emp-core",
  "emp-files",
  "emp-modules",
- "fernet",
+ "emp-storage",
  "getrandom 0.2.17",
  "libc",
  "num-bigint",
@@ -1027,6 +1027,21 @@ dependencies = [
  "tempfile",
  "time",
  "url",
+ "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
+name = "emp-storage"
+version = "0.15.4"
+dependencies = [
+ "base64 0.22.1",
+ "emp-files",
+ "fernet",
+ "libc",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
  "windows-sys 0.61.2",
  "zeroize",
 ]

@@ -1,7 +1,7 @@
-use emp_state::{
-    FileTransaction, FilesystemError, MASTER_KEY_ENV, MASTER_KEY_FILE_ENV,
-    MAX_TRANSACTION_FILE_BYTES, VAULT_MAGIC, VaultStore, with_file_transaction,
+use emp_files::{
+    FileTransaction, FilesystemError, MAX_TRANSACTION_FILE_BYTES, with_file_transaction,
 };
+use emp_storage::{MASTER_KEY_ENV, MASTER_KEY_FILE_ENV, VAULT_MAGIC, VaultStore};
 use serde_json::json;
 use std::fs;
 use std::sync::Mutex;
