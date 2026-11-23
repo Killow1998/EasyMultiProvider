@@ -1,7 +1,9 @@
 use super::raw_head;
 use crate::api::realtime::RealtimeError;
 use crate::app::ServerState;
-use crate::http::response::{SECURITY_HEADERS, json_error_body, response, status_text};
+use crate::http::response::{
+    SECURITY_HEADERS, json_error_body, response_with_headers, status_text,
+};
 use crate::server::http::body::BodyError;
 use crate::services::error_presentation::ErrorPresentation;
 use axum::{
@@ -29,8 +31,8 @@ pub(crate) enum EntryError {
 pub(crate) struct HttpReply {
     status: u16,
     content_type: &'static str,
-    body: Vec<u8>,
-    extra_header: Option<(&'static str, Cow<'static, str>)>,
+    body: Bytes,
+    extra_headers: Vec<(&'static str, Cow<'static, str>)>,
 }
 
 pub(crate) type JsonReply = HttpReply;
@@ -72,12 +74,12 @@ pub(super) async fn present_entry_errors(
 }
 
 impl HttpReply {
-    pub(crate) fn new(status: u16, body: Vec<u8>) -> Self {
+    pub(crate) fn new(status: u16, body: impl Into<Bytes>) -> Self {
         Self {
             status,
             content_type: "application/json",
-            body,
-            extra_header: None,
+            body: body.into(),
+            extra_headers: Vec::new(),
         }
     }
 
@@ -90,25 +92,23 @@ impl HttpReply {
         name: &'static str,
         value: impl Into<Cow<'static, str>>,
     ) -> Self {
-        self.extra_header = Some((name, value.into()));
+        self.extra_headers.push((name, value.into()));
         self
     }
 
-    pub(super) fn with_content_type(mut self, content_type: &'static str) -> Self {
+    pub(crate) fn with_content_type(mut self, content_type: &'static str) -> Self {
         self.content_type = content_type;
         self
     }
 
     pub(crate) fn wire_response(&self) -> Vec<u8> {
-        let header = self
-            .extra_header
-            .as_ref()
-            .map(|(name, value)| (*name, value.as_ref()));
-        response(
+        response_with_headers(
             &format!("HTTP/1.1 {} {}", self.status, status_text(self.status)),
             self.content_type,
             &self.body,
-            header.as_slice(),
+            self.extra_headers
+                .iter()
+                .map(|(name, value)| (*name, value.as_ref())),
         )
     }
 }
@@ -132,7 +132,7 @@ impl IntoResponse for HttpReply {
             let (name, value) = line.split_once(": ").expect("security header");
             builder = builder.header(name, value);
         }
-        if let Some((name, value)) = self.extra_header {
+        for (name, value) in self.extra_headers {
             builder = builder.header(name, value.as_ref());
         }
         builder

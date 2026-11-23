@@ -6,55 +6,21 @@ use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::request::RequestMethod;
 use crate::http::request::percent_decode;
-use crate::http::response::health_response;
 use crate::http::response::json_error_response;
 use crate::http::response::not_found_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
-use crate::server::http::management::{ManagementSession, exchange, page_origin};
+use crate::server::http::management::{ManagementSession, exchange};
 use crate::server::http::modules::ModulePanel;
 use crate::server::http::proxy::require_model_catalog;
 use crate::server::http::settings::SettingsRead;
-use crate::server::http::{inspection, team};
+use crate::server::http::{inspection, pages, team};
 use crate::services::accounts::delete_account_state;
-use crate::web::ui_response;
 
 pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f64) -> Vec<u8> {
     let path = request.raw_path();
-    if request.method == RequestMethod::Get
-        && (path.starts_with("/guide/") || path.starts_with("/assets/tutorial-"))
-    {
-        if let Err(error) = page_origin(request, state.port) {
-            return error.wire_response();
-        }
-        return crate::services::guide_assets::asset_response(path)
-            .unwrap_or_else(not_found_response);
-    }
-    if request.method == RequestMethod::Get
-        && matches!(path, "/assets/app-icon.png" | "/assets/app-icon-source.png")
-    {
-        if let Err(error) = page_origin(request, state.port) {
-            return error.wire_response();
-        }
-        let icon = state.backend.app_icon.snapshot();
-        return response(
-            "HTTP/1.1 200 OK",
-            "image/png",
-            if path.ends_with("-source.png") {
-                &icon.source_png
-            } else {
-                &icon.png
-            },
-            &[("Cache-Control", "no-cache")],
-        );
-    }
-    if request.method == RequestMethod::Get
-        && let Some(bytes) = crate::web::asset_response(path)
-    {
-        return match page_origin(request, state.port) {
-            Ok(()) => bytes,
-            Err(error) => error.wire_response(),
-        };
+    if let Some(reply) = pages::legacy_reply(request, state) {
+        return reply.wire_response();
     }
     if request.method == RequestMethod::Get
         && let Some(panel) = ModulePanel::for_path(path)
@@ -73,19 +39,6 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             Err(error) => error.wire_response(),
         };
     }
-    if path == "/healthz" {
-        if let Err(error) = page_origin(request, state.port) {
-            return error.wire_response();
-        }
-        return health_response();
-    }
-    if path == "/" || path == "/index.html" {
-        if let Err(error) = page_origin(request, state.port) {
-            return error.wire_response();
-        }
-        return ui_response();
-    }
-
     if request.method == RequestMethod::Post && path == "/api/session" {
         return match exchange(request, state, now) {
             Ok(reply) => reply.wire_response(),

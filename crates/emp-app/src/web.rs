@@ -1,9 +1,9 @@
 use crate::http::auth::CLEAR_LEGACY_SESSION_COOKIE;
-use crate::http::response::response;
+use crate::server::http::error::HttpReply;
 
 pub const WEB_INDEX_BYTES: &[u8] = include_bytes!("../web/index.html");
 
-pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
+pub(crate) fn asset_reply(path: &str) -> Option<HttpReply> {
     let bytes: &[u8] = match path {
         "/assets/i18n.js" => include_bytes!("../web/i18n.js"),
         "/assets/copy-core.js" => include_bytes!("../web/copy-core.js"),
@@ -84,37 +84,32 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/presentation.js" => include_bytes!("../web/presentation.js"),
         _ => return None,
     };
-    Some(response(
-        "HTTP/1.1 200 OK",
-        if path.ends_with(".css") {
-            "text/css; charset=utf-8"
-        } else if path.ends_with(".png") {
-            "image/png"
-        } else if path.ends_with(".svg") {
-            "image/svg+xml"
-        } else if path.ends_with(".gif") {
-            "image/gif"
-        } else {
-            "text/javascript; charset=utf-8"
-        },
-        bytes,
-        &[("Cache-Control", "no-store")],
-    ))
+    let content_type = if path.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if path.ends_with(".gif") {
+        "image/gif"
+    } else {
+        "text/javascript; charset=utf-8"
+    };
+    Some(
+        HttpReply::new(200, bytes)
+            .with_content_type(content_type)
+            .with_header("Cache-Control", "no-store"),
+    )
 }
 
 /// Serve secret-free UI without authentication; its script exchanges a one-use bootstrap
 /// token for a session in origin-scoped storage, and responses expire legacy cookies.
-pub(crate) fn ui_response() -> Vec<u8> {
-    response(
-        "HTTP/1.1 200 OK",
-        "text/html; charset=utf-8",
-        WEB_INDEX_BYTES,
-        &[
-            ("Cache-Control", "no-store"),
-            ("Referrer-Policy", "no-referrer"),
-            ("Set-Cookie", CLEAR_LEGACY_SESSION_COOKIE),
-        ],
-    )
+pub(crate) fn ui_reply() -> HttpReply {
+    HttpReply::new(200, WEB_INDEX_BYTES)
+        .with_content_type("text/html; charset=utf-8")
+        .with_header("Cache-Control", "no-store")
+        .with_header("Referrer-Policy", "no-referrer")
+        .with_header("Set-Cookie", CLEAR_LEGACY_SESSION_COOKIE)
 }
 
 pub(crate) const VISION_TEST_IMAGE_BYTES: &[u8] = include_bytes!("../web/vision-test-icon.png");

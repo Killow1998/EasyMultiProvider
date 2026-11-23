@@ -161,6 +161,7 @@ pub(crate) async fn serve_candidate(
             .merge(http::modules::routes())
             .merge(http::gateway::routes())
             .merge(http::inspection::routes())
+            .merge(http::pages::routes())
             .merge(http::team::routes()),
         state.clone(),
     );

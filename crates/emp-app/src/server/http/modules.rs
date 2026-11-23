@@ -67,9 +67,14 @@ impl FromRequestParts<Arc<ServerState>> for ModulePanel {
 }
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
-    Router::new()
-        .route("/api/modules", get(read))
-        .route("/assets/{asset}", get(read_panel))
+    let mut router = Router::new().route("/api/modules", get(read));
+    for module in Module::ALL {
+        router = router.route(
+            &format!("/assets/module-{}.js", module.id()),
+            get(read_panel),
+        );
+    }
+    router
 }
 
 async fn read(

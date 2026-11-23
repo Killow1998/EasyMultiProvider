@@ -2,8 +2,8 @@ use super::{
     ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
     head::GuardedHead,
     http::{
-        accounts, catalog, error::EntryWire, inspection, modules::ModulePanel,
-        proxy::RequestAccess, settings, team, usage,
+        accounts, catalog, error::EntryWire, inspection, pages, proxy::RequestAccess, settings,
+        team, usage,
     },
     run_blocking,
 };
@@ -129,6 +129,7 @@ pub(super) async fn drive_candidate(
     } else if settings::matches(request)
         || catalog::matches(request)
         || module_or_update_read(request)
+        || pages::matches(request)
         || team::matches(request)
         || (request.method == RequestMethod::Get
             && inspection::read_handler(request.raw_path()).is_some())
@@ -338,6 +339,5 @@ fn module_or_update_read(request: crate::http::request::Request<'_>) -> bool {
     let path = request.raw_path();
     request.method == RequestMethod::Get
         && (matches!(path, "/api/updates" | "/api/modules")
-            || GatewayRead::for_path(path).is_some()
-            || ModulePanel::for_path(path).is_some())
+            || GatewayRead::for_path(path).is_some())
 }

@@ -425,6 +425,252 @@ fn install_panel_fixture(
     revision
 }
 
+#[test]
+fn pages_and_health_match_legacy_wire() {
+    Fixture::new().run_candidate(async |fixture, address| {
+        let port = fixture.port();
+        let foreign = ["Origin: https://foreign.invalid"];
+        for (path, content_type, body, error) in [
+            (
+                "/",
+                "text/html; charset=utf-8",
+                crate::WEB_INDEX_BYTES,
+                "cross-origin Web UI request rejected",
+            ),
+            (
+                "/index.html?bootstrap=fixture",
+                "text/html; charset=utf-8",
+                crate::WEB_INDEX_BYTES,
+                "cross-origin Web UI request rejected",
+            ),
+            (
+                "/healthz",
+                "application/json",
+                b"{\"status\":\"ok\"}".as_slice(),
+                "cross-origin health request rejected",
+            ),
+        ] {
+            for method in ["GET", "HEAD"] {
+                let reply = fixture
+                    .parity(
+                        address,
+                        &request(port, method, path, &["Accept: text/event-stream"], b""),
+                        200,
+                    )
+                    .await;
+                let (head, received) = page_reply_parts(&reply, content_type, "no-store");
+                assert!(received == body, "{method} {path} body changed");
+                if content_type == "text/html; charset=utf-8" {
+                    assert!(head.contains("\r\nReferrer-Policy: no-referrer\r\n"));
+                    assert!(head.contains(&format!(
+                        "\r\nSet-Cookie: {}\r\n",
+                        crate::http::auth::CLEAR_LEGACY_SESSION_COOKIE,
+                    )));
+                }
+                let denied = fixture
+                    .parity(address, &request(port, method, path, &foreign, b""), 403)
+                    .await;
+                assert_eq!(json_body(&denied)["error"]["message"], error);
+            }
+        }
+    });
+}
+
+fn page_reply_parts<'a>(reply: &'a [u8], content_type: &str, cache: &str) -> (&'a str, &'a [u8]) {
+    let offset = reply
+        .windows(4)
+        .position(|bytes| bytes == b"\r\n\r\n")
+        .unwrap()
+        + 4;
+    let (head, body) = reply.split_at(offset);
+    let head = str::from_utf8(head).unwrap();
+    assert!(head.contains(&format!("\r\nContent-Type: {content_type}\r\n")));
+    assert!(head.contains(&format!("\r\nContent-Length: {}\r\n", body.len())));
+    assert!(head.contains(&format!("\r\nCache-Control: {cache}\r\n")));
+    assert!(head.contains("\r\nX-Frame-Options: DENY\r\n"));
+    assert!(head.contains("\r\nContent-Security-Policy: frame-ancestors 'none'\r\n"));
+    assert!(head.contains("\r\nX-Content-Type-Options: nosniff\r\n"));
+    (head, body)
+}
+
+#[test]
+fn guides_and_assets_match_legacy_wire() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let directory = tempfile::tempdir().unwrap();
+    let state = directory.path().join("state");
+    std::fs::create_dir(&state).unwrap();
+    let icon = crate::services::app_icon::DEFAULT_PNG;
+    let source_icon =
+        include_bytes!("../../../../../assets/branding/native/easy-multi-provider-tray.png")
+            .as_slice();
+    std::fs::write(
+        state.join("appearance.json"),
+        json!({"preset":"custom","monochrome":false,
+            "png":STANDARD.encode(icon),"original_png":STANDARD.encode(source_icon)})
+        .to_string(),
+    )
+    .unwrap();
+    Fixture::with_directory(directory).run_candidate(async |fixture, address| {
+        let port = fixture.port();
+        let same_origin = format!("Origin: http://localhost:{port}");
+        let foreign = ["Host: foreign.invalid"];
+        let gif =
+            include_bytes!("../../../../../docs/assets/tutorials/00-native-context.gif").as_slice();
+        for (path, content_type, cache, body, denied_message) in [
+            (
+                "/guide/README.zh-CN.md",
+                "text/html; charset=utf-8",
+                "no-store",
+                None,
+                "cross-origin guide request rejected",
+            ),
+            (
+                "/guide/docs/assets/tutorials/00-native-context.gif",
+                "image/gif",
+                "no-store",
+                Some(gif),
+                "cross-origin guide request rejected",
+            ),
+            (
+                "/assets/tutorial-00-native-context.gif",
+                "image/gif",
+                "no-store",
+                Some(gif),
+                "cross-origin guide request rejected",
+            ),
+            (
+                "/assets/guide.css",
+                "text/css; charset=utf-8",
+                "no-store",
+                Some(include_bytes!("../../../web/guide.css").as_slice()),
+                "cross-origin Web UI request rejected",
+            ),
+            (
+                "/assets/i18n.js?v=1",
+                "text/javascript; charset=utf-8",
+                "no-store",
+                Some(include_bytes!("../../../web/i18n.js").as_slice()),
+                "cross-origin Web UI request rejected",
+            ),
+            (
+                "/assets/app-icon.png?v=1",
+                "image/png",
+                "no-cache",
+                Some(icon),
+                "cross-origin Web UI request rejected",
+            ),
+            (
+                "/assets/app-icon-source.png?v=1",
+                "image/png",
+                "no-cache",
+                Some(source_icon),
+                "cross-origin Web UI request rejected",
+            ),
+        ] {
+            let reply = fixture
+                .parity(
+                    address,
+                    &request(port, "GET", path, &[&same_origin], b""),
+                    200,
+                )
+                .await;
+            let (_, received) = page_reply_parts(&reply, content_type, cache);
+            if let Some(body) = body {
+                assert!(received == body, "{path} body changed");
+            } else {
+                let html = str::from_utf8(received).unwrap();
+                assert!(html.starts_with("<!doctype html><html lang=\"zh-CN\">"));
+                assert!(html.contains("href=\"/assets/guide.css\""));
+            }
+            let denied = fixture
+                .parity(address, &request(port, "GET", path, &foreign, b""), 403)
+                .await;
+            assert_eq!(json_body(&denied)["error"]["message"], denied_message);
+            fixture
+                .parity(address, &request(port, "HEAD", path, &[], b""), 404)
+                .await;
+        }
+    });
+}
+
+#[test]
+fn page_and_asset_misses_keep_legacy_status_and_origin_order() {
+    Fixture::new().run_candidate(async |fixture, address| {
+        let port = fixture.port();
+        let foreign = ["Origin: https://foreign.invalid"];
+        for (path, foreign_status) in [
+            ("/index.htm", 404),
+            ("/healthz/", 404),
+            ("/guide", 404),
+            ("/guide/", 403),
+            ("/guide/README%2Emd", 403),
+            ("/guide/missing.md", 403),
+            ("/assets", 404),
+            ("/assets/", 404),
+            ("/assets/unknown/missing.js", 404),
+            ("/assets/app-icon-missing.png", 404),
+            ("/assets/tutorial-missing.gif", 403),
+            ("/assets/module-unknown.js", 404),
+        ] {
+            let not_found = fixture
+                .parity(address, &request(port, "GET", path, &[], b""), 404)
+                .await;
+            assert_eq!(json_body(&not_found)["error"]["message"], "not found");
+            fixture
+                .parity(
+                    address,
+                    &request(port, "GET", path, &foreign, b""),
+                    foreign_status,
+                )
+                .await;
+        }
+        for method in ["POST", "DELETE"] {
+            for path in ["/", "/index.html", "/healthz"] {
+                fixture
+                    .parity(address, &request(port, method, path, &[], b""), 200)
+                    .await;
+                fixture
+                    .parity(address, &request(port, method, path, &foreign, b""), 403)
+                    .await;
+            }
+            for path in ["/unregistered", "/guide/README.md", "/assets/app-icon.png"] {
+                fixture
+                    .parity(address, &request(port, method, path, &[], b""), 404)
+                    .await;
+            }
+        }
+        for method in ["PUT", "OPTIONS"] {
+            for path in ["/", "/unregistered"] {
+                fixture
+                    .parity(address, &request(port, method, path, &[], b""), 400)
+                    .await;
+            }
+        }
+        fixture
+            .parity(
+                address,
+                &request(port, "HEAD", "/unregistered", &[], b""),
+                404,
+            )
+            .await;
+        fixture
+            .parity(
+                address,
+                &request(port, "GET", "/api/unregistered", &[], b""),
+                401,
+            )
+            .await;
+        fixture
+            .parity(
+                address,
+                &request(port, "GET", "/api/unregistered", &[&fixture.session()], b""),
+                404,
+            )
+            .await;
+    });
+}
+
 #[cfg(unix)]
 #[test]
 fn module_panel_matches_legacy_wire_for_origin_and_revision() {

@@ -1,23 +1,19 @@
-use crate::http::response::response;
+use crate::server::http::error::HttpReply;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
 use std::collections::BTreeMap;
 use url::Url;
 
-pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
+pub(crate) fn asset_reply(path: &str) -> Option<HttpReply> {
     let path = if let Some(gif) = path.strip_prefix("/assets/tutorial-") {
         format!("docs/assets/tutorials/{gif}")
     } else {
         path.strip_prefix("/guide/")?.to_owned()
     };
-    Some(match Resource::find(&path)? {
+    let reply = match Resource::find(&path)? {
         Resource::Markdown(bytes) => render_doc(&path, bytes),
-        Resource::Gif(bytes) => response(
-            "HTTP/1.1 200 OK",
-            "image/gif",
-            bytes,
-            &[("Cache-Control", "no-store")],
-        ),
-    })
+        Resource::Gif(bytes) => HttpReply::new(200, bytes).with_content_type("image/gif"),
+    };
+    Some(reply.with_header("Cache-Control", "no-store"))
 }
 
 enum Resource {
@@ -88,7 +84,7 @@ impl Resource {
     }
 }
 
-fn render_doc(path: &str, bytes: &[u8]) -> Vec<u8> {
+fn render_doc(path: &str, bytes: &[u8]) -> HttpReply {
     let base = Url::parse(&format!(
         "https://github.com/Killow1998/EasyMultiProvider/blob/main/{path}"
     ))
@@ -170,12 +166,7 @@ fn render_doc(path: &str, bytes: &[u8]) -> Vec<u8> {
     }
     html::push_html(&mut page, events.into_iter());
     page.push_str("</main></html>");
-    response(
-        "HTTP/1.1 200 OK",
-        "text/html; charset=utf-8",
-        page.as_bytes(),
-        &[("Cache-Control", "no-store")],
-    )
+    HttpReply::new(200, page.into_bytes()).with_content_type("text/html; charset=utf-8")
 }
 
 fn doc_link(base: &Url, target: &str, image: bool) -> String {

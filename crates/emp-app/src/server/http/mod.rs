@@ -6,6 +6,7 @@ pub(super) mod gateway;
 pub(crate) mod inspection;
 pub(crate) mod management;
 pub(crate) mod modules;
+pub(crate) mod pages;
 pub(crate) mod proxy;
 pub(crate) mod settings;
 pub(crate) mod team;

@@ -13,6 +13,15 @@ pub(crate) fn response(
     body: &[u8],
     headers: &[(&str, &str)],
 ) -> Vec<u8> {
+    response_with_headers(status_line, content_type, body, headers.iter().copied())
+}
+
+pub(crate) fn response_with_headers<'a>(
+    status_line: &str,
+    content_type: &str,
+    body: &[u8],
+    headers: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Vec<u8> {
     let mut response = Vec::with_capacity(body.len() + 256);
     let _ = write!(
         response,
@@ -39,15 +48,6 @@ pub(crate) fn response(
     response.extend_from_slice(b"Connection: close\r\n\r\n");
     response.extend_from_slice(body);
     response
-}
-
-pub(crate) fn health_response() -> Vec<u8> {
-    response(
-        "HTTP/1.1 200 OK",
-        "application/json",
-        HEALTH_JSON_BYTES,
-        &[],
-    )
 }
 
 pub(crate) fn not_found_response() -> Vec<u8> {

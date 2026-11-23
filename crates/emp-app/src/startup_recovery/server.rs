@@ -117,8 +117,8 @@ pub(super) fn serve(
                 "/assets/i18n.js" | "/assets/copy-recovery.js"
             )
         {
-            if let Some(asset) = crate::web::asset_response(request.target) {
-                let _ = stream.write_all(&asset);
+            if let Some(asset) = crate::web::asset_reply(request.target) {
+                let _ = stream.write_all(&asset.wire_response());
             }
             continue;
         }
