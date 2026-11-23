@@ -335,6 +335,120 @@ fn native_response_passes_through_unknown_fields_and_model() {
 }
 
 #[test]
+fn native_and_imported_subscription_routes_keep_credentials_and_catalogs_separate() {
+    let upstream = Upstream::start();
+    let workspace = Workspace::new();
+    workspace.write_config(json!({
+        "codex_base_url": upstream.base_url(), "providers": [], "models": [],
+        "account_store_path": workspace.root.join("accounts"),
+    }));
+    crate::support::write_file(
+        &workspace.root.join("native.json"),
+        &json!({"models": [{
+            "slug": "subscription-model", "display_name": "Subscription fixture",
+            "supported_in_api": true, "visibility": "list", "context_window": 256000,
+        }]})
+        .to_string(),
+    );
+    let emp = workspace.start_without_path_cli();
+    let catalog = emp.codex("GET", "/v1/models?client_version=0.156.1", None);
+    assert_eq!(catalog.status, 200, "{}", catalog.text());
+    let before = catalog.json();
+    let before = before["models"].as_array().expect("native catalog");
+    assert!(
+        before
+            .iter()
+            .any(|model| model["slug"] == "subscription-model")
+    );
+    assert!(
+        !before
+            .iter()
+            .any(|model| model["slug"] == "imported/subscription-model")
+    );
+
+    let imported = emp.post(
+        "/api/accounts/import",
+        &json!({
+            "id": "imported-fixture", "name": "imported", "prefix": "imported",
+            "auth_json": {"tokens": {
+                "access_token": "fixture-imported-token", "account_id": "fixture-imported-account",
+            }},
+        }),
+    );
+    assert_eq!(imported.status, 200, "{}", imported.text());
+    crate::support::write_file(
+        &workspace.root.join("accounts/imported-fixture/models_cache.json"),
+        &json!({
+            "base_url": upstream.base_url(),
+            "account_owner": "sha256:41e0194aa21b1ac7527d6356ca71235ed6af0c6d4f813ed8d160ddd6f92cfc96",
+            "models": [{"slug": "subscription-model", "display_name": "Subscription fixture",
+                "supported_in_api": true, "visibility": "list", "context_window": 256000}],
+        }).to_string(),
+    );
+    let catalog = emp.codex("GET", "/v1/models?client_version=0.156.1", None);
+    assert_eq!(catalog.status, 200, "{}", catalog.text());
+    let after = catalog.json();
+    let after = after["models"].as_array().expect("merged catalog");
+    for slug in ["subscription-model", "imported/subscription-model"] {
+        assert!(
+            after
+                .iter()
+                .any(|model| model["slug"] == slug && model["visibility"] == "list"),
+            "{after:?}"
+        );
+    }
+    let listed = emp.codex("GET", "/v1/models", None);
+    assert_eq!(listed.status, 200, "{}", listed.text());
+    let listed = listed.json();
+    for id in ["subscription-model", "imported/subscription-model"] {
+        assert!(
+            listed["data"]
+                .as_array()
+                .expect("visible model list")
+                .iter()
+                .any(|model| model["id"] == id),
+            "{listed}"
+        );
+    }
+
+    for (model, token, account) in [
+        ("subscription-model", NATIVE_TOKEN, "fixture-account"),
+        (
+            "imported/subscription-model",
+            "fixture-imported-token",
+            "fixture-imported-account",
+        ),
+        ("subscription-model", NATIVE_TOKEN, "fixture-account"),
+    ] {
+        let expected = json!({
+            "id": "resp_subscription", "object": "response", "status": "completed",
+            "model": "subscription-model", "output": [{
+                "id": "msg_subscription", "type": "message", "role": "assistant",
+                "status": "completed", "content": [{
+                    "type": "output_text", "text": "Subscription answer", "annotations": [],
+                }],
+            }],
+            "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+            "future_subscription_field": {"kept": true},
+        });
+        upstream.reply_json(&expected);
+        let response = emp.responses(&json!({"model": model, "input": "hello"}));
+        assert_eq!(response.status, 200, "{model}: {}", response.text());
+        assert_eq!(response.json(), expected, "{model}");
+        let request = upstream.next_forwarded();
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/v1/responses");
+        assert_eq!(request.headers["authorization"], format!("Bearer {token}"));
+        assert_eq!(request.headers["chatgpt-account-id"], account);
+        assert_eq!(
+            request.body.expect("native request JSON")["model"],
+            "subscription-model"
+        );
+        upstream.assert_idle();
+    }
+}
+
+#[test]
 fn upstream_503_is_visible_once_with_normalized_retry_advice() {
     let upstream = Upstream::start();
     let workspace = Workspace::with_routes(&upstream);

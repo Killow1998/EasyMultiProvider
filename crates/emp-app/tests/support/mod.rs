@@ -6,14 +6,22 @@ use std::path::Path;
 use std::time::Duration;
 
 mod http;
+#[cfg(target_os = "linux")]
+mod https;
 mod process;
 mod upstream;
+mod websocket;
+
+#[cfg(target_os = "linux")]
+#[allow(unused_imports)]
+pub use https::HttpsProxy;
 
 #[allow(unused_imports)]
 pub use self::{
-    http::{Response, http},
+    http::{Response, SseClient, http},
     process::{Emp, Workspace, emp_command},
     upstream::{Upstream, UpstreamRequest},
+    websocket::{WebSocket, WebSocketUpstream},
 };
 
 /// Synthetic Codex login token; `/v1/*` callers present it as a bearer token.

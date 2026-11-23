@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -15,7 +15,6 @@ pub struct UpstreamRequest {
     pub method: String,
     pub path: String,
     pub headers: BTreeMap<String, String>,
-    /// Parsed JSON body; `None` for empty or content-encoded (compressed) bodies.
     pub body: Option<Value>,
 }
 
@@ -25,9 +24,39 @@ struct Reply {
     content_type: String,
     body: Vec<u8>,
     headers: Vec<(String, String)>,
+    gate: Option<Arc<GatedReply>>,
+}
+
+struct GatedReply {
+    tail: Option<Vec<u8>>,
+    released: Mutex<Receiver<()>>,
+    closed: Sender<()>,
+}
+
+pub struct StreamGate {
+    release: Sender<()>,
+    closed: Receiver<()>,
+}
+
+impl StreamGate {
+    pub fn finish(&self) {
+        self.release.send(()).expect("release upstream tail");
+    }
+
+    pub fn assert_closed(&self) {
+        self.closed
+            .recv_timeout(Duration::from_secs(5))
+            .expect("EMP must close the upstream while its tail is still gated");
+    }
 }
 
 /// Loopback provider that answers every request with the configured reply.
+impl UpstreamRequest {
+    fn is_catalog_refresh(&self) -> bool {
+        self.method == "GET" && self.path.starts_with("/v1/models")
+    }
+}
+
 pub struct Upstream {
     port: u16,
     reply: Arc<Mutex<Reply>>,
@@ -43,6 +72,7 @@ impl Upstream {
             content_type: "application/json".into(),
             body: b"{}".to_vec(),
             headers: Vec::new(),
+            gate: None,
         }));
         let (sender, requests) = mpsc::channel();
         let shared = Arc::clone(&reply);
@@ -89,7 +119,20 @@ impl Upstream {
                 .iter()
                 .map(|(name, value)| ((*name).into(), (*value).into()))
                 .collect(),
+            gate: None,
         };
+    }
+
+    pub fn gate_stream(&self, first: String, tail: Option<String>) -> StreamGate {
+        self.configure(200, "text/event-stream", first);
+        let (release, released) = mpsc::channel();
+        let (closed_sender, closed) = mpsc::channel();
+        self.reply.lock().expect("reply").gate = Some(Arc::new(GatedReply {
+            tail: tail.map(String::into_bytes),
+            released: Mutex::new(released),
+            closed: closed_sender,
+        }));
+        StreamGate { release, closed }
     }
 
     pub fn reply_json(&self, value: &Value) {
@@ -112,34 +155,63 @@ impl Upstream {
             .expect("EMP forwarded a request upstream")
     }
 
-    /// No further request arrived (e.g. no silent retry after a failure).
+    /// Next request other than EMP's background native catalog refresh.
+    #[allow(dead_code)]
+    pub fn next_forwarded(&self) -> UpstreamRequest {
+        loop {
+            let request = self.next_request();
+            if !request.is_catalog_refresh() {
+                return request;
+            }
+        }
+    }
+
+    /// No further forwarded request arrived (e.g. no silent retry after a failure).
     pub fn assert_idle(&self) {
-        match self.requests.recv_timeout(Duration::from_millis(100)) {
-            Err(RecvTimeoutError::Timeout) => {}
-            Ok(request) => panic!("unexpected upstream request: {request:?}"),
-            Err(RecvTimeoutError::Disconnected) => panic!("upstream stopped"),
+        loop {
+            match self.requests.recv_timeout(Duration::from_millis(100)) {
+                Err(RecvTimeoutError::Timeout) => return,
+                Ok(request) if request.is_catalog_refresh() => {}
+                Ok(request) => panic!("unexpected upstream request: {request:?}"),
+                Err(RecvTimeoutError::Disconnected) => panic!("upstream stopped"),
+            }
         }
     }
 }
 
-fn serve_upstream(mut stream: TcpStream, reply: &Reply, sender: &Sender<UpstreamRequest>) {
-    let (request_line, headers, body) = read_message(&mut stream, false);
+pub(super) fn read_request(stream: &mut impl Read) -> UpstreamRequest {
+    let (request_line, headers, mut body) = read_message(stream, false);
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default().to_owned();
     let path = parts.next().unwrap_or_default().to_owned();
-    let body = (!body.is_empty() && !headers.contains_key("content-encoding"))
-        .then(|| serde_json::from_slice(&body).expect("JSON request"));
-    let _ = sender.send(UpstreamRequest {
+    if let Some(encoding) = headers.get("content-encoding") {
+        assert_eq!(encoding, "zstd", "unsupported fixture request encoding");
+        body = zstd::stream::decode_all(body.as_slice()).expect("decode upstream request");
+    }
+    let form = headers
+        .get("content-type")
+        .is_some_and(|value| value.starts_with("application/x-www-form-urlencoded"));
+    let body =
+        (!body.is_empty() && !form).then(|| serde_json::from_slice(&body).expect("JSON request"));
+    UpstreamRequest {
         method,
         path,
         headers,
         body,
-    });
+    }
+}
+
+fn serve_upstream(mut stream: TcpStream, reply: &Reply, sender: &Sender<UpstreamRequest>) {
+    stream.set_read_timeout(Some(IO_TIMEOUT)).expect("timeout");
+    let _ = sender.send(read_request(&mut stream));
+    let length = reply.body.len()
+        + reply
+            .gate
+            .as_ref()
+            .map_or(0, |gate| gate.tail.as_ref().map_or(1, Vec::len));
     let mut head = format!(
         "HTTP/1.1 {} Fixture\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
-        reply.status,
-        reply.content_type,
-        reply.body.len()
+        reply.status, reply.content_type, length
     );
     for (name, value) in &reply.headers {
         head.push_str(&format!("{name}: {value}\r\n"));
@@ -156,6 +228,46 @@ fn serve_upstream(mut stream: TcpStream, reply: &Reply, sender: &Sender<Upstream
             .is_err()
         {
             return;
+        }
+    }
+    if let Some(gate) = &reply.gate {
+        stream
+            .set_read_timeout(Some(Duration::from_millis(25)))
+            .expect("upstream disconnect polling");
+        let released = gate.released.lock().expect("stream gate");
+        loop {
+            match released.try_recv() {
+                Ok(()) => {
+                    if let Some(tail) = &gate.tail {
+                        let _ = stream.write_all(tail).and_then(|()| stream.flush());
+                    }
+                    return;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            let mut byte = [0_u8; 1];
+            match stream.read(&mut byte) {
+                Ok(0) => {
+                    let _ = gate.closed.send(());
+                    return;
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+                    ) =>
+                {
+                    let _ = gate.closed.send(());
+                    return;
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) => {}
+                result => panic!("unexpected bytes/error on gated upstream: {result:?}"),
+            }
         }
     }
 }

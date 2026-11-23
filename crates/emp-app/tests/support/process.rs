@@ -156,6 +156,15 @@ impl Workspace {
         command.args(self.serve_arguments());
         Emp::spawn(command)
     }
+
+    pub fn start_without_path_cli(&self) -> Emp {
+        let mut command = self.command();
+        command
+            .env("PATH", self.root.join("empty-bin"))
+            .env_remove("NVM_DIR")
+            .args(self.serve_arguments());
+        Emp::spawn(command)
+    }
 }
 
 /// A running EMP service with an authenticated management session.
