@@ -1,8 +1,7 @@
-use super::http::error::EntryWire;
 use super::{
     ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
     head::GuardedHead,
-    http::{accounts, settings, usage},
+    http::{accounts, catalog, error::EntryWire, proxy::RequestAccess, settings, usage},
     run_blocking,
 };
 use crate::{
@@ -44,18 +43,31 @@ struct CandidateRequest {
 type UpgradeSession = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 #[derive(Clone)]
-pub(crate) struct ConnectionContext {
+pub(crate) struct ConnectionContext(Arc<Connection>);
+
+struct Connection {
     control: Arc<ServerControl>,
-    upgrade: Arc<Mutex<Option<UpgradeSession>>>,
+    upgrade: Mutex<Option<UpgradeSession>>,
+    _request_permit: Option<ConnectionPermit>,
+    request_access: OnceLock<RequestAccess>,
+    request_id: Option<String>,
 }
 
 impl ConnectionContext {
+    pub(super) fn retain_request_access(&self, access: RequestAccess) {
+        assert!(self.0.request_access.set(access).is_ok());
+    }
+
+    pub(super) fn request_id(&self) -> Option<&str> {
+        self.0.request_id.as_deref()
+    }
+
     pub(crate) fn shutdown_signal(&self) -> ShutdownSignal {
-        self.control.signal()
+        self.0.control.signal()
     }
 
     pub(crate) fn reserve_websocket(&self) -> Option<ConnectionPermit> {
-        self.control.admission.acquire_websocket()
+        self.0.control.admission.acquire_websocket()
     }
 
     pub(crate) fn on_upgrade<F: Future<Output = ()> + Send + 'static>(
@@ -64,7 +76,7 @@ impl ConnectionContext {
         reserved: Option<ConnectionPermit>,
         session: impl FnOnce(TokioIo<Upgraded>, bool, ShutdownSignal) -> F + Send + 'static,
     ) {
-        let control = Arc::clone(&self.control);
+        let control = Arc::clone(&self.0.control);
         let shutdown = self.shutdown_signal();
         let session = async move {
             if let Ok(io) = upgrade.await {
@@ -72,7 +84,7 @@ impl ConnectionContext {
                 session(TokioIo::new(io), permit.is_some(), shutdown).await;
             }
         };
-        *self.upgrade.lock().expect("upgrade registration") = Some(Box::pin(session));
+        *self.0.upgrade.lock().expect("upgrade registration") = Some(Box::pin(session));
     }
 }
 
@@ -108,9 +120,13 @@ pub(super) async fn drive_candidate(
         }
     };
     let request = head.raw.request();
-    let usage_read = usage::matches(request);
-    let settings_read = settings::matches(request);
-    if !usage_read && !settings_read && !accounts::matches(request) {
+    let (half_close, watch_report) = if usage::matches(request) {
+        (true, usage::Report::for_path(request.raw_path()).is_some())
+    } else if settings::matches(request) || catalog::matches(request) {
+        (true, false)
+    } else if accounts::matches(request) {
+        (false, false)
+    } else {
         match io.into_std() {
             Ok(stream) => {
                 let raw = head.into_legacy();
@@ -129,10 +145,10 @@ pub(super) async fn drive_candidate(
             }
         }
         return;
-    }
+    };
     observation.received(request);
-    let (io, report_socket) = if usage_read && usage::Report::for_path(request.raw_path()).is_some()
-    {
+    crate::services::runtime::codex_contacted(request, state);
+    let (io, report_socket) = if watch_report {
         match io.into_std().and_then(|stream| {
             let report_socket = stream.try_clone().ok().map(Arc::new);
             Ok((tokio::net::TcpStream::from_std(stream)?, report_socket))
@@ -149,7 +165,7 @@ pub(super) async fn drive_candidate(
     let candidate = CandidateRequest {
         observation,
         report_socket,
-        half_close: usage_read || settings_read,
+        half_close,
     };
     drive_http(io, peer, router, control, permit, head, Some(candidate)).await;
 }
@@ -206,10 +222,17 @@ async fn drive_http(
         Some(permit)
     };
     let raw = head.raw.clone();
-    let context = ConnectionContext {
+    let request_id = candidate
+        .as_ref()
+        .and_then(|request| request.observation.request_id())
+        .map(str::to_owned);
+    let context = ConnectionContext(Arc::new(Connection {
         control,
-        upgrade: Arc::default(),
-    };
+        upgrade: Mutex::default(),
+        _request_permit: permit,
+        request_access: OnceLock::new(),
+        request_id,
+    }));
     let stop_after_write = AtomicBool::new(false);
     let wire_response = Arc::new(OnceLock::new());
     let service = tower::service_fn(|mut request: axum::http::Request<hyper::body::Incoming>| {
@@ -245,7 +268,12 @@ async fn drive_http(
                 raw.allow_body();
             }
             if response.status() != StatusCode::SWITCHING_PROTOCOLS {
-                context.upgrade.lock().expect("upgrade registration").take();
+                context
+                    .0
+                    .upgrade
+                    .lock()
+                    .expect("upgrade registration")
+                    .take();
             }
             Ok::<_, std::convert::Infallible>(response)
         }
@@ -279,15 +307,19 @@ async fn drive_http(
     }
 
     if stop_after_write.into_inner() {
-        context.control.stop(if written {
+        context.0.control.stop(if written {
             ShutdownReason::ResponseWritten
         } else {
             ShutdownReason::ResponseWriteFailed
         });
     }
-    let upgrade = context.upgrade.lock().expect("upgrade registration").take();
+    let upgrade = context
+        .0
+        .upgrade
+        .lock()
+        .expect("upgrade registration")
+        .take();
     if written && let Some(session) = upgrade {
-        let _session_request_permit = permit;
         session.await;
     }
 }

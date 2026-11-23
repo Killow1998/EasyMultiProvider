@@ -1,6 +1,8 @@
 use super::*;
 use emp_transport::{HttpClient, HttpClientConfig, HttpClientPolicy, ProxyPolicy, TimeoutPolicy};
 
+mod candidate;
+
 pub(super) struct CatalogUpstream {
     address: SocketAddr,
     requests: mpsc::Receiver<(String, BTreeMap<String, String>, Value)>,
@@ -201,25 +203,22 @@ fn metadata_server_with_policy(
     upstream: &CatalogUpstream,
     policy: HttpClientPolicy,
 ) -> (TempDir, ServerHandle) {
-    let mut transport_config = HttpClientConfig::default();
-    transport_config
-        .add_dns_override("generativelanguage.googleapis.com", upstream.address)
-        .expect("Gemini DNS override");
-    let client = HttpClient::with_config(policy, transport_config).expect("metadata HTTP client");
-    metadata_server_with_http_client(upstream, client)
+    metadata_server_at(upstream.address, policy)
 }
 
-fn metadata_server_with_http_client(
-    upstream: &CatalogUpstream,
-    client: HttpClient,
-) -> (TempDir, ServerHandle) {
+fn metadata_server_at(upstream: SocketAddr, policy: HttpClientPolicy) -> (TempDir, ServerHandle) {
+    let mut transport_config = HttpClientConfig::default();
+    transport_config
+        .add_dns_override("generativelanguage.googleapis.com", upstream)
+        .expect("Gemini DNS override");
+    let client = HttpClient::with_config(policy, transport_config).expect("metadata HTTP client");
     let directory = tempfile::tempdir().expect("metadata temp dir");
     let root = canonical_root(&directory);
     let config_path = root.join("config.json");
     let native_path = root.join("codex").join("models_cache.json");
     std::fs::create_dir_all(native_path.parent().expect("parent")).expect("native dir");
     std::fs::write(&native_path, br#"{"models":[]}"#).expect("native catalog");
-    let base_url = format!("http://{}/v1beta/openai", upstream.address);
+    let base_url = format!("http://{upstream}/v1beta/openai");
     std::fs::write(
         &config_path,
         serde_json::to_vec(&json!({
@@ -259,7 +258,7 @@ fn metadata_server_with_http_client(
         .as_object_mut()
         .expect("metadata provider object")["base_url"] = json!(format!(
         "http://generativelanguage.googleapis.com:{}/v1beta/openai",
-        upstream.address.port()
+        upstream.port()
     ));
     (directory, server)
 }

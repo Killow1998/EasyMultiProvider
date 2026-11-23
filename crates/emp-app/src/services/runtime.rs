@@ -290,7 +290,13 @@ pub(crate) struct RuntimeWatch {
     wake: Condvar,
 }
 
-pub(crate) fn codex_contacted(state: &ServerState) {
+pub(crate) fn codex_contacted(request: crate::http::request::Request<'_>, state: &ServerState) {
+    let path = request.raw_path();
+    if !(path.starts_with("/v1/models") || path.starts_with("/v1/responses"))
+        || request.session_token().is_some()
+    {
+        return;
+    }
     let watch = &state.backend.integration.watch;
     if let Ok(mut pending) = watch.pending.lock() {
         *pending = true;

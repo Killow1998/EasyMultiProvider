@@ -60,13 +60,13 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             Err(error) => error.wire_response(),
         };
     }
-    if request.method == RequestMethod::Get
-        && (path == "/v1/models" || path.starts_with("/v1/models/"))
-    {
-        if let Err(error) = require_model_catalog(request, state, now) {
-            return error.wire_response();
-        }
-        return catalog::models_request(request, state);
+    if request.method == RequestMethod::Get && catalog::models_path(path) {
+        return match require_model_catalog(request, state, now)
+            .and_then(|()| catalog::models_request(request, state))
+        {
+            Ok(reply) => reply.wire_response(),
+            Err(error) => error.wire_response(),
+        };
     }
     if path == "/healthz" {
         if let Err(error) = page_origin(request, state.port) {
@@ -145,11 +145,8 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         {
             return inspection::read_request(request, state);
         }
-        if request.method == RequestMethod::Get
-            && path.starts_with("/api/providers/")
-            && path.ends_with("/models")
-        {
-            return catalog::read_management_request(request, state);
+        if request.method == RequestMethod::Get && catalog::provider_models_path(path) {
+            return catalog::provider_models_request(path, state).wire_response();
         }
         if request.method == RequestMethod::Get
             && let Some(read) = AccountRead::for_path(path)

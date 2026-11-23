@@ -69,11 +69,7 @@ pub(crate) fn handle_connection(
     if request.releases_request_permit() {
         let _ = request_permit.take();
     }
-    if (path.starts_with("/v1/models") || path.starts_with("/v1/responses"))
-        && request.session_token().is_none()
-    {
-        crate::services::runtime::codex_contacted(state);
-    }
+    crate::services::runtime::codex_contacted(request, state);
     let _access = match RequestAccess::require(request, state) {
         Ok(access) => access,
         Err(error) => {

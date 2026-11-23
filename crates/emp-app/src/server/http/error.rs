@@ -12,7 +12,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use emp_transport::{ContentDecodeError, RequestCapacityError};
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 pub(crate) enum EntryError {
     InvalidHead,
@@ -29,7 +29,7 @@ pub(crate) enum EntryError {
 pub(crate) struct JsonReply {
     status: u16,
     body: Vec<u8>,
-    extra_header: Option<(&'static str, &'static str)>,
+    extra_header: Option<(&'static str, Cow<'static, str>)>,
 }
 
 #[derive(Clone)]
@@ -81,17 +81,25 @@ impl JsonReply {
         Self::new(status, json_error_body(message, code))
     }
 
-    pub(crate) fn with_header(mut self, name: &'static str, value: &'static str) -> Self {
-        self.extra_header = Some((name, value));
+    pub(crate) fn with_header(
+        mut self,
+        name: &'static str,
+        value: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        self.extra_header = Some((name, value.into()));
         self
     }
 
     pub(crate) fn wire_response(&self) -> Vec<u8> {
+        let header = self
+            .extra_header
+            .as_ref()
+            .map(|(name, value)| (*name, value.as_ref()));
         response(
             &format!("HTTP/1.1 {} {}", self.status, status_text(self.status)),
             "application/json",
             &self.body,
-            self.extra_header.as_slice(),
+            header.as_slice(),
         )
     }
 }
@@ -114,7 +122,7 @@ impl IntoResponse for JsonReply {
             builder = builder.header(name, value);
         }
         if let Some((name, value)) = self.extra_header {
-            builder = builder.header(name, value);
+            builder = builder.header(name, value.as_ref());
         }
         builder
             .body(Body::from(self.body))

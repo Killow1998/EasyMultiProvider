@@ -46,7 +46,7 @@ use tokio::{
     time::timeout,
 };
 
-async fn exchange_wire(address: SocketAddr, request: &[u8], end_input: bool) -> Vec<u8> {
+pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input: bool) -> Vec<u8> {
     timeout(Duration::from_secs(15), async {
         let mut stream = TcpStream::connect(address).await.unwrap();
         stream.write_all(request).await.unwrap();
@@ -81,7 +81,7 @@ pub(crate) async fn assert_wire_parity(
     old
 }
 
-fn assert_status(reply: &[u8], status: u16) {
+pub(crate) fn assert_status(reply: &[u8], status: u16) {
     assert!(
         reply.starts_with(format!("HTTP/1.1 {status} ").as_bytes()),
         "{}",
@@ -89,7 +89,7 @@ fn assert_status(reply: &[u8], status: u16) {
     );
 }
 
-fn json_body(reply: &[u8]) -> Value {
+pub(crate) fn json_body(reply: &[u8]) -> Value {
     let offset = reply
         .windows(4)
         .position(|bytes| bytes == b"\r\n\r\n")
@@ -98,7 +98,13 @@ fn json_body(reply: &[u8]) -> Value {
     serde_json::from_slice(&reply[offset..]).unwrap()
 }
 
-fn request(port: u16, method: &str, path: &str, headers: &[&str], body: &[u8]) -> Vec<u8> {
+pub(crate) fn request(
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[&str],
+    body: &[u8],
+) -> Vec<u8> {
     let mut wire = format!("{method} {path} HTTP/1.1\r\n");
     if !headers.iter().any(|line| line.starts_with("Host:")) {
         wire.push_str(&format!("Host: 127.0.0.1:{port}\r\n"));
@@ -113,7 +119,7 @@ fn request(port: u16, method: &str, path: &str, headers: &[&str], body: &[u8]) -
     wire
 }
 
-fn json_request(port: u16, path: &str, headers: &[&str], body: &[u8]) -> Vec<u8> {
+pub(crate) fn json_request(port: u16, path: &str, headers: &[&str], body: &[u8]) -> Vec<u8> {
     let length = format!("Content-Length: {}", body.len());
     let mut headers = headers.to_vec();
     headers.extend(["Content-Type: application/json", length.as_str()]);
