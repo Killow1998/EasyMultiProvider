@@ -2,7 +2,7 @@ use super::HistoryRepairError;
 use super::replay::RolloutSummary;
 use super::spool::{ContextSnapshot, JsonlSpool};
 use super::transaction::file_fingerprint;
-use crate::history::MAX_ROLLOUT_LINE_BYTES;
+use crate::sessions::read::MAX_ROLLOUT_LINE_BYTES;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};

@@ -46,7 +46,7 @@ fn model_switch_recovers_exact_committed_checkpoint_from_a_failed_turn() {
             {"type":"compaction","encrypted_content":"fixture-committed-checkpoint"},
             {"type":"message","role":"user","content":"later turn is already in the request tail"}
         ],"client_metadata":{"x-codex-turn-metadata":json!({"thread_id":THREAD,"turn_id":TURN}).to_string()}});
-        let prepared = emp_history::prepare_owned(request, &BTreeMap::new(), false, &reader)
+        let prepared = emp_context::prepare_owned(request, &BTreeMap::new(), false, &reader)
             .expect("the committed checkpoint survives its owner's later failure");
         let text = prepared.to_string();
         assert!(text.contains("visible work before the committed checkpoint"));
@@ -117,7 +117,7 @@ fn committed_checkpoint_recovery_does_not_reuse_an_older_summary() {
         {"type":"compaction","encrypted_content":"fixture-committed-checkpoint"},
         {"role":"user","content":"continue after checkpoint"}
     ],"client_metadata":{"x-codex-turn-metadata":json!({"thread_id":THREAD,"turn_id":TURN}).to_string()}});
-    let prepared = emp_history::prepare_owned(request, &BTreeMap::new(), false, &reader).unwrap();
+    let prepared = emp_context::prepare_owned(request, &BTreeMap::new(), false, &reader).unwrap();
     let text = prepared.to_string();
     assert!(text.contains("earlier successful summary"), "{text}");
     assert!(
@@ -175,7 +175,7 @@ fn committed_child_checkpoint_recovery_preserves_inherited_history() {
         {"type":"compaction","encrypted_content":"fixture-committed-checkpoint"},
         {"role":"user","content":"continue child"}
     ],"client_metadata":{"x-codex-turn-metadata":json!({"thread_id":THREAD,"turn_id":TURN}).to_string()}});
-    let prepared = emp_history::prepare_owned(request, &BTreeMap::new(), false, &reader).unwrap();
+    let prepared = emp_context::prepare_owned(request, &BTreeMap::new(), false, &reader).unwrap();
     let text = prepared.to_string();
     assert!(text.contains("inherited work before the fork"), "{text}");
     assert!(
@@ -219,7 +219,7 @@ fn inherited_committed_checkpoint_recovery_stops_at_the_fork() {
         {"type":"compaction","encrypted_content":"fixture-committed-checkpoint"},
         {"role":"user","content":"child's visible tail"}
     ],"client_metadata":{"x-codex-turn-metadata":json!({"thread_id":THREAD,"turn_id":TURN}).to_string()}});
-    let prepared = emp_history::prepare_owned(request, &BTreeMap::new(), false, &reader).unwrap();
+    let prepared = emp_context::prepare_owned(request, &BTreeMap::new(), false, &reader).unwrap();
     let text = prepared.to_string();
     assert!(
         text.contains("visible work before the committed checkpoint"),

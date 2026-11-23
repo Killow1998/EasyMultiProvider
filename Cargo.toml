@@ -6,7 +6,7 @@ members = [
     "crates/emp-config",
     "crates/emp-domain",
     "crates/emp-files",
-    "crates/emp-history",
+    "crates/emp-context",
     "crates/emp-mod-aggregate",
     "crates/emp-mod-decision",
     "crates/emp-mod-gateway",

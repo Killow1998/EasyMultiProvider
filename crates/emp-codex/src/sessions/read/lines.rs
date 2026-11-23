@@ -1,7 +1,7 @@
 //! Bounded JSONL framing, including truncated final lines and frozen file ends.
 use super::MAX_ROLLOUT_LINE_BYTES;
 use super::source::WalkReport;
-use emp_history::HistoryError;
+use emp_context::HistoryError;
 use serde_json::{Map, Value};
 use std::fs::File;
 #[cfg(test)]

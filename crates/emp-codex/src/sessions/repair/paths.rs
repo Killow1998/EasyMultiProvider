@@ -1,6 +1,6 @@
 use super::HistoryRepairError;
 use super::inventory::{ThreadInfo, safe_rollout_path, session_roots};
-use crate::history::uuid_shape;
+use crate::sessions::read::uuid_shape;
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

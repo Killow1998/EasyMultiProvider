@@ -1,5 +1,5 @@
 //! Reversible, append-only conversion of EMP portable checkpoints for native Codex.
-use crate::history::uuid_shape;
+use crate::sessions::read::uuid_shape;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -8,23 +8,14 @@ use std::path::{Path, PathBuf};
 
 const REPAIR_DIRECTORY: &str = "easy-multi-provider/integration/history-repair";
 
-#[path = "history_repair/checkpoint.rs"]
 mod checkpoint;
-#[path = "history_repair/coordination.rs"]
 mod coordination;
-#[path = "history_repair/inventory.rs"]
 mod inventory;
-#[path = "history_repair/paths.rs"]
 mod paths;
-#[path = "history_repair/planning.rs"]
 mod planning;
-#[path = "history_repair/replay.rs"]
 mod replay;
-#[path = "history_repair/selection.rs"]
 mod selection;
-#[path = "history_repair/spool.rs"]
 mod spool;
-#[path = "history_repair/transaction.rs"]
 mod transaction;
 pub use coordination::HistoryRepairLock;
 use coordination::{
@@ -232,5 +223,4 @@ fn ensure_repair_root(home: &Path) -> Result<PathBuf, HistoryRepairError> {
 }
 
 #[cfg(test)]
-#[path = "history_repair/tests.rs"]
 mod tests;

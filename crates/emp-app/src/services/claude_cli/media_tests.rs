@@ -183,7 +183,7 @@ fn context_estimation_keeps_prepared_pdf_bytes_and_decoded_text() {
 
     let provider = json!({"id":"demo"});
     let model = json!({"id":"demo/short","context_window":100000,"output_limit":64});
-    let assessment = emp_history::context::assess(
+    let assessment = emp_context::context::assess(
         provider.as_object().unwrap(),
         model.as_object().unwrap(),
         "anthropic_messages",

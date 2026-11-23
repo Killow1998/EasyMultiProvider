@@ -7,7 +7,7 @@
 //! `lineage_cycle`, `lineage_prefix_truncated`).
 
 use emp_codex::history::CodexHomeHistoryReader;
-use emp_history::{HistoryAnchor, HistoryReader, HistorySnapshot};
+use emp_context::{HistoryAnchor, HistoryReader, HistorySnapshot};
 use rusqlite::params;
 use serde_json::{Value, json};
 use tempfile::tempdir;

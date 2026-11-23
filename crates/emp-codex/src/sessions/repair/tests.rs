@@ -4,9 +4,9 @@ use super::transaction::{
     write_manifest,
 };
 use super::*;
-use crate::history::CodexHomeHistoryReader;
+use crate::sessions::read::CodexHomeHistoryReader;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
-use emp_history::HistoryAnchor;
+use emp_context::HistoryAnchor;
 use rusqlite::Connection;
 use rusqlite::params;
 use serde_json::json;
@@ -472,7 +472,7 @@ fn assert_canonical_replacement_suffix(records: &[Value], checkpoint: &Value) {
     assert!(suffix_count > 0);
 }
 
-fn resumed_snapshot(home: &Path, thread_id: &str) -> emp_history::HistorySnapshot {
+fn resumed_snapshot(home: &Path, thread_id: &str) -> emp_context::HistorySnapshot {
     CodexHomeHistoryReader::new(home)
         .read_visible_history(&HistoryAnchor {
             thread_id: Some(thread_id.to_owned()),

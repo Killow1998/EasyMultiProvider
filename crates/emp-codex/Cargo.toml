@@ -13,7 +13,7 @@ workspace = true
 base64 = "0.22"
 emp-state = { path = "../emp-state" }
 emp-storage = { path = "../emp-storage" }
-emp-history = { path = "../emp-history" }
+emp-context = { path = "../emp-context" }
 emp-transport = { path = "../emp-transport" }
 getrandom = "0.2.17"
 rusqlite = { version = "0.40.2", features = ["bundled"] }

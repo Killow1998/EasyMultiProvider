@@ -26,7 +26,7 @@ pub(super) fn selected_config(state: &ServerState, body: &Value) -> Option<Value
 
 pub(super) enum RelayError {
     Disconnected,
-    History(emp_history::HistoryError),
+    History(emp_context::HistoryError),
     Request(u16, &'static str, &'static str),
 }
 
@@ -166,7 +166,7 @@ pub(super) fn open<'a>(
     observation.diagnostic_only("aero");
     observation.phase(Phase::ValidateInput);
     let anchor =
-        emp_history::request_history_anchor(body.as_object().expect("request body"), incoming).ok();
+        emp_context::request_history_anchor(body.as_object().expect("request body"), incoming).ok();
     let session = anchor
         .as_ref()
         .and_then(|anchor| anchor.thread_id.as_deref())
@@ -282,7 +282,7 @@ pub(super) fn open<'a>(
         let reader =
             emp_codex::history::CodexHomeHistoryReader::new(&state.backend.accounts.codex_home);
         let visible =
-            emp_history::prepare(body, incoming, false, &reader).map_err(RelayError::History)?;
+            emp_context::prepare(body, incoming, false, &reader).map_err(RelayError::History)?;
         let mut materialized = body.clone();
         materialized["_aero_visible_input"] = visible["input"].clone();
         response = open(&materialized)?;

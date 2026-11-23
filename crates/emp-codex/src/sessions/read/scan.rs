@@ -1,7 +1,7 @@
 use super::records::{replacement_contains_encoded, session_meta_history_mode, session_meta_id};
 use super::source::RecordSource;
 use super::visible::{message_role, ordinal, record_turn_id, string_from, token};
-use emp_history::{HistoryAnchor, HistoryError};
+use emp_context::{HistoryAnchor, HistoryError};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 

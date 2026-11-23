@@ -217,7 +217,7 @@ internal summary call occurred.
 | `destination_compaction` | Invalid budget/protocol, summary call/output failure, non-converging reduction, result still over budget. |
 | `unknown` | Unrecognized reason, recorded only as `history_reason_unknown`. |
 
-`emp-history` owns this vocabulary. API error details add `category` and keep the
+`emp-context` owns this vocabulary. API error details add `category` and keep the
 specific `reason`; the client-visible `message` includes both and category-specific
 guidance so clients that display only text still expose the cause. Existing HTTP
 409 and streaming `response.failed` / `invalid_prompt` contracts are preserved.

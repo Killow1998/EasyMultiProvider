@@ -1,10 +1,10 @@
 [package]
 publish = false
-name = "emp-history"
+name = "emp-context"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Codex-visible history continuity and portable checkpoint projection."
+description = "可见历史补全、上下文预算、校准与压缩"
 
 [lints]
 workspace = true

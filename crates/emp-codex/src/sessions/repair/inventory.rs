@@ -1,5 +1,5 @@
 use super::HistoryRepairError;
-use crate::history::{CodexHomeHistoryReader, uuid_shape};
+use crate::sessions::read::{CodexHomeHistoryReader, uuid_shape};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::BTreeSet;
 use std::fs;

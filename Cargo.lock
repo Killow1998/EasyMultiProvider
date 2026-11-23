@@ -809,8 +809,8 @@ version = "0.15.8"
 dependencies = [
  "base64 0.22.1",
  "emp-codex",
+ "emp-context",
  "emp-domain",
- "emp-history",
  "emp-mod-aggregate",
  "emp-mod-decision",
  "emp-mod-gateway",
@@ -856,7 +856,7 @@ name = "emp-codex"
 version = "0.15.8"
 dependencies = [
  "base64 0.22.1",
- "emp-history",
+ "emp-context",
  "emp-state",
  "emp-storage",
  "emp-transport",
@@ -898,6 +898,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "emp-context"
+version = "0.15.8"
+dependencies = [
+ "base64 0.22.1",
+ "emp-domain",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+]
+
+[[package]]
 name = "emp-domain"
 version = "0.15.8"
 dependencies = [
@@ -917,18 +929,6 @@ dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
  "zeroize",
-]
-
-[[package]]
-name = "emp-history"
-version = "0.15.8"
-dependencies = [
- "base64 0.22.1",
- "emp-domain",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "time",
 ]
 
 [[package]]

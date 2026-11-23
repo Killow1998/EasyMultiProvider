@@ -15,7 +15,7 @@ use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::request_preparation::{PreparedRequest, RequestPreparationError};
 use crate::util::projection_ids;
 use crate::util::random_hex;
-use emp_history::HistoryError;
+use emp_context::HistoryError;
 use emp_transport::FailureClass;
 use emp_transport::WebSocketConnection;
 use emp_transport::WebSocketPoll;
@@ -494,7 +494,7 @@ pub(crate) fn serve_responses_websocket(
         };
         let request_headers = websocket.observation.headers(incoming.clone());
         websocket.observation.phase(Phase::PrepareHistory);
-        let request_scope = match emp_history::request_history_anchor(
+        let request_scope = match emp_context::request_history_anchor(
             request_body.as_object().unwrap(),
             &request_headers,
         ) {

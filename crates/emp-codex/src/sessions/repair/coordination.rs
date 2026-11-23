@@ -4,7 +4,7 @@ use super::inventory::ThreadInfo;
 use super::paths::RolloutPaths;
 use super::replay::load_rollout_header;
 use super::transaction::RepairManifest;
-use crate::history::{MAX_LINEAGE_SEGMENTS as MAX_LINEAGE_DEPTH, uuid_shape};
+use crate::sessions::read::{MAX_LINEAGE_SEGMENTS as MAX_LINEAGE_DEPTH, uuid_shape};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};

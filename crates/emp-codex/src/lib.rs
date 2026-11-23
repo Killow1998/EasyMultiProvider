@@ -9,14 +9,17 @@ use std::path::{Path, PathBuf};
 pub mod configuration;
 mod executable_trust;
 pub use executable_trust::PreparedExecutable;
-pub mod history;
+pub mod history {
+    pub use crate::sessions::{read::*, repair};
+}
 pub mod installed_cli;
 pub mod management_views;
 pub mod merged_catalog;
 pub mod quota;
 pub use emp_storage::quota_history;
 pub mod runtime_probe;
-pub mod session_directory;
+pub use sessions::directory as session_directory;
+pub mod sessions;
 pub mod subscription_contexts;
 
 const MAX_ACCOUNT_CATALOG_BYTES: u64 = 4 * 1024 * 1024;

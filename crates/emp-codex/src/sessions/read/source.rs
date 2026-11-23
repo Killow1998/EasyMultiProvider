@@ -4,7 +4,7 @@ use super::lines::{
 use super::records::{HistoryBase, session_meta_history_base};
 use super::visible::token;
 use super::{MAX_ROLLOUT_LINE_BYTES, MAX_ROLLOUT_SCAN_BYTES};
-use emp_history::HistoryError;
+use emp_context::HistoryError;
 use serde_json::{Map, Value};
 use std::ffi::OsStr;
 use std::fs::{self, File};

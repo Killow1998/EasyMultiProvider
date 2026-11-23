@@ -3,8 +3,8 @@ use crate::services::compaction::compaction_summary_body;
 use crate::services::compaction::has_trailing_compaction_trigger;
 use crate::services::compaction::response_output_text;
 use crate::util::projection_ids;
+use emp_context::HistoryError;
 use emp_domain::ResolvedRoute;
-use emp_history::HistoryError;
 use emp_router::RouterError;
 use emp_router::project_external_payload;
 use emp_router::protocol_candidates;
@@ -20,7 +20,7 @@ pub(crate) fn prepare_history(
 ) -> Result<Value, HistoryError> {
     let reader =
         emp_codex::history::CodexHomeHistoryReader::new(&state.backend.accounts.codex_home);
-    emp_history::prepare_owned(
+    emp_context::prepare_owned(
         body,
         incoming,
         route.dialect == emp_domain::Dialect::CodexNative,
@@ -38,7 +38,7 @@ pub(crate) enum DestinationPrepareError {
     ClaudeCli(crate::services::claude_cli::ClaudeCliError),
     Disconnected,
     History(&'static str),
-    Context(Box<emp_history::context::ContextAssessment>),
+    Context(Box<emp_context::context::ContextAssessment>),
 }
 
 #[cfg(test)]
@@ -55,14 +55,14 @@ fn context_guard_body(body: &Value) -> Cow<'_, Value> {
 fn assess_destination_context(
     candidate: &ResolvedRoute,
     body: &Value,
-) -> Result<emp_history::context::ContextAssessment, DestinationPrepareError> {
+) -> Result<emp_context::context::ContextAssessment, DestinationPrepareError> {
     if crate::services::claude_cli::selected(candidate) {
         return crate::services::claude_cli::assess_context(candidate, body)
             .map_err(DestinationPrepareError::ClaudeCli);
     }
     let payload =
         project_external_payload(candidate, body).map_err(DestinationPrepareError::Router)?;
-    Ok(emp_history::context::assess(
+    Ok(emp_context::context::assess(
         candidate.provider.value(),
         candidate.model.value(),
         candidate.protocol.as_config_str(),
@@ -81,7 +81,7 @@ pub(crate) fn prepare_destination_context(
         if body.get("previous_response_id").is_none_or(Value::is_null)
             && let Some(payload) = crate::services::context::payload(state, route, &body)
         {
-            let assessment = emp_history::context::assess(
+            let assessment = emp_context::context::assess(
                 route.provider.value(),
                 route.model.value(),
                 route.protocol.as_config_str(),
@@ -112,7 +112,7 @@ pub(crate) fn prepare_destination_context(
     {
         crate::util::release_large_temporary_pages(bytes);
     }
-    let fit_output = |mut request: Value, assessment: &emp_history::context::ContextAssessment| {
+    let fit_output = |mut request: Value, assessment: &emp_context::context::ContextAssessment| {
         if candidate.model.value().get("_emp_flexible_output_limit") == Some(&Value::Bool(true))
             && let Some(cap) = assessment.output_reserve
             && (request["max_output_tokens"]
@@ -135,7 +135,7 @@ pub(crate) fn prepare_destination_context(
     let mut activity_guard = None;
     let lineage = body
         .as_object()
-        .and_then(|root| emp_history::request_history_anchor(root, incoming).ok())
+        .and_then(|root| emp_context::request_history_anchor(root, incoming).ok())
         .and_then(|anchor| anchor.forked_from_thread_id.or(anchor.thread_id));
     let scope = lineage.as_deref().map(|thread| {
         [
@@ -147,7 +147,7 @@ pub(crate) fn prepare_destination_context(
             candidate.protocol.as_config_str(),
         ]
     });
-    let compacted = emp_history::context::compact_with_cache(
+    let compacted = emp_context::context::compact_with_cache(
         &body,
         candidate.model.value(),
         safe_budget,

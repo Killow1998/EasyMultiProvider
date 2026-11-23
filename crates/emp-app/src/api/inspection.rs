@@ -51,7 +51,7 @@ pub(crate) fn read_request(request: Request<'_>, state: &ServerState) -> Vec<u8>
                 let protocol = record["capabilities"]["effective_protocol"]["value"]
                     .as_str()
                     .unwrap_or("unknown");
-                let context = emp_history::context::status(provider, model, protocol);
+                let context = emp_context::context::status(provider, model, protocol);
                 record["context"] = context;
                 records.push(record);
             }

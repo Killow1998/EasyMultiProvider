@@ -288,7 +288,7 @@ fn identity(
     };
     let anchor = body
         .as_object()
-        .and_then(|body| emp_history::request_history_anchor(body, incoming).ok());
+        .and_then(|body| emp_context::request_history_anchor(body, incoming).ok());
     let thread = anchor
         .as_ref()
         .and_then(|anchor| anchor.thread_id.as_deref())

@@ -50,7 +50,7 @@ flowchart TB
 | `emp-state` | 配置、凭据存储、事务、用量和日志存储 |
 | `emp-codex` | Codex 目录、历史读取、额度辅助进程和运行状态 |
 | `emp-codex::configuration` | 接入配置的占用关系、冲突判断和恢复 |
-| `emp-history` | 历史整理、上下文和压缩算法 |
+| `emp-context` | 历史整理、上下文和压缩算法 |
 | `emp-router` | 协议选择与上游调度 |
 | `emp-protocol` | 不同模型协议的格式转换和流式状态 |
 | `emp-transport` | 连接、代理、TLS、传输限制和收发 |

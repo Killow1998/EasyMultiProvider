@@ -47,7 +47,7 @@ impl ImageRoutes {
     ) {
         let Some(turn) = body
             .as_object()
-            .and_then(|body| emp_history::request_history_anchor(body, incoming).ok())
+            .and_then(|body| emp_context::request_history_anchor(body, incoming).ok())
             .and_then(|anchor| anchor.turn_id)
         else {
             return;

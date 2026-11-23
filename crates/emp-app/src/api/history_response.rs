@@ -4,7 +4,7 @@ use crate::services::compaction::{CompactionError, SummaryExecutionError};
 use crate::services::history::DestinationPrepareError;
 use crate::services::observation::request::RequestObservation;
 use crate::util::random_hex;
-use emp_history::HistoryError;
+use emp_context::HistoryError;
 use serde_json::Value;
 
 fn history_error_detail(error: &HistoryError) -> Value {

@@ -3,7 +3,7 @@ use super::inventory::ThreadInfo;
 use super::paths::RolloutPaths;
 use super::spool::ContextSnapshot;
 use super::transaction::file_fingerprint;
-use crate::history::{
+use crate::sessions::read::{
     HistoryBase, MAX_LINEAGE_SEGMENTS as MAX_LINEAGE_DEPTH, MAX_ROLLOUT_LINE_BYTES,
     session_meta_history_base, session_meta_history_mode, session_meta_id, token,
 };

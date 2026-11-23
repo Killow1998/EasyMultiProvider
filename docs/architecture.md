@@ -104,10 +104,10 @@ to implement. File length is a navigation signal, not a measure of module depth.
 | --- | --- | --- |
 | `emp-domain` | Route identities, model value rules, capability views, usage bounds and session metadata | Pure shared values; preserve unknown fields |
 | `emp-protocol` | Responses, Chat and Anthropic projections and stream state | Retain protocol-specific state machines |
-| `emp-history` | History preparation, tool pairing, context and compaction algorithms | Retain the `HistoryReader` interface and pure algorithms |
+| `emp-context` | History preparation, tool pairing, context and compaction algorithms | Retain the `HistoryReader` interface and pure algorithms |
 | `emp-transport` | HTTP pools, proxy/TLS policy, admission, framing and WebSocket pump | Retain; profile resource ownership before changing execution model |
 | `emp-router` | Protocol selection, projection and upstream execution | Retain; consolidate application attempt orchestration above it |
-| `emp-codex` | Codex catalogs, concrete history access, quota helpers and runtime discovery | Retain concrete Codex integration; reduce application callers' knowledge of its storage details |
+| `emp-codex` | Codex catalogs, concrete history access, quota helpers and runtime discovery | `sessions::{read,repair,directory}` owns session access; repair uses read interfaces, while read has no repair dependency |
 | `emp-codex::configuration` | Configuration leases, conflict detection and recovery | Retain transactional ownership |
 | `emp-files` | Private files, atomic writes, file transactions, cross-process locks and Windows ACLs | Independent of other EMP crates; preserve file formats, permissions and lock semantics |
 | `emp-config` | Configuration, accounts, catalog merge, official model registry and portable import/export | Depends on `emp-domain`, `emp-files` and `emp-storage`; retains existing module names |
@@ -1467,7 +1467,7 @@ flowchart TD
     Claude --> Relay[Private relay and bounded process lifecycle]
     Transport --> Upstream[Selected upstream service]
     Relay --> Upstream
-    Prepare --> History[emp-history and emp-codex: history / context]
+    Prepare --> History[emp-context and emp-codex: history / context]
 ```
 
 The nine crates retain their existing boundaries; this pass adds no crate,
@@ -1480,7 +1480,7 @@ plugin bus, universal internal message schema or new product capability.
 | `emp-router` | Upstream request/stream execution and protocol selection |
 | `emp-protocol` | Responses, Chat and Anthropic projections and tool/stream state machines |
 | `emp-transport` | Connections, proxy/TLS, HTTP framing, SSE and WebSocket transport |
-| `emp-history` | History pairing, context budgeting and compaction algorithms |
+| `emp-context` | History pairing, context budgeting and compaction algorithms |
 | `emp-codex` | Concrete Codex runtime/catalog/history/quota integration; configuration leases, conflict detection and restoration in `configuration` |
 | `emp-state` | Persisted configuration, credentials, accounting and diagnostics storage |
 

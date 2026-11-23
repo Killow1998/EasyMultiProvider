@@ -1,12 +1,13 @@
 //! Bounded, read-only reconstruction of Codex-visible rollout history.
 
-use emp_history::{HistoryAnchor, HistoryError, HistoryReader, HistorySnapshot, VisibleItem};
-use records::{
-    HistoryBase, locate, session_meta_history_base, session_meta_history_mode, session_meta_id,
+use emp_context::{HistoryAnchor, HistoryError, HistoryReader, HistorySnapshot, VisibleItem};
+use records::locate;
+pub(crate) use records::{
+    HistoryBase, session_meta_history_base, session_meta_history_mode, session_meta_id,
 };
 use serde_json::{Map, Value};
 use std::path::PathBuf;
-use visible::{token, uuid_shape};
+pub(crate) use visible::{token, uuid_shape};
 
 mod checkpoint;
 mod lines;
@@ -20,11 +21,8 @@ mod source;
 pub mod tool_timing;
 mod visible;
 
-#[path = "history_repair.rs"]
-pub mod repair;
-
-const MAX_LINEAGE_SEGMENTS: usize = 32;
-const MAX_ROLLOUT_LINE_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_LINEAGE_SEGMENTS: usize = 32;
+pub(crate) const MAX_ROLLOUT_LINE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ROLLOUT_SCAN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const REVERSE_SCAN_WINDOW_CAP: u64 = 64 * 1024 * 1024;
 

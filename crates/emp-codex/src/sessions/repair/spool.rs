@@ -1,5 +1,5 @@
 use super::HistoryRepairError;
-use crate::history::MAX_ROLLOUT_LINE_BYTES;
+use crate::sessions::read::MAX_ROLLOUT_LINE_BYTES;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;

@@ -1,7 +1,7 @@
 use super::records::{locate, session_meta_history_mode, session_meta_id};
 use super::source::{read_history_base, read_session_meta};
 use super::{CodexHomeHistoryReader, MAX_LINEAGE_SEGMENTS, uuid_shape};
-use emp_history::HistoryError;
+use emp_context::HistoryError;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -242,7 +242,7 @@ impl CodexHomeHistoryReader {
         })
     }
 
-    pub(super) fn latest_state_database(&self) -> Result<PathBuf, HistoryError> {
+    pub(crate) fn latest_state_database(&self) -> Result<PathBuf, HistoryError> {
         fs::read_dir(&self.home)
             .map_err(|_| HistoryError::new("state_database_missing"))?
             .filter_map(Result::ok)

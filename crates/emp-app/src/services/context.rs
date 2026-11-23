@@ -33,7 +33,7 @@ pub(crate) fn record_payload(
     payload: &Value,
     success: bool,
 ) {
-    let assessment = emp_history::context::assess(
+    let assessment = emp_context::context::assess(
         route.provider.value(),
         route.model.value(),
         route.protocol.as_config_str(),
@@ -63,7 +63,7 @@ pub(crate) fn record_payload(
     if let Some(calibrations) = model.get("context_calibrations") {
         observed.insert("context_calibrations".into(), calibrations.clone());
     }
-    if !emp_history::context::update_calibration(
+    if !emp_context::context::update_calibration(
         route.provider.value(),
         &mut observed,
         route.protocol.as_config_str(),

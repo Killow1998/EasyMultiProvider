@@ -9,16 +9,16 @@ pub(crate) fn context_estimation_payload(body: &Value) -> Result<Value, ClaudeCl
 pub(crate) fn assess_context(
     route: &ResolvedRoute,
     body: &Value,
-) -> Result<emp_history::context::ContextAssessment, ClaudeCliError> {
+) -> Result<emp_context::context::ContextAssessment, ClaudeCliError> {
     match context_estimation_payload(body) {
-        Ok(payload) => Ok(emp_history::context::assess(
+        Ok(payload) => Ok(emp_context::context::assess(
             route.provider.value(),
             route.model.value(),
             route.protocol.as_config_str(),
             &payload,
         )),
         Err(error @ ClaudeCliError::Failure("claude_cli_input_too_large")) => {
-            let assessment = emp_history::context::assess_with_input_estimate(
+            let assessment = emp_context::context::assess_with_input_estimate(
                 route.provider.value(),
                 route.model.value(),
                 route.protocol.as_config_str(),

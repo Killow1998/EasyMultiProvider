@@ -1,6 +1,6 @@
 use super::location::{LineageSegment, Location};
 use super::{CodexHomeHistoryReader, ReplayContext};
-use emp_history::{HistoryAnchor, HistoryError, HistorySnapshot};
+use emp_context::{HistoryAnchor, HistoryError, HistorySnapshot};
 use serde_json::{Map, Value};
 use std::path::Path;
 

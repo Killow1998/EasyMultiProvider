@@ -1,8 +1,8 @@
 //! Passive receipts end at the downstream boundary and cannot access routing, retries,
 //! accounts or accounting; model outcomes retain their separate upstream boundary.
 use crate::services::request_facts::reasoning_effort;
+use emp_context::HistoryError;
 use emp_domain::ResolvedRoute;
-use emp_history::HistoryError;
 use emp_state::diagnostics::Diagnostics;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

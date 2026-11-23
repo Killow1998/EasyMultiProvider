@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 mod database;
 #[cfg(test)]
-#[path = "session_directory/tests.rs"]
+#[path = "directory/tests.rs"]
 mod lineage_tests;
 
 type Signature = (PathBuf, Option<SystemTime>, u64);

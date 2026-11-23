@@ -8,7 +8,7 @@ use super::visible::{
     apply_thread_rollback, message_role, normalize_visible_item, ordinal, record_turn_id, token,
     visible_payload,
 };
-use emp_history::{HistoryAnchor, HistoryError, HistorySnapshot, VisibleItem};
+use emp_context::{HistoryAnchor, HistoryError, HistorySnapshot, VisibleItem};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;

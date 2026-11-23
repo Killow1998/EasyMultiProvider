@@ -4,7 +4,7 @@ use super::reverse::locate_latest_compaction;
 use super::scan::scan_rollout;
 use super::source::{FileRecordSource, ZstdRecordSource, is_compressed_rollout};
 use super::{CodexHomeHistoryReader, MAX_ROLLOUT_SCAN_BYTES, ReplayContext};
-use emp_history::{HistoryAnchor, HistoryError, HistorySnapshot};
+use emp_context::{HistoryAnchor, HistoryError, HistorySnapshot};
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
 

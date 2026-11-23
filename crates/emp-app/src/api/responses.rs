@@ -27,8 +27,8 @@ use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::providers::persist_protocol_observation;
 use crate::services::request_preparation::{PreparedRequest, RequestPreparationError};
 use crate::util::projection_ids;
+use emp_context::HistoryError;
 use emp_domain::json_truthy;
-use emp_history::HistoryError;
 use std::net::TcpStream;
 
 pub(crate) enum ResponsesRequestResult {

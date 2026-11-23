@@ -32,7 +32,7 @@ pub(super) fn resolve(
                 .find(|(key, _)| key.eq_ignore_ascii_case(name))
                 .map(|(_, value)| value.as_str())
         };
-        let anchor = emp_history::request_history_anchor(body, incoming).ok();
+        let anchor = emp_context::request_history_anchor(body, incoming).ok();
         let thread = anchor
             .as_ref()
             .and_then(|anchor| anchor.thread_id.as_deref())

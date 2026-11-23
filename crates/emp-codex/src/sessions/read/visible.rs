@@ -1,4 +1,4 @@
-use emp_history::VisibleItem;
+use emp_context::VisibleItem;
 use serde_json::{Map, Value, json};
 
 pub(super) fn visible_payload(record: &Map<String, Value>) -> Option<Map<String, Value>> {
@@ -400,7 +400,7 @@ pub(super) fn string_from(raw: &Map<String, Value>, keys: &[&str]) -> Option<Str
     })
 }
 
-pub(super) fn token(value: Option<&Value>) -> String {
+pub(crate) fn token(value: Option<&Value>) -> String {
     value
         .and_then(Value::as_str)
         .unwrap_or_default()
@@ -422,7 +422,7 @@ pub(super) fn token(value: Option<&Value>) -> String {
         .collect()
 }
 
-pub(super) fn uuid_shape(value: &str) -> bool {
+pub(crate) fn uuid_shape(value: &str) -> bool {
     value.len() == 36
         && value.chars().enumerate().all(|(index, character)| {
             if matches!(index, 8 | 13 | 18 | 23) {

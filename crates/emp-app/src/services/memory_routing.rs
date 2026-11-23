@@ -95,7 +95,7 @@ pub(crate) fn prepare(
     let prior = if kind == "memory_extraction" {
         let anchor = body
             .as_object()
-            .map(|body| emp_history::request_history_anchor(body, incoming))
+            .map(|body| emp_context::request_history_anchor(body, incoming))
             .transpose()
             .map_err(|_| fail("source_conflict"))?;
         let thread = anchor

@@ -6,7 +6,7 @@ const ALLOWED: &[(&str, usize)] = &[
     ("emp-codex", 0),
     ("emp-config", 0),
     ("emp-domain", 0),
-    ("emp-history", 0),
+    ("emp-context", 0),
     ("emp-modules", 0),
     ("emp-protocol", 0),
     ("emp-router", 0),

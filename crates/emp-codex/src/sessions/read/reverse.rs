@@ -2,7 +2,7 @@ use super::REVERSE_SCAN_WINDOW_CAP;
 use super::lines::{read_bounded_line, rollout_json_line};
 use super::records::{payload_resume_metadata, payload_window_number, replacement_history};
 use super::visible::{ordinal, record_turn_id, token};
-use emp_history::HistoryError;
+use emp_context::HistoryError;
 use serde_json::{Map, Value};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};

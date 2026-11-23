@@ -1,7 +1,7 @@
 use super::MAX_ROLLOUT_SCAN_BYTES;
 use super::location::Location;
 use super::visible::{content_text, normalize_visible_item, string_from, token, uuid_shape};
-use emp_history::{HistoryError, VisibleItem};
+use emp_context::{HistoryError, VisibleItem};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -77,7 +77,7 @@ pub(super) fn locate(database: &Path, thread: &str) -> Result<Location, HistoryE
     })
 }
 
-pub(super) fn session_meta_id(record: &Map<String, Value>) -> Option<String> {
+pub(crate) fn session_meta_id(record: &Map<String, Value>) -> Option<String> {
     let payload = record.get("payload").and_then(Value::as_object);
     string_from(
         payload.unwrap_or(record),
@@ -85,7 +85,7 @@ pub(super) fn session_meta_id(record: &Map<String, Value>) -> Option<String> {
     )
 }
 
-pub(super) fn session_meta_history_mode(
+pub(crate) fn session_meta_history_mode(
     record: &Map<String, Value>,
 ) -> Result<Option<String>, HistoryError> {
     let payload = record.get("payload").and_then(Value::as_object);
@@ -102,13 +102,13 @@ pub(super) fn session_meta_history_mode(
 /// Inherited prefix: `(parent rollout id, end_ordinal_exclusive, end_byte_offset)`;
 /// the byte offset freezes the fork point, while 0 or absent leaves only the ordinal cutoff.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct HistoryBase {
-    pub(super) thread_id: String,
-    pub(super) end_ordinal_exclusive: u64,
-    pub(super) end_byte_offset: u64,
+pub(crate) struct HistoryBase {
+    pub(crate) thread_id: String,
+    pub(crate) end_ordinal_exclusive: u64,
+    pub(crate) end_byte_offset: u64,
 }
 
-pub(super) fn session_meta_history_base(
+pub(crate) fn session_meta_history_base(
     record: &Map<String, Value>,
 ) -> Result<Option<HistoryBase>, HistoryError> {
     let Some(payload) = record.get("payload").and_then(Value::as_object) else {
@@ -221,7 +221,7 @@ pub(super) fn replacement_entries(
 ) -> Result<Vec<VisibleItem>, HistoryError> {
     let retained: BTreeSet<_> = replacement
         .iter()
-        .filter_map(emp_history::wire_replay_key)
+        .filter_map(emp_context::wire_replay_key)
         .collect();
     let mut output = Vec::new();
     for raw in &replacement {

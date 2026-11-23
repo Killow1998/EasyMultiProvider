@@ -17,7 +17,7 @@ routes, confirmations, source selection, retries and error contracts remain.
 | `emp-state` | Configuration, vault, file transactions, usage and diagnostic storage | Configuration and account commands own writes; HTTP adapters do not hydrate credentials or coordinate transactions. |
 | `emp-codex` | Concrete Codex history, catalogs, quota helpers and runtime observations | Catalog, account/quota and integration services own the complete user operation. |
 | `emp-codex::configuration` | Configuration leases, conflict detection, restoration | Integration commands own apply/restore/search/runtime sequencing; the lease manager retains transactional authority. |
-| `emp-history` | History/context preparation and compaction algorithms | Existing request preparation and history services retain ownership; preserve tool pairing and continuation behavior. |
+| `emp-context` | History/context preparation and compaction algorithms | Existing request preparation and history services retain ownership; preserve tool pairing and continuation behavior. |
 | `emp-router` | Protocol selection, projection and upstream dispatch | Existing native/external/Claude executors retain retry and outcome decisions. Provider discovery now belongs to the catalog service. |
 | `emp-protocol` | Responses/Chat/Anthropic projection and stream state | Keep the concrete protocol machines; do not impose one universal wire pipeline. |
 | `emp-transport` | Connections, TLS/proxy policy, limits, framing and socket lifecycle | Executors use the existing transport; wire adapters own downstream delivery evidence. |
@@ -133,7 +133,7 @@ flowchart TD
   API --> D[emp-router: discovery]
   API --> C[emp-codex: quota / runtime]
   API --> I[emp-codex configuration: leases / restore]
-  R --> H[emp-history]
+  R --> H[emp-context]
   R --> D
   D --> P[emp-protocol]
   D --> T[emp-transport]
@@ -154,7 +154,7 @@ flowchart TD
   API --> M[Account / settings / catalog / quota commands]
   API --> L[Integration commands / shutdown preparation]
   R --> K[emp-domain: route facts]
-  R --> H[emp-history]
+  R --> H[emp-context]
   R --> D[emp-router]
   D --> P[emp-protocol]
   D --> T[emp-transport]

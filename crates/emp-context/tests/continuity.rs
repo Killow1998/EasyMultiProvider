@@ -1,7 +1,7 @@
 //! History continuity: users resuming Codex threads through EMP must get
 //! their visible history back with stable request identity.
 
-use emp_history::{
+use emp_context::{
     HistoryError, HistoryReader, HistorySnapshot, VisibleItem, prepare, request_history_anchor,
 };
 use serde_json::{Value, json};
@@ -19,7 +19,7 @@ struct Reader(Vec<VisibleItem>);
 impl HistoryReader for Reader {
     fn read_compaction_history(
         &self,
-        anchor: &emp_history::HistoryAnchor,
+        anchor: &emp_context::HistoryAnchor,
         _: &serde_json::Map<String, Value>,
     ) -> Result<HistorySnapshot, HistoryError> {
         Ok(HistorySnapshot {
@@ -111,7 +111,7 @@ fn opaque_compaction_hides_only_the_prefix_and_keeps_pairs_intact() {
     );
     assert_eq!(input.last().expect("tail")["content"], "active tail");
     // The boundary tells providers where replayed history ends.
-    assert_eq!(projected[emp_history::ACTIVE_INPUT_START], 3);
+    assert_eq!(projected[emp_context::ACTIVE_INPUT_START], 3);
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn checkpoint_decoding_and_tool_pair_failures_are_distinct() {
             assert_eq!(error.diagnostic().category, "checkpoint");
         }
     }
-    let error = emp_history::build_compaction_replacement(&[
+    let error = emp_context::build_compaction_replacement(&[
         VisibleItem::new(
             "tool_call",
             json!({"name":"synthetic_tool", "arguments":"private-arguments"}),
@@ -187,7 +187,7 @@ fn reconstruction_requires_thread_and_turn_identity() {
     impl HistoryReader for WrongThread {
         fn read_compaction_history(
             &self,
-            _: &emp_history::HistoryAnchor,
+            _: &emp_context::HistoryAnchor,
             _: &serde_json::Map<String, Value>,
         ) -> Result<HistorySnapshot, HistoryError> {
             Ok(HistorySnapshot {

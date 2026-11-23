@@ -45,7 +45,7 @@ fn oversized_claude_history_can_reach_compaction_before_cli_input_validation() {
     let body = json!({
         "model":"claude/model", "instructions":"keep this instruction",
         "input":input, "max_output_tokens":4096,
-        (emp_history::ACTIVE_INPUT_START):active_start,
+        (emp_context::ACTIVE_INPUT_START):active_start,
         "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]
     });
     let assessment = assess_destination_context(&candidate, &body)
@@ -56,7 +56,7 @@ fn oversized_claude_history_can_reach_compaction_before_cli_input_validation() {
     assert_eq!(assessment.safe_input_limit, Some(995648));
 
     let mut summaries = 0;
-    let compacted = emp_history::context::compact_with(
+    let compacted = emp_context::context::compact_with(
         &body,
         candidate.model.value(),
         assessment.safe_input_limit.unwrap(),
@@ -83,7 +83,7 @@ fn oversized_claude_history_can_reach_compaction_before_cli_input_validation() {
             .contains("visible portable checkpoint")
     );
     assert_eq!(body["input"].as_array().unwrap().len(), 51);
-    assert_eq!(body[emp_history::ACTIVE_INPUT_START], active_start);
+    assert_eq!(body[emp_context::ACTIVE_INPUT_START], active_start);
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn oversized_active_input_and_fixed_instructions_are_not_silently_discarded() {
         let assessment = assess_destination_context(&candidate, &body)
             .unwrap_or_else(|_| panic!("bounded estimate must reach history assessment"));
         assert!(assessment.blocked());
-        let result = emp_history::context::compact_with(
+        let result = emp_context::context::compact_with(
             &body,
             candidate.model.value(),
             assessment.safe_input_limit.unwrap(),

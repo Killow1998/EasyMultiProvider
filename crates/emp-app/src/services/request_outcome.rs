@@ -94,7 +94,7 @@ impl<'a> RequestOutcome<'a> {
         };
         let turn = body
             .as_object()
-            .and_then(|body| emp_history::request_history_anchor(body, incoming).ok())
+            .and_then(|body| emp_context::request_history_anchor(body, incoming).ok())
             .and_then(|anchor| anchor.turn_id)
             .unwrap_or_default();
         let mut event = json!({"route":operation,"usage_category":category,"usage_owner":owner,"upstream_model":route.upstream_model,"route_model":route.requested_model,"usage_turn":turn,"service_tier":body["service_tier"].as_str().filter(|s|!s.is_empty()).unwrap_or("default"),
