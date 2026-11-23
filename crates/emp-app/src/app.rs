@@ -87,7 +87,6 @@ pub(crate) struct BackendState {
     pub(crate) provider_balances: crate::services::provider_balance::Balances,
     pub(crate) provider_quotas: crate::services::cpa_quota::PoolQuotas,
     pub(crate) app_icon: crate::services::app_icon::AppIcon,
-    pub(crate) guides: Arc<crate::services::hot_adapter::Guides>,
     pub(crate) auto_review: crate::services::auto_review::ReviewState,
     pub(crate) aggregate_availability: crate::services::auto_review::ReviewState,
     pub(crate) memory_status: crate::services::memory_routing::MemoryStatus,
@@ -196,9 +195,6 @@ impl BackendState {
         };
         Ok(Self {
             modules: Arc::new(modules),
-            guides: Arc::new(crate::services::hot_adapter::Guides::open(
-                state_root.join("hot-adapter/guide"),
-            )),
             aero_callers: Default::default(),
             team: crate::services::team::TeamState::open(
                 state_root.join("team-profile.json"),

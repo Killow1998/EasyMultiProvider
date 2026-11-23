@@ -171,7 +171,7 @@ const {render:renderCatalogDisplay,openEditor:openCatalogDisplayEditor,toggleCon
 const routingSettings = createRoutingSettings({api, getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
 const ultraSettings = createUltraSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
 const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
-const tutorials = createTutorials({openModal,$,tr,esc,api,getLanguage:() => language});
+const tutorials = createTutorials({openModal,$,tr,esc,getLanguage:() => language});
 const moduleSettings = createModuleSettings({api,openModal,notice,$,esc,tr,icon:uiIcon,getLanguage:() => language,onChange:renderModuleEntries,
   openMountedPanel:openTeamWorkspace,
   panelContext:() => ({api,notice,getState:() => state,cloneState,persistState,openModal,$,esc,tr,help:shadowHelp,modelName:modelDisplayName,
@@ -402,7 +402,6 @@ async function load() {
   applyPreferences(); drawLogo();
   try {
     state = await api('/api/config');
-    void tutorials.check().catch(() => {});
     void syncLanguage();
     const integration = loadIntegration();
     void moduleSettings.refresh().then(moduleSettings.checkHint).catch(() => {});

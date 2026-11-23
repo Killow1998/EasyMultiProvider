@@ -1,27 +1,39 @@
 use crate::http::response::response;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use url::Url;
 
-pub(super) const PACK: &str = "tutorials.json";
+pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
+    let path = if let Some(gif) = path.strip_prefix("/assets/tutorial-") {
+        format!("docs/assets/tutorials/{gif}")
+    } else {
+        path.strip_prefix("/guide/")?.to_owned()
+    };
+    Some(match Resource::find(&path)? {
+        Resource::Markdown(bytes) => render_doc(&path, bytes),
+        Resource::Gif(bytes) => response(
+            "HTTP/1.1 200 OK",
+            "image/gif",
+            bytes,
+            &[("Cache-Control", "no-store")],
+        ),
+    })
+}
 
-pub(super) enum Resource {
-    Pack,
+enum Resource {
     Markdown(&'static [u8]),
     Gif(&'static [u8]),
 }
 
 impl Resource {
-    pub(super) fn find(path: &str) -> Option<Self> {
+    fn find(path: &str) -> Option<Self> {
         macro_rules! embedded {
             ($kind:ident, $path:literal) => {
-                Self::$kind(include_bytes!(concat!("../../../../../", $path)))
+                Self::$kind(include_bytes!(concat!("../../../../", $path)))
             };
         }
 
         Some(match path {
-            PACK => Self::Pack,
             "README.md" => embedded!(Markdown, "README.md"),
             "README.zh-CN.md" => embedded!(Markdown, "README.zh-CN.md"),
             "docs/tutorials.md" => embedded!(Markdown, "docs/tutorials.md"),
@@ -74,64 +86,14 @@ impl Resource {
             _ => return None,
         })
     }
-
-    pub(super) fn embedded(&self) -> Option<&'static [u8]> {
-        match self {
-            Self::Pack => None,
-            Self::Markdown(bytes) | Self::Gif(bytes) => Some(bytes),
-        }
-    }
-
-    pub(super) fn limit(&self) -> usize {
-        match self {
-            Self::Pack => 32 * 1024,
-            Self::Markdown(_) => 512 * 1024,
-            Self::Gif(_) => 8 * 1024 * 1024,
-        }
-    }
-
-    pub(super) fn valid(&self, bytes: &[u8]) -> bool {
-        match self {
-            Self::Pack => parse_pack(bytes).is_some(),
-            Self::Markdown(_) => std::str::from_utf8(bytes).is_ok(),
-            Self::Gif(_) => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
-        }
-    }
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct TutorialPack {
-    schema_version: u8,
-    team_join: Localized<JoinLesson>,
-    titles: Localized<BTreeMap<String, String>>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Localized<T> {
-    zh: T,
-    en: T,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct JoinLesson {
-    title: String,
-    steps: [String; 3],
-}
-
-pub(super) fn parse_pack(bytes: &[u8]) -> Option<TutorialPack> {
-    let pack: TutorialPack = serde_json::from_slice(bytes).ok()?;
-    (pack.schema_version == 1).then_some(pack)
-}
-
-pub(super) fn render_doc(path: &str, bytes: &[u8]) -> Vec<u8> {
+fn render_doc(path: &str, bytes: &[u8]) -> Vec<u8> {
     let base = Url::parse(&format!(
         "https://github.com/Killow1998/EasyMultiProvider/blob/main/{path}"
     ))
     .expect("known guide URL");
-    let markdown = std::str::from_utf8(bytes).expect("validated guide Markdown");
+    let markdown = std::str::from_utf8(bytes).expect("embedded guide Markdown");
     let mut events: Vec<_> = Parser::new_ext(
         markdown,
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH,

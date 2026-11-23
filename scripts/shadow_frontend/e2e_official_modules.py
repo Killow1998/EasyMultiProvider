@@ -125,7 +125,7 @@ def https_workspace(stack, root, upstream_port):
 
 
 class Emp:
-    def __init__(self, stack, binary, root, config, release, ca=None, *, guide_source=None):
+    def __init__(self, stack, binary, root, config, release, ca=None):
         self.stack, self.binary, self.root = stack, binary, root
         root.mkdir()
         self.config = root / 'config.json'
@@ -148,8 +148,6 @@ class Emp:
                     'EMP_UPDATE_TEST_API_URL': release + '/releases?per_page=100'}
         if ca:
             self.env['SSL_CERT_FILE'] = str(ca)
-        if guide_source:
-            self.env['EMP_GUIDE_TEST_SOURCE'] = guide_source
         if os.environ.get('EMP_E2E_DESKTOP_NOTICE_LOG'):
             self.env['DBUS_SESSION_BUS_ADDRESS'] = os.environ['DBUS_SESSION_BUS_ADDRESS']
         self.restarts = 0

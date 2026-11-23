@@ -1,4 +1,4 @@
-function createTutorials({openModal, $, tr, esc, api, getLanguage}) {
+function createTutorials({openModal, $, tr, esc, getLanguage}) {
   const base = [
     ['gpt', [['native_context','00-native-context'], ['native_name','00-native-name'], ['remove_subscription','00-remove-subscription']]],
     ['external', [['add','01-add-service'], ['context','05-change-context'], ['rename','06-rename'], ['remove','04-remove-service']]],
@@ -9,12 +9,8 @@ function createTutorials({openModal, $, tr, esc, api, getLanguage}) {
   let teamJoined = false;
   const groups = () => [...base, ['team', teamJoined ? [joinLesson, ...teamLessons] : [joinLesson]]];
   const entries = () => new Map(groups().flatMap(([, items]) => items));
-  let selected = 'native_context', guide = null;
-  const locale = () => getLanguage() === 'en' ? 'en' : 'zh';
-  const joinCopy = () => guide?.team_join?.[locale()];
-  const title = id => (id === 'team_join' ? joinCopy()?.title : guide?.titles?.[locale()]?.[id]) || tr(`tutorials.${id}`);
-  const joinSteps = () => joinCopy()?.steps || ['team_join_install', 'team_join_invitation', 'team_join_submit'].map(key => tr(`tutorials.${key}`));
-  const check = () => api('/api/resources/tutorials').then(pack => { guide = pack; });
+  let selected = 'native_context';
+  const title = id => tr(`tutorials.${id}`);
   function setTeam(joined) { teamJoined = Boolean(joined); }
   function select(id) {
     const asset = entries().get(id);
@@ -37,8 +33,7 @@ function createTutorials({openModal, $, tr, esc, api, getLanguage}) {
       media.setAttribute('aria-busy', 'false');
       return;
     }
-    const version = guide?.version;
-    const url = `/assets/tutorial-${asset}.gif${version ? `?v=${version}` : ''}`;
+    const url = `/assets/tutorial-${asset}.gif`;
     fullSize.href = url;
     // Replace the whole image owner so late load/error events cannot change a new selection.
     media.innerHTML = `<div class="tutorial-placeholder"><p role="status">${esc(tr('tutorials.loading'))}</p><button type="button" class="secondary" hidden></button></div>`;
@@ -67,10 +62,10 @@ function createTutorials({openModal, $, tr, esc, api, getLanguage}) {
   }
   function open(navigation = {}) {
     if (!entries().has(selected)) selected = 'native_context';
-    const list = groups().map(([group, items]) => `<div class="tutorial-group"><h3 data-tutorial-group="${group}">${esc(title(group))}</h3>${items.map(([id]) => `<button type="button" data-tutorial="${id}" aria-controls="tutorial_demo" aria-pressed="false">${esc(title(id))}</button>`).join('')}</div>`).join('');
-    const documents = [[locale() === 'zh' ? 'README.zh-CN.md' : 'README.md', 'readme'], ['docs/self-update.md', 'install'], ['docs/tutorials.md', 'written']];
+    const list = groups().map(([group, items]) => `<div class="tutorial-group"><h3>${esc(title(group))}</h3>${items.map(([id]) => `<button type="button" data-tutorial="${id}" aria-controls="tutorial_demo" aria-pressed="false">${esc(title(id))}</button>`).join('')}</div>`).join('');
+    const documents = [[getLanguage() === 'en' ? 'README.md' : 'README.zh-CN.md', 'readme'], ['docs/self-update.md', 'install'], ['docs/tutorials.md', 'written']];
     const links = `<div class="tutorial-group tutorial-documents"><h3>${esc(tr('tutorials.docs'))}</h3>${documents.map(([path, id]) => `<a href="/guide/${path}" target="_blank" rel="noopener">${esc(tr(`tutorials.${id}`))}</a>`).join('')}</div>`;
-    const joinItems = joinSteps().map(step => `<li>${esc(step)}</li>`).join('');
+    const joinItems = ['team_join_install', 'team_join_invitation', 'team_join_submit'].map(key => `<li>${esc(tr(`tutorials.${key}`))}</li>`).join('');
     openModal(tr('tutorials.title'), `<div id="tutorials"><nav id="tutorial_list" aria-label="${esc(tr('tutorials.title'))}">${list}${links}</nav><div id="tutorial_demo"><div class="tutorial-heading"><h3 id="tutorial_title"></h3><a id="tutorial_full_size" target="_blank" rel="noopener">${esc(tr('tutorials.full_size'))}</a></div><ol id="tutorial_join_steps" hidden>${joinItems}</ol><div id="tutorial_stage" class="tutorial-stage"><div id="tutorial_media" aria-busy="true"></div></div></div></div>`, '', null, null, navigation);
     $('tutorial_list').onclick = event => {
       const button = event.target.closest('[data-tutorial]');
@@ -86,23 +81,6 @@ function createTutorials({openModal, $, tr, esc, api, getLanguage}) {
       buttons[next].scrollIntoView({block:'nearest'});
     };
     select(selected);
-    const owner = $('tutorials');
-    const version = guide?.version;
-    check().then(() => {
-      if (!owner.isConnected) return;
-      $('tutorial_list').querySelectorAll('[data-tutorial]').forEach(button => {
-        button.textContent = title(button.dataset.tutorial);
-      });
-      $('tutorial_list').querySelectorAll('[data-tutorial-group]').forEach(heading => {
-        heading.textContent = title(heading.dataset.tutorialGroup);
-      });
-      $('tutorial_join_steps').replaceChildren(...joinSteps().map(step => {
-        const item = document.createElement('li');
-        item.textContent = step;
-        return item;
-      }));
-      if (guide?.version !== version) select(selected);
-    }).catch(() => {});
   }
-  return {open, setTeam, check};
+  return {open, setTeam};
 }

@@ -31,7 +31,7 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         if !same_origin {
             return cross_origin_response("cross-origin guide request rejected");
         }
-        return crate::services::hot_adapter::asset_response(path, state)
+        return crate::services::guide_assets::asset_response(path)
             .unwrap_or_else(not_found_response);
     }
     if request.method == RequestMethod::Get
@@ -113,9 +113,6 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             }
             if request.method == RequestMethod::Get && path == "/api/image-credit" {
                 return crate::api::images::credit_status(state);
-            }
-            if request.method == RequestMethod::Get && path == "/api/resources/tutorials" {
-                return crate::services::hot_adapter::tutorials(state);
             }
             if request.method == RequestMethod::Get && path == "/api/modules" {
                 return crate::api::modules::read(state);
