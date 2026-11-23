@@ -3,7 +3,9 @@
 use crate::app::ServerState;
 use crate::services::auto_review::resolve_auto_review_route;
 use crate::services::providers::hydrate_provider_keys;
-use emp_domain::{Dialect, OpaqueJson, Protocol, ResolvedRoute, RouteResolutionError, resolve_route};
+use emp_domain::{
+    Dialect, OpaqueJson, Protocol, ResolvedRoute, RouteResolutionError, resolve_route,
+};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
