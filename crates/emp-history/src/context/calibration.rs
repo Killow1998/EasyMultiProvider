@@ -118,9 +118,9 @@ pub(super) fn limits(
         calibration,
     }
 }
+/// Model inspection has no request or projected input to reserve output for.
 pub fn status(provider: &Map<String, Value>, model: &Map<String, Value>, protocol: &str) -> Value {
     let mut result = identity(provider, model, protocol);
-    // Model inspection has no request or projected input to reserve output for.
     let output = positive_integer(model.get("output_limit"));
     let reserves = Some(SAFETY_RESERVE_TOKENS);
     let limits = limits(provider, model, protocol, reserves);

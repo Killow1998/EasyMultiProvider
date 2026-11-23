@@ -34,7 +34,9 @@ pub fn assess(
 }
 
 /// With a known budget, an unavailable estimate still requires compaction
-/// and does not authorize oversized input.
+/// and does not authorize oversized input. A flexible output reserve is fitted to the
+/// measured input; with an unknown estimate the planner compacts first and then
+/// assesses the actual outgoing request.
 pub fn assess_with_input_estimate(
     provider: &Map<String, Value>,
     model: &Map<String, Value>,
@@ -56,8 +58,6 @@ pub fn assess_with_input_estimate(
         && let (Some(requested), Some(window)) = (output_reserve, context_window(provider, model).0)
         && !input_only_window(model)
     {
-        // Fit a ceiling to the measured input. With an unknown estimate, the planner
-        // first compacts the input and then assesses the actual outgoing request.
         let remaining = input_estimate.map_or(1, |input| {
             window
                 .saturating_sub(input)

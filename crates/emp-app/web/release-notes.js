@@ -75,7 +75,6 @@ function renderReleaseNotes(container, markdown) {
   renderedReleaseNotes.set(container, markdown);
 }
 
-// Prefer maintained language sections; never substitute a machine translation.
 function localizedReleaseNotes(body,version,locale) {
   const text=String(body||'').trim(), chinese=locale!=='en';
   const lines=text.split('\n'), sections=new Map();let current=null;
