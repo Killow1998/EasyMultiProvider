@@ -1,5 +1,30 @@
+use crate::tool_pairs::Endpoint;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub(super) fn paired_boundary(items: &[Value], mut cut: usize) -> usize {
+    if cut == 0 || cut == items.len() {
+        return cut;
+    }
+    let mut outputs = BTreeMap::new();
+    for (index, item) in items.iter().enumerate().rev() {
+        match Endpoint::from_wire(item) {
+            Some(Endpoint::Output(kind, id)) => {
+                outputs.insert((kind, id), index);
+            }
+            Some(Endpoint::Call(kind, id)) => {
+                if outputs
+                    .remove(&(kind, id))
+                    .is_some_and(|output| index < cut && cut <= output)
+                {
+                    cut = index;
+                }
+            }
+            None => {}
+        }
+    }
+    cut
+}
 
 pub(super) fn split_atomic_units(items: &[Value], tool_exchanges: bool) -> Vec<Vec<Value>> {
     let mut result = Vec::new();

@@ -1,7 +1,9 @@
 const uiCopy = Object.create(null);
 function registerUiCopy(entries) { Object.assign(uiCopy, entries); }
 function translateUiCopy(key, language, values = {}) {
-  const text = uiCopy[key]?.[language === 'en' ? 1 : 0] ?? key;
+  const zero = values.count === 0 || values.count === '0';
+  const pair = zero ? uiCopy[key + '.zero'] ?? uiCopy[key] : uiCopy[key];
+  const text = pair?.[language === 'en' ? 1 : 0] ?? key;
   return text.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, (placeholder, name) =>
     Object.hasOwn(values, name) ? String(values[name]) : placeholder);
 }

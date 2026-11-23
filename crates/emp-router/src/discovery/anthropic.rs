@@ -35,8 +35,8 @@ pub async fn discover_anthropic_models(
     for _ in 0..MAX_DISCOVERY_PAGES {
         let value = get_json(client, &url, headers.clone(), &mut budget).await?;
         append_anthropic_models(&value, &mut result)?;
-        let has_more = value.get("has_more").is_some_and(python_truthy);
-        let after_id = value.get("last_id").filter(|value| python_truthy(value));
+        let has_more = value.get("has_more").is_some_and(json_truthy);
+        let after_id = value.get("last_id").filter(|value| json_truthy(value));
         if !has_more || after_id.is_none() {
             break;
         }
@@ -76,29 +76,22 @@ fn append_anthropic_models(
         let Some(model_id) = model_id(item.get("id")) else {
             continue;
         };
-        let capabilities = item
-            .get("capabilities")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        let thinking = nested_supported(&capabilities, "thinking");
-        let effort = nested_supported(&capabilities, "effort");
-        let image = nested_supported(&capabilities, "image_input");
-        let pdf = nested_supported(&capabilities, "pdf_input");
-        let structured_output = nested_supported(&capabilities, "structured_outputs");
-        let explicit_reasoning = [thinking, effort].into_iter().flatten().collect::<Vec<_>>();
-        let supports_reasoning = (!explicit_reasoning.is_empty())
-            .then(|| explicit_reasoning.into_iter().any(|value| value));
+        let capabilities = item.get("capabilities").unwrap_or(&Value::Null);
+        let thinking = nested_supported(capabilities, "thinking");
+        let effort = nested_supported(capabilities, "effort");
+        let image = nested_supported(capabilities, "image_input");
+        let pdf = nested_supported(capabilities, "pdf_input");
+        let structured_output = nested_supported(capabilities, "structured_outputs");
+        let supports_reasoning = match (thinking, effort) {
+            (None, None) => None,
+            (thinking, effort) => Some(thinking == Some(true) || effort == Some(true)),
+        };
         let supports_summaries = advertised_reasoning_summaries(item);
         let mut reasoning_levels = Vec::new();
         if effort == Some(true) {
-            let effort = capabilities
-                .get("effort")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
+            let effort = &capabilities["effort"];
             for level in ["low", "medium", "high", "xhigh", "max"] {
-                if nested_supported(&effort, level) == Some(true) {
+                if nested_supported(effort, level) == Some(true) {
                     reasoning_levels.push(level.to_owned());
                 }
             }
@@ -110,82 +103,51 @@ fn append_anthropic_models(
             extra_sources.insert("structured_output".to_owned(), source("advertised"));
         }
         let modality_evidence = image.is_some() || pdf.is_some();
-        let mut raw_input = vec![Value::String("text".to_owned())];
+        let mut raw_input = vec!["text"];
         if image == Some(true) {
-            raw_input.push(Value::String("image".to_owned()));
+            raw_input.push("image");
         }
         if pdf == Some(true) {
-            raw_input.push(Value::String("pdf".to_owned()));
+            raw_input.push("pdf");
         }
-        let raw_input = Value::Array(raw_input);
         let max_input = positive_int(item.get("max_input_tokens"));
         let max_output = positive_int(item.get("max_tokens"));
         let display_name = model_text(item.get("display_name"), &model_id)?;
         let mut capability_sources = Map::from_iter([
             (
                 "supports_reasoning".to_owned(),
-                source(if supports_reasoning.is_some() {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
+                declared_source(supports_reasoning.is_some()),
             ),
             (
                 "supports_reasoning_summaries".to_owned(),
-                source(if supports_summaries.is_some() {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
+                declared_source(supports_summaries.is_some()),
             ),
             (
                 "reasoning_levels".to_owned(),
-                source(if !reasoning_levels.is_empty() || effort == Some(false) {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
+                declared_source(!reasoning_levels.is_empty() || effort == Some(false)),
             ),
             (
                 "input_modalities".to_owned(),
-                source(if modality_evidence {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
+                declared_source(modality_evidence),
             ),
-            (
-                "output_modalities".to_owned(),
-                source(output_modalities_metadata_source(None)),
-            ),
+            ("output_modalities".to_owned(), source("unknown")),
             (
                 "supports_image_detail_original".to_owned(),
                 source("unknown"),
             ),
             (
                 "context_window".to_owned(),
-                source(if max_input > 0 {
-                    "advertised"
+                if max_input > 0 {
+                    json!({"source":"advertised","input_only":true})
                 } else {
-                    "unknown"
-                }),
+                    source("unknown")
+                },
             ),
             (
                 "max_input_tokens".to_owned(),
-                source(if max_input > 0 {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
+                declared_source(max_input > 0),
             ),
-            (
-                "output_limit".to_owned(),
-                source(if max_output > 0 {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
-            ),
+            ("output_limit".to_owned(), declared_source(max_output > 0)),
         ]);
         capability_sources.extend(extra_sources);
         let mut entry = json!({
@@ -198,8 +160,8 @@ fn append_anthropic_models(
             "supports_reasoning": supports_reasoning,
             "supports_reasoning_summaries": supports_summaries,
             "reasoning_levels": reasoning_levels,
-            "input_modalities": normalize_input_modalities(Some(&raw_input)),
-            "output_modalities": normalize_output_modalities(None),
+            "input_modalities": raw_input,
+            "output_modalities": ["text"],
             "supports_image_detail_original": false,
             "capability_sources": capability_sources,
             "created_at": created_timestamp(item.get("created_at")),

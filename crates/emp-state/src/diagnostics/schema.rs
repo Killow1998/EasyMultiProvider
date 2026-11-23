@@ -1,5 +1,6 @@
 //! Only allowlisted diagnostic fields may pass; raw content is excluded.
 use super::Journal;
+use emp_domain::json_truthy;
 use regex::Regex;
 use serde_json::{Value, json};
 use std::sync::LazyLock;
@@ -52,16 +53,6 @@ fn select(value: &Value, choices: &[&str], default: &str) -> String {
 }
 fn fallback<'a>(event: &'a Value, key: &str, alternative: &str) -> &'a Value {
     event.get(key).unwrap_or(&event[alternative])
-}
-fn truth(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
 }
 pub fn route_record(event: &Value, journal: &Journal) -> Value {
     let mut record = serde_json::Map::new();
@@ -316,7 +307,7 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
         "terminal_event_observed",
         "recovery_succeeded",
     ] {
-        record.insert(field.into(), json!(truth(&event[field])));
+        record.insert(field.into(), json!(json_truthy(&event[field])));
     }
     for key in ["connection_reused", "has_previous_response"] {
         record.insert(
@@ -326,7 +317,11 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
     }
     record.insert(
         "fallback".into(),
-        json!(truth(fallback(event, "protocol_fallback", "fallback"))),
+        json!(json_truthy(fallback(
+            event,
+            "protocol_fallback",
+            "fallback"
+        ))),
     );
     record.insert(
         "retry_count".into(),

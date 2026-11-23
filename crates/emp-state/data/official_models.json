@@ -1371,12 +1371,11 @@
       ],
       "supports_reasoning": true,
       "reasoning_levels": [
-        "minimal",
         "low",
         "medium",
         "high"
       ],
-      "reasoning_control": "thinkingLevel param: minimal, low, medium, high",
+      "reasoning_control": "thinkingLevel: LOW, MEDIUM (default), HIGH",
       "tool_calling": true,
       "parallel_tool_calling": null,
       "structured_output": true,
@@ -1393,6 +1392,7 @@
           "https://ai.google.dev/gemini-api/docs/models"
         ],
         "reasoning_levels": [
+          "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking",
           "https://ai.google.dev/gemini-api/docs/thinking"
         ],
         "protocols": [
@@ -1402,7 +1402,7 @@
           "https://openrouter.ai/api/v1/models"
         ]
       },
-      "reviewed_at": "2026-10-30"
+      "reviewed_at": "2026-11-22"
     },
     {
       "provider_key": "google_gemini",
@@ -2402,12 +2402,28 @@
     },
     {
       "provider_key": "google_gemini",
-      "model_id": "gemini-4-hydrogen",
-      "display_name": "Gemini 4 Hydrogen",
-      "reviewed_at": "2026-11-13",
+      "model_id": "gemini-4-neon",
+      "display_name": "Gemini 4 Neon",
+      "reviewed_at": "2026-11-22",
       "context_window": 1048576,
       "max_input_tokens": 1048576,
-      "max_output_tokens": 65536,
+      "max_output_tokens": 1048576,
+      "input_modalities": ["text", "image", "audio", "video", "file"],
+      "output_modalities": ["text"],
+      "supports_reasoning": true,
+      "reasoning_levels": ["low", "medium", "high", "xhigh"],
+      "reasoning_control": "thinkingLevel: LOW, MEDIUM, HIGH (default), XHIGH. Foreground output is limited to one segment.",
+      "aliases": ["google/gemini-4-neon"],
+      "sources_by_field": {"all": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-neon"]}
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-4-hydrogen",
+      "display_name": "Gemini 4 Hydrogen",
+      "reviewed_at": "2026-11-22",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 1048576,
       "input_modalities": ["text", "image", "audio", "video", "file"],
       "output_modalities": ["text"],
       "supports_reasoning": true,
@@ -2423,71 +2439,91 @@
       "provider_key": "google_gemini",
       "model_id": "gemini-4-carbon",
       "display_name": "gemini-4-carbon",
-      "reviewed_at": "2026-11-12",
+      "reviewed_at": "2026-11-22",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 1048576,
+      "supports_reasoning": true,
+      "reasoning_levels": ["low", "medium", "high"],
       "input_modalities": ["text", "image", "audio", "video", "file"],
       "output_modalities": ["text"],
-      "aliases": [],
-      "sources_by_field": {"input_modalities": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-carbon"], "output_modalities": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-carbon"]}
+      "aliases": ["google/gemini-4-carbon", "gemini-4-carbon-cyber-permissive", "google/gemini-4-carbon-cyber-permissive"],
+      "sources_by_field": {"context_window": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-carbon"], "max_output_tokens": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-carbon"], "supports_reasoning": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "reasoning_levels": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "input_modalities": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-carbon"], "output_modalities": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-carbon"]}
     },
     {
       "provider_key": "google_gemini",
       "model_id": "gemini-4-argon",
       "display_name": "gemini-4-argon",
-      "reviewed_at": "2026-10-30",
+      "reviewed_at": "2026-11-22",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 1048576,
+      "supports_reasoning": true,
+      "reasoning_levels": ["low", "medium", "high"],
       "input_modalities": ["text", "image", "audio", "video", "file"],
       "output_modalities": ["text"],
-      "aliases": ["google/gemini-4-argon"],
-      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-4-argon"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-4-argon"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+      "aliases": ["google/gemini-4-argon", "gemini-4-argon-cyber-permissive", "google/gemini-4-argon-cyber-permissive"],
+      "sources_by_field": {"context_window": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon"], "max_output_tokens": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon"], "supports_reasoning": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "reasoning_levels": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-4-argon"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-4-argon"], "aliases": ["https://openrouter.ai/api/v1/models"]}
     },
     {
       "provider_key": "google_gemini",
       "model_id": "gemini-3.8-flash",
       "display_name": "gemini-3.8-flash",
-      "reviewed_at": "2026-10-30",
+      "reviewed_at": "2026-11-22",
+      "supports_reasoning": true,
+      "reasoning_levels": ["low", "medium", "high"],
       "input_modalities": ["text", "image", "audio", "video", "file"],
       "output_modalities": ["text"],
       "aliases": ["google/gemini-3.8-flash"],
-      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+      "sources_by_field": {"supports_reasoning": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "reasoning_levels": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash"], "aliases": ["https://openrouter.ai/api/v1/models"]}
     },
     {
       "provider_key": "google_gemini",
       "model_id": "gemini-3.5-flash",
       "display_name": "gemini-3.5-flash",
-      "reviewed_at": "2026-10-30",
+      "reviewed_at": "2026-11-22",
+      "supports_reasoning": true,
+      "reasoning_levels": ["minimal", "low", "medium", "high"],
       "input_modalities": ["text", "image", "audio", "video", "file"],
       "output_modalities": ["text"],
       "aliases": ["google/gemini-3.5-flash"],
-      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+      "sources_by_field": {"supports_reasoning": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "reasoning_levels": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash"], "aliases": ["https://openrouter.ai/api/v1/models"]}
     },
     {
       "provider_key": "google_gemini",
       "model_id": "gemini-3.5-flash-lite",
       "display_name": "gemini-3.5-flash-lite",
-      "reviewed_at": "2026-10-30",
+      "reviewed_at": "2026-11-22",
+      "supports_reasoning": true,
+      "reasoning_levels": ["minimal", "low", "medium", "high"],
       "input_modalities": ["text", "image", "audio", "video", "file"],
       "output_modalities": ["text"],
       "aliases": ["google/gemini-3.5-flash-lite"],
-      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+      "sources_by_field": {"supports_reasoning": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "reasoning_levels": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite"], "aliases": ["https://openrouter.ai/api/v1/models"]}
     },
     {
       "provider_key": "google_gemini",
       "model_id": "gemini-3.1-flash-lite",
       "display_name": "gemini-3.1-flash-lite",
-      "reviewed_at": "2026-10-30",
+      "reviewed_at": "2026-11-22",
+      "supports_reasoning": true,
+      "reasoning_levels": ["minimal", "low", "medium", "high"],
       "input_modalities": ["text", "image", "audio", "video", "file"],
       "output_modalities": ["text"],
       "aliases": ["google/gemini-3.1-flash-lite"],
-      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+      "sources_by_field": {"supports_reasoning": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "reasoning_levels": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite"], "aliases": ["https://openrouter.ai/api/v1/models"]}
     },
     {
       "provider_key": "google_gemini",
       "model_id": "gemini-3.1-pro-preview",
       "display_name": "gemini-3.1-pro-preview",
-      "reviewed_at": "2026-10-30",
+      "reviewed_at": "2026-11-22",
+      "supports_reasoning": true,
+      "reasoning_levels": ["low", "medium", "high"],
       "input_modalities": ["text", "image", "audio", "video", "file"],
       "output_modalities": ["text"],
       "aliases": ["google/gemini-3.1-pro-preview"],
-      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+      "sources_by_field": {"supports_reasoning": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "reasoning_levels": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"], "aliases": ["https://openrouter.ai/api/v1/models"]}
     },
     {
       "provider_key": "google_gemini",
@@ -2503,11 +2539,13 @@
       "provider_key": "google_gemini",
       "model_id": "gemini-3-flash-preview",
       "display_name": "gemini-3-flash-preview",
-      "reviewed_at": "2026-10-30",
+      "reviewed_at": "2026-11-22",
+      "supports_reasoning": true,
+      "reasoning_levels": ["minimal", "low", "medium", "high"],
       "input_modalities": ["text", "image", "audio", "video", "file"],
       "output_modalities": ["text"],
       "aliases": ["google/gemini-3-flash-preview"],
-      "sources_by_field": {"input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview"], "aliases": ["https://openrouter.ai/api/v1/models"]}
+      "sources_by_field": {"supports_reasoning": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "reasoning_levels": ["https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking"], "input_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview"], "output_modalities": ["https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview"], "aliases": ["https://openrouter.ai/api/v1/models"]}
     },
     {
       "provider_key": "google_gemini",

@@ -152,6 +152,30 @@ fn compaction_keeps_recent_tool_pairs_and_preserves_summary_shape() {
 }
 
 #[test]
+fn explicit_active_start_cannot_split_a_tool_exchange_during_compaction() {
+    let body = json!({
+        "input":[
+            message(&"p".repeat(1400)),
+            {"type":"function_call","name":"lookup","call_id":"crossing","arguments":"{}"},
+            {"type":"function_call_output","call_id":"crossing","output":"r".repeat(1000)},
+            message("continue")
+        ],
+        "_emp_active_input_start":2, "max_output_tokens":32
+    });
+    let result = compact_with(&body, &Map::new(), 1200, |request| {
+        assert!(
+            !request.to_string().contains("crossing"),
+            "active tool entered summary"
+        );
+        Ok("older context".to_owned())
+    })
+    .unwrap();
+    let input = result["input"].as_array().unwrap();
+    assert_eq!(input[1..], body["input"].as_array().unwrap()[1..]);
+    assert!(input[0].to_string().contains("older context"));
+}
+
+#[test]
 fn compaction_keeps_summary_and_unit_failure_reasons() {
     let history = (0..20)
         .map(|index| message(&format!("history {index} {}", "x".repeat(300))))

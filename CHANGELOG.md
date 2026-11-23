@@ -2,6 +2,85 @@
 
 ## Unreleased
 
+## 0.15.7 (2026-11-23)
+
+### 中文
+#### 问题修复
+
+- 父对话已调用过工具时，在侧边对话（sidechat）中切换到外部模型，之前可能提示调用重复，或把已经完成的工具误报为「已中止」。现在即使对话在工具调用和结果之间压缩过，模型也能读到原有结果。
+- 切换到上下文窗口更小的模型后，EMP 再次压缩历史时，会为当前回合一起保留工具调用和对应结果。
+
+从 0.15.6 升级只需更新桌面端 EMP Core。
+
+### English
+
+#### Fixes
+
+- When a parent conversation had already used a tool, continuing in a side chat with an external model could fail on duplicate tool calls or return "aborted" instead of the real output. EMP now keeps the result even when the call and result fall on different sides of a saved compaction.
+- After switching to a model with a smaller context window, further compaction keeps an active tool result together with its call.
+
+To upgrade from 0.15.6, update desktop EMP Core.
+
+## 0.15.6 (2026-11-23)
+
+### 中文
+
+从 0.15.5 升级时，只需更新桌面版 EMP Core。团队空间模组和 VPS 团队服务可继续使用当前版本。
+
+#### 改进
+
+- **查看模型能力。** 在服务的模型列表中可以查看已声明的图像输入能力和思考档位。EMP 结合上游服务、官方资料和每日刷新的 LiteLLM 目录，区分目录列出的档位与实际可选档位，并保留手动设置。
+- **编辑模型。** 「编辑模型」里的服务、上游模型名与帮助按钮已对齐。
+- **阅读更新说明。** Core 和模组的「检查更新」窗口现在按标题和列表排版发行说明。
+
+#### 问题修复
+
+- **长对话的输入空间。** 外部模型的上下文窗口与最大输出相等时，EMP 曾可能把可用历史空间算成零。现在会区分输入上限与输入输出共用的窗口，并按本次请求预留输出。
+- **接续 Codex 会话。** 修复 Codex 为同一会话轮换历史文件后，EMP 可能找不到上一段历史并报告 `source_missing` 的问题。
+
+### English
+
+To upgrade from 0.15.5, update desktop EMP Core. Your current Team Workspace module and VPS service can stay in place.
+
+#### Improvements
+
+- **View model capabilities.** The model list for a service shows declared image input support and reasoning levels. EMP combines upstream declarations, official model information and the daily LiteLLM catalog. The list distinguishes catalog-reported levels from selectable levels and keeps your manual overrides.
+- **Edit a model.** The service and upstream model fields now line up with their help controls in the model editor.
+- **Read release notes.** Check for Updates now displays headings and lists for both Core and module releases.
+
+#### Fixes
+
+- **Input space for long conversations.** When an external model had equal context and maximum output limits, EMP could calculate zero space for history. It now distinguishes input-only limits from shared context windows and accounts for the output reserved for each request.
+- **Resume a Codex conversation.** When Codex rotated a thread’s history file, EMP could lose track of the preceding segment and report `source_missing`. EMP now follows the rotated segments.
+
+## 0.15.5 (2026-11-22)
+
+### 中文
+
+使用团队共享订阅的电脑只需把桌面 EMP Core 从 0.15.4 更新到 0.15.5，已部署的团队空间模组和 VPS 团队服务仍保持 0.10.2-beta。
+
+#### 问题修复
+
+- **刷新额度**。修复了团队共享的 Codex 订阅登录有效，点「刷新额度」却提示「Codex 无法读取账号登录状态」的问题。
+- **重复账号**。同一个订阅同时在团队和本机 Other 里时，切换账号或查看用量可能会看到“账号名”和“账号名 2”。现在只显示本机原有的名称，保留模型设置，并使用有效期更晚的可用登录。
+
+#### 升级后怎么做
+
+已经同步过最新登录的电脑，直接在服务列表中点该账号的「刷新额度」。如果订阅持有者刚重新上传了登录，先在「团队空间 → 同步」点一次，再刷新额度。再次同步时如果没有变化，会提示「当前没有需要更新的共享订阅」。
+
+### English
+
+On computers that use team-shared subscriptions, update desktop EMP Core from 0.15.4 to 0.15.5. Deployed Team Workspace modules and the VPS team service stay on 0.10.2-beta.
+
+#### Fixes
+
+- **Quota refresh.** Fixed an issue where clicking **Refresh quota** for a team-shared Codex subscription showed “Codex could not read the account login state” even with a valid login.
+- **Duplicate accounts.** When the same subscription was in both Team Workspace and your local Other list, you could see both “Account” and “Account 2” when switching accounts or checking usage. EMP now shows just the local name, keeps your model settings, and uses the available login with the later expiry.
+
+#### After you update
+
+If this computer has already synced the latest login, just click **Refresh quota** for that account in the service list. If the subscription owner has just re-uploaded their login, click **Team Workspace → Sync** once, then refresh the quota. If nothing has changed, syncing again will tell you there are no shared subscriptions to update.
+
 ## 0.15.4 (2026-11-22)
 
 ### 中文

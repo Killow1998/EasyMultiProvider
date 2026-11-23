@@ -149,20 +149,24 @@ fn prepare_external_request(
     }
 
     let model = route.model.value();
-    if let Some(limit) = model
+    let configured_limit = model
         .get("output_limit")
         .and_then(Value::as_u64)
-        .filter(|value| *value > 0)
+        .filter(|&n| n > 0);
+    let requested = body.get("max_output_tokens");
+    let implicit = requested.is_none_or(Value::is_null);
+    let source = model
+        .get("capability_sources")
+        .and_then(|sources| sources["output_limit"]["source"].as_str());
+    let user_limit = !matches!(
+        source,
+        Some("catalog" | "official" | "advertised" | "observed")
+    );
+    if let Some(limit) = configured_limit
+        && ((implicit && user_limit)
+            || requested.and_then(Value::as_u64).is_some_and(|n| n > limit))
     {
-        match body.get("max_output_tokens") {
-            None | Some(Value::Null) => {
-                body.insert("max_output_tokens".into(), limit.into());
-            }
-            Some(value) if value.as_u64().is_some_and(|value| value > limit) => {
-                body.insert("max_output_tokens".into(), limit.into());
-            }
-            _ => {}
-        }
+        body.insert("max_output_tokens".into(), limit.into());
     }
     let policy = summary_policy(config, route, model);
     let supported = model
@@ -175,6 +179,7 @@ fn prepare_external_request(
     let preserve_summary = supported && responses_capable && policy != SummaryPolicy::Hide;
 
     let mut request_model = model.clone();
+    request_model.insert("_emp_flexible_output_limit".into(), Value::Bool(true));
     request_model.insert(
         "_emp_reasoning_summary_policy".to_owned(),
         Value::String(

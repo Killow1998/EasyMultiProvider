@@ -84,6 +84,7 @@ impl TeamState {
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         let plan: SyncPlan = policy(state, Request::SyncShares { shares: metadata })?;
+        let syncable = plan.selected.len();
         let selected = plan
             .selected
             .into_iter()
@@ -189,7 +190,11 @@ impl TeamState {
             drop(config);
             super::super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
         }
-        Ok(json!({"synced":changed,"skipped_native":plan.skipped_native}))
+        Ok(json!({
+            "synced": changed,
+            "unchanged": syncable - changed,
+            "skipped_native": plan.skipped_native,
+        }))
     }
 
     pub(crate) fn purge_local(&self, state: &ServerState) -> Result<()> {

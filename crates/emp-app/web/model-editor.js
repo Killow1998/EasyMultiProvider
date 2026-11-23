@@ -46,13 +46,13 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
     modalModalitiesEdited = false;
     modalReasoningEdited = false;
     const body = `<div class="grid">
-      <div><label>${tr("common.provider")}</label><select id="modal_model_provider" data-editor-change="route">${options}</select></div>
-      <div><label id="modal_model_upstream_label">${upstreamLabel}</label> ${help(tr("models.set_the_model_name_and_context_label_in_model"))}<input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${upstreamPlaceholder}" data-editor-input="route"></div>
+      <div><div class="model-field-heading"><label for="modal_model_provider">${tr("common.provider")}</label></div><select id="modal_model_provider" data-editor-change="route">${options}</select></div>
+      <div><div class="model-field-heading"><label id="modal_model_upstream_label" for="modal_model_upstream">${upstreamLabel}</label>${help(tr("models.set_the_model_name_and_context_label_in_model"))}</div><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${upstreamPlaceholder}" data-editor-input="route"></div>
       <div class="wide"><label>${tr("models.maximum_context_window")} ${help('').replace('data-shadow-help=', 'id="modal_model_context_help" data-shadow-help=')}</label><div class="input-action"><input id="modal_model_context" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.context_window || 0)}" data-editor-input="context"><button id="modal_model_context_inspect" type="button" class="secondary" data-editor-action="inspect" ${localClaude ? 'hidden' : ''}>${tr("models.fetch_upstream_maximum")}</button></div><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr("models.codex_uses", {context:compactContext(usableContext(existing))}) : ''}</small></div>
       <div class="wide"><label for="modal_model_output">${tr('models.maximum_output')} ${help(tr('models.maximum_output_help'))}</label><input id="modal_model_output" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.output_limit || 0) || ''}" placeholder="${tr('models.output_default')}"></div>
       <div class="wide"><label>${tr("models.available_reasoning_levels")} ${help(tr("models.choose_the_effort_when_selecting_a_model_in_codex"))}</label><div id="modal_model_reasoning" class="modality-options">${reasoningOptions(modalReasoningLevels || [])}</div></div>
       <div class="wide"><label>${tr("models.input_modalities")}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}</div></div>
-      <div class="wide"><code id="modal_model_route" hidden></code></div></div>`;
+      <code id="modal_model_route" hidden></code></div>`;
     openModal(modelId ? tr("models.edit_model") : tr("add_model"), `<div id="model_editor">${body}</div>`, tr("models.save_model"), async () => { const node = $('model_editor'); await saveManualModel(); if ($('model_editor') === node) closeModal(); }, null, navigation);
     const root = $('model_editor');
     root.onchange = event => {
@@ -61,7 +61,17 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
       else if (action === 'reasoning') modalReasoningEdited = true;
       else if (action === 'modality') { modalModalitiesEdited = true; if (event.target.value === 'image') modalVisionStatus = event.target.checked ? 'supported' : 'unsupported'; }
     };
-    root.oninput = event => { if (event.target.dataset.editorInput === 'route') updateManualModelRoute(); else if (event.target.dataset.editorInput === 'context') { event.target.value = event.target.value.replace(/\D/g,''); previewModalContext(); } };
+    root.oninput = event => {
+      const input = event.target;
+      if (input.dataset.editorInput === 'route') updateManualModelRoute();
+      if (input.id === 'modal_model_context' || input.id === 'modal_model_output') {
+        input.dataset.source = 'manual';
+        if (input.id === 'modal_model_context') {
+          input.value = input.value.replace(/\D/g,'');
+          previewModalContext();
+        }
+      }
+    };
     root.onclick = event => { const action = event.target.closest('[data-editor-action]')?.dataset.editorAction; if (action === 'inspect') inspectModalModel(); else if (action === 'vision') testModalVision(); else if (action === 'audio') testModalAudio(); };
     if (selectedProviderId) $('modal_model_provider').value = selectedProviderId;
     updateManualModelRoute();
@@ -103,11 +113,15 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
       if (controller.signal.aborted || $('model_editor') !== root) return;
       $('modal_model_context').value = result.context_window;
       $('modal_model_output').value = Number(result.output_token_limit) || '';
+      $('modal_model_context').dataset.source = 'advertised';
+      $('modal_model_output').dataset.source = 'advertised';
       previewModalContext();
-      modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : [];
-      modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null;
-      modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null;
-      $('modal_model_reasoning').innerHTML = reasoningOptions(modalReasoningLevels); modalReasoningEdited = true;
+      if (result.reasoning_levels?.length && !modalReasoningEdited) {
+        modalReasoningLevels = result.reasoning_levels;
+        $('modal_model_reasoning').innerHTML = reasoningOptions(modalReasoningLevels);
+      }
+      if (typeof result.supports_reasoning === 'boolean') modalReasoningSupport = result.supports_reasoning;
+      if (typeof result.supports_reasoning_summaries === 'boolean') modalReasoningSummarySupport = result.supports_reasoning_summaries;
       updateManualModelRoute();
       notice(tr("models.limits_fetched_input_output", {inputTokenLimit:Number(result.input_token_limit).toLocaleString(), outputTokenLimit:Number(result.output_token_limit).toLocaleString()}));
     } catch (error) { if (!controller.signal.aborted && $('model_editor') === root) notice(tr("models.fetch_failed") + upstreamErrorText(error),true); }
@@ -121,6 +135,9 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
     const upstream = entered.startsWith(prefix) ? entered.slice(prefix.length) : entered;
     const id = prefix + upstream;
     const previous = getState().models.find(m => m.id === editingModelId);
+    const contextSource = $('modal_model_context').dataset.source;
+    const outputSource = $('modal_model_output').dataset.source;
+    const contextWindow = Number($('modal_model_context').value) || 0;
     const outputText = $('modal_model_output').value.trim();
     const outputLimit = outputText ? Number(outputText) : 0;
     if (outputText && (!/^\d+$/.test(outputText) || !Number.isSafeInteger(outputLimit) || outputLimit<=0)) throw new Error(tr('models.invalid_output_limit'));
@@ -144,10 +161,14 @@ function createModelEditor({getState, $, tr, esc, api, persistState, openModal, 
       display_name:previous?.display_name || upstream, description:previous?.description || '',
       family_id:previous?.family_id || '', supports_reasoning:support,
       supports_reasoning_summaries:summarySupport, reasoning_levels:levels,
-      context_window:Number($('modal_model_context').value) || 0,
+      context_window:contextWindow,
+      ...(contextSource === 'advertised' ? {max_input_tokens:contextWindow} : {}),
       output_limit:outputLimit,
-      input_modalities:modalities, created_at:previous?.created_at || 0,
+      input_modalities:!modalModalitiesEdited && previous?.input_modalities ? previous.input_modalities : modalities, created_at:previous?.created_at || 0,
       capability_sources:{...(previous?.capability_sources || {}),
+        ...(contextSource === 'advertised' ? {context_window:{source:'advertised',input_only:true},max_input_tokens:{source:'advertised'}} : {}),
+        ...(contextSource === 'manual' ? {context_window:{source:'manual'}} : {}),
+        ...(outputSource ? {output_limit:{source:outputSource}} : {}),
         ...(modalModalitiesEdited ? {input_modalities:{source:'manual'}} : {}),
         ...(modalReasoningEdited ? {reasoning_levels:{source:'manual'}, supports_reasoning:{source:'manual'}} : {})},
       enabled:previous ? previous.enabled : true,

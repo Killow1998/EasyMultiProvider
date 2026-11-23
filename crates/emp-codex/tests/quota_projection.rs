@@ -174,6 +174,14 @@ fn quota_projection_redacts_private_details_and_parses_app_server_output() {
 
 #[test]
 fn workspace_routing_failures_flag_the_imported_refresh_retry() {
+    for method in ["account/read", "account/rateLimits/read"] {
+        let rejected = quota_rpc_error(
+            method,
+            &json!({"code":-32603,"message":"workspace routing discovery unauthorized (401)"}),
+        );
+        assert_eq!(rejected.code(), "quota_auth_required");
+        assert_eq!(rejected.diagnostics()["http_status"], 401);
+    }
     for (method, message, expected_code, expected_retry) in [
         (
             "account/read",

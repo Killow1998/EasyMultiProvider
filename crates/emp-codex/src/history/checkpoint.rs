@@ -13,7 +13,7 @@ impl CodexHomeHistoryReader {
         compaction: &Map<String, Value>,
     ) -> Result<HistorySnapshot, HistoryError> {
         let segments = if location.mode == "paginated" {
-            self.lineage_segments(database, &location.path, thread)?
+            self.lineage_segments(database, location, thread)?
         } else {
             vec![LineageSegment {
                 thread: thread.to_owned(),

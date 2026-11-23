@@ -114,16 +114,23 @@ impl TeamState {
         accounts: &'a [Value],
         account: &Value,
     ) -> Option<&'a Value> {
-        if account["workspace_shared"] == true || account["credential_status"] != "invalid" {
+        if account["workspace_shared"] == true || account["_emp_shared_source"].is_string() {
             return None;
         }
         let id = account["id"].as_str()?;
-        let source = self.subscription_source(state, id, account);
-        if source == id || self.check_route(&source, true, None).is_err() {
+        let (source, shared_expiry, private_auth) =
+            self.matching_subscription(state, id, account)?;
+        if self.check_route(&source, true, None).is_err() {
+            return None;
+        }
+        if account["credential_status"] != "invalid"
+            && subscriptions::subscription(&private_auth)
+                .is_none_or(|private| Some(private.expires_at) >= shared_expiry)
+        {
             return None;
         }
         accounts.iter().find(|candidate| {
-            candidate["id"] == source.as_ref()
+            candidate["id"] == source
                 && candidate["workspace_shared"] == true
                 && candidate["enabled"] != false
                 && candidate["credential_status"] != "invalid"
@@ -147,7 +154,9 @@ impl TeamState {
             account["_emp_catalog_auth_file"] = account["auth_file"].clone();
             account["auth_file"] = source["auth_file"].clone();
             account["credential_status"] = source["credential_status"].clone();
-            account["quota"] = source["quota"].clone();
+            if !source["quota"].is_null() {
+                account["quota"] = source["quota"].clone();
+            }
             account["_emp_shared_source"] = source["id"].clone();
         }
     }
@@ -193,47 +202,45 @@ impl TeamState {
         provider: &'a str,
         account: &Value,
     ) -> Cow<'a, str> {
-        let personal = Cow::Borrowed(provider);
         if let Some(source) = account["_emp_shared_source"].as_str() {
             return Cow::Owned(source.to_owned());
         }
+        self.matching_subscription(state, provider, account)
+            .map_or(Cow::Borrowed(provider), |(id, _, _)| Cow::Owned(id))
+    }
+
+    fn matching_subscription(
+        &self,
+        state: &ServerState,
+        provider: &str,
+        account: &Value,
+    ) -> Option<(String, Option<i64>, Value)> {
         if account["workspace_shared"] == true
             || (account.is_null() && provider != "codex-native")
             || !state.backend.modules.active(Module::Team)
         {
-            return personal;
+            return None;
         }
-        let Ok(store) = self.store.lock() else {
-            return personal;
-        };
-        let Some(store) = store.as_ref() else {
-            return personal;
-        };
-        let Some(session) = &store.session else {
-            return personal;
-        };
+        let store = self.store.lock().ok()?;
+        let store = store.as_ref()?;
+        let workspace = store.session.as_ref()?.workspace();
         let shares = store.imported.iter().filter(|(_, record)| {
-            record.workspace == session.workspace() && record.account_identity.is_some()
+            record.workspace == workspace && record.account_identity.is_some()
         });
-        if shares.clone().next().is_none() {
-            return personal;
-        }
-        let identity = if provider == "codex-native" {
+        shares.clone().next()?;
+        let auth = if provider == "codex-native" {
             crate::services::accounts::native_auth_document(
                 &state.backend.accounts.native_auth_path,
-            )
-            .filter(|auth| emp_codex::account_auth_headers(auth).is_some())
-            .map(|auth| emp_state::accounts::account_auth_identity(&auth))
+            )?
         } else {
-            subscriptions::stored_identity(&state.backend.configuration.vault, account)
+            subscriptions::stored_auth(&state.backend.configuration.vault, account)?
         };
-        let Some(identity) = identity else {
-            return personal;
-        };
-        shares
+        emp_codex::account_auth_headers(&auth)?;
+        let identity = emp_state::accounts::account_auth_identity(&auth);
+        let (id, record) = shares
             .filter(|(_, record)| record.account_identity.as_deref() == Some(identity.as_str()))
-            .max_by_key(|(_, record)| record.usable())
-            .map_or(personal, |(id, _)| Cow::Owned(id.clone()))
+            .max_by_key(|(_, record)| (record.usable(), record.expires_at))?;
+        Some((id.clone(), record.expires_at, auth))
     }
 
     pub(crate) fn check_model_route(

@@ -112,8 +112,21 @@ pub(crate) fn prepare_destination_context(
     {
         crate::util::release_large_temporary_pages(bytes);
     }
+    let fit_output = |mut request: Value, assessment: &emp_history::context::ContextAssessment| {
+        if candidate.model.value().get("_emp_flexible_output_limit") == Some(&Value::Bool(true))
+            && let Some(cap) = assessment.output_reserve
+            && (request["max_output_tokens"]
+                .as_u64()
+                .is_some_and(|n| n > cap)
+                || (request["max_output_tokens"].is_null()
+                    && candidate.protocol == emp_domain::Protocol::AnthropicMessages))
+        {
+            request["max_output_tokens"] = cap.into();
+        }
+        request
+    };
     if !assessment.blocked() {
-        return Ok(body);
+        return Ok(fit_output(body, &assessment));
     }
     let Some(safe_budget) = assessment.safe_input_limit else {
         return Err(DestinationPrepareError::Context(assessment.into()));
@@ -169,23 +182,17 @@ pub(crate) fn prepare_destination_context(
                     })
                 }
                 Err(error) => {
-                    match &error {
-                        crate::services::compaction::SummaryExecutionError::Router(error) => {
-                            usage.router_error(error)
-                        }
-                        crate::services::compaction::SummaryExecutionError::Disconnected => {
-                            usage.disconnected()
-                        }
-                        crate::services::compaction::SummaryExecutionError::ClaudeCli(_) => {}
-                    }
+                    use crate::services::compaction::SummaryExecutionError;
                     summary_failure = Some(match error {
-                        crate::services::compaction::SummaryExecutionError::Router(error) => {
+                        SummaryExecutionError::Router(error) => {
+                            usage.router_error(&error);
                             DestinationPrepareError::Router(error)
                         }
-                        crate::services::compaction::SummaryExecutionError::ClaudeCli(error) => {
+                        SummaryExecutionError::ClaudeCli(error) => {
                             DestinationPrepareError::ClaudeCli(error)
                         }
-                        crate::services::compaction::SummaryExecutionError::Disconnected => {
+                        SummaryExecutionError::Disconnected => {
+                            usage.disconnected();
                             DestinationPrepareError::Disconnected
                         }
                     });
@@ -207,7 +214,7 @@ pub(crate) fn prepare_destination_context(
     if final_assessment.blocked() {
         return Err(DestinationPrepareError::Context(final_assessment.into()));
     }
-    Ok(compacted)
+    Ok(fit_output(compacted, &final_assessment))
 }
 
 #[cfg(test)]

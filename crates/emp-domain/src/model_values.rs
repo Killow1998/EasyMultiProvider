@@ -19,27 +19,7 @@ pub fn is_concrete_reasoning_effort(value: &str) -> bool {
 
 /// Trim Unicode whitespace, including the four C0 file separators.
 pub fn trim_whitespace(value: &str) -> &str {
-    value.trim_matches(|character: char| {
-        matches!(
-            character,
-            '\t'
-                | '\n'
-                | '\u{b}'
-                | '\u{c}'
-                | '\r'
-                | ' '
-                | '\u{85}'
-                | '\u{a0}'
-                | '\u{1680}'
-                | '\u{2000}'..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{1c}'..='\u{1f}'
-        )
-    })
+    value.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
 }
 
 fn modality_identifier(item: &str) -> Option<String> {
@@ -57,9 +37,8 @@ fn modality_identifier(item: &str) -> Option<String> {
     if valid { Some(identifier) } else { None }
 }
 
-fn parse_modalities(value: Option<&Value>) -> Option<Vec<String>> {
-    let value = value?;
-    let Value::Array(items) = value else {
+pub fn parse_modalities(value: Option<&Value>) -> Option<Vec<String>> {
+    let Value::Array(items) = value? else {
         return None;
     };
     if items.is_empty() || items.len() > MAX_MODALITIES {
@@ -75,11 +54,7 @@ fn parse_modalities(value: Option<&Value>) -> Option<Vec<String>> {
             result.push(identifier);
         }
     }
-    if result.is_empty() {
-        None
-    } else {
-        Some(result)
-    }
+    Some(result)
 }
 
 /// Normalize bounded modality identifiers, falling back to `["text"]`.
@@ -115,23 +90,9 @@ pub fn codex_input_modalities(value: Option<&Value>) -> Vec<String> {
     }
 }
 
-/// Normalize bounded output modality identifiers, falling back to `["text"]`.
-pub fn normalize_output_modalities(value: Option<&Value>) -> Vec<String> {
-    parse_modalities(value).unwrap_or_else(|| vec![TEXT_MODALITY.to_owned()])
-}
-
-pub fn output_modalities_known(value: Option<&Value>) -> bool {
-    parse_modalities(value).is_some()
-}
-
-/// Classify a valid output list as advertised and all other input as unknown.
-pub fn output_modalities_metadata_source(value: Option<&Value>) -> &'static str {
-    if output_modalities_known(value) {
-        "advertised"
-    } else {
-        "unknown"
-    }
-}
+pub use input_modalities_known as output_modalities_known;
+pub use input_modalities_metadata_source as output_modalities_metadata_source;
+pub use normalize_input_modalities as normalize_output_modalities;
 
 /// Normalize unique known protocol values, excluding `auto`.
 pub fn normalize_supported_protocols(value: Option<&Value>) -> Vec<String> {

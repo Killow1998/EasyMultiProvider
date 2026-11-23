@@ -164,7 +164,7 @@ impl RequestObservation {
         stream: Option<&Value>,
     ) {
         self.fields["requested_effort"] = json!(reasoning_effort(reasoning, input, metadata));
-        if self.fields["transport"] == "http" && crate::util::python_truthy(stream) {
+        if self.fields["transport"] == "http" && stream.is_some_and(emp_domain::json_truthy) {
             self.fields["transport"] = json!("sse");
             self.fields["requested_transport"] = json!("sse");
         }

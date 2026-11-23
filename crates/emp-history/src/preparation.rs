@@ -44,22 +44,11 @@ pub fn prepare<R: HistoryReader + ?Sized>(
     if Some(snapshot.thread_id.as_str()) != anchor.thread_id.as_deref() {
         return Err(HistoryError::new("thread_mismatch"));
     }
-    let replacement = build_compaction_replacement(&snapshot.items)?;
-    let history = replacement.iter().filter_map(wire_item).collect::<Vec<_>>();
-    let trigger = source
-        .last()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("compaction_trigger"));
-    let mut tail = source[boundary + 1..].to_vec();
-    if trigger.is_some() {
-        tail.pop();
-    }
+    let replacement = normalize_tool_pairs(compaction_slice(&snapshot.items)?, &source)?;
     let mut input = source[..boundary].to_vec();
-    input.extend(history.iter().cloned());
+    input.extend(replacement.iter().filter_map(wire_item));
     let active_start = input.len();
-    input.extend(tail);
-    if let Some(trigger) = trigger {
-        input.push(trigger.clone());
-    }
+    input.extend_from_slice(&source[boundary + 1..]);
     let mut projected = decoded;
     projected.insert("input".to_owned(), Value::Array(input));
     projected.insert(ACTIVE_INPUT_START.to_owned(), Value::from(active_start));
@@ -108,6 +97,10 @@ fn has_previous_response(root: &Map<String, Value>) -> bool {
 pub fn build_compaction_replacement(
     items: &[VisibleItem],
 ) -> Result<Vec<VisibleItem>, HistoryError> {
+    normalize_tool_pairs(compaction_slice(items)?, &[])
+}
+
+fn compaction_slice(items: &[VisibleItem]) -> Result<&[VisibleItem], HistoryError> {
     let boundary = items
         .iter()
         .rposition(|item| {
@@ -119,12 +112,11 @@ pub fn build_compaction_replacement(
         .ok_or_else(|| HistoryError::new("compaction_summary_missing"))?;
     let compacted = &items[boundary];
     let has_summary = content_text(&compacted.content).is_some_and(|text| !text.trim().is_empty());
-    let replacement = if has_summary {
-        vec![compacted.clone()]
+    Ok(if has_summary {
+        &items[boundary..=boundary]
     } else {
-        items[..boundary].to_vec()
-    };
-    normalize_tool_pairs(replacement)
+        &items[..boundary]
+    })
 }
 
 fn decode_portable_items(root: &Map<String, Value>) -> Result<Map<String, Value>, HistoryError> {

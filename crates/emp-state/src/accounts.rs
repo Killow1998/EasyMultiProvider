@@ -1,6 +1,7 @@
 //! Codex account normalization discards unknown metadata and retains opaque quota objects.
 
 use crate::model_values::trim_whitespace;
+use emp_domain::json_truthy;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -103,18 +104,6 @@ pub fn duplicate_account_status(
         seen.push((id.as_str(), auth));
     }
     duplicates
-}
-
-fn json_truthy(value: &Value) -> bool {
-    if matches!(value, Value::Bool(false) | Value::Null) {
-        return false;
-    }
-    if let Value::Number(number) = value {
-        return number.as_f64() != Some(0.0);
-    }
-    !matches!(value, Value::String(value) if value.is_empty())
-        && !matches!(value, Value::Array(values) if values.is_empty())
-        && !matches!(value, Value::Object(values) if values.is_empty())
 }
 
 fn auth_file(raw: Option<&Value>) -> AccountResult<String> {

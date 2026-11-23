@@ -134,6 +134,8 @@ def main():
                             payload = response.read()
                             assert response.status == 200 and b'FIXTURE_COMPLETE' in payload, payload
                     report = wait_for(lambda: (result if (result := request(fixture.base+'/api/calls?limit=100', headers=fixture.headers)[1])['total'] == len(cases)+1 else None))
+                    if model in ('gpt-6.1-sol','imported/gpt-6.1-sol'):
+                        assert fixture.upstream.requests[-1]['body'].get('service_tier') == selected, (model,transport,selected)
                     row = report['records'][0]
                     mode = 'unknown' if returned is None else 'fast' if returned == 'priority' else 'standard'
                     expected = {'requested_service_tier':selected,'reported_service_tier':returned,

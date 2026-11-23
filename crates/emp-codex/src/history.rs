@@ -87,7 +87,7 @@ impl CodexHomeHistoryReader {
                 },
             );
         }
-        let segments = self.lineage_segments(&database, &location.path, thread)?;
+        let segments = self.lineage_segments(&database, location, thread)?;
         let mut visible = Vec::<VisibleItem>::new();
         let mut source_model = None;
         for (position, segment) in segments.iter().enumerate() {

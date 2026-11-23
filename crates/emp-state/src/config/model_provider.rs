@@ -15,7 +15,8 @@ const PROVIDER_AUTH_MODES: [&str; 7] = [
     "vertex_service_account",
     "vertex_api_key",
 ];
-const CAPABILITY_SOURCES: [(&str, f64); 7] = [
+const CAPABILITY_SOURCES: [(&str, f64); 8] = [
+    ("catalog", 0.7),
     ("official", 0.95),
     ("advertised", 0.75),
     ("observed", 1.0),
@@ -527,7 +528,7 @@ pub fn normalize_model_capability_sources(
             }
             continue;
         };
-        let provenance = if let Some(object) = value.as_object() {
+        let mut provenance = if let Some(object) = value.as_object() {
             let source = default_model_capability_source(field, values, explicit_fields);
             normalize_model_provenance(object, source)
                 .map_err(|_| ConfigError::new(format!("invalid provenance for model.{field}")))?
@@ -536,6 +537,9 @@ pub fn normalize_model_capability_sources(
                 "model.capability_sources.{field} must be an object"
             )));
         };
+        if field == "context_window" && value["input_only"] == true {
+            provenance["input_only"] = true.into();
+        }
         result.insert(field.to_owned(), provenance);
     }
     Ok(Value::Object(result))

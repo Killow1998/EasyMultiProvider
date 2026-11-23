@@ -170,8 +170,8 @@ const catalogDisplay=createCatalogDisplay({getState:()=>state,$,tr,t,esc,api,not
 const {render:renderCatalogDisplay,openEditor:openCatalogDisplayEditor,toggleContext:toggleCatalogContext,toggleSearch:toggleCatalogSearch,searchKeydown:catalogSearchKeydown,presentationName,modelName:modelDisplayName,serviceName:serviceDisplayName}=catalogDisplay;
 const routingSettings = createRoutingSettings({api, getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr});
 const ultraSettings = createUltraSettings({getState:() => state, cloneState, persistState, openModal, closeModal, $, esc, tr, help:shadowHelp});
-const nativeLogin = createNativeLogin({onImported:refreshImportedAccounts});
-const tutorials = createTutorials({openModal,$,tr,esc,getLanguage:() => language});
+const nativeLogin = createNativeLogin({getState:selectableServiceState,onImported:refreshImportedAccounts});
+const tutorials = createTutorials({openModal,$,tr,esc,api,getLanguage:() => language});
 const moduleSettings = createModuleSettings({api,openModal,notice,$,esc,tr,icon:uiIcon,getLanguage:() => language,onChange:renderModuleEntries,
   openMountedPanel:openTeamWorkspace,
   panelContext:() => ({api,notice,getState:() => state,cloneState,persistState,openModal,$,esc,tr,help:shadowHelp,modelName:modelDisplayName,
@@ -195,7 +195,10 @@ async function openTeamWorkspace(back) {
 const settings = createSettings({api, notice, modules:moduleSettings, quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, help:shadowHelp, contextHelp, openAppIcon:back=>appIcon.open(back), presentationOptions:quotaChoice => presentationSettingsHtml(quotaChoice), collaborationHelp:collaborationComparison});
 const {open:openSettings, toggle:toggleSetting} = settings;
 const openAggregates = back => moduleSettings.openOptions('aggregate', back);
-const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, modelDisplayName, serviceName:serviceDisplayName, periodPickerHtml, registerPeriodPicker});
+function selectableServiceState() {
+  return {...state, accounts:(state.accounts || []).filter(account => !(account.team_shared && account.duplicate))};
+}
+const callReports = createCallReports({api, getState:selectableServiceState, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, modelDisplayName, serviceName:serviceDisplayName, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, modelName:modelDisplayName, serviceName:serviceDisplayName, localTimeText, notice});
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
 let language = 'zh-CN';
@@ -293,7 +296,7 @@ const accountDetails = createAccountDetails({renderInfo:renderAccountInfo,getSta
 const {open:openAccountDetails, saveAlias:saveAccountAlias} = accountDetails;
 const {open:openServiceChooser} = createServiceChooser({tr, esc, presets:officialProviders, icon:serviceIconHtml, openModal, getState:() => state});
 
-const confirmedCapabilitySources = new Set(['manual','observed','advertised','official']);
+const confirmedCapabilitySources = new Set(['manual','observed','advertised','official','catalog']);
 function confirmedField(model, field) {
   const source = model?.capability_sources?.[field]?.source;
   if (!confirmedCapabilitySources.has(source)) return null;
@@ -323,6 +326,10 @@ function capabilitySummary(model) {
   }
   const outputs = Array.isArray(confirmedField(model, 'output_modalities')) ? confirmedField(model, 'output_modalities') : [];
   if (outputs.length) parts.push(tr("core.output") + outputs.map(modalityLabel).map(esc).join('/'));
+  const levels = confirmedField(model, 'reasoning_levels');
+  if (Array.isArray(levels) && levels.length) parts.push(esc(tr('models.thinking_levels', {levels:levels.join(' / ')})));
+  else if (confirmedField(model, 'supports_reasoning') !== false && model.catalog_efforts?.length) parts.push(esc(tr('models.reported_thinking_levels', {levels:model.catalog_efforts.join(' / ')})));
+  else if (confirmedField(model, 'supports_reasoning') === true) parts.push(esc(tr('models.thinking_supported')));
   const protocols = Array.isArray(confirmedField(model, 'supported_protocols')) ? confirmedField(model, 'supported_protocols') : [];
   if (protocols.length) parts.push(protocols.map(protocolLabel).map(esc).join('/'));
   return parts.join(' · ');
@@ -1162,7 +1169,7 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
 }
 function closeModal() { migration.stop(); servicePresentation.hide(); stopModalFeatures(); modalNavigation = {}; $('modal_back').onclick = null; $('modal_back').hidden = true; $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; if(modalOpener?.isConnected)modalOpener.focus({preventScroll:true}); modalOpener=null; }
 
-const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,releaseHistoryText,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW),reload:()=>window.location.reload()});
+const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,releaseHistoryText,showNotes:renderReleaseNotes,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW),reload:()=>window.location.reload()});
 const {open:openUpdate,stop:stopUpdatePoll,request:requestUpdate,render:renderUpdate,hint:renderUpdateHint,checkHint:checkUpdateHint,openRelease:openLatestRelease,copyCommands:copyLinuxMigrationCommands}=updates;
 function finishQuit() {
   if (management.isStopped()) return;
@@ -1273,7 +1280,7 @@ if (window.addEventListener) {
 </script>
 <script src="/assets/presentation.js"></script>
 <script>
-const statistics=createStatistics({api,$,tr,esc,getState:()=>state,getLanguage:()=>language,openModal,callReports,serviceName:serviceDisplayName,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport});
+const statistics=createStatistics({api,$,tr,esc,getState:selectableServiceState,getLanguage:()=>language,openModal,callReports,serviceName:serviceDisplayName,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport});
 const presentationSyncMotion=installMotion(refreshResetCountdowns);
 installInteractions();
 installServiceErrors();

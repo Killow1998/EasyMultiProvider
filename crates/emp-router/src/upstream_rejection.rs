@@ -1,16 +1,6 @@
 //! Decode and redact untrusted upstream HTTP rejection bodies.
+use emp_domain::json_truthy;
 use serde_json::Value;
-
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
-}
 
 pub(crate) fn details(status: u16, content_type: &str, raw: &[u8]) -> (Option<String>, String) {
     let media = content_type
@@ -39,9 +29,9 @@ pub(crate) fn details(status: u16, content_type: &str, raw: &[u8]) -> (Option<St
         let nested = if value.is_object() {
             value
                 .get("error")
-                .filter(|value| truthy(value))
-                .or_else(|| value.get("message").filter(|value| truthy(value)))
-                .or_else(|| value.get("detail").filter(|value| truthy(value)))
+                .filter(|value| json_truthy(value))
+                .or_else(|| value.get("message").filter(|value| json_truthy(value)))
+                .or_else(|| value.get("detail").filter(|value| json_truthy(value)))
                 .unwrap_or(&value)
         } else {
             &value
@@ -58,7 +48,7 @@ pub(crate) fn details(status: u16, content_type: &str, raw: &[u8]) -> (Option<St
         let nested = if nested.is_object() {
             ["message", "type", "code"]
                 .iter()
-                .find_map(|key| nested.get(key).filter(|value| truthy(value)))
+                .find_map(|key| nested.get(key).filter(|value| json_truthy(value)))
                 .unwrap_or(nested)
         } else {
             nested

@@ -588,7 +588,13 @@ def verify_local_key_upload(stack, emppy, root, vps, workspace, release, mock, c
     published = owner.team('publish')
     assert published['version'] == 1 and published['review_required']
     owner.team('review_service', {'id':published['id'],'version':1,'shared':True})
+    member.api('/api/accounts/import', {'id':'existing-owner','prefix':'existing-owner','name':'owner',
+        'auth_json':original})
     assert member.team('sync')['synced'] == 1
+    shared_id = 'team-'+published['id']
+    records = {row['id']:row for row in member.api('/api/accounts')['accounts']}
+    assert records[shared_id]['team_shared'] and records[shared_id]['duplicate_of']=='existing-owner'
+    assert records['existing-owner']['name']=='owner' and not records['existing-owner']['duplicate']
 
     owner.auth.write_text(json.dumps({'auth_mode':'apikey','OPENAI_API_KEY':LOCAL_KEY}))
     assert owner.team('sync')['synced'] == 1
@@ -609,11 +615,23 @@ def verify_local_key_upload(stack, emppy, root, vps, workspace, release, mock, c
     renewed = owner.team('publish')
     assert renewed == {'id':published['id'],'version':2,'review_required':False}, renewed
     assert member.team('sync')['synced'] == 1
-    member.api('/api/accounts/team-'+published['id']+'/models/refresh',{})
+    member.api('/api/accounts/existing-owner/models/refresh',{})
     websocket_request(member.base, {'Authorization':'Bearer '+LOCAL_KEY},
                       {'model':'owner/gpt-6.1-sol','input':'Verify the version received by another device '*6})
     forwarded = {key.lower():value for key,value in upstream.requests[-1]['headers'].items()}
     assert forwarded['authorization']=='Bearer '+newer['tokens']['access_token']
+    usage = member.api('/api/usage?lifetime=true&account=existing-owner')['groups']
+    assert any(row['owner_name']=='owner' and row['owner_local_id']=='existing-owner' for row in usage)
+    if browser_enabled:
+        member_browser = Browser(stack, root)
+        member_browser.navigate(member.url)
+        member_browser.execute('document.querySelector("[data-ui-action=native-login]").click(); document.querySelector("[data-native-method=other]").click();')
+        assert member_browser.execute('return [...document.querySelector("#native_other_account").options].map(o=>o.text)') == ['owner']
+        member_browser.execute('document.querySelector("#modal_close").click();')
+        member_browser.execute('document.querySelector("#team_workspace_open").click();')
+        wait_for(lambda: member_browser.execute('return !!document.querySelector("[data-team-choice=sync]:enabled");'))
+        member_browser.execute('document.querySelector("[data-team-choice=sync]").click();')
+        wait_for(lambda: member_browser.execute('return /没有需要更新的共享订阅|No shared subscriptions need updating/.test(document.body.textContent);'))
 
     assert owner.team('sync')['synced'] == 1
     owner.api('/api/accounts/'+local_id+'/models/refresh',{})
@@ -626,9 +644,23 @@ def verify_local_key_upload(stack, emppy, root, vps, workspace, release, mock, c
     assert wait_for(own_model)['context_window']==192000
     assert not any(unquote(row['slug'])=='owner/gpt-6.1-sol' for row in picker())
 
-    owner.api('/api/accounts/import', {**metadata,'auth_json':login_auth('former-native', expiry-7200)})
     private_path = Path(next(row['auth_file'] for row in json.loads(owner.config.read_text())['accounts']
                             if row['id']==local_id))
+    latest = login_auth('former-native', expiry+1200)
+    for private, expected in [(original, newer), (latest, latest)]:
+        owner.api('/api/accounts/import', {**metadata,'auth_json':private})
+        before = private_path.read_bytes()
+        for _ in range(10):
+            assert owner.team('sync') == {'synced':0,'unchanged':1,'skipped_native':0}
+        accounts = owner.api('/api/accounts')['accounts']
+        assert [(row['id'], row['name']) for row in accounts if not row['duplicate']] == [(local_id, metadata['name'])]
+        assert len(accounts) == 2 and private_path.read_bytes() == before
+        assert wait_for(own_model)['context_window']==192000
+        websocket_request(owner.base, auth_header, {'model':model,'input':'Use the freshest authorized login '*6})
+        headers = {key.lower():value for key,value in upstream.requests[-1]['headers'].items()}
+        assert headers['authorization']=='Bearer '+expected['tokens']['access_token'], 'Used stale subscription'
+
+    owner.api('/api/accounts/import', {**metadata,'auth_json':login_auth('former-native', expiry-7200)})
     expired_private = private_path.read_bytes()
     assert owner.team('publish', expected=409)['error']['code']=='workspace_subscription_sign_in_required'
     owner.team('sync')

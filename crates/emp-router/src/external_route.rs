@@ -37,7 +37,7 @@ impl<'a> ExternalRouter<'a> {
         }
         let native_gemini = route.provider.value()["auth_mode"] == "vertex_api_key";
         if native_gemini {
-            payload = vertex::gemini::request(&payload)?;
+            payload = vertex::gemini::request_for_model(&payload, Some(route.model.value()))?;
         }
         let encoded = request_encoding::encode_projected_request(&payload);
         drop(payload);
@@ -288,7 +288,7 @@ impl<'a> ExternalRouter<'a> {
         }
         let native_gemini = route.provider.value()["auth_mode"] == "vertex_api_key";
         if native_gemini {
-            payload = vertex::gemini::request(&payload)?;
+            payload = vertex::gemini::request_for_model(&payload, Some(route.model.value()))?;
         } else {
             payload["stream"] = Value::Bool(true);
         }

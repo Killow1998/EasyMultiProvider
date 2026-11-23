@@ -12,17 +12,6 @@ fn expected_projected_input() -> Value {
     ])
 }
 
-fn expected_sidechat_input() -> Value {
-    // Sidechat history continuity: the parent's compaction summary becomes a
-    // user-visible reference, the inherited checkpoint stays hidden, and the
-    // side question follows.
-    json!([
-        {"type":"message","role":"user","content":[{"type":"input_text","text":"parent reference"}]},
-        {"type":"message","role":"user","content":"Side conversation boundary: reference only"},
-        {"type":"message","role":"user","content":"side question"}
-    ])
-}
-
 #[test]
 fn external_to_native_http_switch_preserves_visible_tool_history_and_headers() {
     let upstream = OneShotUpstream::start(json!({
@@ -115,10 +104,41 @@ fn external_to_native_http_switch_preserves_visible_tool_history_and_headers() {
 
 #[test]
 fn short_to_long_native_history_fork_uses_exact_checkpoint_and_never_reads_later_parent_tail() {
-    let upstream = OneShotUpstream::start(json!({
-        "id":"switch-long","object":"response","status":"completed",
-        "model":"long-model","output":[]
-    }));
+    for (protocol, model, path, reply) in [
+        (
+            "responses",
+            "fixture-one",
+            "/v1/responses",
+            json!({
+                "id":"r","object":"response","status":"completed","model":"fixture-one","output":[]
+            }),
+        ),
+        (
+            "chat_completions",
+            "fixture-two",
+            "/v1/chat/completions",
+            json!({
+                "id":"c","object":"chat.completion","model":"fixture-two",
+                "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+            }),
+        ),
+        (
+            "anthropic_messages",
+            "fixture-three",
+            "/v1/messages",
+            json!({
+                "id":"m","type":"message","role":"assistant","model":"fixture-three",
+                "content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn",
+                "usage":{"input_tokens":20,"output_tokens":1}
+            }),
+        ),
+    ] {
+        assert_sidechat_replay(protocol, model, path, reply);
+    }
+}
+
+fn assert_sidechat_replay(protocol: &str, model: &str, expected_path: &str, reply: Value) {
+    let upstream = OneShotUpstream::start(reply);
     let directory = tempfile::tempdir().expect("history switch tempdir");
     let root = canonical_root(&directory);
     let codex_home = root.join("codex");
@@ -130,10 +150,17 @@ fn short_to_long_native_history_fork_uses_exact_checkpoint_and_never_reads_later
     let records = [
         json!({"type":"session_meta","payload":{"id":thread_id,"history_mode":"legacy"}}),
         json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"before"}}),
+        json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"prefix-call","output":"stored tool output"}}),
         json!({"type":"response_item","payload":{"type":"message","role":"user","content":"parent reference"}}),
+        json!({"type":"response_item","payload":{"type":"tool_search_call","execution":"server","arguments":{"query":"weather"}}}),
+        json!({"type":"response_item","payload":{"type":"tool_search_output","execution":"server","status":"completed",
+            "tools":[{"type":"function","name":"lookup_fixture","parameters":{"type":"object","properties":{}}}]}}),
+        json!({"type":"response_item","payload":{"type":"function_call","name":"read_fixture","arguments":"{}","call_id":"saved-call"}}),
         json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"before"}}),
         json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"compact"}}),
-        json!({"type":"compacted","payload":{"message":"","replacement_history":[{"type":"compaction","encrypted_content":"inherited-checkpoint"}]}}),
+        json!({"type":"compacted","payload":{"message":"","replacement_history":[
+            {"type":"compaction","encrypted_content":"inherited-checkpoint"},
+            {"type":"function_call","name":"read_fixture","arguments":"{}","call_id":"saved-call"}]}}),
         json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"compact"}}),
         json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"later"}}),
         json!({"type":"response_item","payload":{"type":"message","role":"user","content":"DO NOT LEAK LATER PARENT"}}),
@@ -168,11 +195,11 @@ fn short_to_long_native_history_fork_uses_exact_checkpoint_and_never_reads_later
         serde_json::to_vec_pretty(&json!({
             "providers":[{
                 "id":"long","name":"Long context","base_url":upstream.base_url(),
-                "protocol":"responses","auth_mode":"api_key","api_key":"destination-secret"
+                "protocol":protocol,"auth_mode":"api_key","api_key":"destination-secret"
             }],
             "models":[{
-                "id":"long/model","provider":"long","upstream_id":"long-model",
-                "enabled":true,"context_window":100000,"output_limit":4096,
+                "id":"long/model","provider":"long","upstream_id":model,
+                "enabled":true,"context_window":100000,"output_limit":100000,
                 "capability_sources":{"context_window":{"source":"manual","confidence":1.0}}
             }]
         }))
@@ -194,13 +221,14 @@ fn short_to_long_native_history_fork_uses_exact_checkpoint_and_never_reads_later
     let body = json!({
         "model":"long/model",
         "input":[
+            {"type":"function_call","call_id":"prefix-call","name":"read_prefix","arguments":"{}"},
             {"type":"compaction","encrypted_content":"inherited-checkpoint"},
+            {"type":"function_call_output","call_id":"saved-call","output":"actual tool output"},
             {"type":"message","role":"user","content":"Side conversation boundary: reference only"},
             {"type":"message","role":"user","content":"side question"}
         ],
         "client_metadata":{"x-codex-turn-metadata":turn_metadata}
     });
-    let expected_input = expected_sidechat_input();
     let response = post(
         &server,
         "/v1/responses",
@@ -213,11 +241,8 @@ fn short_to_long_native_history_fork_uses_exact_checkpoint_and_never_reads_later
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     let (path, headers, observed) = upstream.observed();
-    assert_eq!(path, "/v1/responses");
-    assert_eq!(
-        headers.get("authorization").map(String::as_str),
-        Some("Bearer destination-secret")
-    );
+    assert_eq!(path, expected_path);
+    assert_eq!(headers["authorization"], "Bearer destination-secret");
     assert!(headers.get("x-emp-request-id").is_some_and(|request_id| {
         request_id.len() == 16
             && request_id
@@ -230,15 +255,62 @@ fn short_to_long_native_history_fork_uses_exact_checkpoint_and_never_reads_later
             "external destination received internal header {internal_header}: {headers:?}"
         );
     }
-    let rendered = observed["input"].to_string();
-    assert_eq!(observed["input"], expected_input);
+    assert!(
+        observed.to_string().contains("lookup_fixture"),
+        "{protocol}: {observed}"
+    );
+    let transcript = observed
+        .get("input")
+        .or_else(|| observed.get("messages"))
+        .unwrap();
+    let rendered = transcript.to_string();
+    let mut exchange = Vec::new();
+    for item in transcript.as_array().unwrap() {
+        match protocol {
+            "responses" => match item["type"].as_str() {
+                Some("function_call") => exchange.push((&item["call_id"], &item["name"])),
+                Some("function_call_output") => exchange.push((&item["call_id"], &item["output"])),
+                _ => {}
+            },
+            "chat_completions" => {
+                for call in item["tool_calls"].as_array().into_iter().flatten() {
+                    exchange.push((&call["id"], &call["function"]["name"]));
+                }
+                if item["role"] == "tool" {
+                    exchange.push((&item["tool_call_id"], &item["content"]));
+                }
+            }
+            "anthropic_messages" => {
+                for block in item["content"].as_array().into_iter().flatten() {
+                    match block["type"].as_str() {
+                        Some("tool_use") => exchange.push((&block["id"], &block["name"])),
+                        Some("tool_result") => {
+                            exchange.push((&block["tool_use_id"], &block["content"]))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(
+        json!(exchange),
+        json!([
+            ["prefix-call", "read_prefix"],
+            ["prefix-call", "stored tool output"],
+            ["saved-call", "read_fixture"],
+            ["saved-call", "actual tool output"]
+        ]),
+        "{protocol}"
+    );
     assert!(rendered.contains("parent reference"), "{rendered}");
     assert!(rendered.contains("Side conversation boundary: reference only"));
     assert!(rendered.contains("side question"));
     assert!(!rendered.contains("DO NOT LEAK LATER PARENT"), "{rendered}");
     assert!(!rendered.contains("inherited-checkpoint"), "{rendered}");
     assert!(!rendered.contains("newer-checkpoint"), "{rendered}");
-    assert_eq!(observed["model"], "long-model");
+    assert_eq!(observed["model"], model);
     server
         .shutdown()
         .expect("shutdown long-context destination");

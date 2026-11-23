@@ -1,3 +1,4 @@
+use emp_domain::json_truthy;
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read;
@@ -31,11 +32,8 @@ const MAX_REGISTRY_BYTES: usize = 4 * 1024 * 1024;
 fn bundled_registry() -> &'static Map<String, Value> {
     static REGISTRY: OnceLock<Map<String, Value>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
-        serde_json::from_str::<Value>(include_str!("../data/official_models.json"))
-            .expect("bundled official model registry must be valid JSON")
-            .as_object()
-            .expect("bundled official model registry must be an object")
-            .clone()
+        serde_json::from_str(include_str!("../data/official_models.json"))
+            .expect("bundled official model registry must be a JSON object")
     })
 }
 
@@ -50,13 +48,12 @@ fn registry_from_path(path: Option<&Path>) -> Cow<'static, Map<String, Value>> {
         if bytes.len() > MAX_REGISTRY_BYTES {
             return None;
         }
-        let value: Value = serde_json::from_slice(&bytes).ok()?;
-        let data = value.as_object()?;
+        let data: Map<String, Value> = serde_json::from_slice(&bytes).ok()?;
         (data.get("schema_version").and_then(Value::as_u64) == Some(1)
             && data.get("providers").is_some_and(Value::is_array)
             && data.get("models").is_some_and(Value::is_array)
             && data.get("reviewed_at").is_some_and(Value::is_string))
-        .then(|| data.clone())
+        .then_some(data)
     });
     override_data
         .map(Cow::Owned)
@@ -94,7 +91,7 @@ pub fn published_text_models(provider_key: &str) -> Vec<Value> {
         .map(|id| json!({"upstream_id":id,"display_name":id}))
         .collect();
     let reference = json!({"base_url": publisher["api_base_urls"][0]});
-    enrich_models(reference.as_object().unwrap(), models, false)
+    enrich_models(reference.as_object().unwrap(), models, false, &registry)
 }
 
 pub fn identify_provider(provider: &Map<String, Value>) -> Option<String> {
@@ -133,22 +130,28 @@ fn identify_provider_in_registry(
 }
 
 pub fn enrich_discovered_models(provider: &Map<String, Value>, models: Vec<Value>) -> Vec<Value> {
-    enrich_models(provider, models, false)
+    enrich_models(provider, models, false, &registry())
 }
 
 /// Refresh known modalities without resetting saved limits or reasoning settings.
 pub fn enrich_saved_models(provider: &Map<String, Value>, models: Vec<Value>) -> Vec<Value> {
-    enrich_models(provider, models, true)
+    enrich_models(provider, models, true, &registry())
 }
 
-fn enrich_models(provider: &Map<String, Value>, models: Vec<Value>, saved: bool) -> Vec<Value> {
-    let registry = registry();
+/// Relays inherit published modalities, not the publisher's deployment limits;
+/// Claude CLI has its own published reasoning defaults.
+fn enrich_models(
+    provider: &Map<String, Value>,
+    models: Vec<Value>,
+    saved: bool,
+    registry: &Map<String, Value>,
+) -> Vec<Value> {
     let claude_cli =
         provider.get("execution_backend").and_then(Value::as_str) == Some("claude_cli");
     let provider_key = if claude_cli {
         Some("anthropic".to_owned())
     } else {
-        identify_provider_in_registry(provider, &registry)
+        identify_provider_in_registry(provider, registry)
     };
     let match_any_publisher =
         provider_key.is_none() || provider_key.as_deref() == Some("openrouter");
@@ -180,13 +183,13 @@ fn enrich_models(provider: &Map<String, Value>, models: Vec<Value>, saved: bool)
     models
         .into_iter()
         .map(|model| {
-            let Some(mut model) = model.as_object().cloned() else {
+            let Value::Object(mut model) = model else {
                 return model;
             };
             let Some(model_id) = ["upstream_id", "model_id", "id"]
                 .into_iter()
                 .filter_map(|field| model.get(field))
-                .find(|value| python_truthy(value))
+                .find(|value| json_truthy(value))
                 .and_then(Value::as_str)
             else {
                 return Value::Object(model);
@@ -217,8 +220,22 @@ fn enrich_models(provider: &Map<String, Value>, models: Vec<Value>, saved: bool)
             if let Some(reviewed_at) = official.get("reviewed_at") {
                 provenance["observed_at"] = reviewed_at.clone();
             }
+            let vertex_publisher =
+                provider.contains_key("vertex") && official["provider_key"] == "google_gemini";
             for field in TOP_LEVEL_FIELDS {
-                if modalities_only && !matches!(field, "input_modalities" | "output_modalities") {
+                let publisher_default = vertex_publisher
+                    && matches!(
+                        field,
+                        "context_window"
+                            | "max_input_tokens"
+                            | "supports_reasoning"
+                            | "reasoning_levels"
+                            | "reasoning_control"
+                    );
+                if modalities_only
+                    && !publisher_default
+                    && !matches!(field, "input_modalities" | "output_modalities")
+                {
                     continue;
                 }
                 if claude_cli
@@ -245,33 +262,35 @@ fn enrich_models(provider: &Map<String, Value>, models: Vec<Value>, saved: bool)
             }
 
             for (registry_field, target, nested) in PROJECTED_FIELDS {
-                if claude_cli || modalities_only {
+                if claude_cli
+                    || (modalities_only && !(vertex_publisher && target == "output_limit"))
+                {
                     continue;
                 }
                 let official_value = official.get(registry_field).unwrap_or(&Value::Null);
                 if is_missing(official_value) {
                     continue;
                 }
-                if nested {
-                    let current_capabilities = model
+                let current = if nested {
+                    model
                         .get("capabilities")
-                        .and_then(Value::as_object)
-                        .cloned()
-                        .unwrap_or_default();
-                    let current = current_capabilities.get(target).unwrap_or(&Value::Null);
-                    if can_override(current, &sources, target) {
-                        let mut capabilities = current_capabilities;
-                        capabilities.insert(target.to_owned(), official_value.clone());
-                        model.insert("capabilities".to_owned(), Value::Object(capabilities));
-                        sources.insert(target.to_owned(), provenance.clone());
-                    }
+                        .and_then(|fields| fields.get(target))
                 } else {
-                    let current = model.get(target).unwrap_or(&Value::Null);
-                    if can_override(current, &sources, target) {
-                        model.insert(target.to_owned(), official_value.clone());
-                        sources.insert(target.to_owned(), provenance.clone());
-                    }
+                    model.get(target)
+                };
+                if !can_override(current.unwrap_or(&Value::Null), &sources, target) {
+                    continue;
                 }
+                if nested {
+                    let capabilities = model.entry("capabilities").or_insert(Value::Null);
+                    if !capabilities.is_object() {
+                        *capabilities = json!({});
+                    }
+                    capabilities[target] = official_value.clone();
+                } else {
+                    model.insert(target.to_owned(), official_value.clone());
+                }
+                sources.insert(target.to_owned(), provenance.clone());
             }
 
             if !sources.is_empty() {
@@ -280,6 +299,16 @@ fn enrich_models(provider: &Map<String, Value>, models: Vec<Value>, saved: bool)
             Value::Object(model)
         })
         .collect()
+}
+
+pub fn published_reasoning_levels(publisher: &str, id: &str) -> Option<Value> {
+    registry()["models"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|model| model["provider_key"] == publisher && model_matches(model, id))?
+        .get("reasoning_levels")
+        .cloned()
 }
 
 /// Claude Code defaults differ from Messages API defaults for some models.
@@ -329,7 +358,7 @@ fn can_override(current: &Value, sources: &Map<String, Value>, field: &str) -> b
     });
     match source {
         Some("manual" | "observed" | "advertised") => false,
-        Some("unknown" | "inferred" | "official") => true,
+        Some("unknown" | "inferred" | "catalog" | "official") => true,
         _ => is_missing(current),
     }
 }
@@ -381,17 +410,6 @@ fn normalize_url(value: &str) -> String {
         "/".to_owned()
     };
     format!("{}://{host}{port}{path}", value.scheme())
-}
-
-fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
 }
 
 #[cfg(test)]

@@ -133,6 +133,13 @@ name limit, and `SessionScope`/`SessionMetadata` with their pure ownership rules
 ledger queries and temporary-table installation stay in `usage/ledger/`.
 `emp_modules::workspace::MAX_USAGE_MODEL_BYTES` re-exports the domain constant,
 so the SDK and state share the bound through their direct domain dependencies.
+The daily LiteLLM snapshot has two readers within `emp-state`.
+[`pricing/catalog.rs`](../crates/emp-state/src/usage/pricing/catalog.rs) extracts model
+capabilities. [`pricing/rates.rs`](../crates/emp-state/src/usage/pricing/rates.rs)
+matches model prices and calculates costs. [`pricing.rs`](../crates/emp-state/src/usage/pricing.rs)
+persists the snapshot and tracks its revision for repricing.
+Live discovery and catalog imports share the [modality parser](../crates/emp-domain/src/model_values.rs).
+It distinguishes a missing or invalid list from an explicit text-only declaration.
 
 No library crate depends on `emp-app`. The principal layering leaks are inside
 the application, where most modules can access the complete `ServerState`.

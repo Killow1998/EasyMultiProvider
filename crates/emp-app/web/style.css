@@ -498,7 +498,13 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .call-outcome-dialog table{width:100%;border-collapse:collapse;margin-top:16px;table-layout:fixed}.call-outcome-dialog th,.call-outcome-dialog td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);overflow-wrap:anywhere}.call-outcome-dialog th{color:var(--muted);font-weight:500}.call-outcome-dialog th:first-child{width:25%}.call-outcome-dialog th:last-child{width:48px}.call-outcome-dialog td:last-child{text-align:right;font-variant-numeric:tabular-nums}
 
 .update-notes{border-top:1px solid var(--border);margin-top:16px;padding-top:12px}
-.update-notes-content{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;font-size:13px;line-height:1.6;scrollbar-color:var(--border-strong) var(--panel)}
+.update-notes-content{overflow-wrap:anywhere;max-height:280px;overflow:auto;font-size:13px;line-height:1.6;scrollbar-color:var(--border-strong) var(--panel)}
+.update-notes-content :is(h1,h2,h3,h4,h5,h6){margin:1em 0 .35em;font-size:1.05em}
+.update-notes-content :is(p,ul,ol){margin:.4em 0}
+.update-notes-content :is(ul,ol){padding-inline-start:1.6em}
+.update-notes-content li+li{margin-top:.3em}
+.update-notes-content>:first-child{margin-top:0}
+.update-notes-content>:last-child{margin-bottom:0}
 #native_login .form-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
 #native_login .device-code{font-family:monospace;font-size:18px;letter-spacing:0}
 .choice-grid .native-key-choice{display:flex;align-items:flex-start;gap:10px;margin:0;cursor:pointer}
@@ -533,6 +539,8 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .tabs button:not(.shadow-help):hover{color:var(--text)}
 .tabs button:not(.shadow-help)[aria-selected="true"]{border-bottom-color:var(--accent);color:var(--text);font-weight:600}
 .tabs+[role=tabpanel]{min-height:0}
+.model-field-heading{display:flex;align-items:center;gap:6px;min-height:20px;margin:0 0 4px}
+.model-field-heading label{margin:0}
 .form-label{display:inline-flex;align-items:center;gap:6px}label>.form-label{display:flex;margin-bottom:0}legend>.form-label{display:inline-flex}
 .page-header-controls .header-icon-button{display:inline-grid;place-items:center;width:30px;min-width:30px;padding:0}.header-icon-button svg{width:16px;height:16px}
 /* The header keeps one row: below desktop width icon buttons drop their labels (title and accessible name keep them). */

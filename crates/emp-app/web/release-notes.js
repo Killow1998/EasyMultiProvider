@@ -7,18 +7,75 @@ function releaseHistoryText(info,locale,tr) {
     if(releases.length===1)return text+(info.release_history_complete===false?'\n\n'+tr('transfers.release_history_more'):'');
     const lines=text.split('\n');
     if(lines.some(line=>line.trim() && !/^[-*]\s+/.test(line))) {
-      other.push(`${release.version}\n${text}`);continue;
+      other.push(`### ${release.version}\n${text}`);continue;
     }
     for(const line of lines.filter(line=>line.trim())) {
       const item=line.replace(/^[-*]\s+/,''), fixed=/^(修复|修正|解决|fix(?:ed|es)?\b|correct(?:ed)?\b|resolve(?:d)?\b)/i.test(item);
       groups[fixed?'fixes':'improvements'].push(`- [${release.version}] ${item}`);
     }
   }
-  let text=[...Object.entries(groups).filter(([,items])=>items.length).map(([key,items])=>`${tr('transfers.release_'+key)}\n${items.join('\n')}`),...other].join('\n\n');
+  let text=[...Object.entries(groups).filter(([,items])=>items.length).map(([key,items])=>`### ${tr('transfers.release_'+key)}\n${items.join('\n')}`),...other].join('\n\n');
   if(info.release_history_complete===false)text+='\n\n'+tr('transfers.release_history_more');
   return text;
 }
 
+const renderedReleaseNotes = new WeakMap();
+function renderReleaseNotes(container, markdown) {
+  if (renderedReleaseNotes.get(container) === markdown) return;
+  const doc = container.ownerDocument;
+  const fragment = doc.createDocumentFragment();
+  function inline(parent, text) {
+    const tokens = /`([^`\n]+)`|\*\*(.+?)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^\s()]+)\)/gi;
+    let end = 0;
+    for (const match of text.matchAll(tokens)) {
+      parent.append(text.slice(end, match.index));
+      const [, code, bold, label, href] = match;
+      const el = doc.createElement(code !== undefined ? 'code' : bold !== undefined ? 'strong' : 'a');
+      if (href) {
+        el.href = href;
+        el.target = '_blank';
+        el.rel = 'noopener noreferrer';
+      }
+      if (bold !== undefined) inline(el, bold);
+      else el.textContent = code ?? label;
+      parent.append(el);
+      end = match.index + match[0].length;
+    }
+    parent.append(text.slice(end));
+  }
+  let block;
+  for (const raw of markdown.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) { block = null; continue; }
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const el = doc.createElement('h' + heading[1].length);
+      inline(el, heading[2]);
+      fragment.append(el);
+      block = null;
+      continue;
+    }
+    const item = line.match(/^(?:[-*+]|(\d+)[.)])\s+(.+)$/);
+    const tag = item ? (item[1] ? 'ol' : 'ul') : 'p';
+    if (block?.localName !== tag) {
+      block = doc.createElement(tag);
+      if (tag === 'ol') block.start = Number(item[1]);
+      fragment.append(block);
+    }
+    if (item) {
+      const li = doc.createElement('li');
+      inline(li, item[2]);
+      block.append(li);
+    } else {
+      if (block.hasChildNodes()) block.append(' ');
+      inline(block, line);
+    }
+  }
+  container.replaceChildren(fragment);
+  renderedReleaseNotes.set(container, markdown);
+}
+
+// Prefer maintained language sections; never substitute a machine translation.
 function localizedReleaseNotes(body,version,locale) {
   const text=String(body||'').trim(), chinese=locale!=='en';
   const lines=text.split('\n'), sections=new Map();let current=null;

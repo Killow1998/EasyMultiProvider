@@ -148,7 +148,7 @@ function createModuleSettings({api, openModal, notice, $, esc, tr, icon, getLang
         }
         if (owner.isConnected) open();
       }, null, navigation);
-    $('module_release_notes').textContent = notes;
+    renderReleaseNotes($('module_release_notes'), notes);
   }
 
   function actionButton(attributes, glyph, label, enabled, hint = label) {

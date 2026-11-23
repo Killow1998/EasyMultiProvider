@@ -153,7 +153,7 @@ impl ExternalTools {
                     Some("additional_tools" | "tool_search_output") => {
                         let loaded =
                             self.definitions(item.get("tools").unwrap_or(&json!([])), None, "")?;
-                        if item["type"] == "additional_tools" {
+                        if item["type"] == "additional_tools" || item["execution"] == "server" {
                             converted.push(json!({"type":"additional_tools", "role":"developer", "tools":loaded}));
                             continue;
                         }
@@ -170,6 +170,7 @@ impl ExternalTools {
                         );
                         continue;
                     }
+                    Some("tool_search_call") if item["execution"] == "server" => continue,
                     Some("tool_search_call") => {
                         if item["execution"] != "client"
                             || item["call_id"].as_str().is_none_or(str::is_empty)

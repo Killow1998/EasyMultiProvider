@@ -47,7 +47,7 @@ where
     };
     let (candidate, active) =
         if let Some(index) = active_start.filter(|index| *index <= source.len()) {
-            let active = source.split_off(index);
+            let active = source.split_off(units::paired_boundary(&source, index));
             (source, active)
         } else if !suffix.is_empty() {
             (source, Vec::new())

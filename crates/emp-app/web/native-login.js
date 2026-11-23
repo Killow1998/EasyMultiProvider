@@ -1,11 +1,12 @@
-function createNativeLogin({onImported}) {
+function createNativeLogin({getState,onImported}) {
   let timer=null, view=null;
   function stop() {clearTimeout(timer);view=null;}
   function active(owner) {return view===owner && owner.node.isConnected;}
   function manage({back=null}={}) {
     stop();
-    const mode=state.native_account?.auth_mode||'missing';
-    const other=(state.accounts||[]).filter(account=>account.credential_set);
+    const {native_account,accounts}=getState();
+    const mode=native_account?.auth_mode||'missing';
+    const other=accounts.filter(account=>account.credential_set);
     openModal(tr('login.change_method'),`<p>${tr('login.mode_'+mode)}</p><div class="choice-grid">${[
       ['subscription','login.subscription','login.subscription_help'],
       ['api_key','login.api_key','login.api_key_help'],
