@@ -225,6 +225,10 @@ fn release_server_with_mode(
             let (mut stream, _) = match listener.accept() {
                 Ok(connection) => connection,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                    )]
                     thread::sleep(Duration::from_millis(10));
                     continue;
                 }
@@ -277,6 +281,10 @@ fn release_server_with_mode(
                     let split = package.len() / 2;
                     stream.write_all(&package[..split]).unwrap();
                     stream.flush().unwrap();
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "分段发送更新包并固定延迟，模拟慢下载期间的并发请求"
+                    )]
                     thread::sleep(Duration::from_millis(800));
                     stream.write_all(&package[split..]).unwrap();
                 }
@@ -299,6 +307,10 @@ fn release_server_with_mode(
             match listener.accept() {
                 Ok(_) => panic!("duplicate release or package request observed"),
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                    )]
                     thread::sleep(Duration::from_millis(5));
                 }
                 Err(error) => panic!("fake release server failed: {error}"),
@@ -317,6 +329,10 @@ fn spawn_staged_executable(command: &mut Command) -> std::io::Result<Child> {
             Err(error)
                 if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < deadline =>
             {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "可执行文件写入者关闭后按固定间隔重试 ETXTBSY"
+                )]
                 thread::sleep(Duration::from_millis(10));
             }
             result => return result,
@@ -446,6 +462,10 @@ fn staged_executable_waits_for_writer_to_close() {
         Some(libc::ETXTBSY)
     );
     let release = thread::spawn(move || {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "延迟关闭可执行文件写入者，模拟暂时的 ETXTBSY"
+        )]
         thread::sleep(Duration::from_millis(50));
         drop(writer);
     });
@@ -488,6 +508,10 @@ fn wait_for_state(
             Instant::now() < deadline,
             "timed out waiting for {expected}: {snapshot}"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "管理接口没有状态推送，此 helper 按固定间隔轮询更新状态"
+        )]
         thread::sleep(Duration::from_millis(25));
     }
 }
@@ -511,6 +535,10 @@ fn wait_for_error(
             Instant::now() < deadline,
             "timed out waiting for error {expected}: {snapshot}"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "管理接口没有状态推送，此 helper 按固定间隔轮询更新错误"
+        )]
         thread::sleep(Duration::from_millis(10));
     }
 }
@@ -546,6 +574,10 @@ fn stop_emp(emp: &mut RunningEmp) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while emp.process.0.try_wait().unwrap().is_none() {
             assert!(Instant::now() < deadline, "EMP did not stop after quit");
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+            )]
             thread::sleep(Duration::from_millis(10));
         }
     }
@@ -749,6 +781,10 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
                 code => panic!("quit during update returned unexpected status {code}"),
             }
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "按既有间隔采样更新重试和管理请求排空状态"
+        )]
         thread::sleep(Duration::from_millis(2));
     }
     assert!(
@@ -775,6 +811,10 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
             Instant::now() < deadline,
             "old EMP process did not shut down after handoff"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(25));
     }
     let candidate_pid = loop {
@@ -784,6 +824,10 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
             break pid;
         }
         assert!(Instant::now() < deadline, "candidate did not start");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "候选进程通过 PID 文件报告启动，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(25));
     };
     let success_deadline = Instant::now() + Duration::from_secs(20);
@@ -806,6 +850,10 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
             Instant::now() < success_deadline,
             "update worker did not accept candidate readiness before timeout"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "更新成功通过文件标记报告，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(20));
     }
     assert!(
@@ -821,6 +869,10 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
             Instant::now() < candidate_exit_deadline,
             "candidate process remained alive"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "候选进程退出通过 procfs 观察，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(25));
     }
     release_server
@@ -1135,6 +1187,10 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
     let deadline = Instant::now() + Duration::from_secs(5);
     while emp.process.0.try_wait().unwrap().is_none() {
         assert!(Instant::now() < deadline, "EMP did not stop after quit");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(10));
     }
     server.join().expect("fake release server completed");
@@ -1161,6 +1217,10 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
             Instant::now() < old_exit_deadline,
             "old EMP did not hand off"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(10));
     }
 
@@ -1175,6 +1235,10 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
             Instant::now() < restart_deadline,
             "old EMP did not return after rollback"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "回滚服务以固定间隔轮询健康状态"
+        )]
         thread::sleep(Duration::from_millis(20));
     }
     let rolled_back = request(emp.port, "GET", "/api/updates", Some(&emp.session), None);
@@ -1203,6 +1267,10 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
             Instant::now() < shutdown_deadline,
             "rolled-back EMP stayed alive"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "回滚后的退出以 HTTP 连接失败报告，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(20));
     }
     server.join().expect("fake rollback release completed");

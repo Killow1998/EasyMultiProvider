@@ -73,6 +73,10 @@ impl<P: Pipe> Read for CancellablePipe<P> {
                     };
                 }
                 if available == 0 {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "Windows 管道以固定间隔轮询可读字节，并检查取消标志"
+                    )]
                     thread::sleep(Duration::from_millis(20));
                     continue;
                 }
@@ -81,7 +85,11 @@ impl<P: Pipe> Read for CancellablePipe<P> {
             };
             match self.pipe.read(buffer) {
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(20))
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "非阻塞管道暂无字节时按固定间隔重试，并检查取消标志"
+                    )]
+                    thread::sleep(Duration::from_millis(20));
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 result => return result,

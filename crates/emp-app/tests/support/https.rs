@@ -80,6 +80,10 @@ impl HttpsProxy {
                 let (mut stream, _) = match listener.accept() {
                     Ok(accepted) => accepted,
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                        )]
                         thread::sleep(Duration::from_millis(10));
                         continue;
                     }

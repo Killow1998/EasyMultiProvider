@@ -62,6 +62,10 @@ impl UpdateManager {
                     "http_status": diagnostic.http_status, "os_error": diagnostic.os_error
                 })
             );
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "更新请求失败后按既有指数退避间隔重试"
+            )]
             std::thread::sleep(Duration::from_secs(1 << (count - 1)));
         }
     }

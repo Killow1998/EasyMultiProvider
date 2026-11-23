@@ -34,6 +34,10 @@ pub(super) fn accept(listener: TcpListener, state: Arc<ServerState>) {
                     }));
                     last_error = Some(Instant::now());
                 }
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "accept 遇到资源耗尽等错误后按既有固定间隔退避"
+                )]
                 thread::sleep(ACCEPT_RETRY);
                 continue;
             }

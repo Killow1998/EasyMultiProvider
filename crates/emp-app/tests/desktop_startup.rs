@@ -44,6 +44,10 @@ fn desktop_startup_keeps_the_native_tray_alive_through_enable_and_restore() {
             break;
         }
         assert!(Instant::now() < deadline, "native tray did not start");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "原生托盘就绪通过诊断日志报告，以固定间隔轮询"
+        )]
         std::thread::sleep(Duration::from_millis(20));
     }
     for (operation, expected) in [("enable", "emp_applied"), ("restore", "native")] {

@@ -253,12 +253,14 @@ fn save_uses_config_path_environment_without_reloading_vault() {
     let vault =
         VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store");
     let original = std::env::var_os(CONFIG_PATH_ENV);
+    // SAFETY: ENV_LOCK is held; the runner must exclude concurrent environment readers during mutation.
     unsafe {
         std::env::set_var(CONFIG_PATH_ENV, &configured);
     }
     let saved = save_configuration(&json!({}), None, &vault).expect("save configured path");
     assert_eq!(saved, configured);
     assert_eq!(config_path(), configured);
+    // SAFETY: ENV_LOCK remains held and the runner must exclude environment readers during restoration.
     unsafe {
         match original {
             Some(value) => std::env::set_var(CONFIG_PATH_ENV, value),

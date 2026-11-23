@@ -126,6 +126,10 @@ fn run_with_timeout_policy(
             if cancelled.is_cancelled() {
                 break;
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+            )]
             thread::sleep(CHILD_POLL);
         }
         // Stop descendants before joining pipes they may still hold open.
@@ -265,6 +269,10 @@ impl ChildTree {
         }
         #[cfg(unix)]
         {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "向进程组发送 SIGTERM 后保留既有宽限期，再发送 SIGKILL"
+            )]
             thread::sleep(Duration::from_millis(100));
             // SAFETY: kill accepts scalar arguments; the negative child ID targets its process group.
             unsafe {

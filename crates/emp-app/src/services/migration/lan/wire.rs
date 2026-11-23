@@ -168,7 +168,11 @@ pub(super) fn serve(
                     return;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(50))
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "非阻塞 LAN 监听器按既有间隔轮询连接并检查取消状态"
+                    )]
+                    std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(_) => break,
             }

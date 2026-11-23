@@ -391,6 +391,10 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
             let deadline = started + Duration::from_secs(30);
             while upstream.traffic.lock().unwrap().warmups == 0 {
                 assert!(Instant::now() < deadline);
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "续接替身通过共享状态报告进展，以固定间隔轮询"
+                )]
                 thread::sleep(Duration::from_millis(10));
             }
             if started.elapsed() > Duration::from_secs(10) {
@@ -406,6 +410,10 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
                     Instant::now() < deadline,
                     "prefill upstream was not cancelled"
                 );
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "续接替身通过共享状态报告进展，以固定间隔轮询"
+                )]
                 thread::sleep(Duration::from_millis(10));
             }
         } else {

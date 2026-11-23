@@ -128,6 +128,10 @@ impl Drop for Worker {
         if self.module == Module::Aero {
             let until = std::time::Instant::now() + Duration::from_secs(5);
             while self.is_running() && std::time::Instant::now() < until {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "关闭 Aero 命令通道后按固定间隔等待其自行退出，再执行强制清理"
+                )]
                 std::thread::sleep(Duration::from_millis(10));
             }
         }

@@ -547,6 +547,10 @@ fn smoke_service(root: &Path, executable: &Path, target: Target) -> Result {
                     .map(|(_, token)| token.split('&').next().unwrap_or("").trim().to_owned())
             })
         else {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "启动地址由日志文件提供，以固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(100));
             continue;
         };
@@ -554,11 +558,19 @@ fn smoke_service(root: &Path, executable: &Path, target: Target) -> Result {
             Ok((200, _)) => {}
             Ok((status, _)) => {
                 last_error = format!("health check returned HTTP {status}");
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "打包验收以固定间隔轮询服务健康状态"
+                )]
                 std::thread::sleep(Duration::from_millis(100));
                 continue;
             }
             Err(error) => {
                 last_error = error;
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "打包验收以固定间隔重试尚未就绪的 HTTP 服务"
+                )]
                 std::thread::sleep(Duration::from_millis(100));
                 continue;
             }
@@ -878,6 +890,10 @@ fn run_hdiutil_create(command: &mut Command) -> Result {
         eprintln!(
             "hdiutil create reported transient Resource busy; retrying ({attempt}/{HDIUTIL_CREATE_MAX_ATTEMPTS})"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "hdiutil 返回 Resource busy 后按既有退避间隔重试"
+        )]
         std::thread::sleep(HDIUTIL_CREATE_RETRY_DELAYS[attempt - 1]);
     }
 

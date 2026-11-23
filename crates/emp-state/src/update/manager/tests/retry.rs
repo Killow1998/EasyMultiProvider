@@ -13,6 +13,10 @@ pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) ->
                 Ok((stream, _)) => break stream,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     assert!(Instant::now() < deadline, "missing updater request");
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                    )]
                     thread::sleep(Duration::from_millis(5));
                 }
                 Err(error) => panic!("fake release server: {error}"),

@@ -73,7 +73,11 @@ fn run_verifier(command: &mut Command, timeout: Duration) -> bool {
         match child.try_wait() {
             Ok(Some(status)) => return status.success() && started.elapsed() <= timeout,
             Ok(None) if started.elapsed() < timeout => {
-                std::thread::sleep(Duration::from_millis(10))
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+                )]
+                std::thread::sleep(Duration::from_millis(10));
             }
             _ => {
                 let _ = child.kill();

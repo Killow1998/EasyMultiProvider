@@ -20,6 +20,10 @@ impl ImageUpstream {
                 let (mut socket, _) = match listener.accept() {
                     Ok(socket) => socket,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                        )]
                         thread::sleep(Duration::from_millis(5));
                         continue;
                     }

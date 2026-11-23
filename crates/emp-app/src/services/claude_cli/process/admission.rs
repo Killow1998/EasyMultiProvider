@@ -127,6 +127,10 @@ mod tests {
                         assert_eq!(status.success(), _index != 0);
                     }
                     #[cfg(not(unix))]
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "非 Unix 平台用固定等待模拟任务持有并发槽位的时间"
+                    )]
                     std::thread::sleep(Duration::from_millis(20));
                     running.fetch_sub(1, Ordering::SeqCst);
                 });

@@ -197,6 +197,10 @@ impl<'a> AccountCredentials<'a> {
                 return Ok(());
             }
             if attempt + 1 < PERSIST_ROTATION_ATTEMPTS {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "轮换凭据持久化失败后按既有指数退避间隔重试"
+                )]
                 std::thread::sleep(Duration::from_millis(100 << attempt));
             }
         }

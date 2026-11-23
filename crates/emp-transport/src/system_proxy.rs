@@ -79,6 +79,10 @@ fn run_command(
             }
             Ok(Some(_)) => return None,
             Ok(None) if Instant::now() < deadline => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+                )]
                 thread::sleep(Duration::from_millis(10));
             }
             Ok(None) | Err(_) => {

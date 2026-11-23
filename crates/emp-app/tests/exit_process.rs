@@ -44,6 +44,10 @@ fn await_native(workspace: &Workspace) {
             Instant::now() < deadline,
             "native routing was not restored before the exit deadline"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "退出恢复结果写入配置文件，以固定间隔轮询"
+        )]
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_native(workspace);
@@ -120,6 +124,10 @@ fn exit_restores_while_runtime_observation_is_stalled() {
             Instant::now() < deadline,
             "EMP never started the runtime observation"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "运行时观测通过管理接口提供，以固定间隔轮询"
+        )]
         std::thread::sleep(Duration::from_millis(10));
     };
     socket

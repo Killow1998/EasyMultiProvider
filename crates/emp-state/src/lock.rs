@@ -267,6 +267,10 @@ impl IntegrationFileLock {
                 }
                 TryLock::Contended => {
                     let remaining = timeout.saturating_sub(started.elapsed());
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "跨进程文件锁没有释放通知，按调用者指定间隔轮询至超时"
+                    )]
                     thread::sleep(poll_interval.min(remaining));
                 }
             }

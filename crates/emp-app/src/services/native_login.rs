@@ -279,6 +279,10 @@ mod tests {
                 Instant::now() < deadline,
                 "device login timed out: {status}"
             );
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "设备登录完成通过状态接口报告，以固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(25));
         }
         assert_eq!(local_auth::mode(&auth_path), "subscription");

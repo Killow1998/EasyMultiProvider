@@ -55,7 +55,13 @@ impl QuotaChild {
             match self.process.try_wait() {
                 Ok(Some(status)) if status.success() => break Ok(()),
                 Ok(Some(_)) => break Err(io::Error::other("quota helper failed")),
-                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                Ok(None) if Instant::now() < deadline => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+                    )]
+                    thread::sleep(Duration::from_millis(10));
+                }
                 Ok(None) => {
                     break Err(io::Error::new(io::ErrorKind::TimedOut, "quota helper exit"));
                 }

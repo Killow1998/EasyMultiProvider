@@ -68,6 +68,10 @@ impl VertexFixture {
         let worker = thread::spawn(move || {
             while !stopped.load(Ordering::Acquire) {
                 let Ok((stream, _)) = listener.accept() else {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                    )]
                     thread::sleep(Duration::from_millis(10));
                     continue;
                 };
@@ -540,6 +544,7 @@ fn vertex_adc_routes_gemini_and_claude_with_refreshed_oauth() {
     .unwrap();
     let previous = std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS");
     // This ignored test runs alone, with a synthetic file and no other test threads.
+    // SAFETY: the isolated runner guarantees no concurrent environment access; the token worker only serves loopback HTTP.
     unsafe {
         std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", &credential_path);
     }
@@ -565,6 +570,10 @@ fn vertex_adc_routes_gemini_and_claude_with_refreshed_oauth() {
     .enumerate()
     {
         if index > 0 {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "等待首个令牌真实过期，验证后续请求会刷新并复用新令牌"
+            )]
             thread::sleep(Duration::from_secs(2));
         }
         let body = json!({"model":model,"input":"Hello","stream":false});
@@ -632,6 +641,7 @@ fn vertex_adc_routes_gemini_and_claude_with_refreshed_oauth() {
     );
     server.shutdown().unwrap();
     token_worker.join().unwrap();
+    // SAFETY: the server and token worker have stopped before this isolated test restores the environment.
     unsafe {
         if let Some(value) = previous {
             std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", value);
@@ -693,6 +703,10 @@ fn installed_codex_roundtrips_a_vertex_tool_with_real_emp() {
             Instant::now() < deadline,
             "Codex exec-server did not start: {text}"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Codex exec-server 通过日志报告地址，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(30));
     };
     let mut codex = Codex::start(&home);

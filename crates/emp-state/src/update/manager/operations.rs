@@ -332,6 +332,10 @@ impl UpdateManager {
                 worker_process.stop();
                 return Err(UpdateError("worker_failed"));
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "更新 worker 通过就绪文件报告状态，以固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(100));
         }
         self.set("installing", "", Some(asset.version.clone()), 100);

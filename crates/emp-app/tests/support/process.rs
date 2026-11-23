@@ -212,6 +212,10 @@ impl Emp {
                 Err(error) => {
                     let _ = child.kill();
                     let _ = child.wait();
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "启动失败后保留既有间隔，让 stderr 收集线程完成诊断输出"
+                    )]
                     thread::sleep(Duration::from_millis(50));
                     panic!(
                         "EMP not ready ({error}); stdout: {startup_output:?}; stderr: {}",
@@ -320,6 +324,10 @@ impl Emp {
             if let Some(status) = self.child.try_wait().expect("poll EMP") {
                 return status.code();
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+            )]
             thread::sleep(Duration::from_millis(10));
         }
         panic!("EMP did not exit within {timeout:?}");
@@ -342,6 +350,10 @@ impl Emp {
             if self.child.try_wait().ok().flatten().is_some() {
                 return;
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+            )]
             thread::sleep(Duration::from_millis(10));
         }
         let _ = self.child.kill();

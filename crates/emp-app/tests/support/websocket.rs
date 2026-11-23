@@ -212,7 +212,11 @@ impl WebSocketUpstream {
                 match listener.accept() {
                     Ok((stream, _)) => break stream,
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(10))
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                        )]
+                        thread::sleep(Duration::from_millis(10));
                     }
                     Err(error) => panic!("accept upstream WS: {error}"),
                 }

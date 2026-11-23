@@ -78,6 +78,10 @@ impl TestServer {
                             });
                         }
                         Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                            #[expect(
+                                clippy::disallowed_methods,
+                                reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                            )]
                             thread::sleep(Duration::from_millis(2));
                         }
                         Err(_) => break,
@@ -212,6 +216,10 @@ impl TlsTestServer {
                             thread::spawn(move || serve_tls_connection(stream, config));
                         }
                         Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                            #[expect(
+                                clippy::disallowed_methods,
+                                reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                            )]
                             thread::sleep(Duration::from_millis(2));
                         }
                         Err(_) => break,
@@ -399,6 +407,10 @@ fn serve_connection(
             }
             let _ = stream.flush();
             while !release_streams.load(Ordering::Acquire) && !shutdown.load(Ordering::Acquire) {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "流式响应替身按固定间隔检查释放和停止标志"
+                )]
                 thread::sleep(Duration::from_millis(2));
             }
             let _ = stream.write_all(&vec![b'x'; 100_000 - 13]);

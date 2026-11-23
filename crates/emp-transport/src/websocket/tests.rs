@@ -188,6 +188,10 @@ fn ready_reads_preserve_partial_frames_timeouts_and_blocking_writes() {
             }
             WebSocketPoll::Pending => {
                 assert!(Instant::now() < deadline);
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "非阻塞 WebSocket 暂无帧时按既有间隔轮询，避免空转"
+                )]
                 std::thread::sleep(Duration::from_millis(1));
             }
             other => panic!("unexpected frame: {other:?}"),
@@ -221,6 +225,10 @@ fn ready_reads_preserve_partial_frames_timeouts_and_blocking_writes() {
                 }
                 WebSocketPoll::Pending => {
                     assert!(Instant::now() < deadline);
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "非阻塞 WebSocket 暂无帧时按既有间隔轮询，避免空转"
+                    )]
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 other => panic!("unexpected frame: {other:?}"),

@@ -124,6 +124,10 @@ pub(super) fn run(
         let (mut stream, _) = match context.listener.accept() {
             Ok(accepted) => accepted,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "非阻塞中继监听器按固定间隔轮询，并检查消息和会话截止时间"
+                )]
                 std::thread::sleep(Duration::from_millis(20));
                 continue;
             }

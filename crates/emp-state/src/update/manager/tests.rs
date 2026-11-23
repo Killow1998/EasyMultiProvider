@@ -85,6 +85,7 @@ fn candidate_version_probe_times_out_and_reaps_the_child() {
         .trim()
         .parse()
         .unwrap();
+    // SAFETY: signal zero only probes the fixture PID and kill takes no pointers.
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     assert_eq!(
         std::io::Error::last_os_error().raw_os_error(),
@@ -100,12 +101,14 @@ fn candidate_version_probe_restores_error_mode_after_bad_image() {
     let root = tempfile::TempDir::new().unwrap();
     let binary = root.path().join("candidate.exe");
     std::fs::write(&binary, b"deliberately invalid executable").unwrap();
+    // SAFETY: GetThreadErrorMode takes no arguments and reads only this thread.
     let previous = unsafe { GetThreadErrorMode() };
     assert_eq!(
         probe_candidate_version(&binary, "0.12.0", root.path(), Duration::from_secs(1))
             .unwrap_err(),
         crate::update::UpdateError("update_failed")
     );
+    // SAFETY: GetThreadErrorMode takes no arguments and reads only this thread.
     assert_eq!(unsafe { GetThreadErrorMode() }, previous);
 }
 
@@ -143,6 +146,10 @@ fn concurrent_checks_start_only_one_release_job() {
                     );
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                    )]
                     thread::sleep(Duration::from_millis(5));
                 }
                 Err(error) => panic!("fake release server failed: {error}"),
@@ -183,6 +190,10 @@ fn concurrent_checks_start_only_one_release_job() {
     assert_eq!(server.join().unwrap(), 1, "only one check request is sent");
     let deadline = Instant::now() + Duration::from_secs(3);
     while manager.snapshot().state == "checking" && Instant::now() < deadline {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "并发发布检查通过状态快照观察，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(manager.snapshot().state, "no_release");
@@ -251,6 +262,10 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
     assert_eq!(server.join().unwrap(), 4);
     let deadline = Instant::now() + Duration::from_secs(12);
     while manager.snapshot().state != "error" && Instant::now() < deadline {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "更新阶段通过状态快照观察，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(5));
     }
     let snapshot = manager.snapshot();
@@ -427,6 +442,10 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
             break;
         }
         assert!(Instant::now() < deadline, "update never completed");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "更新完成通过观测回调报告，以固定间隔轮询已收集事件"
+        )]
         thread::sleep(Duration::from_millis(10));
     }
     server.join().unwrap();

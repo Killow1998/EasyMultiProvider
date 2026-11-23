@@ -73,6 +73,10 @@ impl Upstream {
                 let (mut stream, _) = match listener.accept() {
                     Ok(pair) => pair,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                        )]
                         thread::sleep(Duration::from_millis(5));
                         continue;
                     }
@@ -143,6 +147,10 @@ impl Upstream {
                         let text = match ws.poll_text_ready() {
                             Ok(WebSocketPoll::Text(text)) => text,
                             Ok(WebSocketPoll::Pending) => {
+                                #[expect(
+                                    clippy::disallowed_methods,
+                                    reason = "非阻塞 WebSocket 暂无帧时按既有间隔轮询，避免空转"
+                                )]
                                 thread::sleep(Duration::from_millis(1));
                                 continue;
                             }
@@ -217,7 +225,13 @@ impl Upstream {
                                     traffic.lock().unwrap().warmups += 1;
                                     while !stop.load(Ordering::Acquire) {
                                         match ws.poll_text_ready() {
-                                            Ok(WebSocketPoll::Pending) => thread::sleep(Duration::from_millis(1)),
+                                            Ok(WebSocketPoll::Pending) => {
+                                                #[expect(
+                                                    clippy::disallowed_methods,
+                                                    reason = "非阻塞 WebSocket 暂无帧时按既有间隔轮询，避免空转"
+                                                )]
+                                                thread::sleep(Duration::from_millis(1));
+                                            }
                                             Ok(WebSocketPoll::Closed{..}) | Err(_) => {
                                                 traffic.lock().unwrap().cancelled_prefills += 1;
                                                 break;

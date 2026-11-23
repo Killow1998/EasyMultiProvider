@@ -66,6 +66,10 @@ impl Parent {
             if Instant::now() >= deadline {
                 return Err("old EMP did not start".into());
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "旧 EMP 通过启动日志报告地址，以固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(100));
         };
         let (status, body) = http(
@@ -113,6 +117,10 @@ impl Parent {
             if Instant::now() >= deadline {
                 return Err("old EMP did not exit".into());
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(100));
         }
         Ok(())

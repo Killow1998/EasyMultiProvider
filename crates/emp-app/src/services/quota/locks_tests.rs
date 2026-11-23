@@ -93,6 +93,10 @@ fn replacement_quota_refresh_waits_in_migration_lock_order() {
         });
         let deadline = Instant::now() + Duration::from_secs(5);
         while Arc::strong_count(&shared_lock) == shared_count && Instant::now() < deadline {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "配置锁占用没有通知接口，以固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(5));
         }
         let queued_for_shared = Arc::strong_count(&shared_lock) > shared_count;

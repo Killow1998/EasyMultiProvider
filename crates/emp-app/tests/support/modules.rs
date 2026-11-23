@@ -419,6 +419,10 @@ pub fn eventually<T>(timeout: Duration, what: &str, mut probe: impl FnMut() -> O
             return value;
         }
         assert!(Instant::now() < deadline, "{what} within {timeout:?}");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "被观察的进程表和管理接口没有变更通知，只能固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(20));
     }
 }

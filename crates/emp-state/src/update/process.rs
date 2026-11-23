@@ -233,6 +233,10 @@ impl OwnedChild {
         }
         let deadline = Instant::now() + Duration::from_secs(5);
         while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(25));
         }
         if self.child.try_wait().ok().flatten().is_none() {
@@ -255,6 +259,10 @@ impl OwnedChild {
                 self.stop();
                 return Err(UpdateError("worker_failed"));
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(25));
         }
     }
@@ -311,8 +319,10 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let executable = root.path().join("candidate.exe");
         std::fs::write(&executable, b"deliberately invalid executable").unwrap();
+        // SAFETY: GetThreadErrorMode takes no arguments and reads only this thread.
         let previous = unsafe { GetThreadErrorMode() };
         assert!(spawn(&executable, &[], &[], true).is_err());
+        // SAFETY: GetThreadErrorMode takes no arguments and reads only this thread.
         assert_eq!(unsafe { GetThreadErrorMode() }, previous);
     }
 }

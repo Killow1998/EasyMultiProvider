@@ -123,6 +123,10 @@ pub fn run(plan_path: &Path) -> Result<u8> {
         if Instant::now() > deadline {
             return Err(UpdateError("shutdown_timeout"));
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "旧进程的存活状态没有通知接口，以固定间隔轮询"
+        )]
         std::thread::sleep(Duration::from_millis(200));
     }
     let backup = job.join("previous");
@@ -162,6 +166,10 @@ pub fn run(plan_path: &Path) -> Result<u8> {
                 exit_code = status.code();
                 break;
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "候选服务就绪和退出以固定间隔轮询，保留既有启动超时"
+            )]
             std::thread::sleep(Duration::from_millis(200));
         }
         Err(UpdateError("startup_failed"))
@@ -242,6 +250,10 @@ fn mark_ready_for_executable(version: &str, marker: PathBuf, executable: &Path) 
         .name("emp-update-cleanup".into())
         .spawn(move || {
             for _ in 0..30 {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "成功更新目录按既有两秒间隔重试清理"
+                )]
                 std::thread::sleep(Duration::from_secs(2));
                 if job.join("success").is_file() && fs::remove_dir_all(&job).is_ok() {
                     break;

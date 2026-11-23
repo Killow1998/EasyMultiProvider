@@ -42,6 +42,10 @@ fn idle_accept_worker_wakes_for_shutdown_after_serving_a_request() {
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(response.ends_with("{\"status\":\"ok\"}"));
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "保留监听器进入空闲接收状态的时间窗口"
+    )]
     thread::sleep(Duration::from_millis(25));
     let started = Instant::now();
     server.shutdown().expect("idle listener shutdown");
@@ -437,6 +441,10 @@ fn request_head_has_an_overall_deadline() {
         // Trickle one byte at a time, never finishing the head and never
         // idling long enough for the per-read timeout.
         for _ in 0..40 {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "按固定间隔逐字节发送，验证持续有数据时请求头仍受总时限约束"
+            )]
             thread::sleep(Duration::from_millis(50));
             if client.write_all(b"X").is_err() {
                 break;
@@ -464,6 +472,10 @@ fn request_body_has_an_overall_deadline() {
     let writer = thread::spawn(move || {
         let mut client = TcpStream::connect(address).expect("connect");
         for _ in 0..40 {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "按固定间隔逐字节发送，验证请求体读取总时限"
+            )]
             thread::sleep(Duration::from_millis(50));
             if client.write_all(b"X").is_err() {
                 break;

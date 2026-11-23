@@ -328,6 +328,10 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     app.join().expect("join sideband handler");
     let deadline = Instant::now() + Duration::from_secs(1);
     while server.state.connection_admission.active_websockets() != 0 && Instant::now() < deadline {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "WebSocket 准入释放没有通知接口，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(server.state.connection_admission.active_websockets(), 0);

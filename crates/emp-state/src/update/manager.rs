@@ -371,7 +371,13 @@ fn probe_candidate_version_observed(
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Ok(None) if Instant::now() < deadline => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+                )]
+                std::thread::sleep(Duration::from_millis(25));
+            }
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();

@@ -510,7 +510,13 @@ impl ClientWebSocket {
     pub fn receive_value(&mut self) -> Result<Option<Value>, ClientWebSocketError> {
         loop {
             match self.poll_receive_text()? {
-                WebSocketPoll::Pending => std::thread::sleep(Duration::from_millis(1)),
+                WebSocketPoll::Pending => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "非阻塞 WebSocket 暂无帧时按既有间隔轮询，避免空转"
+                    )]
+                    std::thread::sleep(Duration::from_millis(1));
+                }
                 WebSocketPoll::Ping(payload) => self.send_pong(&payload)?,
                 WebSocketPoll::Closed { code } => {
                     self.close_with(code.unwrap_or(1000), "");

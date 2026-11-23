@@ -172,6 +172,10 @@ fn full_event_queue_does_not_block_close_or_leave_worker() {
     )
     .unwrap();
     sent_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "保留接收队列填满的时间窗口，验证关闭不会被背压阻塞"
+    )]
     thread::sleep(Duration::from_millis(30));
 
     let start = Instant::now();

@@ -57,6 +57,10 @@ fn exit_restores_before_active_requests_and_websockets_release() {
     let shutdown = std::thread::spawn(move || server.shutdown());
     while state.backend.integration.manager.status().unwrap().state != "restored" {
         assert!(start.elapsed() < Duration::from_secs(2));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "集成恢复状态通过快照观察，以固定间隔轮询"
+        )]
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_original(

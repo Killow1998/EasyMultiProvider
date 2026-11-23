@@ -641,6 +641,10 @@ fn pump_worker(
                 Ok(()) => continue,
                 Err(TrySendError::Full(event)) => {
                     pending_event = Some(event);
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "接收队列满时按固定间隔重试，并继续检查关闭控制消息"
+                    )]
                     std::thread::sleep(Duration::from_millis(1));
                     continue;
                 }
@@ -652,7 +656,13 @@ fn pump_worker(
         }
 
         match client.poll_receive_text() {
-            Ok(WebSocketPoll::Pending) => std::thread::sleep(Duration::from_millis(1)),
+            Ok(WebSocketPoll::Pending) => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "非阻塞 WebSocket 暂无帧时按既有间隔轮询，避免空转"
+                )]
+                std::thread::sleep(Duration::from_millis(1));
+            }
             Ok(WebSocketPoll::Text(text)) => pending_event = Some(PumpEvent::Text(text)),
             Ok(WebSocketPoll::Ping(payload)) => {
                 if let Err(error) = client.send_pong(&payload) {

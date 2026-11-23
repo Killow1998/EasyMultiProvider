@@ -245,6 +245,10 @@ pub(crate) fn serve_responses_websocket(
                         }
                     }
                     Ok(WebSocketPoll::Pending) => {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "按既有固定间隔轮询 WebSocket 帧并检查连接排空状态"
+                        )]
                         std::thread::sleep(std::time::Duration::from_millis(25));
                     }
                     Err(error) => break Err(error),

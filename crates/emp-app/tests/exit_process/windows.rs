@@ -143,6 +143,7 @@ fn closing_the_console_restores_before_windows_terminates_emp() {
     };
     assert!(!window.is_null());
     let mut class = [0u16; 128];
+    // SAFETY: window is the fixture console handle and class has the stated writable UTF-16 capacity.
     let len = unsafe { GetClassNameW(window, class.as_mut_ptr(), class.len() as i32) };
     let class = String::from_utf16_lossy(&class[..len.max(0) as usize]);
     assert_eq!(
@@ -150,6 +151,7 @@ fn closing_the_console_restores_before_windows_terminates_emp() {
         "this test needs Windows Console Host; a ConPTY proxy HWND cannot close its client"
     );
     // Actual console close, not an invocation of EMP's cleanup function.
+    // SAFETY: window is the detached fixture console; WM_CLOSE carries no pointer arguments.
     assert_ne!(unsafe { PostMessageW(window, WM_CLOSE, 0, 0) }, 0);
     if let Err(failure) = std::panic::catch_unwind(|| await_native(&workspace)) {
         use windows_sys::Win32::Foundation::CloseHandle;
@@ -158,6 +160,7 @@ fn closing_the_console_restores_before_windows_terminates_emp() {
         };
         // Read only this fixture's process and synthetic journal. Keep the
         // original assertion: successful message posting is not proof of exit.
+        // SAFETY: the PID belongs to the fixture and code is writable output storage; the handle is closed once.
         unsafe {
             let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, emp.pid() as u32);
             let mut code = 0;
@@ -189,12 +192,14 @@ fn canceled_session_end_keeps_running_and_confirmed_end_restores_synchronously()
         let window = session_window(emp.pid());
         let applied = workspace.read_codex_config();
         // Send only to our fixture window. No real logoff/shutdown is requested.
+        // SAFETY: window belongs to the fixture and session messages carry scalar flags only.
         unsafe {
             assert_eq!(SendMessageW(window, WM_QUERYENDSESSION, 0, reason), 1);
             SendMessageW(window, WM_ENDSESSION, 0, reason);
         }
         assert_eq!(workspace.read_codex_config(), applied);
         assert_eq!(emp.anonymous("GET", "/healthz").status, 200);
+        // SAFETY: window belongs to the fixture and WM_ENDSESSION carries scalar flags only.
         unsafe {
             SendMessageW(window, WM_ENDSESSION, 1, reason);
         }
@@ -212,6 +217,7 @@ fn close_window_request_restores_native() {
     let mut emp = start(&workspace, CREATE_NEW_CONSOLE);
     enable(&emp, &workspace);
     let window = session_window(emp.pid());
+    // SAFETY: window belongs to the fixture and WM_CLOSE carries no pointer arguments.
     unsafe {
         SendMessageW(window, WM_CLOSE, 0, 0);
     }

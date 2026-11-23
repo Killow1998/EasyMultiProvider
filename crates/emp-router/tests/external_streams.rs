@@ -58,6 +58,10 @@ impl StreamServer {
                             thread::spawn(move || serve(stream, &fixtures, requests));
                         }
                         Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                            #[expect(
+                                clippy::disallowed_methods,
+                                reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                            )]
                             thread::sleep(Duration::from_millis(2));
                         }
                         Err(_) => break,
@@ -147,6 +151,10 @@ fn serve(mut stream: TcpStream, fixtures: &Value, requests: Arc<Mutex<Vec<Record
         {
             return;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "假上游按固定间隔分段发送，模拟流式响应"
+        )]
         thread::sleep(Duration::from_millis(1));
     }
 }

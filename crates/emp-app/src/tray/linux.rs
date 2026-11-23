@@ -45,6 +45,10 @@ impl Tray {
     }
 
     pub(super) fn pump(&mut self) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "GTK 托盘每次泵完原生事件后按既有间隔检查应用状态"
+        )]
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }

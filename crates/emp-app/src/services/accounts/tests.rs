@@ -49,6 +49,10 @@ fn wait_for_file(path: &Path) {
         if path.is_file() {
             return;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "此 helper 按固定间隔轮询配额替身的文件标记"
+        )]
         thread::sleep(Duration::from_millis(5));
     }
     panic!("fake app-server did not enter the blocked quota operation");
@@ -745,6 +749,10 @@ fn credential_replacement_also_locks_accounts_added_while_it_waited() {
         });
         // The replacement listed only `a` and now waits for its lock; `b`
         // is added in the meantime.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "保留替换操作被账号锁阻塞的时间窗口，再并发导入新账号"
+        )]
         thread::sleep(Duration::from_millis(100));
         import_account_state(None, &server.state, &body("b")).expect("import b");
         drop(guard_a);
@@ -794,6 +802,10 @@ fn account_import_during_credential_replacement_is_not_lost() {
                     .send(import_account_state(None, &server.state, &body("b")).is_ok())
                     .unwrap();
             });
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "保持配置锁的观察窗口，验证并发导入没有提前完成"
+            )]
             thread::sleep(Duration::from_millis(200));
             assert!(
                 imported_rx.try_recv().is_err(),
@@ -887,6 +899,10 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
         // settling, blocked on the history database).
         let deadline = Instant::now() + Duration::from_secs(2);
         while configuration.try_lock().is_ok() && Instant::now() < deadline {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "配置锁占用没有通知接口，以固定间隔轮询"
+            )]
             thread::sleep(Duration::from_millis(5));
         }
         let rival = scope.spawn(|| {
@@ -896,6 +912,10 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
                 &body("team-a", "team-b", "upstream-team-a"),
             )
         });
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "维持数据库阻塞窗口，让竞争导入进入配置锁等待"
+        )]
         thread::sleep(Duration::from_millis(200));
         blocker
             .execute_batch("COMMIT")

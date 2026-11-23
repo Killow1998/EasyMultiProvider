@@ -424,10 +424,18 @@ for line in sys.stdin:
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !executable.with_extension("rotated").exists() {
         assert!(std::time::Instant::now() < deadline, "Codex never rotated");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "配额轮换替身通过文件报告状态，以固定间隔轮询"
+        )]
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let release = executable.with_extension("release");
     let releaser = std::thread::spawn(move || {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "延迟释放配额替身，验证退出会等待轮换完成"
+        )]
         std::thread::sleep(std::time::Duration::from_millis(300));
         std::fs::write(release, b"").expect("release fake Codex");
     });

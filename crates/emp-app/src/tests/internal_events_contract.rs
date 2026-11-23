@@ -43,6 +43,10 @@ fn http_journal_pairs_receipts_and_omits_query_identity_and_content() {
             break records;
         }
         assert!(Instant::now() < deadline, "missing completed HTTP receipts");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "HTTP 完成回执异步写入诊断日志，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(5));
     };
     let text = serde_json::to_string(&records).unwrap();

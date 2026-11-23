@@ -16,6 +16,7 @@ fn allocated(bytes: usize) {
 // SAFETY: All allocation operations delegate to System using the same layout.
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: the caller supplies a valid allocation layout, forwarded unchanged to System.
         let pointer = unsafe { System.alloc(layout) };
         if !pointer.is_null() {
             allocated(layout.size());
@@ -23,10 +24,12 @@ unsafe impl GlobalAlloc for Allocator {
         pointer
     }
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        // SAFETY: the caller supplies a live System allocation and its original layout.
         unsafe { System.dealloc(pointer, layout) };
         LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
     }
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        // SAFETY: the caller supplies a live System allocation, its layout and a valid new size.
         let updated = unsafe { System.realloc(pointer, layout, size) };
         if !updated.is_null() {
             LIVE.fetch_sub(layout.size(), Ordering::Relaxed);

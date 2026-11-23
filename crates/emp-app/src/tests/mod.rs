@@ -339,6 +339,10 @@ fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
             std::time::Instant::now() < deadline,
             "call receipt not persisted: {report}"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "调用回执通过管理接口提供，此 helper 按固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(5));
     }
 }

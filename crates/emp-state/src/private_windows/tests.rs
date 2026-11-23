@@ -6,6 +6,7 @@ use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, WRITE_
 
 fn descriptor(file: &File) -> LocalAllocation {
     let mut descriptor = null_mut();
+    // SAFETY: file owns a live handle and descriptor is writable output storage, freed with LocalFree.
     let result = unsafe {
         GetSecurityInfo(
             file.as_raw_handle() as HANDLE,
@@ -30,6 +31,7 @@ fn set_test_acl(path: &Path, acl: &LocalAllocation, protected: bool) {
         UNPROTECTED_DACL_SECURITY_INFORMATION
     };
     assert_eq!(
+        // SAFETY: path is NUL-terminated and acl owns a valid ACL that remains live through the call.
         unsafe {
             SetNamedSecurityInfoW(
                 path.as_mut_ptr(),
@@ -51,6 +53,7 @@ fn set_test_owner(path: &Path) {
     let user = CurrentUser::load().unwrap();
     let mut path = wide_path(path);
     assert_eq!(
+        // SAFETY: path is NUL-terminated and user owns the SID for the duration of the call.
         unsafe {
             SetNamedSecurityInfoW(
                 path.as_mut_ptr(),
@@ -111,8 +114,9 @@ fn private_state_writes_do_not_require_write_owner_from_the_existing_owner() {
     let user = CurrentUser::load().unwrap();
     let acl = private_acl(user.sid(), true).unwrap();
     let mut ace = null_mut();
+    // SAFETY: acl owns an initialized ACL containing one ACE and ace is writable output storage.
     assert_ne!(unsafe { GetAce(acl.0.cast(), 0, &mut ace) }, 0);
-    // This is the sole ACCESS_ALLOWED_ACE created by private_acl above.
+    // SAFETY: GetAce succeeded and returned the sole ACCESS_ALLOWED_ACE in the live private_acl allocation.
     unsafe { (*ace.cast::<ACCESS_ALLOWED_ACE>()).Mask &= !WRITE_OWNER };
     set_test_acl(directory.path(), &acl, true);
     let ownership_access = fs::OpenOptions::new()
@@ -149,6 +153,7 @@ fn legacy_key_granting_another_principal_access_is_not_silently_repaired() {
     let mut everyone = null_mut();
     let sid_string: Vec<u16> = "S-1-1-0\0".encode_utf16().collect();
     assert_ne!(
+        // SAFETY: sid_string is NUL-terminated and everyone receives an allocation later freed by LocalFree.
         unsafe { ConvertStringSidToSidW(sid_string.as_ptr(), &mut everyone) },
         0
     );

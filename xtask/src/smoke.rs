@@ -221,6 +221,10 @@ fn update_in(
         if worker.0.try_wait().map_err(error)?.is_some() || Instant::now() >= ready_deadline {
             return Err("update worker did not become ready before old EMP exits".into());
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "更新 worker 通过文件报告就绪，以固定间隔轮询"
+        )]
         std::thread::sleep(Duration::from_millis(100));
     }
     parent.quit()?;
@@ -232,6 +236,10 @@ fn update_in(
         if Instant::now() > deadline {
             return Err("packaged update worker did not finish".to_owned());
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+        )]
         std::thread::sleep(Duration::from_millis(200));
     };
     let expected_exit = if fails_startup { 1 } else { 0 };
@@ -256,6 +264,10 @@ fn update_in(
         if Instant::now() > deadline {
             return Err("replacement/rollback service did not become healthy".to_owned());
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "替换或回滚服务以固定间隔轮询健康状态"
+        )]
         std::thread::sleep(Duration::from_millis(200));
     }
     let session = fs::read(root.join("state/web-session.json")).map_err(error)?;
@@ -313,6 +325,10 @@ fn update_in(
     } else {
         let deadline = Instant::now() + Duration::from_secs(15);
         while job.exists() && Instant::now() < deadline {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "更新清理通过目录消失报告完成，以固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(200));
         }
         if job.exists() {
@@ -370,6 +386,10 @@ fn stop_processes_under(root: &Path) {
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .status();
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "终止打包验收进程后保留既有的一秒资源释放间隔"
+    )]
     std::thread::sleep(Duration::from_secs(1));
 }
 

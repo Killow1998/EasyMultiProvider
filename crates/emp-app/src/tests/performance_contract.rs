@@ -40,16 +40,28 @@ impl TimedUsageUpstream {
                 .write_all(b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"perf\",\"status\":\"in_progress\",\"model\":\"upstream\"}}\n\n")
                 .expect("usage created event");
             stream.flush().expect("flush usage created event");
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "流式上游按固定间隔发送事件，验证用量更新时序"
+            )]
             thread::sleep(Duration::from_millis(120));
             stream
                 .write_all(b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"answer\"}\n\n")
                 .expect("usage text event");
             stream.flush().expect("flush usage text event");
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "流式上游按固定间隔发送事件，验证用量更新时序"
+            )]
             thread::sleep(Duration::from_millis(120));
             stream
                 .write_all(b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"!\"}\n\n")
                 .expect("usage second text event");
             stream.flush().expect("flush usage second text event");
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "流式上游按固定间隔发送事件，验证用量更新时序"
+            )]
             thread::sleep(Duration::from_millis(120));
             stream
                 .write_all(b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"perf\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"upstream\",\"output\":[],\"usage\":{\"output_tokens\":120,\"output_tokens_details\":{\"reasoning_tokens\":90}}}}\n\n")

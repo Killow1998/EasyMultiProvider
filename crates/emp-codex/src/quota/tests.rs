@@ -81,6 +81,10 @@ for line in sys.stdin:
         });
         let deadline = Instant::now() + Duration::from_secs(5);
         while !marker.exists() && Instant::now() < deadline {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "配额辅助进程通过文件报告就绪，以固定间隔轮询"
+            )]
             thread::sleep(Duration::from_millis(10));
         }
         assert!(marker.exists());

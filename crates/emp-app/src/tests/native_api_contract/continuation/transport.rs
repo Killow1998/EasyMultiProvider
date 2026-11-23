@@ -145,6 +145,10 @@ fn native_http_fallback_recovers_on_the_same_connection_after_cooldown() {
         ));
     }
     // Exercise the real cooldown without a test clock or production test hooks.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "等待真实的三十秒冷却期结束，保留既有续接验收时序"
+    )]
     thread::sleep(Duration::from_secs(30));
     for (upstream, directory, server, model, mut client, mut full, http_id, fault) in cases {
         let stale = turn(
@@ -298,6 +302,10 @@ fn installed_codex_recovers_a_failed_native_upload_then_resumes_websocket() {
         (6, "Reply only OK.".into()),
     ] {
         if number == 5 {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "等待真实的三十秒冷却期结束，保留既有续接验收时序"
+            )]
             thread::sleep(Duration::from_secs(30));
         }
         codex.rpc(

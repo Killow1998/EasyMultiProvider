@@ -23,6 +23,10 @@ fn wait_for(timeout: Duration, mut ready: impl FnMut() -> bool) {
         if ready() {
             return;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "此等待 helper 按固定间隔检查条件，保留既有截止时间"
+        )]
         thread::sleep(Duration::from_millis(5));
     }
     assert!(ready(), "condition did not become ready before deadline");

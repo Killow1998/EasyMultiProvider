@@ -281,6 +281,10 @@ fn desktop_launch_opens_the_bootstrap_url_on_the_configured_port() {
             std::time::Instant::now() < deadline,
             "browser was not launched"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "浏览器替身通过文件报告启动，以固定间隔轮询"
+        )]
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let url = std::fs::read_to_string(&opened).expect("opened URL");

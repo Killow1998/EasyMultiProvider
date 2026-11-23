@@ -218,7 +218,13 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
     pub fn receive_text(&mut self) -> Result<Option<String>, WebSocketError> {
         loop {
             match self.poll_text()? {
-                WebSocketPoll::Pending => std::thread::sleep(Duration::from_millis(1)),
+                WebSocketPoll::Pending => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "非阻塞 WebSocket 暂无帧时按既有间隔轮询，避免空转"
+                    )]
+                    std::thread::sleep(Duration::from_millis(1));
+                }
                 WebSocketPoll::Text(text) => return Ok(Some(text)),
                 WebSocketPoll::Ping(payload) => self.send_pong(&payload)?,
                 WebSocketPoll::Closed { .. } => return Ok(None),

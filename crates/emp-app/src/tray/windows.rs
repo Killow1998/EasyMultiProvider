@@ -48,6 +48,10 @@ impl Events {
                 DispatchMessageW(&message);
             }
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Windows 托盘每次泵完原生消息后按既有间隔检查应用状态"
+        )]
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }

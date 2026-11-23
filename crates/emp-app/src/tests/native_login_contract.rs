@@ -83,6 +83,10 @@ fn browser_login_classifies_engine_failures_and_leaves_http_and_auth_intact() {
                     break;
                 }
                 assert!(Instant::now() < deadline, "{code}: {response}");
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                )]
                 std::thread::sleep(Duration::from_millis(20));
             }
         }

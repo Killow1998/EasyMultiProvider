@@ -47,6 +47,10 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
             let (stream, _) = match listener.accept() {
                 Ok(connection) => connection,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                    )]
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
                 }
@@ -97,6 +101,10 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
             };
             paths.push(path);
             // Leave enough time for unwanted background model requests to start.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "固定延迟目录响应，留出观察意外后台模型请求的窗口"
+            )]
             std::thread::sleep(Duration::from_millis(500));
             let _ = write!(
                 stream,

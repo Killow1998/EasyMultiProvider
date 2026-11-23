@@ -38,6 +38,10 @@ fn launch(arguments: &[String]) -> bool {
             });
             return true;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+        )]
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -287,6 +291,10 @@ mod tests {
         ]));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         while !receipt.exists() && std::time::Instant::now() < deadline {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "PowerShell 替身通过回执文件报告结果，以固定间隔轮询"
+            )]
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(std::fs::read_to_string(receipt).unwrap(), "True");

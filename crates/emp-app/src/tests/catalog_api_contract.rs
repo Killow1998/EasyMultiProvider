@@ -98,12 +98,20 @@ impl CatalogUpstream {
                         }
                         write!(stream,"HTTP/1.1 {status} {}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",status_text(status),payload.len()).expect("head");
                         if let Some(delay) = delay {
+                            #[expect(
+                                clippy::disallowed_methods,
+                                reason = "按用例指定延迟模拟慢目录上游"
+                            )]
                             thread::sleep(delay);
                         }
                         let _ = stream.write_all(&payload);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(2))
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                        )]
+                        thread::sleep(Duration::from_millis(2));
                     }
                     Err(error) => panic!("discovery accept: {error}"),
                 }

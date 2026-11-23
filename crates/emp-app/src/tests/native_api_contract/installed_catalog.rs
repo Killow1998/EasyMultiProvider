@@ -219,6 +219,10 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool, s
             std::fs::read_to_string(home.join("stderr.log")).unwrap(),
         );
         rpc_id += 1;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "真实 Codex 目录刷新按既有固定间隔观察缓存变化"
+        )]
         thread::sleep(Duration::from_millis(500));
     }
     drop(codex);

@@ -134,6 +134,10 @@ fn cached_version_does_not_wait_for_or_repeat_a_delayed_refresh() {
         let refreshing = scope.spawn(|| inventory.snapshot(true));
         let deadline = Instant::now() + Duration::from_secs(1);
         while !entered.exists() && Instant::now() < deadline {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "探测替身通过文件报告进入状态，以固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(entered.exists(), "delayed probe did not start");

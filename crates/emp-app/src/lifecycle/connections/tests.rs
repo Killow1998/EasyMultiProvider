@@ -47,6 +47,7 @@ fn child_fixture() {
         rlim_max: 128,
     };
     // This is a fresh, disposable process. The parent and live EMP are untouched.
+    // SAFETY: limit is initialized and lives through setrlimit in this disposable child process.
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
     let root = tempfile::tempdir().unwrap();
     let config = root.path().canonicalize().unwrap().join("config.json");
@@ -151,6 +152,10 @@ fn listener_survives_real_descriptor_exhaustion() {
     assert_eq!(next_marker(), "EXHAUSTED");
     // A new connection makes accept() report real EMFILE in the child.
     let queued = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "维持文件描述符耗尽窗口，观察真实 EMFILE 下的 accept 退避"
+    )]
     thread::sleep(Duration::from_millis(400));
     command(&mut input, "release");
     assert_eq!(next_marker(), "RELEASED");
@@ -176,6 +181,10 @@ fn listener_survives_real_descriptor_exhaustion() {
             break;
         }
         assert!(Instant::now() < deadline, "child did not exit");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(10));
     }
 }

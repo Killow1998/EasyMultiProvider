@@ -171,6 +171,10 @@ fn probe(
                 let _ = child.wait();
                 break Err(failure);
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(10));
         })
     })();

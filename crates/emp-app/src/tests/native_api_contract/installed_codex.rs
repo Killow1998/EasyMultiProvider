@@ -96,6 +96,7 @@ impl Codex {
 impl Drop for Codex {
     fn drop(&mut self) {
         #[cfg(unix)]
+        // SAFETY: the child was spawned in its own process group and kill takes no pointers.
         unsafe {
             libc::kill(-(self.child.id() as libc::pid_t), libc::SIGTERM);
         }
@@ -328,7 +329,11 @@ fn accept(listener: &TcpListener) -> TcpStream {
                 return socket;
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(5))
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
+                )]
+                thread::sleep(Duration::from_millis(5));
             }
             Err(error) => panic!("{error}"),
         }

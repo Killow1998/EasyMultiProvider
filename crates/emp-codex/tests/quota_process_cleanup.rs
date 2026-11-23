@@ -49,6 +49,10 @@ fn check_launcher(mode: &str, cancel: bool) {
             scope.spawn(move || {
                 let deadline = Instant::now() + Duration::from_secs(3);
                 while !ready.exists() && Instant::now() < deadline {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "辅助进程通过文件报告就绪，以固定间隔轮询后触发取消"
+                    )]
                     thread::sleep(Duration::from_millis(10));
                 }
                 flag.store(true, Ordering::Release);
@@ -79,6 +83,7 @@ fn check_launcher(mode: &str, cancel: bool) {
         .unwrap()
         .parse()
         .unwrap();
+    // SAFETY: kill with signal zero only probes the fixture PID and takes no pointers.
     let running = unsafe { libc::kill(pid, 0) } == 0;
     #[cfg(target_os = "linux")]
     let running = running
@@ -90,6 +95,7 @@ fn check_launcher(mode: &str, cancel: bool) {
                 .trim_start()
                 .starts_with('Z')
         });
+    // SAFETY: the PID belongs to the disposable fixture child; kill takes no pointers.
     unsafe { libc::kill(pid, libc::SIGKILL) };
 
     if mode == "success" {

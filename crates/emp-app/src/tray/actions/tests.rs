@@ -65,8 +65,16 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
         let deadline = Instant::now() + Duration::from_secs(2);
         while state.connection_admission.acquire_request().is_some() {
             assert!(Instant::now() < deadline);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "请求准入关闭没有通知接口，以固定间隔轮询"
+            )]
             std::thread::sleep(Duration::from_millis(10));
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "保持请求未排空的观察窗口，验证托盘动作继续等待"
+        )]
         std::thread::sleep(Duration::from_millis(150));
         assert!(
             !worker.is_finished(),

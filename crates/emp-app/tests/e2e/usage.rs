@@ -24,6 +24,10 @@ fn scan_report(emp: &Emp, path: &str) -> Value {
             std::time::Instant::now() < deadline,
             "scan {command}: {payload}"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "用量扫描结果通过 CLI 状态提供，以固定间隔轮询"
+        )]
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
@@ -103,6 +107,10 @@ fn usage_scan_prices_codex_history_by_upstream_route() {
             break payload;
         }
         assert!(std::time::Instant::now() < deadline, "{payload}");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "计价结果通过管理接口提供，以固定间隔轮询"
+        )]
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
     assert_eq!(payload["totals"]["priced_requests"], 2);

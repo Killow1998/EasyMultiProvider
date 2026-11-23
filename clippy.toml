@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "std::thread::sleep", reason = "用条件等待、channel 或超时接收替代；确实需要固定间隔时用 #[expect(clippy::disallowed_methods, reason = \"…\")] 写明原因" },
+]

@@ -102,6 +102,10 @@ pub(super) fn finished(root: &Path, count: usize) -> Vec<Value> {
             return records;
         }
         assert!(Instant::now() < deadline, "missing request receipts");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "观测状态没有通知接口，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(5));
     }
 }

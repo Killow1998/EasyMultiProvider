@@ -427,6 +427,10 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
             break snapshot;
         }
         assert!(Instant::now() < deadline, "activity guard was not released");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "活动请求完成通过状态快照观察，以固定间隔轮询"
+        )]
         thread::sleep(Duration::from_millis(5));
     };
     assert_eq!(only_route(&finished)["in_flight"], 0);
@@ -508,6 +512,10 @@ fn real_sse_records_raw_model_conflicts_reasoning_ttft_and_cache_usage() {
             )
         })
         .collect::<String>();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "固定延迟上游完成响应，保留活动时长计量窗口"
+    )]
     thread::sleep(Duration::from_millis(20));
     upstream.release(index, 200, raw.into_bytes());
     let delivered = response_until_close(&mut socket);
