@@ -8,7 +8,7 @@ mod estimate;
 
 pub use budget::{ContextAssessment, assess, assess_with_input_estimate};
 pub use calibration::{status, update as update_calibration};
-pub use compaction::compact_with;
+pub use compaction::{SummaryCache, compact_with, compact_with_cache};
 pub use estimate::estimate_json_tokens;
 
 pub const SAFETY_RESERVE_TOKENS: u64 = 256;

@@ -3,7 +3,18 @@ use crate::tool_pairs::Endpoint;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) fn paired_boundary(items: &[Value], mut cut: usize) -> usize {
+pub(super) fn active_turn_boundary(items: &[Value], checkpoint_end: usize) -> usize {
+    let tail = &items[checkpoint_end..];
+    let mut cut = tail
+        .iter()
+        .rposition(is_user_item)
+        .and_then(|user| {
+            tail[..user].iter().rposition(|item| {
+                item.get("role").and_then(Value::as_str) == Some("assistant")
+                    && item.get("phase").and_then(Value::as_str) == Some("final_answer")
+            })
+        })
+        .map_or(checkpoint_end, |answer| checkpoint_end + answer + 1);
     if cut == 0 || cut == items.len() {
         return cut;
     }
