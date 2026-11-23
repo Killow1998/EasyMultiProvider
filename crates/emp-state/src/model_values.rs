@@ -20,8 +20,8 @@ pub fn is_concrete_reasoning_effort(value: &str) -> bool {
     value != "ultra" && REASONING_EFFORT_ORDER.contains(&value)
 }
 
-/// Apply Python `str.strip()` semantics, including the four C0 file separators.
-fn python_trim(value: &str) -> &str {
+/// Trim Unicode whitespace, including the four C0 file separators.
+pub(crate) fn trim_whitespace(value: &str) -> &str {
     value.trim_matches(|character: char| {
         matches!(
             character,
@@ -45,12 +45,8 @@ fn python_trim(value: &str) -> &str {
     })
 }
 
-fn python_lower(value: &str) -> String {
-    value.to_lowercase()
-}
-
 fn modality_identifier(item: &str) -> Option<String> {
-    let identifier = python_lower(python_trim(item));
+    let identifier = trim_whitespace(item).to_lowercase();
     if identifier.is_empty() || identifier.len() > MAX_MODALITY_ID_BYTES {
         return None;
     }
@@ -152,7 +148,7 @@ pub fn normalize_supported_protocols(value: Option<&Value>) -> Vec<String> {
         let Value::String(item) = item else {
             continue;
         };
-        let protocol = python_lower(python_trim(item));
+        let protocol = trim_whitespace(item).to_lowercase();
         if KNOWN_CONCRETE_PROTOCOLS.contains(&protocol.as_str()) && !result.contains(&protocol) {
             result.push(protocol);
         }
@@ -175,11 +171,11 @@ pub fn normalize_reasoning_levels(value: Option<&Value>) -> Vec<String> {
         let Value::String(item) = item else {
             continue;
         };
-        let trimmed = python_trim(item);
+        let trimmed = trim_whitespace(item);
         if trimmed.is_empty() {
             continue;
         }
-        let lowered = python_lower(trimmed);
+        let lowered = trimmed.to_lowercase();
         let effort = if REASONING_EFFORT_ORDER.contains(&lowered.as_str()) {
             lowered
         } else {

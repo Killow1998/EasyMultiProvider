@@ -1,6 +1,7 @@
 //! Python-compatible plaintext collaboration transport for native Responses.
 //! Existing ciphertext is never decoded or relabelled as a plaintext task.
 
+use crate::json_truthy;
 use ring::digest::{Context, SHA1_FOR_LEGACY_USE_ONLY};
 use serde_json::{Map, Value, json};
 use std::fmt::{self, Write as _};
@@ -46,17 +47,6 @@ impl fmt::Display for CollaborationError {
 }
 impl std::error::Error for CollaborationError {}
 
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
-}
-
 // Iterating Python dict/string values yields keys/characters, which cannot be
 // tool objects. Preserve those no-ops while retaining non-iterable failures.
 fn object_iter(value: &Value) -> Result<Option<&[Value]>, CollaborationError> {
@@ -68,7 +58,7 @@ fn object_iter(value: &Value) -> Result<Option<&[Value]>, CollaborationError> {
 }
 
 fn tools(container: &Map<String, Value>) -> Result<&[Value], CollaborationError> {
-    match container.get("tools").filter(|value| truthy(value)) {
+    match container.get("tools").filter(|value| json_truthy(value)) {
         Some(value) => Ok(object_iter(value)?.unwrap_or_default()),
         None => Ok(&[]),
     }
@@ -225,7 +215,7 @@ fn restore_item(item: &mut Value) -> Result<(), CollaborationError> {
     {
         item["namespace"] = "collaboration".into();
         if message_tool(item.get("name"))? {
-            if item.get("encrypted_function_args").is_some_and(truthy) {
+            if item.get("encrypted_function_args").is_some_and(json_truthy) {
                 return Err(CollaborationError::UnexpectedEncryptedArguments);
             }
             item["encrypted_function_args"] = json!([]);

@@ -121,7 +121,10 @@ pub(crate) fn automatic_review_candidates(
             };
             if id.is_empty()
                 || account.get("enabled") == Some(&Value::Bool(false))
-                || !account.get("auth_file").is_some_and(is_python_truthy)
+                || account
+                    .get("auth_file")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
                 || account.get("credential_status").and_then(Value::as_str) == Some("invalid")
                 || excluded_review_plan(account.get("quota"), || auth_plan(id))
             {
@@ -252,7 +255,10 @@ fn route_from_candidates(
             continue;
         };
         if account.get("enabled") == Some(&Value::Bool(false))
-            || !account.get("auth_file").is_some_and(is_python_truthy)
+            || account
+                .get("auth_file")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
             || account.get("credential_status").and_then(Value::as_str) == Some("invalid")
         {
             continue;
@@ -328,16 +334,5 @@ fn set_review_route_model(model: &mut Map<String, Value>, requested_model: &str)
             );
         }
         model.insert("capability_sources".to_owned(), Value::Object(sources));
-    }
-}
-
-fn is_python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
     }
 }

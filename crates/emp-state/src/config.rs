@@ -12,7 +12,7 @@ use crate::filesystem::{
 use crate::model_values::{
     input_modalities_known, normalize_input_modalities, normalize_output_modalities,
     normalize_reasoning_levels, normalize_supported_protocols, output_modalities_known,
-    supported_protocols_known,
+    supported_protocols_known, trim_whitespace,
 };
 use emp_core::{deployment_identity, endpoint_fingerprint};
 use serde_json::{Map, Value};
@@ -97,8 +97,8 @@ use context_calibration::{
 
 mod model_provider;
 use model_provider::{
-    MODEL_BOOLEAN_CAPABILITIES, TOP_LEVEL_PROVENANCE_FIELDS, json_truthy, python_capability_trim,
-    safe_capability_identity, valid_python_iso_timestamp,
+    MODEL_BOOLEAN_CAPABILITIES, TOP_LEVEL_PROVENANCE_FIELDS, json_truthy, safe_capability_identity,
+    valid_python_iso_timestamp,
 };
 pub use model_provider::{normalize_model, normalize_model_capability_sources, normalize_provider};
 mod route_aliases;

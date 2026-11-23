@@ -1,5 +1,6 @@
 //! Local credential identity comparison; no token or identity is logged.
-use super::{MAX_AUTH_BYTES, python_trim};
+use super::MAX_AUTH_BYTES;
+use crate::model_values::trim_whitespace;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -18,7 +19,7 @@ fn auth_identities(auth: &Value) -> BTreeSet<(String, String)> {
             if let Some(value) = source
                 .get(key)
                 .and_then(Value::as_str)
-                .map(python_trim)
+                .map(trim_whitespace)
                 .filter(|value| !value.is_empty())
             {
                 identities.insert(("account_id".to_owned(), value.to_owned()));
@@ -28,7 +29,7 @@ fn auth_identities(auth: &Value) -> BTreeSet<(String, String)> {
             if let Some(value) = source
                 .get(key)
                 .and_then(Value::as_str)
-                .map(python_trim)
+                .map(trim_whitespace)
                 .filter(|value| !value.is_empty())
             {
                 identities.insert(("user_id".to_owned(), value.to_owned()));
@@ -54,7 +55,7 @@ fn auth_identities(auth: &Value) -> BTreeSet<(String, String)> {
                 if let Some(value) = claims
                     .get(key)
                     .and_then(Value::as_str)
-                    .map(python_trim)
+                    .map(trim_whitespace)
                     .filter(|value| !value.is_empty())
                 {
                     identities.insert((kind.to_owned(), value.to_owned()));
@@ -65,7 +66,7 @@ fn auth_identities(auth: &Value) -> BTreeSet<(String, String)> {
     if let Some(value) = tokens
         .get("access_token")
         .and_then(Value::as_str)
-        .map(python_trim)
+        .map(trim_whitespace)
         .filter(|value| !value.is_empty())
     {
         identities.insert(("access_token".to_owned(), value.to_owned()));

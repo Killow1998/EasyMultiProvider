@@ -1,5 +1,6 @@
 //! Codex account normalization discards unknown metadata and retains opaque quota objects.
 
+use crate::model_values::trim_whitespace;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -68,7 +69,7 @@ pub fn validate_auth_json(auth: &Value) -> AccountResult<Value> {
     );
     if access_token
         .and_then(Value::as_str)
-        .is_none_or(|value| python_trim(value).is_empty())
+        .is_none_or(|value| trim_whitespace(value).is_empty())
     {
         return Err(AccountError::new(
             "auth_json does not contain a ChatGPT access token",
@@ -104,31 +105,6 @@ pub fn duplicate_account_status(
     duplicates
 }
 
-/// Apply Python `str.strip()` semantics, including the four C0 file separators.
-fn python_trim(value: &str) -> &str {
-    value.trim_matches(|character: char| {
-        matches!(
-            character,
-            '\t'
-                | '\n'
-                | '\u{b}'
-                | '\u{c}'
-                | '\r'
-                | ' '
-                | '\u{85}'
-                | '\u{a0}'
-                | '\u{1680}'
-                | '\u{2000}'..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{1c}'..='\u{1f}'
-        )
-    })
-}
-
 fn json_truthy(value: &Value) -> bool {
     if matches!(value, Value::Bool(false) | Value::Null) {
         return false;
@@ -144,7 +120,7 @@ fn json_truthy(value: &Value) -> bool {
 fn auth_file(raw: Option<&Value>) -> AccountResult<String> {
     match raw {
         None => Ok(String::new()),
-        Some(Value::String(value)) => Ok(python_trim(value).to_owned()),
+        Some(Value::String(value)) => Ok(trim_whitespace(value).to_owned()),
         Some(_) => Err(AccountError::new("account.auth_file must be a string")),
     }
 }
@@ -168,7 +144,7 @@ pub fn normalize_hidden_models(raw: Option<&Value>, field: &str) -> AccountResul
         let Value::String(item) = value else {
             return Err(AccountError::new(format!("{field} must contain model IDs")));
         };
-        let model_id = python_trim(item);
+        let model_id = trim_whitespace(item);
         if model_id.is_empty() {
             return Err(AccountError::new(format!("{field} must contain model IDs")));
         }
@@ -202,7 +178,7 @@ pub fn normalize_context_windows(raw: Option<&Value>) -> AccountResult<Map<Strin
     }
     let mut normalized = Map::new();
     for (model, tokens) in raw {
-        let trimmed_model = python_trim(model);
+        let trimmed_model = trim_whitespace(model);
         if trimmed_model.is_empty() || model.len() > MAX_MODEL_ID_BYTES {
             return Err(AccountError::new(
                 "model_context_windows has an invalid model ID",
@@ -276,7 +252,7 @@ pub fn normalize_account(raw: &Value) -> AccountResult<Value> {
         for value in names {
             let name = value
                 .as_str()
-                .map(python_trim)
+                .map(trim_whitespace)
                 .filter(|name| !name.is_empty())
                 .ok_or_else(|| AccountError::new("account.route_names must contain names"))?;
             if !routes.contains(&name) {
@@ -296,7 +272,7 @@ fn account_segment(raw: Option<&Value>, field: &str) -> AccountResult<String> {
             "{field} must be a safe single path segment"
         )));
     };
-    let trimmed = python_trim(value);
+    let trimmed = trim_whitespace(value);
     if trimmed.is_empty() || trimmed.len() > 64 {
         return Err(AccountError::new(format!(
             "{field} must be a safe single path segment"
@@ -342,7 +318,7 @@ fn account_name(raw: Option<&Value>, fallback: &str) -> AccountResult<String> {
     match raw {
         None | Some(Value::Null) => Ok(fallback.to_owned()),
         Some(Value::String(value)) => {
-            let name = python_trim(value);
+            let name = trim_whitespace(value);
             if name.is_empty() {
                 Ok(fallback.to_owned())
             } else {

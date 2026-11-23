@@ -98,17 +98,6 @@ fn required_upstream_string<'a>(
         .ok_or(upstream_error(message))
 }
 
-fn python_truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null | Value::Bool(false)) => false,
-        Some(Value::Bool(true)) => true,
-        Some(Value::Number(value)) => value.as_f64() != Some(0.0),
-        Some(Value::String(value)) => !value.is_empty(),
-        Some(Value::Array(value)) => !value.is_empty(),
-        Some(Value::Object(value)) => !value.is_empty(),
-    }
-}
-
 mod input;
 mod request;
 mod response;

@@ -1,6 +1,6 @@
 //! Responses request projection onto the OpenAI Chat Completions dialect.
 
-use super::{ProtocolError, request_error};
+use super::{ProtocolError, json_truthy, request_error};
 use crate::tool_definitions::custom_tool_arguments;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE;
@@ -436,17 +436,6 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, ProtocolError> {
     Ok(messages)
 }
 
-fn python_truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null | Value::Bool(false)) => false,
-        Some(Value::Bool(true)) => true,
-        Some(Value::Number(number)) => number.as_f64() != Some(0.0),
-        Some(Value::String(value)) => !value.is_empty(),
-        Some(Value::Array(value)) => !value.is_empty(),
-        Some(Value::Object(value)) => !value.is_empty(),
-    }
-}
-
 fn response_format(body: &Map<String, Value>) -> Result<Option<Value>, ProtocolError> {
     let Some(text) = body.get("text") else {
         return Ok(None);
@@ -501,7 +490,7 @@ pub fn responses_to_chat(body: &Value, upstream_model: &str) -> Result<Value, Pr
     let mut payload = serde_json::json!({
         "model": upstream_model,
         "messages": messages(body)?,
-        "stream": python_truthy(body.get("stream")),
+        "stream": body.get("stream").is_some_and(json_truthy),
     });
     let projected_tools = tools(body)?;
     if !projected_tools.is_empty() {

@@ -1,8 +1,8 @@
 //! Python-compatible numeric parsing and model context calibration.
 
 use super::{
-    ConfigError, ConfigResult, Map, Value, json_truthy, python_capability_trim,
-    safe_capability_identity, string_value, valid_python_iso_timestamp,
+    ConfigError, ConfigResult, Map, Value, json_truthy, safe_capability_identity, string_value,
+    trim_whitespace, valid_python_iso_timestamp,
 };
 
 const CONTEXT_CALIBRATION_LIMIT: usize = 8;
@@ -28,7 +28,7 @@ fn unicode_decimal_digit(character: char) -> Option<u8> {
 }
 
 fn python_int_string(raw: &str) -> Option<i64> {
-    let text = python_capability_trim(raw);
+    let text = trim_whitespace(raw);
     let (negative, digits) = if let Some(digits) = text.strip_prefix('-') {
         (true, digits)
     } else {
@@ -60,7 +60,7 @@ fn python_int_string(raw: &str) -> Option<i64> {
 }
 
 fn python_u64_string(raw: &str) -> Option<(bool, u64)> {
-    let text = python_capability_trim(raw);
+    let text = trim_whitespace(raw);
     let (negative, digits) = if let Some(digits) = text.strip_prefix('-') {
         (true, digits)
     } else {
@@ -197,7 +197,7 @@ fn python_float(raw: &Value) -> Result<f64, ()> {
         Value::Bool(value) => f64::from(*value),
         Value::Number(value) => value.as_f64().ok_or(())?,
         Value::String(value) => {
-            let text = python_capability_trim(value);
+            let text = trim_whitespace(value);
             let mut normalized = String::with_capacity(text.len());
             let mut previous_was_digit = false;
             let mut characters = text.chars().peekable();

@@ -1,11 +1,12 @@
 //! Responses request controls and Anthropic request assembly.
 use super::input::{instruction_text, messages};
 use super::tools::{tool_choice, tools};
-use super::{AnthropicError, python_truthy, request_error};
+use super::{AnthropicError, request_error};
+use crate::json_truthy;
 use serde_json::{Map, Value};
 
 fn anthropic_max_tokens(value: Option<&Value>) -> Result<Value, AnthropicError> {
-    if !python_truthy(value) {
+    if !value.is_some_and(json_truthy) {
         return Ok(Value::from(4096));
     }
     match value {
@@ -80,7 +81,7 @@ pub fn responses_to_anthropic(body: &Value, upstream_model: &str) -> Result<Valu
         "model": upstream_model,
         "max_tokens": anthropic_max_tokens(body.get("max_output_tokens"))?,
         "messages": messages,
-        "stream": python_truthy(body.get("stream")),
+        "stream": body.get("stream").is_some_and(json_truthy),
     });
     if system.len() == 1 {
         payload["system"] = system[0]["text"].clone();

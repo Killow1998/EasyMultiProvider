@@ -2,6 +2,7 @@
 
 use super::stream::AnthropicIds;
 use super::{AnthropicError, required_upstream_string, upstream_error};
+use crate::json_truthy;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
@@ -135,10 +136,7 @@ pub fn response_from_anthropic(
             "Anthropic upstream returned invalid content",
         ));
     };
-    if root
-        .get("error")
-        .is_some_and(|value| super::python_truthy(Some(value)))
-    {
+    if root.get("error").is_some_and(json_truthy) {
         return Err(upstream_error("Anthropic upstream returned an error"));
     }
     let mut output = Vec::new();

@@ -394,30 +394,6 @@ fn normalize_protocol_observation(raw: Option<&Value>) -> ConfigResult<Value> {
     }))
 }
 
-pub(super) fn python_capability_trim(value: &str) -> &str {
-    value.trim_matches(|character: char| {
-        matches!(
-            character,
-            '\t'
-                | '\n'
-                | '\u{b}'
-                | '\u{c}'
-                | '\u{d}'
-                | ' '
-                | '\u{85}'
-                | '\u{a0}'
-                | '\u{1680}'
-                | '\u{2000}'..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{1c}'..='\u{1f}'
-        )
-    })
-}
-
 fn effective_model_capability_value<'a>(values: &'a Value, field: &str) -> Option<&'a Value> {
     if let Some(value) = values.get(field) {
         return Some(value);
@@ -439,7 +415,7 @@ fn model_capability_known(field: &str, value: Option<&Value>) -> bool {
         "reasoning_levels" => value.as_array().is_some_and(|levels| !levels.is_empty()),
         "reasoning_control" => value
             .as_str()
-            .is_some_and(|control| !python_capability_trim(control).is_empty()),
+            .is_some_and(|control| !trim_whitespace(control).is_empty()),
         "input_modalities" => input_modalities_known(Some(value)),
         "output_modalities" => output_modalities_known(Some(value)),
         "supported_protocols" => supported_protocols_known(Some(value)),
@@ -579,7 +555,7 @@ fn strict_reasoning_levels(raw: Option<&Value>) -> ConfigResult<Vec<String>> {
         let Value::String(level) = item else {
             return Err(ConfigError::new("model.reasoning_levels must be a string"));
         };
-        levels.push(python_capability_trim(level).to_owned());
+        levels.push(trim_whitespace(level).to_owned());
     }
     if levels.iter().any(|level| level.is_empty()) {
         return Err(ConfigError::new(

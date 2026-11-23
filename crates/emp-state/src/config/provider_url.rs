@@ -1,6 +1,6 @@
 //! Provider URL and identifier normalization at the configuration boundary.
 
-use super::{ConfigError, ConfigResult, Value, python_capability_trim};
+use super::{ConfigError, ConfigResult, Value, trim_whitespace};
 
 #[derive(Debug)]
 pub(super) struct ParsedProviderUrl<'a> {
@@ -92,7 +92,7 @@ pub(super) fn string_value(
 ) -> ConfigResult<String> {
     let value = match raw {
         None | Some(Value::Null) => "",
-        Some(Value::String(value)) => python_capability_trim(value),
+        Some(Value::String(value)) => trim_whitespace(value),
         Some(_) => return Err(ConfigError::new(format!("{field} must be a string"))),
     };
     if required && value.is_empty() {
