@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.15.5 (2026-11-22)
+
+### 中文
+
+- 从 0.15.4 升级时，只需更新桌面 EMP Core。团队空间模组和 VPS 团队服务继续使用 0.10.2-beta。
+- **额度刷新**。修复共享订阅凭据有效，Codex 却报告无法读取账号登录状态的问题。上游实际返回 401 时，EMP 会提示登录失效。
+- **共享订阅同步**。同一账号在本机和团队各有一份登录时，原有模型入口会选用有效期更晚的可用凭据。重复同步保留本机名称和模型设置，切换登录与查看调用用量时只显示一个账号。
+- **同步结果**。新凭据下载后显示更新数量，再次同步且没有变化时提示「当前没有需要更新的共享订阅」。与本机 Native 相同的账号会单独列出跳过数量。
+
+### English
+
+- When upgrading from 0.15.4, update desktop EMP Core only. Both the Team Workspace module and the VPS workspace service stay on 0.10.2-beta.
+- **Quota refresh**. Fixed a case where Codex could not read the sign-in state of a shared subscription with valid credentials. An upstream 401 now identifies an expired or rejected login.
+- **Shared subscriptions**. If the same account has both local and shared credentials, its existing model entry uses the available credentials with the later expiry. Repeated syncs keep local names and model settings. The login picker and usage views show one account.
+- **Sync feedback**. Sync shows how many shared subscriptions it updated. If nothing changed, it says that no updates are needed. Accounts already used by Native have a separate skipped count.
+
 ## 0.15.4 (2026-11-22)
 
 ### 中文

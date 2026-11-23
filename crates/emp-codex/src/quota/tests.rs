@@ -121,7 +121,7 @@ fn isolated_process_sequences_requests_and_returns_rotated_auth() {
     fs::write(
             &script,
             r#"#!/usr/bin/env python3
-import configparser, json, os, pathlib, sys
+import configparser, datetime, json, os, pathlib, sys
 
 home = pathlib.Path(os.environ["CODEX_HOME"])
 assert pathlib.Path.cwd().samefile(home)
@@ -154,8 +154,11 @@ for line in sys.stdin:
     elif method == "account/read":
         assert request["params"] == {"refreshToken": False}
         auth = json.loads((home / "auth.json").read_text())
-        auth["tokens"]["access_token"] = "rotated-token"
-        (home / "auth.json").write_text(json.dumps(auth))
+        if auth.get("auth_mode") == "chatgptAuthTokens":
+            assert datetime.datetime.fromisoformat(auth["last_refresh"].replace("Z", "+00:00")).tzinfo
+        else:
+            auth["tokens"]["access_token"] = "rotated-token"
+            (home / "auth.json").write_text(json.dumps(auth))
         print(json.dumps({"id": request["id"], "result": {"account": {"email": "user@example.com", "planType": "pro"}}}), flush=True)
     elif method == "account/rateLimits/read":
         assert request["params"] is None
@@ -192,6 +195,17 @@ for line in sys.stdin:
         result.refreshed_auth.expect("rotated auth")["tokens"]["access_token"],
         "rotated-token"
     );
+    let shared = json!({"auth_mode":"chatgptAuthTokens","tokens":{
+        "access_token":"shared-token","account_id":"shared","refresh_token":""
+    }});
+    let result = run_quota_query(
+        &shared,
+        script.to_str().unwrap(),
+        Duration::from_secs(5),
+        false,
+    )
+    .expect("read shared quota without rotating credentials");
+    assert!(result.refreshed_auth.is_none());
     assert_eq!(
         run_quota_reset(
             &auth,
@@ -220,7 +234,7 @@ for line in sys.stdin:
     );
     let homes = fs::read_to_string(script.with_extension("homes")).unwrap();
     let homes: std::collections::BTreeSet<_> = homes.lines().collect();
-    assert_eq!(homes.len(), 3, "each helper must have its own private home");
+    assert_eq!(homes.len(), 4, "each helper must have its own private home");
     for home in homes {
         assert!(!Path::new(home).exists(), "helper home was not removed");
     }

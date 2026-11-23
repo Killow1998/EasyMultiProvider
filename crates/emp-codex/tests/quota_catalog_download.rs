@@ -43,6 +43,7 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
     let stopping = stop.clone();
     let server = std::thread::spawn(move || {
         let mut paths = Vec::new();
+        let mut shared_usage_authenticated = false;
         while !stopping.load(Ordering::Acquire) {
             let (stream, _) = match listener.accept() {
                 Ok(connection) => connection,
@@ -64,6 +65,14 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
                 line.clear();
                 if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
                     break;
+                }
+                if path.ends_with("/usage")
+                    && line.split_once(':').is_some_and(|(name, value)| {
+                        name.eq_ignore_ascii_case("authorization")
+                            && value.trim() == "Bearer shared-fixture-access"
+                    })
+                {
+                    shared_usage_authenticated = true;
                 }
             }
             drop(reader);
@@ -105,7 +114,7 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
             );
             let _ = stream.write_all(&body);
         }
-        paths
+        (paths, shared_usage_authenticated)
     });
     let launcher = root.path().join("codex");
     // Only the test launcher changes the backend URL. The production helper
@@ -172,8 +181,19 @@ os.execv({binary}, [{binary}, *sys.argv[1:]])
             Ok(())
         },
     );
+    let shared = json!({"auth_mode":"chatgptAuthTokens","tokens":{
+        "id_token":token,"access_token":"shared-fixture-access",
+        "account_id":"fixture-account","refresh_token":""
+    }});
+    let shared_quota = run_quota_query_persisting(
+        &shared,
+        launcher.to_str().unwrap(),
+        Duration::from_secs(15),
+        false,
+        |_| panic!("reading a shared subscription must not persist a rotation"),
+    );
     stop.store(true, Ordering::Release);
-    let paths = server.join().unwrap();
+    let (paths, shared_usage_authenticated) = server.join().unwrap();
     println!("captured HTTP requests: {paths:?}");
     for result in results {
         assert!(
@@ -185,10 +205,18 @@ os.execv({binary}, [{binary}, *sys.argv[1:]])
     }
     assert_eq!(
         paths.iter().filter(|path| path.ends_with("/usage")).count(),
-        3,
+        4,
         "quota requests: {paths:?}"
     );
     assert_eq!(reset.expect("native reset"), "reset");
+    assert!(
+        shared_usage_authenticated,
+        "shared quota request lost its bearer token"
+    );
+    assert_eq!(
+        shared_quota.unwrap()["rate_limits"]["primary"]["usedPercent"],
+        7
+    );
     assert!(imported.is_ok(), "{imported:?}");
     assert_eq!(
         persisted.expect("imported rotation persisted")["tokens"]["refresh_token"],

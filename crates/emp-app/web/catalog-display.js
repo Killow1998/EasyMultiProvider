@@ -21,6 +21,11 @@ function createCatalogDisplay({getState, $, tr, t, esc, api, notice, cloneState,
     if (id === '@native' || id === 'native') return 'Native';
     const state = getState();
     const source = id && state && [...state.providers, ...state.accounts].find(item => item.id === id || item.prefix === id || item.name === id);
+    if (source?.team_shared && source.duplicate) {
+      if (source.duplicate_of === '当前 Codex 登录') return 'Native';
+      const personal = state.accounts.find(account => account.id === source.duplicate_of);
+      if (personal) return personal.name;
+    }
     return source?.native ? 'Native' : source?.name || (fallback !== id && fallback) || tr('reports.unknown_source');
   }
   function modelDisplayName(id) {
