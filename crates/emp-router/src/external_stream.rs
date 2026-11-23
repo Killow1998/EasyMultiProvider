@@ -189,7 +189,7 @@ impl ExternalStream {
         }
         match &mut self.projection {
             StreamProjection::Gemini { source, chat } => {
-                for chunk in source.push(&value)? {
+                for chunk in source.push(&value).map_err(gemini_error)? {
                     self.observation.observe(&chunk, true);
                     self.pending.extend(
                         chat.push(&chunk, ChatFrame::Sse)

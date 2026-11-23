@@ -3,16 +3,20 @@ use super::*;
 const MAX_ANTHROPIC_PASSTHROUGH_BYTES: usize = 12 * 1024 * 1024;
 
 impl<'a> ExternalRouter<'a> {
-    pub const fn new(client: &'a HttpClient) -> Self {
+    pub const fn new(
+        client: &'a HttpClient,
+        official_models: emp_domain::official_models::OfficialModels,
+    ) -> Self {
         Self {
             client,
+            official_models,
             gemini_signatures: None,
         }
     }
 
     pub fn with_gemini_signatures(
         mut self,
-        store: std::sync::Arc<emp_state::gemini_signatures::GeminiSignatures>,
+        store: std::sync::Arc<dyn emp_domain::SignatureStore>,
     ) -> Self {
         self.gemini_signatures = Some(store);
         self
@@ -37,7 +41,11 @@ impl<'a> ExternalRouter<'a> {
         }
         let native_gemini = route.provider.value()["auth_mode"] == "vertex_api_key";
         if native_gemini {
-            payload = vertex::gemini::request_for_model(&payload, Some(route.model.value()))?;
+            payload = vertex::gemini_request(
+                &payload,
+                Some(route.model.value()),
+                &self.official_models,
+            )?;
         }
         let encoded = request_encoding::encode_projected_request(&payload);
         drop(payload);
@@ -76,7 +84,8 @@ impl<'a> ExternalRouter<'a> {
             )
         })?;
         if native_gemini {
-            upstream = vertex::gemini::complete(&upstream, ids.response_id())?;
+            upstream = emp_protocol::gemini::complete(&upstream, ids.response_id())
+                .map_err(gemini_error)?;
         }
         if let Some(context) = &gemini
             && let Some(calls) = upstream
@@ -288,7 +297,11 @@ impl<'a> ExternalRouter<'a> {
         }
         let native_gemini = route.provider.value()["auth_mode"] == "vertex_api_key";
         if native_gemini {
-            payload = vertex::gemini::request_for_model(&payload, Some(route.model.value()))?;
+            payload = vertex::gemini_request(
+                &payload,
+                Some(route.model.value()),
+                &self.official_models,
+            )?;
         } else {
             payload["stream"] = Value::Bool(true);
         }
@@ -321,7 +334,7 @@ impl<'a> ExternalRouter<'a> {
                     .with_custom_names(&custom_name_refs);
                 if native_gemini {
                     StreamProjection::Gemini {
-                        source: vertex::gemini::Stream::new(ids.response_id()),
+                        source: emp_protocol::gemini::Stream::new(ids.response_id()),
                         chat: stream,
                     }
                 } else {

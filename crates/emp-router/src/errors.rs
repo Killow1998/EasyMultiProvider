@@ -100,6 +100,10 @@ pub(super) fn invalid_request(message: &'static str) -> RouterError {
     )
 }
 
+pub(super) fn gemini_error(error: ProtocolError) -> RouterError {
+    invalid_request(error.message())
+}
+
 pub(super) fn unresolved_protocol() -> RouterError {
     RouterError::new(
         RouterErrorKind::UnsupportedProtocol,

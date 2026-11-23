@@ -1,8 +1,8 @@
 use emp_domain::json_truthy;
 use std::collections::{BTreeMap, BTreeSet};
 
-use emp_state::model_values::{parse_modalities, trim_whitespace};
-use emp_state::normalize_reasoning_levels;
+use emp_domain::model_values::{parse_modalities, trim_whitespace};
+use emp_domain::normalize_reasoning_levels;
 use emp_transport::{
     FailureClass, HttpClient, HttpMethod, HttpTransportErrorKind, status_error_class,
 };
@@ -13,7 +13,7 @@ use time::{Date, Month, OffsetDateTime};
 use url::Url;
 
 use super::{RouterError, RouterErrorKind};
-use crate::official_registry::enrich_discovered_models;
+use emp_domain::official_models::OfficialModels;
 
 mod anthropic;
 mod decisions;
@@ -82,10 +82,11 @@ impl DiscoveryBudget {
 pub async fn discover_models(
     client: &HttpClient,
     provider: &Map<String, Value>,
-    vertex_models: &[emp_state::usage::pricing::ModelMetadata],
+    vertex_models: &[emp_domain::model_metadata::ModelMetadata],
+    official_models: &OfficialModels,
 ) -> Result<Vec<Value>, RouterError> {
     if provider.contains_key("vertex") {
-        return vertex::discover(client, provider, vertex_models).await;
+        return vertex::discover(client, provider, vertex_models, official_models).await;
     }
     let protocol = provider
         .get("protocol")
@@ -97,7 +98,7 @@ pub async fn discover_models(
         .unwrap_or_default();
     if protocol == "anthropic_messages" || (protocol == "auto" && auth_mode == "anthropic_api_key")
     {
-        return discover_anthropic_models(client, provider).await;
+        return discover_anthropic_models(client, provider, official_models).await;
     }
     let is_native_gemini = provider
         .get("base_url")
@@ -107,9 +108,9 @@ pub async fn discover_models(
         .as_deref()
         == Some("generativelanguage.googleapis.com");
     if is_native_gemini {
-        return discover_gemini_models(client, provider).await;
+        return discover_gemini_models(client, provider, official_models).await;
     }
-    discover_generic_models(client, provider).await
+    discover_generic_models(client, provider, official_models).await
 }
 
 pub(crate) fn python_json_error_message(input: &[u8], error: &serde_json::Error) -> String {
@@ -594,7 +595,7 @@ fn declared_source(declared: bool) -> Value {
 fn discovered_modalities(raw: Option<&Value>) -> (Vec<String>, Value) {
     match parse_modalities(raw) {
         Some(values) => (values, source("advertised")),
-        None => (vec![emp_state::TEXT_MODALITY.to_owned()], source("unknown")),
+        None => (vec![emp_domain::TEXT_MODALITY.to_owned()], source("unknown")),
     }
 }
 

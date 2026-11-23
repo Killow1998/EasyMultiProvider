@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 mod catalog;
 mod rates;
-pub use catalog::{ModelMetadata, apply_catalog_metadata};
+pub use emp_domain::model_metadata::{ModelMetadata, apply_catalog_metadata};
 use rates::price_source;
 pub use rates::{estimate_tokens, normalize_prices};
 

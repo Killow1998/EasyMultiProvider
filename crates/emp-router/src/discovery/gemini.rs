@@ -3,6 +3,7 @@ use super::*;
 pub async fn discover_gemini_models(
     client: &HttpClient,
     provider: &Map<String, Value>,
+    official_models: &OfficialModels,
 ) -> Result<Vec<Value>, RouterError> {
     if provider.get("auth_mode").and_then(Value::as_str) != Some("api_key") {
         return Err(discovery_error(
@@ -44,7 +45,7 @@ pub async fn discover_gemini_models(
             break;
         }
     }
-    Ok(enrich_discovered_models(provider, result))
+    Ok(official_models.enrich_discovered_models(provider, result))
 }
 
 pub fn project_gemini_models(value: &Map<String, Value>) -> Result<Vec<Value>, RouterError> {

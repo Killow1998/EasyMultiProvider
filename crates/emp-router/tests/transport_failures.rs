@@ -89,7 +89,7 @@ async fn refused_proxy_survives_native_and_external_http_and_sse_routing() {
             assert!(!public.contains(secret));
         }
     }
-    let external = ExternalRouter::new(&client);
+    let external = ExternalRouter::new(&client, emp_config::official_registry::snapshot());
     let external_route = route(Dialect::PortableResponses);
     let complete = external
         .execute_complete(&external_route, &body, &BTreeMap::new(), &ids)

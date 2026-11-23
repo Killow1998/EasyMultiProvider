@@ -350,6 +350,7 @@ async fn discovery_requests_carry_auth_headers_and_follow_pagination() {
     let models = discover_gemini_models(
         &client,
         gemini_provider.as_object().expect("Gemini provider"),
+        &emp_config::official_registry::snapshot(),
     )
     .await
     .expect("Gemini discovery");
@@ -367,6 +368,7 @@ async fn discovery_requests_carry_auth_headers_and_follow_pagination() {
         &client,
         anthropic_provider.as_object().expect("Anthropic provider"),
         &[],
+        &emp_config::official_registry::snapshot(),
     )
     .await
     .expect("Anthropic discovery");
@@ -416,9 +418,13 @@ async fn generic_discovery_uses_bounded_native_transport() {
         "api_key": "test-key"
     });
     let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
-    let models = discover_generic_models(&client, provider.as_object().expect("provider object"))
-        .await
-        .expect("generic discovery");
+    let models = discover_generic_models(
+        &client,
+        provider.as_object().expect("provider object"),
+        &emp_config::official_registry::snapshot(),
+    )
+    .await
+    .expect("generic discovery");
     server.join().expect("join discovery upstream");
     assert_eq!(models.len(), 2);
 }
@@ -430,18 +436,26 @@ async fn discovery_without_usable_credentials_fails_before_any_network_call() {
         "id": "demo", "base_url": "https://external.example/v1",
         "protocol": "chat_completions", "auth_mode": "api_key"
     });
-    let error = discover_generic_models(&client, provider.as_object().expect("provider object"))
-        .await
-        .expect_err("missing key must fail");
+    let error = discover_generic_models(
+        &client,
+        provider.as_object().expect("provider object"),
+        &emp_config::official_registry::snapshot(),
+    )
+    .await
+    .expect_err("missing key must fail");
     assert_eq!(error.status(), 503);
 
     let provider = json!({
         "id": "demo", "base_url": "https://external.example/v1",
         "protocol": "chat_completions", "auth_mode": "none"
     });
-    let error = discover_generic_models(&client, provider.as_object().expect("provider object"))
-        .await
-        .expect_err("incompatible auth mode must fail");
+    let error = discover_generic_models(
+        &client,
+        provider.as_object().expect("provider object"),
+        &emp_config::official_registry::snapshot(),
+    )
+    .await
+    .expect_err("incompatible auth mode must fail");
     assert_eq!(error.status(), 400);
 }
 

@@ -140,7 +140,10 @@ impl ResolvedRoute {
 }
 
 pub mod capability_view;
+pub mod model_metadata;
 pub mod model_values;
+pub mod official_models;
+pub mod redaction;
 pub mod session;
 mod usage;
 
@@ -162,4 +165,9 @@ pub fn json_truthy(value: &Value) -> bool {
         Value::Array(value) => !value.is_empty(),
         Value::Object(value) => !value.is_empty(),
     }
+}
+
+pub trait SignatureStore: Send + Sync {
+    fn put(&self, scope: &str, call_id: &str, signature: &str) -> std::io::Result<()>;
+    fn get(&self, scope: &str, call_id: &str) -> std::io::Result<Option<String>>;
 }

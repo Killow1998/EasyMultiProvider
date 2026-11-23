@@ -140,6 +140,7 @@ fn discover_inner(
                         &state.backend.transport.client,
                         fields,
                         &vertex_models,
+                        &emp_state::official_registry::snapshot(),
                     ))
                     .map_err(DiscoveryError::Upstream)
             }

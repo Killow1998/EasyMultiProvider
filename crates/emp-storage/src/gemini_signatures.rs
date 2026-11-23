@@ -62,3 +62,13 @@ impl GeminiSignatures {
         })
     }
 }
+
+impl emp_domain::SignatureStore for GeminiSignatures {
+    fn put(&self, scope: &str, call_id: &str, signature: &str) -> io::Result<()> {
+        GeminiSignatures::put(self, scope, call_id, signature)
+    }
+
+    fn get(&self, scope: &str, call_id: &str) -> io::Result<Option<String>> {
+        GeminiSignatures::get(self, scope, call_id)
+    }
+}

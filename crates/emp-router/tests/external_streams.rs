@@ -398,7 +398,7 @@ async fn every_stream_protocol_ends_with_one_completed_response() {
     let fixtures = stream_fixtures();
     let server = StreamServer::start(fixtures);
     let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
-    let router = ExternalRouter::new(&client);
+    let router = ExternalRouter::new(&client, emp_config::official_registry::snapshot());
     let chat = collect(
         &router,
         &route(&server.base_url(), Protocol::ChatCompletions, "upstream"),
@@ -462,7 +462,7 @@ async fn a_plain_json_reply_is_reframed_as_the_standard_response_event_sequence(
     let fixtures = stream_fixtures();
     let server = StreamServer::start(fixtures);
     let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
-    let router = ExternalRouter::new(&client);
+    let router = ExternalRouter::new(&client, emp_config::official_registry::snapshot());
     let ordinary = collect(
         &router,
         &route(&server.base_url(), Protocol::ChatCompletions, "ordinary"),
@@ -494,7 +494,7 @@ async fn a_truncated_stream_fails_instead_of_succeeding_silently() {
     let fixtures = stream_fixtures();
     let server = StreamServer::start(fixtures);
     let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
-    let router = ExternalRouter::new(&client);
+    let router = ExternalRouter::new(&client, emp_config::official_registry::snapshot());
     let error = collect_failure(
         &router,
         &route(&server.base_url(), Protocol::ChatCompletions, "incomplete"),

@@ -26,8 +26,11 @@ pub(crate) fn complete(
     ids: &ProjectionIds,
 ) -> Result<CompleteResponse, ExternalRequestError> {
     let started = Instant::now();
-    let router = ExternalRouter::new(&state.backend.transport.client)
-        .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
+    let router = ExternalRouter::new(
+        &state.backend.transport.client,
+        emp_state::official_registry::snapshot(),
+    )
+    .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
     let mut outcome =
         RequestOutcome::new(state, route, body, incoming, None, "responses").started_at(started);
     let _activity_guard =
@@ -70,8 +73,11 @@ pub(crate) fn open_stream<'a>(
     monitor: Option<&mut DisconnectMonitor>,
 ) -> Result<(ExternalStream, ResolvedRoute, RequestOutcome<'a>), ExternalRequestError> {
     let started = Instant::now();
-    let router = ExternalRouter::new(&state.backend.transport.client)
-        .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
+    let router = ExternalRouter::new(
+        &state.backend.transport.client,
+        emp_state::official_registry::snapshot(),
+    )
+    .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
     let mut outcome =
         RequestOutcome::new(state, route, body, incoming, None, "responses").started_at(started);
     let (stream, candidate) = Execution {

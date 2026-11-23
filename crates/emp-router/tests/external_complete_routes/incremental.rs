@@ -5,7 +5,7 @@ use super::*;
 async fn updated_catalog_reaches_all_external_protocols() {
     let server = UpstreamServer::start();
     let client = HttpClient::new(HttpClientPolicy::default()).unwrap();
-    let router = ExternalRouter::new(&client);
+    let router = ExternalRouter::new(&client, emp_config::official_registry::snapshot());
     let declaration = |revision| {
         json!({"type":"additional_tools","role":"developer","tools":[
             {"type":"namespace","name":"files","tools":[

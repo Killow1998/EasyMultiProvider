@@ -1,4 +1,5 @@
 //! Private rotating JSONL diagnostics; journal failures never stop routing.
+pub use emp_domain::redaction::redact_sensitive_text;
 use regex::Regex;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -12,21 +13,8 @@ const MAX_PART: u64 = 2 * 1024 * 1024;
 const MAX_DIRECTORY: u64 = 10 * 1024 * 1024;
 static PART: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^emp-\d{8}T\d{6}Z-\d+-[0-9a-f]{16}-p\d+\.jsonl$").unwrap());
-static REDACTIONS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    [
-    r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{6,}", r"(?i)\bsk-[A-Za-z0-9_-]{10,}\b",
-    r"\bAIza[0-9A-Za-z_-]{20,}\b", r"(?i)\bgh[pousr]_[A-Za-z0-9]{20,}\b",
-    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b",
-    r#"(?i)\b(api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|token|password|secret|set[-_ ]?cookie|cookie|authorization|bootstrap|session)\s*[=:]\s*(?:bearer\s+)?["']?[^\s"',;&{}]{4,}"#,
-].into_iter().map(|pattern| Regex::new(pattern).unwrap()).collect()
-});
 static CAMEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"([a-z0-9])([A-Z])").unwrap());
 static SEPARATOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^A-Za-z0-9]+").unwrap());
-pub fn redact_sensitive_text(text: &str) -> String {
-    REDACTIONS.iter().fold(text.to_owned(), |text, pattern| {
-        pattern.replace_all(&text, "<redacted>").into_owned()
-    })
-}
 fn forbidden(key: &str) -> bool {
     let camel = CAMEL.replace_all(key.trim(), "${1}_${2}");
     let normalized = SEPARATOR

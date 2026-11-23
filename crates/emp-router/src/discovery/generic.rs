@@ -3,6 +3,7 @@ use super::*;
 pub async fn discover_generic_models(
     client: &HttpClient,
     provider: &Map<String, Value>,
+    official_models: &OfficialModels,
 ) -> Result<Vec<Value>, RouterError> {
     if provider.get("auth_mode").and_then(Value::as_str) != Some("api_key") {
         return Err(discovery_error(
@@ -50,7 +51,8 @@ pub async fn discover_generic_models(
         get_json(client, &format!("{base}/key"), headers.clone(), &mut budget).await?;
     }
     let value = get_json(client, &format!("{base}/models"), headers, &mut budget).await?;
-    project_generic_models(&value).map(|models| enrich_discovered_models(provider, models))
+    project_generic_models(&value)
+        .map(|models| official_models.enrich_discovered_models(provider, models))
 }
 
 pub fn project_generic_models(value: &Map<String, Value>) -> Result<Vec<Value>, RouterError> {

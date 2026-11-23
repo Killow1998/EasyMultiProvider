@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use url::Url;
 
-pub(super) mod gemini;
 #[cfg(test)]
 mod tests;
 
@@ -15,7 +14,7 @@ const CLOUD_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 pub(super) struct GeminiContext {
     scope: String,
-    store: std::sync::Arc<emp_state::gemini_signatures::GeminiSignatures>,
+    store: std::sync::Arc<dyn emp_domain::SignatureStore>,
 }
 
 impl std::fmt::Debug for GeminiContext {
@@ -27,7 +26,7 @@ impl std::fmt::Debug for GeminiContext {
 impl GeminiContext {
     pub(super) fn for_route(
         route: &ResolvedRoute,
-        store: Option<&std::sync::Arc<emp_state::gemini_signatures::GeminiSignatures>>,
+        store: Option<&std::sync::Arc<dyn emp_domain::SignatureStore>>,
     ) -> Result<Option<Self>, RouterError> {
         let provider = route.provider.value();
         let Some(vertex) = provider.get("vertex") else {
@@ -243,4 +242,24 @@ fn auth_error(message: &'static str) -> RouterError {
         None,
         message,
     )
+}
+
+pub(super) fn gemini_request(
+    chat: &Value,
+    capabilities: Option<&Map<String, Value>>,
+    official_models: &emp_domain::official_models::OfficialModels,
+) -> Result<Value, RouterError> {
+    let declared = capabilities
+        .and_then(|model| model.get("reasoning_levels"))
+        .and_then(Value::as_array)
+        .filter(|levels| !levels.is_empty());
+    let official_levels = if chat["reasoning_effort"].as_str().is_some() && declared.is_none() {
+        let model = chat["model"].as_str().unwrap_or_default();
+        let model = model.strip_prefix("google/").unwrap_or(model);
+        official_models.published_reasoning_levels("google_gemini", model)
+    } else {
+        None
+    };
+    emp_protocol::gemini::request_for_model(chat, capabilities, official_levels.as_ref())
+        .map_err(gemini_error)
 }

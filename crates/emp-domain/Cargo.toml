@@ -14,3 +14,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10.9"
 url = "2.5.7"
+regex = "1.13.1"

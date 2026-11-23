@@ -139,7 +139,10 @@ pub(super) fn run(
             output
                 .send(super::Reply::Dispatched)
                 .map_err(|_| ClaudeCliError::Disconnected)?;
-            let router = emp_router::ExternalRouter::new(&context.client);
+            let router = emp_router::ExternalRouter::new(
+                &context.client,
+                emp_state::official_registry::snapshot(),
+            );
             let mut message_id = String::new();
             let mut has_text = false;
             let mut observe = |event: &Value| {

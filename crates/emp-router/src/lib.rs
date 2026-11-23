@@ -23,7 +23,6 @@ pub mod model_observation;
 pub mod native_http;
 pub mod native_metadata;
 pub mod native_request;
-pub mod official_registry;
 mod retry_after;
 pub use retry_after::parse as parse_retry_after;
 pub mod subscription_catalog;
@@ -182,7 +181,7 @@ impl From<StreamEvent> for StreamResponseEvent {
 enum StreamProjection {
     Chat(ChatStream),
     Gemini {
-        source: vertex::gemini::Stream,
+        source: emp_protocol::gemini::Stream,
         chat: ChatStream,
     },
     Anthropic(AnthropicStream),
@@ -213,8 +212,9 @@ pub struct ExternalStream {
 }
 
 pub struct ExternalRouter<'a> {
+    official_models: emp_domain::official_models::OfficialModels,
     client: &'a HttpClient,
-    gemini_signatures: Option<std::sync::Arc<emp_state::gemini_signatures::GeminiSignatures>>,
+    gemini_signatures: Option<std::sync::Arc<dyn emp_domain::SignatureStore>>,
 }
 
 /// Order candidates without mutating configuration; trust observations only when endpoint, deployment

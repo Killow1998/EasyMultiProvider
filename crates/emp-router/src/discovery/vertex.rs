@@ -1,12 +1,13 @@
 //! Google Model Garden catalog; project access is checked by the model service.
 
 use super::*;
-use emp_state::usage::pricing::{ModelMetadata, apply_catalog_metadata};
+use emp_domain::model_metadata::{ModelMetadata, apply_catalog_metadata};
 
 pub(super) async fn discover(
     client: &HttpClient,
     provider: &Map<String, Value>,
     vertex_models: &[ModelMetadata],
+    official_models: &OfficialModels,
 ) -> Result<Vec<Value>, RouterError> {
     if provider["auth_mode"] == "vertex_api_key" {
         if provider["api_key"].as_str().is_none_or(str::is_empty) {
@@ -17,7 +18,10 @@ pub(super) async fn discover(
                 "Vertex API Key is not configured",
             ));
         }
-        let models = enrich_discovered_models(provider, api_key_candidates(vertex_models));
+        let models = official_models.enrich_discovered_models(
+            provider,
+            api_key_candidates(vertex_models, official_models),
+        );
         if provider["vertex"]["project"] == "" {
             return verify_express_models(client, provider, models).await;
         }
@@ -90,7 +94,7 @@ pub(super) async fn discover(
             }
         }
     }
-    let mut models = enrich_discovered_models(provider, result);
+    let mut models = official_models.enrich_discovered_models(provider, result);
     apply_catalog_metadata(&mut models, vertex_models);
     Ok(models)
 }
@@ -113,9 +117,12 @@ fn is_vertex_text_model(id: &str) -> bool {
         .any(|kind| id.contains(kind))
 }
 
-fn api_key_candidates(vertex_models: &[ModelMetadata]) -> Vec<Value> {
+fn api_key_candidates(
+    vertex_models: &[ModelMetadata],
+    official_models: &OfficialModels,
+) -> Vec<Value> {
     let mut models = BTreeMap::new();
-    for mut model in emp_state::official_registry::published_text_models("google_gemini") {
+    for mut model in official_models.published_text_models("google_gemini") {
         let id = model["upstream_id"].as_str().expect("reference model ID");
         if is_vertex_text_model(id) {
             let id = id.to_owned();

@@ -2,7 +2,7 @@
 //! limits and capability flags, and which provider a base URL belongs to.
 //! This drives the capability facts shown in the web UI.
 
-use emp_router::official_registry::{enrich_discovered_models, identify_provider};
+use emp_config::official_registry::{enrich_discovered_models, identify_provider};
 use serde_json::{Value, json};
 
 fn provider(base_url: &str) -> Value {

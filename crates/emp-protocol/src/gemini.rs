@@ -1,15 +1,12 @@
-use super::*;
-use serde_json::json;
+use crate::{ProtocolError, request_error};
+use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 
-#[cfg(test)]
-pub(super) fn request(chat: &Value) -> Result<Value, RouterError> {
-    request_for_model(chat, None)
-}
-
-pub(crate) fn request_for_model(
+pub fn request_for_model(
     chat: &Value,
     capabilities: Option<&Map<String, Value>>,
-) -> Result<Value, RouterError> {
+    official_levels: Option<&Value>,
+) -> Result<Value, ProtocolError> {
     let mut contents = Vec::new();
     let mut system = Vec::new();
     let mut names = HashMap::new();
@@ -28,7 +25,7 @@ pub(crate) fn request_for_model(
                     .as_str()
                     .expect("projected tool result ID");
                 let (name, order) = names.get(id).ok_or_else(|| {
-                    invalid_request("Gemini tool result has no corresponding call")
+                    request_error("Gemini tool result has no corresponding call")
                 })?;
                 responses.push((*order, json!({"functionResponse":{"name":name,"response":{"result":result["content"]}}})));
                 current = if messages.peek().is_some_and(|next| next["role"] == "tool") {
@@ -54,7 +51,7 @@ pub(crate) fn request_for_model(
                 let args: Value = serde_json::from_str(
                     function["arguments"].as_str().expect("projected arguments"),
                 )
-                .map_err(|_| invalid_request("invalid Gemini tool arguments"))?;
+                .map_err(|_| request_error("invalid Gemini tool arguments"))?;
                 names.insert(id.to_owned(), (name.to_owned(), names.len()));
                 let mut part = json!({"functionCall":{"name":name,"args":args}});
                 if let Some(signature) = call.pointer("/extra_content/google/thought_signature") {
@@ -134,20 +131,13 @@ pub(crate) fn request_for_model(
         }
         _ => {}
     }
-    let model = chat["model"].as_str().unwrap_or_default();
-    let model = model.strip_prefix("google/").unwrap_or(model);
     if let Some(effort) = chat["reasoning_effort"].as_str() {
         let declared = capabilities
             .and_then(|model| model.get("reasoning_levels"))
             .and_then(Value::as_array)
             .filter(|levels| !levels.is_empty());
-        let official = if declared.is_none() {
-            emp_state::official_registry::published_reasoning_levels("google_gemini", model)
-        } else {
-            None
-        };
         let levels = declared
-            .or_else(|| official.as_ref().and_then(Value::as_array))
+            .or_else(|| official_levels.and_then(Value::as_array))
             .or_else(|| {
                 capabilities
                     .and_then(|model| model.get("catalog_efforts"))
@@ -170,7 +160,7 @@ pub(crate) fn request_for_model(
     Ok(request)
 }
 
-fn content_parts(content: &Value) -> Result<Vec<Value>, RouterError> {
+fn content_parts(content: &Value) -> Result<Vec<Value>, ProtocolError> {
     if content.is_null() {
         return Ok(Vec::new());
     }
@@ -180,7 +170,7 @@ fn content_parts(content: &Value) -> Result<Vec<Value>, RouterError> {
     let mut parts = Vec::new();
     for part in content
         .as_array()
-        .ok_or_else(|| invalid_request("invalid Gemini message content"))?
+        .ok_or_else(|| request_error("invalid Gemini message content"))?
     {
         match part["type"].as_str() {
             Some("text") => parts.push(json!({"text":part["text"]})),
@@ -193,7 +183,7 @@ fn content_parts(content: &Value) -> Result<Vec<Value>, RouterError> {
                     .strip_prefix("data:")
                     .and_then(|value| value.split_once(";base64,"))
                 else {
-                    return Err(invalid_request(
+                    return Err(request_error(
                         "Gemini image input must be a base64 data URL",
                     ));
                 };
@@ -207,21 +197,21 @@ fn content_parts(content: &Value) -> Result<Vec<Value>, RouterError> {
                     json!({"inlineData":{"mimeType":format!("audio/{mime}"),"data":audio["data"]}}),
                 );
             }
-            _ => return Err(invalid_request("unsupported Gemini message content")),
+            _ => return Err(request_error("unsupported Gemini message content")),
         }
     }
     Ok(parts)
 }
 
 #[derive(Debug)]
-pub(crate) struct Stream {
+pub struct Stream {
     id: String,
     calls: usize,
     finished: bool,
 }
 
 impl Stream {
-    pub(crate) fn new(response_id: &str) -> Self {
+    pub fn new(response_id: &str) -> Self {
         Self {
             id: response_id.to_owned(),
             calls: 0,
@@ -229,13 +219,13 @@ impl Stream {
         }
     }
 
-    pub(crate) fn finished(&self) -> bool {
+    pub fn finished(&self) -> bool {
         self.finished
     }
 
-    pub(crate) fn push(&mut self, value: &Value) -> Result<Vec<Value>, RouterError> {
+    pub fn push(&mut self, value: &Value) -> Result<Vec<Value>, ProtocolError> {
         if value.pointer("/promptFeedback/blockReason").is_some() {
-            return Err(invalid_request("Gemini blocked the request"));
+            return Err(request_error("Gemini blocked the request"));
         }
         let mut chunks = Vec::new();
         if let Some(parts) = value
@@ -248,11 +238,11 @@ impl Stream {
                         .as_str()
                         .filter(|name| !name.is_empty())
                         .ok_or_else(|| {
-                            invalid_request("Gemini returned a tool call without a name")
+                            request_error("Gemini returned a tool call without a name")
                         })?;
                     let args = call.get("args").cloned().unwrap_or_else(|| json!({}));
                     if !args.is_object() {
-                        return Err(invalid_request("Gemini returned invalid tool arguments"));
+                        return Err(request_error("Gemini returned invalid tool arguments"));
                     }
                     let id = call
                         .get("id")
@@ -296,7 +286,7 @@ impl Stream {
                 "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" => "content_filter",
                 "STOP" if self.calls > 0 => "tool_calls",
                 "STOP" => "stop",
-                _ => return Err(invalid_request("Gemini generation stopped unexpectedly")),
+                _ => return Err(request_error("Gemini generation stopped unexpectedly")),
             };
             chunks.push(json!({"choices":[{"index":0,"delta":{},"finish_reason":finish}]}));
         }
@@ -331,7 +321,7 @@ impl Stream {
     }
 }
 
-pub(crate) fn complete(value: &Value, response_id: &str) -> Result<Value, RouterError> {
+pub fn complete(value: &Value, response_id: &str) -> Result<Value, ProtocolError> {
     let mut stream = Stream::new(response_id);
     let mut message = json!({"role":"assistant","content":""});
     let mut reason = Value::Null;
@@ -365,7 +355,7 @@ pub(crate) fn complete(value: &Value, response_id: &str) -> Result<Value, Router
         }
     }
     if !stream.finished() {
-        return Err(invalid_request("Gemini response did not complete"));
+        return Err(request_error("Gemini response did not complete"));
     }
     let mut chat = json!({"choices":[{"index":0,"message":message,"finish_reason":reason}]});
     if let Some(model) = value.get("modelVersion").and_then(Value::as_str) {
@@ -376,3 +366,6 @@ pub(crate) fn complete(value: &Value, response_id: &str) -> Result<Value, Router
     }
     Ok(chat)
 }
+
+#[cfg(test)]
+mod tests;

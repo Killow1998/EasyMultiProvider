@@ -3,6 +3,7 @@ use super::*;
 pub async fn discover_anthropic_models(
     client: &HttpClient,
     provider: &Map<String, Value>,
+    official_models: &OfficialModels,
 ) -> Result<Vec<Value>, RouterError> {
     let key = required_key(provider)?;
     let base = provider
@@ -48,7 +49,7 @@ pub async fn discover_anthropic_models(
             quote_query(&after_id)
         );
     }
-    Ok(enrich_discovered_models(provider, result))
+    Ok(official_models.enrich_discovered_models(provider, result))
 }
 
 pub fn project_anthropic_models(value: &Map<String, Value>) -> Result<Vec<Value>, RouterError> {

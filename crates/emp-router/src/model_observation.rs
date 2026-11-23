@@ -91,7 +91,7 @@ impl ModelObservation {
             }
             if let Some(effort) = object["reasoning"]["effort"]
                 .as_str()
-                .filter(|value| emp_state::model_values::is_concrete_reasoning_effort(value))
+                .filter(|value| emp_domain::model_values::is_concrete_reasoning_effort(value))
             {
                 self.reported_effort = Some(effort.into());
             }

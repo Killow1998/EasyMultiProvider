@@ -58,7 +58,7 @@ pub(crate) fn details(status: u16, content_type: &str, raw: &[u8]) -> (Option<St
             .map(str::to_owned)
             .unwrap_or_else(|| "Upstream returned an error without a readable message.".to_owned());
     }
-    let code = code.map(|value| emp_state::diagnostics::redact_sensitive_text(&value));
+    let code = code.map(|value| emp_domain::redaction::redact_sensitive_text(&value));
     let mut metadata = Vec::new();
     if let Some(code) = &code {
         metadata.push(format!("code: {code}"));
@@ -74,7 +74,7 @@ pub(crate) fn details(status: u16, content_type: &str, raw: &[u8]) -> (Option<St
     if detail.trim().is_empty() {
         detail = "Upstream returned an empty error response.".to_owned();
     }
-    detail = emp_state::diagnostics::redact_sensitive_text(&format!(
+    detail = emp_domain::redaction::redact_sensitive_text(&format!(
         "HTTP {status}{metadata}: {detail}"
     ));
     detail = detail.split_whitespace().collect::<Vec<_>>().join(" ");
