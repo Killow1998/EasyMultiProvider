@@ -334,18 +334,36 @@ fn endpoint_error_response(status: u16, code: &str) -> Vec<u8> {
     )
 }
 
-pub(crate) fn discover(state: &ServerState, body: &Value) -> Result<Value, DiscoveryError> {
-    let Some(id) = body["provider"].as_str().filter(|id| !id.is_empty()) else {
-        return Err(DiscoveryError::Invalid("provider is required".into()));
-    };
+pub(crate) struct DecisionDiscovery {
+    provider_id: String,
+    protocol: Option<Protocol>,
+}
+
+impl DecisionDiscovery {
+    pub(crate) fn parse(body: &Value) -> Result<Self, DiscoveryError> {
+        let provider_id = body["provider"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| DiscoveryError::Invalid("provider is required".into()))?;
+        Ok(Self {
+            provider_id: provider_id.to_owned(),
+            protocol: body["protocol"].as_str().and_then(Protocol::parse),
+        })
+    }
+}
+
+pub(crate) fn discover(
+    state: &ServerState,
+    operation: DecisionDiscovery,
+) -> Result<Value, DiscoveryError> {
+    let id = operation.provider_id.as_str();
     if state.backend.team.shared_subscription(id) {
         return Err(DiscoveryError::Invalid(
             "choose a personal HTTP API service".into(),
         ));
     }
-    let protocol = body["protocol"]
-        .as_str()
-        .and_then(Protocol::parse)
+    let protocol = operation
+        .protocol
         .ok_or_else(|| DiscoveryError::Invalid("decision API type is invalid".into()))?;
     let (base, key) = {
         let config = state

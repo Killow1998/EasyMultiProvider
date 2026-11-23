@@ -2,7 +2,7 @@
 use super::{generated_catalog_path, server_catalog};
 use crate::app::ServerState;
 use crate::services::configuration::ChangeError;
-use emp_state::discovery_merge::merge_selected_models;
+use emp_state::discovery_merge::{SelectedModels, merge_model_selection};
 use emp_state::filesystem::write_catalog_json;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -19,7 +19,7 @@ pub(crate) fn select_models(
     state: &ServerState,
     provider_id: &str,
     discovered: &[Value],
-    selected: &Value,
+    selected: Result<SelectedModels, emp_state::ConfigError>,
     expected_provider: &Value,
 ) -> Result<ModelSelection, ChangeError> {
     let mut config = state
@@ -32,11 +32,11 @@ pub(crate) fn select_models(
             "Service changed; update the model list".into(),
         ));
     }
-    let merged = merge_selected_models(
+    let merged = merge_model_selection(
         &config,
         provider_id,
         discovered,
-        selected,
+        &selected.map_err(ChangeError::invalid)?,
         &emp_state::observed_at_now(),
     )
     .map_err(ChangeError::invalid)?;

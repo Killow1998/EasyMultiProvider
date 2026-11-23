@@ -21,44 +21,49 @@ pub(super) struct VertexFixture {
     worker: Option<JoinHandle<()>>,
 }
 
+pub(crate) fn fixture_tls(host: &str) -> (Arc<ServerConfig>, Vec<u8>) {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.not_before = date_time_ymd(2025, 1, 1);
+    ca.not_after = date_time_ymd(2030, 1, 1);
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca.key_usages = vec![
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::KeyCertSign,
+    ];
+    let ca_key = KeyPair::generate().unwrap();
+    let ca_cert = ca.self_signed(&ca_key).unwrap();
+    let issuer = Issuer::new(ca, ca_key);
+    let mut leaf = CertificateParams::new(vec![host.to_owned()]).unwrap();
+    leaf.not_before = date_time_ymd(2025, 1, 1);
+    leaf.not_after = date_time_ymd(2030, 1, 1);
+    leaf.distinguished_name = DistinguishedName::new();
+    leaf.distinguished_name.push(DnType::CommonName, host);
+    leaf.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    leaf.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    leaf.use_authority_key_identifier_extension = true;
+    let leaf_key = KeyPair::generate().unwrap();
+    let leaf_cert = leaf.signed_by(&leaf_key, &issuer).unwrap();
+    let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
+    let config = Arc::new(
+        ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![leaf_cert.der().clone(), ca_cert.der().clone()],
+                private_key,
+            )
+            .unwrap(),
+    );
+    (config, ca_cert.der().to_vec())
+}
+
 impl VertexFixture {
     fn start() -> Self {
         Self::start_for("aiplatform.googleapis.com")
     }
 
     pub(super) fn start_for(host: &str) -> Self {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
-        ca.not_before = date_time_ymd(2025, 1, 1);
-        ca.not_after = date_time_ymd(2030, 1, 1);
-        ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        ca.key_usages = vec![
-            KeyUsagePurpose::DigitalSignature,
-            KeyUsagePurpose::KeyCertSign,
-        ];
-        let ca_key = KeyPair::generate().unwrap();
-        let ca_cert = ca.self_signed(&ca_key).unwrap();
-        let issuer = Issuer::new(ca, ca_key);
-        let mut leaf = CertificateParams::new(vec![host.to_owned()]).unwrap();
-        leaf.not_before = date_time_ymd(2025, 1, 1);
-        leaf.not_after = date_time_ymd(2030, 1, 1);
-        leaf.distinguished_name = DistinguishedName::new();
-        leaf.distinguished_name.push(DnType::CommonName, host);
-        leaf.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-        leaf.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-        leaf.use_authority_key_identifier_extension = true;
-        let leaf_key = KeyPair::generate().unwrap();
-        let leaf_cert = leaf.signed_by(&leaf_key, &issuer).unwrap();
-        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
-        let config = Arc::new(
-            ServerConfig::builder()
-                .with_no_client_auth()
-                .with_single_cert(
-                    vec![leaf_cert.der().clone(), ca_cert.der().clone()],
-                    private_key,
-                )
-                .unwrap(),
-        );
+        let (config, root) = fixture_tls(host);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -201,7 +206,7 @@ impl VertexFixture {
         Self {
             host: host.to_owned(),
             address,
-            root: ca_cert.der().to_vec(),
+            root,
             requests,
             stop,
             worker: Some(worker),

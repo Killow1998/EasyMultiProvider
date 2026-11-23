@@ -2,6 +2,7 @@ use crate::app::ServerState;
 use crate::services::configuration::ChangeError;
 use crate::services::observation::operation::{OperationObservation, observe};
 use emp_router::discovery::discover_models;
+use emp_state::discovery_merge::SelectedModels;
 use serde_json::{Value, json};
 
 pub(crate) enum DiscoveryError {
@@ -69,10 +70,33 @@ fn metadata_inner(
     result.map_err(DiscoveryError::Upstream)
 }
 
+pub(crate) struct ProviderDiscovery {
+    provider_id: String,
+    cached: bool,
+    selected: Option<Result<SelectedModels, emp_state::ConfigError>>,
+}
+
+impl ProviderDiscovery {
+    pub(crate) fn parse(body: &Value) -> Result<Self, DiscoveryError> {
+        let provider_id = body["provider"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| DiscoveryError::Invalid("provider is required".into()))?;
+        Ok(Self {
+            provider_id: provider_id.to_owned(),
+            cached: body["cached"] == true,
+            selected: body
+                .get("selected")
+                .filter(|value| !value.is_null())
+                .map(SelectedModels::parse),
+        })
+    }
+}
+
 pub(crate) fn discover(
     request_id: Option<&str>,
     state: &ServerState,
-    body: &Value,
+    operation: Result<ProviderDiscovery, DiscoveryError>,
 ) -> Result<Value, DiscoveryError> {
     observe(
         &state.backend.diagnostics,
@@ -80,23 +104,22 @@ pub(crate) fn discover(
         "model_discovery",
         |receipt| {
             receipt.check("runtime_catalog_matches_target", None);
-            discover_inner(state, body, receipt)
+            discover_inner(state, operation?, receipt)
         },
     )
 }
 
 fn discover_inner(
     state: &ServerState,
-    body: &Value,
+    operation: ProviderDiscovery,
     receipt: &mut OperationObservation,
 ) -> Result<Value, DiscoveryError> {
-    let Some(provider_id) = body
-        .get("provider")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    else {
-        return Err(DiscoveryError::Invalid("provider is required".into()));
-    };
+    let ProviderDiscovery {
+        provider_id,
+        cached,
+        selected,
+    } = operation;
+    let provider_id = provider_id.as_str();
     let provider = configured_provider(state, provider_id)?;
     let _guard = state
         .backend
@@ -104,7 +127,7 @@ fn discover_inner(
         .discovery_lock
         .lock()
         .map_err(|_| DiscoveryError::Unavailable)?;
-    let saved = if body["cached"] == true {
+    let saved = if cached {
         receipt.step("read_saved_models", || {
             super::provider_models::load(state, &provider).ok_or_else(|| {
                 DiscoveryError::Invalid("Update the model list before saving a selection".into())
@@ -166,7 +189,7 @@ fn discover_inner(
             })
             .map_err(|_| DiscoveryError::Unavailable)?
     };
-    let Some(selected) = body.get("selected").filter(|value| !value.is_null()) else {
+    let Some(selected) = selected else {
         return Ok(
             json!({"provider":provider_id,"protocol":provider["protocol"],"available":saved.models.len(),"models":saved.models,"updated_at":saved.updated_at,"added":0}),
         );

@@ -1,4 +1,3 @@
-use crate::api::failure_response::router_error_response;
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::request::percent_decode;
@@ -11,7 +10,6 @@ use crate::http::response::status_text;
 use crate::server::http::error::{EntryError, JsonReply};
 use crate::server::http::management::ManagementSession;
 use crate::services::catalog::discovery::{self, DiscoveryError};
-use crate::services::catalog::refresh_for_management;
 use crate::services::catalog::server_catalog;
 use emp_codex::preserve_native_catalog;
 use serde_json::Value;
@@ -41,33 +39,10 @@ pub(crate) fn management_request(
             Err(error) => config_error(&error),
         };
     }
-    if request.raw_path() == "/api/catalog/context-preference" {
-        return update_catalog_context_preference(request, state, &body);
-    }
-    if request.raw_path() == "/api/catalog/refresh" {
-        let (path, model_count) = match refresh_for_management(request.observation_id, state) {
-            Ok(result) => result,
-            Err(()) => return internal_error(),
-        };
-        return json_response(
-            &json!({"status":"ok","catalog_path":path,"model_count":model_count}),
-        );
-    }
-    if request.raw_path() == "/api/models/metadata" {
-        return metadata_request(request.observation_id, state, &body).wire_response();
-    }
-    let result = if request.raw_path() == "/api/decisions/models" {
-        crate::api::decisions::discover(state, &body)
-    } else {
-        discovery::discover(request.observation_id, state, &body)
-    };
-    match discovery_reply(result) {
-        Ok(reply) => reply.wire_response(),
-        Err(error) => router_error_response(error),
-    }
+    metadata_request(request.observation_id, state, &body).wire_response()
 }
 
-fn discovery_reply(
+pub(crate) fn discovery_reply(
     result: Result<Value, DiscoveryError>,
 ) -> Result<JsonReply, emp_router::RouterError> {
     match result {
@@ -96,28 +71,6 @@ pub(crate) fn metadata_request(
             metadata_error_response(error)
         }
     })
-}
-
-fn update_catalog_context_preference(
-    request: Request<'_>,
-    state: &ServerState,
-    incoming: &Value,
-) -> Vec<u8> {
-    match crate::services::configuration::settings::context_preference(
-        request.observation_id,
-        state,
-        incoming,
-    ) {
-        Ok(show_context) => json_response(&json!({"catalog_show_context":show_context})),
-        Err(error) => change_error(error),
-    }
-}
-
-fn change_error(error: crate::services::configuration::ChangeError) -> Vec<u8> {
-    match error {
-        crate::services::configuration::ChangeError::Invalid(message) => config_error(&message),
-        crate::services::configuration::ChangeError::Unavailable => internal_error(),
-    }
 }
 
 pub(crate) fn models_path(path: &str) -> bool {
@@ -205,7 +158,7 @@ pub(crate) fn provider_models_request(path: &str, state: &ServerState) -> JsonRe
     discovery_reply(result).unwrap_or_else(|_| EntryError::internal().reply())
 }
 
-fn catalog_json(value: &Value) -> JsonReply {
+pub(crate) fn catalog_json(value: &Value) -> JsonReply {
     JsonReply::new(200, serde_json::to_vec(value).expect("JSON response"))
 }
 
@@ -240,8 +193,4 @@ fn metadata_error_response(error: emp_router::RouterError) -> JsonReply {
         Some(delay) => reply.with_header("Retry-After", delay.to_string()),
         None => reply,
     }
-}
-
-pub(crate) fn internal_error() -> Vec<u8> {
-    json_error_response(500, status_text(500), "internal server error", None, &[])
 }

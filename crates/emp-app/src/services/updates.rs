@@ -123,6 +123,11 @@ impl UpdateState {
         drain(&self.gate, timeout)
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn active_for_test(&self) -> usize {
+        self.gate.state.lock().unwrap().active
+    }
+
     pub(crate) fn snapshot(&self) -> Snapshot {
         self.manager.snapshot()
     }

@@ -142,12 +142,27 @@ impl Pair<'_> {
 }
 
 async fn wait_for_model_fetch(upstream: &AsyncListener) -> TcpStream {
+    expect_upstream_get(
+        upstream,
+        "/v1/models?client_version=0.159.2",
+        "fixture-token",
+    )
+    .await
+}
+
+pub(super) async fn expect_upstream_get(
+    upstream: &AsyncListener,
+    path: &str,
+    token: &str,
+) -> TcpStream {
+    let expected_request = format!("GET {path} HTTP/1.1\r\n");
+    let authorization = format!("Authorization: Bearer {token}\r\n");
     timeout(Duration::from_secs(5), async {
         let (stream, _) = upstream.accept().await.unwrap();
         let mut stream = tokio::io::BufReader::new(stream);
         let mut line = String::new();
         stream.read_line(&mut line).await.unwrap();
-        assert_eq!(line, "GET /v1/models?client_version=0.159.2 HTTP/1.1\r\n");
+        assert_eq!(line, expected_request);
         let mut authorized = false;
         loop {
             line.clear();
@@ -155,7 +170,7 @@ async fn wait_for_model_fetch(upstream: &AsyncListener) -> TcpStream {
             if line == "\r\n" {
                 break;
             }
-            authorized |= line.eq_ignore_ascii_case("Authorization: Bearer fixture-token\r\n");
+            authorized |= line.eq_ignore_ascii_case(&authorization);
         }
         assert!(authorized);
         stream.into_inner()

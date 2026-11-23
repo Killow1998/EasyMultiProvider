@@ -20,6 +20,7 @@ use crate::http::request::read_request_head;
 use crate::http::response::bad_request_response;
 use crate::http::routes::route_request_at;
 use crate::server::http::accounts::AccountWriteRoute;
+use crate::server::http::catalog::CatalogWriteRoute;
 use crate::server::http::proxy::{RequestAccess, request_source};
 use crate::server::http::usage::Report;
 use crate::server::http::{error::EntryError, login};
@@ -81,6 +82,13 @@ pub(crate) fn handle_connection(
     let now = system_now();
     let response = if let Some(route) = AccountWriteRoute::for_request(request) {
         Some(route.legacy(&mut stream, request, raw.body_prefix, state, now))
+    } else if let Some(route) = CatalogWriteRoute::for_request(request) {
+        Some(
+            route
+                .legacy(&mut stream, request, raw.body_prefix, state, now)
+                .unwrap_or_else(EntryError::reply)
+                .wire_response(),
+        )
     } else if login::matches(request) {
         Some(
             login::legacy(&mut stream, request, raw.body_prefix, state, now)
@@ -223,21 +231,9 @@ pub(crate) fn handle_connection(
                 state,
                 now,
             )),
-            (
-                RequestMethod::Post,
-                "/api/providers/discover"
-                | "/api/catalog/refresh"
-                | "/api/catalog/context-preference"
-                | "/api/models/metadata"
-                | "/api/decisions/models"
-                | "/api/language",
-            ) => Some(catalog::management_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                now,
-            )),
+            (RequestMethod::Post, "/api/models/metadata" | "/api/language") => Some(
+                catalog::management_request(&mut stream, request, raw.body_prefix, state, now),
+            ),
             (RequestMethod::Post, "/v1/responses/compact") => match compact_request(
                 &mut stream,
                 request,
@@ -272,17 +268,6 @@ pub(crate) fn handle_connection(
                 serve_quota_events(&mut stream, request, state, now);
                 None
             }
-            (RequestMethod::Post, path)
-                if path.starts_with("/api/providers/") && path.ends_with("/balance") =>
-            {
-                Some(crate::api::provider_balance::refresh(
-                    &mut stream,
-                    request,
-                    raw.body_prefix,
-                    state,
-                    now,
-                ))
-            }
             (RequestMethod::Post, "/api/app-icon") => Some(crate::api::app_icon::save(
                 &mut stream,
                 request,
@@ -290,17 +275,6 @@ pub(crate) fn handle_connection(
                 state,
                 now,
             )),
-            (RequestMethod::Post, path)
-                if path.starts_with("/api/providers/") && path.ends_with("/quota") =>
-            {
-                Some(crate::api::provider_quota::refresh(
-                    &mut stream,
-                    request,
-                    raw.body_prefix,
-                    state,
-                    now,
-                ))
-            }
             _ => Some(route_request_at(request, state, now)),
         }
     };

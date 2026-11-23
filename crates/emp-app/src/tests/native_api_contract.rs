@@ -19,4 +19,6 @@ mod oversized;
 mod sse;
 mod support;
 mod vertex;
+#[cfg(unix)]
+pub(crate) use vertex::fixture_tls;
 mod websocket;

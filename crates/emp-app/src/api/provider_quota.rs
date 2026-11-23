@@ -1,14 +1,9 @@
 use crate::{
     app::ServerState,
-    http::{
-        auth::same_origin,
-        request::{Request, percent_decode, query_values, read_json_body},
-        response::*,
-    },
+    http::request::{Request, percent_decode, query_values},
     server::http::error::{EntryError, JsonReply},
 };
 use serde_json::Value;
-use std::net::TcpStream;
 
 fn local_provider(state: &ServerState, id: &str) -> bool {
     state
@@ -27,43 +22,13 @@ fn local_provider(state: &ServerState, id: &str) -> bool {
         })
 }
 
-pub(crate) fn refresh(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-) -> Vec<u8> {
-    if !same_origin(request, state.port) {
-        return cross_origin_response("management session is required");
+pub(crate) fn refresh(state: &ServerState, id: &str, force: bool) -> JsonReply {
+    if local_provider(state, id) {
+        return reply(crate::services::claude_cli::quota_query::refresh(state));
     }
-    if !state
-        .sessions
-        .contains(request.session_token().as_deref(), now)
-    {
-        return unauthorized_response();
-    }
-    let body = match read_json_body(stream, request, prefix, state) {
-        Ok(body) => body,
-        Err(error) => return body_error_response(error),
-    };
-    let force = match body.get("force") {
-        None => false,
-        Some(Value::Bool(force)) => *force,
-        _ => return json_error_response(400, status_text(400), "force must be boolean", None, &[]),
-    };
-    let id = request
-        .raw_path()
-        .strip_prefix("/api/providers/")
-        .and_then(|path| path.strip_suffix("/quota"))
-        .map(|id| percent_decode(id, false))
-        .unwrap_or_default();
-    if local_provider(state, &id) {
-        return reply(crate::services::claude_cli::quota_query::refresh(state)).wire_response();
-    }
-    match crate::services::cpa_quota::refresh(state, &id, force) {
-        Some(value) => reply(Ok(value)).wire_response(),
-        None => not_found_response(),
+    match crate::services::cpa_quota::refresh(state, id, force) {
+        Some(value) => reply(Ok(value)),
+        None => EntryError::NotFound.reply(),
     }
 }
 

@@ -1,7 +1,7 @@
 //! Observable command receipts, management events and privacy-safe failures.
 use super::*;
 
-pub(super) fn live_journal(root: &Path) -> Vec<Value> {
+pub(crate) fn live_journal(root: &Path) -> Vec<Value> {
     read_journal(root, true)
 }
 

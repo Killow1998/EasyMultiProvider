@@ -1,6 +1,6 @@
 pub(crate) mod accounts;
 pub(crate) mod body;
-pub(super) mod catalog;
+pub(crate) mod catalog;
 pub(crate) mod error;
 pub(super) mod gateway;
 pub(crate) mod inspection;

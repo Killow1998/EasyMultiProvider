@@ -73,10 +73,14 @@ mod gateway_contract;
 mod history_diagnostic_contract;
 mod integration_sideband_contract;
 mod internal_events_contract;
+#[cfg(unix)]
+pub(crate) use internal_events_contract::live_journal;
 mod management_http_contract;
 mod management_operation_contract;
 mod memory_routing_contract;
 mod native_api_contract;
+#[cfg(unix)]
+pub(crate) use native_api_contract::fixture_tls;
 #[cfg(unix)]
 mod native_login_contract;
 mod other_auth_contract;

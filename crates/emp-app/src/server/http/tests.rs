@@ -65,6 +65,8 @@ pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input
 #[cfg(unix)]
 mod account_writes;
 #[cfg(unix)]
+mod catalog_writes;
+#[cfg(unix)]
 mod login_writes;
 
 pub(crate) async fn assert_wire_parity(

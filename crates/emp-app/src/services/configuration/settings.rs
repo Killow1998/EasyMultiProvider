@@ -108,25 +108,14 @@ pub(crate) fn update(
 pub(crate) fn context_preference(
     request_id: Option<&str>,
     state: &ServerState,
-    incoming: &Value,
+    show_context: Result<bool, ChangeError>,
 ) -> Result<bool, ChangeError> {
     crate::services::observation::operation::observe(
         &state.backend.diagnostics,
         request_id,
         "catalog_preference",
         |receipt| {
-            let object = incoming
-                .as_object()
-                .filter(|object| object.len() == 1)
-                .ok_or_else(|| {
-                    ChangeError::invalid(
-                        "catalog preference request must contain only catalog_show_context",
-                    )
-                })?;
-            let show_context = object
-                .get("catalog_show_context")
-                .and_then(Value::as_bool)
-                .ok_or_else(|| ChangeError::invalid("catalog_show_context must be boolean"))?;
+            let show_context = show_context?;
             let mut current = state
                 .backend
                 .configuration

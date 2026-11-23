@@ -55,19 +55,45 @@ pub fn merge_selected_models(
     selected: &Value,
     observed_at: &str,
 ) -> Result<DiscoveryMerge, ConfigError> {
-    let selected = selected
-        .as_array()
-        .filter(|items| items.iter().all(Value::is_string))
-        .ok_or_else(|| ConfigError::new("selected models must be a list of model IDs"))?;
-    let selected = selected
-        .iter()
-        .filter_map(Value::as_str)
-        .collect::<BTreeSet<_>>();
+    merge_model_selection(
+        config,
+        provider_id,
+        discovered,
+        &SelectedModels::parse(selected)?,
+        observed_at,
+    )
+}
+
+pub struct SelectedModels(BTreeSet<String>);
+
+impl SelectedModels {
+    pub fn parse(selected: &Value) -> Result<Self, ConfigError> {
+        selected
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .map(|item| item.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .map(Self)
+            .ok_or_else(|| ConfigError::new("selected models must be a list of model IDs"))
+    }
+}
+
+pub fn merge_model_selection(
+    config: &Value,
+    provider_id: &str,
+    discovered: &[Value],
+    selected: &SelectedModels,
+    observed_at: &str,
+) -> Result<DiscoveryMerge, ConfigError> {
+    let selected = &selected.0;
     let available = discovered
         .iter()
         .filter_map(|item| item.get("upstream_id").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    if !selected.is_subset(&available) {
+    if !selected.iter().all(|id| available.contains(id.as_str())) {
         return Err(ConfigError::new(
             "selected model is not in the discovered list",
         ));

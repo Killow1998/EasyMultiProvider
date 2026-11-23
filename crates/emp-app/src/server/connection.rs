@@ -3,7 +3,7 @@ use super::{
     head::GuardedHead,
     http::{
         accounts::{self, AccountWriteRoute},
-        catalog,
+        catalog::{self, CatalogWriteRoute},
         error::EntryWire,
         inspection, login, management, pages,
         proxy::RequestAccess,
@@ -47,6 +47,7 @@ struct CandidateRequest {
     report_socket: Option<Arc<TcpStream>>,
     half_close: bool,
     account_write: Option<AccountWriteRoute>,
+    catalog_write: Option<CatalogWriteRoute>,
 }
 
 type UpgradeSession = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -130,9 +131,12 @@ pub(super) async fn drive_candidate(
     };
     let request = head.raw.request();
     let account_write = AccountWriteRoute::for_request(request);
+    let catalog_write = CatalogWriteRoute::for_request(request)
+        .filter(|route| !matches!(route, CatalogWriteRoute::Balance(None)));
     let (half_close, watch_report) = if usage::matches(request) {
         (true, usage::Report::for_path(request.raw_path()).is_some())
     } else if account_write.is_some()
+        || catalog_write.is_some()
         || login::matches(request)
         || (request.method == RequestMethod::Post && request.raw_path() == management::SESSION_PATH)
         || settings::matches(request)
@@ -187,6 +191,7 @@ pub(super) async fn drive_candidate(
         report_socket,
         half_close,
         account_write,
+        catalog_write,
     };
     drive_http(io, peer, router, control, permit, head, Some(candidate)).await;
 }
@@ -236,6 +241,9 @@ async fn drive_http(
     let account_write = candidate
         .as_ref()
         .and_then(|request| request.account_write.as_ref());
+    let catalog_write = candidate
+        .as_ref()
+        .and_then(|request| request.catalog_write.as_ref());
     let report_socket = candidate
         .as_ref()
         .and_then(|request| request.report_socket.as_ref());
@@ -270,6 +278,9 @@ async fn drive_http(
             request.extensions_mut().insert(raw.clone());
             request.extensions_mut().insert(context.clone());
             if let Some(route) = account_write {
+                request.extensions_mut().insert(route.clone());
+            }
+            if let Some(route) = catalog_write {
                 request.extensions_mut().insert(route.clone());
             }
             if let Some(socket) = report_socket {
