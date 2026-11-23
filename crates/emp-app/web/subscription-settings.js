@@ -102,15 +102,22 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
     box.querySelectorAll('input[name="subscription_context"]').forEach((input,index)=>preview(input,index));
   }
   async function load(candidate,refresh=false){
-    capture(candidate);candidate.controller.abort();candidate.controller=new AbortController();const controller=candidate.controller;
-    const button=$('subscription_model_refresh');if(refresh)button.disabled=true;
+    candidate.controller.abort();
+    const controller=candidate.controller=new AbortController();
+    const button=$('subscription_model_refresh');
+    button.disabled=true;
+    let result;
     try{
-      const result=await api('/api/accounts/'+encodeURIComponent(candidate.account.id)+'/models'+(refresh?'/refresh':''),{...(refresh?{method:'POST',body:'{}'}:{}),signal:controller.signal});
-      if(!current(candidate)||controller.signal.aborted)return;
-      capture(candidate);candidate.models=result.models;render(candidate);
-      if(refresh)$('modal_status').textContent=tr("models.model_list_refreshed");
+      result=await api('/api/accounts/'+encodeURIComponent(candidate.account.id)+'/models'+(refresh?'/refresh':''),{...(refresh?{method:'POST',body:'{}'}:{}),signal:controller.signal});
     }catch(error){if(current(candidate)&&!controller.signal.aborted)$('modal_status').textContent=error.message;}
-    finally{if(current(candidate)&&refresh)button.disabled=false;}
+    if(!current(candidate)||controller.signal.aborted)return;
+    button.disabled=false;
+    if(result){
+      capture(candidate);
+      candidate.models=result.models;
+    }
+    if(!refresh||result)render(candidate);
+    if(refresh&&result)$('modal_status').textContent=tr("models.model_list_refreshed");
   }
   function open(id,navigation={}){
     const state=getState(),account=state.native_account?.id===id?state.native_account:(state.accounts||[]).find(a=>a.id===id);if(!account)return;
@@ -121,7 +128,7 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
     candidate.resolved=new Set();
     const body=`<div class="toolbar"><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh">${tr("models.refresh_model_list")}</button></div>
       <div class="subscription-list-head"><span>${tr("models.visible_in_codex_model")}</span><span>${tr("models.maximum_context_window_tokens")} ${help(tr("models.settings_cannot_exceed_the_online_catalog_limit_leave_blank"))}</span></div>
-      <div id="subscription_model_list" class="model-selection"></div>`;
+      <div id="subscription_model_list" class="model-selection">${tr("models.loading_model_list")}</div>`;
     services.open(id,'account','edit',body,tr("models.save_changes"),async()=>{
       if($('subscription_model_list').querySelector('[data-preference-kind]'))throw new Error(tr("models.choose_visibility_and_context_settings_for_this_account_first"));
       for(const input of $('subscription_model_list').querySelectorAll('input[name="subscription_context"]')){
@@ -131,7 +138,10 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
       const config=applySubscriptionPreferences(cloneState(),{id,native:candidate.native,hidden:candidate.hidden,windows,syncModels:candidate.syncModels});
       await persistState(tr("models.account_saved"),config);if(current(candidate))closeModal();
     },navigation);
-    editor=candidate;$('subscription_model_refresh').onclick=()=>load(candidate,true);render(candidate);void load(candidate);
+    editor=candidate;
+    $('modal_submit').disabled=true;
+    $('subscription_model_refresh').onclick=()=>load(candidate,true);
+    void load(candidate);
   }
   return {open,stop};
 }
