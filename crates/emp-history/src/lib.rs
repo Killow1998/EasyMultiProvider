@@ -80,6 +80,13 @@ pub struct VisibleItem {
 }
 
 impl VisibleItem {
+    pub fn replay_key(&self) -> Option<(&str, &str)> {
+        Some((
+            self.raw_type.as_deref()?,
+            self.call_id.as_deref().or(self.item_id.as_deref())?,
+        ))
+    }
+
     pub fn new(kind: impl Into<String>, content: Value) -> Self {
         Self {
             kind: kind.into(),
@@ -90,6 +97,22 @@ impl VisibleItem {
             raw_type: None,
         }
     }
+}
+
+pub fn wire_replay_key(item: &Map<String, Value>) -> Option<(&str, &str)> {
+    let kind = item
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("message");
+    let id = ["call_id", "callId", "id", "item_id", "itemId"]
+        .iter()
+        .find_map(|key| {
+            item.get(*key)?
+                .as_str()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+        })?;
+    Some((kind, id))
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -18,6 +18,14 @@ all post-checkpoint items, including the side boundary and current question.
 No parent-tail merge, transcript mutation, or heuristic parent search is used.
 Native destinations retain their original opaque history.
 
+When projecting an inherited checkpoint, explicit Codex items keep their places.
+EMP matches overlapping records by item type and ID. A client tool call and its
+output can come from different sides of the checkpoint. EMP pairs them across
+the combined request before filling missing results. If the destination needs
+another compaction, the cut moves back to keep calls with their active outputs.
+A completed server-side tool search contributes its tool declarations to external
+protocols without creating a client tool invocation.
+
 Missing parent metadata, unavailable parent history, and absent/ambiguous checkpoint
 identities still fail closed. A new native compaction created only inside the
 ephemeral child cannot be recovered from the parent by this mechanism. EMP cannot
@@ -47,3 +55,8 @@ Reviewed at `rust-v0.153.4`; the fork metadata fields also exist in `rust-v0.152
 - [Side fork request](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/tui/src/app_server_session.rs)
 - [Responses fork metadata](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/responses_metadata.rs)
 - [Ephemeral app-server contract](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/app-server/README.md#lifecycle-overview)
+
+Codex 0.171.0 restores replacement history before replaying its suffix and
+pairs client tool calls over the resulting timeline.
+[Rollout reconstruction](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/core/src/session/rollout_reconstruction.rs)
+and [tool normalization](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/core/src/context_manager/normalize.rs).

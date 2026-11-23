@@ -225,8 +225,12 @@ pub(super) fn replacement_entries(
     previous: &[VisibleItem],
     turn: Option<String>,
 ) -> Result<Vec<VisibleItem>, HistoryError> {
+    let retained: BTreeSet<_> = replacement
+        .iter()
+        .filter_map(emp_history::wire_replay_key)
+        .collect();
     let mut output = Vec::new();
-    for raw in replacement {
+    for raw in &replacement {
         if raw.get("type").and_then(Value::as_str) == Some("compaction")
             && raw
                 .get("encrypted_content")
@@ -239,21 +243,24 @@ pub(super) fn replacement_entries(
                     "compaction_summary" | "compaction_marker"
                 )
             });
-            let portable = match boundary {
-                Some(index) if content_text(&previous[index].content).trim().is_empty() => previous
-                    .iter()
-                    .enumerate()
-                    .filter(|(position, _)| *position != index)
-                    .map(|(_, item)| item.clone())
-                    .collect(),
-                Some(index) => previous[index..].to_vec(),
-                None => previous.to_vec(),
+            let (before, after) = match boundary {
+                Some(index) if content_text(&previous[index].content).trim().is_empty() => {
+                    (&previous[..index], &previous[index + 1..])
+                }
+                Some(index) => (&[][..], &previous[index..]),
+                None => (&[][..], previous),
             };
-            if portable.is_empty() {
+            if before.is_empty() && after.is_empty() {
                 return Err(HistoryError::new("opaque_replacement_unavailable"));
             }
-            output.extend(portable);
-        } else if let Some(item) = normalize_visible_item(&raw, turn.clone()) {
+            output.extend(
+                before
+                    .iter()
+                    .chain(after)
+                    .filter(|item| !item.replay_key().is_some_and(|key| retained.contains(&key)))
+                    .cloned(),
+            );
+        } else if let Some(item) = normalize_visible_item(raw, turn.clone()) {
             output.push(item);
         }
     }
