@@ -5,8 +5,6 @@ use crate::http::request::query_values;
 use crate::http::request::read_json_body;
 use crate::http::response::body_error_response;
 use crate::http::response::json_error_body;
-use crate::http::response::json_error_response;
-use crate::http::response::status_text;
 use crate::server::http::error::{EntryError, JsonReply};
 use crate::server::http::management::ManagementSession;
 use crate::services::catalog::discovery::{self, DiscoveryError};
@@ -30,15 +28,6 @@ pub(crate) fn management_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
-    if request.raw_path() == "/api/language" {
-        let Some(language) = body["language"].as_str() else {
-            return config_error("language is required");
-        };
-        return match crate::services::configuration::update_language(state, language) {
-            Ok(()) => json_response(&json!({"language":language})),
-            Err(error) => config_error(&error),
-        };
-    }
     metadata_request(request.observation_id, state, &body).wire_response()
 }
 
@@ -160,13 +149,6 @@ pub(crate) fn provider_models_request(path: &str, state: &ServerState) -> JsonRe
 
 pub(crate) fn catalog_json(value: &Value) -> JsonReply {
     JsonReply::new(200, serde_json::to_vec(value).expect("JSON response"))
-}
-
-fn json_response(value: &Value) -> Vec<u8> {
-    catalog_json(value).wire_response()
-}
-fn config_error(message: &str) -> Vec<u8> {
-    json_error_response(400, status_text(400), message, None, &[])
 }
 
 fn metadata_error_response(error: emp_router::RouterError) -> JsonReply {

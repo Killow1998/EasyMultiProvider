@@ -66,6 +66,8 @@ pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input
 mod account_writes;
 #[cfg(unix)]
 mod catalog_writes;
+#[cfg(target_os = "linux")]
+mod local_writes;
 #[cfg(unix)]
 mod login_writes;
 
@@ -88,14 +90,18 @@ async fn assert_wire_parity_with(
         exchange_wire(new, new_request, end_input),
     );
     let (old, new) = (normalize(old), normalize(new));
+    assert_wire_response_parity(old_request, &old, &new);
+    old
+}
+
+fn assert_wire_response_parity(old_request: &[u8], old: &[u8], new: &[u8]) {
     assert!(
         new == old,
         "different responses for {}\nnew: {}\nold: {}",
         String::from_utf8_lossy(old_request.split(|&byte| byte == b'\r').next().unwrap()),
-        String::from_utf8_lossy(&new),
-        String::from_utf8_lossy(&old),
+        String::from_utf8_lossy(new),
+        String::from_utf8_lossy(old),
     );
-    old
 }
 
 pub(crate) fn assert_status(reply: &[u8], status: u16) {

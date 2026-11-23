@@ -21,6 +21,7 @@ use crate::http::response::bad_request_response;
 use crate::http::routes::route_request_at;
 use crate::server::http::accounts::AccountWriteRoute;
 use crate::server::http::catalog::CatalogWriteRoute;
+use crate::server::http::local_writes::LocalWriteRoute;
 use crate::server::http::proxy::{RequestAccess, request_source};
 use crate::server::http::usage::Report;
 use crate::server::http::{error::EntryError, login};
@@ -89,6 +90,13 @@ pub(crate) fn handle_connection(
                 .unwrap_or_else(EntryError::reply)
                 .wire_response(),
         )
+    } else if let Some(route) = LocalWriteRoute::for_request(request) {
+        Some(
+            route
+                .legacy(&mut stream, request, raw.body_prefix, state, now)
+                .unwrap_or_else(EntryError::reply)
+                .wire_response(),
+        )
     } else if login::matches(request) {
         Some(
             login::legacy(&mut stream, request, raw.body_prefix, state, now)
@@ -116,31 +124,6 @@ pub(crate) fn handle_connection(
             (RequestMethod::Post, "/api/updates/check" | "/api/updates/install") => Some(
                 crate::api::updates::start(&mut stream, request, raw.body_prefix, state, now),
             ),
-            (RequestMethod::Post, "/api/client-events") => {
-                Some(crate::api::diagnostics::client_event(
-                    &mut stream,
-                    request,
-                    raw.body_prefix,
-                    state,
-                    now,
-                ))
-            }
-            (RequestMethod::Post, "/api/usage/scan") => Some(crate::api::usage::scan(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                now,
-            )),
-            (RequestMethod::Post, "/api/runtime/scan") => {
-                Some(crate::api::runtime::management_request(
-                    &mut stream,
-                    request,
-                    raw.body_prefix,
-                    state,
-                    now,
-                ))
-            }
             (RequestMethod::Post, "/api/quit") => {
                 let (response, stop) =
                     quit_request(&mut stream, request, raw.body_prefix, state, now);
@@ -231,9 +214,13 @@ pub(crate) fn handle_connection(
                 state,
                 now,
             )),
-            (RequestMethod::Post, "/api/models/metadata" | "/api/language") => Some(
-                catalog::management_request(&mut stream, request, raw.body_prefix, state, now),
-            ),
+            (RequestMethod::Post, "/api/models/metadata") => Some(catalog::management_request(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                now,
+            )),
             (RequestMethod::Post, "/v1/responses/compact") => match compact_request(
                 &mut stream,
                 request,
@@ -268,13 +255,6 @@ pub(crate) fn handle_connection(
                 serve_quota_events(&mut stream, request, state, now);
                 None
             }
-            (RequestMethod::Post, "/api/app-icon") => Some(crate::api::app_icon::save(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                now,
-            )),
             _ => Some(route_request_at(request, state, now)),
         }
     };

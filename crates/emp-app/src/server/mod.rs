@@ -159,6 +159,7 @@ pub(crate) async fn serve_candidate(
                 http::management::session_route(),
             )
             .merge(http::login::routes())
+            .merge(http::local_writes::routes())
             .merge(http::usage::routes())
             .merge(http::settings::routes())
             .merge(http::catalog::routes())

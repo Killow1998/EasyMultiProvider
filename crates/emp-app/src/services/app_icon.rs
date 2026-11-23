@@ -128,6 +128,11 @@ impl AppIcon {
         Arc::clone(&self.image.lock().expect("app icon"))
     }
 
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn lock_image_for_test(&self) -> std::sync::MutexGuard<'_, Arc<Image>> {
+        self.image.lock().unwrap()
+    }
+
     pub(crate) fn save(&self, selection: Selection) -> Result<Value, &'static str> {
         let image = Image::decode(selection)?;
         let bytes = serde_json::to_vec(&image.selection).expect("appearance JSON");

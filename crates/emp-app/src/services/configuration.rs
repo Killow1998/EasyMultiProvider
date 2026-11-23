@@ -177,14 +177,27 @@ impl ConfigurationEdit<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Language {
+    English,
+    SimplifiedChinese,
+}
+
+impl Language {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::SimplifiedChinese => "zh-CN",
+        }
+    }
+}
+
 /// A language change updates only its preference, without catalog or engine work.
 pub(crate) fn update_language(
     state: &crate::app::ServerState,
-    language: &str,
+    language: Language,
 ) -> Result<(), String> {
-    if !matches!(language, "en" | "zh-CN") {
-        return Err("language must be en or zh-CN".into());
-    }
+    let language = language.as_str();
     let mut edit = state
         .backend
         .configuration

@@ -3,8 +3,8 @@ pub(crate) mod lifetime;
 mod sessions;
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
-use crate::http::request::{Request, query_values, read_json_body};
-use crate::http::response::{body_error_response, cross_origin_response, unauthorized_response};
+use crate::http::request::{Request, query_values};
+use crate::http::response::{cross_origin_response, unauthorized_response};
 use crate::server::http::error::JsonReply;
 use crate::services::accounts::{
     account_catalog_headers, native_subscription_headers, quota_owner_key,
@@ -135,32 +135,7 @@ pub(crate) fn read(
     payload["history"] = state.backend.usage.status();
     json_response(200, &payload)
 }
-pub(crate) fn scan(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-) -> Vec<u8> {
-    if !same_origin(request, state.port) {
-        return cross_origin_response("management session is required");
-    }
-    if !state
-        .sessions
-        .contains(request.session_token().as_deref(), now)
-    {
-        return unauthorized_response();
-    }
-    if let Err(error) = read_json_body(stream, request, prefix, state) {
-        return body_error_response(error);
-    }
-    let Some(id) = state.backend.usage.queue_scan(state) else {
-        return JsonReply::error(503, "EMP is shutting down", None).wire_response();
-    };
-    let mut status = state.backend.usage.status();
-    status["command_id"] = json!(id);
-    json_response(202, &status).wire_response()
-}
+
 fn invalid() -> JsonReply {
     JsonReply::error(400, "Invalid usage period or category", None)
 }
