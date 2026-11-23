@@ -958,7 +958,8 @@ printf '%s' "$count" > "$FAKE_HDIUTIL_COUNT"
         );
         fs::write(&executable, format!("#!/bin/sh\nset -eu\n{body}")).unwrap();
         make_executable(&executable).unwrap();
-        let mut command = Command::new(executable);
+        let mut command = Command::new("/bin/sh");
+        command.arg(executable);
         command.env("FAKE_HDIUTIL_COUNT", directory.join("count"));
         command
     }
