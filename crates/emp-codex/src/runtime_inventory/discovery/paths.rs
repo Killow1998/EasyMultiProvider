@@ -39,13 +39,13 @@ pub(super) fn runtime_file(path: &Path) -> Option<PathBuf> {
 /// Search `path_var` for a trusted `codex`. Empty and relative entries are
 /// skipped so a PATH such as `:/usr/bin` or `.:bin` never resolves against the
 /// current working directory.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(in crate::runtime_inventory) fn path_cli_in(path_var: &std::ffi::OsStr) -> Option<PathBuf> {
     let platform = RuntimePlatform::current()?;
     path_cli_in_for(path_var, platform)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) fn path_cli_in_for(path_var: &OsStr, platform: RuntimePlatform) -> Option<PathBuf> {
     let path_extensions = std::env::var_os("PATHEXT");
     let names = cli_command_names(platform, path_extensions.as_deref());

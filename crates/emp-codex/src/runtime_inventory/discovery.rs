@@ -15,7 +15,7 @@ mod tests;
 #[cfg(test)]
 use paths::app;
 pub(super) use paths::nvm_roots;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) use paths::path_cli_in;
 use paths::{apps, cli_command_names, editor, executable, nvm_installations, path_cli_candidates};
 use platform::{RuntimeOs, RuntimePlatform};
