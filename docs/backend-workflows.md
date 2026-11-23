@@ -93,6 +93,25 @@ Balance visibility follows the backend's supported metadata in both product UI
 and Shadow. `real_config.py` owns Shadow's cross-version metadata projection;
 the HTTP handler owns authentication and read-only forwarding.
 
+## History and destination context contracts
+
+Codex owns durable threads and history. Request routing reads visible history
+only when needed and never writes Codex databases or rollouts; explicit local
+history repair is a separate operation. `previous_response_id` is transport
+continuity, not permission to reconstruct history. Explicit thread identity is
+distinct from the `session-id` cache-affinity key, and WebSocket turn metadata
+comes from the current request rather than stale handshake metadata.
+
+Destination compaction preserves the active request and complete tool pairs,
+retains the newest complete history units and summarizes only older visible
+context through the selected destination. An oversized atomic unit fails
+explicitly instead of being clipped. Summary calls do not recursively prepare
+history or execute tools. The final translated payload, including tool schemas
+and output reserve, must pass Context Guard before normal generation. Context
+calibration belongs to the endpoint/deployment/model/protocol identity. Only
+explicit context failures lower its bound; network, authentication and rate-limit
+errors do not change it.
+
 ## Before / after
 
 These are responsibility diagrams, not a complete crate dependency graph.

@@ -952,6 +952,24 @@ compaction, real-provider large-context warmup, Windows/macOS and App/IDE
 acceptance remain pending. No real credentials, paid models or running user
 clients were used by these fixtures.
 
+## Request projection contracts
+
+Responses transport does not imply support for the complete Codex-native item
+dialect. Native destinations preserve compatible opaque state; portable
+destinations receive only representable controls, ordered visible text/images
+and valid tool call/result pairs. External plaintext reasoning must not become
+native encrypted reasoning state or a fabricated user message. Projection stays
+request-local and does not create an EMP transcript database.
+
+Tool identity includes namespace and name. Portable mappings must restore that
+identity across definitions, history, choices, calls and results while retaining
+call IDs for pairing. Unsupported visible content or tool semantics produce
+bounded, content-free projection errors rather than silent loss. Codex owns
+tool discovery, execution, permissions and child-task lifecycle; catalog
+visibility alone does not establish a model's coding-worker quality. See
+[capability ownership](official-model-registry-spec.md#catalog-capability-and-identity-contracts)
+and [collaboration modes](external-collaboration.md).
+
 ## Protocol decisions
 
 - **Windows loopback discovery:** the development candidate advertises

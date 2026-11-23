@@ -29,6 +29,22 @@ probe does not automatically repeat inference. The implementation is in
 `crates/emp-app/src/services/native_connections.rs` and the native continuation
 path.
 
+## Protocol negotiation and terminal results
+
+External protocol fallback requires `auto` selection, an available alternate
+adapter and a pre-output protocol rejection (404/405/415/501). An explicit
+`model_not_found` never triggers it. Authentication, permission, WAF, rate-limit,
+context, network, timeout and generic 5xx failures do not establish a different
+protocol. Same-protocol retry decisions remain separate from negotiation.
+Successful protocol observations are scoped to endpoint, deployment and model.
+
+Generation is never replayed after visible output or tool activity. Recovery of
+an existing task and requesting full input from Codex are distinct from replay.
+An upstream incomplete response or missing terminal event must not become
+`response.completed`. Output limits, content filtering and `stream_incomplete`
+retain their bounded reasons; a normal tool-call boundary is not truncation.
+Diagnostics retain lifecycle facts and error classes, without response content.
+
 ## Verification
 
 - `crates/emp-transport/tests/http_client.rs`: real loopback TCP/TLS tests for

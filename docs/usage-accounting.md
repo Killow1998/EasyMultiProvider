@@ -154,6 +154,38 @@ retaining model calls; HTTP 401/403 means
 the service Key lacks access. After enabling the endpoint, use the global
 Refresh quota in EMP to read it immediately and restore those controls.
 
+## Call outcomes and quota observations
+
+Request handlers feed terminal facts into `RequestOutcome`; activity and storage
+use `emp_state::usage::call_state`. `usage/ledger/calls.rs` stores facts and
+delivery, while its `report` module owns filtered queries, pagination and aggregates.
+Reports and shadow charts share `contracts/call-outcomes.sql`, which also
+classifies older records from stored delivery evidence without rewriting usage.
+
+| Outcome | Recorded meaning |
+|---|---|
+| `completed` | Upstream success. Delivery to Codex remains a separate fact. |
+| `failed` | Explicit failure, status or failed/incomplete response or delivery. |
+| `interrupted` | Explicit client interruption or steering. |
+| `cancelled` | Client disconnection. |
+| `recovery_required` | History resend requested through `previous_response_not_found`. |
+| `unknown` | No evidence establishing another outcome. |
+
+Request success is completed / (completed + failed); interruption, disconnect,
+history resend and unknown outcomes stay separate. It measures requests, not
+final conversation success. Native upstream wire errors remain unchanged and
+retain upstream receipt attribution even if their payload claims another source.
+
+`call-outcomes.js` owns percentages, failure groups and child dialogs;
+`call-reports.js` owns report views and queries. Child dialogs preserve parent
+filters and close independently with Escape. Legacy backends without classified
+samples display a completion ratio.
+
+Failed quota checks store phase, duration, status and categorized cause separately
+from measurements. They never create quota values; only measured points enter
+trends. Recorded failures explain gaps, while older gaps without diagnostics
+remain unexplained.
+
 ## History resend records
 
 **History resend** records an instruction to send full context, not a model failure.
@@ -211,10 +243,15 @@ add to the total.
 
 Token and USD displays use lowercase **k/m/b** for thousands, millions and
 billions; hover to see the full recorded value. This affects presentation only.
-Statistics use six ten-minute buckets for 1h, 24 hourly buckets for 1d, seven
-daily buckets for 7d and 30 daily buckets for 30d. Usage and performance charts
-read the same bucket width from the ledger; regrouping does not change recorded
-totals.
+The Statistics window shares time/service/model/session/outcome filters across
+performance and accounting. `/api/usage?series=true` uses ten-minute buckets for
+intervals up to one hour, hourly buckets up to one day, and daily buckets for
+longer intervals, without a fixed 48-bucket cap. Usage and performance charts
+share these ledger rows, totals and service/model colors. Receipt filters select
+only accounting rows linked to matching calls; unmatched history is not guessed.
+The official page defaults to bars; Settings switches to mirrored quota rings.
+Official and shadow pages share presentation modules in `crates/emp-app/web/`;
+shadow adds its read-only boundary, local drafts and demos.
 
 Statistics stream actual row-processing progress through the selected call
 records and their aggregates. Only a percentage and progress bar appear beside
@@ -381,6 +418,11 @@ markups. It does not prove that EMP changes cache hit rates versus native use.
 
 ## Local storage
 
+`crates/emp-state/src/usage/ledger.rs` owns persisted usage and report projections.
+`crates/emp-codex/src/usage_history.rs` reconciles live receipts with Codex history;
+checkpoints skip unchanged files. Account identity and compatible turn metadata
+determine whether historical and live records describe one call.
+
 `state/usage.sqlite3` and `state/api_prices.json` live beside the EMP config.
 The ledger survives restarts and does not expire with the diagnostic ring or
 15-day quota trend. It stores numeric counts, route identifiers and rates;
@@ -395,6 +437,40 @@ transactionally. The original `.codex` files are never modified. Usage is local
 installation history and is not included in `.emp` configuration exports.
 For an offline backup, exit EMP cleanly and copy the usage database and price
 cache. An older EMP build ignores these additional files on rollback.
+
+## Verification
+
+Run `scripts/shadow_frontend/e2e_request_modes.py --emp /path/to/EMP --output
+/path/to/result.json` against a candidate binary. It sends synthetic requests
+through Native, imported subscriptions, external Responses and Chat Completions,
+then opens the bilingual statistics UI. Coverage includes HTTP, SSE, Responses
+WebSocket, requested/reported speed tiers, missing usage, current-turn effort,
+Ultra versus reported `xhigh`, persisted call details, model totals and upstream
+request counts. It uses disposable credentials and loopback endpoints, with no
+real provider calls. Its requests declare client version 0.167.0; it does not
+launch or require a Codex runtime.
+
+Existing boundary contracts:
+
+- `crates/emp-state/tests/call_reports.rs`: durable details, outcome classification
+  and filtering, history-recovery linkage without duplicate usage, scan progress
+  and cancellation, tier/effort persistence and invalid historical TPS exclusion.
+- `crates/emp-state/tests/account_usage.rs`: ownership, periods/start times,
+  one-time live/history reconciliation, chart totals/source filters and historical
+  identity requiring a unique matching turn and route.
+- `crates/emp-app/src/tests/gateway_contract.rs`: device/shared-key attribution
+  and invalid report periods at the HTTP boundary.
+- `scripts/shadow_frontend/e2e_native_local_key.py`: Native credential changes
+  retain account data and late saves do not close newer dialogs.
+- Quota-store and native endpoint contracts cover failed observations, receipts
+  and unchanged wire behavior. [Shadow frontend acceptance](../scripts/shadow_frontend/README.md)
+  covers dialog lifecycle and preview isolation.
+
+Reported zero and missing usage remain distinct. Unpriced models do not become
+known zero-cost calls; partial pricing remains visible. Missing historical
+identities and prices cannot be reconstructed from token totals alone.
+Release package/startup checks complement these contracts; real provider
+acceptance requires explicit account authorization.
 
 ## References
 

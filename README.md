@@ -304,7 +304,7 @@ EMP records local operational metrics so you can see where your coding-agent usa
 
 Performance history survives EMP restarts. Missing upstream cache data is shown as unavailable rather than estimated.
 
-See [usage accounting](docs/usage-accounting.md) and [usage verification](docs/usage-verification.md).
+See [usage accounting](docs/usage-accounting.md) and its [verification contracts](docs/usage-accounting.md#verification).
 
 ### Model display and context windows
 
@@ -557,7 +557,7 @@ for subsequent updates.
 Useful technical references:
 
 - [Usage accounting](docs/usage-accounting.md)
-- [Usage verification](docs/usage-verification.md)
+- [Usage verification](docs/usage-accounting.md#verification)
 - [External collaboration compatibility](docs/external-collaboration.md)
 - [HTTP forwarding](docs/http-forwarding.md)
 - [Request limits](docs/request-limits.md)
@@ -565,6 +565,7 @@ Useful technical references:
 - [Packaging](docs/packaging.md)
 - [Diagnostic journal specification](docs/diagnostic-journal-spec.md)
 - [Sidechat history handling](docs/sidechat-history.md)
+- [Historical document index](docs/archive.md)
 - [Changelog](CHANGELOG.md)
 
 ## Notes

@@ -54,6 +54,18 @@ not mean every transition is enforced by a type.
 | M03 | [LAN sender](../crates/emp-app/src/services/migration/lan.rs), [wire](../crates/emp-app/src/services/migration/lan/wire.rs) | Waiting → receiver bound / confirmation → approval → sending → sent / failed; deadline → expired; cancel → drop sender | M. `approved` is an internal distinction while public status remains `confirmation`. Bundle ownership is consumed once. Keep this mapping documented. |
 | M04 | [LAN receive operation](../crates/emp-app/src/services/migration/lan/wire.rs) | Present proof and nonce → pending approval → receive bytes → preview; rejection/expiry → error | M. Pending approval is not a failed password. Receiver identity persists across polls. |
 
+### Durable credential formats
+
+Vault files retain `easy-multi-provider-v1\n` followed by Fernet ciphertext.
+Migration bundles retain `EMP-MIGRATION\x01\n`, the
+`easy-multi-provider-migration` envelope and a 16-byte salt. Imports accept v1
+with fixed scrypt `N=16384,r=8,p=1`; current exports use v2 with
+`N=131072,r=8,p=1`. The decrypted payload stays at version 1. Each envelope's
+KDF parameters must match its version; bundle input cannot choose the cost.
+Credentials are re-encrypted under the destination vault on import. Private
+files/directories retain Unix 0600/0700 or the restricted Windows ACL/owner
+rules, including symlink/reparse-point checks and transactional rollback.
+
 ## Requests, transports and model execution
 
 | ID | Owner | Phases / transition triggers | Representation and boundary |

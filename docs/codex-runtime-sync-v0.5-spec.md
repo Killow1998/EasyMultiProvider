@@ -24,6 +24,21 @@ offline recovery must not:
 EMP owns only its generated model catalog, its integration lease, and the
 `openai_base_url` / `model_catalog_json` fields while the lease is active.
 
+### Lease transaction and recovery
+
+After listener readiness, enable acquires the integration lock, reads TOML,
+atomically writes a `prepared` lease, applies managed fields and marks it
+`active`. Restore holds the same lock, compares current values with the lease,
+marks `restoring`, restores only owned values and marks `restored`. Unrelated
+TOML, comments and user changes survive; a newly created config is removed only
+when no unrelated content remains. Integration paths reject symlinks.
+
+Lease records retain original/applied values and recovery metadata, without
+credentials. Crash recovery compares durable file state before re-adoption;
+listener readiness remains required. Offline `doctor` and `restore` operate
+without starting the server or running Codex commands, and never report a stale
+runtime observation as fresh verification.
+
 ## 2. File state and runtime observation
 
 Saved integration files and the live backend are independent states.

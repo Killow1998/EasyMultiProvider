@@ -115,6 +115,27 @@ The registry never causes EMP to call a generation endpoint, spend model quota,
 or send user content. Updating the bundled registry is a maintainer/release
 operation, not an automatic startup network request.
 
+## Catalog capability and identity contracts
+
+Native catalog metadata remains authoritative for native routes. External entries
+inherit only reviewed coding/tool template fields, not native service tiers,
+entitlements, experimental context or collaboration-backend capabilities.
+Imported accounts do not inherit the current login's `available_access_programs`;
+absence preserves unknown access rather than asserting an empty entitlement set.
+
+Reasoning support and exact effort levels are separate facts. Generic reasoning
+support does not invent selectable levels. Unknown levels leave the catalog
+without an effort default; manual overrides survive discovery refreshes.
+Model-list compatibility alone proves neither generation protocols nor tool or
+streaming support. Quota-bearing capability probes require an explicit user test.
+
+Route identity stays separate from configurable display labels. Interactive and
+delegated requests use the same catalog route, without subagent-only aliases or
+selectable fake group headings. Optional context labels use right-aligned
+five-character fields, two spaces before the name, uppercase K/M and `?` for an
+unknown limit. Client ID encoding follows the
+[Unicode route contract](codex-compatibility.md#unicode-route-identifiers-and-websocket-2026-11-17-utc).
+
 ## Maintenance
 
 The 2026-11-13 maintenance candidate adds Gemini 4 Hydrogen from Google's
