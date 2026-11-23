@@ -1,3 +1,4 @@
+import { decompress } from 'fzstd';
 import { test as base, expect } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -40,6 +41,7 @@ async function fakeUpstream() {
     requests,
     models: ['fixture-model', 'spare-model'],
     rejectResponses: false,
+    omitUsage: false,
     gate(method, path) {
       const entered = deferred(), released = deferred();
       const gate = { method, path, entered: entered.promise, release: released.resolve,
@@ -51,7 +53,10 @@ async function fakeUpstream() {
   const server = http.createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
-    const text = Buffer.concat(chunks).toString();
+    const raw = Buffer.concat(chunks);
+    const encoding = request.headers['content-encoding'];
+    if (encoding && encoding !== 'zstd') throw new Error(`unsupported fixture request encoding: ${encoding}`);
+    const text = Buffer.from(encoding ? decompress(raw) : raw).toString();
     const body = text ? JSON.parse(text) : {};
     const path = new URL(request.url, 'http://127.0.0.1').pathname;
     const record = { number: requests.length + 1, method: request.method, path: request.url,
@@ -74,10 +79,11 @@ async function fakeUpstream() {
         status = 401;
         result = { error: { type: 'authentication_error', code: 'invalid_api_key', message: 'Fixture rejected key' } };
       } else {
-        result = { id: 'resp-fixture', object: 'response', model: body.model, status: 'completed',
+        result = { id: `resp-fixture-${record.number}`, object: 'response', model: body.model, status: 'completed',
           output: [{ id: 'msg-fixture', type: 'message', role: 'assistant', status: 'completed',
             content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] }],
           usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } };
+        if (upstream.omitUsage) delete result.usage;
         if (body.stream) {
           response.writeHead(200, { 'Content-Type': 'text/event-stream' });
           const events = [
@@ -104,6 +110,42 @@ async function fakeUpstream() {
     await new Promise(resolve => server.close(resolve));
   };
   return upstream;
+}
+
+async function fakeRelease() {
+  const release = { version: '9999.0.0', requests: [], fail: false,
+    notes: { en: 'Keep local session bills readable offline.', zh: '离线查看本机会话账单。' } };
+  const server = http.createServer((request, response) => {
+    const path = new URL(request.url, 'http://127.0.0.1').pathname;
+    release.requests.push({ method: request.method, path });
+    if (release.fail) {
+      response.writeHead(503);
+      response.end();
+    } else if (path === '/latest') {
+      response.writeHead(302, { Location: release.repositoryURL + '/api/latest' });
+      response.end();
+    } else if (path === '/api/latest') {
+      const names = ['EMP-linux-x86_64.tar.gz', 'EMP-linux-arm64.tar.gz',
+        'EMP-macos-x86_64.dmg', 'EMP-macos-arm64.dmg'];
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ tag_name: `v${release.version}`, draft: false, prerelease: false,
+        body: `## English\n- ${release.notes.en}\n\n## 中文\n- ${release.notes.zh}`,
+        assets: names.map(name => ({ name, digest: 'sha256:' + '0'.repeat(64), size: 1,
+          browser_download_url: `${release.repositoryURL}/releases/download/v${release.version}/${name}` })) }));
+    } else {
+      response.writeHead(404);
+      response.end();
+    }
+  });
+  const port = await listen(server);
+  if (port <= 4300) throw new Error('Release fixture requires a port above 4300');
+  release.repositoryURL = `http://127.0.0.1:${port}`;
+  release.apiURL = release.repositoryURL + '/latest';
+  release.stop = async () => {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  };
+  return release;
 }
 
 function isolatedEnvironment(root) {
@@ -134,11 +176,20 @@ function redact(text) {
 
 async function startEmp(binary, root, options) {
   const environment = isolatedEnvironment(root);
+  if (options.release) {
+    environment.EMP_UPDATE_TEST_REPOSITORY_URL = options.release.repositoryURL;
+    environment.EMP_UPDATE_TEST_API_URL = options.release.apiURL;
+  }
   await Promise.all(Object.entries(environment).filter(([key]) => ['HOME', 'USERPROFILE', 'CODEX_HOME',
     'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'APPDATA',
     'LOCALAPPDATA', 'TMPDIR', 'TMP', 'TEMP'].includes(key))
     .map(([, path]) => mkdir(path, { recursive: true, mode: 0o700 })));
   if (options.nativeAuth) await writeFile(join(environment.CODEX_HOME, 'auth.json'), JSON.stringify(options.nativeAuth), { mode: 0o600 });
+  if (options.nativeConfig !== undefined) await writeFile(join(environment.CODEX_HOME, 'config.toml'), options.nativeConfig, { mode: 0o600 });
+  if (options.invalidMasterKey) {
+    await mkdir(join(root, 'state'), { mode: 0o700 });
+    await writeFile(join(root, 'state/master.key'), 'invalid-fixture-key', { mode: 0o600 });
+  }
   const catalogPath = join(root, 'native-models.json');
   await writeFile(catalogPath, JSON.stringify({ models: options.catalog || [] }));
   const configPath = join(root, 'config.json');
@@ -150,12 +201,12 @@ async function startEmp(binary, root, options) {
     cwd: root, env: environment, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
   });
   const exited = deferred();
-  child.once('exit', exited.resolve);
+  child.once('exit', (code, signal) => exited.resolve({ code, signal }));
   child.once('error', exited.resolve);
   let output = '', stopped = false;
   const app = {
     root, configPath, codexHome: environment.CODEX_HOME, baseURL: `http://127.0.0.1:${port}`,
-    bootstrapURL: '', session: '',
+    bootstrapURL: '', recoveryURL: '', session: '', exited: exited.promise,
     log: () => redact(output),
     async stop() {
       if (stopped) return;
@@ -202,7 +253,8 @@ async function startEmp(binary, root, options) {
       await expect(page).toHaveURL(app.baseURL + '/');
     },
   };
-  const ready = deferred();
+  const ready = deferred(), managementReady = deferred();
+  app.waitForManagement = () => managementReady.promise;
   let listening = false;
   const lines = createInterface({ input: child.stdout });
   const append = chunk => { output = (output + chunk.toString()).slice(-32_000); };
@@ -210,9 +262,14 @@ async function startEmp(binary, root, options) {
   child.stderr.on('data', append);
   lines.on('line', line => {
     if (line === `EMP listening on ${app.baseURL}`) listening = true;
+    if (line.startsWith('Recovery page: ')) {
+      app.recoveryURL = line.slice('Recovery page: '.length).trim();
+      if (options.invalidMasterKey) ready.resolve();
+    }
     if (line.startsWith('Open in browser: ') && listening) {
       app.bootstrapURL = line.slice('Open in browser: '.length).trim();
-      ready.resolve();
+      managementReady.resolve();
+      if (!options.invalidMasterKey) ready.resolve();
     }
   });
   const startupTimer = new AbortController();
@@ -222,6 +279,9 @@ async function startEmp(binary, root, options) {
       exited.promise.then(() => { throw new Error(`EMP exited during startup\n${app.log()}`); }),
       delay(30_000, undefined, { signal: startupTimer.signal }).then(() => { throw new Error(`EMP readiness timed out\n${app.log()}`); }),
     ]);
+    if (app.recoveryURL && Number(new URL(app.recoveryURL).port) <= 4300) {
+      throw new Error('EMP recovery requires a port above 4300');
+    }
     return app;
   } catch (error) {
     await app.stop();
@@ -245,6 +305,19 @@ export const test = base.extend({
     try { await use(upstream); }
     finally { await upstream.stop(); }
   },
+  release: async ({}, use) => {
+    const release = await fakeRelease();
+    try { await use(release); }
+    finally { await release.stop(); }
+  },
+  blockExternalNetwork: [async ({ context }, use) => {
+    await context.route('**/*', route => {
+      const url = new URL(route.request().url());
+      return url.protocol === 'http:' && url.hostname === '127.0.0.1' && Number(url.port) > 4300
+        ? route.continue() : route.abort('internetdisconnected');
+    });
+    await use();
+  }, { auto: true }],
   empFactory: async ({ binary, browser }, use, testInfo) => {
     const instances = [], roots = [];
     await testInfo.attach('runtime', { body: JSON.stringify({ binary: binary.path,
