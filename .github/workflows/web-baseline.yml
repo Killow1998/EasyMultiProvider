@@ -27,8 +27,8 @@ jobs:
         with:
           shared-key: web-baseline-1.93.1
           cache-bin: false
-      - name: Build the real EMP application
-        run: cargo build --locked -p emp-app
+      - name: Build the real EMP application and official modules
+        run: cargo build --locked -p emp-app -p emp-mod-decision -p emp-mod-gateway -p emp-mod-aggregate -p emp-mod-team --bins
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: "22"
@@ -38,7 +38,7 @@ jobs:
       - name: Install Chromium
         working-directory: tests/web
         run: npx playwright install --with-deps chromium
-      - name: Run U01–U03 against shipped assets
+      - name: Run U01–U06 against shipped assets
         working-directory: tests/web
         run: npm test
       - name: Upload browser diagnostics
