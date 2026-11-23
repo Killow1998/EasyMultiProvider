@@ -1,5 +1,3 @@
-//! Catalog composition, persistence and identity.
-
 use crate::app::ServerState;
 use crate::services::accounts::account_catalog_headers;
 use emp_state::filesystem::write_catalog_json;
@@ -160,8 +158,7 @@ pub(crate) fn subscription_model(
     })
 }
 
-/// The existing refresh button publishes locally, then schedules subscription
-/// refresh. Scheduling is not evidence of background completion or client load.
+/// Publish locally, then schedule subscription refresh without claiming completion or client load.
 pub(crate) fn refresh_for_management(
     request_id: Option<&str>,
     state: &ServerState,

@@ -3,8 +3,7 @@ use serde::Serialize;
 use serde_json::{Serializer, Value, ser::Formatter};
 use std::io::{self, Write};
 
-/// The same encoding feeds wire buffers and byte counters. Callers do not need
-/// to inspect quoted strings or retain a second encoded copy.
+/// Share one encoding for wire buffers and byte counts without a second encoded copy.
 pub(crate) fn write(writer: impl Write, value: &Value) -> serde_json::Result<()> {
     value.serialize(&mut Serializer::with_formatter(writer, Spaced))
 }

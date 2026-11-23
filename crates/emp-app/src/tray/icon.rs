@@ -1,4 +1,3 @@
-//! Reuse the packaged EMP mark, keeping the native tray payload small.
 pub(super) const SIZE: u32 = 48;
 
 pub(super) fn rgba() -> Result<Vec<u8>, Box<dyn std::error::Error>> {

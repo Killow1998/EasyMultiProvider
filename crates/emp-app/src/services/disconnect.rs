@@ -1,5 +1,3 @@
-//! Request-local downstream disconnect observation for streamed proxy work.
-
 use polling::{Event, Events, Poller};
 use std::future::Future;
 use std::net::TcpStream;

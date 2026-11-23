@@ -1,5 +1,3 @@
-//! HTTP request parsing, decoding and admission.
-
 use crate::app::ServerState;
 use crate::http::auth::session_header_value;
 use emp_transport::ContentDecodeError;
@@ -144,7 +142,6 @@ pub(crate) fn read_before(
     }
 }
 
-/// Restore the idle timeout used after a request has been fully received.
 pub(crate) fn restore_read_timeout(stream: &TcpStream) {
     let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
 }

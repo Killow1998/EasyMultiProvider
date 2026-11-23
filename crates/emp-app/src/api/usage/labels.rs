@@ -1,4 +1,3 @@
-//! Resolve friendly account labels across route categories without changing usage.
 use super::*;
 
 pub(super) fn enrich(state: &ServerState, config: &Value, payload: &mut Value) {

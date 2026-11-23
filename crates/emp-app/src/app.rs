@@ -1,4 +1,3 @@
-//! Shared application service ownership.
 use crate::error::AppError;
 use crate::services::accounts::AccountState;
 use crate::services::activity::ActivityService;

@@ -1,4 +1,3 @@
-//! User-facing error summaries belong to delivery, not upstream execution or accounting.
 use crate::app::ServerState;
 use emp_core::{Dialect, ResolvedRoute};
 use serde_json::Value;

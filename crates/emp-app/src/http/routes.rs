@@ -1,5 +1,3 @@
-//! Buffered HTTP responses. Domain logic lives in services.
-
 use crate::api::catalog;
 use crate::api::inspection;
 use crate::api::integration::read_integration_request;

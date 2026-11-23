@@ -1,4 +1,3 @@
-//! Isolated CLI invocation policy; no spawning or response parsing.
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

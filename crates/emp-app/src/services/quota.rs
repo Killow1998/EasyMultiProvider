@@ -1,4 +1,3 @@
-//! Account-scoped quota refresh, reset and history operations.
 pub(crate) mod commands;
 #[cfg(all(test, unix))]
 mod locks_tests;
@@ -85,7 +84,6 @@ fn save_account_quota_state(
         .ok_or_else(|| QuotaError::new("account changed during quota refresh", "quota_error"))
 }
 
-/// Durable-save attempts for credentials Codex rotated during a quota check.
 const PERSIST_ROTATION_ATTEMPTS: u32 = 3;
 
 /// Test-only fault injection: rotated-credential saves to these auth files
@@ -110,8 +108,7 @@ fn save_rotated_credential(
     vault.write_encrypted_json(auth_path, auth).map_err(|_| ())
 }
 
-/// The stored credentials of one imported account, as quota refresh and
-/// reset both read and rotate them.
+/// Stored credentials shared by an imported account's quota refresh and reset.
 struct AccountCredentials<'a> {
     state: &'a ServerState,
     auth_file: String,
@@ -171,9 +168,7 @@ impl<'a> AccountCredentials<'a> {
         &self.state.backend.accounts.pending_rotations
     }
 
-    /// Current credential: a rotated credential whose save failed supersedes
-    /// the stored copy, whose refresh token Codex may already have
-    /// invalidated upstream.
+    /// Prefer unsaved rotated credentials: Codex may have invalidated the stored refresh token.
     fn read(&self) -> Result<Value, QuotaError> {
         let rotated = self
             .pending()
@@ -193,9 +188,8 @@ impl<'a> AccountCredentials<'a> {
             .map_err(|_| QuotaError::new("stored encrypted auth.json is invalid", "quota_error"))
     }
 
-    /// Durably save a credential Codex rotated. On failure the credential is
-    /// kept in memory: the next check uses it, and the quota sampler and
-    /// shutdown retry the save ([`flush_pending_rotations`]).
+    /// Save rotated credentials durably or retain them for the next check, with retries
+    /// by the quota sampler and shutdown via [`flush_pending_rotations`].
     fn persist(&self, refreshed: &Value) -> Result<(), ()> {
         for attempt in 0..PERSIST_ROTATION_ATTEMPTS {
             if save_rotated_credential(self.vault(), self.auth_path(), refreshed).is_ok() {
@@ -215,10 +209,8 @@ impl<'a> AccountCredentials<'a> {
     }
 }
 
-/// Retry the durable save of every rotated credential still held in memory.
-/// Each save runs under its account's refresh lock, so it cannot overwrite a
-/// newer rotation a concurrent check persisted. Credentials of accounts that
-/// are gone are dropped. Returns the number still unsaved.
+/// Retry pending saves under each account's refresh lock to avoid overwriting newer
+/// rotations; drop credentials of removed accounts and return the number still unsaved.
 pub(crate) fn flush_pending_rotations(state: &ServerState) -> usize {
     let pending_files = state
         .backend
@@ -327,9 +319,8 @@ pub(crate) fn settle_legacy_quota_history(
         .delete_account(account_id)
 }
 
-/// Run [`adopt_legacy_quota_history`] for every imported account. Accounts
-/// whose identity cannot be derived yet keep their rows until they can, or
-/// until [`settle_legacy_quota_history`] runs for them.
+/// Adopt every imported account's legacy rows, retaining rows with unknown identity
+/// until attribution succeeds or [`settle_legacy_quota_history`] runs.
 pub(crate) fn migrate_legacy_quota_history(state: &ServerState) {
     let accounts = state
         .backend

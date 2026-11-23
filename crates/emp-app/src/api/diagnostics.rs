@@ -1,4 +1,3 @@
-//! Existing diagnostic chart and typed browser event APIs.
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
 use crate::http::request::{Request, read_json_body};

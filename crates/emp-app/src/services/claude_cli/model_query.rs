@@ -1,4 +1,3 @@
-//! Model discovery through the installed CLI's initialization control response.
 use super::{local_query::with_login, process};
 use crate::app::ServerState;
 use serde_json::{Value, json};

@@ -1,5 +1,3 @@
-//! Bounded, process-local request activity for management views.
-
 use super::management_events::{Change, ManagementEvents};
 use emp_core::{ResolvedRoute, RouteSource};
 use serde_json::{Value, json};
@@ -169,8 +167,7 @@ impl ActivityService {
         }
     }
 
-    /// Return a compact public snapshot. Old finished rows are retained only
-    /// for bounded capacity management, then omitted from the snapshot.
+    /// Public snapshot omits finished rows retained only for capacity management.
     pub(crate) fn snapshot(&self, observed_at: u64) -> Value {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let routes = state

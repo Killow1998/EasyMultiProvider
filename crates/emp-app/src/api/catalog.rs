@@ -1,5 +1,3 @@
-//! Api catalog.
-
 use crate::api::failure_response::router_error_response;
 use crate::app::ServerState;
 use crate::http::auth::same_origin;

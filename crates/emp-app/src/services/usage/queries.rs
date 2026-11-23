@@ -1,4 +1,3 @@
-//! Join accounting with read-only conversation metadata before presenting a report.
 use super::UsageState;
 use emp_state::usage::ledger::{SessionBillPage, SessionScope, UsageError, UsageSeriesFilter};
 use serde_json::{Value, json};

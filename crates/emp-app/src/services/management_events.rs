@@ -1,5 +1,3 @@
-//! Coalesced management state changes, separate from command results/receipts.
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;

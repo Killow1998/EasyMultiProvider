@@ -38,9 +38,8 @@ struct PollState {
 impl CatalogRefreshState {
     pub(crate) fn request(&self, force: bool) {
         if let Ok(mut queue) = self.queue.lock() {
-            // Requests arriving during a pass join that pass. Its source
-            // snapshot is revalidated before persistence, and the next scan
-            // observes any identity change that raced the request.
+            // Arrivals join this pass; revalidate its source before persistence so the
+            // next scan observes any identity change that raced the request.
             if !queue.running || !force {
                 queue.pending = true;
                 if !queue.running {

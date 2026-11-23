@@ -1,5 +1,3 @@
-//! Destination-model compaction and portable summaries.
-
 use crate::app::ServerState;
 use crate::util::random_hex;
 use base64::Engine as _;

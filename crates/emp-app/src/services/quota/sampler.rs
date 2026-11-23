@@ -50,8 +50,7 @@ pub(crate) fn run(state: &Arc<ServerState>) {
         if !state.shutdown.load(Ordering::Acquire) {
             super::sample_quotas_once(state);
             crate::services::cpa_quota::sample_due(state);
-            // Disabled or duplicate accounts are not sampled;
-            // their rotated credentials still need saving.
+            // Disabled or duplicate accounts skip sampling but still need rotated credentials saved.
             super::flush_pending_rotations(state);
         }
     }
@@ -76,8 +75,7 @@ fn quota_sample_targets(state: &ServerState) -> Vec<String> {
     else {
         return targets;
     };
-    // Sample each upstream account once: an import of the native login or of
-    // another imported account shares its quota and history owner.
+    // Sample each upstream identity once: native/imported duplicates share quota and history.
     let duplicates = duplicate_accounts(
         &config,
         &state.backend.configuration.vault,

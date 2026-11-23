@@ -1,8 +1,6 @@
-//! In-process Windows session notifications. No helper process or later repair.
-//!
-//! Loading user32 means a console handler alone cannot receive logoff/shutdown.
-//! A hidden top-level window receives WM_ENDSESSION; a message-only window
-//! would miss the broadcast. Cleanup finishes before returning that message.
+//! With user32 loaded, logoff/shutdown requires a hidden top-level window:
+//! message-only windows miss WM_ENDSESSION, and console handlers miss logoff.
+//! Finish cleanup before returning from WM_ENDSESSION.
 use crate::app::ServerState;
 use std::io;
 use std::ptr::null_mut;

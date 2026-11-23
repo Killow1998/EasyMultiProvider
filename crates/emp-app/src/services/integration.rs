@@ -1,4 +1,3 @@
-//! Services integration.
 pub(crate) mod commands;
 pub(crate) mod enable;
 pub(crate) mod endpoint;

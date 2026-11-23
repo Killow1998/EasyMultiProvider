@@ -1,5 +1,3 @@
-//! Serve the browser application.
-
 use crate::http::auth::CLEAR_LEGACY_SESSION_COOKIE;
 use crate::http::response::response;
 
@@ -132,9 +130,8 @@ pub(crate) fn module_asset_response(
     })
 }
 
-/// Serve the UI without authentication. It contains no secrets: the script
-/// exchanges the single-use bootstrap token for a session kept in origin-scoped
-/// storage. Any cookie left by older releases is expired.
+/// Serve secret-free UI without authentication; its script exchanges a one-use bootstrap
+/// token for a session in origin-scoped storage, and responses expire legacy cookies.
 pub(crate) fn ui_response() -> Vec<u8> {
     response(
         "HTTP/1.1 200 OK",

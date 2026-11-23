@@ -1,4 +1,3 @@
-//! Util.
 pub(crate) mod spaced_json;
 
 use crate::error::AppError;

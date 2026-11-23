@@ -1,5 +1,3 @@
-//! Strict, bounded multipart parser for Codex Voice call creation.
-
 use super::{
     MAX_REALTIME_PART_BYTES, MAX_REALTIME_PART_HEADER_BYTES, MAX_REALTIME_REQUEST_BYTES,
     RealtimeCall, RealtimeError,

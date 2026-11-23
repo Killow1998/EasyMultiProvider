@@ -1,4 +1,3 @@
-//! Claude error presentation for HTTP and WebSocket callers.
 use crate::http::response::{response, status_text};
 use crate::services::claude_cli::failure_stage;
 use crate::services::claude_cli::{ClaudeCliError, failure_details};

@@ -1,4 +1,3 @@
-//! Integration HTTP adapter: authenticate, decode, execute, render.
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
 use crate::http::request::{Request, read_json_body};

@@ -1,5 +1,3 @@
-//! Error.
-
 use emp_state::ConfigError;
 use emp_state::FilesystemError;
 use emp_state::WebSessionError;

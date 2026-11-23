@@ -1,4 +1,3 @@
-//! Existing usage charts and on-demand history refresh endpoints.
 mod labels;
 pub(crate) mod lifetime;
 mod sessions;

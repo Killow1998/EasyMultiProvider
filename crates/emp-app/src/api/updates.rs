@@ -1,4 +1,3 @@
-//! Management endpoints for stable update discovery and installation.
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
 use crate::http::request::{Request, read_json_body};

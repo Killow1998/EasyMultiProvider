@@ -1,5 +1,3 @@
-//! Temporary Claude TUI per user turn; Codex owns history and tool execution.
-
 mod auth;
 mod cancellation;
 mod context;

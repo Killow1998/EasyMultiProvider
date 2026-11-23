@@ -1,5 +1,3 @@
-//! Accept and admit HTTP connections; request handling owns the admitted work.
-
 use crate::app::ServerState;
 use crate::http::connection::handle_connection;
 use std::net::TcpListener;

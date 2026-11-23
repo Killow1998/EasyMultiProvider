@@ -1,4 +1,3 @@
-//! Return free glibc heap pages between model requests.
 use crate::app::ServerState;
 use std::sync::Arc;
 use std::time::Duration;

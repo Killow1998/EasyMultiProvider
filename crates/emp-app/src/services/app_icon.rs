@@ -1,4 +1,3 @@
-//! Device appearance stays separate from provider and Codex configuration.
 mod launcher;
 mod pixels;
 use base64::{Engine, engine::general_purpose::STANDARD};

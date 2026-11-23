@@ -1,4 +1,3 @@
-//! Native upstream connection reuse, incremental ownership and HTTP fallback.
 use super::Turn;
 use super::duplex::{Duplex, Message};
 use crate::app::ServerState;
@@ -309,8 +308,7 @@ impl NativeSession {
                         .map(str::to_owned);
                 }
                 usage.observe_upstream(&event);
-                // Native WS terminal policy preserves Python's generic
-                // stream failures; only successful turns calibrate here.
+                // Only successful generated turns calibrate native WebSocket context.
                 if request_body.get("generate") != Some(&Value::Bool(false))
                     && crate::services::context::outcome(&event) == Some(true)
                 {

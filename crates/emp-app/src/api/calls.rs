@@ -1,4 +1,3 @@
-//! One authenticated report interface for call details and measured performance.
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
 use crate::http::request::{Request, query_values};

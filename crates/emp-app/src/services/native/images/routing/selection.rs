@@ -59,8 +59,7 @@ pub(super) fn automatic(
         if remaining.is_some_and(|value| value <= 0.0) {
             continue;
         }
-        // Read each balance once; a positive known balance beats unknown.
-        // Strict comparison preserves Native/account order on ties.
+        // Read balances once: known positive beats unknown, with Native/account order breaking ties.
         if best.is_none_or(|(_, current)| remaining > current) {
             best = Some((id, remaining));
         }

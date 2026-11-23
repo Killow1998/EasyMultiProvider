@@ -1,4 +1,3 @@
-//! Authenticated, isolated local control queries shared by quota and model discovery.
 use super::{Cancellation, ClaudeCliError, process, verify_local_subscription};
 use crate::app::ServerState;
 

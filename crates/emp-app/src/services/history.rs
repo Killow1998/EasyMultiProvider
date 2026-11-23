@@ -1,5 +1,3 @@
-//! History reconstruction and destination context preparation.
-
 use crate::app::ServerState;
 use crate::services::compaction::compaction_summary_body;
 use crate::services::compaction::has_trailing_compaction_trigger;

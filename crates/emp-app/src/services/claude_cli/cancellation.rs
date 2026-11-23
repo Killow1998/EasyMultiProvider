@@ -1,4 +1,3 @@
-//! Cancellation shared by the temporary TUI, control queries and upstream I/O.
 use tokio::sync::watch;
 
 pub(super) struct Cancellation {

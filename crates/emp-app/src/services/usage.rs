@@ -1,4 +1,3 @@
-//! Durable usage observations, price refresh and read-only rollout scanning.
 pub(crate) mod identities;
 mod queries;
 use crate::app::ServerState;

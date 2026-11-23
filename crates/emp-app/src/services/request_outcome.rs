@@ -1,6 +1,5 @@
-//! Upstream outcome/accounting for one routed operation. Each terminal outcome
-//! updates existing routing feedback, usage and activity exactly once. Downstream
-//! delivery belongs to the passive request receipt and cannot rewrite this result.
+//! Finalize each routed operation's feedback, usage and activity exactly once;
+//! downstream delivery receipts cannot rewrite this upstream outcome.
 use super::request_facts;
 use crate::app::ServerState;
 use emp_core::ResolvedRoute;

@@ -1,4 +1,3 @@
-//! Claude execution failures and public classification, independent of delivery.
 use emp_router::RouterError;
 
 #[derive(Debug)]

@@ -1,5 +1,3 @@
-//! Codex Voice HTTP call creation and native sideband service.
-
 use crate::http::response::{json_error_response, status_text};
 use serde_json::Value;
 use std::collections::BTreeMap;

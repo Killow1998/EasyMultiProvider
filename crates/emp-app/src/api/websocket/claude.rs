@@ -1,4 +1,3 @@
-//! Single-step Claude completion projected into downstream WebSocket events.
 use super::{Turn, TurnResult};
 use crate::app::ServerState;
 use serde_json::Value;

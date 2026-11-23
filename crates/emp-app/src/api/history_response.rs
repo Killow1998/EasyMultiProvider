@@ -1,4 +1,3 @@
-//! Render workflow failures at the HTTP/SSE/WebSocket boundary.
 use crate::api::failure_response::{route_resolution_response, router_error_response};
 use crate::http::response::response;
 use crate::services::compaction::{CompactionError, SummaryExecutionError};

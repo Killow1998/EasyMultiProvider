@@ -1,4 +1,3 @@
-//! Persistent call receipts share the existing usage database and management feed.
 use super::RequestOutcome;
 use serde_json::json;
 impl RequestOutcome<'_> {

@@ -1,4 +1,3 @@
-//! Provider discovery and selection own credentials, serialization and commits.
 use crate::app::ServerState;
 use crate::services::configuration::ChangeError;
 use crate::services::observation::operation::{OperationObservation, observe};

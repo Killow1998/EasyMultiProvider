@@ -1,4 +1,3 @@
-//! Desktop-only entry point; the service and WebUI share the same lifecycle commands.
 mod actions;
 mod copy;
 mod icon;

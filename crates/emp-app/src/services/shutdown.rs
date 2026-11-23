@@ -1,4 +1,3 @@
-//! Shutdown preparation owns update, active-work and integration constraints.
 use crate::app::ServerState;
 use crate::services::observation::operation::observe;
 use std::time::Duration;

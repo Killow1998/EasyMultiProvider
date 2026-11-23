@@ -1,4 +1,3 @@
-//! HTTP/SSE fallback and external streams delivered through the downstream WebSocket.
 use super::{Turn, TurnResult};
 use crate::api::failure_response::{
     stream_failure_value, stream_failure_value_for_route, websocket_router_error,

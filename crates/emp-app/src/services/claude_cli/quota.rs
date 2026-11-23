@@ -1,6 +1,5 @@
-//! Subscription observations from Claude Code's events and usage control query.
-//! No OAuth extraction or extra inference for quota checks. Only numeric window
-//! fields leave this module; CLI identity is kept in memory to separate logins.
+//! Observe subscription windows through Claude Code events and usage controls without OAuth extraction
+//! or extra inference; export only numeric window fields and keep login identity in memory.
 use emp_codex::quota_history::QuotaHistoryStore;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

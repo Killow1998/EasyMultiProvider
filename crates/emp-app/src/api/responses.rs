@@ -1,5 +1,3 @@
-//! Responses HTTP request orchestration.
-
 use crate::api::failure_response::request_router_error_response;
 use crate::api::failure_response::route_resolution_response;
 use crate::api::history_response::destination_error_response;

@@ -1,4 +1,3 @@
-//! Request-owned tool identities, allowed choices and unambiguous spellings.
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -36,8 +35,7 @@ pub(super) fn resolve_tool<'a>(
     if let Some(tool) = available.get(&exact) {
         return Some(tool);
     }
-    // Restore only an unambiguous spelling of an already available identity.
-    // Never invent a tool, cross kinds or override an explicitly wrong scope.
+    // Restore only unambiguous existing tool spellings within the requested kind and scope.
     let mut matches = available.iter().filter(|tool| {
         tool.kind == kind
             && (namespace.is_empty() || namespace == tool.namespace)

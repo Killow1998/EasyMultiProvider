@@ -1,4 +1,3 @@
-//! Complete integration commands. Wire adapters only authenticate, decode and render.
 use crate::app::ServerState;
 use crate::services::integration::integration_summary_with_result;
 use crate::services::observation::operation::{OperationObservation, observe};
@@ -64,8 +63,7 @@ pub(crate) fn execute(
         }
     })
     .unwrap_or_else(|reply| reply);
-    // A failed follow-up can still leave a committed configuration change.
-    // Every entry point invalidates the same WebUI snapshot after completion.
+    // Invalidate the WebUI snapshot even when follow-up fails after a config commit.
     if matches!(operation, "enable" | "restore" | "reload" | "verify") {
         state
             .backend
@@ -250,8 +248,7 @@ fn execute_inner(
     };
     receipt.check("configuration_command_succeeded", Some(result.ok()));
     if result.ok() {
-        // Record ownership before optional follow-up work can fail. If its
-        // rollback fails too, exit must still know which route to restore.
+        // Record route ownership before fallible follow-up so exit can restore after failed rollback.
         let active = result.state == "active";
         state
             .backend
@@ -290,8 +287,7 @@ fn execute_inner(
             record_runtime_result(receipt, result);
         }
         let runtime_sync_failed = runtime_sync.is_err();
-        // A native restore is already committed here. Runtime observation is
-        // secondary; keep EMP available and return the committed result.
+        // Restore is committed; a secondary runtime observation failure must leave EMP available.
         if runtime_sync_failed && operation != "restore" {
             return unavailable(409);
         }
@@ -338,8 +334,7 @@ fn summary(
     }
 }
 
-/// Called only with this command's existing, confirmed runtime observation.
-/// A previous live snapshot is not evidence that this command performed a check.
+/// Use only this command's confirmed observation; a prior live snapshot proves no new check.
 fn record_runtime_result(
     receipt: &mut OperationObservation,
     result: &emp_codex::runtime_probe::RuntimeSyncResult,

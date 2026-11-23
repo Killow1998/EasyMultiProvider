@@ -1,4 +1,3 @@
-//! CLI result validation, tool identity restoration and Codex response projection.
 use super::tools::{ToolKind, available_tools, resolve_tool};
 use crate::services::claude_cli::ClaudeCliError;
 use crate::util::random_hex;

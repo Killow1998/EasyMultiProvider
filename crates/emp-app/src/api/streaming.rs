@@ -1,5 +1,3 @@
-//! Downstream SSE delivery and cancellation.
-
 use crate::api::failure_response::pre_output_failure_response;
 use crate::api::failure_response::pre_output_router_error_response_for_route;
 use crate::api::failure_response::stream_failure_value_for_route;
@@ -243,21 +241,18 @@ pub(crate) fn serve_native_stream(
     .map(|_| ())
 }
 
-/// Native and external streams share delivery, cancellation and failure handling.
 enum RelayEvent {
     /// End of stream without a terminal event.
     Incomplete,
-    /// Downstream peer vanished mid-relay.
     Disconnected,
-    /// Upstream failure before or after output flowed.
     Failure(RouterError),
-    /// An SSE frame could not be produced for an event.
     SerializationFailure,
-    /// A decodable upstream event with its wire frame.
-    Event { frame: Vec<u8>, body: Value },
+    Event {
+        frame: Vec<u8>,
+        body: Value,
+    },
 }
 
-/// Decode the next upstream event for one relay turn.
 trait RelaySource {
     fn observation(&self) -> &emp_router::model_observation::ModelObservation;
     fn next(
@@ -320,7 +315,6 @@ impl RelaySource for ExternalRelay {
     }
 }
 
-/// Shared relay inputs that do not change per upstream flavor.
 struct RelayContext<'a> {
     downstream: ObservedSse<'a>,
     state: &'a ServerState,

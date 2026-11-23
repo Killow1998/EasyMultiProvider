@@ -288,8 +288,7 @@ const CODEX_SETTLE: Duration = Duration::from_secs(2);
 /// A Codex still on an old catalog keeps sending requests; check it at most this often.
 const CODEX_RECHECK_GAP: Duration = Duration::from_secs(30);
 
-/// Wakes the runtime watcher when Codex talks to EMP; the page hears the outcome
-/// through its event stream instead of asking on a timer.
+/// Wake the runtime watcher on Codex traffic and publish results through the page's event stream.
 #[derive(Default)]
 pub(crate) struct RuntimeWatch {
     pending: Mutex<bool>,

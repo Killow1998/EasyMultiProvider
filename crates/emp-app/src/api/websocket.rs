@@ -1,5 +1,3 @@
-//! Responses WebSocket turns and upstream connection ownership.
-
 use crate::api::failure_response::emp_websocket_error;
 use crate::api::failure_response::websocket_router_error;
 use crate::api::history_response::history_stream_error;

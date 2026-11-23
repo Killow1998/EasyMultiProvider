@@ -253,9 +253,8 @@ pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
     })
 }
 
-/// Build the Anthropic Messages view that the CLI is expected to send, for
-/// destination context assessment only. The original Responses body remains
-/// untouched and is still passed to inference and compaction.
+/// Build the expected Anthropic Messages view only for destination context assessment;
+/// inference and compaction still receive the unchanged original Responses body.
 pub(super) fn context_payload(body: &Value) -> Result<Value, &'static str> {
     let prepared = prepare(body)?;
     let content = match prepared.expected_user_content {

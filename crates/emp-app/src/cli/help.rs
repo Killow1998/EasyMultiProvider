@@ -1,4 +1,3 @@
-//! Help text follows the existing Python command surface.
 pub(super) fn text(command: Option<&str>) -> String {
     match command {
         Some("migrate-history") => "usage: EMP migrate-history --thread-id THREAD_ID [--json]\n\nMigrate one closed legacy EMP conversation for direct native Codex resume.\nKeeps a transactional backup; does not change Codex configuration or other conversations.\nOnly converts EMP-owned checkpoints; cannot decrypt native encrypted agent messages.\n".to_owned(),

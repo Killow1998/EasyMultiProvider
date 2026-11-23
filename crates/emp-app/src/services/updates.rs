@@ -1,4 +1,3 @@
-//! Update request admission and orderly application handoff.
 use emp_state::update::manager::{Snapshot, UpdateHooks, UpdateManager};
 use emp_state::update::release::UpdateEndpoints;
 use emp_state::update::{Result as UpdateResult, UpdateError};

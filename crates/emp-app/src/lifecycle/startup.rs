@@ -1,5 +1,3 @@
-//! Construct isolated state and register the service's background workers.
-
 use super::{ServerHandle, UpdateStartupMarkers, connections};
 use crate::app::{BackendState, ServerState};
 use crate::cli::is_loopback;

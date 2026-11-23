@@ -1,4 +1,3 @@
-//! Read the CPA observer's cached, caller-scoped subscription windows.
 use crate::app::ServerState;
 use emp_state::provider_api_key;
 use emp_transport::{HttpClient, HttpMethod};

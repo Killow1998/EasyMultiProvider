@@ -1,5 +1,3 @@
-//! Native credential selection and request forwarding.
-
 use crate::app::ServerState;
 use crate::services::catalog::response_catalog_etag;
 use crate::services::disconnect::DisconnectMonitor;

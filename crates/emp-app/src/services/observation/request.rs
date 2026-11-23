@@ -1,6 +1,5 @@
-//! Passive request receipts. This owner knows diagnostics, not routing, retries,
-//! account state or usage accounting. A receipt ends at the downstream boundary;
-//! model outcomes keep their existing, separate upstream/accounting boundary.
+//! Passive receipts end at the downstream boundary and cannot access routing, retries,
+//! accounts or accounting; model outcomes retain their separate upstream boundary.
 use crate::services::request_facts::reasoning_effort;
 use emp_core::ResolvedRoute;
 use emp_history::HistoryError;
@@ -197,9 +196,8 @@ impl RequestObservation {
             .event("info", "request_route_selected", &Value::Object(fields));
     }
 
-    /// Record the local failure before delivery, independently of whether the
-    /// client socket accepts the error. Never infer history failures from
-    /// arbitrary upstream JSON or normal previous-response fallback events.
+    /// Record local failure independently of socket delivery; upstream JSON and normal
+    /// previous-response fallback never establish a history failure.
     pub(crate) fn history_failed(&mut self, error: &HistoryError) {
         self.fields["error_origin"] = json!("emp");
         let diagnostic = error.diagnostic();
@@ -221,8 +219,7 @@ impl RequestObservation {
         );
     }
 
-    /// Return the original result unchanged; observation cannot change control flow.
-    /// A successful local write is not an acknowledgement from the client.
+    /// Preserve control flow and results; a successful local write is no client acknowledgement.
     pub(crate) fn written<T, E>(&mut self, result: Result<T, E>, terminal: bool) -> Result<T, E> {
         if result.is_ok() {
             let count = self.fields["writes_completed"].as_u64().unwrap_or(0);

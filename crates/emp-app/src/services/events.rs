@@ -1,5 +1,3 @@
-//! Services events.
-
 use serde_json::Value;
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]

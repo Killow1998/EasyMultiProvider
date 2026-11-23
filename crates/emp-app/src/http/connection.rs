@@ -1,5 +1,3 @@
-//! Socket lifecycle and streaming dispatch for a parsed HTTP request.
-
 use crate::api::accounts::management_account_request;
 use crate::api::catalog;
 use crate::api::compact::compact_request;

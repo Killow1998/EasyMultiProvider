@@ -128,8 +128,7 @@ fn run_with_timeout_policy(
             }
             thread::sleep(CHILD_POLL);
         }
-        // Kill the entire process group/job before joining pipes. The CLI
-        // parent may already have exited while a descendant still holds one.
+        // Kill the process group/job before joining pipes that descendants may still hold.
         tree.stop();
         let status = tree.wait().ok();
         let input_ok = input_task.join().unwrap_or(false);

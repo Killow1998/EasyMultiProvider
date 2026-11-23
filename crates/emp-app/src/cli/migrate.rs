@@ -1,7 +1,5 @@
-//! `--emp-migrate-config SOURCE TARGET`: the Linux installer moves an older
-//! configuration, its `state/` directory and the files it references into the
-//! desktop configuration directory. Anything replaced is moved into a sibling
-//! backup directory whose path is printed; any failure restores the target.
+//! Move configuration, state and referenced files to the desktop directory;
+//! replaced files go to a sibling backup whose path is printed; failures restore the target.
 use serde_json::Value;
 use std::fs;
 use std::io;

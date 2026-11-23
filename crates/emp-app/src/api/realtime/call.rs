@@ -1,5 +1,3 @@
-//! Native upstream HTTP call creation and response validation.
-
 use super::multipart::read_realtime_call_from_socket;
 use super::{
     MAX_REALTIME_RESPONSE_BYTES, REALTIME_TIMEOUT, RealtimeError, RealtimeResponse, header,

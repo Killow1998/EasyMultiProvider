@@ -1,5 +1,3 @@
-//! Authentication, admission and upstream target selection for Voice sidebands.
-
 use super::call::{incoming_headers, native_headers, safe_forwarded_headers};
 use super::{RealtimeError, valid_call_id};
 use crate::VERSION;

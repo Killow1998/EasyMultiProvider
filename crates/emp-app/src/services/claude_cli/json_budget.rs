@@ -3,8 +3,7 @@
 use serde::Serialize;
 use std::io::{self, Write};
 
-/// Account for blocks retained together in a Claude CLI input. Unlike streamed
-/// output, these blocks stay in memory until the complete input is encoded.
+/// Budget all CLI input blocks together: they remain in memory until encoding completes.
 #[derive(Debug)]
 pub(super) struct JsonByteBudget {
     remaining: usize,

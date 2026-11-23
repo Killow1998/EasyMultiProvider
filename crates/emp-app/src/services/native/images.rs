@@ -204,8 +204,7 @@ pub(crate) fn execute(
                 .image_routes
                 .observe(&route, status, &headers, value.as_ref());
             if let Some(value) = value.as_mut() {
-                // Images have no Responses ID. Correlate accounting and call
-                // receipts without changing the image body returned to Codex.
+                // Correlate image accounting and receipts without a Responses ID or image-body changes.
                 if let Some(object) = value.as_object_mut()
                     && !object.contains_key("id")
                     && let Some(id) = receipt_id

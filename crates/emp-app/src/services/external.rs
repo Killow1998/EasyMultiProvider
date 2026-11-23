@@ -1,5 +1,3 @@
-//! External Responses execution. Callers choose complete or streaming delivery;
-//! this module owns protocol selection, bounded retries and attempt accounting.
 use crate::app::ServerState;
 use crate::services::disconnect::{DisconnectMonitor, DisconnectRace, raced};
 use crate::services::observation;
@@ -61,9 +59,8 @@ pub(crate) fn complete(
     Ok(result)
 }
 
-/// An opened stream transfers completion accounting to its relay. Opening
-/// retries stop at this interface: no stream output is ever replayed here.
-/// The HTTP/WS relay owns activity through opening, delivery and cancellation.
+/// Opening retries end here; the HTTP/WS relay takes completion accounting and
+/// owns activity through opening, delivery and cancellation without replaying output.
 pub(crate) fn open_stream<'a>(
     state: &'a ServerState,
     route: &ResolvedRoute,

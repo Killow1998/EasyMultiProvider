@@ -1,4 +1,3 @@
-//! Command line entry and dispatch; desktop launch is the native package default.
 use crate::VERSION;
 use crate::error::AppError;
 use crate::lifecycle::run_server;

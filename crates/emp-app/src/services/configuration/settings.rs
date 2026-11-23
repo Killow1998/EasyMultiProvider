@@ -1,4 +1,3 @@
-//! Configuration commands used by management views.
 use super::ChangeError;
 use crate::app::ServerState;
 use crate::services::catalog::{refresh_catalog, validate_update};

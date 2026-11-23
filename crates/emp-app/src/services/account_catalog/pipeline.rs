@@ -273,10 +273,9 @@ pub(crate) fn persist_fetched_catalog(
     Ok(catalog)
 }
 
-/// Catalog discovery is not an inference authorization check. A partial
-/// response must not invalidate a previously selectable model mid-conversation.
-/// Keep its metadata only for the same account/backend; fresh entries (including
-/// explicit supported_in_api=false) always take precedence.
+/// Retain omitted models only for the same account/backend so partial discovery
+/// cannot invalidate selectable models mid-conversation; discovery is not inference
+/// authorization, and fresh entries (including supported_in_api=false) take precedence.
 fn retain_known_models(catalog: &mut Value, previous: &Value, source: &RefreshSource) -> usize {
     let matches_source = |field: &str, expected: &str| {
         previous

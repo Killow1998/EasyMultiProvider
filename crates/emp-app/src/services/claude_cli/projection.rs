@@ -60,8 +60,7 @@ pub(super) fn effort(body: &Value) -> Result<Option<&'static str>, &'static str>
     else {
         return Ok(None);
     };
-    // Responses represents an absent optional effort as either omission or
-    // JSON null. Neither requests a CLI override; the string "none" does.
+    // Omitted or null effort requests no CLI override; the string "none" does.
     if value.is_null() {
         return Ok(None);
     }

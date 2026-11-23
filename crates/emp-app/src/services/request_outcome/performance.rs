@@ -1,4 +1,3 @@
-//! Operation timing and rate definitions, independent of accounting and delivery.
 use super::RequestOutcome;
 use serde_json::{Value, json};
 

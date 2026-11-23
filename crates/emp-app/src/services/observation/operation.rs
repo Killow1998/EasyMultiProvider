@@ -1,6 +1,5 @@
-//! Passive receipts for application commands. Only diagnostics are available to
-//! this owner: it cannot access configuration, credentials, routing or workers.
-//! A completed command is distinct from its observed effects and client delivery.
+//! Passive command receipts access only diagnostics, with completion distinct from
+//! observed effects and client delivery.
 use emp_state::diagnostics::Diagnostics;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -68,8 +67,7 @@ impl OperationObservation {
         result
     }
 
-    // Fixed application vocabulary only. Never accept a request body, path,
-    // upstream error message, configuration snapshot or credential value.
+    // Fixed vocabulary only; never journal bodies, paths, upstream error text, config or credentials.
     pub(crate) fn fact(&mut self, name: &'static str, value: &'static str) {
         self.fields["facts"][name] = json!(value);
     }

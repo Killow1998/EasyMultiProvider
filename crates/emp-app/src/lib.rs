@@ -1,4 +1,3 @@
-//! EMP application composition and consumer interfaces.
 mod api;
 mod app;
 mod cli;

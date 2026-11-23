@@ -1,4 +1,3 @@
-//! Read-only management data used by existing model testing and limit displays.
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::response::{json_error_response, response, status_text};

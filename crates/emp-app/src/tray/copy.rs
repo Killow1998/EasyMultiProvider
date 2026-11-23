@@ -1,4 +1,3 @@
-//! Desktop UI copy follows the saved WebUI language.
 pub(super) struct Copy {
     pub open: &'static str,
     pub restore: &'static str,

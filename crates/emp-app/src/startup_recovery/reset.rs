@@ -46,8 +46,7 @@ pub(super) fn rebuild_with(
         ))
     });
     create_private_directory(&backup).map_err(|_| "backup_failed")?;
-    // Keep every prior attempt in the same transaction archive. A fresh attempt
-    // can finish after interruption at any move without overwriting old files.
+    // Keep all attempts in one archive so interrupted file moves never overwrite prior attempts.
     let attempt = if resuming {
         backup.join(format!("attempt-{nonce}"))
     } else {
@@ -71,8 +70,7 @@ pub(super) fn rebuild_with(
         .map_err(|_| "backup_failed")?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| "backup_failed")?;
-    // A crash between file moves must reopen recovery, not silently start
-    // from defaults beside a half-moved credential store.
+    // Interrupted file moves must reopen recovery instead of starting defaults with partial state.
     if let Some(bytes) = &previous_marker {
         write_new_private_file(&attempt.join("previous-reset.json"), bytes)
             .map_err(|_| "prepare_failed")?;

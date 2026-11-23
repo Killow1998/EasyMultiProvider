@@ -1,4 +1,3 @@
-//! StatusNotifierItem + D-Bus menu; no GTK or terminal process is needed.
 use super::{Action, Snapshot, icon};
 use ksni::blocking::TrayMethods;
 use std::sync::mpsc::SyncSender;

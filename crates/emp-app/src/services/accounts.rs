@@ -1,4 +1,3 @@
-//! Account credentials, persistence and public snapshots.
 use emp_codex::quota_history::QuotaHistoryStore;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
@@ -235,9 +234,8 @@ pub(crate) struct AccountState {
     pub(crate) quota_history: QuotaHistoryStore,
     pub(crate) quota_sampler_wait: Mutex<()>,
     pub(crate) quota_sampler_condition: Condvar,
-    /// Rotated credentials whose durable save failed, keyed by encrypted
-    /// auth file. Codex may already have invalidated the stored refresh token,
-    /// so the next quota check uses (and re-saves) this copy instead.
+    /// Pending rotated credentials keyed by encrypted auth file; quota checks reuse
+    /// and re-save them because Codex may have invalidated the stored refresh token.
     pub(crate) pending_rotations: Mutex<BTreeMap<String, Value>>,
     /// Quota checks and resets that may rotate a credential upstream.
     /// Shutdown closes it and waits for them before the final save.
@@ -266,9 +264,8 @@ impl CredentialOperationGate {
         Some(CredentialOperation(self))
     }
 
-    /// Refuse new operations and wait up to `timeout` for running ones.
-    /// Returns how many are still running: a credential one of them rotated
-    /// may never be saved.
+    /// Refuse new operations, wait up to `timeout`, and return the number still running,
+    /// whose rotated credentials may remain unsaved.
     pub(crate) fn close_and_drain(&self, timeout: std::time::Duration) -> usize {
         let Ok(mut state) = self.state.lock() else {
             return 0;
@@ -344,8 +341,7 @@ pub(crate) fn quota_owner_key(state: &ServerState, account_id: &str) -> Result<S
     quota_owner_key_in(state, &config, account_id)
 }
 
-/// [`quota_owner_key`] against `config`, for callers already holding the
-/// configuration lock.
+/// [`quota_owner_key`] for callers already holding the configuration lock.
 pub(crate) fn quota_owner_key_in(
     state: &ServerState,
     config: &Value,

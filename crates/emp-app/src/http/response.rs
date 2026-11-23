@@ -1,12 +1,9 @@
-//! Wire response framing and public HTTP errors.
-
 use crate::http::request::BodyError;
 use emp_transport::ContentDecodeError;
 use emp_transport::RequestCapacityError;
 use serde_json::Value;
 use std::io::Write;
 
-/// Exact compact JSON body observed in the Python server tests.
 pub const HEALTH_JSON_BYTES: &[u8] = b"{\"status\":\"ok\"}";
 
 /// Framing and sniffing protections sent with every framed response.

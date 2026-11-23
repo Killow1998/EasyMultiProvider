@@ -1,4 +1,3 @@
-//! Services providers.
 use crate::app::ServerState;
 use emp_core::ResolvedRoute;
 use emp_state::VaultStore;

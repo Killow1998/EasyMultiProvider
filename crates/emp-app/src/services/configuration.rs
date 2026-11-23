@@ -1,5 +1,4 @@
-//! Serialized configuration ownership. Readers cannot publish in-memory edits;
-//! writers publish only after their durable transaction and reload succeed.
+//! Readers cannot publish edits; serialize writes and publish only after durable transactions and reloads succeed.
 
 use emp_state::{
     ConfigError, FileTransaction, VaultStore, load_configuration,

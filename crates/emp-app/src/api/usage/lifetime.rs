@@ -1,4 +1,3 @@
-//! Owner-scoped lifetime aggregates streamed to service details.
 use super::*;
 use crate::services::events::sse_frame;
 use std::io::Write;

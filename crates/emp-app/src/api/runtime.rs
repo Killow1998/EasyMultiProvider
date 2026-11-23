@@ -1,4 +1,3 @@
-//! Rescanning installed Codex runtimes, separate from shared runtime state.
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
 use crate::http::request::{Request, read_json_body};

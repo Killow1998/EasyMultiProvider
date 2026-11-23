@@ -1,4 +1,3 @@
-//! Page main-conversation bills using reconciled usage and local ownership metadata.
 use super::*;
 use emp_state::usage::ledger::SessionBillPage;
 

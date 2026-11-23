@@ -1,5 +1,3 @@
-//! Local management sessions and proxy caller authentication.
-
 use crate::app::ServerState;
 use crate::http::request::Request;
 use base64::Engine as _;
@@ -92,9 +90,8 @@ impl SessionStore {
     /// browser login receives a fresh token and earlier ones stop working.
     pub(crate) fn rotate(&self, now: f64) -> Option<(String, u64)> {
         let mut session = self.session.lock().ok()?;
-        // Keep the previous session aside until the new one is persisted, so
-        // a failed rotation (disk full, permissions) leaves existing browsers
-        // signed in instead of deleting the only valid session.
+        // Persist the new session before discarding the old one so failed rotations
+        // leave existing browser logins valid.
         let backup = self.path.with_extension("rotating");
         let had_previous = match std::fs::rename(&self.path, &backup) {
             Ok(()) => true,
