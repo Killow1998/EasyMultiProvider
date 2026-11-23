@@ -113,6 +113,14 @@ to implement. File length is a navigation signal, not a measure of module depth.
 | `emp-state` | Configuration, vault, transactions, plus update/usage/diagnostic subsystems | Narrow application access first; do not create new crates merely to redistribute files |
 | `emp-app` | Composition, HTTP/UI, request orchestration and mutable services | Primary refactoring target |
 
+The daily LiteLLM snapshot has two readers within `emp-state`.
+[`pricing/catalog.rs`](../crates/emp-state/src/usage/pricing/catalog.rs) extracts model
+capabilities. [`pricing/rates.rs`](../crates/emp-state/src/usage/pricing/rates.rs)
+matches model prices and calculates costs. [`pricing.rs`](../crates/emp-state/src/usage/pricing.rs)
+persists the snapshot and tracks its revision for repricing.
+Live discovery and catalog imports share the [modality parser](../crates/emp-state/src/model_values.rs).
+It distinguishes a missing or invalid list from an explicit text-only declaration.
+
 No library crate depends on `emp-app`. The principal layering leaks are inside
 the application, where most modules can access the complete `ServerState`.
 

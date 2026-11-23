@@ -3,7 +3,15 @@
 use super::*;
 use serde_json::json;
 
-pub(crate) fn request(chat: &Value) -> Result<Value, RouterError> {
+#[cfg(test)]
+pub(super) fn request(chat: &Value) -> Result<Value, RouterError> {
+    request_for_model(chat, None)
+}
+
+pub(crate) fn request_for_model(
+    chat: &Value,
+    capabilities: Option<&Map<String, Value>>,
+) -> Result<Value, RouterError> {
     let mut contents = Vec::new();
     let mut system = Vec::new();
     let mut names = HashMap::new();
@@ -128,27 +136,37 @@ pub(crate) fn request(chat: &Value) -> Result<Value, RouterError> {
         }
         _ => {}
     }
+    let model = chat["model"].as_str().unwrap_or_default();
+    let model = model.strip_prefix("google/").unwrap_or(model);
     if let Some(effort) = chat["reasoning_effort"].as_str() {
-        let level = match effort {
-            "minimal" | "low" => "LOW",
-            "medium" => "MEDIUM",
-            "xhigh"
-                if chat["model"].as_str().is_some_and(|model| {
-                    model.strip_prefix("google/").unwrap_or(model) == "gemini-4-hydrogen"
-                }) =>
-            {
-                "XHIGH"
-            }
-            "high" | "xhigh" => "HIGH",
-            _ => "",
+        let declared = capabilities
+            .and_then(|model| model.get("reasoning_levels"))
+            .and_then(Value::as_array)
+            .filter(|levels| !levels.is_empty());
+        let official = if declared.is_none() {
+            emp_state::official_registry::published_reasoning_levels("google_gemini", model)
+        } else {
+            None
         };
-        if !level.is_empty()
-            && chat["model"]
-                .as_str()
-                .is_some_and(|model| model.contains("gemini-3") || model.contains("gemini-4"))
-        {
-            request["generationConfig"]["thinkingConfig"] =
-                json!({"thinkingLevel":level,"includeThoughts":true});
+        let levels = declared
+            .or_else(|| official.as_ref().and_then(Value::as_array))
+            .or_else(|| {
+                capabilities
+                    .and_then(|model| model.get("catalog_efforts"))
+                    .and_then(Value::as_array)
+            });
+        if let Some(levels) = levels {
+            let supports = |level: &str| levels.iter().any(|v| v == level);
+            let selected = match effort {
+                "minimal" if !supports("minimal") && supports("low") => Some("low"),
+                "xhigh" if !supports("xhigh") && supports("high") => Some("high"),
+                "minimal" | "low" | "medium" | "high" | "xhigh" if supports(effort) => Some(effort),
+                _ => None,
+            };
+            if let Some(level) = selected {
+                request["generationConfig"]["thinkingConfig"] =
+                    json!({"thinkingLevel":level.to_ascii_uppercase(),"includeThoughts":true});
+            }
         }
     }
     Ok(request)
@@ -276,7 +294,7 @@ impl Stream {
         {
             self.finished = true;
             let finish = match reason {
-                "MAX_TOKENS" => "length",
+                "MAX_TOKENS" | "CONTINUATION" => "length",
                 "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" => "content_filter",
                 "STOP" if self.calls > 0 => "tool_calls",
                 "STOP" => "stop",

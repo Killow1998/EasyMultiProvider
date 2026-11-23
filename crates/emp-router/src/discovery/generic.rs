@@ -65,12 +65,7 @@ pub fn project_generic_models(value: &Map<String, Value>) -> Result<Vec<Value>, 
     let mut result = Vec::new();
     for item in items {
         if result.len() >= MAX_DISCOVERED_MODELS {
-            return Err(discovery_error(
-                RouterErrorKind::Protocol,
-                502,
-                FailureClass::ProtocolError,
-                "provider model list exceeded its limit",
-            ));
+            return Err(model_count_error());
         }
         let Some(item) = item.as_object() else {
             continue;
@@ -82,11 +77,7 @@ pub fn project_generic_models(value: &Map<String, Value>) -> Result<Vec<Value>, 
             item,
             &["context_window", "context_length", "inputTokenLimit"],
         ));
-        let architecture = item
-            .get("architecture")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+        let architecture = item.get("architecture");
         let mut flag_modalities = vec![json!("text")];
         let mut has_modality_flags = false;
         for (field, modality) in [
@@ -103,14 +94,16 @@ pub fn project_generic_models(value: &Map<String, Value>) -> Result<Vec<Value>, 
         let flag_modalities = has_modality_flags.then_some(Value::Array(flag_modalities));
         let raw_input = non_null(item.get("input_modalities"))
             .or_else(|| non_null(item.get("inputModalities")))
-            .or_else(|| non_null(architecture.get("input_modalities")))
+            .or_else(|| non_null(architecture.and_then(|value| value.get("input_modalities"))))
             .or(flag_modalities.as_ref());
         let raw_output = non_null(item.get("output_modalities"))
             .or_else(|| non_null(item.get("outputModalities")))
-            .or_else(|| architecture.get("output_modalities"));
+            .or_else(|| architecture.and_then(|value| value.get("output_modalities")));
+        let (input_modalities, input_source) = discovered_modalities(raw_input);
+        let (output_modalities, output_source) = discovered_modalities(raw_output);
         let raw_image_detail = item
             .get("supports_image_detail_original")
-            .or_else(|| architecture.get("supports_image_detail_original"));
+            .or_else(|| architecture.and_then(|value| value.get("supports_image_detail_original")));
         let supports_image_detail = raw_image_detail.and_then(Value::as_bool).unwrap_or(false);
         let (supports_reasoning, reasoning_levels) = advertised_reasoning(item);
         let supports_summaries = advertised_reasoning_summaries(item);
@@ -120,7 +113,7 @@ pub fn project_generic_models(value: &Map<String, Value>) -> Result<Vec<Value>, 
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
-            .map(|value| python_trim(value).to_lowercase())
+            .map(|value| trim_model_field(value).to_lowercase())
             .collect::<BTreeSet<_>>();
         let mut capabilities = Map::new();
         let mut extra_sources = Map::new();
@@ -141,7 +134,7 @@ pub fn project_generic_models(value: &Map<String, Value>) -> Result<Vec<Value>, 
             capabilities.insert("streaming".to_owned(), Value::Bool(streaming));
             extra_sources.insert("streaming".to_owned(), source("advertised"));
         }
-        let output_limit = ["output_limit", "max_tokens", "max_output_tokens"]
+        let output_limit = ["output_limit", "max_output_tokens", "max_tokens"]
             .into_iter()
             .find_map(|field| {
                 let value = positive_int(item.get(field));
@@ -153,74 +146,42 @@ pub fn project_generic_models(value: &Map<String, Value>) -> Result<Vec<Value>, 
                     .map(|provider| positive_int(provider.get("max_completion_tokens")))
                     .unwrap_or(0)
             });
-        let max_input = positive_int(item.get("max_input_tokens"));
+        let max_input = positive_int(first_truthy(item, &["max_input_tokens", "inputTokenLimit"]));
         let display_value = first_truthy(item, &["display_name", "name"]);
         let display_name = model_text(display_value, &model_id)?;
         let description = model_text(item.get("description"), "")?;
-        let input_modalities = normalize_input_modalities(raw_input);
-        let output_modalities = normalize_output_modalities(raw_output);
+
         let mut capability_sources = Map::from_iter([
             (
                 "supports_reasoning".to_owned(),
-                source(if supports_reasoning.is_some() {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
+                declared_source(supports_reasoning.is_some()),
             ),
             (
                 "supports_reasoning_summaries".to_owned(),
-                source(if supports_summaries.is_some() {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
+                declared_source(supports_summaries.is_some()),
             ),
             (
                 "reasoning_levels".to_owned(),
-                source(if reasoning_levels.is_empty() {
-                    "unknown"
-                } else {
-                    "advertised"
-                }),
+                declared_source(!reasoning_levels.is_empty()),
             ),
-            (
-                "input_modalities".to_owned(),
-                source(input_modalities_metadata_source(raw_input)),
-            ),
-            (
-                "output_modalities".to_owned(),
-                source(output_modalities_metadata_source(raw_output)),
-            ),
+            ("input_modalities".to_owned(), input_source),
+            ("output_modalities".to_owned(), output_source),
             (
                 "supports_image_detail_original".to_owned(),
-                source(if raw_image_detail.is_some_and(Value::is_boolean) {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
+                declared_source(raw_image_detail.is_some_and(Value::is_boolean)),
             ),
-            (
-                "context_window".to_owned(),
-                source(if context > 0 { "advertised" } else { "unknown" }),
-            ),
+            ("context_window".to_owned(), declared_source(context > 0)),
             (
                 "max_input_tokens".to_owned(),
-                source(if max_input > 0 {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
+                declared_source(max_input > 0),
             ),
-            (
-                "output_limit".to_owned(),
-                source(if output_limit > 0 {
-                    "advertised"
-                } else {
-                    "unknown"
-                }),
-            ),
+            ("output_limit".to_owned(), declared_source(output_limit > 0)),
         ]);
+        if context > 0
+            && positive_int(first_truthy(item, &["context_window", "context_length"])) == 0
+        {
+            capability_sources.get_mut("context_window").unwrap()["input_only"] = true.into();
+        }
         capability_sources.extend(extra_sources);
         let mut entry = json!({
             "upstream_id": model_id,

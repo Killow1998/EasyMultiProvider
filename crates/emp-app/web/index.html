@@ -296,7 +296,7 @@ const accountDetails = createAccountDetails({renderInfo:renderAccountInfo,getSta
 const {open:openAccountDetails, saveAlias:saveAccountAlias} = accountDetails;
 const {open:openServiceChooser} = createServiceChooser({tr, esc, presets:officialProviders, icon:serviceIconHtml, openModal, getState:() => state});
 
-const confirmedCapabilitySources = new Set(['manual','observed','advertised','official']);
+const confirmedCapabilitySources = new Set(['manual','observed','advertised','official','catalog']);
 function confirmedField(model, field) {
   const source = model?.capability_sources?.[field]?.source;
   if (!confirmedCapabilitySources.has(source)) return null;
@@ -326,6 +326,10 @@ function capabilitySummary(model) {
   }
   const outputs = Array.isArray(confirmedField(model, 'output_modalities')) ? confirmedField(model, 'output_modalities') : [];
   if (outputs.length) parts.push(tr("core.output") + outputs.map(modalityLabel).map(esc).join('/'));
+  const levels = confirmedField(model, 'reasoning_levels');
+  if (Array.isArray(levels) && levels.length) parts.push(esc(tr('models.thinking_levels', {levels:levels.join(' / ')})));
+  else if (confirmedField(model, 'supports_reasoning') !== false && model.catalog_efforts?.length) parts.push(esc(tr('models.reported_thinking_levels', {levels:model.catalog_efforts.join(' / ')})));
+  else if (confirmedField(model, 'supports_reasoning') === true) parts.push(esc(tr('models.thinking_supported')));
   const protocols = Array.isArray(confirmedField(model, 'supported_protocols')) ? confirmedField(model, 'supported_protocols') : [];
   if (protocols.length) parts.push(protocols.map(protocolLabel).map(esc).join('/'));
   return parts.join(' · ');
@@ -1166,7 +1170,7 @@ function openModal(title, body, submitLabel, submit, serviceContext = null, navi
 }
 function closeModal() { migration.stop(); servicePresentation.hide(); stopModalFeatures(); modalNavigation = {}; $('modal_back').onclick = null; $('modal_back').hidden = true; $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; if(modalOpener?.isConnected)modalOpener.focus({preventScroll:true}); modalOpener=null; }
 
-const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,releaseHistoryText,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW),reload:()=>window.location.reload()});
+const updates=createUpdates({api,$,tr,t,esc,openModal,notice,getLanguage:()=>language,releaseHistoryText,showNotes:renderReleaseNotes,visible:()=>document.visibilityState!=='hidden',openLink:url=>window.open(url,'_blank','noopener'),copyText:text=>navigator.clipboard.writeText(text),isPreview:()=>Boolean(window.EMP_PREVIEW),reload:()=>window.location.reload()});
 const {open:openUpdate,stop:stopUpdatePoll,request:requestUpdate,render:renderUpdate,hint:renderUpdateHint,checkHint:checkUpdateHint,openRelease:openLatestRelease,copyCommands:copyLinuxMigrationCommands}=updates;
 function finishQuit() {
   if (management.isStopped()) return;

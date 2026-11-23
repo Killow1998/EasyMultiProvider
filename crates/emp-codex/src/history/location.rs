@@ -1,10 +1,9 @@
 //! Database lookup, ancestor resolution and containment before opening rollouts.
 use super::records::{locate, session_meta_history_mode, session_meta_id};
 use super::source::{read_history_base, read_session_meta};
-use super::{CodexHomeHistoryReader, MAX_LINEAGE_SEGMENTS};
+use super::{CodexHomeHistoryReader, MAX_LINEAGE_SEGMENTS, uuid_shape};
 use emp_history::HistoryError;
 use std::collections::BTreeSet;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -29,6 +28,30 @@ pub(super) struct LineageSegment {
     pub(super) byte_offset: u64,
 }
 
+// Codex may rotate a thread's physical rollout without changing its session ID.
+// A history_base identifies the physical segment, while session_meta.id names its owner.
+fn rollout_ids(path: &Path) -> Option<(&str, &str)> {
+    let name = path.file_name()?.to_str()?;
+    let stem = name
+        .strip_suffix(".jsonl.zst")
+        .or_else(|| name.strip_suffix(".jsonl"))?;
+    let (stem, generation) = match stem.rsplit_once('_') {
+        Some((stem, generation)) if uuid_shape(generation) => (stem, Some(generation)),
+        _ => (stem, None),
+    };
+    let (prefix, thread) = stem.split_at_checked(stem.len().checked_sub(36)?)?;
+    if !uuid_shape(thread)
+        || !(prefix.is_empty()
+            || prefix
+                .strip_prefix("rollout-")?
+                .strip_suffix('-')
+                .is_some_and(|timestamp| !timestamp.is_empty()))
+    {
+        return None;
+    }
+    Some((thread, generation.unwrap_or(thread)))
+}
+
 impl CodexHomeHistoryReader {
     /// Resolve the lineage segments for a paginated rollout, child last.
     ///
@@ -39,20 +62,21 @@ impl CodexHomeHistoryReader {
     pub(super) fn lineage_segments(
         &self,
         database: &Path,
-        path: &Path,
+        location: Location,
         thread: &str,
     ) -> Result<Vec<LineageSegment>, HistoryError> {
-        let location = locate(database, thread)?;
+        let path = self.contained_rollout_path(&location.path)?;
+        let mut visited =
+            BTreeSet::from([rollout_ids(&path).map_or(thread, |(_, id)| id).to_owned()]);
+        let mut next_base = read_history_base(&path)?;
         let mut segments = vec![LineageSegment {
             thread: thread.to_owned(),
             location,
             bound: None,
             byte_offset: 0,
         }];
-        let mut visited = vec![thread.to_owned()];
-        let mut next_base = read_history_base(&self.contained_rollout_path(path)?)?;
         while let Some(base) = next_base {
-            if visited.contains(&base.thread_id) {
+            if !visited.insert(base.thread_id.clone()) {
                 return Err(HistoryError::new("lineage_cycle"));
             }
             if segments.len() >= MAX_LINEAGE_SEGMENTS {
@@ -61,11 +85,10 @@ impl CodexHomeHistoryReader {
             let parent_id = base.thread_id;
             let bound = base.end_ordinal_exclusive;
             let byte_offset = base.end_byte_offset;
-            visited.push(parent_id.clone());
-            let parent_location = self.locate_parent(database, &parent_id)?;
+            let (owner, parent_location) = self.locate_parent(database, &parent_id)?;
             next_base = read_history_base(&parent_location.path)?;
             segments.push(LineageSegment {
-                thread: parent_id,
+                thread: owner,
                 location: parent_location,
                 bound: Some(bound),
                 byte_offset,
@@ -78,22 +101,26 @@ impl CodexHomeHistoryReader {
 
     /// Resolve a lineage ancestor either through the threads database or by
     /// scanning the sessions tree for the rollout file name.
-    fn locate_parent(&self, database: &Path, rollout_id: &str) -> Result<Location, HistoryError> {
+    fn locate_parent(
+        &self,
+        database: &Path,
+        rollout_id: &str,
+    ) -> Result<(String, Location), HistoryError> {
         let roots = self.canonical_session_roots()?;
         match locate(database, rollout_id) {
             Ok(location) => {
-                if self.is_under_session_root(&location.path, &roots) {
-                    return Ok(location);
+                if !self.is_under_session_root(&location.path, &roots) {
+                    return Err(HistoryError::new("rollout_outside_session_root"));
                 }
-                return Err(HistoryError::new("rollout_outside_session_root"));
+                // threads.rollout_path follows the newest generation, even when
+                // the requested history_base names the original rollout.
+                if rollout_ids(&location.path).is_none_or(|(_, id)| id == rollout_id) {
+                    return Ok((rollout_id.to_owned(), location));
+                }
             }
             Err(error) if error.reason() != "thread_missing" => return Err(error),
             Err(_) => {}
         }
-        let expected = [
-            format!("{rollout_id}.jsonl"),
-            format!("{rollout_id}.jsonl.zst"),
-        ];
         let mut found = BTreeSet::new();
         for root in &roots {
             let mut stack = vec![(root.clone(), 0usize)];
@@ -125,10 +152,7 @@ impl CodexHomeHistoryReader {
                         continue;
                     }
                     if file_type.is_file()
-                        && path
-                            .file_name()
-                            .and_then(OsStr::to_str)
-                            .is_some_and(|name| expected.iter().any(|candidate| candidate == name))
+                        && rollout_ids(&path).is_some_and(|(_, id)| id == rollout_id)
                         && let Ok(canonical) = path.canonicalize()
                         && canonical.starts_with(root)
                     {
@@ -145,16 +169,19 @@ impl CodexHomeHistoryReader {
                     .ok_or_else(|| HistoryError::new("session_meta_missing"))?;
                 let id = session_meta_id(&meta)
                     .ok_or_else(|| HistoryError::new("session_meta_missing"))?;
-                if id != rollout_id {
+                if rollout_ids(&path).is_none_or(|(owner, _)| owner != id) {
                     return Err(HistoryError::new("thread_mismatch"));
                 }
                 let mode =
                     session_meta_history_mode(&meta)?.unwrap_or_else(|| "paginated".to_owned());
-                Ok(Location {
-                    path,
-                    mode,
-                    source_model: None,
-                })
+                Ok((
+                    id,
+                    Location {
+                        path,
+                        mode,
+                        source_model: None,
+                    },
+                ))
             }
             _ => Err(HistoryError::new("lineage_source_ambiguous")),
         }

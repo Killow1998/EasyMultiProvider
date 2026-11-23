@@ -1,5 +1,6 @@
 //! Codex account normalization discards unknown metadata and retains opaque quota objects.
 
+use emp_core::json_truthy;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -127,18 +128,6 @@ fn python_trim(value: &str) -> &str {
                 | '\u{1c}'..='\u{1f}'
         )
     })
-}
-
-fn json_truthy(value: &Value) -> bool {
-    if matches!(value, Value::Bool(false) | Value::Null) {
-        return false;
-    }
-    if let Value::Number(number) = value {
-        return number.as_f64() != Some(0.0);
-    }
-    !matches!(value, Value::String(value) if value.is_empty())
-        && !matches!(value, Value::Array(values) if values.is_empty())
-        && !matches!(value, Value::Object(values) if values.is_empty())
 }
 
 fn auth_file(raw: Option<&Value>) -> AccountResult<String> {

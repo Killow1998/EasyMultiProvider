@@ -21,36 +21,12 @@ pub fn is_concrete_reasoning_effort(value: &str) -> bool {
 }
 
 /// Apply Python `str.strip()` semantics, including the four C0 file separators.
-fn python_trim(value: &str) -> &str {
-    value.trim_matches(|character: char| {
-        matches!(
-            character,
-            '\t'
-                | '\n'
-                | '\u{b}'
-                | '\u{c}'
-                | '\r'
-                | ' '
-                | '\u{85}'
-                | '\u{a0}'
-                | '\u{1680}'
-                | '\u{2000}'..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{1c}'..='\u{1f}'
-        )
-    })
-}
-
-fn python_lower(value: &str) -> String {
-    value.to_lowercase()
+pub fn trim_model_field(value: &str) -> &str {
+    value.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
 }
 
 fn modality_identifier(item: &str) -> Option<String> {
-    let identifier = python_lower(python_trim(item));
+    let identifier = trim_model_field(item).to_lowercase();
     if identifier.is_empty() || identifier.len() > MAX_MODALITY_ID_BYTES {
         return None;
     }
@@ -64,9 +40,8 @@ fn modality_identifier(item: &str) -> Option<String> {
     if valid { Some(identifier) } else { None }
 }
 
-fn parse_modalities(value: Option<&Value>) -> Option<Vec<String>> {
-    let value = value?;
-    let Value::Array(items) = value else {
+pub fn parse_modalities(value: Option<&Value>) -> Option<Vec<String>> {
+    let Value::Array(items) = value? else {
         return None;
     };
     if items.is_empty() || items.len() > MAX_MODALITIES {
@@ -82,11 +57,7 @@ fn parse_modalities(value: Option<&Value>) -> Option<Vec<String>> {
             result.push(identifier);
         }
     }
-    if result.is_empty() {
-        None
-    } else {
-        Some(result)
-    }
+    Some(result)
 }
 
 /// Normalize bounded modality identifiers, falling back to `["text"]`.
@@ -123,24 +94,9 @@ pub fn codex_input_modalities(value: Option<&Value>) -> Vec<String> {
     }
 }
 
-/// Normalize bounded output modality identifiers, falling back to `["text"]`.
-pub fn normalize_output_modalities(value: Option<&Value>) -> Vec<String> {
-    parse_modalities(value).unwrap_or_else(|| vec![TEXT_MODALITY.to_owned()])
-}
-
-/// Return whether a discovery payload contains a valid output modality list.
-pub fn output_modalities_known(value: Option<&Value>) -> bool {
-    parse_modalities(value).is_some()
-}
-
-/// Classify a valid output list as advertised and all other input as unknown.
-pub fn output_modalities_metadata_source(value: Option<&Value>) -> &'static str {
-    if output_modalities_known(value) {
-        "advertised"
-    } else {
-        "unknown"
-    }
-}
+pub use input_modalities_known as output_modalities_known;
+pub use input_modalities_metadata_source as output_modalities_metadata_source;
+pub use normalize_input_modalities as normalize_output_modalities;
 
 /// Normalize unique known protocol values, excluding `auto`.
 pub fn normalize_supported_protocols(value: Option<&Value>) -> Vec<String> {
@@ -152,7 +108,7 @@ pub fn normalize_supported_protocols(value: Option<&Value>) -> Vec<String> {
         let Value::String(item) = item else {
             continue;
         };
-        let protocol = python_lower(python_trim(item));
+        let protocol = trim_model_field(item).to_lowercase();
         if KNOWN_CONCRETE_PROTOCOLS.contains(&protocol.as_str()) && !result.contains(&protocol) {
             result.push(protocol);
         }
@@ -175,11 +131,11 @@ pub fn normalize_reasoning_levels(value: Option<&Value>) -> Vec<String> {
         let Value::String(item) = item else {
             continue;
         };
-        let trimmed = python_trim(item);
+        let trimmed = trim_model_field(item);
         if trimmed.is_empty() {
             continue;
         }
-        let lowered = python_lower(trimmed);
+        let lowered = trimmed.to_lowercase();
         let effort = if REASONING_EFFORT_ORDER.contains(&lowered.as_str()) {
             lowered
         } else {

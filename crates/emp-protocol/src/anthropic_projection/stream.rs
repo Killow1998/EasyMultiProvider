@@ -1,7 +1,7 @@
 //! Anthropic SSE stream state and event synthesis.
 
 use super::response::{anthropic_usage, incomplete_reason};
-use super::{AnthropicError, python_truthy, stream_error, upstream_error};
+use super::{AnthropicError, stream_error, upstream_error};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -174,7 +174,7 @@ impl AnthropicStream {
                     .get("delta")
                     .and_then(Value::as_object)
                     .and_then(|delta| delta.get("stop_reason"))
-                    .filter(|reason| python_truthy(Some(reason)))
+                    .filter(|reason| crate::json_truthy(reason))
                 {
                     self.stop_reason = Some(reason.clone());
                 }

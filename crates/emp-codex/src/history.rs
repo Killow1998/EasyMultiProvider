@@ -100,7 +100,7 @@ impl CodexHomeHistoryReader {
         // vector (ancestors drop out), while an opaque child compaction
         // resolves against the merged pre-compaction history exactly as the
         // full scan would.
-        let segments = self.lineage_segments(&database, &location.path, thread)?;
+        let segments = self.lineage_segments(&database, location, thread)?;
         let mut visible = Vec::<VisibleItem>::new();
         let mut source_model = None;
         for (position, segment) in segments.iter().enumerate() {

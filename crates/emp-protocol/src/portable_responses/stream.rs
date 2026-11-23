@@ -3,23 +3,13 @@
 use super::response::project_response;
 use super::response::{custom_tool_ids, custom_tool_input, project_reasoning_item};
 use super::{PortableProjectionError, error, python_string};
+use crate::json_truthy;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null | Value::Bool(false) => false,
-        Value::Bool(true) => true,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
-}
-
 fn python_or_string(value: Option<&Value>) -> String {
     value
-        .filter(|value| python_truthy(value))
+        .filter(|value| json_truthy(value))
         .map(|value| python_string(Some(value), ""))
         .unwrap_or_default()
 }
@@ -104,8 +94,8 @@ impl PortableStreamProjector {
         }) {
             let raw_item_id = item
                 .get("id")
-                .filter(|value| python_truthy(value))
-                .or_else(|| item.get("call_id").filter(|value| python_truthy(value)))
+                .filter(|value| json_truthy(value))
+                .or_else(|| item.get("call_id").filter(|value| json_truthy(value)))
                 .map(|value| python_string(Some(value), ""))
                 .unwrap_or_default();
             let raw_id = Value::String(raw_item_id.clone());
@@ -129,7 +119,7 @@ impl PortableStreamProjector {
             let arguments = clean
                 .remove("arguments")
                 .unwrap_or(Value::String(String::new()));
-            if python_truthy(&arguments) {
+            if json_truthy(&arguments) {
                 state.arguments = python_string(Some(&arguments), "");
             }
             clean.insert(

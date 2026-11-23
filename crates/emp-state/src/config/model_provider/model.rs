@@ -120,6 +120,12 @@ pub fn normalize_model(raw: &Value) -> ConfigResult<Value> {
             "model.capabilities",
         )?,
     });
+    if let Some(efforts) = raw.get("catalog_efforts") {
+        let efforts = strict_reasoning_levels(Some(efforts))?;
+        if !efforts.is_empty() {
+            model["catalog_efforts"] = serde_json::json!(efforts);
+        }
+    }
     let mut explicit_fields = raw.keys().map(String::as_str).collect::<Vec<_>>();
     if let Some(Value::Object(capabilities)) = raw.get("capabilities") {
         explicit_fields.extend(capabilities.keys().map(String::as_str));

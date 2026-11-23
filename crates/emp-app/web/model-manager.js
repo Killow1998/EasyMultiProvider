@@ -6,7 +6,18 @@ function createProviderModelManager({getState,cloneState,$,tr,esc,api,persistSta
   function rows(view){
     const configured=(getState().models||[]).filter(model=>model.provider===view.id);
     const combined=new Map(view.models.map(model=>[model.upstream_id,model]));
-    for(const model of configured)combined.set(model.upstream_id,{...combined.get(model.upstream_id),...model});
+    for(const model of configured){
+      const listed=combined.get(model.upstream_id);
+      const merged={...listed,...model,capability_sources:{...model.capability_sources}};
+      if(listed){
+        for(const [field,evidence] of Object.entries(listed.capability_sources||{})){
+          const old=merged.capability_sources[field]?.source;
+          if(!['catalog','official','advertised'].includes(evidence.source) || ['manual','observed','advertised'].includes(old) || (old==='official' && evidence.source==='catalog'))continue;
+          if(listed[field]!==undefined){merged[field]=listed[field];merged.capability_sources[field]=evidence;}
+        }
+      }
+      combined.set(model.upstream_id,merged);
+    }
     return [...combined.values()].map(model=>({...model,enabled:configured.some(item=>item.upstream_id===model.upstream_id&&item.enabled!==false)}))
       .sort((a,b)=>Number(b.enabled)-Number(a.enabled)||modelSort(a,b));
   }
@@ -61,9 +72,9 @@ function createProviderModelManager({getState,cloneState,$,tr,esc,api,persistSta
   function edit(view,model){
     const id=view.id, query=view.query, route=model ? model.id||id+'/'+model.upstream_id : '';
     const existing=model&&(getState().models||[]).some(item=>item.id===route);
-    const draft=model&&!existing ? {...model,id:route,provider:id,enabled:false} : null;
+    const draft=model ? {...model,id:route,provider:id,enabled:Boolean(existing && model.enabled)} : null;
     const back=()=>open(id,query,view.navigation);
-    const instance=createEditor({getState:()=>draft?{...getState(),models:[...getState().models,draft]}:getState(),closeModal:back});
+    const instance=createEditor({getState:()=>draft?{...getState(),models:existing?getState().models.map(item=>item.id===route?draft:item):[...getState().models,draft]}:getState(),closeModal:back});
     instance.open(route,id,{back});editor=instance;
     $('modal_model_provider').disabled=true;
   }

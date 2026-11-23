@@ -1,6 +1,6 @@
 //! Reuse persisted, identity-bound observations when reporting and budgeting context.
 use super::SAFETY_RESERVE_TOKENS;
-use super::budget::{context_window, positive_integer};
+use super::budget::{context_window, input_only_window, positive_integer};
 use emp_core::capability_view::safe_id;
 use emp_core::{deployment_identity, endpoint_fingerprint};
 use serde_json::{Map, Value, json};
@@ -96,9 +96,17 @@ pub(super) fn limits(
         .filter(|value| fresh(value.get("smallest_failure_observed_at")) && confirmed(value))
         .and_then(|value| positive_integer(value.get("smallest_failure_estimate")))
         .map(|value| value - 1);
-    let base = context
-        .zip(reserves)
-        .map(|(limit, reserve)| limit.saturating_sub(reserve));
+    let mut base = context.zip(reserves).map(|(limit, reserve)| {
+        limit.saturating_sub(if input_only_window(model) {
+            SAFETY_RESERVE_TOKENS
+        } else {
+            reserve
+        })
+    });
+    if let Some(input) = positive_integer(model.get("max_input_tokens")) {
+        let input = input.saturating_sub(SAFETY_RESERVE_TOKENS);
+        base = Some(base.map_or(input, |limit| limit.min(input)));
+    }
     let input = if failure.is_some_and(|failure| base.is_none_or(|base| failure <= base)) {
         source = "observed".to_owned();
         confidence = 1.0;
@@ -116,10 +124,11 @@ pub(super) fn limits(
 }
 pub fn status(provider: &Map<String, Value>, model: &Map<String, Value>, protocol: &str) -> Value {
     let mut result = identity(provider, model, protocol);
+    // Model inspection has no request or projected input to reserve output for.
     let output = positive_integer(model.get("output_limit"));
-    let reserves = output.map(|value| value.saturating_add(SAFETY_RESERVE_TOKENS));
+    let reserves = Some(SAFETY_RESERVE_TOKENS);
     let limits = limits(provider, model, protocol, reserves);
-    let fields = json!({"context_limit":limits.context,"safe_input_limit":limits.input,"output_reserve":output,
+    let fields = json!({"context_limit":limits.context,"safe_input_limit":limits.input,"output_limit":output,"output_reserve":null,
         "safety_reserve":SAFETY_RESERVE_TOKENS,"reserves":reserves,"confidence":limits.confidence,"source":limits.source,
         "largest_success_estimate":limits.calibration.as_ref().and_then(|value|positive_integer(value.get("largest_success_estimate"))),
         "smallest_failure_estimate":limits.calibration.as_ref().and_then(|value|positive_integer(value.get("smallest_failure_estimate")))});
@@ -176,7 +185,6 @@ pub fn update(
             }
             value
         });
-    let total_estimate = estimate.saturating_add(output_reserve.unwrap_or(0));
     let mut changed = false;
     let recorded = if success {
         let old = positive_integer(current.get("largest_success_estimate"));
@@ -184,6 +192,11 @@ pub fn update(
             .then_some(("largest_success", estimate, 1.0))
     } else {
         let window = context_window(provider, model).0;
+        let total_estimate = if input_only_window(model) {
+            estimate
+        } else {
+            estimate.saturating_add(output_reserve.unwrap_or(0))
+        };
         if window.is_some_and(|window| total_estimate > window) {
             return false;
         }
