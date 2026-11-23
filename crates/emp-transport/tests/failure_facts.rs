@@ -1,6 +1,6 @@
 use emp_transport::{
-    FailureClass, FailurePhase, HttpFailureInput, NetworkFailureKind, http_failure, network_failure,
-    public_failure_message, status_error_class,
+    FailureClass, FailurePhase, HttpFailureInput, NetworkFailureKind, http_failure,
+    network_failure, public_failure_message, status_error_class,
 };
 
 #[test]

@@ -1,6 +1,6 @@
 mod journal;
-pub use journal::Journal;
 use emp_domain::MODEL_TEST_OPERATIONS;
+pub use journal::Journal;
 const PROBE_CAPACITY: usize = 64;
 
 pub fn is_probe(operation: &str) -> bool {

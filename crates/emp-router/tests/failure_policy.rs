@@ -4,7 +4,8 @@ use emp_router::failure_policy::{
     external_backoff_delay, external_http_retry_allowed, protocol_fallback_allowed, retry_allowed,
 };
 use emp_transport::{
-    FailureClass, FailurePhase, HttpFailureInput, UpstreamFailure, http_failure, public_failure_message,
+    FailureClass, FailurePhase, HttpFailureInput, UpstreamFailure, http_failure,
+    public_failure_message,
 };
 
 #[test]

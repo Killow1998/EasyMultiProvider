@@ -19,7 +19,8 @@ pub use admission::{
 pub use content_encoding::{ContentDecodeError, decode_content, zstd_encode};
 pub use failure::{
     FailureClass, FailurePhase, HttpFailureInput, NetworkFailureKind, UpstreamFailure,
-    http_failure, network_failure, normalize_error_class, public_failure_message, status_error_class,
+    http_failure, network_failure, normalize_error_class, public_failure_message,
+    status_error_class,
 };
 pub use http_client::{
     HttpClient, HttpClientConfig, HttpResponse, HttpTransportError, HttpTransportErrorKind,
