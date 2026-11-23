@@ -65,7 +65,7 @@ test('U05 本地 Release 新版本说明在检查失败后仍可重读，不执�
   await updateButton(page).click();
   await expect(dialog(page).getByText(release.notes.zh, { exact: false })).toBeVisible();
   await expect(dialog(page).getByRole('status').filter({ hasText: /检查版本时失败/ })).toContainText('HTTP 503');
-  expect(await emp.json('/api/updates')).toMatchObject({
+  await expect.poll(() => emp.json('/api/updates')).toMatchObject({
     state: 'error', latest_version: release.version, current_version: currentVersion,
   });
   expect(release.requests.every(request => ['/latest', '/api/latest'].includes(request.path))).toBe(true);
