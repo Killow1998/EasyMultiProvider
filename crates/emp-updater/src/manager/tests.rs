@@ -446,10 +446,9 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = thread::spawn(move || {
         for status in ["503 Service Unavailable", "404 Not Found"] {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(test_timeout(Duration::from_secs(3))))
-                .unwrap();
+            let (stream, _) = listener.accept().unwrap();
+            let mut stream =
+                emp_test_support::Deadline::after(test_timeout(Duration::from_secs(3))).io(stream);
             let mut request = Vec::new();
             let mut buffer = [0; 512];
             while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {

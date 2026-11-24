@@ -60,10 +60,13 @@ fn installed_codex_quota_preserves_native_credentials_and_persists_imported_rota
                 }
                 Err(error) => panic!("fixture accept: {error}"),
             };
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
-            let mut stream = StreamOwned::new(ServerConnection::new(tls.clone()).unwrap(), stream);
+            let mut stream = StreamOwned::new(
+                ServerConnection::new(tls.clone()).unwrap(),
+                emp_test_support::Deadline::after(emp_test_support::test_timeout(
+                    Duration::from_secs(3),
+                ))
+                .io(stream),
+            );
             let mut reader = BufReader::new(&mut stream);
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();

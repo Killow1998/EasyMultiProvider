@@ -1,5 +1,8 @@
 #![cfg(target_os = "linux")]
 
+#[allow(dead_code, reason = "Update tests only use the shared HTTP fixture")]
+mod support;
+
 use emp_state::VaultStore;
 use emp_test_support::{Deadline, test_timeout};
 use sha2::{Digest, Sha256};
@@ -102,6 +105,47 @@ fn try_request_before(
     deadline.accept(response, path)
 }
 
+fn update_accepted(port: u16, session: &str, path: &str) -> Deadline {
+    let response = support::http::http_before(
+        port,
+        "POST",
+        path,
+        &[
+            ("X-EMP-Session", session),
+            ("Content-Type", "application/json"),
+        ],
+        b"{}",
+        &Deadline::after(test_timeout(Duration::from_secs(10))),
+    );
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
+    assert_eq!(response.status, 202, "{path}: {}", response.text());
+    deadline
+}
+
+#[test]
+fn accepted_update_does_not_wait_for_the_connection_to_close() {
+    for framing in [
+        b"Content-Length: 2\r\n\r\n{}".as_slice(),
+        b"Transfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n",
+    ] {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (received, finish) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut stream = Deadline::after(test_timeout(Duration::from_secs(10))).io(stream);
+            let _ = support::http::read_message(&mut stream, false);
+            stream.write_all(b"HTTP/1.1 202 Accepted\r\n").unwrap();
+            stream.write_all(framing).unwrap();
+            finish.recv().unwrap();
+        });
+        let deadline = update_accepted(port, "fixture", "/api/updates/check");
+        assert!(!deadline.is_expired());
+        received.send(()).unwrap();
+        server.join().unwrap();
+    }
+}
+
 /// Exchange the one-use bootstrap token for a management session header.
 fn bootstrap_session(port: u16, bootstrap: &str) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to EMP");
@@ -111,11 +155,11 @@ fn bootstrap_session(port: u16, bootstrap: &str) -> String {
          X-EMP-Bootstrap: {bootstrap}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
-    stream
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(10))))
-        .unwrap();
     let mut response = Vec::new();
-    stream.read_to_end(&mut response).unwrap();
+    Deadline::after(test_timeout(Duration::from_secs(10)))
+        .io(stream)
+        .read_to_end(&mut response)
+        .unwrap();
     assert_eq!(status(&response), 200, "bootstrap session response");
     let body: serde_json::Value =
         serde_json::from_slice(response_body(&response)).expect("session JSON");
@@ -1022,25 +1066,8 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
             release_server_with_mode(b"unused".to_vec(), "0".repeat(64), mode);
         let mut emp = start_authenticated_emp(&case, &repository, false);
         server.start();
-        let check = request(
-            emp.port,
-            "POST",
-            "/api/updates/check",
-            Some(&emp.session),
-            Some(b"{}"),
-        );
-        assert_eq!(
-            status(&check),
-            202,
-            "check request: {}",
-            String::from_utf8_lossy(&check)
-        );
-        wait_for_error(
-            emp.port,
-            &emp.session,
-            expected,
-            &Deadline::after(test_timeout(Duration::from_secs(10))),
-        );
+        let deadline = update_accepted(emp.port, &emp.session, "/api/updates/check");
+        wait_for_error(emp.port, &emp.session, expected, &deadline);
         server.join().expect("fake release error server completed");
         stop_emp(&mut emp);
     }
@@ -1053,20 +1080,8 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
     drop(listener);
     let base = format!("http://{unused}");
     let mut emp = start_authenticated_emp_with_api(&case, &base, &format!("{base}/latest"), false);
-    let check = request(
-        emp.port,
-        "POST",
-        "/api/updates/check",
-        Some(&emp.session),
-        Some(b"{}"),
-    );
-    assert_eq!(status(&check), 202);
-    wait_for_error(
-        emp.port,
-        &emp.session,
-        "update_failed",
-        &Deadline::after(test_timeout(Duration::from_secs(10))),
-    );
+    let deadline = update_accepted(emp.port, &emp.session, "/api/updates/check");
+    wait_for_error(emp.port, &emp.session, "update_failed", &deadline);
     stop_emp(&mut emp);
 
     let root = emp_test_support::fixture_dir().unwrap();
@@ -1095,20 +1110,8 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         &format!("{partial_base}/latest"),
         false,
     );
-    let check = request(
-        emp.port,
-        "POST",
-        "/api/updates/check",
-        Some(&emp.session),
-        Some(b"{}"),
-    );
-    assert_eq!(status(&check), 202);
-    wait_for_error(
-        emp.port,
-        &emp.session,
-        "update_failed",
-        &Deadline::after(test_timeout(Duration::from_secs(10))),
-    );
+    let deadline = update_accepted(emp.port, &emp.session, "/api/updates/check");
+    wait_for_error(emp.port, &emp.session, "update_failed", &deadline);
     partial_server.join().unwrap();
     stop_emp(&mut emp);
 }
@@ -1141,20 +1144,8 @@ fn package_http_and_checksum_failures_preserve_the_running_installation() {
         let mut emp = start_authenticated_emp(&case, &repository, false);
         server.start();
         check_for_available(&emp);
-        let install = request(
-            emp.port,
-            "POST",
-            "/api/updates/install",
-            Some(&emp.session),
-            Some(b"{}"),
-        );
-        assert_eq!(status(&install), 202);
-        wait_for_error(
-            emp.port,
-            &emp.session,
-            expected,
-            &Deadline::after(test_timeout(Duration::from_secs(10))),
-        );
+        let deadline = update_accepted(emp.port, &emp.session, "/api/updates/install");
+        wait_for_error(emp.port, &emp.session, expected, &deadline);
         server.join().expect("fake package error server completed");
         assert_eq!(
             std::fs::read(&emp.executable).unwrap(),
@@ -1173,20 +1164,8 @@ fn malicious_symlink_package_is_rejected_before_replacement() {
     let mut emp = start_authenticated_emp(temp.path(), &repository, false);
     server.start();
     check_for_available(&emp);
-    let install = request(
-        emp.port,
-        "POST",
-        "/api/updates/install",
-        Some(&emp.session),
-        Some(b"{}"),
-    );
-    assert_eq!(status(&install), 202);
-    wait_for_error(
-        emp.port,
-        &emp.session,
-        "invalid_package",
-        &Deadline::after(test_timeout(Duration::from_secs(10))),
-    );
+    let deadline = update_accepted(emp.port, &emp.session, "/api/updates/install");
+    wait_for_error(emp.port, &emp.session, "invalid_package", &deadline);
     assert_eq!(
         std::fs::read(&emp.executable).unwrap(),
         emp.original_executable
@@ -1203,20 +1182,8 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
     let mut emp = start_authenticated_emp(temp.path(), &repository, true);
     server.start();
     check_for_available(&emp);
-    let install = request(
-        emp.port,
-        "POST",
-        "/api/updates/install",
-        Some(&emp.session),
-        Some(b"{}"),
-    );
-    assert_eq!(status(&install), 202);
-    wait_for_error(
-        emp.port,
-        &emp.session,
-        "worker_failed",
-        &Deadline::after(test_timeout(Duration::from_secs(10))),
-    );
+    let deadline = update_accepted(emp.port, &emp.session, "/api/updates/install");
+    wait_for_error(emp.port, &emp.session, "worker_failed", &deadline);
     let delete = request(
         emp.port,
         "DELETE",

@@ -257,7 +257,7 @@ fn delete(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
     complete_response(&mut stream)
 }
 
-struct ChunkedSse<R = BufReader<TcpStream>> {
+struct ChunkedSse<R> {
     input: R,
     remaining: usize,
     ended: bool,
@@ -332,11 +332,8 @@ fn read_sse_frame(reader: &mut impl BufRead) -> String {
     }
 }
 
-fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<ChunkedSse> {
+fn open_quota_events(server: &ServerHandle, session: &str) -> impl BufRead + use<> {
     let mut stream = TcpStream::connect(server.local_addr()).expect("connect SSE");
-    stream
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-        .expect("SSE response timeout");
     stream
             .write_all(
                 format!(
@@ -346,7 +343,9 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<ChunkedS
                 .as_bytes(),
             )
             .expect("write SSE request");
-    let (head, mut reader) = read_sse_head(BufReader::new(stream));
+    let (head, mut reader) = read_sse_head(BufReader::new(
+        Deadline::after(test_timeout(Duration::from_secs(5))).io(stream),
+    ));
     assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
     assert!(head.contains("Content-Type: text/event-stream\r\n"));
     assert!(head.contains("Cache-Control: no-store\r\n"));
@@ -467,8 +466,7 @@ fn websocket_event_before(
         let remaining = deadline
             .accept(deadline.remaining(), "WebSocket response event")
             .unwrap();
-        socket.set_read_timeout(remaining);
-        match socket.poll_receive_text().unwrap() {
+        match socket.poll_receive_text_with_timeout(remaining).unwrap() {
             emp_transport::WebSocketPoll::Text(text) => {
                 if let Ok(value @ Value::Object(_)) = serde_json::from_str(&text) {
                     return deadline.accept(value, "WebSocket response event").unwrap();
@@ -478,6 +476,39 @@ fn websocket_event_before(
             emp_transport::WebSocketPoll::Pending => {}
             other => panic!("WebSocket ended before response event: {other:?}"),
         }
+    }
+}
+
+type CancellationProbe = (Deadline, mpsc::Sender<bool>);
+
+fn report_cancellation(
+    probe: &mpsc::Receiver<CancellationProbe>,
+    observe: impl FnOnce(&Deadline) -> bool,
+) {
+    if let Ok((deadline, result)) = probe.recv() {
+        let _ = result.send(observe(&deadline));
+    }
+}
+
+fn wait_for_cancellation(probe: &mpsc::Sender<CancellationProbe>, deadline: &Deadline) -> bool {
+    let (result, observed) = mpsc::channel();
+    probe
+        .send((*deadline, result))
+        .expect("start cancellation probe");
+    let closed = observed
+        .recv_timeout(deadline.remaining())
+        .expect("upstream observes cancellation");
+    deadline.accept(closed, "upstream cancellation").unwrap()
+}
+
+fn upstream_closed_before(stream: &TcpStream, deadline: &Deadline) -> bool {
+    match deadline.io(stream).peek(&mut [0]) {
+        Ok(0) => true,
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+        ),
+        Ok(_) => false,
     }
 }
 
@@ -502,15 +533,12 @@ pub(crate) struct OneShotUpstream {
 }
 
 fn receive_upstream_request(stream: &mut TcpStream) -> (String, BTreeMap<String, String>, Value) {
-    stream
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-        .expect("upstream timeout");
     let raw = read_request_head(stream).expect("upstream request head");
     receive_upstream_request_from_head(stream, raw)
 }
 
 fn receive_upstream_request_from_head(
-    stream: &mut TcpStream,
+    stream: &TcpStream,
     raw: RequestHead,
 ) -> (String, BTreeMap<String, String>, Value) {
     let request = parse_request(&raw.head).expect("upstream HTTP request");
@@ -526,6 +554,7 @@ fn receive_upstream_request_from_head(
         .get("content-length")
         .map(|value| value.parse::<usize>().expect("upstream Content-Length"))
         .unwrap_or(0);
+    let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
     let mut body = raw.body_prefix;
     while body.len() < length {
         let mut chunk = [0_u8; 4096];

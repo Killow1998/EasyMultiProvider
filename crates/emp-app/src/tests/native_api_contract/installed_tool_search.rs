@@ -64,9 +64,6 @@ fn tool_search(protocol: &'static str, native: bool, websocket: bool) {
                     Err(error) => panic!("{error}"),
                 }
             };
-            socket
-                .set_read_timeout(Some(Duration::from_secs(15)))
-                .unwrap();
             let body = receive_native_request(&mut socket).body;
             let serialized = body.to_string();
             if stage == 0 && native {

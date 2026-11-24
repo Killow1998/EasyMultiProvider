@@ -32,9 +32,6 @@ impl ImageUpstream {
                 // Exercise inherited nonblocking mode before the fixture's blocking reads.
                 socket.set_nonblocking(true).unwrap();
                 socket.set_nonblocking(false).unwrap();
-                socket
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .unwrap();
                 let raw = read_request_head(&mut socket).unwrap();
                 let head = parse_request(&raw.head).unwrap();
                 if head
@@ -53,9 +50,13 @@ impl ImageUpstream {
                     let accept = websocket_accept(&headers["sec-websocket-key"]).unwrap();
                     write!(socket,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
                     socket.flush().unwrap();
-                    let mut websocket = WebSocketConnection::new(&mut socket);
-                    let body: Value =
-                        serde_json::from_str(&websocket.receive_text().unwrap().unwrap()).unwrap();
+                    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+                    let mut input = deadline.io(&socket);
+                    let mut websocket = WebSocketConnection::new(&mut input);
+                    let text = receive_upstream_websocket_text(&mut websocket, &deadline)
+                        .unwrap()
+                        .unwrap();
+                    let body = serde_json::from_str(&text).unwrap();
                     sender
                         .send(ObservedNativeRequest {
                             path: head.target.to_owned(),
@@ -67,14 +68,17 @@ impl ImageUpstream {
                     websocket.send_json(&json!({"type":"response.completed","response":{"id":"response_fixture","object":"response","status":"completed","model":"upstream","output":[]}})).unwrap();
                     continue;
                 }
-                let request = finish_native_request(&mut socket, raw);
+                let request = finish_native_request(&socket, raw);
                 let image = request.path.contains("/images/");
                 let streaming = request.body["stream"] == true;
                 sender.send(request).unwrap();
                 if image && status == 499 {
                     let mut byte = [0];
                     assert_eq!(
-                        socket.read(&mut byte).unwrap(),
+                        Deadline::after(test_timeout(Duration::from_secs(5)))
+                            .io(&socket)
+                            .read(&mut byte)
+                            .unwrap(),
                         0,
                         "gateway must disconnect the image upstream"
                     );
@@ -196,10 +200,8 @@ pub(super) fn select_turn(server: &ServerHandle, model: &str, turn: &str, websoc
         return;
     }
     let mut socket = TcpStream::connect(server.local_addr()).unwrap();
-    socket
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-        .unwrap();
     write!(socket,"GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{}\r\n\r\n",server.local_addr().port(),session_header(server)).unwrap();
+    let mut socket = Deadline::after(test_timeout(Duration::from_secs(5))).io(socket);
     let mut handshake = Vec::new();
     while !handshake.ends_with(b"\r\n\r\n") {
         let mut byte = [0];

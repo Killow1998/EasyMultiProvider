@@ -74,9 +74,16 @@ impl ClientWebSocket {
     }
 
     pub fn poll_receive_text(&mut self) -> Result<WebSocketPoll<String>, ClientWebSocketError> {
+        self.poll_receive_text_with_timeout(self.read_timeout)
+    }
+
+    pub fn poll_receive_text_with_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<WebSocketPoll<String>, ClientWebSocketError> {
         match self
             .runtime
-            .block_on(tokio_read(&mut self.client, self.read_timeout))?
+            .block_on(tokio_read(&mut self.client, timeout))?
         {
             None => Ok(WebSocketPoll::Pending),
             Some(WebSocketEvent::Text(text)) => Ok(WebSocketPoll::Text(text)),

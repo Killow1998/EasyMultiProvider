@@ -8,7 +8,7 @@ use std::time::Duration;
 
 #[cfg(unix)]
 mod accounts;
-mod http;
+pub(super) mod http;
 #[cfg(target_os = "linux")]
 mod https;
 #[cfg(unix)]

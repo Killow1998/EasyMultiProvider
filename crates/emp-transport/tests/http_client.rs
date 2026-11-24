@@ -306,9 +306,6 @@ fn serve_connection(
     release_streams: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
 ) {
-    stream
-        .set_read_timeout(Some(Duration::from_millis(50)))
-        .expect("request timeout");
     loop {
         let Some((head, _body)) = read_request(&mut stream, &shutdown) else {
             return;
@@ -429,17 +426,22 @@ fn serve_connection(
 }
 
 fn read_request(stream: &mut TcpStream, shutdown: &AtomicBool) -> Option<(Vec<u8>, Vec<u8>)> {
+    let interval = test_timeout(Duration::from_millis(50));
+    let mut stream = Deadline::after(interval).io(&*stream);
     let mut received = Vec::new();
     let header_end = loop {
         if let Some(position) = received.windows(4).position(|part| part == b"\r\n\r\n") {
             break position + 4;
+        }
+        if received.is_empty() {
+            stream.set_deadline(&Deadline::after(interval));
         }
         let mut buffer = [0_u8; 4096];
         match stream.read(&mut buffer) {
             Ok(0) => return None,
             Ok(count) => received.extend_from_slice(&buffer[..count]),
             Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                if shutdown.load(Ordering::Acquire) {
+                if !received.is_empty() || shutdown.load(Ordering::Acquire) {
                     return None;
                 }
             }

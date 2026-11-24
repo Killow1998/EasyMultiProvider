@@ -59,13 +59,15 @@ impl RefreshCatalogFixture {
                     .set_nonblocking(false)
                     .expect("blocking refresh stream");
                 request_number += 1;
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                    .expect("refresh request timeout");
                 let mut request = String::new();
                 let mut input = None;
                 {
-                    let mut reader = BufReader::new(stream.try_clone().expect("clone refresh"));
+                    let mut reader = BufReader::new(
+                        emp_test_support::Deadline::after(emp_test_support::test_timeout(
+                            std::time::Duration::from_secs(5),
+                        ))
+                        .io(&stream),
+                    );
                     loop {
                         let mut line = String::new();
                         reader.read_line(&mut line).expect("read refresh request");
@@ -220,9 +222,6 @@ fn http_request(
 ) -> String {
     let mut stream =
         std::net::TcpStream::connect(server.local_addr()).expect("connect HTTP server");
-    stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
-        .expect("HTTP response timeout");
     let session = if session {
         format!("X-EMP-Session: {}\r\n", server.session_token())
     } else {
@@ -239,7 +238,14 @@ fn http_request(
         stream.write_all(body).expect("HTTP request body");
     }
     let mut response = Vec::new();
-    std::io::Read::read_to_end(&mut stream, &mut response).expect("HTTP response");
+    std::io::Read::read_to_end(
+        &mut emp_test_support::Deadline::after(emp_test_support::test_timeout(
+            std::time::Duration::from_secs(10),
+        ))
+        .io(stream),
+        &mut response,
+    )
+    .expect("HTTP response");
     String::from_utf8(response).expect("HTTP response text")
 }
 

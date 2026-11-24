@@ -35,21 +35,19 @@ struct GatedReply {
 }
 
 impl GatedReply {
-    fn wait_for_tail(&self, stream: &mut TcpStream) -> bool {
+    fn wait_for_tail(&self, stream: &TcpStream) -> bool {
         let released = self.released.lock().expect("stream gate");
         let Some(closed) = &self.closed else {
             return released.recv().is_ok();
         };
-        stream
-            .set_read_timeout(Some(test_timeout(Duration::from_millis(25))))
-            .expect("upstream disconnect polling");
+        let poll_interval = test_timeout(Duration::from_millis(25));
         loop {
             match released.try_recv() {
                 Ok(()) => return true,
                 Err(mpsc::TryRecvError::Disconnected) => return false,
                 Err(mpsc::TryRecvError::Empty) => {}
             }
-            match stream.read(&mut [0]) {
+            match Deadline::after(poll_interval).io(stream).read(&mut [0]) {
                 Ok(0) => {}
                 Err(error)
                     if matches!(
@@ -331,7 +329,7 @@ fn serve_upstream(
         }
     }
     if let Some(gate) = &reply.gate
-        && gate.wait_for_tail(&mut stream)
+        && gate.wait_for_tail(&stream)
         && let Some(tail) = &gate.tail
     {
         let _ = stream.write_all(tail).and_then(|()| stream.flush());

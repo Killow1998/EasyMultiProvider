@@ -52,9 +52,9 @@ fn encode_parts(encoding: &str, first: &[u8], last: &[u8]) -> (Vec<u8>, Vec<u8>)
 }
 
 fn receive_headers(stream: &mut TcpStream) -> String {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    let mut stream =
+        emp_test_support::Deadline::after(emp_test_support::test_timeout(Duration::from_secs(5)))
+            .io(stream);
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
         let mut byte = [0];

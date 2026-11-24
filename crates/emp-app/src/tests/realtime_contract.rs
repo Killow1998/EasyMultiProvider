@@ -30,11 +30,11 @@ impl RealtimeUpstream {
         let worker = thread::spawn(move || {
             loop {
                 let (mut stream, _) = listener.accept()?;
-                stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-                if stream.peek(&mut [0])? == 0 {
+                let mut input = Deadline::after(test_timeout(Duration::from_secs(5))).io(&stream);
+                if input.peek(&mut [0])? == 0 {
                     return Ok(());
                 }
-                let observed = receive_request(&mut stream);
+                let observed = receive_request(&mut input);
                 sender.send(observed).expect("record Voice call");
                 let location = response
                     .location
@@ -111,7 +111,7 @@ fn dropping_the_realtime_fixture_does_not_propagate_upstream_panics() {
     drop(upstream);
 }
 
-fn receive_request(stream: &mut TcpStream) -> UpstreamRequest {
+fn receive_request(stream: &mut impl Read) -> UpstreamRequest {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     let (separator, body_length) = loop {

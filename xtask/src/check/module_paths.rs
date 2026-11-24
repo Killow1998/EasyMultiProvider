@@ -74,9 +74,12 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
             let portable = value.replace('\\', "/");
             let rooted = portable.starts_with('/')
                 || matches!(portable.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic());
-            let mut targets = BTreeSet::from([self.directory.join(&value)]);
-            targets.insert(self.directory.join(&portable));
-            if rooted
+            let native = Path::new(&value);
+            let mut targets = BTreeSet::from([self.directory.join(native)]);
+            if !rooted {
+                targets.insert(self.directory.join(&portable));
+            }
+            if rooted && !native.is_absolute()
                 || targets
                     .iter()
                     .any(|target| !resolve(target).starts_with(&self.sources.crate_dir))
@@ -222,6 +225,40 @@ mod nested {
         assert!(errors[0].contains("lib.rs:3"));
         assert!(errors[1].contains("lib.rs:4"));
         assert!(errors[2].contains("local.rs:4"));
+    }
+
+    #[test]
+    fn checks_native_absolute_paths_against_the_declaring_crate() {
+        let root = emp_test_support::fixture_dir().unwrap();
+        let crate_dir = root.path().join("app");
+        let src = crate_dir.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let entry = src.join("lib.rs");
+        let inside = src.join("inside.rs");
+        let outside = root.path().join("outside.rs");
+        fs::write(&inside, "").unwrap();
+        fs::write(&outside, "").unwrap();
+        let src = src.canonicalize().unwrap();
+        fs::write(
+            &entry,
+            format!(
+                "#[path = {:?}] mod inside;\n#[path = {:?}] mod outside;\n",
+                src.join("../src/inside.rs").to_str().unwrap(),
+                src.join("../../outside.rs").to_str().unwrap(),
+            ),
+        )
+        .unwrap();
+
+        let mut errors = Vec::new();
+        check(
+            root.path(),
+            &crate_dir,
+            std::iter::once(entry.as_path()),
+            &mut errors,
+        )
+        .unwrap();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("lib.rs:2"), "{errors:?}");
     }
 
     #[test]

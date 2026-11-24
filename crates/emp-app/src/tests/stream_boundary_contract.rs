@@ -151,26 +151,23 @@ fn streaming_flushes_before_upstream_eof() {
         "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
     }))
     .expect("request JSON");
-    let mut downstream =
-        open_post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
+    let downstream = open_post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
     first_ready
         .recv_timeout(test_timeout(Duration::from_secs(2)))
         .expect("upstream first event");
-    downstream
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(2))))
-        .expect("downstream timeout");
+    let mut input = Deadline::after(test_timeout(Duration::from_secs(2))).io(&downstream);
     let mut response = Vec::new();
     while !response
         .windows(b"event: response.output_text.delta\n".len())
         .any(|window| window == b"event: response.output_text.delta\n")
     {
         let mut chunk = [0_u8; 4096];
-        let count = downstream.read(&mut chunk).expect("incremental SSE read");
+        let count = input.read(&mut chunk).expect("incremental SSE read");
         assert!(count > 0, "downstream ended before visible output");
         response.extend_from_slice(&chunk[..count]);
     }
     release.send(()).expect("release terminal SSE event");
-    downstream
+    input
         .read_to_end(&mut response)
         .expect("finish downstream SSE");
     let response = String::from_utf8(response).expect("UTF-8 SSE response");
@@ -184,7 +181,7 @@ fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream");
     let address = listener.local_addr().expect("upstream address");
     let (head_sent, head_ready) = mpsc::sync_channel(1);
-    let (closed_sender, closed) = mpsc::sync_channel(1);
+    let (probe, cancelled) = mpsc::channel();
     let worker = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept upstream");
         let _ = receive_upstream_request(&mut stream);
@@ -195,21 +192,9 @@ fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
             .expect("write upstream response head");
         stream.flush().expect("flush upstream response head");
         head_sent.send(()).expect("announce upstream head");
-        stream
-            .set_read_timeout(Some(test_timeout(Duration::from_secs(3))))
-            .expect("upstream close timeout");
-        let mut byte = [0_u8; 1];
-        let closed_by_emp = match stream.read(&mut byte) {
-            Ok(0) => true,
-            Err(error) => matches!(
-                error.kind(),
-                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
-            ),
-            Ok(_) => false,
-        };
-        closed_sender
-            .send(closed_by_emp)
-            .expect("report upstream cancellation");
+        report_cancellation(&cancelled, |deadline| {
+            upstream_closed_before(&stream, deadline)
+        });
     });
     let (_directory, server) = configured_server(&format!("http://{address}/v1"));
     let body = serde_json::to_vec(&json!({
@@ -221,11 +206,10 @@ fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
     head_ready
         .recv_timeout(test_timeout(Duration::from_secs(2)))
         .expect("upstream response head");
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
     drop(downstream);
     assert!(
-        closed
-            .recv_timeout(test_timeout(Duration::from_secs(3)))
-            .expect("upstream cancellation result"),
+        wait_for_cancellation(&probe, &deadline),
         "EMP kept the upstream stream open after its downstream disconnected"
     );
     server.shutdown().expect("shutdown");

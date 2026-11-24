@@ -115,8 +115,7 @@ impl Drop for HeldUpstream {
 struct CancelableUpstream {
     address: SocketAddr,
     observed: Receiver<(String, BTreeMap<String, String>, Value)>,
-    closed: Receiver<bool>,
-    probe: SyncSender<()>,
+    probe: Option<mpsc::Sender<CancellationProbe>>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -126,53 +125,19 @@ impl CancelableUpstream {
             TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind cancelable upstream");
         let address = listener.local_addr().expect("cancelable upstream address");
         let (observed_sender, observed) = mpsc::sync_channel(1);
-        let (closed_sender, closed) = mpsc::sync_channel(1);
-        let (probe, canceled) = mpsc::sync_channel(1);
+        let (probe, canceled) = mpsc::channel();
         let worker = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept cancelable request");
             let request = receive_upstream_request(&mut stream);
             let _ = observed_sender.send(request);
-            // Measure cancellation latency after the client closes, not while
-            // the test is still waiting for the active management snapshot.
-            if canceled.recv().is_err() {
-                return;
-            }
-            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-            let closed_by_client = loop {
-                let Ok(remaining) = deadline.accept(deadline.remaining(), "client cancellation")
-                else {
-                    break false;
-                };
-                stream
-                    .set_read_timeout(Some(remaining.min(test_timeout(Duration::from_millis(50)))))
-                    .expect("set cancellation probe timeout");
-                let mut byte = [0_u8; 1];
-                match stream.peek(&mut byte) {
-                    Ok(0) => break !deadline.is_expired(),
-                    Ok(_) => continue,
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                        ) => {}
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
-                        ) =>
-                    {
-                        break !deadline.is_expired();
-                    }
-                    Err(_) => break false,
-                }
-            };
-            let _ = closed_sender.send(closed_by_client);
+            report_cancellation(&canceled, |deadline| {
+                upstream_closed_before(&stream, deadline)
+            });
         });
         Self {
             address,
             observed,
-            closed,
-            probe,
+            probe: Some(probe),
             worker: Some(worker),
         }
     }
@@ -184,7 +149,7 @@ impl CancelableUpstream {
 
 impl Drop for CancelableUpstream {
     fn drop(&mut self) {
-        let _ = self.probe.try_send(());
+        drop(self.probe.take());
         if let Some(worker) = self.worker.take() {
             worker.join().expect("join cancelable upstream");
         }
@@ -402,16 +367,10 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
         .snapshot(crate::util::system_now() as u64);
     assert_eq!(only_route(&active)["in_flight"], 1);
     assert_eq!(only_route(&active)["model_id"], "demo/model");
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     drop(downstream);
-    upstream
-        .probe
-        .send(())
-        .expect("start cancellation deadline");
     assert!(
-        upstream
-            .closed
-            .recv_timeout(Duration::from_secs(5))
-            .expect("upstream observes client cancellation"),
+        wait_for_cancellation(upstream.probe.as_ref().unwrap(), &deadline),
         "downstream cancellation did not close the pending upstream request"
     );
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
@@ -434,6 +393,26 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
     };
     assert_eq!(only_route(&finished)["in_flight"], 0);
     server.shutdown().expect("shutdown activity test server");
+}
+
+#[tokio::test]
+async fn cancellation_probe_and_observer_share_the_scaled_deadline() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (upstream, _) = listener.accept().unwrap();
+    let (probe, cancelled) = mpsc::channel();
+    let budget = test_timeout(Duration::from_secs(5));
+    let deadline = Deadline::after(budget);
+    let worker = thread::spawn(move || {
+        report_cancellation(&cancelled, |deadline| {
+            upstream_closed_before(&upstream, deadline)
+        });
+    });
+    let observed = tokio::task::spawn_blocking(move || wait_for_cancellation(&probe, &deadline));
+    tokio::time::sleep(budget.mul_f64(0.7)).await;
+    drop(client);
+    assert!(observed.await.unwrap());
+    worker.join().unwrap();
 }
 
 #[test]

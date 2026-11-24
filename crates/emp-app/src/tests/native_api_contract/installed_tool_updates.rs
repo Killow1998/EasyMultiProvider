@@ -56,9 +56,6 @@ fn switch_and_resume(protocol: &'static str) {
                     Err(error) => panic!("{error}"),
                 }
             };
-            socket
-                .set_read_timeout(Some(Duration::from_secs(15)))
-                .unwrap();
             let body = receive_native_request(&mut socket).body;
             let definitions = body["tools"].as_array().expect("real Codex tools");
             let tools = definitions

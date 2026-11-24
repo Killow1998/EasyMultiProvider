@@ -80,11 +80,11 @@ impl VertexFixture {
                     thread::sleep(Duration::from_millis(10));
                     continue;
                 };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(10)))
-                    .unwrap();
                 let connection = ServerConnection::new(Arc::clone(&config)).unwrap();
-                let mut input = BufReader::new(StreamOwned::new(connection, stream));
+                let mut input = BufReader::new(StreamOwned::new(
+                    connection,
+                    Deadline::after(test_timeout(Duration::from_secs(10))).io(stream),
+                ));
                 let mut first = String::new();
                 input.read_line(&mut first).unwrap();
                 let mut headers = BTreeMap::new();
@@ -512,10 +512,8 @@ fn vertex_adc_routes_gemini_and_claude_with_refreshed_oauth() {
     let token_worker = thread::spawn(move || {
         for number in 1..=2 {
             let (stream, _) = oauth.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(10)))
-                .unwrap();
-            let mut input = BufReader::new(stream);
+            let mut input =
+                BufReader::new(Deadline::after(test_timeout(Duration::from_secs(10))).io(stream));
             let mut first = String::new();
             input.read_line(&mut first).unwrap();
             assert!(first.starts_with("POST /token "));

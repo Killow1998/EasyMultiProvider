@@ -437,6 +437,54 @@ mod tests {
     use std::collections::VecDeque;
     use std::io::{self, Read};
 
+    #[tokio::test]
+    async fn trickled_frame_yields_at_deadline_and_resumes_without_losing_bytes() {
+        use emp_test_support::{Deadline, test_timeout};
+        use std::net::{TcpListener, TcpStream};
+        use tokio::io::AsyncWriteExt;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let mut peer = tokio::net::TcpStream::from_std(peer).unwrap();
+        let payload = b"abcdefghijklmnopqrstuvwxyz";
+        peer.write_all(&[0x81, payload.len() as u8]).await.unwrap();
+
+        let (started, reading) = tokio::sync::oneshot::channel();
+        let mut decoder = tokio::task::spawn_blocking(move || {
+            let mut decoder = FrameDecoder::new(1024);
+            let deadline = Deadline::after(test_timeout(Duration::from_millis(200)));
+            let mut input = deadline.io(client);
+            started.send(()).unwrap();
+            let poll = decoder.poll(&mut input, false, false).unwrap();
+            (decoder, input, poll)
+        });
+        reading.await.unwrap();
+        let mut sent = 0;
+        let (mut decoder, mut input, poll) = loop {
+            tokio::select! {
+                result = &mut decoder => break result.unwrap(),
+                _ = tokio::time::sleep(test_timeout(Duration::from_millis(25))), if sent < payload.len() => {
+                    peer.write_all(&payload[sent..=sent]).await.unwrap();
+                    sent += 1;
+                }
+            }
+        };
+        assert!(matches!(poll, FramePoll::Pending));
+        assert!(sent < payload.len());
+        peer.write_all(&payload[sent..]).await.unwrap();
+        let decoded = tokio::task::spawn_blocking(move || {
+            input.set_deadline(&Deadline::after(test_timeout(Duration::from_secs(5))));
+            decoder.poll(&mut input, false, false).unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(
+            matches!(decoded, FramePoll::Message { opcode: 1, payload: decoded, compressed: false } if decoded == payload)
+        );
+    }
+
     enum ReadAction {
         Bytes(Vec<u8>),
         WouldBlock,

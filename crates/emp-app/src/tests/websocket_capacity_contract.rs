@@ -34,11 +34,8 @@ pub(crate) fn wait_for(deadline: &Deadline, mut ready: impl FnMut() -> bool) {
     panic!("condition did not become ready before deadline");
 }
 
-fn websocket(server: &ServerHandle) -> TcpStream {
+fn websocket(server: &ServerHandle) -> emp_test_support::DeadlineIo<TcpStream> {
     let mut stream = TcpStream::connect(server.local_addr()).expect("connect websocket");
-    stream
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-        .expect("set websocket timeout");
     let cookie = session_header(server);
     write!(
         stream,
@@ -47,10 +44,11 @@ fn websocket(server: &ServerHandle) -> TcpStream {
     )
     .expect("send websocket handshake");
     stream.flush().expect("flush websocket handshake");
+    let mut input = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
     let mut head = Vec::new();
     while !head.windows(4).any(|window| window == b"\r\n\r\n") {
         let mut byte = [0_u8; 1];
-        stream
+        input
             .read_exact(&mut byte)
             .expect("read websocket handshake");
         head.push(byte[0]);
@@ -61,10 +59,10 @@ fn websocket(server: &ServerHandle) -> TcpStream {
             .starts_with("HTTP/1.1 101"),
         "downstream websocket upgrade must complete before overload close"
     );
-    stream
+    input
 }
 
-fn read_server_frame(stream: &mut TcpStream) -> Option<(u8, Vec<u8>)> {
+fn read_server_frame(stream: &mut impl Read) -> Option<(u8, Vec<u8>)> {
     let mut header = [0_u8; 2];
     match stream.read_exact(&mut header) {
         Ok(()) => {}
@@ -111,7 +109,7 @@ fn read_server_frame(stream: &mut TcpStream) -> Option<(u8, Vec<u8>)> {
     Some((opcode, payload))
 }
 
-fn send_masked_text(stream: &mut TcpStream, value: &Value) {
+fn send_masked_text(stream: &mut impl Write, value: &Value) {
     let payload = serde_json::to_vec(value).expect("websocket JSON");
     let mask = [11_u8, 12, 13, 14];
     let mut frame = vec![0x81];
@@ -139,9 +137,6 @@ fn send_masked_text(stream: &mut TcpStream, value: &Value) {
 
 fn health_status(server: &ServerHandle) -> Option<String> {
     let mut stream = TcpStream::connect(server.local_addr()).expect("connect health endpoint");
-    stream
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(3))))
-        .expect("set health timeout");
     let write_request = write!(
         stream,
         "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
@@ -159,6 +154,7 @@ fn health_status(server: &ServerHandle) -> Option<String> {
         }
         panic!("flush health request: {error}");
     }
+    let mut stream = Deadline::after(test_timeout(Duration::from_secs(3))).io(stream);
     let mut status = Vec::new();
     loop {
         let mut byte = [0_u8; 1];
@@ -227,9 +223,7 @@ fn websocket_admission_closes_overflow_and_reuses_a_released_slot() {
     let health_while_websockets_full = health_status(&server);
 
     let mut overflow = websocket(&server);
-    overflow
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(2))))
-        .expect("set overflow timeout");
+    overflow.set_deadline(&Deadline::after(test_timeout(Duration::from_secs(2))));
     let (opcode, payload) = read_server_frame(&mut overflow).expect("overload close frame");
     let overflow_code = if opcode == 8 && payload.len() >= 2 {
         Some(u16::from_be_bytes([payload[0], payload[1]]))

@@ -81,14 +81,11 @@ impl CatalogUpstream {
                         stream
                             .set_nonblocking(false)
                             .expect("blocking accepted discovery stream");
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(5)))
-                            .expect("discovery request timeout");
                         let Some(raw) = read_request_head(&mut stream) else {
                             continue;
                         };
                         let (path, headers, body) =
-                            receive_upstream_request_from_head(&mut stream, raw);
+                            receive_upstream_request_from_head(&stream, raw);
                         sender
                             .send((path.clone(), headers, body))
                             .expect("record request");
@@ -589,9 +586,6 @@ fn management_body_limits_reject_oversized_plain_and_gzip_bodies() {
     let (_directory, server) = catalog_server(&upstream);
     for (label, data, length, encoding) in cases {
         let mut stream = TcpStream::connect(server.local_addr()).expect("connect");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .expect("timeout");
         let length = if length.is_empty() {
             data.len().to_string()
         } else {
@@ -606,7 +600,10 @@ fn management_body_limits_reject_oversized_plain_and_gzip_bodies() {
         }
         let _ = stream.shutdown(Shutdown::Write);
         let mut wire = String::new();
-        stream.read_to_string(&mut wire).expect("response");
+        Deadline::after(test_timeout(Duration::from_secs(5)))
+            .io(stream)
+            .read_to_string(&mut wire)
+            .expect("response");
         let status: u16 = wire
             .split_whitespace()
             .nth(1)

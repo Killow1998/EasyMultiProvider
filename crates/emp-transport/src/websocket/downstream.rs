@@ -37,6 +37,10 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
         self.peer_close_code
     }
 
+    pub fn get_mut(&mut self) -> &mut S {
+        self.stream
+    }
+
     fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> Result<(), WebSocketError> {
         if self.closed {
             return Err(WebSocketError::new(1006, "websocket closed"));

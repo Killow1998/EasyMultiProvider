@@ -181,17 +181,15 @@ impl TeamRelay {
                 if stopped.load(Ordering::Acquire) {
                     break;
                 }
-                let mut stream = stream.expect("Team relay connection");
+                let stream = stream.expect("Team relay connection");
                 let discard = Arc::clone(&discard);
                 let hold = Arc::clone(&hold);
                 let observed = Arc::clone(&observed);
                 let accepted = accepted.clone();
                 requests.push(thread::spawn(move || {
-                    stream
-                        .set_write_timeout(Some(io_timeout()))
-                        .expect("relay timeout");
                     let deadline = Deadline::after(io_timeout());
-                    let (line, headers, body) = super::http::read_message(&mut deadline.io(&stream), false);
+                    let mut stream = deadline.io(stream);
+                    let (line, headers, body) = super::http::read_message(&mut stream, false);
                     let method = line.split_whitespace().next().expect("Team HTTP method");
                     let path = line.split_whitespace().nth(1).expect("Team HTTP path");
                     if method == "GET" && path.split('?').next() == Some("/v1/models") {
@@ -216,15 +214,10 @@ impl TeamRelay {
                     } else {
                         server
                     };
-                    let Ok(mut backend) = TcpStream::connect(("127.0.0.1", destination)) else {
+                    let Ok(backend) = TcpStream::connect(("127.0.0.1", destination)) else {
                         return;
                     };
-                    backend
-                        .set_read_timeout(Some(io_timeout()))
-                        .expect("backend timeout");
-                    backend
-                        .set_write_timeout(Some(io_timeout()))
-                        .expect("backend timeout");
+                    let mut backend = Deadline::after(io_timeout()).io(backend);
                     write!(
                         backend,
                         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{destination}\r\n"
@@ -242,12 +235,14 @@ impl TeamRelay {
                     )
                     .and_then(|()| backend.write_all(&body))
                     .expect("Team request body");
+                    let deadline = Deadline::after(io_timeout());
+                    backend.set_deadline(&deadline);
                     if destination == provider {
+                        stream.set_deadline(&deadline);
                         let _ = std::io::copy(&mut backend, &mut stream);
                         return;
                     }
-                    let deadline = Deadline::after(io_timeout());
-                    let (status, headers, reply) = super::http::read_message(&mut deadline.io(&backend), true);
+                    let (status, headers, reply) = super::http::read_message(&mut backend, true);
                     if path == "/workspace/v1/report"
                         && status.split_whitespace().nth(1) == Some("200")
                     {
@@ -284,6 +279,7 @@ impl TeamRelay {
                         "Content-Length: {}\r\nConnection: close\r\n\r\n",
                         reply.len()
                     ));
+                    stream.set_deadline(&Deadline::after(io_timeout()));
                     let _ = stream
                         .write_all(head.as_bytes())
                         .and_then(|()| stream.write_all(&reply));

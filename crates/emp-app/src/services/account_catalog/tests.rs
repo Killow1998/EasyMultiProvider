@@ -24,12 +24,14 @@ fn fake_catalog(hold_response: bool) -> CatalogFixture {
     let (release_sender, release_receiver) = mpsc::channel();
     let worker = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("catalog accept");
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .expect("catalog read timeout");
         let mut request = String::new();
         {
-            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut reader = BufReader::new(
+                emp_test_support::Deadline::after(emp_test_support::test_timeout(
+                    std::time::Duration::from_secs(5),
+                ))
+                .io(&stream),
+            );
             loop {
                 let mut line = String::new();
                 reader.read_line(&mut line).expect("read request line");

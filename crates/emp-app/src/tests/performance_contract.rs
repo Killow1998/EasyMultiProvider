@@ -1,5 +1,6 @@
 use super::{canonical_root, request, session_header};
 use crate::lifecycle::ServerHandle;
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -89,9 +90,6 @@ impl Drop for TimedUsageUpstream {
 
 fn post_response_stream(server: &ServerHandle, body: &[u8], cookie: &str) -> String {
     let mut stream = TcpStream::connect(server.local_addr()).expect("connect EMP responses");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .expect("set response timeout");
     write!(
         stream,
         "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAuthorization: Bearer caller\r\n{cookie}\r\nConnection: close\r\n\r\n",
@@ -101,7 +99,8 @@ fn post_response_stream(server: &ServerHandle, body: &[u8], cookie: &str) -> Str
     .expect("write responses head");
     stream.write_all(body).expect("write responses body");
     let mut response = Vec::new();
-    stream
+    Deadline::after(test_timeout(Duration::from_secs(5)))
+        .io(stream)
         .read_to_end(&mut response)
         .expect("read streamed response");
     String::from_utf8(response).expect("stream response UTF-8")

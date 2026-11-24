@@ -32,12 +32,10 @@ fn native_websocket_accepts_a_full_128_mib_message_without_http_replay() {
             !deadline.is_expired(),
             "large WebSocket turn did not complete"
         );
-        client.set_read_timeout(
-            deadline
-                .remaining()
-                .min(test_timeout(Duration::from_secs(30))),
-        );
-        let text = match client.poll_receive_text().unwrap() {
+        let remaining = deadline
+            .remaining()
+            .min(test_timeout(Duration::from_secs(30)));
+        let text = match client.poll_receive_text_with_timeout(remaining).unwrap() {
             emp_transport::WebSocketPoll::Text(text) => text,
             emp_transport::WebSocketPoll::Pending => continue,
             other => panic!("unexpected large WebSocket frame: {other:?}"),

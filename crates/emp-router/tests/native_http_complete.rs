@@ -94,10 +94,10 @@ impl Drop for NativeUpstream {
     }
 }
 
-fn receive(mut stream: &TcpStream) -> RecordedRequest {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .expect("request timeout");
+fn receive(stream: &TcpStream) -> RecordedRequest {
+    let mut stream =
+        emp_test_support::Deadline::after(emp_test_support::test_timeout(Duration::from_secs(5)))
+            .io(stream);
     let mut wire = Vec::new();
     let header_end = loop {
         if let Some(position) = wire.windows(4).position(|window| window == b"\r\n\r\n") {

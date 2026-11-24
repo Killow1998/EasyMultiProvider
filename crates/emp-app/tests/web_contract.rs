@@ -1,3 +1,4 @@
+use emp_test_support::{Deadline, test_timeout};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -15,9 +16,7 @@ fn canonical_root(directory: &TempDir) -> PathBuf {
 }
 
 fn complete_response(stream: &mut TcpStream) -> Vec<u8> {
-    stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .expect("response timeout");
+    let mut stream = Deadline::after(test_timeout(std::time::Duration::from_secs(5))).io(stream);
     let mut response = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {

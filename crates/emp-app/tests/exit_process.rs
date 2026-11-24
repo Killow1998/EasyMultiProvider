@@ -113,9 +113,6 @@ fn exit_restores_while_runtime_observation_is_stalled() {
     let listener = UnixListener::bind(control.join("app-server-control.sock")).unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut observation = TcpStream::connect(("127.0.0.1", emp.port)).unwrap();
-    observation
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .unwrap();
     write!(observation, "POST /api/integration/verify HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-EMP-Session: {}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}", emp.port, emp.session).unwrap();
     let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
     let mut socket = loop {

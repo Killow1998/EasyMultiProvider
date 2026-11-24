@@ -8,12 +8,10 @@ fn event(client: &mut ClientWebSocket, kind: &str) -> Value {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     loop {
         assert!(!deadline.is_expired(), "waiting for {kind}");
-        client.set_read_timeout(
-            deadline
-                .remaining()
-                .min(test_timeout(Duration::from_millis(20))),
-        );
-        match client.poll_receive_text().unwrap() {
+        let remaining = deadline
+            .remaining()
+            .min(test_timeout(Duration::from_millis(20)));
+        match client.poll_receive_text_with_timeout(remaining).unwrap() {
             WebSocketPoll::Text(text) => {
                 let value: Value = serde_json::from_str(&text).unwrap();
                 if value["type"] == kind {
@@ -34,7 +32,7 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
-        let (closed_sender, closed) = mpsc::sync_channel(1);
+        let (probe, cancelled) = mpsc::channel();
         let worker = thread::spawn(move || {
             let accept = || {
                 let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
@@ -42,9 +40,6 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
                     assert!(!deadline.is_expired(), "upstream request did not arrive");
                     match listener.accept() {
                         Ok((socket, _)) => {
-                            socket
-                                .set_read_timeout(Some(Duration::from_secs(5)))
-                                .unwrap();
                             return deadline.accept(socket, "upstream accept").unwrap();
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -81,16 +76,9 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
                 write!(socket, "data: {}\n\n", json!({"type":"response.created", "response":{"id":id,"status":"in_progress","model":"upstream"}})).unwrap();
                 socket.flush().unwrap();
                 if index == 0 {
-                    let mut byte = [0u8; 1];
-                    let ended = match socket.read(&mut byte) {
-                        Ok(0) => true,
-                        Err(error) => matches!(
-                            error.kind(),
-                            std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
-                        ),
-                        _ => false,
-                    };
-                    closed_sender.send(ended).unwrap();
+                    report_cancellation(&cancelled, |deadline| {
+                        upstream_closed_before(&socket, deadline)
+                    });
                 } else {
                     write!(socket, "data: {}\n\n", json!({"type":"response.completed", "response":{"id":id,"status":"completed","model":"upstream","output":[]}})).unwrap();
                     socket.flush().unwrap();
@@ -136,6 +124,7 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             "invalid_request"
         );
         let interrupt = json!({"type":"response.interrupt","response_id":"resp_steer","mode":"discard_partial_items"});
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
         client.send_json(&interrupt).unwrap();
         let incomplete = event(&mut client, "response.incomplete");
         assert_eq!(
@@ -148,7 +137,7 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             "unreported tokens must not become zero"
         );
         assert!(
-            closed.recv_timeout(Duration::from_secs(2)).unwrap(),
+            wait_for_cancellation(&probe, &deadline),
             "steering retained HTTP inference"
         );
         // An incremental request must ask Codex for full history rather than

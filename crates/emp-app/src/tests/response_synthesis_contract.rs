@@ -23,17 +23,17 @@ fn responses_sse_stops_at_terminal_without_eof_or_parsing_the_tail() {
             let _ = hold.recv_timeout(Duration::from_secs(5));
         });
         let (_root, server) = configured_protocol_server(&base_url, "responses", auth_mode);
-        let mut downstream = open_post_stream(
+        let downstream = open_post_stream(
             &server,
             "/v1/responses",
             br#"{"model":"demo/model","input":"hello","stream":true}"#,
             &[&session_header(&server), "Authorization: Bearer fixture"],
         );
-        downstream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
         let mut wire = String::new();
-        downstream.read_to_string(&mut wire).unwrap();
+        Deadline::after(test_timeout(Duration::from_secs(2)))
+            .io(downstream)
+            .read_to_string(&mut wire)
+            .unwrap();
         let events: Vec<Value> = wire
             .lines()
             .filter_map(|line| line.strip_prefix("data: "))
@@ -76,10 +76,8 @@ fn native_and_external_json_replies_stream_to_completion_beyond_64_mib() {
                 br#"{"model":"demo/model","input":"hello","stream":true}"#,
                 &[&session_header(&server), "Authorization: Bearer fixture"],
             );
-            stream
-                .set_read_timeout(Some(Duration::from_secs(10)))
-                .unwrap();
-            let mut reader = BufReader::new(stream);
+            let mut reader =
+                BufReader::new(Deadline::after(test_timeout(Duration::from_secs(10))).io(stream));
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
             assert!(line.starts_with("HTTP/1.1 200"), "{auth_mode}: {line}");
@@ -153,10 +151,8 @@ fn disconnect_during_synthesis_stops_delivery_without_retry_or_false_completion(
             br#"{"model":"demo/model","input":"hello","stream":true}"#,
             &[&session_header(&server), "Authorization: Bearer fixture"],
         );
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut reader = BufReader::new(stream);
+        let mut reader =
+            BufReader::new(Deadline::after(test_timeout(Duration::from_secs(5))).io(&stream));
         let mut line = String::new();
         loop {
             line.clear();
@@ -165,7 +161,7 @@ fn disconnect_during_synthesis_stops_delivery_without_retry_or_false_completion(
                 break;
             }
         }
-        reader.get_ref().shutdown(Shutdown::Both).unwrap();
+        stream.shutdown(Shutdown::Both).unwrap();
         drop(reader);
         let _ = upstream.observed();
         let records = super::request_observation_contract::finished(root.path(), 1);

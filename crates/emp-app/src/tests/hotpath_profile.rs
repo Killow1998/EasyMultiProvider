@@ -24,14 +24,14 @@ fn measure(name: &str, iterations: usize, mut operation: impl FnMut()) {
 fn response(server: &ServerHandle, body: &[u8]) -> String {
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
     stream.set_nodelay(true).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
     write!(stream, "POST /v1/responses HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{}\r\nAuthorization: Bearer fixture-caller\r\nConnection: close\r\n\r\n",
         server.local_addr(), body.len(), session_header(server)).unwrap();
     stream.write_all(body).unwrap();
     let mut wire = String::new();
-    stream.read_to_string(&mut wire).unwrap();
+    Deadline::after(test_timeout(Duration::from_secs(10)))
+        .io(stream)
+        .read_to_string(&mut wire)
+        .unwrap();
     wire
 }
 

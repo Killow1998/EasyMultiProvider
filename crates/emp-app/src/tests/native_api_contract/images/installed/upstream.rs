@@ -33,27 +33,30 @@ pub(super) fn spawn(
                     Err(error) => panic!("{error}"),
                 }
             };
-            socket
-                .set_read_timeout(Some(Duration::from_secs(10)))
-                .unwrap();
             let raw = read_request_head(&mut socket).unwrap();
             let head = parse_request(&raw.head).unwrap();
-            let mut websocket_socket = socket.try_clone().unwrap();
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            let mut websocket_socket = deadline.io(&socket);
             let mut websocket = if head.header("upgrade") == Some("websocket") {
                 let accept = websocket_accept(head.header("sec-websocket-key").unwrap()).unwrap();
-                write!(socket,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
-                socket.flush().unwrap();
+                write!(&socket,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
+                (&socket).flush().unwrap();
                 Some(WebSocketConnection::new(&mut websocket_socket))
             } else {
                 None
             };
             let request = if let Some(websocket) = &mut websocket {
-                let mut body: Value =
-                    serde_json::from_str(&websocket.receive_text().unwrap().unwrap()).unwrap();
+                let text = receive_upstream_websocket_text(websocket, &deadline)
+                    .unwrap()
+                    .unwrap();
+                let mut body: Value = serde_json::from_str(&text).unwrap();
                 if body["generate"] == false {
                     websocket.send_json(&json!({"type":"response.completed","response":{"id":"image-prefill","status":"completed","output":[]}})).unwrap();
-                    let next: Value =
-                        serde_json::from_str(&websocket.receive_text().unwrap().unwrap()).unwrap();
+                    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+                    let text = receive_upstream_websocket_text(websocket, &deadline)
+                        .unwrap()
+                        .unwrap();
+                    let next: Value = serde_json::from_str(&text).unwrap();
                     body.as_object_mut().unwrap().remove("generate");
                     body.as_object_mut()
                         .unwrap()
@@ -73,7 +76,7 @@ pub(super) fn spawn(
                     body,
                 }
             } else {
-                finish_native_request(&mut socket, raw)
+                finish_native_request(&socket, raw)
             };
             assert_eq!(request.headers["authorization"], "Bearer selected-fixture");
             assert_eq!(request.headers["chatgpt-account-id"], "selected-owner");

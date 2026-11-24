@@ -74,11 +74,9 @@ fn child_fixture() {
     let address = server.local_addr();
     let mut websocket =
         TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2))).unwrap();
-    websocket
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-        .unwrap();
     write!(websocket, "GET /v1/responses HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nX-EMP-Session: {}\r\n\r\n", server.session_token()).unwrap();
-    let mut reader = BufReader::new(websocket);
+    let mut reader =
+        BufReader::new(Deadline::after(test_timeout(Duration::from_secs(5))).io(websocket));
     let mut status = String::new();
     reader.read_line(&mut status).unwrap();
     assert!(status.starts_with("HTTP/1.1 101"), "{status}");
@@ -164,16 +162,16 @@ fn listener_survives_real_descriptor_exhaustion() {
     drop(queued);
     let mut health =
         TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2))).unwrap();
-    health
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-        .unwrap();
     write!(
         health,
         "GET /healthz HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
     let mut response = String::new();
-    health.read_to_string(&mut response).unwrap();
+    Deadline::after(test_timeout(Duration::from_secs(5)))
+        .io(&health)
+        .read_to_string(&mut response)
+        .unwrap();
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     drop(health);
     command(&mut input, "stop");

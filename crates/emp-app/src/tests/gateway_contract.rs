@@ -119,7 +119,6 @@ fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_ident
         timeout,
     )
     .unwrap();
-    websocket.set_read_timeout(timeout);
     let body = json!({"id":id}).to_string();
     let mut removal = TcpStream::connect(server.local_addr()).unwrap();
     write!(
@@ -134,7 +133,7 @@ fn device_keys_remain_readable_across_restart_and_legacy_replacement_keeps_ident
         .send_json(&json!({"type":"response.create","model":"missing"}))
         .unwrap();
     assert_eq!(
-        websocket.poll_receive_text().unwrap(),
+        websocket.poll_receive_text_with_timeout(timeout).unwrap(),
         emp_transport::WebSocketPoll::Closed { code: Some(1008) }
     );
     assert!(

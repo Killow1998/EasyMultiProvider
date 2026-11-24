@@ -1,10 +1,10 @@
 use emp_transport::{AsyncClientWebSocket, WebSocketEvent, websocket_accept};
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, TcpListener};
 use std::thread;
 use std::time::{Duration, Instant};
 
-fn handshake(stream: &mut TcpStream, extensions: &str) {
+fn handshake(stream: &mut (impl Read + Write), extensions: &str) {
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
         let mut byte = [0u8; 1];
@@ -70,10 +70,11 @@ async fn async_session_preserves_raw_text_pongs_and_propagates_close_once() {
     let raw_upstream = " { \"kind\" : \"event\", \"n\" : 1 }\n";
     let raw_downstream = "{\"type\":\"cancel\", \"reason\":\"caller\"}";
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let mut stream = emp_test_support::Deadline::after(emp_test_support::test_timeout(
+            Duration::from_secs(3),
+        ))
+        .io(stream);
         handshake(&mut stream, "");
         write_server_frame(&mut stream, 0x89, b"keepalive");
         write_server_frame(&mut stream, 0x81, raw_upstream.as_bytes());
@@ -143,10 +144,11 @@ async fn negotiated_windows_keep_deflate_context_in_both_directions_across_turns
         .collect();
     let expected = text.clone();
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let mut stream = emp_test_support::Deadline::after(emp_test_support::test_timeout(
+            Duration::from_secs(3),
+        ))
+        .io(stream);
         handshake(
             &mut stream,
             "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits=12; server_max_window_bits=12\r\n",
@@ -230,19 +232,18 @@ async fn tcp_reset_during_frame_write_returns_failure_and_unknown_delivery() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let (stream, _) = listener.accept().unwrap();
         let socket = socket2::SockRef::from(&stream);
         socket.set_recv_buffer_size(4096).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        handshake(&mut stream, "");
+        let mut input = emp_test_support::Deadline::after(emp_test_support::test_timeout(
+            Duration::from_secs(5),
+        ))
+        .io(&stream);
+        handshake(&mut input, "");
         let mut prefix = [0; 14];
-        stream.read_exact(&mut prefix).unwrap();
+        input.read_exact(&mut prefix).unwrap();
         assert_eq!(&prefix[..2], &[0x81, 0xff]);
-        socket2::SockRef::from(&stream)
-            .set_linger(Some(Duration::ZERO))
-            .unwrap();
+        socket.set_linger(Some(Duration::ZERO)).unwrap();
     });
     let mut client = AsyncClientWebSocket::connect_with_proxy(
         &format!("ws://{address}/responses"),

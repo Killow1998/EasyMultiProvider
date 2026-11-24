@@ -1,4 +1,4 @@
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::io::{self, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -78,7 +78,7 @@ impl HttpsProxy {
         let worker_stop = Arc::clone(&stop);
         let worker = thread::spawn(move || {
             while !worker_stop.load(Ordering::Acquire) {
-                let (mut stream, _) = match listener.accept() {
+                let (stream, _) = match listener.accept() {
                     Ok(accepted) => accepted,
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         #[expect(
@@ -93,12 +93,8 @@ impl HttpsProxy {
                 let tls = Arc::clone(&tls);
                 let connected = connected.clone();
                 thread::spawn(move || {
-                    stream
-                        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-                        .expect("proxy read timeout");
-                    stream
-                        .set_write_timeout(Some(test_timeout(Duration::from_secs(5))))
-                        .expect("proxy write timeout");
+                    let mut stream =
+                        Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
                     let (connect, _, _) = read_message(&mut stream, false);
                     let authority = connect
                         .strip_prefix("CONNECT ")
@@ -120,6 +116,7 @@ impl HttpsProxy {
                     stream
                         .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
                         .expect("accept CONNECT");
+                    stream.set_deadline(&Deadline::after(test_timeout(Duration::from_secs(5))));
                     let connection = ServerConnection::new(tls).expect("TLS connection");
                     let mut stream = StreamOwned::new(connection, stream);
                     let (request, headers, body) = read_message(&mut stream, false);
@@ -134,6 +131,9 @@ impl HttpsProxy {
                         .map(|(name, value)| (name.as_str(), value.as_str()))
                         .collect();
                     let response = http(upstream_port, method, path, &headers, &body);
+                    stream
+                        .sock
+                        .set_deadline(&Deadline::after(test_timeout(Duration::from_secs(5))));
                     write!(stream,
                         "HTTP/1.1 {} Fixture\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         response.status, response.header("content-type").expect("upstream content type"), response.body.len()

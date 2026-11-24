@@ -228,14 +228,12 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
         server.local_addr().port()
     );
     let mut downstream = TcpStream::connect(address).expect("connect downstream fixture");
-    downstream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
     let mut one_write = request.into_bytes();
     one_write.extend_from_slice(&first_client);
     downstream
         .write_all(&one_write)
         .expect("send handshake+first frame");
+    let mut downstream = Deadline::after(test_timeout(Duration::from_secs(2))).io(downstream);
     let response_head = read_http_head(&mut downstream);
     assert!(response_head.starts_with("HTTP/1.1 101 Switching Protocols\r\n"));
 
@@ -409,9 +407,6 @@ impl FakeSideband {
         let (sender, observed) = mpsc::channel();
         let worker = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept fake sideband");
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
             let request_head = read_request_head(&mut stream).expect("read upstream handshake");
             let request = parse_request(&request_head.head).expect("parse upstream handshake");
             let path = request.target.to_owned();
@@ -425,6 +420,7 @@ impl FakeSideband {
             let accept = websocket_accept(&headers["sec-websocket-key"]).unwrap();
             write!(stream, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
             stream.flush().unwrap();
+            let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
             write_ws_frame(
                 &mut stream,
                 1,
@@ -528,15 +524,12 @@ fn direct_sideband_request(server: &ServerHandle, call_id: &str, fake_url: &str)
     );
     let mut client = TcpStream::connect(address).expect("connect sideband request");
     client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .expect("set sideband response timeout");
-    client
         .write_all(raw.as_bytes())
         .expect("write sideband request");
     response_until_close(&mut client)
 }
 
-fn read_http_head(stream: &mut TcpStream) -> String {
+fn read_http_head(stream: &mut impl Read) -> String {
     let mut bytes = Vec::new();
     while !bytes.ends_with(b"\r\n\r\n") {
         let mut byte = [0_u8; 1];
@@ -560,7 +553,7 @@ fn masked_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
     frame
 }
 
-fn write_ws_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) {
+fn write_ws_frame(stream: &mut impl Write, opcode: u8, payload: &[u8]) {
     let mut frame = vec![0x80 | opcode];
     if payload.len() < 126 {
         frame.push(payload.len() as u8);
@@ -573,7 +566,7 @@ fn write_ws_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) {
     stream.flush().unwrap();
 }
 
-fn read_ws_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
+fn read_ws_frame(stream: &mut impl Read) -> (u8, Vec<u8>) {
     let mut header = [0_u8; 2];
     stream
         .read_exact(&mut header)

@@ -8,47 +8,68 @@ use syn::{
     visit::{self, Visit},
 };
 
-const ALLOWED: &[(&str, usize)] = &[
-    ("emp-app", 117),
-    ("emp-codex", 3),
-    ("emp-router", 3),
-    ("emp-transport", 14),
-];
+const ALLOWED: &[(&str, usize)] = &[("emp-app", 73), ("emp-codex", 2), ("emp-transport", 9)];
+
+const SOCKET_TIMEOUTS: &[(&str, usize)] = &[("emp-app", 5)];
 
 pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
-    let mut counts: BTreeMap<&str, Vec<String>> = ALLOWED
+    let mut counts: BTreeMap<&str, (Vec<String>, Vec<String>)> = ALLOWED
         .iter()
-        .map(|&(name, _)| (name, Vec::new()))
+        .chain(SOCKET_TIMEOUTS)
+        .map(|&(name, _)| (name, (Vec::new(), Vec::new())))
         .collect();
     for path in paths {
         let Some(group) = group(path) else { continue };
         if !root.join(path).is_file() {
             continue;
         }
-        for line in violations(path, &read(root, path)?)? {
-            counts
-                .entry(group)
-                .or_default()
-                .push(format!("{path}:{line}"));
-        }
+        let (bare, sockets) = inspect_source(path, &read(root, path)?)?;
+        let (bare_locations, socket_locations) = counts.entry(group).or_default();
+        bare_locations.extend(bare.into_iter().map(|line| format!("{path}:{line}")));
+        socket_locations.extend(sockets.into_iter().map(|line| format!("{path}:{line}")));
     }
-    for (group, locations) in counts {
-        let allowed = ALLOWED
-            .iter()
-            .find(|&&(name, _)| name == group)
-            .map_or(0, |&(_, count)| count);
-        check_baseline(group, &locations, allowed, errors);
+    for (group, (bare, sockets)) in counts {
+        for (rule, locations, baseline, label, fix) in [
+            (
+                "test-deadlines",
+                bare,
+                ALLOWED,
+                "裸写期限",
+                "使用 test_timeout",
+            ),
+            (
+                "test-socket-timeouts",
+                sockets,
+                SOCKET_TIMEOUTS,
+                "直接设置 socket 超时",
+                "使用 Deadline::io 或带期限的读取接口",
+            ),
+        ] {
+            let allowed = baseline
+                .iter()
+                .find(|&&(name, _)| name == group)
+                .map_or(0, |&(_, count)| count);
+            check_baseline(rule, group, &locations, allowed, label, fix, errors);
+        }
     }
     Ok(())
 }
 
-fn check_baseline(group: &str, locations: &[String], allowed: usize, errors: &mut Vec<String>) {
+fn check_baseline(
+    rule: &str,
+    group: &str,
+    locations: &[String],
+    allowed: usize,
+    label: &str,
+    fix: &str,
+    errors: &mut Vec<String>,
+) {
     let actual = locations.len();
     if actual > allowed {
-        errors.push(format!("[test-deadlines] {group}: 当前 {actual} 处裸写期限，基线 {allowed}；使用 test_timeout，计数棘轮只降不升\n{}", locations.join("\n")));
+        errors.push(format!("[{rule}] {group}: 当前 {actual} 处{label}，基线 {allowed}；{fix}，计数棘轮只降不升\n{}", locations.join("\n")));
     } else if actual < allowed {
         errors.push(format!(
-            "[test-deadlines] {group}: 当前 {actual} 处裸写期限，基线 {allowed}；请在同一提交将基线调低至 {actual}"
+            "[{rule}] {group}: 当前 {actual} 处{label}，基线 {allowed}；请在同一提交将基线调低至 {actual}"
         ));
     }
 }
@@ -66,41 +87,59 @@ fn group(path: &str) -> Option<&str> {
     }
 }
 
-fn violations(path: &str, contents: &str) -> Result<Vec<usize>> {
-    let test_file = path.starts_with("crates/emp-test-support/src/") || comments::test_file(path);
+fn inspect_source(path: &str, contents: &str) -> Result<(Vec<usize>, Vec<usize>)> {
+    let test_support = path.starts_with("crates/emp-test-support/src/");
+    let test_file = test_support || comments::test_file(path);
     if !(test_file || (contents.contains("test") && contents.contains("#["))) {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let source = syn::parse_file(contents).map_err(|error| format!("{path}: {error}"))?;
     let mut scopes = comments::TestScopes::default();
-    if !test_file {
+    if !test_file || test_support {
         scopes.visit_file(&source);
     }
     let mut visitor = Deadlines {
         test_file,
         emp_app: group(path) == Some("emp-app"),
+        socket_implementation: path == "crates/emp-test-support/src/lib.rs",
         scopes,
         lines: Vec::new(),
+        socket_lines: Vec::new(),
     };
     visitor.visit_file(&source);
     visitor.lines.sort_unstable();
-    Ok(visitor.lines)
+    visitor.socket_lines.sort_unstable();
+    Ok((visitor.lines, visitor.socket_lines))
 }
 
 struct Deadlines {
     test_file: bool,
     emp_app: bool,
+    socket_implementation: bool,
     scopes: comments::TestScopes,
     lines: Vec<usize>,
+    socket_lines: Vec<usize>,
 }
 
 impl Deadlines {
+    fn in_test(&self, line: usize) -> bool {
+        self.test_file || self.scopes.contains(line)
+    }
+
     fn inspect(&mut self, expr: &Expr, constants: bool) {
         let line = expr.span().start().line;
-        if (self.test_file || self.scopes.contains(line))
-            && bare_duration(expr, constants, self.emp_app, false)
-        {
+        if self.in_test(line) && bare_duration(expr, constants, self.emp_app, false) {
             self.lines.push(line);
+        }
+    }
+
+    fn inspect_socket_timeout(&mut self, name: &syn::Ident) {
+        let line = name.span().start().line;
+        if (!self.socket_implementation || self.scopes.contains(line))
+            && self.in_test(line)
+            && (name == "set_read_timeout" || name == "set_write_timeout")
+        {
+            self.socket_lines.push(line);
         }
     }
 
@@ -139,7 +178,7 @@ fn bare_duration(expr: &Expr, constants: bool, emp_app: bool, arithmetic: bool) 
         Expr::Paren(paren) => bare_duration(&paren.expr, constants, emp_app, arithmetic),
         Expr::Group(group) => bare_duration(&group.expr, constants, emp_app, arithmetic),
         Expr::Binary(binary) if matches!(binary.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_)) => {
-            if instant_now(&binary.left) {
+            if starts_at_now(&binary.left) {
                 return false;
             }
             bare_duration(&binary.left, true, emp_app, true)
@@ -215,6 +254,17 @@ fn instant_now(expr: &Expr) -> bool {
     )
 }
 
+fn starts_at_now(expr: &Expr) -> bool {
+    match expr {
+        Expr::Paren(paren) => starts_at_now(&paren.expr),
+        Expr::Group(group) => starts_at_now(&group.expr),
+        Expr::Binary(binary) if matches!(binary.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_)) => {
+            starts_at_now(&binary.left)
+        }
+        _ => instant_now(expr),
+    }
+}
+
 fn deadline_name(name: &syn::Ident) -> bool {
     name.to_string()
         .split('_')
@@ -247,6 +297,7 @@ impl<'ast> Visit<'ast> for Deadlines {
         if let Expr::Path(path) = call.func.as_ref()
             && let Some(name) = path.path.segments.last()
         {
+            self.inspect_socket_timeout(&name.ident);
             if name.ident == "after"
                 && path
                     .path
@@ -267,6 +318,7 @@ impl<'ast> Visit<'ast> for Deadlines {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        self.inspect_socket_timeout(&call.method);
         let name = call.method.to_string();
         if name == "wait_timeout" || name == "wait_timeout_while" {
             if let Some(expr) = call.args.iter().nth(1) {
@@ -279,7 +331,7 @@ impl<'ast> Visit<'ast> for Deadlines {
     }
 
     fn visit_expr_binary(&mut self, expr: &'ast syn::ExprBinary) {
-        if matches!(expr.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_)) && instant_now(&expr.left) {
+        if matches!(expr.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_)) && starts_at_now(&expr.left) {
             self.inspect(&expr.right, true);
         }
         visit::visit_expr_binary(self, expr);
@@ -325,6 +377,10 @@ fn parse_match_arguments(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn violations(path: &str, source: &str) -> Result<Vec<usize>> {
+        Ok(inspect_source(path, source)?.0)
+    }
 
     #[test]
     fn rejects_bare_waits_and_allows_simulated_time() {
@@ -423,17 +479,83 @@ fn drain() {
     }
 
     #[test]
+    fn checks_every_offset_from_instant_now() {
+        let source = r#"
+#[test]
+fn deadlines() {
+    timeout_at(Instant::now() + test_timeout(margin) + FIXTURE_WAIT, work);
+    let deadline = (Instant::now() - FIXTURE_WAIT) + test_timeout(margin) - OTHER_WAIT;
+    let deadline = Instant::now() + test_timeout(margin) - test_timeout(margin);
+}
+"#;
+        assert_eq!(
+            violations("crates/emp-app/src/lib.rs", source).unwrap(),
+            [4, 5, 5]
+        );
+    }
+
+    #[test]
+    fn socket_timeout_rule_checks_methods_and_qualified_calls_in_tests() {
+        let source = r#"
+fn production() { socket.set_read_timeout(Some(timeout)); }
+#[cfg(test)]
+mod tests {
+    fn fixture() {
+        socket.set_read_timeout(Some(test_timeout(limit)));
+        TcpStream::set_write_timeout(&socket, Some(limit));
+        assert!(socket.set_write_timeout(None).is_ok());
+        let reader = Deadline::after(test_timeout(limit)).io(socket);
+    }
+}
+"#;
+        for (path, expected) in [
+            ("crates/app/src/lib.rs", &[6, 7, 8][..]),
+            ("crates/app/tests/wire.rs", &[2, 6, 7, 8][..]),
+            (
+                "crates/emp-test-support/src/fixture/wire.rs",
+                &[2, 6, 7, 8][..],
+            ),
+        ] {
+            assert_eq!(inspect_source(path, source).unwrap().1, expected);
+        }
+    }
+
+    #[test]
     fn baseline_requires_an_exact_match() {
         let mut errors = Vec::new();
-        check_baseline("sample", &[], 1, &mut errors);
+        check_baseline(
+            "test-socket-timeouts",
+            "sample",
+            &[],
+            1,
+            "调用",
+            "使用 Deadline::io",
+            &mut errors,
+        );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("在同一提交将基线调低至 0"));
 
         errors.clear();
         let locations = ["tests/wire.rs:42".to_owned()];
-        check_baseline("sample", &locations, 1, &mut errors);
+        check_baseline(
+            "test-socket-timeouts",
+            "sample",
+            &locations,
+            1,
+            "调用",
+            "使用 Deadline::io",
+            &mut errors,
+        );
         assert!(errors.is_empty());
-        check_baseline("sample", &locations, 0, &mut errors);
+        check_baseline(
+            "test-socket-timeouts",
+            "sample",
+            &locations,
+            0,
+            "调用",
+            "使用 Deadline::io",
+            &mut errors,
+        );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("tests/wire.rs:42"));
     }

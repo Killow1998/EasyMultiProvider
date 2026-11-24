@@ -380,9 +380,10 @@ fn upstream_retry_advice_reaches_http_and_websocket_clients() {
                 let mut body = body;
                 body["type"] = json!("response.create");
                 socket.send_json(&body).unwrap();
+                let deadline = Deadline::after(test_timeout(Duration::from_secs(300)));
                 let mut failure = None;
                 for _ in 0..4 {
-                    let event = socket.receive_json().unwrap().expect("WebSocket event");
+                    let event = websocket_event_before(&mut socket, &deadline);
                     if event["type"] == "error" {
                         failure = Some(event);
                         break;

@@ -42,7 +42,7 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
 }
 
 fn violations(path: &str, contents: &str) -> Result<Vec<(usize, &'static str)>> {
-    if !contents.contains("temp") && !contents.contains("Temp") {
+    if !contents.contains("temp") && !contents.contains("Temp") && !contents.contains("make") {
         return Ok(Vec::new());
     }
     let file = syn::parse_file(contents).map_err(|error| format!("{path}: {error}"))?;
@@ -108,13 +108,15 @@ impl<'ast> Visit<'ast> for FixtureRoots {
                 .map(|segment| &segment.ident);
             if let Some(name) = segments.next() {
                 let line = name.span().start().line;
+                let owner = segments.next();
                 if name == "tempdir"
                     || name == "temp_dir"
                     || name == "tempfile"
+                    || name == "spooled_tempfile"
+                    || name == "make" && owner.is_some_and(|owner| owner == "Builder")
+                    || name == "new" && owner.is_some_and(|owner| owner == "SpooledTempFile")
                     || (name == "new" || name == "with_prefix" || name == "with_suffix")
-                        && segments
-                            .next()
-                            .is_some_and(|owner| owner == "TempDir" || owner == "NamedTempFile")
+                        && owner.is_some_and(|owner| owner == "TempDir" || owner == "NamedTempFile")
                 {
                     self.uses_implicit_root(line);
                 } else if self.xtask && name == "temporary_directory" && self.in_test(line) {
@@ -126,7 +128,7 @@ impl<'ast> Visit<'ast> for FixtureRoots {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if call.method == "tempdir" || call.method == "tempfile" {
+        if call.method == "tempdir" || call.method == "tempfile" || call.method == "make" {
             self.uses_implicit_root(call.method.span().start().line);
         }
         visit::visit_expr_method_call(self, call);
@@ -177,6 +179,27 @@ mod tests {
         assert_eq!(
             violations("xtask/src/package.rs", unit).unwrap(),
             [(4, FIXTURE_ROOT_GUIDANCE), (5, FIXTURE_ROOT_GUIDANCE)]
+        );
+    }
+
+    #[test]
+    fn requires_explicit_roots_for_builder_make_and_spooled_files() {
+        let source = r#"
+fn fixture() {
+    tempfile::Builder::new().prefix("case-").make(create);
+    tempfile::Builder::make(&builder, create);
+    tempfile::spooled_tempfile(0);
+    tempfile::SpooledTempFile::new(0);
+    tempfile::Builder::new().make_in(root, create);
+    tempfile::spooled_tempfile_in(0, root);
+    tempfile::SpooledTempFile::new_in(0, root);
+}
+"#;
+        assert_eq!(
+            violations("crates/example/tests/wire.rs", source).unwrap(),
+            (3..=6)
+                .map(|line| (line, FIXTURE_ROOT_GUIDANCE))
+                .collect::<Vec<_>>()
         );
     }
 

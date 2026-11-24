@@ -81,30 +81,60 @@ fn parse_head(head: &str) -> (String, BTreeMap<String, String>) {
     (first, headers)
 }
 
-/// Decode a complete chunked body, or `None` while more bytes are needed.
-fn dechunk(mut raw: &[u8]) -> Option<Vec<u8>> {
+fn trailer_is_end(line: &[u8]) -> io::Result<bool> {
+    if line.is_empty() {
+        return Ok(true);
+    }
+    let valid = line
+        .iter()
+        .position(|&byte| byte == b':')
+        .is_some_and(|colon| {
+            colon > 0
+                && line[..colon]
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^`_|~".contains(byte))
+                && line[colon + 1..]
+                    .iter()
+                    .all(|&byte| byte == b'\t' || (byte >= b' ' && byte != 127))
+        });
+    if !valid {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid chunk trailer field",
+        ));
+    }
+    Ok(false)
+}
+
+fn dechunk(mut raw: &[u8]) -> io::Result<Option<Vec<u8>>> {
     let mut body = Vec::new();
     loop {
-        let line_end = find(raw, b"\r\n")?;
+        let Some(line_end) = find(raw, b"\r\n") else {
+            return Ok(None);
+        };
         let size_text = std::str::from_utf8(&raw[..line_end]).expect("chunk size");
-        let size =
-            usize::from_str_radix(size_text.split(';').next()?.trim(), 16).expect("hex chunk size");
+        let size = usize::from_str_radix(size_text.split(';').next().unwrap().trim(), 16)
+            .expect("hex chunk size");
         let start = line_end + 2;
         if size == 0 {
             let mut trailers = &raw[start..];
-            loop {
-                let end = find(trailers, b"\r\n")?;
-                if end == 0 {
-                    return Some(body);
+            while let Some(end) = find(trailers, b"\r\n") {
+                if trailer_is_end(&trailers[..end])? {
+                    return Ok(Some(body));
                 }
                 trailers = &trailers[end + 2..];
             }
+            return Ok(None);
         }
         if raw.len() < start + size + 2 {
-            return None;
+            return Ok(None);
         }
-        body.extend_from_slice(&raw[start..start + size]);
-        raw = &raw[start + size + 2..];
+        let end = start + size;
+        if &raw[end..end + 2] != b"\r\n" {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "chunk ending"));
+        }
+        body.extend_from_slice(&raw[start..end]);
+        raw = &raw[end + 2..];
     }
 }
 
@@ -126,7 +156,7 @@ fn sse_finished(body: &[u8]) -> bool {
 
 /// Read one HTTP message (request or response) whose head ends at `\r\n\r\n`.
 /// Returns the first line, lowercase headers and the decoded body.
-pub(super) fn read_message(
+pub(crate) fn read_message(
     stream: &mut impl Read,
     until_eof: bool,
 ) -> (String, BTreeMap<String, String>, Vec<u8>) {
@@ -146,7 +176,7 @@ pub(super) fn read_message(
                 .get("transfer-encoding")
                 .is_some_and(|value| value.eq_ignore_ascii_case("chunked"))
             {
-                if let Some(body) = dechunk(rest) {
+                if let Some(body) = dechunk(rest).expect("valid HTTP chunk trailers") {
                     return (first, headers, body);
                 }
             } else if !until_eof {
@@ -165,11 +195,17 @@ pub(super) fn read_message(
             let head = std::str::from_utf8(&raw[..separator]).expect("ASCII head");
             let (first, headers) = parse_head(head);
             let rest = raw[separator + 4..].to_vec();
+            assert!(
+                !headers.contains_key("content-length"),
+                "HTTP body ended before Content-Length bytes"
+            );
             let body = if headers
                 .get("transfer-encoding")
                 .is_some_and(|value| value.eq_ignore_ascii_case("chunked"))
             {
-                dechunk(&rest).expect("complete chunked body")
+                dechunk(&rest)
+                    .expect("valid HTTP chunk trailers")
+                    .expect("complete chunked body")
             } else {
                 rest
             };
@@ -196,7 +232,7 @@ pub fn http(
     )
 }
 
-pub(super) fn http_before(
+pub(crate) fn http_before(
     port: u16,
     method: &str,
     path: &str,
@@ -301,7 +337,7 @@ impl SseClient {
             if length == 0 {
                 loop {
                     self.read_chunk_line(&mut line)?;
-                    if line == b"\r\n" {
+                    if trailer_is_end(&line[..line.len() - 2])? {
                         break;
                     }
                 }
@@ -382,6 +418,28 @@ impl SseClient {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn both_chunk_readers_reject_invalid_trailer_fields() {
+        let body = b"0\r\ngarbage\r\n\r\n";
+        assert_eq!(
+            dechunk(body).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+        server.write_all(body).unwrap();
+
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let mut reader = SseClient::read_head(client, &deadline);
+        assert_eq!(
+            reader.expect_eof(&deadline).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
 
     #[test]
     fn chunked_sse_requires_the_final_empty_line_even_after_completion() {

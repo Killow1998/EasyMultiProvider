@@ -265,15 +265,14 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     // An idle native connection must drain without requiring the user to
     // close the entire desktop application or restart the computer.
     let mut idle = std::net::TcpStream::connect(server.local_addr()).unwrap();
-    idle.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .unwrap();
     use std::io::{Read, Write};
     write!(idle,"GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{}\r\nAuthorization: Bearer fixture-only\r\n\r\n",server.local_addr().port(),session_header(&server)).unwrap();
     idle.flush().unwrap();
     let mut head = Vec::new();
+    let mut handshake = Deadline::after(test_timeout(Duration::from_secs(5))).io(&idle);
     while !head.ends_with(b"\r\n\r\n") {
         let mut byte = [0];
-        idle.read_exact(&mut byte).unwrap();
+        handshake.read_exact(&mut byte).unwrap();
         head.push(byte[0]);
     }
     assert!(head.starts_with(b"HTTP/1.1 101"));
@@ -287,6 +286,7 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
         restored_reply.starts_with("HTTP/1.1 200 OK"),
         "{restored_reply}"
     );
+    let mut idle = Deadline::after(test_timeout(Duration::from_secs(5))).io(idle);
     let mut close_head = [0; 2];
     idle.read_exact(&mut close_head).unwrap();
     assert_eq!(close_head[0], 0x88);

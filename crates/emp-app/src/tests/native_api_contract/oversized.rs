@@ -108,9 +108,6 @@ fn native_websocket_peer_1009_before_events_falls_back_to_full_http_request() {
     let (_directory, server) = native_alias_server(&upstream.base_url());
     let cookie = session_header(&server);
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
     write!(
         stream,
         "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: size-fallback-thread\r\n\r\n",
@@ -118,6 +115,7 @@ fn native_websocket_peer_1009_before_events_falls_back_to_full_http_request() {
     )
     .unwrap();
     stream.flush().unwrap();
+    let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
     let mut head = Vec::new();
     while !head.windows(4).any(|part| part == b"\r\n\r\n") {
         let mut byte = [0u8; 1];

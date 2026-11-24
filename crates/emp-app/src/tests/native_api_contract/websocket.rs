@@ -8,15 +8,13 @@ fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_p
     let (_directory, server) = native_alias_server(&upstream.base_url());
     let cookie = session_header(&server);
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-    stream
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-        .unwrap();
     let mut request = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: websocket-thread\r\n\r\n",server.local_addr().port()).into_bytes();
     request.extend_from_slice(&masked_websocket_text(
         &json!({"type":"response.create","model":"native/alias","input":"hello"}),
     ));
     stream.write_all(&request).unwrap();
     stream.flush().unwrap();
+    let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
     let mut handshake = Vec::new();
     while !handshake.windows(4).any(|part| part == b"\r\n\r\n") {
         let mut byte = [0u8; 1];
@@ -145,7 +143,7 @@ fn responses_websocket_streams_first_external_event_and_cancels_on_disconnect() 
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let (request_sender, request_ready) = mpsc::sync_channel::<()>(1);
-    let (closed_sender, closed) = mpsc::sync_channel::<bool>(1);
+    let (probe, cancelled) = mpsc::channel();
     let worker = thread::spawn(move || {
         let (mut upstream, _) = listener.accept().unwrap();
         let raw = read_request_head(&mut upstream).unwrap();
@@ -173,19 +171,9 @@ fn responses_websocket_streams_first_external_event_and_cancels_on_disconnect() 
             .unwrap();
         upstream.flush().unwrap();
         request_sender.send(()).unwrap();
-        upstream
-            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .unwrap();
-        let mut byte = [0_u8; 1];
-        let ended = match upstream.read(&mut byte) {
-            Ok(0) => true,
-            Err(error) => matches!(
-                error.kind(),
-                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
-            ),
-            Ok(_) => false,
-        };
-        closed_sender.send(ended).unwrap();
+        report_cancellation(&cancelled, |deadline| {
+            upstream_closed_before(&upstream, deadline)
+        });
     });
     let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
@@ -208,15 +196,13 @@ fn responses_websocket_streams_first_external_event_and_cancels_on_disconnect() 
     let cookie = session_header(&server);
     let address = server.local_addr();
     let mut stream = TcpStream::connect(address).unwrap();
-    stream
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-        .unwrap();
     let mut request = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: external-ws-thread\r\n\r\n",server.local_addr().port()).into_bytes();
     request.extend_from_slice(&masked_websocket_text(
         &json!({"type":"response.create","model":"demo/model","input":"hello"}),
     ));
     stream.write_all(&request).unwrap();
     stream.flush().unwrap();
+    let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
     let mut handshake = Vec::new();
     while !handshake.windows(4).any(|part| part == b"\r\n\r\n") {
         let mut byte = [0_u8; 1];
@@ -239,11 +225,10 @@ fn responses_websocket_streams_first_external_event_and_cancels_on_disconnect() 
     request_ready
         .recv_timeout(test_timeout(Duration::from_secs(2)))
         .unwrap();
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     drop(stream);
     assert!(
-        closed
-            .recv_timeout(test_timeout(Duration::from_secs(5)))
-            .unwrap(),
+        wait_for_cancellation(&probe, &deadline),
         "EMP retained the external HTTP stream after the websocket client disconnected"
     );
     server.shutdown().unwrap();
@@ -255,10 +240,8 @@ fn generic_websocket_client_receives_only_public_responses_events() {
     let upstream = NativeSseUpstream::start(false);
     let (_directory, server) = native_alias_server(&upstream.base_url());
     let mut socket = TcpStream::connect(server.local_addr()).unwrap();
-    socket
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-        .unwrap();
     write!(socket, "GET /v1/responses HTTP/1.1\r\nHost: {}\r\n{}\r\nAuthorization: Bearer fixture\r\nUser-Agent: async-openai\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",server.local_addr(),session_header(&server)).unwrap();
+    let mut socket = Deadline::after(test_timeout(Duration::from_secs(5))).io(socket);
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
         let mut byte = [0];

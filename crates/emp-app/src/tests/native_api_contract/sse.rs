@@ -16,8 +16,11 @@ impl NativeErrorSseUpstream {
         let worker = thread::spawn(move || {
             for received in 0..requests {
                 let (mut stream, _) = listener.accept()?;
-                stream.set_read_timeout(Some(crate::server::raw_tcp::wire_timeout()))?;
-                if stream.peek(&mut [0])? == 0 {
+                if Deadline::after(crate::server::raw_tcp::wire_timeout())
+                    .io(&stream)
+                    .peek(&mut [0])?
+                    == 0
+                {
                     return Ok(received);
                 }
                 let _ = receive_native_request(&mut stream);
@@ -67,8 +70,9 @@ fn read_native_sse(input: impl BufRead) -> (String, Vec<String>) {
 
 fn post_native_sse(server: &ServerHandle, body: &[u8], headers: &[&str]) -> (String, Vec<String>) {
     let stream = open_post_stream(server, "/v1/responses", body, headers);
-    stream.set_read_timeout(Some(response_timeout())).unwrap();
-    read_native_sse(BufReader::new(stream))
+    read_native_sse(BufReader::new(
+        Deadline::after(response_timeout()).io(stream),
+    ))
 }
 
 fn incomplete_sse_event(frames: &[String]) -> Value {
@@ -292,24 +296,14 @@ fn native_sse_downstream_disconnect_cancels_open_before_headers() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let (request_sender, request_received) = mpsc::sync_channel(1);
-    let (closed_sender, closed) = mpsc::sync_channel(1);
+    let (probe, cancelled) = mpsc::channel();
     let worker = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let _ = receive_native_request(&mut stream);
         request_sender.send(()).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .unwrap();
-        let mut byte = [0u8; 1];
-        let ended = match stream.read(&mut byte) {
-            Ok(0) => true,
-            Err(error) => matches!(
-                error.kind(),
-                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
-            ),
-            Ok(_) => false,
-        };
-        closed_sender.send(ended).unwrap();
+        report_cancellation(&cancelled, |deadline| {
+            upstream_closed_before(&stream, deadline)
+        });
     });
     let (_directory, server) = native_alias_server(&format!("http://{address}/v1"));
     let cookie = session_header(&server);
@@ -326,9 +320,10 @@ fn native_sse_downstream_disconnect_cancels_open_before_headers() {
     request_received
         .recv_timeout(Duration::from_secs(2))
         .unwrap();
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
     drop(downstream);
     assert!(
-        closed.recv_timeout(Duration::from_secs(3)).unwrap(),
+        wait_for_cancellation(&probe, &deadline),
         "Rust EMP retained native upstream while open_stream awaited response headers"
     );
     server.shutdown().unwrap();
@@ -340,7 +335,7 @@ fn native_sse_downstream_disconnect_cancels_upstream() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let (head_sender, head_ready) = mpsc::sync_channel(1);
-    let (closed_sender, closed) = mpsc::sync_channel(1);
+    let (probe, cancelled) = mpsc::channel();
     let worker = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let _ = receive_native_request(&mut stream);
@@ -351,19 +346,9 @@ fn native_sse_downstream_disconnect_cancels_upstream() {
             .unwrap();
         stream.flush().unwrap();
         head_sender.send(()).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .unwrap();
-        let mut byte = [0u8; 1];
-        let ended = match stream.read(&mut byte) {
-            Ok(0) => true,
-            Err(error) => matches!(
-                error.kind(),
-                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
-            ),
-            Ok(_) => false,
-        };
-        closed_sender.send(ended).unwrap();
+        report_cancellation(&cancelled, |deadline| {
+            upstream_closed_before(&stream, deadline)
+        });
     });
     let (_directory, server) = native_alias_server(&format!("http://{address}/v1"));
     let cookie = session_header(&server);
@@ -376,9 +361,10 @@ fn native_sse_downstream_disconnect_cancels_upstream() {
         &[&cookie, "Authorization: Bearer caller"],
     );
     head_ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
     drop(downstream);
     assert!(
-        closed.recv_timeout(Duration::from_secs(3)).unwrap(),
+        wait_for_cancellation(&probe, &deadline),
         "Rust EMP retained native upstream after Codex disconnected"
     );
     server.shutdown().unwrap();

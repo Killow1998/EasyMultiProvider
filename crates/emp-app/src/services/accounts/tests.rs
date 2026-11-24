@@ -21,9 +21,6 @@ fn http_request(
     sent: Option<mpsc::Sender<()>>,
 ) -> String {
     let mut stream = TcpStream::connect(address).expect("connect management endpoint");
-    stream
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(15))))
-        .expect("set endpoint timeout");
     write!(
         stream,
         "{method} {target} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-EMP-Session: {cookie}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -37,7 +34,8 @@ fn http_request(
         sent.send(()).expect("signal endpoint request sent");
     }
     let mut response = Vec::new();
-    stream
+    Deadline::after(test_timeout(Duration::from_secs(15)))
+        .io(stream)
         .read_to_end(&mut response)
         .expect("read endpoint response");
     String::from_utf8(response).expect("endpoint response is UTF-8")

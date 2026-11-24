@@ -26,10 +26,12 @@ impl NativeWebSocketUpstream {
             let accept = websocket_accept(&headers["sec-websocket-key"]).unwrap();
             write!(stream,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nOpenAI-Model: upstream\r\nX-Codex-Turn-State: native-ws-turn\r\nX-Models-Etag: stale-native-ws\r\n\r\n").unwrap();
             stream.flush().unwrap();
-            let mut websocket = WebSocketConnection::new(&mut stream);
+            let mut io = Deadline::after(test_timeout(Duration::from_secs(5))).io(&stream);
+            let mut websocket = WebSocketConnection::new(&mut io);
             for (index, id) in ["resp_one", "resp_two"].into_iter().enumerate() {
-                let received = websocket.receive_text();
-                let Ok(Some(text)) = received else {
+                let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+                let Ok(Some(text)) = receive_upstream_websocket_text(&mut websocket, &deadline)
+                else {
                     return;
                 };
                 let body: Value = serde_json::from_str(&text).unwrap();
@@ -77,9 +79,6 @@ fn check_incremental_turn(prewarm: bool) {
     let (_directory, server) = native_alias_server(&upstream.base_url());
     let cookie = session_header(&server);
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-    stream
-        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-        .unwrap();
     write!(
         stream,
         "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: native-ws-thread\r\nx-openai-subagent: websocket-subagent\r\n\r\n",
@@ -87,6 +86,7 @@ fn check_incremental_turn(prewarm: bool) {
     )
     .unwrap();
     stream.flush().unwrap();
+    let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
     let mut head = Vec::new();
     while !head.windows(4).any(|part| part == b"\r\n\r\n") {
         let mut byte = [0u8; 1];
@@ -216,14 +216,13 @@ impl NativeFailureContinuityUpstream {
             let accept = websocket_accept(&headers["sec-websocket-key"]).unwrap();
             write!(stream,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
             stream.flush().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(10)))
-                .unwrap();
-            let mut websocket = WebSocketConnection::new(&mut stream);
+            let mut io = Deadline::after(test_timeout(Duration::from_secs(10))).io(&stream);
+            let mut websocket = WebSocketConnection::new(&mut io);
             for index in 0..3 {
-                let text = match websocket.receive_text() {
-                    Ok(Some(text)) => text,
-                    Ok(None) | Err(_) => return,
+                let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
+                let Ok(Some(text)) = receive_upstream_websocket_text(&mut websocket, &deadline)
+                else {
+                    return;
                 };
                 let body: Value = serde_json::from_str(&text).unwrap();
                 sender.send(body.clone()).unwrap();
@@ -282,7 +281,7 @@ impl Drop for NativeFailureContinuityUpstream {
 }
 
 fn send_native_continuity_turn(
-    stream: &mut TcpStream,
+    stream: &mut (impl Read + Write),
     input: &str,
     previous: Option<&str>,
 ) -> Vec<Value> {
@@ -313,9 +312,6 @@ fn responses_websocket_retains_last_successful_previous_id_after_failed_or_incom
         let (_directory, server) = native_alias_server(&upstream.base_url());
         let cookie = session_header(&server);
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream
-            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .unwrap();
         write!(
             stream,
             "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\noriginator: codex_cli_rs\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: continuity-thread\r\n\r\n",
@@ -323,6 +319,7 @@ fn responses_websocket_retains_last_successful_previous_id_after_failed_or_incom
         )
         .unwrap();
         stream.flush().unwrap();
+        let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
         let mut head = Vec::new();
         while !head.windows(4).any(|part| part == b"\r\n\r\n") {
             let mut byte = [0u8; 1];

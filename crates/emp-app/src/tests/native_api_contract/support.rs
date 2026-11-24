@@ -1,6 +1,49 @@
 //! Shared native request observation and endpoint fixtures.
 use super::*;
 
+fn upstream_websocket_poll(
+    ws: &mut WebSocketConnection<'_, emp_test_support::DeadlineIo<&TcpStream>>,
+    deadline: &Deadline,
+) -> Result<emp_transport::WebSocketPoll<String>, emp_transport::WebSocketError> {
+    ws.get_mut().set_deadline(deadline);
+    loop {
+        deadline.accept((), "upstream WebSocket frame").unwrap();
+        let event = ws.poll_text()?;
+        if !matches!(event, emp_transport::WebSocketPoll::Pending) {
+            return Ok(deadline.accept(event, "upstream WebSocket frame").unwrap());
+        }
+    }
+}
+
+pub(super) fn upstream_websocket_request(
+    ws: &mut WebSocketConnection<'_, emp_test_support::DeadlineIo<&TcpStream>>,
+    deadline: &Deadline,
+) -> Value {
+    match upstream_websocket_poll(ws, deadline).unwrap() {
+        emp_transport::WebSocketPoll::Text(text) => {
+            let value = serde_json::from_str(&text).unwrap();
+            deadline
+                .accept(value, "upstream WebSocket request")
+                .unwrap()
+        }
+        other => panic!("unexpected upstream frame: {other:?}"),
+    }
+}
+
+pub(super) fn receive_upstream_websocket_text(
+    ws: &mut WebSocketConnection<'_, emp_test_support::DeadlineIo<&TcpStream>>,
+    deadline: &Deadline,
+) -> Result<Option<String>, emp_transport::WebSocketError> {
+    loop {
+        match upstream_websocket_poll(ws, deadline)? {
+            emp_transport::WebSocketPoll::Text(text) => return Ok(Some(text)),
+            emp_transport::WebSocketPoll::Ping(payload) => ws.send_pong(&payload)?,
+            emp_transport::WebSocketPoll::Closed { .. } => return Ok(None),
+            emp_transport::WebSocketPoll::Pending => unreachable!("poll waits for a frame"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct ObservedNativeRequest {
     pub(super) path: String,
@@ -13,10 +56,7 @@ pub(super) fn receive_native_request(stream: &mut TcpStream) -> ObservedNativeRe
     finish_native_request(stream, raw)
 }
 
-pub(super) fn finish_native_request(
-    stream: &mut TcpStream,
-    raw: RequestHead,
-) -> ObservedNativeRequest {
+pub(super) fn finish_native_request(stream: &TcpStream, raw: RequestHead) -> ObservedNativeRequest {
     let request = parse_request(&raw.head).expect("native HTTP request");
     let headers = request
         .headers
@@ -28,6 +68,7 @@ pub(super) fn finish_native_request(
     let length = headers["content-length"]
         .parse::<usize>()
         .expect("native Content-Length");
+    let mut stream = Deadline::after(crate::server::raw_tcp::wire_timeout()).io(stream);
     let mut encoded = raw.body_prefix;
     while encoded.len() < length {
         let mut chunk = [0u8; 4096];
@@ -218,13 +259,13 @@ pub(super) fn masked_websocket_text(value: &Value) -> Vec<u8> {
     frame
 }
 
-pub(super) fn send_masked_websocket_text(stream: &mut TcpStream, value: &Value) {
+pub(super) fn send_masked_websocket_text(stream: &mut impl Write, value: &Value) {
     stream.write_all(&masked_websocket_text(value)).unwrap();
     stream.flush().unwrap();
 }
 
 #[track_caller]
-pub(super) fn receive_websocket_json(stream: &mut TcpStream) -> Value {
+pub(super) fn receive_websocket_json(stream: &mut impl Read) -> Value {
     let mut header = [0u8; 2];
     stream
         .read_exact(&mut header)
@@ -286,7 +327,7 @@ impl NativeSseUpstream {
                 stream = stream2;
                 observed
             } else {
-                finish_native_request(&mut stream, raw)
+                finish_native_request(&stream, raw)
             };
             sender.send(observed).unwrap();
             if ordinary_json {

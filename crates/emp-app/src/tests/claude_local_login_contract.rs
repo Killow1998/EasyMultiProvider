@@ -176,7 +176,7 @@ impl LocalMessagesApi {
                     .next()
                     .unwrap_or_default()
                     .to_owned();
-                let (path, headers, body) = receive_upstream_request_from_head(&mut stream, raw);
+                let (path, headers, body) = receive_upstream_request_from_head(&stream, raw);
                 if request_sender
                     .send(LocalRequest {
                         method: method.clone(),

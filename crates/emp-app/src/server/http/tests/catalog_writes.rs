@@ -134,7 +134,7 @@ async fn serve_model_query(upstream: &AsyncListener, path: &str, body: &[u8]) {
 async fn wait_for_balance(
     listener: &AsyncListener,
     tls: &Arc<ServerConfig>,
-) -> StreamOwned<ServerConnection, std::net::TcpStream> {
+) -> StreamOwned<ServerConnection, emp_test_support::DeadlineIo<std::net::TcpStream>> {
     let (peer, _) = timeout(test_timeout(Duration::from_secs(5)), listener.accept())
         .await
         .unwrap()
@@ -143,10 +143,7 @@ async fn wait_for_balance(
     let tls = Arc::clone(tls);
     tokio::task::spawn_blocking(move || {
         peer.set_nonblocking(false).unwrap();
-        peer.set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .unwrap();
-        peer.set_write_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .unwrap();
+        let peer = Deadline::after(test_timeout(Duration::from_secs(5))).io(peer);
         let mut peer =
             std::io::BufReader::new(StreamOwned::new(ServerConnection::new(tls).unwrap(), peer));
         let mut line = String::new();
@@ -168,7 +165,9 @@ async fn wait_for_balance(
     .unwrap()
 }
 
-async fn send_balance(mut peer: StreamOwned<ServerConnection, std::net::TcpStream>) {
+async fn send_balance(
+    mut peer: StreamOwned<ServerConnection, emp_test_support::DeadlineIo<std::net::TcpStream>>,
+) {
     tokio::task::spawn_blocking(move || {
         let reply = crate::http::response::response(
             "HTTP/1.1 200 OK",
@@ -176,6 +175,8 @@ async fn send_balance(mut peer: StreamOwned<ServerConnection, std::net::TcpStrea
             BALANCE_BODY,
             &[],
         );
+        peer.sock
+            .set_deadline(&Deadline::after(test_timeout(Duration::from_secs(5))));
         peer.write_all(&reply).unwrap();
         peer.conn.send_close_notify();
         peer.flush().unwrap();

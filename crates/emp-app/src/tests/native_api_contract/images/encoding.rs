@@ -24,7 +24,7 @@ fn native_inline_images_survive_zstd_rejection_without_changing_history_or_accou
                     stream = fallback;
                     request
                 } else {
-                    finish_native_request(&mut stream, raw)
+                    finish_native_request(&stream, raw)
                 };
                 let rejected =
                     request.headers.get("content-encoding").map(String::as_str) == Some("zstd");

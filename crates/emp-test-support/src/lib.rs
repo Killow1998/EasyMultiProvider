@@ -74,13 +74,22 @@ impl<T> DeadlineIo<T> {
 
 impl<T: Borrow<TcpStream>> Read for DeadlineIo<T> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut stream = self.stream.borrow();
+        self.read_with(|mut stream| stream.read(buf))
+    }
+}
+
+impl<T: Borrow<TcpStream>> DeadlineIo<T> {
+    pub fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.read_with(|stream| stream.peek(buf))
+    }
+
+    fn read_with(&self, read: impl FnOnce(&TcpStream) -> io::Result<usize>) -> io::Result<usize> {
+        let stream = self.stream.borrow();
         let remaining = self
             .deadline
             .accept(self.deadline.remaining(), "TCP read deadline")?;
         stream.set_read_timeout(Some(remaining))?;
-        self.deadline
-            .accept(stream.read(buf), "TCP read deadline")?
+        self.deadline.accept(read(stream), "TCP read deadline")?
     }
 }
 

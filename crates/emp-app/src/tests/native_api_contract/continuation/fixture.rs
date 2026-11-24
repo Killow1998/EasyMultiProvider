@@ -90,7 +90,6 @@ impl Upstream {
                     // Exercise macOS's inherited mode on Linux before blocking fixture reads.
                     stream.set_nonblocking(true).unwrap();
                     stream.set_nonblocking(false).unwrap();
-                    stream.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
                     let raw = read_request_head(&mut stream).unwrap();
                     let request = parse_request(&raw.head).unwrap();
                     assert_eq!(request.header("Authorization"), Some("Bearer fixture-access"));
@@ -98,10 +97,11 @@ impl Upstream {
                     if request.header("Upgrade").is_none() {
                         let size: usize = request.header("Content-Length").unwrap().parse().unwrap();
                         let encoding = request.header("Content-Encoding").unwrap_or("").to_owned();
+                        let mut input = Deadline::after(test_timeout(Duration::from_secs(5))).io(&stream);
                         let mut bytes = raw.body_prefix;
                         while bytes.len() < size {
                             let mut buffer = [0; 65536];
-                            let count = stream.read(&mut buffer).unwrap();
+                            let count = input.read(&mut buffer).unwrap();
                             assert_ne!(count, 0);
                             bytes.extend_from_slice(&buffer[..count]);
                         }
@@ -340,7 +340,7 @@ pub(super) fn server(upstream: &Upstream, imported: bool) -> (TempDir, ServerHan
 }
 
 pub(super) fn connect(server: &ServerHandle, thread_id: &str) -> ClientWebSocket {
-    let mut ws = ClientWebSocket::connect(
+    ClientWebSocket::connect(
         &format!("ws://{}/v1/responses", server.local_addr()),
         &BTreeMap::from([
             ("originator".into(), "codex_cli_rs".into()),
@@ -357,9 +357,7 @@ pub(super) fn connect(server: &ServerHandle, thread_id: &str) -> ClientWebSocket
         ]),
         Duration::from_secs(5),
     )
-    .unwrap();
-    ws.set_read_timeout(Duration::from_secs(30));
-    ws
+    .unwrap()
 }
 
 pub(super) fn turn(client: &mut ClientWebSocket, body: &Value) -> Value {
@@ -368,8 +366,10 @@ pub(super) fn turn(client: &mut ClientWebSocket, body: &Value) -> Value {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(30)));
     loop {
         assert!(!deadline.is_expired(), "fixture turn did not terminate");
-        client.set_read_timeout(deadline.remaining());
-        let event: Value = match client.poll_receive_text().unwrap() {
+        let event: Value = match client
+            .poll_receive_text_with_timeout(deadline.remaining())
+            .unwrap()
+        {
             WebSocketPoll::Text(text) => serde_json::from_str(&text).unwrap(),
             WebSocketPoll::Pending => continue,
             other => panic!("unexpected fixture frame: {other:?}"),

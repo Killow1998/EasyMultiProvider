@@ -73,10 +73,11 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind catalog fixture");
         let address = listener.local_addr().expect("catalog fixture address");
         let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept catalog request");
-            stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                .expect("request timeout");
+            let (stream, _) = listener.accept().expect("accept catalog request");
+            let mut stream = emp_test_support::Deadline::after(emp_test_support::test_timeout(
+                std::time::Duration::from_secs(5),
+            ))
+            .io(stream);
             let mut request = Vec::new();
             loop {
                 let mut buffer = [0_u8; 1024];

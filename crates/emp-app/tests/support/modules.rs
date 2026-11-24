@@ -167,12 +167,10 @@ impl ModuleRelease {
                 if stopped.load(Ordering::Acquire) {
                     break;
                 }
-                let mut stream = stream.expect("accept release request");
-                stream
-                    .set_write_timeout(Some(io_timeout()))
-                    .expect("release write timeout");
+                let stream = stream.expect("accept release request");
                 let deadline = Deadline::after(io_timeout());
-                let (line, _, _) = read_message(&mut deadline.io(&stream), false);
+                let mut stream = deadline.io(stream);
+                let (line, _, _) = read_message(&mut stream, false);
                 let path = line.split_whitespace().nth(1).expect("release path");
                 let base = format!("http://127.0.0.1:{port}");
                 let mut state = shared.lock().expect("release state");

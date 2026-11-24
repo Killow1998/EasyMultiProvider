@@ -22,12 +22,6 @@ impl Upstream {
                     break;
                 }
                 stream.set_nonblocking(false).unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(10)))
-                    .unwrap();
-                stream
-                    .set_write_timeout(Some(Duration::from_secs(10)))
-                    .unwrap();
                 let (path, _, body) = receive_upstream_request(&mut stream);
                 assert_eq!(body["model"], "upstream");
                 let (content_type, response) = if path.ends_with("/chat/completions") {
@@ -47,6 +41,7 @@ impl Upstream {
                     )
                 };
                 counted.fetch_add(1, Ordering::AcqRel);
+                let mut stream = Deadline::after(test_timeout(Duration::from_secs(10))).io(stream);
                 write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
             }
         });
