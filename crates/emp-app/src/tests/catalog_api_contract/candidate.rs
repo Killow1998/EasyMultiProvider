@@ -111,8 +111,7 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
             ),
         ] {
             let wire = request(port, method, path, headers, b"");
-            let reply = assert_wire_parity(old, candidate, &wire, false).await;
-            assert_status(&reply, status);
+            let reply = assert_wire_parity(old, candidate, &wire, false, status).await;
             assert!(String::from_utf8_lossy(&reply).contains(no_store));
             if status == 200 {
                 let body = json_body(&reply);
@@ -134,8 +133,7 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
             }
         }
         let rich = request(port, "GET", rich_path, &[], b"");
-        let reply = assert_wire_parity(old, candidate, &rich, true).await;
-        assert_status(&reply, 200);
+        let reply = assert_wire_parity(old, candidate, &rich, true, 200).await;
         assert!(json_body(&reply)["models"].is_array());
         let etag = String::from_utf8_lossy(&reply)
             .lines()
@@ -145,7 +143,7 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
         let conditional = format!("If-None-Match: {etag}");
         let wire = request(port, "GET", rich_path, &[&conditional], b"");
         assert_eq!(
-            assert_wire_parity(old, candidate, &wire, false).await,
+            assert_wire_parity(old, candidate, &wire, false, 200).await,
             reply
         );
 
@@ -158,7 +156,7 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
             b"",
         );
         assert_eq!(
-            assert_wire_parity(old, candidate, &gateway, false).await,
+            assert_wire_parity(old, candidate, &gateway, false, 200).await,
             reply
         );
         server
@@ -166,12 +164,9 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
             .backend
             .modules
             .mark_unavailable(emp_modules::Module::Gateway, "test");
-        assert_status(
-            &assert_wire_parity(old, candidate, &gateway, false).await,
-            403,
-        );
+        assert_wire_parity(old, candidate, &gateway, false, 403).await;
         assert_eq!(
-            assert_wire_parity(old, candidate, &rich, false).await,
+            assert_wire_parity(old, candidate, &rich, false, 200).await,
             reply
         );
         assert!(upstream.requests.try_recv().is_err());
@@ -211,11 +206,10 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
             ([&*session].as_slice(), b"{}".as_slice(), 400),
         ] {
             let wire = json_request(port, path, headers, body);
-            let reply = assert_wire_parity(old, candidate, &wire, false).await;
-            assert_status(&reply, status);
+            assert_wire_parity(old, candidate, &wire, false, status).await;
         }
         let head = request(port, "HEAD", path, &[&session], b"");
-        assert_status(&assert_wire_parity(old, candidate, &head, false).await, 404);
+        assert_wire_parity(old, candidate, &head, false, 404).await;
         let partial = request(
             port,
             "POST",
@@ -227,8 +221,7 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
             ],
             b"{",
         );
-        let reply = assert_wire_parity(old, candidate, &partial, true).await;
-        assert_status(&reply, 400);
+        let reply = assert_wire_parity(old, candidate, &partial, true, 400).await;
         assert_eq!(
             json_body(&reply)["error"]["message"],
             "request body is incomplete"
@@ -241,13 +234,11 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
             &[&session],
             br#"{"provider":"gemini","model":"gemini/alpha beta/preview"}"#,
         );
-        let reply = assert_wire_parity(old, candidate, &wire, true).await;
-        assert_status(&reply, 200);
+        let reply = assert_wire_parity(old, candidate, &wire, true, 200).await;
         assert!(String::from_utf8_lossy(&reply).contains("Cache-Control: no-store"));
         assert_eq!(json_body(&reply)["context_window"], 1024);
         upstream.observed_metadata(&["/v1beta/models/alpha%20beta%2Fpreview"; 2]);
-        let reply = assert_wire_parity(old, candidate, &wire, false).await;
-        assert_status(&reply, 200);
+        assert_wire_parity(old, candidate, &wire, false, 200).await;
         upstream.observed_metadata(&["/v1beta/models/alpha%20beta%2Fpreview"; 2]);
         assert!(!directory.path().join("provider-model-lists").exists());
     });
@@ -265,8 +256,7 @@ fn metadata_upstream_rejection_matches_legacy_wire_on_the_candidate_listener() {
             &[&session_header(server)],
             br#"{"provider":"gemini","model":"rate-limited"}"#,
         );
-        let reply = assert_wire_parity(old, candidate, &wire, false).await;
-        assert_status(&reply, 429);
+        let reply = assert_wire_parity(old, candidate, &wire, false, 429).await;
         assert_eq!(json_body(&reply)["error"]["code"], "rate_limit_exceeded");
         upstream.observed_metadata(&["/v1beta/models/rate-limited"; 2]);
     });
@@ -365,7 +355,6 @@ fn calls_sse_matches_legacy_after_http_framing() {
             b"",
         );
         let reply = assert_sse_wire_parity(old, candidate, &wire).await;
-        assert_status(&reply, 200);
         let reply = std::str::from_utf8(&reply).unwrap();
         assert!(reply.contains("Content-Type: text/event-stream\r\n"));
         assert!(reply.contains("event: result\n"));

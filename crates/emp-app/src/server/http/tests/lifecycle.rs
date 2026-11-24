@@ -316,11 +316,13 @@ fn lifecycle_and_unmatched_requests_match_legacy_wire() {
             )
             .await;
         let missing_balance = json_request(port, "/api/providers/balance", &[&session], b"{}");
-        assert!(
-            assert_wire_parity(old, candidate, &missing_balance, false)
-                .await
-                .is_empty()
-        );
+        for address in [old, candidate] {
+            assert!(
+                exchange_wire(address, &missing_balance, false)
+                    .await
+                    .is_empty()
+            );
+        }
 
         fixture
             .parity(
@@ -456,14 +458,15 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
             b"",
         );
         let (old_reply, new_reply) = tokio::join!(
-            exchange_wire(old_addr, &old_status, false),
-            exchange_wire(candidate, &new_status, false),
+            assert_wire(old_addr, &old_status, false, 200),
+            assert_wire(candidate, &new_status, false, 200),
         );
-        assert_status(&old_reply, 200);
-        assert_eq!(
-            json_body(&old_reply)["runtime"]["last_known"]["observed_at"],
-            OBSERVED_AT
-        );
+        for reply in [&old_reply, &new_reply] {
+            assert_eq!(
+                json_body(reply)["runtime"]["last_known"]["observed_at"],
+                OBSERVED_AT
+            );
+        }
         assert_wire_response_parity(
             &old_status,
             &normalize(&old, old_reply),
@@ -493,11 +496,12 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
             let old_request = json_request(old.port(), &path, &[&old.session()], body);
             let new_request = json_request(new.port(), &path, &[&new.session()], body);
             let (old_reply, new_reply) = tokio::join!(
-                exchange_wire(old_addr, &old_request, false),
-                exchange_wire(candidate, &new_request, false),
+                assert_wire(old_addr, &old_request, false, status),
+                assert_wire(candidate, &new_request, false, status),
             );
-            assert_status(&old_reply, status);
-            assert_eq!(json_body(&old_reply)["configuration"]["state"], state);
+            for reply in [&old_reply, &new_reply] {
+                assert_eq!(json_body(reply)["configuration"]["state"], state);
+            }
             assert_wire_response_parity(
                 &old_request,
                 &normalize(&old, old_reply),
@@ -517,6 +521,7 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
 #[cfg(unix)]
 #[test]
 fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
+    use super::wire_contract::{Driver, assert_reply, json_head};
     use crate::server::ShutdownReason;
     use crate::server::raw_tcp::{RawClient, read_websocket_frame};
 
@@ -528,8 +533,10 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
         .build()
         .unwrap()
         .block_on(async {
-            let mut replies = Vec::new();
-            for (fixture, addr) in [(&old, old.legacy.local_addr()), (&new, candidate)] {
+            for (driver, fixture, addr) in [
+                (Driver::Legacy, &old, old.legacy.local_addr()),
+                (Driver::Candidate, &new, candidate),
+            ] {
                 let port = fixture.port();
                 let session = fixture.session();
                 let websocket = request(
@@ -592,8 +599,13 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
                 assert_status(&response, 409);
                 let mut response = Vec::new();
                 stopping.read_to_end(&mut response).await.unwrap();
-                assert_status(&response, 200);
-                assert_eq!(json_body(&response), json!({"status":"stopping"}));
+                assert_reply(
+                    driver,
+                    "POST /api/quit",
+                    &response,
+                    json_head!("200 OK", "21"),
+                    br#"{"status":"stopping"}"#,
+                );
                 let sse_end = sse.rest().await;
                 assert!(String::from_utf8_lossy(&sse_end).contains("event: emp-exiting"));
                 let signal = state.lifecycle.signal().wait().await;
@@ -606,9 +618,7 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
                     }
                 );
                 assert!(state.lifecycle.admission.acquire_request().is_none());
-                replies.push(response);
             }
-            assert_eq!(replies[0], replies[1]);
             candidate_task.await.unwrap().unwrap();
             assert!(TcpStream::connect(candidate).await.is_err());
         });

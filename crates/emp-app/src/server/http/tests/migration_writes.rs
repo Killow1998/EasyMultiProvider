@@ -194,17 +194,8 @@ async fn assert_migration_wire_parity(
 ) -> [Vec<u8>; 2] {
     let [(old, old_addr), (new, new_addr)] = endpoints(pair);
     let (old_reply, new_reply) = tokio::join!(
-        exchange_wire(old_addr, requests[0], false),
-        exchange_wire(new_addr, requests[1], false),
-    );
-    let expected = format!("HTTP/1.1 {status} ");
-    assert!(
-        old_reply.starts_with(expected.as_bytes()),
-        "legacy {operation}: expected {status}"
-    );
-    assert!(
-        new_reply.starts_with(expected.as_bytes()),
-        "candidate {operation}: expected {status}"
+        assert_wire(old_addr, requests[0], false, status),
+        assert_wire(new_addr, requests[1], false, status),
     );
     assert!(
         normalize(old, operation, &old_reply) == normalize(new, operation, &new_reply),

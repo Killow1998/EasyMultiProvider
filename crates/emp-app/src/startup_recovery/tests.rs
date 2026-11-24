@@ -276,114 +276,179 @@ fn recovery_refuses_config_symlinks_and_never_deletes_link_targets() {
 }
 
 #[test]
-fn recovery_routes_match_legacy_bytes_before_reset_or_exit() {
+fn recovery_wire_contract_before_reset_or_exit() {
     use crate::server::{
         ServerControl,
-        http::tests::{assert_status, exchange_wire, json_body, request},
+        http::tests::{
+            exchange_wire, request,
+            wire_contract::{Driver, assert_reply, asset_head, json_head},
+        },
     };
     use crate::services::connection_admission::{ConnectionAdmission, ConnectionAdmissionConfig};
     use std::{net::TcpListener, sync::Arc};
 
-    for restart in [false, true] {
-        let (old_dir, old_config, _) = fixture();
-        let (new_dir, new_config, _) = fixture();
-        let old_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let new_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let (old, new) = (
-            old_listener.local_addr().unwrap(),
-            new_listener.local_addr().unwrap(),
-        );
-        let legacy_config = old_config.clone();
-        let candidate_config = new_config.clone();
-        let legacy = std::thread::spawn(move || {
-            super::serve_for_test(old_listener, &legacy_config, "recovery-fixture").unwrap()
-        });
-        let candidate = std::thread::spawn(move || {
-            server::serve_candidate(
-                new_listener,
-                &candidate_config,
-                "config_invalid",
-                "recovery-fixture",
-                Arc::new(ServerControl::recovery(Arc::new(ConnectionAdmission::new(
-                    ConnectionAdmissionConfig::default(),
-                )))),
-            )
-            .unwrap()
-        });
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let auth = "X-EMP-Recovery: recovery-fixture";
-                let cases = [
-                    ("GET", "/", vec![], 200),
-                    ("GET", "/healthz", vec![], 503),
-                    ("GET", "/assets/i18n.js", vec![], 200),
-                    ("GET", "/assets/copy-recovery.js", vec![], 200),
-                    ("GET", "/api/recovery", vec![auth], 200),
-                    ("GET", "/api/recovery", vec![], 401),
-                    ("GET", "/api/recovery?extra=1", vec![auth], 400),
-                    ("HEAD", "/", vec![auth], 400),
-                    ("GET", "/", vec!["Origin: https://other.invalid"], 403),
-                    (
-                        "POST",
-                        "/api/recovery/reset",
-                        vec![auth, "Content-Length: 0"],
-                        409,
-                    ),
-                    (
-                        "POST",
-                        "/api/recovery/exit",
-                        vec![auth, "Content-Length: 1"],
-                        400,
-                    ),
-                    (
-                        "POST",
-                        "/api/recovery/reset",
-                        vec!["Content-Length: 0"],
-                        401,
-                    ),
-                    ("POST", "/api/recovery/exit", vec!["Content-Length: 0"], 401),
-                ];
-                for (method, path, headers, status) in cases {
-                    let a = request(old.port(), method, path, &headers, b"");
-                    let b = request(new.port(), method, path, &headers, b"");
-                    let (a, b) =
-                        tokio::join!(exchange_wire(old, &a, true), exchange_wire(new, &b, true));
-                    assert_status(&a, status);
-                    assert_eq!(a, b, "{method} {path}");
+    const PAGE: &str = concat!(
+        "HTTP/1.1 200 OK\r\n",
+        "Content-Type: text/html; charset=utf-8\r\n",
+        "Content-Length: 4505\r\n",
+        "X-Frame-Options: DENY\r\n",
+        "Content-Security-Policy: frame-ancestors 'none'\r\n",
+        "X-Content-Type-Options: nosniff\r\n",
+        "Cache-Control: no-store\r\n",
+        "Referrer-Policy: no-referrer\r\n",
+        "Connection: close\r\n\r\n",
+    );
+    const UNAUTHORIZED: &str = json_head!("401 Unauthorized", "37");
+    const SESSION_REQUIRED: &[u8] = br#"{"error":"recovery_session_required"}"#;
+    const BAD_REQUEST: &str = json_head!("400 Bad Request", "27");
+    const INVALID: &[u8] = br#"{"error":"invalid_request"}"#;
+
+    for driver in Driver::ALL {
+        for restart in [false, true] {
+            let (directory, config, _) = fixture();
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            let worker_config = config.clone();
+            let worker = std::thread::spawn(move || match driver {
+                Driver::Legacy => {
+                    super::serve_for_test(listener, &worker_config, "recovery-fixture").unwrap()
                 }
-                let path = if restart {
-                    "/api/recovery/reset"
-                } else {
-                    "/api/recovery/exit"
-                };
-                let headers = [
-                    auth,
-                    "Content-Length: 0",
-                    "X-EMP-Recovery-Confirm: clear-and-reset",
-                ];
-                let a = request(old.port(), "POST", path, &headers, b"");
-                let b = request(new.port(), "POST", path, &headers, b"");
-                let (a, b) =
-                    tokio::join!(exchange_wire(old, &a, true), exchange_wire(new, &b, true));
-                assert_status(&a, 200);
-                assert_eq!(a, b);
-                let response = json_body(&b);
-                assert_eq!(
-                    response[if restart { "restarting" } else { "exiting" }],
-                    true
-                );
+                Driver::Candidate => server::serve_candidate(
+                    listener,
+                    &worker_config,
+                    "config_invalid",
+                    "recovery-fixture",
+                    Arc::new(ServerControl::recovery(Arc::new(ConnectionAdmission::new(
+                        ConnectionAdmissionConfig::default(),
+                    )))),
+                )
+                .unwrap(),
             });
-        assert_eq!(legacy.join().unwrap(), restart);
-        assert_eq!(candidate.join().unwrap(), restart);
-        for (address, config, root) in [
-            (old, old_config, old_dir.path()),
-            (new, new_config, new_dir.path()),
-        ] {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let auth = "X-EMP-Recovery: recovery-fixture";
+                    let empty = "Content-Length: 0";
+                    let mut cases = vec![
+                        (
+                            "GET",
+                            "/",
+                            vec![],
+                            PAGE,
+                            include_bytes!("../../web/recovery.html").as_slice(),
+                        ),
+                        (
+                            "GET",
+                            "/healthz",
+                            vec![],
+                            json_head!("503 Service Unavailable", "30"),
+                            br#"{"status":"recovery_required"}"#.as_slice(),
+                        ),
+                        (
+                            "GET",
+                            "/assets/i18n.js",
+                            vec![],
+                            asset_head!("text/javascript; charset=utf-8", "500"),
+                            include_bytes!("../../web/i18n.js").as_slice(),
+                        ),
+                        (
+                            "GET",
+                            "/assets/copy-recovery.js",
+                            vec![],
+                            asset_head!("text/javascript; charset=utf-8", "4238"),
+                            include_bytes!("../../web/copy-recovery.js").as_slice(),
+                        ),
+                        (
+                            "GET",
+                            "/api/recovery",
+                            vec![auth],
+                            json_head!("200 OK", "27"),
+                            br#"{"reason":"config_invalid"}"#.as_slice(),
+                        ),
+                        (
+                            "GET",
+                            "/api/recovery",
+                            vec![],
+                            UNAUTHORIZED,
+                            SESSION_REQUIRED,
+                        ),
+                        (
+                            "GET",
+                            "/api/recovery?extra=1",
+                            vec![auth],
+                            BAD_REQUEST,
+                            INVALID,
+                        ),
+                        ("HEAD", "/", vec![auth], BAD_REQUEST, INVALID),
+                        (
+                            "GET",
+                            "/",
+                            vec!["Origin: https://other.invalid"],
+                            json_head!("403 Forbidden", "27"),
+                            br#"{"error":"origin_rejected"}"#.as_slice(),
+                        ),
+                        (
+                            "POST",
+                            "/api/recovery/reset",
+                            vec![auth, empty],
+                            json_head!("409 Error", "33"),
+                            br#"{"error":"confirmation_required"}"#.as_slice(),
+                        ),
+                        (
+                            "POST",
+                            "/api/recovery/exit",
+                            vec![auth, "Content-Length: 1"],
+                            BAD_REQUEST,
+                            INVALID,
+                        ),
+                        (
+                            "POST",
+                            "/api/recovery/reset",
+                            vec![empty],
+                            UNAUTHORIZED,
+                            SESSION_REQUIRED,
+                        ),
+                        (
+                            "POST",
+                            "/api/recovery/exit",
+                            vec![empty],
+                            UNAUTHORIZED,
+                            SESSION_REQUIRED,
+                        ),
+                    ];
+                    let (path, head, body) = if restart {
+                        (
+                            "/api/recovery/reset",
+                            json_head!("200 OK", "62"),
+                            br#"{"backup_path":null,"cleanup_pending":false,"restarting":true}"#
+                                .as_slice(),
+                        )
+                    } else {
+                        (
+                            "/api/recovery/exit",
+                            json_head!("200 OK", "16"),
+                            br#"{"exiting":true}"#.as_slice(),
+                        )
+                    };
+                    cases.push((
+                        "POST",
+                        path,
+                        vec![auth, empty, "X-EMP-Recovery-Confirm: clear-and-reset"],
+                        head,
+                        body,
+                    ));
+
+                    for (method, path, headers, head, body) in cases {
+                        let wire = request(address.port(), method, path, &headers, b"");
+                        let reply = exchange_wire(address, &wire, true).await;
+                        assert_reply(driver, &format!("{method} {path}"), &reply, head, body);
+                    }
+                });
+            assert_eq!(worker.join().unwrap(), restart);
             assert!(std::net::TcpStream::connect(address).is_err());
-            assert_eq!(root.join("state/old.enc").exists(), !restart);
+            assert_eq!(directory.path().join("state/old.enc").exists(), !restart);
             assert!(config.is_file());
         }
     }

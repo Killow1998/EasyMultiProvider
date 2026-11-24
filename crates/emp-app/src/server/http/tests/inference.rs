@@ -229,7 +229,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
     );
 }
 
-fn fixture(base: &str) -> Fixture {
+pub(super) fn fixture(base: &str) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let config = root.join("config.json");
@@ -314,10 +314,8 @@ async fn buffered_parity(
     wire: &[u8],
     status: u16,
 ) -> Vec<u8> {
-    let legacy = exchange_wire(fixture.legacy.local_addr(), wire, false).await;
-    let candidate = exchange_wire(address, wire, false).await;
-    assert_status(&legacy, status);
-    assert_status(&candidate, status);
+    let legacy = assert_wire(fixture.legacy.local_addr(), wire, false, status).await;
+    let candidate = assert_wire(address, wire, false, status).await;
     let (old_head, old_body) = split_response(&legacy);
     let (new_head, new_body) = split_response(&candidate);
     assert_eq!(old_head, new_head, "{}", String::from_utf8_lossy(wire));

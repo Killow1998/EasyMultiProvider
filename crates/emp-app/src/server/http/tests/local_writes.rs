@@ -149,15 +149,14 @@ async fn compare_icon(pair: &Pair<'_>, home: &Path) -> Value {
         &[&pair.new.session()],
         body.as_bytes(),
     );
-    let old = exchange_wire(pair.old.legacy.local_addr(), &old_request, false).await;
-    assert_status(&old, 200);
+    let old = assert_wire(pair.old.legacy.local_addr(), &old_request, false, 200).await;
     let result = json_body(&old);
     assert_eq!(result["launcher_updated"], true);
     let metadata = &result["app_icon"];
     assert_eq!(metadata["preset"], "fixture-custom");
     assert_eq!(metadata["monochrome"], true);
     assert_icon(pair.old, home, &expected, metadata, DEFAULT_PNG);
-    let new = exchange_wire(pair.candidate, &new_request, false).await;
+    let new = assert_wire(pair.candidate, &new_request, false, 200).await;
     assert_wire_response_parity(&old_request, &old, &new);
     assert_icon(pair.new, home, &expected, metadata, DEFAULT_PNG);
 
@@ -167,10 +166,10 @@ async fn compare_icon(pair: &Pair<'_>, home: &Path) -> Value {
         let reply = assert_wire_parity_with(
             [(pair.old.legacy.local_addr(), &old), (pair.candidate, &new)],
             false,
+            200,
             |reply| reply,
         )
         .await;
-        assert_status(&reply, 200);
         let (_, body) = reply.split_at(
             reply
                 .windows(4)

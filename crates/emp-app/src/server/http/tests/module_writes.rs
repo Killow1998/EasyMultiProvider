@@ -135,15 +135,14 @@ async fn compare_client_wire(
     let old_wire = make(0, old.port(), &old.session());
     let new_wire = make(1, new.port(), &new.session());
     let (old_reply, new_reply) = tokio::join!(
-        exchange_wire(old_addr, &old_wire, false),
-        exchange_wire(new_addr, &new_wire, false),
+        assert_wire(old_addr, &old_wire, false, status),
+        assert_wire(new_addr, &new_wire, false, status),
     );
     let (old_normalized, new_normalized) = (
         normalize_clients(old_reply.clone()),
         normalize_clients(new_reply.clone()),
     );
     assert_wire_response_parity(&old_wire, &old_normalized, &new_normalized);
-    assert_status(&old_normalized, status);
     [json_body(&old_reply), json_body(&new_reply)]
 }
 

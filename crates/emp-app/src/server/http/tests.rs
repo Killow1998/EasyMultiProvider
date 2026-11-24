@@ -139,14 +139,33 @@ mod module_writes;
 mod team_writes;
 #[cfg(unix)]
 mod websocket;
+pub(crate) mod wire_contract;
+
+pub(crate) async fn assert_wire(
+    address: SocketAddr,
+    request: &[u8],
+    end_input: bool,
+    status: u16,
+) -> Vec<u8> {
+    let reply = exchange_wire(address, request, end_input).await;
+    assert_status(&reply, status);
+    reply
+}
 
 pub(crate) async fn assert_wire_parity(
     old: SocketAddr,
     new: SocketAddr,
     request: &[u8],
     end_input: bool,
+    status: u16,
 ) -> Vec<u8> {
-    assert_wire_parity_with([(old, request), (new, request)], end_input, |reply| reply).await
+    assert_wire_parity_with(
+        [(old, request), (new, request)],
+        end_input,
+        status,
+        |reply| reply,
+    )
+    .await
 }
 
 pub(crate) async fn assert_sse_wire_parity(
@@ -154,7 +173,13 @@ pub(crate) async fn assert_sse_wire_parity(
     new: SocketAddr,
     request: &[u8],
 ) -> Vec<u8> {
-    assert_wire_parity_with([(old, request), (new, request)], false, decode_report_wire).await
+    let (old, new) = tokio::join!(assert_sse_wire(old, request), assert_sse_wire(new, request));
+    assert_wire_response_parity(request, &old, &new);
+    new
+}
+
+pub(crate) async fn assert_sse_wire(address: SocketAddr, request: &[u8]) -> Vec<u8> {
+    decode_report_wire(assert_wire(address, request, false, 200).await)
 }
 
 fn decode_report_wire(wire: Vec<u8>) -> Vec<u8> {
@@ -195,15 +220,16 @@ fn decode_report_wire(wire: Vec<u8>) -> Vec<u8> {
 async fn assert_wire_parity_with(
     [(old, old_request), (new, new_request)]: [(SocketAddr, &[u8]); 2],
     end_input: bool,
+    status: u16,
     normalize: impl Fn(Vec<u8>) -> Vec<u8>,
 ) -> Vec<u8> {
     let (old, new) = tokio::join!(
-        exchange_wire(old, old_request, end_input),
-        exchange_wire(new, new_request, end_input),
+        assert_wire(old, old_request, end_input, status),
+        assert_wire(new, new_request, end_input, status),
     );
     let (old, new) = (normalize(old), normalize(new));
     assert_wire_response_parity(old_request, &old, &new);
-    old
+    new
 }
 
 fn assert_wire_response_parity(old_request: &[u8], old: &[u8], new: &[u8]) {
@@ -397,9 +423,7 @@ impl Fixture {
     }
 
     async fn parity(&self, new: SocketAddr, request: &[u8], status: u16) -> Vec<u8> {
-        let reply = assert_wire_parity(self.legacy.local_addr(), new, request, false).await;
-        assert_status(&reply, status);
-        reply
+        assert_wire_parity(self.legacy.local_addr(), new, request, false, status).await
     }
 }
 
@@ -461,8 +485,8 @@ fn update_module_and_gateway_reads_match_legacy_wire() {
                 &[&session, "Accept: text/event-stream"],
                 b"",
             );
-            let reply = assert_wire_parity(fixture.legacy.local_addr(), address, &wire, true).await;
-            assert_status(&reply, 200);
+            let reply =
+                assert_wire_parity(fixture.legacy.local_addr(), address, &wire, true, 200).await;
             assert_eq!(json_body(&reply)[field], expected);
             assert_eq!(
                 str::from_utf8(&reply)
@@ -1061,8 +1085,8 @@ fn inspection_reads_match_legacy_wire_on_candidate_listener() {
             );
             let reply = if path == "/api/support-report" {
                 let (old, new) = tokio::join!(
-                    exchange_wire(fixture.legacy.local_addr(), &wire, false),
-                    exchange_wire(address, &wire, false),
+                    assert_wire(fixture.legacy.local_addr(), &wire, false, 200),
+                    assert_wire(address, &wire, false, 200),
                 );
                 assert_eq!(
                     support_report_without_timestamp(&old),
@@ -1386,7 +1410,6 @@ fn report_stream_selection_matches_legacy() {
         ] {
             let wire = request(fixture.port(), "GET", path, &[&session, accept], b"");
             let reply = assert_sse_wire_parity(fixture.legacy.local_addr(), address, &wire).await;
-            assert_status(&reply, 200);
             let reply = str::from_utf8(&reply).unwrap();
             assert!(reply.contains("\r\nContent-Type: text/event-stream\r\n"));
             assert!(reply.contains("event: progress\n"));
@@ -1440,8 +1463,8 @@ fn closing_report_input_cancels_legacy_and_candidate_json_queries() {
             ("/api/calls?start=1&end=10", "Call history is unavailable"),
         ] {
             let wire = request(fixture.port(), "GET", path, &[&session], b"");
-            let reply = assert_wire_parity(fixture.legacy.local_addr(), address, &wire, true).await;
-            assert_status(&reply, 503);
+            let reply =
+                assert_wire_parity(fixture.legacy.local_addr(), address, &wire, true, 503).await;
             assert_eq!(json_body(&reply)["error"]["message"], message);
             fixture.parity(address, &wire, 200).await;
         }
@@ -1829,7 +1852,8 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
             &[headers.as_slice(), &["Content-Length: 2"]].concat(),
             b"{",
         );
-        let reply = assert_wire_parity(fixture.legacy.local_addr(), new, &incomplete, true).await;
+        let reply =
+            assert_wire_parity(fixture.legacy.local_addr(), new, &incomplete, true, 400).await;
         assert_eq!(
             json_body(&reply)["error"]["message"],
             "request body is incomplete"
@@ -1903,8 +1927,8 @@ fn insufficient_body_budget_matches_legacy_before_read() {
             ],
             b"",
         );
-        let reply = assert_wire_parity(legacy_address, runtime.local_addr(), &wire, false).await;
-        assert_status(&reply, 503);
+        let reply =
+            assert_wire_parity(legacy_address, runtime.local_addr(), &wire, false, 503).await;
         assert!(String::from_utf8_lossy(&reply).contains("\r\nRetry-After: 2\r\n"));
         assert_eq!(json_body(&reply)["error"]["memory"]["available_bytes"], 0);
         worker.await.unwrap();
@@ -2098,13 +2122,16 @@ fn recovery_keeps_flat_errors_and_auth_precedes_empty_body_policy() {
             ),
         ] {
             let wire = request(port, method, path, &headers, b"");
-            let reply = assert_wire_parity(old, server.local_addr(), &wire, false).await;
-            assert_status(&reply, status);
+            let reply = assert_wire_parity(old, server.local_addr(), &wire, false, status).await;
             assert_eq!(json_body(&reply), json!({"error":code}));
         }
-        let malformed =
-            assert_wire_parity(old, server.local_addr(), b"PUT / HTTP/1.1\r\n\r\n", false).await;
-        assert!(malformed.is_empty());
+        for address in [old, server.local_addr()] {
+            assert!(
+                exchange_wire(address, b"PUT / HTTP/1.1\r\n\r\n", false)
+                    .await
+                    .is_empty()
+            );
+        }
         let exit = request(
             port,
             "POST",
@@ -2112,10 +2139,7 @@ fn recovery_keeps_flat_errors_and_auth_precedes_empty_body_policy() {
             &["X-EMP-Recovery: recovery-fixture", "Content-Length: 0"],
             b"",
         );
-        assert_status(
-            &assert_wire_parity(old, server.local_addr(), &exit, false).await,
-            200,
-        );
+        assert_wire_parity(old, server.local_addr(), &exit, false, 200).await;
         assert!(!worker.join().unwrap());
         server.shutdown().await.unwrap();
     });

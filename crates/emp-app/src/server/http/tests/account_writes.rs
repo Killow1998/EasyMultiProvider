@@ -87,10 +87,10 @@ impl Pair<'_> {
         let reply = assert_wire_parity_with(
             [(self.old.legacy.local_addr(), &old), (self.candidate, &new)],
             false,
+            status,
             normalize,
         )
         .await;
-        assert_status(&reply, status);
         json_body(&reply)
     }
 

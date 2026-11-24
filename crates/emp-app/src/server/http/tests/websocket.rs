@@ -23,7 +23,13 @@ const SWITCHING_PROTOCOLS: &str = concat!(
     "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
 );
 
-fn upgrade(port: u16, path: &str, session: &str, other: &[&str], prefix: &[u8]) -> Vec<u8> {
+pub(super) fn upgrade(
+    port: u16,
+    path: &str,
+    session: &str,
+    other: &[&str],
+    prefix: &[u8],
+) -> Vec<u8> {
     let mut headers = UPGRADE.to_vec();
     headers.push(session);
     headers.extend_from_slice(other);
@@ -467,7 +473,7 @@ fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
     });
 }
 
-fn realtime_fixture(upstream: &RealtimeUpstream) -> (tempfile::TempDir, Fixture) {
+pub(super) fn realtime_fixture(upstream: &RealtimeUpstream) -> (tempfile::TempDir, Fixture) {
     let native = tempfile::tempdir().unwrap();
     let auth = native.path().join("auth.json");
     std::fs::write(
@@ -535,10 +541,10 @@ fn realtime_call_preserves_multipart_rejection_location_and_upstream_error() {
                 let reply = assert_wire_parity_with(
                     [(old_address, &old_wire), (address, &new_wire)],
                     false,
+                    status,
                     |reply| reply,
                 )
                 .await;
-                assert_status(&reply, status);
                 if status == 201 {
                     assert!(
                         String::from_utf8(reply)
@@ -609,7 +615,10 @@ fn realtime_rejections_retain_update_access_until_response_write() {
     });
 }
 
-async fn accept_upstream(listener: &AsyncListener, extensions: &str) -> (AsyncStream, String) {
+pub(super) async fn accept_upstream(
+    listener: &AsyncListener,
+    extensions: &str,
+) -> (AsyncStream, String) {
     let (mut io, _) = timeout(Duration::from_secs(5), listener.accept())
         .await
         .unwrap()
@@ -697,7 +706,7 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
     });
 }
 
-fn native_fixture(address: SocketAddr) -> Fixture {
+pub(super) fn native_fixture(address: SocketAddr) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("config.json");
     let catalog = directory.path().join("catalog.json");
