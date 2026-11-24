@@ -381,7 +381,7 @@ fn slow_device_revalidation_leaves_other_websockets_responsive() {
                 });
                 assert!(source.caller.is_some());
                 request.source = Some(&source);
-                let permit = Arc::new(state.lifecycle.admission.acquire_websocket().unwrap());
+                let permit = state.lifecycle.admission.acquire_websocket().unwrap();
                 crate::api::websocket::run_responses(
                     &state,
                     request,
@@ -389,7 +389,7 @@ fn slow_device_revalidation_leaves_other_websockets_responsive() {
                     downstream,
                     &[],
                     None,
-                    Some(permit),
+                    Some(permit.slot().clone()),
                 )
                 .await;
             });

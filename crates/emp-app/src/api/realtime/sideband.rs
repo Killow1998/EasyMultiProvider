@@ -23,7 +23,7 @@ pub(crate) struct PreparedSideband {
     pub(crate) headers: BTreeMap<String, String>,
     pub(crate) proxy: Option<String>,
     pub(crate) max_message_bytes: usize,
-    pub(crate) permit: crate::services::connection_admission::ConnectionPermit,
+    pub(crate) permit: crate::services::connection_admission::BusinessToken,
 }
 
 pub(crate) fn prepare_sideband(

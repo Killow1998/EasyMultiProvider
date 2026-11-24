@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc, Condvar, Mutex, MutexGuard, TryLockError,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
@@ -64,11 +61,11 @@ impl ConnectionAdmission {
         }
     }
 
-    pub(crate) fn acquire_request(&self) -> Option<ConnectionPermit> {
+    pub(crate) fn acquire_request(&self) -> Option<BusinessToken> {
         AdaptiveSlotPool::acquire(&self.requests)
     }
 
-    pub(crate) fn acquire_websocket(&self) -> Option<ConnectionPermit> {
+    pub(crate) fn acquire_websocket(&self) -> Option<BusinessToken> {
         AdaptiveSlotPool::acquire(&self.websockets)
     }
 
@@ -236,7 +233,7 @@ impl AdaptiveSlotPool {
         }
     }
 
-    fn acquire(pool: &Arc<Self>) -> Option<ConnectionPermit> {
+    fn acquire(pool: &Arc<Self>) -> Option<BusinessToken> {
         let mut state = pool.state.lock().ok()?;
         if state.closed {
             return None;
@@ -252,9 +249,8 @@ impl AdaptiveSlotPool {
         }
         state.active += 1;
         state.working += 1;
-        Some(ConnectionPermit(Some(Arc::new(ConnectionSlot {
+        Some(BusinessToken(Some(Arc::new(ConnectionSlot {
             pool: Arc::clone(pool),
-            holders: AtomicUsize::new(1),
         }))))
     }
 
@@ -333,9 +329,9 @@ impl Drop for AdmissionGateGuard<'_> {
     }
 }
 
-pub(crate) struct ConnectionPermit(Option<Arc<ConnectionSlot>>);
+pub(crate) struct BusinessToken(Option<Arc<ConnectionSlot>>);
 
-impl ConnectionPermit {
+impl BusinessToken {
     pub(crate) fn slot(&self) -> &Arc<ConnectionSlot> {
         self.0.as_ref().expect("active business permit")
     }
@@ -349,29 +345,27 @@ impl ConnectionPermit {
         if let Some(slot) = &slot
             && let Ok(mut state) = slot.pool.state.lock()
         {
-            if slot.holders.fetch_sub(1, Ordering::Relaxed) == 1 {
-                state.working -= 1;
-                if state.working == 0 {
-                    #[cfg(test)]
-                    let now = slot
-                        .pool
-                        .test_clock
-                        .get()
-                        .map_or_else(Instant::now, |now| now());
-                    #[cfg(not(test))]
-                    let now = Instant::now();
-                    state.idle_at = Some(now);
-                    slot.pool.work_finished.notify_waiters();
-                }
-                slot.pool.drained.notify_all();
+            state.working -= 1;
+            if state.working == 0 {
+                #[cfg(test)]
+                let now = slot
+                    .pool
+                    .test_clock
+                    .get()
+                    .map_or_else(Instant::now, |now| now());
+                #[cfg(not(test))]
+                let now = Instant::now();
+                state.idle_at = Some(now);
+                slot.pool.work_finished.notify_waiters();
             }
+            slot.pool.drained.notify_all();
             return handoff();
         }
         handoff()
     }
 }
 
-impl Drop for ConnectionPermit {
+impl Drop for BusinessToken {
     fn drop(&mut self) {
         self.release(|| ());
     }
@@ -379,16 +373,16 @@ impl Drop for ConnectionPermit {
 
 pub(crate) struct ConnectionSlot {
     pool: Arc<AdaptiveSlotPool>,
-    holders: AtomicUsize,
 }
 
 impl ConnectionSlot {
-    pub(crate) fn start_work(self: &Arc<Self>) -> ConnectionPermit {
-        let mut state = self.pool.state.lock().expect("connection admission");
-        if self.holders.fetch_add(1, Ordering::Relaxed) == 0 {
-            state.working += 1;
-        }
-        ConnectionPermit(Some(self.clone()))
+    pub(in crate::services) fn admit_callback(self: &Arc<Self>) -> BusinessToken {
+        self.pool
+            .state
+            .lock()
+            .expect("connection admission")
+            .working += 1;
+        BusinessToken(Some(self.clone()))
     }
 }
 

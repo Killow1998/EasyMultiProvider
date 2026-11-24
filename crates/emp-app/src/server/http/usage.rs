@@ -94,7 +94,7 @@ impl ReportQuery {
         self,
         state: &ServerState,
         cancelled: Arc<AtomicBool>,
-        write_frame: impl Fn(&[u8]) -> io::Result<()> + Send + 'static,
+        write_progress: impl Fn(i64, i64) -> io::Result<()> + Send + 'static,
     ) -> Result<Vec<u8>, serde_json::Error> {
         #[cfg(test)]
         let gate = state.backend.usage.report_gate.clone();
@@ -102,10 +102,7 @@ impl ReportQuery {
             #[cfg(test)]
             let cancelled = cancelled.clone();
             move |completed, total| {
-                write_frame(&sse_frame(
-                    "progress",
-                    &json!({"completed":completed,"total":total}),
-                )?)?;
+                write_progress(completed, total)?;
                 #[cfg(test)]
                 if completed == 0 {
                     let gate = gate.lock().unwrap().take();
@@ -162,50 +159,57 @@ async fn read_report(
         let socket = socket.expect("report stream socket").0;
         let delivery = stream.delivery.clone();
         let (sender, response) = oneshot::channel();
-        let worker = crate::server::spawn_connection_work_with_permit(move |business| {
-            let mut output = BodyOutput::new(socket, delivery, sender);
-            let query = match report.prepare_stream(raw.request(), &state, system_now()) {
-                Ok(query) => query,
-                Err(reply) => {
-                    output.finish(business, || reply.into_response());
+        let hooks = state.lifecycle.test_hooks.clone();
+        let worker = crate::server::spawn_response_work({
+            let hooks = hooks.clone();
+            move |business| {
+                let mut output = BodyOutput::new(socket, delivery, sender, business, hooks);
+                let query = match report.prepare_stream(raw.request(), &state, system_now()) {
+                    Ok(query) => query,
+                    Err(reply) => {
+                        output.finish(|| reply.into_response());
+                        return;
+                    }
+                };
+                let Ok(mut monitor) = DisconnectMonitor::start(output.socket()) else {
+                    output.finish(no_response);
                     return;
-                }
-            };
-            let Ok(mut monitor) = DisconnectMonitor::start(output.socket()) else {
-                output.finish(business, no_response);
-                return;
-            };
-            if output
-                .head(200, "text/event-stream", std::iter::empty())
-                .is_ok()
-            {
-                let output = Arc::new(Mutex::new(output));
-                let progress_output = output.clone();
-                let terminal = query.stream(&state, monitor.cancellation(), move |frame| {
-                    progress_output.lock().expect("report output").frame(frame)
-                });
-                if let Ok(terminal) = terminal {
-                    let _ = output.lock().expect("report output").terminal_frame(
-                        terminal,
-                        business,
-                        &state.lifecycle.test_hooks,
-                    );
+                };
+                if output
+                    .head(200, "text/event-stream", std::iter::empty())
+                    .is_ok()
+                {
+                    let output = Arc::new(Mutex::new(output));
+                    let progress_output = output.clone();
+                    let terminal =
+                        query.stream(&state, monitor.cancellation(), move |completed, total| {
+                            progress_output
+                                .lock()
+                                .expect("report output")
+                                .report_progress(completed, total)
+                        });
+                    if let Ok(terminal) = terminal {
+                        let _ = output
+                            .lock()
+                            .expect("report output")
+                            .finish_report(terminal);
+                    }
                 }
             }
         });
         *stream.worker.lock().expect("stream worker") = Some(worker);
+        hooks.before_response_receive().await;
         return response.await.map_err(|_| EntryError::internal());
     }
     run_blocking(move || {
-        report
-            .read(
-                raw.request(),
-                &state,
-                socket.as_ref().map(|Extension(socket)| socket.as_ref()),
-            )
-            .into_response()
+        report.read(
+            raw.request(),
+            &state,
+            socket.as_ref().map(|Extension(socket)| socket.as_ref()),
+        )
     })
     .await
+    .map(IntoResponse::into_response)
     .map_err(|_| EntryError::internal())
 }
 

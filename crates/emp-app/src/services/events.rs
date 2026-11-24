@@ -70,15 +70,14 @@ pub(crate) fn stream_event_activity(event: &Value) -> (bool, bool) {
 }
 
 pub(crate) fn terminal_stream_event(event: &Value) -> bool {
-    event
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|event_type| {
-            matches!(
-                event_type,
-                "response.completed" | "response.incomplete" | "response.failed" | "error"
-            )
-        })
+    event["type"].as_str().is_some_and(terminal_event_type)
+}
+
+pub(crate) fn terminal_event_type(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "response.completed" | "response.incomplete" | "response.failed" | "error"
+    )
 }
 
 /// Codex extensions are not part of the public Responses event protocol.

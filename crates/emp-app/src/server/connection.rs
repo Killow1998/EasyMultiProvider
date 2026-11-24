@@ -1,5 +1,5 @@
 use super::{
-    BUSINESS_SLOT, ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
+    BUSINESS_TOKEN, ServerControl, ServerMode, ShutdownReason, ShutdownSignal, handoff_response,
     head::GuardedHead,
     http::{
         accounts::AccountWriteRoute,
@@ -11,14 +11,14 @@ use super::{
         stream::{Flushed, StreamConnection},
         usage, websocket,
     },
-    run_blocking,
+    run_blocking, take_business,
     transport::ConnectionIo,
 };
 use crate::{
     app::ServerState,
     http::request::{MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE, RequestMethod},
     services::{
-        connection_admission::{ConnectionPermit, ConnectionSlot},
+        connection_admission::{BusinessToken, ConnectionSlot},
         modules::aero::CallLease,
         observation::http::HttpObservation,
     },
@@ -38,6 +38,7 @@ use hyper_util::{
 };
 use std::{
     borrow::Cow,
+    cell::RefCell,
     net::{SocketAddr, TcpStream},
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
@@ -65,12 +66,13 @@ struct HttpRequestContext {
 
 type UpgradeSession = Pin<Box<dyn Future<Output = ()> + Send>>;
 type RunUpgrade = Box<
-    dyn FnOnce(Option<TokioIo<Upgraded>>, Option<Arc<ConnectionPermit>>) -> UpgradeSession + Send,
+    dyn FnOnce(Option<TokioIo<Upgraded>>, Option<Arc<ConnectionSlot>>) -> UpgradeSession + Send,
 >;
 
 struct PendingUpgrade {
     io: OnUpgrade,
-    reserved: Option<ConnectionPermit>,
+    reserved: Option<BusinessToken>,
+    request: Option<BusinessToken>,
     run: RunUpgrade,
 }
 
@@ -123,17 +125,17 @@ impl ConnectionContext {
     }
 
     #[cfg(test)]
-    pub(crate) fn reserve_websocket(&self) -> Option<ConnectionPermit> {
+    pub(crate) fn reserve_websocket(&self) -> Option<BusinessToken> {
         self.0.control.admission.acquire_websocket()
     }
 
     pub(crate) fn on_upgrade<F: Future<Output = ()> + Send + 'static>(
         &self,
         upgrade: OnUpgrade,
-        reserved: Option<ConnectionPermit>,
+        reserved: Option<BusinessToken>,
         session: impl FnOnce(
             Option<TokioIo<Upgraded>>,
-            Option<Arc<ConnectionPermit>>,
+            Option<Arc<ConnectionSlot>>,
             ShutdownSignal,
         ) -> F
         + Send
@@ -143,6 +145,7 @@ impl ConnectionContext {
         *self.0.upgrade.lock().expect("upgrade registration") = Some(PendingUpgrade {
             io: upgrade,
             reserved,
+            request: None,
             run: Box::new(move |io, permit| Box::pin(session(io, permit, shutdown))),
         });
     }
@@ -181,8 +184,8 @@ pub(super) async fn drive_http(
         Ok(head) => head,
         Err(error) => {
             let _slot = permit.slot().clone();
-            drop(permit);
             let bytes = error.reply().encode();
+            drop(permit);
             let result = io.write_all(&bytes).await;
             let _ = io.shutdown().await;
             let _ = run_blocking(move || observation.response_finished(&bytes, result)).await;
@@ -270,7 +273,7 @@ pub(super) async fn drive(
     accepted: Instant,
     router: Router,
     control: Arc<ServerControl>,
-    permit: ConnectionPermit,
+    permit: BusinessToken,
 ) {
     let mode = control.mode;
     let head = match GuardedHead::read(&mut io, accepted + mode.head_timeout()).await {
@@ -302,7 +305,7 @@ async fn drive_connection(
     peer: SocketAddr,
     router: Router,
     control: Arc<ServerControl>,
-    permit: ConnectionPermit,
+    permit: BusinessToken,
     head: GuardedHead,
     http_context: Option<HttpRequestContext>,
 ) {
@@ -407,17 +410,27 @@ async fn drive_connection(
             if let Some(uri) = routing_uri {
                 *request.uri_mut() = uri.clone();
             }
-            let slot = context
-                .0
-                .request_slot
-                .lock()
-                .expect("request admission")
-                .clone();
-            let mut response = BUSINESS_SLOT.scope(slot, router.oneshot(request)).await?;
+            let token = business.lock().expect("request work").take();
+            let (mut response, token) = BUSINESS_TOKEN
+                .scope(RefCell::new(token), async {
+                    let response = router.oneshot(request).await?;
+                    Ok::<_, std::convert::Infallible>((response, take_business()))
+                })
+                .await?;
             let flushed = response.extensions_mut().remove::<Flushed>();
-            if response.extensions().get::<BufferedResponse>().is_some() || flushed.is_some() {
-                business.lock().expect("request work").take();
-            }
+            let token = if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+                context
+                    .0
+                    .upgrade
+                    .lock()
+                    .expect("upgrade registration")
+                    .as_mut()
+                    .expect("switching protocols has an upgrade")
+                    .request = token;
+                None
+            } else {
+                token
+            };
             if let Some(flushed) = flushed
                 && let Some(stream) = stream
             {
@@ -446,7 +459,12 @@ async fn drive_connection(
                     .expect("upgrade registration")
                     .take();
             }
-            Ok::<_, std::convert::Infallible>(response)
+            if response.extensions().get::<BufferedResponse>().is_some() {
+                Ok::<_, std::convert::Infallible>(handoff_response(token, || response))
+            } else {
+                *business.lock().expect("request work") = token;
+                Ok(response)
+            }
         }
     });
     let websocket = websocket::is_upgrade_route(raw_request);
@@ -486,7 +504,13 @@ async fn drive_connection(
         .lock()
         .expect("upgrade registration")
         .take();
-    if let Some(PendingUpgrade { io, reserved, run }) = upgrade {
+    if let Some(PendingUpgrade {
+        io,
+        reserved,
+        request,
+        run,
+    }) = upgrade
+    {
         let io = io.await.ok().map(TokioIo::new);
         let release_http_permit = async {
             drop(
@@ -508,21 +532,16 @@ async fn drive_connection(
                 }
             }
         };
-        let websocket_permit = reserved
-            .or_else(|| {
-                io.as_ref()
-                    .and_then(|_| context.0.control.admission.acquire_websocket())
-            })
-            .map(Arc::new);
-        business.lock().expect("request work").take();
+        let websocket_permit = reserved.or_else(|| {
+            io.as_ref()
+                .and_then(|_| context.0.control.admission.acquire_websocket())
+        });
+        drop(request);
         release_http_permit.await;
-        let slot = websocket_permit
-            .as_ref()
-            .map(|permit| permit.slot().clone());
-        BUSINESS_SLOT
-            .scope(slot, run(io, websocket_permit.clone()))
+        let slot = websocket_permit.as_ref().map(|token| token.slot().clone());
+        BUSINESS_TOKEN
+            .scope(RefCell::new(websocket_permit), run(io, slot))
             .await;
-        drop(websocket_permit);
     }
     drop(business.into_inner().expect("request work"));
     if let Some(HttpRequestContext {

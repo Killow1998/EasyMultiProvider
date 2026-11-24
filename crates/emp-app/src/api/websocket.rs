@@ -177,7 +177,7 @@ pub(crate) async fn run_responses(
     io: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
     prefix: &[u8],
     monitor: Option<Arc<tokio::net::TcpStream>>,
-    permit: Option<Arc<crate::services::connection_admission::ConnectionPermit>>,
+    permit: Option<Arc<crate::services::connection_admission::ConnectionSlot>>,
 ) {
     let Ok(websocket) = Downstream::new(
         io,
@@ -225,7 +225,7 @@ async fn responses_turns(
     monitor: Option<&Arc<tokio::net::TcpStream>>,
     (native_session, permit): (
         &mut NativeSession,
-        &Arc<crate::services::connection_admission::ConnectionPermit>,
+        &Arc<crate::services::connection_admission::ConnectionSlot>,
     ),
 ) {
     let mut last_response_id = None;
@@ -400,7 +400,7 @@ async fn responses_turns(
             let (control, mut monitor) = control::TurnControl::start(state, &mut websocket);
             let mut source = request.source.expect("authorized WebSocket caller").clone();
             source.aero_lease = Some(crate::services::modules::aero::CallLease {
-                connection: permit.slot().clone(),
+                connection: permit.clone(),
                 work: Arc::new(work),
             });
             let request = Request {

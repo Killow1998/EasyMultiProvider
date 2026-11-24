@@ -181,7 +181,7 @@ async fn exercise(
     let terminal = (phase == TerminalFrameAtDeadline).then(|| {
         let (queued, observed) = oneshot::channel();
         let clock = clock.clone();
-        *control.test_hooks.terminal_frame.lock().unwrap() = Some(Box::new(move || {
+        *control.test_hooks.output_queued.lock().unwrap() = Some(Box::new(move || {
             clock.expire();
             let _ = queued.send(());
         }));
@@ -284,7 +284,7 @@ async fn exercise(
         work.finish_business();
         work.writing().await;
     }
-    if matches!(phase, Sending | FinishesAfterDeadline) {
+    if phase == FinishesAfterDeadline {
         timeout(wire_timeout(), control.admission.wait_for_business_idle())
             .await
             .unwrap_or_else(|_| panic!("{case}: business still counted while write was paused"));
@@ -559,6 +559,114 @@ fn drain_submitted_search() {
 
 #[cfg(unix)]
 #[test]
+fn drain_buffered_search_handoff_before_connection_resumes() {
+    use super::inference::{RESULT, fixture, upstream_reply};
+    use crate::tests::OneShotUpstream;
+
+    let upstream = OneShotUpstream::serve(1, |socket| {
+        upstream_reply(socket, 200, "application/json", RESULT.len(), "");
+        socket.write_all(RESULT).unwrap();
+    });
+    drain_buffered_handoff(fixture(&upstream.base_url()), |fixture| {
+        json_request(
+            fixture.port(),
+            "/v1/alpha/search",
+            &[&fixture.session(), "Authorization: Bearer caller"],
+            br#"{"query":"fixture"}"#,
+        )
+    });
+    assert_eq!(upstream.observed().0, "/v1/alpha/search");
+}
+
+#[test]
+fn drain_report_early_reply_handoff_before_connection_resumes() {
+    drain_buffered_handoff(Fixture::new(), |fixture| {
+        request(
+            fixture.port(),
+            "GET",
+            "/api/calls?start=invalid",
+            &[&fixture.session(), "Accept: text/event-stream"],
+            b"",
+        )
+    });
+}
+
+fn drain_buffered_handoff(fixture: Fixture, wire: impl FnOnce(&Fixture) -> Vec<u8>) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let control = fixture.server.state.lifecycle.clone();
+        let clock = TestDrainClock::install(&control);
+        let (paused, connection_paused) = oneshot::channel();
+        let (resume, resumed) = oneshot::channel();
+        *control.test_hooks.response_receive.lock().unwrap() = Some((paused, resumed));
+        let (queued, response_queued) = oneshot::channel();
+        *control.test_hooks.output_queued.lock().unwrap() = Some(Box::new(move || {
+            let _ = queued.send(());
+        }));
+
+        let mut client = submit(fixture.server.local_addr(), &wire(&fixture)).await;
+        receive(
+            connection_paused,
+            "connection paused before receiving response",
+        )
+        .await;
+        receive(response_queued, "worker queued the buffered response").await;
+
+        let shutdown = tokio::task::spawn_blocking(move || fixture.server.shutdown());
+        assert_eq!(
+            timeout(wire_timeout(), control.signal().wait())
+                .await
+                .unwrap(),
+            ShutdownReason::Requested,
+        );
+        clock.expire();
+        let mut reply = Vec::new();
+        let closed = timeout(wire_timeout(), client.read_to_end(&mut reply)).await;
+        let _ = resume.send(());
+
+        assert_eq!(closed.unwrap().unwrap(), 0, "connection closed at cutoff");
+        assert!(
+            timeout(wire_timeout(), shutdown)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_ok()
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_inference_history_failure_at_terminal_write() {
+    run_case(
+        super::inference::fixture("http://127.0.0.1:1/v1"),
+        "inference history failure",
+        Sending,
+        false,
+        async |fixture| {
+            let path = "/v1/responses";
+            let probe = Probe::arm(fixture, path, Some(b"event: response.failed"));
+            let client = RawClient::request(
+                fixture.server.local_addr(),
+                &json_request(
+                    fixture.port(),
+                    path,
+                    &[&fixture.session()],
+                    br#"{"model":"demo/model","stream":true,"input":[{"type":"compaction","encrypted_content":"opaque"}]}"#,
+                ),
+            )
+            .await;
+            assert!(client.head.starts_with("HTTP/1.1 200 OK\r\n"));
+            Work::new(probe, client.io, None, 200, "response.failed").await
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn drain_inference_stream() {
     for &phase in ACTIVE {
         for via_quit in [false, true] {
@@ -665,7 +773,7 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
             let probe = Probe::arm(
                 fixture,
                 path,
-                (phase == Sending).then_some(b"0\r\n\r\n".as_slice()),
+                (phase == Sending).then_some(b"event: response.completed".as_slice()),
             );
             let headers = parent.as_ref().map_or_else(
                 || vec![session.as_str()],

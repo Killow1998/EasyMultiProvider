@@ -1,14 +1,20 @@
 use crate::server::{handoff_response, test_hooks::ServerHooks};
 use crate::{
-    http::response::status_text, server::http::error::response_head,
-    services::connection_admission::ConnectionPermit,
+    http::response::status_text,
+    server::http::error::response_head,
+    services::{
+        connection_admission::BusinessToken,
+        events::{sse_frame, terminal_event_type},
+    },
 };
 use axum::{
     body::{Body, Bytes},
     http::response::Builder,
     response::Response,
 };
+use emp_transport::SseJsonParser;
 use hyper::body::{Body as HttpBody, Frame};
+use serde_json::{Map, Value, json};
 use std::{
     convert::Infallible,
     io,
@@ -71,6 +77,8 @@ pub(crate) struct BodyOutput {
     delivery: Arc<Delivery>,
     response: Option<oneshot::Sender<Response>>,
     stream: Option<StreamFrames>,
+    business: Option<BusinessToken>,
+    hooks: Arc<ServerHooks>,
 }
 
 impl BodyOutput {
@@ -78,12 +86,16 @@ impl BodyOutput {
         socket: Arc<TcpStream>,
         delivery: Arc<Delivery>,
         response: oneshot::Sender<Response>,
+        business: BusinessToken,
+        hooks: Arc<ServerHooks>,
     ) -> Self {
         Self {
             socket,
             delivery,
             response: Some(response),
             stream: None,
+            business: Some(business),
+            hooks,
         }
     }
 
@@ -119,42 +131,68 @@ impl BodyOutput {
         Ok(())
     }
 
-    pub(crate) fn frame(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
-        stream
-            .send
-            .blocking_send(Bytes::copy_from_slice(bytes))
-            .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        stream.wait_for_flush()
+    pub(crate) fn response_event(&mut self, kind: &str, frames: &[Vec<u8>]) -> io::Result<()> {
+        if let Some((last, preceding)) = frames.split_last() {
+            for frame in preceding {
+                self.write_frame(Bytes::copy_from_slice(frame), false)?;
+            }
+            self.write_frame(Bytes::copy_from_slice(last), terminal_event_type(kind))?;
+        }
+        Ok(())
     }
 
-    pub(super) fn terminal_frame(
+    pub(crate) fn aero_chunk(
         &mut self,
-        bytes: Vec<u8>,
-        business: Option<ConnectionPermit>,
-        hooks: &ServerHooks,
-    ) -> io::Result<()> {
-        let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
-        let permit = tokio::runtime::Handle::current()
-            .block_on(stream.send.reserve())
-            .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        let bytes = Bytes::from(bytes);
-        handoff_response(business, || {
-            permit.send(bytes);
-            hooks.terminal_frame_queued();
+        chunk: &[u8],
+        parser: Option<&mut SseJsonParser>,
+    ) -> io::Result<Vec<Map<String, Value>>> {
+        let events = parser
+            .and_then(|parser| parser.push(chunk).ok())
+            .unwrap_or_default();
+        let terminal = events.last().is_some_and(|event| {
+            event
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(terminal_event_type)
         });
+        self.write_frame(Bytes::copy_from_slice(chunk), terminal)?;
+        Ok(events)
+    }
+
+    pub(super) fn report_progress(&mut self, completed: i64, total: i64) -> io::Result<()> {
+        let frame = sse_frame("progress", &json!({"completed":completed,"total":total}))?;
+        self.write_frame(Bytes::from(frame), false)
+    }
+
+    pub(super) fn finish_report(&mut self, bytes: Vec<u8>) -> io::Result<()> {
+        self.write_frame(Bytes::from(bytes), true)
+    }
+
+    fn write_frame(&mut self, bytes: Bytes, terminal: bool) -> io::Result<()> {
+        let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
+        if terminal {
+            let permit = tokio::runtime::Handle::current()
+                .block_on(stream.send.reserve())
+                .map_err(|_| io::ErrorKind::BrokenPipe)?;
+            handoff_response(self.business.take(), || {
+                permit.send(bytes);
+                self.hooks.output_queued();
+            });
+        } else {
+            stream
+                .send
+                .blocking_send(bytes)
+                .map_err(|_| io::ErrorKind::BrokenPipe)?;
+        }
         stream.wait_for_flush()
     }
 
-    pub(super) fn finish(
-        self,
-        business: Option<ConnectionPermit>,
-        response: impl FnOnce() -> Response,
-    ) {
+    pub(super) fn finish(self, response: impl FnOnce() -> Response) {
         let reply = self.response.map(|sender| (sender, response()));
-        handoff_response(business, || {
+        handoff_response(self.business, || {
             if let Some((sender, response)) = reply {
                 let _ = sender.send(response);
+                self.hooks.output_queued();
             }
             drop(self.stream);
         });

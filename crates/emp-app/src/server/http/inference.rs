@@ -221,7 +221,7 @@ async fn submit(
         .map_err(EntryError::reply)?;
     let (sender, response) = oneshot::channel();
     let delivery = inference.stream.delivery.clone();
-    let worker = crate::server::spawn_connection_work_with_permit({
+    let worker = crate::server::spawn_response_work({
         let state = state.clone();
         let inference = inference.clone();
         move |business| {
@@ -229,9 +229,15 @@ async fn submit(
             let mut request = raw.request();
             request.source = Some(&source);
             request.observation_id = context.request_id();
-            let mut sink = BodyOutput::new(inference.socket.clone(), delivery, sender);
+            let mut sink = BodyOutput::new(
+                inference.socket.clone(),
+                delivery,
+                sender,
+                business,
+                state.lifecycle.test_hooks.clone(),
+            );
             let reply = route.execute(&mut sink, request, body, &state, observation.as_mut());
-            sink.finish(business, || match reply {
+            sink.finish(|| match reply {
                 InferenceOutcome::Buffered(reply) => {
                     buffered(reply, observation.as_ref(), &inference.receipt)
                 }
@@ -245,6 +251,7 @@ async fn submit(
         }
     });
     *inference.stream.worker.lock().expect("stream worker") = Some(worker);
+    state.lifecycle.test_hooks.before_response_receive().await;
     response.await.map_err(|_| EntryError::internal().reply())
 }
 

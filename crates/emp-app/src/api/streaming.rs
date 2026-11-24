@@ -40,7 +40,6 @@ fn stream_headers(headers: &BTreeMap<String, String>) -> impl Iterator<Item = (&
     })
 }
 
-/// Records downstream delivery while returning the writer's original I/O results.
 pub(crate) struct ObservedSse<'a> {
     sink: &'a mut BodyOutput,
     observation: &'a mut RequestObservation,
@@ -93,7 +92,7 @@ impl<'a> ObservedSse<'a> {
         upstream: bool,
     ) -> std::io::Result<()> {
         if !matches!(event_type, "response.failed" | "error") {
-            return frames.iter().try_for_each(|frame| self.sink.frame(frame));
+            return self.sink.response_event(event_type, frames);
         }
         let formatted = frames
             .iter()
@@ -104,9 +103,7 @@ impl<'a> ObservedSse<'a> {
                     .unwrap_or_else(|| frame.clone())
             })
             .collect::<Vec<_>>();
-        formatted
-            .iter()
-            .try_for_each(|frame| self.sink.frame(frame))
+        self.sink.response_event(event_type, &formatted)
     }
 }
 

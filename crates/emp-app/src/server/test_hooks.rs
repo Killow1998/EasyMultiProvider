@@ -18,7 +18,9 @@ mod implementation {
 
         pub(in crate::server) async fn health_handler(&self, _: bool) {}
 
-        pub(in crate::server) fn terminal_frame_queued(&self) {}
+        pub(in crate::server) fn output_queued(&self) {}
+
+        pub(in crate::server) async fn before_response_receive(&self) {}
     }
 
     #[derive(Clone, Default)]
@@ -61,7 +63,8 @@ mod implementation {
     pub(in crate::server) struct ServerHooks {
         pub(in crate::server) request: Mutex<Option<RequestProbe>>,
         pub(in crate::server) health_handler: Mutex<Option<HandlerProbe>>,
-        pub(in crate::server) terminal_frame: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        pub(in crate::server) output_queued: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        pub(in crate::server) response_receive: Mutex<Option<HandlerProbe>>,
     }
 
     impl ServerHooks {
@@ -91,8 +94,16 @@ mod implementation {
             }
         }
 
-        pub(in crate::server) fn terminal_frame_queued(&self) {
-            let probe = self.terminal_frame.lock().unwrap().take();
+        pub(in crate::server) async fn before_response_receive(&self) {
+            let resume = self.response_receive.lock().unwrap().take();
+            if let Some((paused, resume)) = resume {
+                let _ = paused.send(());
+                let _ = resume.await;
+            }
+        }
+
+        pub(in crate::server) fn output_queued(&self) {
+            let probe = self.output_queued.lock().unwrap().take();
             if let Some(probe) = probe {
                 probe();
             }

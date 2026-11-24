@@ -6,7 +6,7 @@ use super::{ActiveWorker, Modules};
 use crate::{
     app::ServerState,
     services::{
-        connection_admission::{ConnectionPermit, ConnectionSlot},
+        connection_admission::{BusinessToken, ConnectionSlot},
         gateway_clients::Caller,
         updates::RequestPermit,
     },
@@ -46,7 +46,7 @@ pub(crate) struct CallLease {
 }
 
 pub(crate) struct CallbackLease {
-    pub(crate) connection: ConnectionPermit,
+    pub(crate) business: BusinessToken,
     pub(crate) work: Arc<RequestPermit>,
 }
 
@@ -107,7 +107,7 @@ impl Callers {
         Some((
             identity.clone(),
             lease.as_ref().map(|lease| CallbackLease {
-                connection: lease.connection.start_work(),
+                business: lease.connection.admit_callback(),
                 work: lease.work.clone(),
             }),
         ))

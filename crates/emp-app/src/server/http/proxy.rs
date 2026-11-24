@@ -7,7 +7,7 @@ use crate::{
     },
     server::run_blocking,
     services::{
-        connection_admission::ConnectionPermit, gateway_clients::Caller,
+        connection_admission::BusinessToken, gateway_clients::Caller,
         modules::aero::CallerDelegation, updates::RequestPermit,
     },
     util::system_now,
@@ -61,7 +61,7 @@ pub(crate) struct AdmittedCallback {
 }
 
 pub(crate) enum ConnectionIntake {
-    Public(ConnectionPermit),
+    Public(BusinessToken),
     CallbackHead(tokio::sync::OwnedSemaphorePermit),
 }
 
@@ -86,7 +86,7 @@ impl ConnectionIntake {
         request: Option<Request<'_>>,
         state: &ServerState,
         peer: Option<IpAddr>,
-    ) -> Option<(ConnectionPermit, Option<AdmittedCallback>)> {
+    ) -> Option<(BusinessToken, Option<AdmittedCallback>)> {
         let callback = request
             .filter(|request| request.method == RequestMethod::Post)
             .and_then(|request| aero_delegation_key(request, state, peer))
@@ -94,7 +94,7 @@ impl ConnectionIntake {
         if let Some((identity, Some(lease))) = callback {
             drop(self);
             return Some((
-                lease.connection,
+                lease.business,
                 Some(AdmittedCallback {
                     identity,
                     work: Some(lease.work),

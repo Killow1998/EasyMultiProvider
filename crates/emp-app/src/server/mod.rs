@@ -7,7 +7,7 @@ mod transport;
 
 use crate::app::ServerState;
 use crate::services::{
-    connection_admission::{ConnectionAdmission, ConnectionPermit, ConnectionSlot},
+    connection_admission::{BusinessToken, ConnectionAdmission},
     management_events::ManagementEvents,
     updates::UpdateState,
 };
@@ -16,6 +16,7 @@ use axum::{Router, middleware::from_fn_with_state};
 #[cfg(test)]
 use std::net::SocketAddr;
 use std::{
+    cell::RefCell,
     io,
     sync::{
         Arc,
@@ -102,7 +103,7 @@ pub(crate) struct ServerControl {
     pub(crate) shutdown: Arc<AtomicBool>,
     stopped: watch::Sender<Option<(ShutdownReason, DrainInstant)>>,
     drain_clock: DrainClock,
-    test_hooks: test_hooks::ServerHooks,
+    test_hooks: Arc<test_hooks::ServerHooks>,
     updates: Option<UpdateState>,
     management_events: Option<Arc<ManagementEvents>>,
 }
@@ -115,7 +116,7 @@ impl ServerControl {
             shutdown: Arc::default(),
             stopped: watch::Sender::new(None),
             drain_clock: DrainClock::default(),
-            test_hooks: test_hooks::ServerHooks::default(),
+            test_hooks: Arc::default(),
             updates: None,
             management_events: None,
         }
@@ -441,30 +442,32 @@ async fn accept_with_retry<T, F: Future<Output = io::Result<T>>>(
 
 tokio::task_local! {
     static BLOCKING_WORK: watch::Receiver<()>;
-    static BUSINESS_SLOT: Option<Arc<ConnectionSlot>>;
+    static BUSINESS_TOKEN: RefCell<Option<BusinessToken>>;
 }
 
-pub(crate) fn spawn_connection_work<T: Send + 'static>(
+fn take_business() -> Option<BusinessToken> {
+    BUSINESS_TOKEN
+        .try_with(|business| business.take())
+        .ok()
+        .flatten()
+}
+
+fn spawn_connection_work<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> JoinHandle<T> {
-    spawn_connection_work_with_permit(move |_business| work())
-}
-
-fn spawn_connection_work_with_permit<T: Send + 'static>(
-    work: impl FnOnce(Option<ConnectionPermit>) -> T + Send + 'static,
-) -> JoinHandle<T> {
     let pending = BLOCKING_WORK.try_with(Clone::clone).ok();
-    let business = BUSINESS_SLOT
-        .try_with(|slot| slot.as_ref().map(ConnectionSlot::start_work))
-        .ok()
-        .flatten();
     tokio::task::spawn_blocking(move || {
         let _pending = pending;
-        work(business)
+        work()
     })
 }
 
-fn handoff_response<T>(business: Option<ConnectionPermit>, publish: impl FnOnce() -> T) -> T {
+fn spawn_response_work(work: impl FnOnce(BusinessToken) + Send + 'static) -> JoinHandle<()> {
+    let business = take_business().expect("response worker owns the request");
+    spawn_connection_work(move || work(business))
+}
+
+fn handoff_response<T>(business: Option<BusinessToken>, publish: impl FnOnce() -> T) -> T {
     match business {
         Some(business) => business.finish_with(publish),
         None => publish(),
@@ -474,5 +477,12 @@ fn handoff_response<T>(business: Option<ConnectionPermit>, publish: impl FnOnce(
 pub(crate) async fn run_blocking<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, JoinError> {
-    spawn_connection_work(work).await
+    let business = take_business();
+    let (result, business) = spawn_connection_work(move || (work(), business)).await?;
+    if let Some(business) = business {
+        BUSINESS_TOKEN.with(|owner| {
+            assert!(owner.replace(Some(business)).is_none());
+        });
+    }
+    Ok(result)
 }

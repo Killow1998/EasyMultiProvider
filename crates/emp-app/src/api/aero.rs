@@ -111,7 +111,9 @@ pub(crate) fn relay(
     {
         return InferenceOutcome::Streamed;
     }
-    let mut parser = SseJsonParser::new();
+    let mut parser = content_type
+        .starts_with("text/event-stream")
+        .then(SseJsonParser::new);
     loop {
         match state.backend.transport.runtime.block_on(await_module(
             state,
@@ -119,19 +121,14 @@ pub(crate) fn relay(
             upstream.response.next_chunk(),
         )) {
             DisconnectRace::Ready(Ok(Some(chunk))) => {
-                if observation
-                    .written(downstream.frame(&chunk), false)
-                    .is_err()
-                {
+                let Ok(events) =
+                    observation.written(downstream.aero_chunk(&chunk, parser.as_mut()), false)
+                else {
                     break;
-                }
-                if content_type.starts_with("text/event-stream")
-                    && let Ok(events) = parser.push(&chunk)
-                {
-                    for event in events {
-                        let _ = observation
-                            .event_written(&Value::Object(event), Ok::<(), std::io::Error>(()));
-                    }
+                };
+                for event in events {
+                    let _ = observation
+                        .event_written(&Value::Object(event), Ok::<(), std::io::Error>(()));
                 }
             }
             DisconnectRace::Ready(Ok(None)) => {

@@ -29,7 +29,7 @@ pub(super) async fn serve(
     let state = Arc::clone(state);
     let started = websocket.observation.execution_started();
     let (events, mut incoming) = mpsc::channel::<(Value, oneshot::Sender<io::Result<()>>)>(1);
-    let worker = crate::server::spawn_connection_work(move || {
+    let worker = crate::server::run_blocking(move || {
         let Turn {
             route,
             body,
@@ -108,14 +108,17 @@ pub(super) async fn serve(
             TurnResult::Closed
         })
     });
-    while let Some((mut event, acknowledge)) = incoming.recv().await {
-        let result = websocket
-            .send_stateless_json(&mut event, false)
-            .await
-            .map_err(io::Error::other);
-        let _ = acknowledge.send(result);
-    }
-    match worker.await {
+    let deliver = async {
+        while let Some((mut event, acknowledge)) = incoming.recv().await {
+            let result = websocket
+                .send_stateless_json(&mut event, false)
+                .await
+                .map_err(io::Error::other);
+            let _ = acknowledge.send(result);
+        }
+    };
+    let (result, ()) = tokio::join!(worker, deliver);
+    match result {
         Ok(Completion::Finished(result)) => result,
         Ok(Completion::Failed(event)) if websocket.send_json(&event).await.is_ok() => {
             TurnResult::Finished
