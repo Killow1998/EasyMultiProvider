@@ -7,7 +7,6 @@ use super::{
 };
 use crate::{
     app::ServerState,
-    http::request::{Request, RequestMethod, read_json_body},
     server::{connection::ConnectionContext, run_blocking},
     services::migration::{self, ExportOptions, MigrationError, Selection, lan, preview},
     util::system_now,
@@ -19,7 +18,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value, json};
-use std::{net::TcpStream, sync::Arc};
+use std::sync::Arc;
 
 const EXPORT: &str = "/api/migration/export";
 const LAN_START: &str = "/api/migration/lan/start";
@@ -65,34 +64,6 @@ pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
 }
 
 impl MigrationRoute {
-    pub(crate) fn for_request(request: Request<'_>) -> Option<Self> {
-        if request.method != RequestMethod::Post {
-            return None;
-        }
-        let path = request.raw_path();
-        ROUTES
-            .iter()
-            .find_map(|&(route_path, route)| (path == route_path).then_some(route))
-    }
-
-    pub(crate) fn legacy(
-        self,
-        stream: &mut TcpStream,
-        request: Request<'_>,
-        prefix: Vec<u8>,
-        state: &ServerState,
-        now: f64,
-    ) -> Result<HttpReply, HttpReply> {
-        let ManagementSession(session) =
-            ManagementSession::require(request, state, now).map_err(EntryError::reply)?;
-        check_permission(state)?;
-        let body = read_json_body(stream, request, prefix, state)
-            .map_err(|error| EntryError::from(error).reply())?;
-        self.parse(body)
-            .execute(state, &session, now, request.observation_id)
-            .map_err(EntryError::reply)
-    }
-
     fn parse(self, body: Value) -> MigrationCommand {
         let Value::Object(mut fields) = body else {
             unreachable!("migration body is a validated JSON object");

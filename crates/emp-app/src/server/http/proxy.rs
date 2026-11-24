@@ -350,6 +350,7 @@ fn peer(parts: &Parts) -> Option<IpAddr> {
 }
 
 pub(crate) struct ProxyCaller {
+    #[cfg(test)]
     pub(crate) caller: Caller,
     pub(crate) incoming: BTreeMap<String, String>,
 }
@@ -375,8 +376,11 @@ impl FromRequestParts<Arc<ServerState>> for ProxyCaller {
             request.source = Some(&source);
             require_proxy(request, &state, now)?;
             let incoming = request.incoming();
-            let caller = source.caller.expect("authorized proxy caller");
-            Ok(Self { caller, incoming })
+            Ok(Self {
+                #[cfg(test)]
+                caller: source.caller.expect("authorized proxy caller"),
+                incoming,
+            })
         })
         .await
         .map_err(|_| EntryError::internal())?

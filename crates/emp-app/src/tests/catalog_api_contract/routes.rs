@@ -1,8 +1,6 @@
 use super::*;
-use crate::lifecycle::TestDriver;
 use crate::server::http::tests::{
-    assert_sse_wire_parity, assert_status, assert_wire, assert_wire_parity,
-    assert_wire_response_parity, driver_endpoints, exchange_wire, json_body, json_request, request,
+    assert_sse_wire, assert_status, assert_wire, exchange_wire, json_body, json_request, request,
 };
 use crate::tests::internal_events_contract::final_journal;
 use tokio::{
@@ -11,36 +9,21 @@ use tokio::{
     time::timeout,
 };
 
-fn with_candidate(server: ServerHandle, exercise: impl AsyncFnOnce(&ServerHandle, SocketAddr)) {
+fn with_server(server: ServerHandle, exercise: impl AsyncFnOnce(&ServerHandle, SocketAddr)) {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(async {
-            if matches!(server.test_driver, TestDriver::Candidate) {
-                exercise(&server, server.local_addr()).await;
-                return;
-            }
-            let listener = AsyncListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-            let address = listener.local_addr().unwrap();
-            let candidate = tokio::spawn(crate::server::serve_candidate(
-                listener,
-                server.state.clone(),
-            ));
-            exercise(&server, address).await;
-            server.state.request_shutdown();
-            candidate.await.unwrap().unwrap();
-        });
+        .block_on(exercise(&server, server.local_addr()));
     server.shutdown().unwrap();
 }
 
 #[test]
-fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
+fn catalog_reads_preserve_visibility_etag_and_auth() {
     let upstream = CatalogUpstream::start(200);
-    let (_directory, server) = catalog_server_with_driver(&upstream, TestDriver::reference());
-    with_candidate(server, async |server, candidate| {
-        let old = server.local_addr();
-        let port = old.port();
+    let (_directory, server) = catalog_server(&upstream);
+    with_server(server, async |server, endpoint| {
+        let port = endpoint.port();
         let session = session_header(server);
         let discover = json_request(
             port,
@@ -48,7 +31,7 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
             &[&session],
             br#"{"provider":"demo"}"#,
         );
-        let reply = exchange_wire(candidate, &discover, false).await;
+        let reply = exchange_wire(endpoint, &discover, false).await;
         assert_status(&reply, 200);
         upstream.observed();
 
@@ -59,7 +42,7 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
             let refresh = &server.state.catalog_refresh;
             assert!(refresh.wait_until_idle(Duration::ZERO));
             let rich = request(port, "GET", rich_path, &[], b"");
-            assert_status(&exchange_wire(candidate, &rich, false).await, 200);
+            assert_status(&exchange_wire(endpoint, &rich, false).await, 200);
             assert!(!refresh.wait_until_idle(Duration::ZERO));
         }
         for (method, path, headers, status) in [
@@ -116,7 +99,7 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
             ),
         ] {
             let wire = request(port, method, path, headers, b"");
-            let reply = assert_wire_parity(old, candidate, &wire, false, status).await;
+            let reply = assert_wire(endpoint, &wire, false, status).await;
             assert!(String::from_utf8_lossy(&reply).contains(no_store));
             if status == 200 {
                 let body = json_body(&reply);
@@ -138,7 +121,7 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
             }
         }
         let rich = request(port, "GET", rich_path, &[], b"");
-        let reply = assert_wire_parity(old, candidate, &rich, true, 200).await;
+        let reply = assert_wire(endpoint, &rich, true, 200).await;
         assert!(json_body(&reply)["models"].is_array());
         let etag = String::from_utf8_lossy(&reply)
             .lines()
@@ -147,10 +130,7 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
             .to_owned();
         let conditional = format!("If-None-Match: {etag}");
         let wire = request(port, "GET", rich_path, &[&conditional], b"");
-        assert_eq!(
-            assert_wire_parity(old, candidate, &wire, false, 200).await,
-            reply
-        );
+        assert_eq!(assert_wire(endpoint, &wire, false, 200).await, reply);
 
         let bearer = format!("Authorization: Bearer {}", server.state.backend.gateway_key);
         let gateway = request(
@@ -160,38 +140,27 @@ fn catalog_reads_match_legacy_wire_on_the_candidate_listener() {
             &["Host: outside.invalid", &bearer],
             b"",
         );
-        assert_eq!(
-            assert_wire_parity(old, candidate, &gateway, false, 200).await,
-            reply
-        );
+        assert_eq!(assert_wire(endpoint, &gateway, false, 200).await, reply);
         server
             .state
             .backend
             .modules
             .mark_unavailable(emp_modules::Module::Gateway, "test");
-        assert_wire_parity(old, candidate, &gateway, false, 403).await;
-        assert_eq!(
-            assert_wire_parity(old, candidate, &rich, false, 200).await,
-            reply
-        );
+        assert_wire(endpoint, &gateway, false, 403).await;
+        assert_eq!(assert_wire(endpoint, &rich, false, 200).await, reply);
         assert!(upstream.requests.try_recv().is_err());
     });
 }
 
 #[test]
-fn metadata_matches_legacy_wire_on_the_candidate_listener() {
+fn metadata_preserves_read_write_and_body_contracts() {
     let upstream = CatalogUpstream::start_with_payload(
         200,
         json!({"inputTokenLimit":1024,"outputTokenLimit":128}),
     );
-    let (directory, server) = metadata_server_at_with_driver(
-        upstream.address,
-        HttpClientPolicy::default(),
-        TestDriver::reference(),
-    );
-    with_candidate(server, async |server, candidate| {
-        let old = server.local_addr();
-        let port = old.port();
+    let (directory, server) = metadata_server_at(upstream.address, HttpClientPolicy::default());
+    with_server(server, async |server, endpoint| {
+        let port = endpoint.port();
         let session = session_header(server);
         let path = "/api/models/metadata";
         for (headers, body, status) in [
@@ -215,10 +184,10 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
             ([&*session].as_slice(), b"{}".as_slice(), 400),
         ] {
             let wire = json_request(port, path, headers, body);
-            assert_wire_parity(old, candidate, &wire, false, status).await;
+            assert_wire(endpoint, &wire, false, status).await;
         }
         let head = request(port, "HEAD", path, &[&session], b"");
-        assert_wire_parity(old, candidate, &head, false, 404).await;
+        assert_wire(endpoint, &head, false, 404).await;
         let partial = request(
             port,
             "POST",
@@ -230,7 +199,7 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
             ],
             b"{",
         );
-        let reply = assert_wire_parity(old, candidate, &partial, true, 400).await;
+        let reply = assert_wire(endpoint, &partial, true, 400).await;
         assert_eq!(
             json_body(&reply)["error"]["message"],
             "request body is incomplete"
@@ -244,22 +213,17 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
             br#"{"provider":"gemini","model":"gemini/alpha beta/preview"}"#,
         );
         for end_input in [true, false] {
-            let mut replies = Vec::new();
-            for (_, address) in driver_endpoints(old, candidate) {
-                replies.push(
-                    checked_metadata_reply(
-                        address,
-                        &wire,
-                        end_input,
-                        200,
-                        &upstream,
-                        "/v1beta/models/alpha%20beta%2Fpreview",
-                    )
-                    .await,
-                );
-            }
-            for pair in replies.windows(2) {
-                assert_wire_response_parity(&wire, &pair[0], &pair[1]);
+            {
+                let address = endpoint;
+                checked_metadata_reply(
+                    address,
+                    &wire,
+                    end_input,
+                    200,
+                    &upstream,
+                    "/v1beta/models/alpha%20beta%2Fpreview",
+                )
+                .await;
             }
         }
         assert!(!directory.path().join("provider-model-lists").exists());
@@ -267,37 +231,28 @@ fn metadata_matches_legacy_wire_on_the_candidate_listener() {
 }
 
 #[test]
-fn metadata_upstream_rejection_matches_legacy_wire_on_the_candidate_listener() {
+fn metadata_preserves_upstream_rejections() {
     let upstream = CatalogUpstream::start(429);
-    let (_directory, server) = metadata_server_at_with_driver(
-        upstream.address,
-        HttpClientPolicy::default(),
-        TestDriver::reference(),
-    );
-    with_candidate(server, async |server, candidate| {
-        let old = server.local_addr();
+    let (_directory, server) = metadata_server_at(upstream.address, HttpClientPolicy::default());
+    with_server(server, async |server, endpoint| {
         let wire = json_request(
-            old.port(),
+            endpoint.port(),
             "/api/models/metadata",
             &[&session_header(server)],
             br#"{"provider":"gemini","model":"rate-limited"}"#,
         );
-        let mut replies = Vec::new();
-        for (_, address) in driver_endpoints(old, candidate) {
-            replies.push(
-                checked_metadata_reply(
-                    address,
-                    &wire,
-                    false,
-                    429,
-                    &upstream,
-                    "/v1beta/models/rate-limited",
-                )
-                .await,
-            );
-        }
-        for pair in replies.windows(2) {
-            assert_wire_response_parity(&wire, &pair[0], &pair[1]);
+
+        {
+            let address = endpoint;
+            checked_metadata_reply(
+                address,
+                &wire,
+                false,
+                429,
+                &upstream,
+                "/v1beta/models/rate-limited",
+            )
+            .await;
         }
     });
 }
@@ -331,14 +286,11 @@ async fn checked_metadata_reply(
 
 #[test]
 fn metadata_finishes_admitted_upstream_work_after_the_client_disconnects() {
-    for &driver in TestDriver::selected() {
+    {
         let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         upstream.set_nonblocking(true).unwrap();
-        let (directory, server) = metadata_server_at_with_driver(
-            upstream.local_addr().unwrap(),
-            HttpClientPolicy::default(),
-            driver,
-        );
+        let (directory, server) =
+            metadata_server_at(upstream.local_addr().unwrap(), HttpClientPolicy::default());
         let address = server.local_addr();
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -418,26 +370,24 @@ fn metadata_finishes_admitted_upstream_work_after_the_client_disconnects() {
 }
 
 #[test]
-fn calls_sse_matches_legacy_after_http_framing() {
+fn calls_sse_preserves_events_after_http_framing() {
     let directory = tempfile::tempdir().unwrap();
     let root = canonical_root(&directory);
-    let server = ServerHandle::start_with_test_driver(
+    let server = ServerHandle::start_for_test(
         Ipv4Addr::LOCALHOST.into(),
         &root.join("config.json"),
         root.join("codex/auth.json"),
-        TestDriver::reference(),
     )
     .unwrap();
-    with_candidate(server, async |server, candidate| {
-        let old = server.local_addr();
+    with_server(server, async |server, endpoint| {
         let wire = request(
-            old.port(),
+            endpoint.port(),
             "GET",
             "/api/calls?start=0&end=4102444800",
             &[&session_header(server), "Accept: text/event-stream"],
             b"",
         );
-        let reply = assert_sse_wire_parity(old, candidate, &wire).await;
+        let reply = assert_sse_wire(endpoint, &wire).await;
         let reply = std::str::from_utf8(&reply).unwrap();
         assert!(reply.contains("Content-Type: text/event-stream\r\n"));
         assert!(reply.contains("event: result\n"));

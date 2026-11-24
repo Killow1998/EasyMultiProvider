@@ -11,7 +11,6 @@ use crate::http::request::RequestHead;
 use crate::http::request::parse_request;
 use crate::http::request::read_request_head;
 use crate::http::response::status_text;
-use crate::http::routes::route_request_at;
 use crate::lifecycle::ServerHandle;
 use crate::services::accounts::notify_quota_update;
 use crate::services::compaction::COMPACTION_PROMPT;
@@ -221,7 +220,69 @@ fn delete(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
     complete_response(&mut stream)
 }
 
-fn read_sse_frame(reader: &mut BufReader<TcpStream>) -> String {
+struct ChunkedSse {
+    input: BufReader<TcpStream>,
+    remaining: usize,
+    ended: bool,
+}
+
+impl Read for ChunkedSse {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.ended || buffer.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining == 0 {
+            let mut length = String::new();
+            self.input.read_line(&mut length)?;
+            self.remaining = usize::from_str_radix(
+                length.strip_suffix("\r\n").expect("HTTP chunk length line"),
+                16,
+            )
+            .expect("HTTP chunk length");
+            if self.remaining == 0 {
+                let mut end = [0; 2];
+                self.input.read_exact(&mut end)?;
+                assert_eq!(&end, b"\r\n", "terminal HTTP chunk delimiter");
+                self.ended = true;
+                return Ok(0);
+            }
+        }
+        let length = buffer.len().min(self.remaining);
+        let count = self.input.read(&mut buffer[..length])?;
+        assert!(count > 0, "HTTP chunk ended before its payload");
+        self.remaining -= count;
+        if self.remaining == 0 {
+            let mut end = [0; 2];
+            self.input.read_exact(&mut end)?;
+            assert_eq!(&end, b"\r\n", "HTTP chunk delimiter");
+        }
+        Ok(count)
+    }
+}
+
+fn read_sse_head(mut input: BufReader<TcpStream>) -> (String, BufReader<ChunkedSse>) {
+    let mut head = String::new();
+    loop {
+        let mut line = String::new();
+        input.read_line(&mut line).expect("read SSE headers");
+        assert!(!line.is_empty(), "SSE response ended before headers");
+        if line == "\r\n" {
+            break;
+        }
+        head.push_str(&line);
+    }
+    assert!(head.contains("Transfer-Encoding: chunked\r\n"), "{head}");
+    (
+        head,
+        BufReader::new(ChunkedSse {
+            input,
+            remaining: 0,
+            ended: false,
+        }),
+    )
+}
+
+fn read_sse_frame(reader: &mut impl BufRead) -> String {
     let mut frame = String::new();
     loop {
         let mut line = String::new();
@@ -234,7 +295,7 @@ fn read_sse_frame(reader: &mut BufReader<TcpStream>) -> String {
     }
 }
 
-fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<TcpStream> {
+fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<ChunkedSse> {
     let mut stream = TcpStream::connect(server.local_addr()).expect("connect SSE");
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -248,17 +309,7 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<TcpStrea
                 .as_bytes(),
             )
             .expect("write SSE request");
-    let mut reader = BufReader::new(stream);
-    let mut head = String::new();
-    loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("read SSE headers");
-        assert!(!line.is_empty(), "SSE response ended before headers");
-        if line == "\r\n" {
-            break;
-        }
-        head.push_str(&line);
-    }
+    let (head, mut reader) = read_sse_head(BufReader::new(stream));
     assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
     assert!(head.contains("Content-Type: text/event-stream\r\n"));
     assert!(head.contains("Cache-Control: no-store\r\n"));

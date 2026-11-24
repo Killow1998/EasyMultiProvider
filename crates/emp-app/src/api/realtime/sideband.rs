@@ -2,18 +2,12 @@ use super::call::{incoming_headers, native_headers, safe_forwarded_headers};
 use super::{RealtimeError, valid_call_id};
 use crate::VERSION;
 use crate::api::websocket::prepare_upgrade;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::api::websocket::socket::legacy_websocket_io;
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::server::http::error::HttpReply;
 use crate::server::http::proxy::require_proxy;
 use emp_transport::{AsyncClientWebSocket, DEFAULT_WEBSOCKET_MESSAGE_BYTES};
 use std::collections::BTreeMap;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use std::io::Write;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use std::net::TcpStream;
 use std::time::Duration;
 pub(crate) mod relay;
 #[cfg(test)]
@@ -92,88 +86,6 @@ pub(crate) fn prepare_sideband(
         max_message_bytes: MAX_REALTIME_SIDEBAND_MESSAGE_BYTES,
         permit,
     })
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn serve_realtime_sideband(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    call_id: &str,
-    body_prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-) {
-    serve_sideband(stream, request, call_id, body_prefix, state, now, |_| {});
-}
-
-#[cfg(test)]
-pub(crate) fn serve_realtime_sideband_with_test_connector(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    call_id: &str,
-    body_prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-    configure: impl FnOnce(&mut PreparedSideband),
-) {
-    serve_sideband(stream, request, call_id, body_prefix, state, now, configure);
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-fn serve_sideband(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    call_id: &str,
-    body_prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-    configure: impl FnOnce(&mut PreparedSideband),
-) {
-    let mut prepared = match prepare_sideband(request, call_id, state, now) {
-        Err(response) => {
-            write_http_response(stream, &response.wire_response());
-            return;
-        }
-        Ok(prepared) => prepared,
-    };
-
-    configure(&mut prepared);
-    let runtime = state.backend.transport.runtime.handle();
-    let mut upstream = match runtime.block_on(prepared.connect()) {
-        Ok(upstream) => upstream,
-        Err(reply) => {
-            write_http_response(stream, &reply.wire_response());
-            return;
-        }
-    };
-    let head = format!(
-        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
-        prepared.accept
-    );
-    if stream.write_all(head.as_bytes()).is_err() || stream.flush().is_err() {
-        runtime.block_on(upstream.close(1001, "downstream disconnected"));
-        return;
-    }
-    let socket = match legacy_websocket_io(stream, runtime) {
-        Ok(socket) => socket,
-        Err(_) => {
-            runtime.block_on(upstream.close(1011, "websocket setup failed"));
-            return;
-        }
-    };
-    runtime.block_on(relay::run(
-        state,
-        upstream,
-        socket,
-        &body_prefix,
-        prepared.max_message_bytes,
-    ));
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-fn write_http_response(stream: &mut TcpStream, response: &[u8]) {
-    let _ = stream.write_all(response);
-    let _ = stream.flush();
 }
 
 impl PreparedSideband {

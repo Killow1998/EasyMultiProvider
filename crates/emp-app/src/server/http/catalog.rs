@@ -12,7 +12,7 @@ use crate::{
         provider_quota, router_error_reply,
     },
     app::ServerState,
-    http::request::{Request, RequestMethod, percent_decode, read_json_body},
+    http::request::{Request, RequestMethod, percent_decode},
     server::{connection::ConnectionContext, run_blocking},
     services::{
         catalog::{
@@ -30,7 +30,7 @@ use axum::{
     routing::{get, post},
 };
 use serde_json::{Value, json};
-use std::{net::TcpStream, sync::Arc};
+use std::sync::Arc;
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
@@ -169,21 +169,6 @@ impl CatalogWriteRoute {
                 }
             }
         })
-    }
-
-    pub(crate) fn legacy(
-        self,
-        stream: &mut TcpStream,
-        request: Request<'_>,
-        prefix: Vec<u8>,
-        state: &ServerState,
-        now: f64,
-    ) -> Result<JsonReply, EntryError> {
-        ManagementSession::require(request, state, now)?;
-        let body = read_json_body(stream, request, prefix, state)?;
-        Ok(self
-            .with_body(&body)?
-            .execute(state, request.observation_id))
     }
 }
 

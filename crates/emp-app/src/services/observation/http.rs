@@ -3,8 +3,6 @@ use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::services::observation::diagnostics::Diagnostics;
 use serde_json::{Value, json};
-#[cfg(any(test, not(feature = "server-candidate")))]
-use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -71,21 +69,6 @@ impl HttpObservation {
         } else if request.raw_path() == "/api/accounts/events" {
             self.fields["transport"] = json!("sse");
         }
-    }
-
-    #[cfg(any(test, not(feature = "server-candidate")))]
-    pub(crate) fn write_response(&mut self, stream: &mut impl Write, bytes: &[u8]) {
-        let formatted = self
-            .model
-            .as_ref()
-            .and_then(|model| model.errors().http(bytes));
-        let bytes = formatted.as_deref().unwrap_or(bytes);
-        let result = if bytes.is_empty() {
-            Ok(())
-        } else {
-            stream.write_all(bytes).and_then(|()| stream.flush())
-        };
-        self.response_finished(bytes, result);
     }
 
     pub(crate) fn response_finished(&mut self, bytes: &[u8], result: std::io::Result<()>) {

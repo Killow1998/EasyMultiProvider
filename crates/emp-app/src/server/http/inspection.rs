@@ -18,12 +18,6 @@ const READS: [(&str, ManagementRead); 6] = [
     ("/api/image-credit", images::credit_status),
 ];
 
-pub(crate) fn read_handler(path: &str) -> Option<ManagementRead> {
-    READS
-        .iter()
-        .find_map(|&(route, read)| (route == path).then_some(read))
-}
-
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     READS
         .into_iter()

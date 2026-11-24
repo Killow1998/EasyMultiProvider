@@ -229,7 +229,7 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
         let this = self.get_mut();
         let response = this.response.get_or_init(|| {
             Some(match this.mode {
-                ServerMode::Http => Bytes::from(EntryError::InvalidHead.wire_response()),
+                ServerMode::Http => Bytes::from(EntryError::InvalidHead.reply().encode()),
                 ServerMode::Recovery => Bytes::new(),
             })
         });

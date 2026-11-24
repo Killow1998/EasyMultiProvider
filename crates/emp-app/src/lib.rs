@@ -4,10 +4,6 @@ mod cli;
 mod error;
 mod http;
 mod lifecycle;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "The server runtime is being integrated in stages")
-)]
 mod server;
 mod services;
 mod startup_recovery;

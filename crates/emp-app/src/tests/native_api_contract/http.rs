@@ -304,26 +304,21 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
         let (head, returned) = response_parts(wire);
         assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
         assert_eq!(returned, upstream.raw_response);
-        assert!(head.contains("x-codex-turn-state: fixture-turn\r\n"));
-        let etag = head
-            .lines()
-            .find_map(|line| {
-                line.to_ascii_lowercase()
-                    .strip_prefix("x-models-etag: ")
-                    .map(str::to_owned)
-            })
-            .expect("catalog ETag");
+        assert_eq!(
+            response_header(head, "x-codex-turn-state"),
+            Some("fixture-turn"),
+            "{head}"
+        );
+        let etag = response_header(head, "x-models-etag").expect("catalog ETag");
         assert_ne!(etag, "stale-upstream-etag");
     }
-    assert!(
-        response_parts(&forward)
-            .0
-            .contains("openai-model: upstream\r\n")
+    assert_eq!(
+        response_header(response_parts(&forward).0, "openai-model"),
+        Some("upstream")
     );
-    assert!(
-        response_parts(&account)
-            .0
-            .contains("openai-model: demo/upstream\r\n")
+    assert_eq!(
+        response_header(response_parts(&account).0, "openai-model"),
+        Some("demo/upstream")
     );
 
     let forward = upstream.next();
@@ -647,7 +642,11 @@ fn native_endpoint_matches_retry_and_terminal_error_decisions() {
             );
         }
         if case == "rate" {
-            assert!(response_parts(&wire).0.contains("Retry-After: 2\r\n"));
+            assert_eq!(
+                response_header(response_parts(&wire).0, "retry-after"),
+                Some("2"),
+                "{wire}"
+            );
             let error =
                 serde_json::from_slice::<Value>(response_parts(&wire).1).unwrap()["error"].clone();
             assert_eq!(error["code"], "rate_limit_exceeded");
@@ -705,7 +704,11 @@ fn native_compact_endpoint_preserves_opaque_response_and_owned_headers() {
     let (head, body) = response_parts(&response);
     assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert_eq!(body, raw);
-    assert!(head.contains("openai-model: native/alias\r\n"));
+    assert_eq!(
+        response_header(head, "openai-model"),
+        Some("native/alias"),
+        "{head}"
+    );
     assert!(!head.contains("stale-compact"));
     let request = observed.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(request.path, "/v1/responses/compact");

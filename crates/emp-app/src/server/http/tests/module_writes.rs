@@ -1,7 +1,4 @@
-use super::{
-    account_writes::{Pair, normalize_body},
-    *,
-};
+use super::{account_writes::normalize_body, *};
 use emp_modules::Module;
 use std::{fs, path::PathBuf};
 
@@ -36,13 +33,14 @@ impl Write {
         request(port, self.method, self.path, &headers, body)
     }
 
-    async fn parity(self, pair: &Pair<'_>, body: &[u8], status: u16) -> Value {
-        pair.parity(
-            |port, session| self.wire(port, Some(session), body),
-            status,
-            normalize_clients,
-        )
-        .await
+    async fn submit(self, fixture: &Fixture, body: &[u8], status: u16) -> Value {
+        fixture
+            .request_checked(
+                |port, session| self.wire(port, Some(session), body),
+                status,
+                normalize_clients,
+            )
+            .await
     }
 }
 
@@ -83,10 +81,10 @@ fn normalize_clients(reply: Vec<u8>) -> Vec<u8> {
     })
 }
 
-fn fixture_with_decision(driver: TestDriver) -> Fixture {
+fn fixture_with_decision() -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     install_panel_fixture(directory.path(), Module::Decision, "fixture panel");
-    Fixture::with_driver(directory, driver)
+    Fixture::with_directory(directory)
 }
 
 fn decision(value: &Value) -> &Value {
@@ -110,7 +108,7 @@ fn persisted_clients(fixture: &Fixture) -> Value {
             .starts_with(emp_state::vault::VAULT_MAGIC)
     );
     fixture
-        .legacy
+        .server
         .state
         .backend
         .configuration
@@ -119,83 +117,47 @@ fn persisted_clients(fixture: &Fixture) -> Value {
         .unwrap()
 }
 
-fn comparison_endpoints<'a>(pair: &Pair<'a>) -> [(&'a Fixture, SocketAddr); 2] {
-    [
-        (pair.old, pair.old.legacy.local_addr()),
-        (pair.new, pair.candidate),
-    ]
-}
-
-async fn compare_client_wire(
-    pair: &Pair<'_>,
-    make: impl Fn(usize, u16, &str) -> Vec<u8>,
-    status: u16,
-) -> [Value; 2] {
-    let [(old, old_addr), (new, new_addr)] = comparison_endpoints(pair);
-    let old_wire = make(0, old.port(), &old.session());
-    let new_wire = make(1, new.port(), &new.session());
-    let check_reply = |reply: Vec<u8>| {
-        let body = json_body(&reply);
-        (body, normalize_clients(reply))
-    };
-    let ((old_body, old_wire_reply), (new_body, new_wire_reply)) = tokio::join!(
-        assert_wire_with(old_addr, &old_wire, false, status, check_reply),
-        assert_wire_with(new_addr, &new_wire, false, status, check_reply),
-    );
-    assert_wire_response_parity(&old_wire, &old_wire_reply, &new_wire_reply);
-    [old_body, new_body]
-}
-
-async fn compare_client_lists(pair: &Pair<'_>) -> [Value; 2] {
-    compare_client_wire(
-        pair,
-        |_, port, session| request(port, "GET", CLIENTS, &[session], b""),
-        200,
-    )
-    .await
+async fn clients(fixture: &Fixture) -> Value {
+    fixture.read(CLIENTS).await
 }
 
 #[test]
-fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
-    let old = fixture_with_decision(TestDriver::reference());
-    fixture_with_decision(TestDriver::Candidate).run_wire(async |new, candidate| {
-        let pair = Pair {
-            old: &old,
-            new,
-            candidate,
-        };
+fn module_and_gateway_writes_preserve_drain_order() {
+    fixture_with_decision().run_wire(async |fixture, _| {
         for route in [MODULE, ISSUE, REVOKE] {
-            pair.parity(
-                |port, _| route.wire(port, None, b"{"),
-                401,
-                normalize_clients,
-            )
-            .await;
-            pair.parity(
-                |port, session| {
-                    request(
-                        port,
-                        route.method,
-                        route.path,
-                        &[
-                            session,
-                            "Origin: https://other.invalid",
-                            "Content-Length: -1",
-                        ],
-                        b"",
-                    )
-                },
-                401,
-                normalize_clients,
-            )
-            .await;
-            route.parity(&pair, b"{", 400).await;
+            fixture
+                .request_checked(
+                    |port, _| route.wire(port, None, b"{"),
+                    401,
+                    normalize_clients,
+                )
+                .await;
+            fixture
+                .request_checked(
+                    |port, session| {
+                        request(
+                            port,
+                            route.method,
+                            route.path,
+                            &[
+                                session,
+                                "Origin: https://other.invalid",
+                                "Content-Length: -1",
+                            ],
+                            b"",
+                        )
+                    },
+                    401,
+                    normalize_clients,
+                )
+                .await;
+            route.submit(fixture, b"{", 400).await;
             assert_eq!(
-                route.parity(&pair, b"[]", 400).await["error"]["message"],
+                route.submit(fixture, b"[]", 400).await["error"]["message"],
                 "request body must be a JSON object",
             );
-            let limit = pair
-                .parity(
+            let limit = fixture
+                .request_checked(
                     |port, session| {
                         request(
                             port,
@@ -223,7 +185,7 @@ fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
             br#"{"action":"disable","id":"unknown"}"#,
         ] {
             assert_eq!(
-                MODULE.parity(&pair, body, 400).await["error"]["message"],
+                MODULE.submit(fixture, body, 400).await["error"]["message"],
                 "Unknown EMP module"
             );
         }
@@ -233,43 +195,43 @@ fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
             br#"{"id":"decision","action":false}"#,
         ] {
             assert_eq!(
-                MODULE.parity(&pair, body, 409).await["error"]["code"],
+                MODULE.submit(fixture, body, 409).await["error"]["code"],
                 "invalid_module_action",
             );
         }
         assert_eq!(
             MODULE
-                .parity(&pair, br#"{"action":"update","id":"team"}"#, 409)
+                .submit(fixture, br#"{"action":"update","id":"team"}"#, 409)
                 .await["error"]["code"],
             "module_not_installed",
         );
         assert_eq!(
             MODULE
-                .parity(&pair, br#"{"action":"uninstall","id":"decision"}"#, 409)
+                .submit(fixture, br#"{"action":"uninstall","id":"decision"}"#, 409)
                 .await["error"]["code"],
             "module_disable_before_uninstall",
         );
-        let initial = pair.read(MODULES).await;
+        let initial = fixture.read(MODULES).await;
         assert_eq!(decision(&initial)["active"], true);
         let disable = br#"{"action":"disable","id":"decision","revision":10,"ignored":true}"#;
-        let disabled = MODULE.parity(&pair, disable, 200).await;
+        let disabled = MODULE.submit(fixture, disable, 200).await;
         assert_eq!(decision(&disabled)["active"], false);
         assert_eq!(decision(&disabled)["enabled"], false);
         let enabled = MODULE
-            .parity(
-                &pair,
+            .submit(
+                fixture,
                 br#"{"action":"enable","id":"decision","revision":"ignored"}"#,
                 200,
             )
             .await;
         assert_eq!(enabled, initial);
-        MODULE.parity(&pair, disable, 200).await;
+        MODULE.submit(fixture, disable, 200).await;
         let removed = MODULE
-            .parity(&pair, br#"{"action":"uninstall","id":"decision"}"#, 200)
+            .submit(fixture, br#"{"action":"uninstall","id":"decision"}"#, 200)
             .await;
         assert!(decision(&removed)["installed_version"].is_null());
-        assert_eq!(pair.read(MODULES).await, removed);
-        for (fixture, _) in comparison_endpoints(&pair) {
+        assert_eq!(fixture.read(MODULES).await, removed);
+        {
             let registry = fixture.directory.path().join("state/modules/modules.json");
             assert_eq!(
                 serde_json::from_slice::<Value>(&fs::read(registry).unwrap()).unwrap(),
@@ -279,8 +241,8 @@ fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
 
         assert_eq!(
             MODULE
-                .parity(
-                    &pair,
+                .submit(
+                    fixture,
                     br#"{"action":"check_updates","id":false,"revision":[],"ignored":true}"#,
                     200,
                 )
@@ -289,7 +251,7 @@ fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
         );
         for body in [b"{}".as_slice(), br#"{"name":false}"#, br#"{"name":"   "}"#] {
             assert_eq!(
-                ISSUE.parity(&pair, body, 400).await["error"]["message"],
+                ISSUE.submit(fixture, body, 400).await["error"]["message"],
                 "Caller name must contain 1–64 characters",
             );
         }
@@ -303,89 +265,80 @@ fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
             (REVOKE, br#"{"id":""}"#),
         ] {
             assert_eq!(
-                route.parity(&pair, body, 400).await["error"]["message"],
+                route.submit(fixture, body, 400).await["error"]["message"],
                 "A device key ID is required",
             );
         }
         assert_eq!(
-            ISSUE.parity(&pair, br#"{"id":"missing"}"#, 400).await["error"]["message"],
+            ISSUE.submit(fixture, br#"{"id":"missing"}"#, 400).await["error"]["message"],
             "Device key was not found",
         );
         assert_eq!(
             REVOKE
-                .parity(&pair, br#"{"id":"missing","ignored":true}"#, 200)
+                .submit(fixture, br#"{"id":"missing","ignored":true}"#, 200)
                 .await,
             json!({"ok":true})
         );
-        for value in compare_client_lists(&pair).await {
+        {
+            let value = clients(fixture).await;
             assert!(value["clients"] == json!([]));
         }
 
-        let issued = compare_client_wire(
-            &pair,
-            |_, port, session| {
-                ISSUE.wire(
-                    port,
-                    Some(session),
-                    br#"{"name":" Device ","ignored":true}"#,
-                )
-            },
-            200,
-        )
-        .await;
-        let clients = compare_client_lists(&pair).await;
-        for (issued, list) in issued.iter().zip(&clients) {
-            let client = &list["clients"][0];
+        let issued = fixture
+            .request_json(
+                |port, session| {
+                    ISSUE.wire(
+                        port,
+                        Some(session),
+                        br#"{"name":" Device ","ignored":true}"#,
+                    )
+                },
+                200,
+            )
+            .await;
+        let before = clients(fixture).await;
+        {
+            let client = &before["clients"][0];
             assert_eq!(issued["name"], "Device");
             assert!(client["id"] == issued["id"] && client["api_key"] == issued["api_key"]);
         }
-        let replaced = compare_client_wire(
-            &pair,
-            |index, port, session| {
-                let body = json!({"id":issued[index]["id"],"name":false,"ignored":true});
-                ISSUE.wire(port, Some(session), body.to_string().as_bytes())
-            },
-            200,
-        )
-        .await;
-        let listed = compare_client_lists(&pair).await;
-        for (index, (fixture, _)) in comparison_endpoints(&pair).into_iter().enumerate() {
-            let client = &listed[index]["clients"][0];
-            assert_eq!(listed[index]["clients"].as_array().unwrap().len(), 1);
-            assert!(replaced[index]["id"] == issued[index]["id"]);
-            assert!(replaced[index]["api_key"] != issued[index]["api_key"]);
-            assert_eq!(replaced[index]["name"], "Device");
-            assert!(
-                client["id"] == replaced[index]["id"]
-                    && client["api_key"] == replaced[index]["api_key"]
-            );
-            assert_eq!(
-                client["created_at"],
-                clients[index]["clients"][0]["created_at"]
-            );
+        let replaced = fixture
+            .request_json(
+                |port, session| {
+                    let body = json!({"id":issued["id"],"name":false,"ignored":true});
+                    ISSUE.wire(port, Some(session), body.to_string().as_bytes())
+                },
+                200,
+            )
+            .await;
+        let listed = clients(fixture).await;
+        {
+            let client = &listed["clients"][0];
+            assert_eq!(listed["clients"].as_array().unwrap().len(), 1);
+            assert!(replaced["id"] == issued["id"]);
+            assert!(replaced["api_key"] != issued["api_key"]);
+            assert_eq!(replaced["name"], "Device");
+            assert!(client["id"] == replaced["id"] && client["api_key"] == replaced["api_key"]);
+            assert_eq!(client["created_at"], before["clients"][0]["created_at"]);
             assert!(persisted_clients(fixture)[0]["api_key"] == client["api_key"]);
         }
-        let revoked = compare_client_wire(
-            &pair,
-            |index, port, session| {
-                let body = json!({"id":replaced[index]["id"],"ignored":true});
-                REVOKE.wire(port, Some(session), body.to_string().as_bytes())
-            },
-            200,
-        )
-        .await;
-        for reply in revoked {
-            assert_eq!(reply, json!({"ok":true}));
-        }
-        for ((fixture, _), reply) in comparison_endpoints(&pair)
-            .into_iter()
-            .zip(compare_client_lists(&pair).await)
+        let revoked = fixture
+            .request_json(
+                |port, session| {
+                    let body = json!({"id":replaced["id"],"ignored":true});
+                    REVOKE.wire(port, Some(session), body.to_string().as_bytes())
+                },
+                200,
+            )
+            .await;
+        assert_eq!(revoked, json!({"ok":true}));
         {
+            let reply = clients(fixture).await;
             assert!(reply["clients"] == json!([]));
             assert!(persisted_clients(fixture) == json!([]));
             assert!(
                 fixture
-                    .legacy
+                    .server
                     .state
                     .lifecycle
                     .updates()
@@ -399,11 +352,11 @@ fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
             (REVOKE, br#"{"id":"missing"}"#),
         ] {
             assert_eq!(
-                route.parity(&pair, body, 503).await["error"]["code"],
+                route.submit(fixture, body, 503).await["error"]["code"],
                 "updating"
             );
-            let denied = pair
-                .parity(
+            let denied = fixture
+                .request_checked(
                     |port, _| route.wire(port, None, b"{"),
                     503,
                     normalize_clients,
@@ -411,26 +364,24 @@ fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
                 .await;
             assert_eq!(denied["error"]["code"], "updating");
         }
-        assert_eq!(pair.read(MODULES).await, removed);
-        for ((fixture, _), reply) in comparison_endpoints(&pair)
-            .into_iter()
-            .zip(compare_client_lists(&pair).await)
+        assert_eq!(fixture.read(MODULES).await, removed);
         {
+            let reply = clients(fixture).await;
             assert!(reply["clients"] == json!([]));
             assert!(persisted_clients(fixture) == json!([]));
         }
 
-        for (fixture, _) in comparison_endpoints(&pair) {
+        {
             fixture
-                .legacy
+                .server
                 .state
                 .backend
                 .modules
                 .mark_unavailable(Module::Gateway, "fixture_disabled");
         }
         for route in [ISSUE, REVOKE] {
-            let rejection = pair
-                .parity(
+            let rejection = fixture
+                .request_checked(
                     |port, _| route.wire(port, None, b"{"),
                     404,
                     normalize_clients,
@@ -439,22 +390,15 @@ fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
             assert_eq!(rejection["error"]["code"], "module_disabled");
         }
     });
-    old.legacy.shutdown().unwrap();
 }
 
 #[test]
 fn submitted_gateway_issue_saves_once_after_disconnect_and_holds_drain() {
-    let old = Fixture::new();
-    Fixture::new_with_driver(TestDriver::Candidate).run_wire(async |new, candidate| {
-        let pair = Pair {
-            old: &old,
-            new,
-            candidate,
-        };
-        for (fixture, address) in comparison_endpoints(&pair) {
-            let state = &fixture.legacy.state;
+    Fixture::new().run_wire(async |fixture, _| {
+        {
+            let state = &fixture.server.state;
             let (ready, release) = state.backend.gateway_clients.gate_next_save_for_test();
-            let (mut client, task) = connect_submitted_write(fixture, address).await;
+            let (mut client, task) = connect_submitted_write(fixture).await;
             let wire = ISSUE.wire(
                 fixture.port(),
                 Some(&fixture.session()),
@@ -489,8 +433,8 @@ fn submitted_gateway_issue_saves_once_after_disconnect_and_holds_drain() {
             .await
             .unwrap();
         }
-        let lists = compare_client_lists(&pair).await;
-        for ((fixture, _), value) in comparison_endpoints(&pair).into_iter().zip(lists) {
+        {
+            let value = clients(fixture).await;
             let clients = value["clients"].as_array().unwrap();
             let saved = persisted_clients(fixture);
             assert_eq!(clients.len(), 1);
@@ -501,5 +445,4 @@ fn submitted_gateway_issue_saves_once_after_disconnect_and_holds_drain() {
             );
         }
     });
-    old.legacy.shutdown().unwrap();
 }

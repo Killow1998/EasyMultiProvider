@@ -144,7 +144,7 @@ mod tests {
                 &mut receipt,
             );
             drop(receipt);
-            let text = String::from_utf8(response.unwrap().wire_response()).unwrap();
+            let text = String::from_utf8(response.unwrap().encode()).unwrap();
             assert!(text.starts_with("HTTP/1.1 409"));
             let body: Value = serde_json::from_str(text.split_once("\r\n\r\n").unwrap().1).unwrap();
             assert_eq!(body["error"]["category"], "destination_compaction");

@@ -1,8 +1,8 @@
 use super::*;
 
 #[test]
-fn raw_management_paths_match_legacy_without_executing_writes() {
-    Fixture::new().run_candidate(async |fixture, candidate| {
+fn raw_management_paths_follow_route_matching_without_writes() {
+    Fixture::new().run_wire(async |fixture, endpoint| {
         let port = fixture.port();
         let session = fixture.session();
         for path in [
@@ -22,22 +22,22 @@ fn raw_management_paths_match_legacy_without_executing_writes() {
             "/api/a/../quit",
             "/api/quit/",
         ] {
-            fixture
-                .parity(
-                    candidate,
-                    &json_request(port, path, &[&session], b"{}"),
-                    404,
-                )
-                .await;
+            assert_wire(
+                endpoint,
+                &json_request(port, path, &[&session], b"{}"),
+                false,
+                404,
+            )
+            .await;
         }
         for path in ["/api/native/login/start#x", "/api/accounts/login/finish#x"] {
-            fixture
-                .parity(
-                    candidate,
-                    &json_request(port, path, &[&session], b"{}"),
-                    409,
-                )
-                .await;
+            assert_wire(
+                endpoint,
+                &json_request(port, path, &[&session], b"{}"),
+                false,
+                409,
+            )
+            .await;
         }
         for suffix in [
             "x<y",
@@ -57,13 +57,13 @@ fn raw_management_paths_match_legacy_without_executing_writes() {
         ] {
             for route in ["/api/native/login/start", "/api/accounts/login/finish"] {
                 let path = format!("{route}#{suffix}");
-                let reply = fixture
-                    .parity(
-                        candidate,
-                        &json_request(port, &path, &[&session], b"{}"),
-                        409,
-                    )
-                    .await;
+                let reply = assert_wire(
+                    endpoint,
+                    &json_request(port, &path, &[&session], b"{}"),
+                    false,
+                    409,
+                )
+                .await;
                 assert_eq!(
                     json_body(&reply)["error"]["code"],
                     "login_unknown_operation",
@@ -74,13 +74,13 @@ fn raw_management_paths_match_legacy_without_executing_writes() {
                 format!("/api/quit#{suffix}"),
                 format!("/api/integration/enable#{suffix}"),
             ] {
-                fixture
-                    .parity(
-                        candidate,
-                        &json_request(port, &path, &[&session], b"{}"),
-                        404,
-                    )
-                    .await;
+                assert_wire(
+                    endpoint,
+                    &json_request(port, &path, &[&session], b"{}"),
+                    false,
+                    404,
+                )
+                .await;
             }
             for (route, headers) in [
                 ("/healthz", &[][..]),
@@ -90,9 +90,13 @@ fn raw_management_paths_match_legacy_without_executing_writes() {
             ] {
                 for query in [format!("?probe={suffix}"), format!("?probe=ok#{suffix}")] {
                     let path = format!("{route}{query}");
-                    fixture
-                        .parity(candidate, &request(port, "GET", &path, headers, b""), 200)
-                        .await;
+                    assert_wire(
+                        endpoint,
+                        &request(port, "GET", &path, headers, b""),
+                        false,
+                        200,
+                    )
+                    .await;
                 }
             }
         }
@@ -100,57 +104,61 @@ fn raw_management_paths_match_legacy_without_executing_writes() {
             "/api/native/login/start#x y",
             "/api/native/login/start?probe=x y",
         ] {
-            fixture
-                .parity(
-                    candidate,
-                    &json_request(port, path, &[&session], b"{}"),
-                    400,
-                )
-                .await;
+            assert_wire(
+                endpoint,
+                &json_request(port, path, &[&session], b"{}"),
+                false,
+                400,
+            )
+            .await;
         }
         for (headers, status) in [
             (vec![], 401),
             (vec![session.as_str(), "Origin: https://other.invalid"], 403),
         ] {
             for path in ["/api/quit#x", "/api/native/login/start#x<y"] {
-                fixture
-                    .parity(
-                        candidate,
-                        &json_request(port, path, &headers, b"{}"),
-                        status,
-                    )
-                    .await;
+                assert_wire(
+                    endpoint,
+                    &json_request(port, path, &headers, b"{}"),
+                    false,
+                    status,
+                )
+                .await;
             }
         }
-        fixture
-            .parity(candidate, &request(port, "GET", "/healthz", &[], b""), 200)
-            .await;
+        assert_wire(
+            endpoint,
+            &request(port, "GET", "/healthz", &[], b""),
+            false,
+            200,
+        )
+        .await;
     });
 }
 
 #[test]
-fn unknown_provider_read_matches_legacy_not_found() {
-    Fixture::new().run_candidate(async |fixture, candidate| {
-        fixture
-            .parity(
-                candidate,
-                &request(
-                    fixture.port(),
-                    "GET",
-                    "/api/providers/example/unknown",
-                    &[&fixture.session()],
-                    b"",
-                ),
-                404,
-            )
-            .await;
+fn unknown_provider_read_returns_not_found() {
+    Fixture::new().run_wire(async |fixture, endpoint| {
+        assert_wire(
+            endpoint,
+            &request(
+                fixture.port(),
+                "GET",
+                "/api/providers/example/unknown",
+                &[&fixture.session()],
+                b"",
+            ),
+            false,
+            404,
+        )
+        .await;
     });
 }
 
 #[cfg(unix)]
 #[test]
-fn migrated_wrong_methods_match_legacy_before_and_during_update_drain() {
-    Fixture::new().run_candidate(async |fixture, candidate| {
+fn wrong_methods_keep_status_before_and_during_update_drain() {
+    Fixture::new().run_wire(async |fixture, endpoint| {
         let port = fixture.port();
         let session = fixture.session();
         for (method, path) in [
@@ -184,15 +192,15 @@ fn migrated_wrong_methods_match_legacy_before_and_during_update_drain() {
             ("GET", "/api/team/publish_source"),
             ("GET", "/api/migration/export"),
         ] {
-            fixture
-                .parity(
-                    candidate,
-                    &request(port, method, path, &[&session], b""),
-                    404,
-                )
-                .await;
+            assert_wire(
+                endpoint,
+                &request(port, method, path, &[&session], b""),
+                false,
+                404,
+            )
+            .await;
         }
-        let state = fixture.legacy.state.clone();
+        let state = fixture.server.state.clone();
         assert!(
             tokio::task::spawn_blocking(move || {
                 state
@@ -209,13 +217,13 @@ fn migrated_wrong_methods_match_legacy_before_and_during_update_drain() {
             "/v1/alpha/search",
             "/api/quit",
         ] {
-            let reply = fixture
-                .parity(
-                    candidate,
-                    &request(port, "DELETE", path, &[&session], b""),
-                    503,
-                )
-                .await;
+            let reply = assert_wire(
+                endpoint,
+                &request(port, "DELETE", path, &[&session], b""),
+                false,
+                503,
+            )
+            .await;
             assert!(String::from_utf8_lossy(&reply).contains("\r\nRetry-After: "));
         }
     });
@@ -226,9 +234,9 @@ fn migrated_wrong_methods_match_legacy_before_and_during_update_drain() {
 fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
     use crate::{server::raw_tcp::RawClient, services::modules::aero::CallLease};
 
-    for &driver in TestDriver::selected() {
-        Fixture::new_with_driver(driver).run_wire(async |fixture, address| {
-            let state = &fixture.legacy.state;
+    {
+        Fixture::new().run_wire(async |fixture, address| {
+            let state = &fixture.server.state;
             let calls = &state.backend.aero_callers;
             let delegation = calls
                 .delegate(
@@ -265,7 +273,7 @@ fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
             drop(delegation);
             assert!(
                 state.lifecycle.updates().drain_for_test(Duration::ZERO),
-                "idle WebSocket kept the parent work active ({driver:?})"
+                "idle WebSocket kept the parent work active"
             );
             ws.io.shutdown().await.unwrap();
         });
@@ -273,11 +281,10 @@ fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
 }
 
 #[test]
-fn lifecycle_and_unmatched_requests_match_legacy_wire() {
-    Fixture::new().run_candidate(async |fixture, candidate| {
+fn lifecycle_and_unmatched_requests_keep_method_and_auth_policy() {
+    Fixture::new().run_wire(async |fixture, endpoint| {
         let port = fixture.port();
         let session = fixture.session();
-        let old = fixture.legacy.local_addr();
         for path in [
             "/api/integration/enable",
             "/api/integration/restore",
@@ -293,25 +300,30 @@ fn lifecycle_and_unmatched_requests_match_legacy_wire() {
                 (vec![&session[..], "Origin: https://other.invalid"], 403),
                 (vec![&session[..]], 400),
             ] {
-                fixture
-                    .parity(candidate, &json_request(port, path, &headers, b"{"), status)
-                    .await;
+                assert_wire(
+                    endpoint,
+                    &json_request(port, path, &headers, b"{"),
+                    false,
+                    status,
+                )
+                .await;
             }
         }
-        fixture
-            .parity(
-                candidate,
-                &json_request(
-                    port,
-                    "/api/providers/balance",
-                    &[&session],
-                    br#"{"force":"yes"}"#,
-                ),
-                400,
-            )
-            .await;
+        assert_wire(
+            endpoint,
+            &json_request(
+                port,
+                "/api/providers/balance",
+                &[&session],
+                br#"{"force":"yes"}"#,
+            ),
+            false,
+            400,
+        )
+        .await;
         let missing_balance = json_request(port, "/api/providers/balance", &[&session], b"{}");
-        for (_, address) in driver_endpoints(old, candidate) {
+        {
+            let address = endpoint;
             assert!(
                 exchange_wire(address, &missing_balance, false)
                     .await
@@ -319,25 +331,23 @@ fn lifecycle_and_unmatched_requests_match_legacy_wire() {
             );
         }
 
-        fixture
-            .parity(
-                candidate,
-                &json_request(port, "/api/updates/install", &[&session], b"{}"),
-                409,
-            )
-            .await;
+        assert_wire(
+            endpoint,
+            &json_request(port, "/api/updates/install", &[&session], b"{}"),
+            false,
+            409,
+        )
+        .await;
         for path in ["/", "/index.html", "/healthz"] {
             for method in ["POST", "DELETE"] {
-                fixture
-                    .parity(candidate, &request(port, method, path, &[], b""), 200)
-                    .await;
-                fixture
-                    .parity(
-                        candidate,
-                        &request(port, method, path, &["Origin: https://other.invalid"], b""),
-                        403,
-                    )
-                    .await;
+                assert_wire(endpoint, &request(port, method, path, &[], b""), false, 200).await;
+                assert_wire(
+                    endpoint,
+                    &request(port, method, path, &["Origin: https://other.invalid"], b""),
+                    false,
+                    403,
+                )
+                .await;
             }
         }
         for (method, path, status) in [
@@ -358,37 +368,35 @@ fn lifecycle_and_unmatched_requests_match_legacy_wire() {
             ("GET", "/not-present", 404),
             ("GET", "/v1/responses", 404),
         ] {
-            fixture
-                .parity(
-                    candidate,
-                    &request(port, method, path, &[&session], b""),
-                    status,
+            assert_wire(
+                endpoint,
+                &request(port, method, path, &[&session], b""),
+                false,
+                status,
+            )
+            .await;
+            if path.starts_with("/api/") {
+                assert_wire(endpoint, &request(port, method, path, &[], b""), false, 401).await;
+                assert_wire(
+                    endpoint,
+                    &request(
+                        port,
+                        method,
+                        path,
+                        &[&session, "Origin: https://other.invalid"],
+                        b"",
+                    ),
+                    false,
+                    403,
                 )
                 .await;
-            if path.starts_with("/api/") {
-                fixture
-                    .parity(candidate, &request(port, method, path, &[], b""), 401)
-                    .await;
-                fixture
-                    .parity(
-                        candidate,
-                        &request(
-                            port,
-                            method,
-                            path,
-                            &[&session, "Origin: https://other.invalid"],
-                            b"",
-                        ),
-                        403,
-                    )
-                    .await;
             }
         }
     });
 }
 
 #[cfg(unix)]
-fn integration_fixture(observed_at: Option<&str>, driver: TestDriver) -> Fixture {
+fn integration_fixture(observed_at: Option<&str>) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     std::fs::write(
@@ -421,67 +429,34 @@ fn integration_fixture(observed_at: Option<&str>, driver: TestDriver) -> Fixture
         )
         .unwrap();
     }
-    Fixture::with_driver(directory, driver)
-}
-
-#[cfg(unix)]
-fn normalize_integration_reply(fixture: &Fixture, reply: Vec<u8>) -> Vec<u8> {
-    super::account_writes::normalize_body(reply, |body| {
-        body.replace(&fixture.directory.path().display().to_string(), "/fixture")
-            .replace(&format!("127.0.0.1:{}", fixture.port()), "127.0.0.1:PORT")
-    })
+    Fixture::with_directory(directory)
 }
 
 #[cfg(unix)]
 #[test]
-fn integration_recovery_record_matches_legacy_wire() {
+fn integration_recovery_record_returns_last_observation() {
     const OBSERVED_AT: &str = "2026-01-02T03:04:05Z";
 
-    let old = integration_fixture(Some(OBSERVED_AT), TestDriver::reference());
-    integration_fixture(Some(OBSERVED_AT), TestDriver::Candidate).run_wire(
-        async |new, candidate| {
-            let old_status = request(
-                old.port(),
-                "GET",
-                "/api/integration",
-                &[&old.session()],
-                b"",
-            );
-            let new_status = request(
-                new.port(),
-                "GET",
-                "/api/integration",
-                &[&new.session()],
-                b"",
-            );
-            let old_addr = old.legacy.local_addr();
-            let check_status = |fixture: &Fixture, reply: Vec<u8>| {
-                assert_eq!(
-                    json_body(&reply)["runtime"]["last_known"]["observed_at"],
-                    OBSERVED_AT
-                );
-                normalize_integration_reply(fixture, reply)
-            };
-            let (old_reply, new_reply) = tokio::join!(
-                assert_wire_with(old_addr, &old_status, false, 200, |reply| check_status(
-                    &old, reply
-                )),
-                assert_wire_with(candidate, &new_status, false, 200, |reply| check_status(
-                    new, reply
-                )),
-            );
-            assert_wire_response_parity(&old_status, &old_reply, &new_reply);
-        },
-    );
-    old.legacy.shutdown().unwrap();
+    integration_fixture(Some(OBSERVED_AT)).run_wire(async |fixture, address| {
+        let wire = request(
+            fixture.port(),
+            "GET",
+            "/api/integration",
+            &[&fixture.session()],
+            b"",
+        );
+        let reply = assert_wire(address, &wire, false, 200).await;
+        assert_eq!(
+            json_body(&reply)["runtime"]["last_known"]["observed_at"],
+            OBSERVED_AT
+        );
+    });
 }
 
 #[cfg(unix)]
 #[test]
-fn integration_commands_match_legacy_wire_and_restore_native_files() {
-    let old = integration_fixture(None, TestDriver::reference());
-    integration_fixture(None, TestDriver::Candidate).run_wire(async |new, candidate| {
-        let old_addr = old.legacy.local_addr();
+fn integration_commands_restore_native_files() {
+    integration_fixture(None).run_wire(async |fixture, address| {
         for (operation, body, status, state) in [
             ("enable", b"{}".as_slice(), 409, "native"),
             ("restore", b"{}".as_slice(), 409, "native"),
@@ -502,45 +477,30 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
             ),
         ] {
             let path = format!("/api/integration/{operation}");
-            let old_request = json_request(old.port(), &path, &[&old.session()], body);
-            let new_request = json_request(new.port(), &path, &[&new.session()], body);
-            let check_operation = |fixture: &Fixture, reply: Vec<u8>| {
-                let body = json_body(&reply);
-                assert_eq!(body["configuration"]["state"], state);
-                if status == 409 {
-                    assert_eq!(body["runtime"].get("last_known"), Some(&Value::Null));
-                }
-                normalize_integration_reply(fixture, reply)
-            };
-            let (old_reply, new_reply) = tokio::join!(
-                assert_wire_with(old_addr, &old_request, false, status, |reply| {
-                    check_operation(&old, reply)
-                }),
-                assert_wire_with(candidate, &new_request, false, status, |reply| {
-                    check_operation(new, reply)
-                }),
-            );
-            assert_wire_response_parity(&old_request, &old_reply, &new_reply);
+            let wire = json_request(fixture.port(), &path, &[&fixture.session()], body);
+            let reply = assert_wire(address, &wire, false, status).await;
+            let body = json_body(&reply);
+            assert_eq!(body["configuration"]["state"], state);
+            if status == 409 {
+                assert_eq!(body["runtime"].get("last_known"), Some(&Value::Null));
+            }
         }
-        for fixture in [&old, new] {
-            assert_eq!(
-                std::fs::read(fixture.directory.path().join("codex/config.toml")).unwrap(),
-                b"# native fixture\nopenai_base_url = \"native\"\n"
-            );
-        }
+        assert_eq!(
+            std::fs::read(fixture.directory.path().join("codex/config.toml")).unwrap(),
+            b"# native fixture\nopenai_base_url = \"native\"\n"
+        );
     });
-    old.legacy.shutdown().unwrap();
 }
 
 #[cfg(unix)]
 #[test]
 fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
-    use super::wire_contract::{Driver, assert_reply, json_head};
+    use super::wire_contract::{assert_reply, json_head};
     use crate::server::ShutdownReason;
     use crate::server::raw_tcp::{RawClient, read_websocket_frame};
 
-    for &driver in Driver::selected() {
-        let address = Fixture::new_with_driver(driver).run_wire(async |fixture, addr| {
+    {
+        Fixture::new().run_wire(async |fixture, addr| {
             let port = fixture.port();
             let session = fixture.session();
             let websocket = request(
@@ -579,7 +539,7 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
                 ))
                 .await
                 .unwrap();
-            let state = &fixture.legacy.state;
+            let state = &fixture.server.state;
             crate::tests::wait_for(Duration::from_secs(5), || {
                 state.lifecycle.updates().active_for_test() == 1
             });
@@ -604,7 +564,6 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
             let mut response = Vec::new();
             stopping.read_to_end(&mut response).await.unwrap();
             assert_reply(
-                driver,
                 "POST /api/quit",
                 &response,
                 json_head!("200 OK", "21"),
@@ -613,17 +572,12 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
             let sse_end = sse.rest().await;
             assert!(String::from_utf8_lossy(&sse_end).contains("event: emp-exiting"));
             let signal = state.lifecycle.signal().wait().await;
-            assert_eq!(
-                signal,
-                if matches!(driver, Driver::Candidate) {
-                    ShutdownReason::ResponseWritten
-                } else {
-                    ShutdownReason::Requested
-                }
-            );
+            assert_eq!(signal, ShutdownReason::ResponseWritten);
             assert!(state.lifecycle.admission.acquire_request().is_none());
-            addr
+            crate::tests::wait_for(crate::server::raw_tcp::DEADLINE, || {
+                fixture.server.listener_finished()
+            });
+            assert!(std::net::TcpStream::connect(addr).is_err());
         });
-        assert!(std::net::TcpStream::connect(address).is_err());
     }
 }

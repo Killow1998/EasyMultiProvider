@@ -4,12 +4,12 @@ use crate::api::history_response::destination_error_response;
 use crate::api::history_response::history_http_error;
 use crate::api::history_response::history_stream_error;
 use crate::api::streaming::ObservedSse;
-use crate::api::streaming::ReplySink;
 use crate::api::streaming::serve_external_stream;
 use crate::api::streaming::serve_generated_response;
 use crate::api::streaming::serve_native_stream;
 use crate::app::ServerState;
 use crate::http::request::Request;
+use crate::server::http::stream::BodyOutput;
 use crate::server::http::{error::HttpReply, inference::InferenceOutcome};
 use crate::services::compaction::external_compaction_response;
 use crate::services::compaction::has_trailing_compaction_trigger;
@@ -26,7 +26,7 @@ use emp_context::HistoryError;
 use emp_domain::json_truthy;
 
 pub(crate) fn execute(
-    downstream: &mut ReplySink<'_>,
+    downstream: &mut BodyOutput,
     request: Request<'_>,
     body: serde_json::Value,
     state: &ServerState,

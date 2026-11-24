@@ -163,14 +163,16 @@ fn discover_inner(
                         &state.backend.transport.client,
                         fields,
                         &vertex_models,
-                        &emp_state::official_registry::snapshot(),
+                        &(state.backend.configuration.official_models)(),
                     ))
                     .map_err(DiscoveryError::Upstream)
             }
         })?;
         prices.enrich_models(
             fields,
-            emp_state::official_registry::identify_provider(fields).as_deref(),
+            (state.backend.configuration.official_models)()
+                .identify_provider(fields)
+                .as_deref(),
             &mut models,
         );
         let config = state

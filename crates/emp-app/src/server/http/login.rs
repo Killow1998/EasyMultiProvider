@@ -7,7 +7,6 @@ use super::{
 };
 use crate::{
     app::ServerState,
-    http::request::{Request, RequestMethod, read_json_body},
     server::{connection::ConnectionContext, run_blocking},
     services::native_login::{self, LoginOperation},
 };
@@ -17,16 +16,10 @@ use axum::{
     routing::post,
 };
 use serde_json::Value;
-use std::{net::TcpStream, sync::Arc};
+use std::sync::Arc;
 
 const NATIVE_PREFIX: &str = "/api/native/login/";
 pub(super) const ACCOUNTS_PREFIX: &str = "/api/accounts/login/";
-
-pub(crate) fn matches(request: Request<'_>) -> bool {
-    let path = request.raw_path();
-    request.method == RequestMethod::Post
-        && (path.starts_with(NATIVE_PREFIX) || path.starts_with(ACCOUNTS_PREFIX))
-}
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
@@ -37,18 +30,6 @@ pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
 fn operation(path: &str, body: &Value) -> LoginOperation {
     let name = path.rsplit('/').next().unwrap_or_default();
     LoginOperation::parse(name, body, path.starts_with(ACCOUNTS_PREFIX))
-}
-
-pub(crate) fn legacy(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-) -> Result<JsonReply, EntryError> {
-    ManagementSession::require(request, state, now)?;
-    let body = read_json_body(stream, request, prefix, state)?;
-    Ok(execute(operation(request.raw_path(), &body), state))
 }
 
 impl FromRequest<Arc<ServerState>> for JsonBody<LoginOperation> {

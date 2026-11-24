@@ -131,7 +131,12 @@ async fn idle_and_trickling_heads_hold_permits_until_their_deadlines() {
         assert_eq!(admission.active_requests(), 0);
         let mut response = Vec::new();
         client.read_to_end(&mut response).await.unwrap();
-        assert_eq!(response, crate::http::response::bad_request_response());
+        assert_eq!(
+            response,
+            crate::server::http::error::EntryError::InvalidHead
+                .reply()
+                .encode()
+        );
     }
 }
 
@@ -407,7 +412,7 @@ async fn exit_signals_after_socket_write_and_distinguishes_failed_write() {
 }
 
 #[tokio::test]
-async fn wire_guard_returns_legacy_400_status_and_body() {
+async fn wire_guard_returns_emp_400_status_and_body() {
     const INVALID_HEAD: &[u8] = br#"{"error":{"message":"invalid HTTP request"}}"#;
     const INVALID_FRAMING: &[u8] =
         br#"{"error":{"message":"duplicate Content-Length or unsupported Transfer-Encoding","origin":"emp"}}"#;

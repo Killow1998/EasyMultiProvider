@@ -39,7 +39,7 @@ done
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
 
-fn fixture(base: SocketAddr, executable: &Path, driver: TestDriver) -> Fixture {
+fn fixture(base: SocketAddr, executable: &Path) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let config = root.join("config.json");
@@ -53,95 +53,76 @@ fn fixture(base: SocketAddr, executable: &Path, driver: TestDriver) -> Fixture {
         .to_string(),
     )
     .unwrap();
-    let legacy = LegacyServer::start_with_test_options(
+    let server = RunningServer::start_with_test_options(
         LOOPBACK.ip(),
         &config,
         root.join("codex/auth.json"),
-        driver,
         executable.to_str().unwrap(),
         Some(emp_transport::HttpClient::new(emp_transport::HttpClientPolicy::default()).unwrap()),
     )
     .unwrap();
     Fixture {
         directory,
-        legacy,
+        server,
         upstream: Arc::default(),
     }
 }
 
-pub(super) struct Pair<'a> {
-    pub(super) old: &'a Fixture,
-    pub(super) new: &'a Fixture,
-    pub(super) candidate: SocketAddr,
-}
-
-impl Pair<'_> {
-    pub(super) async fn parity(
+impl Fixture {
+    pub(super) async fn request_json(
         &self,
-        make: impl Fn(u16, &str) -> Vec<u8>,
+        make: impl FnOnce(u16, &str) -> Vec<u8>,
         status: u16,
-        normalize: impl Fn(Vec<u8>) -> Vec<u8>,
     ) -> Value {
-        let old = make(self.old.port(), &self.old.session());
-        let new = make(self.candidate.port(), &self.new.session());
-        let (old_reply, reply) = tokio::join!(
-            assert_wire_with(
-                self.old.legacy.local_addr(),
-                &old,
-                false,
-                status,
-                &normalize
-            ),
-            assert_wire_with(self.candidate, &new, false, status, &normalize),
-        );
-        assert_wire_response_parity(&old, &old_reply, &reply);
-        json_body(&reply)
+        self.request_checked(make, status, |reply| reply).await
+    }
+
+    pub(super) async fn request_checked(
+        &self,
+        make: impl FnOnce(u16, &str) -> Vec<u8>,
+        status: u16,
+        check: impl FnOnce(Vec<u8>) -> Vec<u8>,
+    ) -> Value {
+        let wire = make(self.port(), &self.session());
+        let reply = assert_wire(self.server.local_addr(), &wire, false, status).await;
+        json_body(&check(reply))
     }
 
     pub(super) async fn post(&self, path: &str, body: &[u8], status: u16) -> Value {
-        self.parity(
+        self.request_json(
             |port, session| json_request(port, path, &[session], body),
             status,
-            |reply| reply,
         )
         .await
     }
 
     pub(super) async fn read(&self, path: &str) -> Value {
-        self.parity(
+        self.request_json(
             |port, session| request(port, "GET", path, &[session], b""),
             200,
-            |reply| reply,
         )
         .await
     }
 
     fn saved(&self) -> Value {
-        let read = |fixture: &Fixture| {
-            let config = std::fs::read(fixture.directory.path().join("config.json")).unwrap();
-            serde_json::from_slice::<Value>(&config).unwrap()
-        };
-        let mut old = read(self.old)["accounts"].clone();
-        let mut new = read(self.new)["accounts"].clone();
-        for accounts in [&mut old, &mut new] {
-            for account in accounts.as_array_mut().unwrap() {
-                assert!(
-                    account
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("auth_file")
-                        .unwrap()
-                        .as_str()
-                        .unwrap()
-                        .ends_with(AUTH)
-                );
-                if let Some(quota) = account["quota"].as_object_mut() {
-                    assert!(quota.remove("updated_at").unwrap().as_u64().is_some());
-                }
+        let config = std::fs::read(self.directory.path().join("config.json")).unwrap();
+        let mut accounts = serde_json::from_slice::<Value>(&config).unwrap()["accounts"].take();
+        for account in accounts.as_array_mut().unwrap() {
+            assert!(
+                account
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("auth_file")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .ends_with(AUTH)
+            );
+            if let Some(quota) = account["quota"].as_object_mut() {
+                assert!(quota.remove("updated_at").unwrap().as_u64().is_some());
             }
         }
-        assert_eq!(old, new);
-        old
+        accounts
     }
 }
 
@@ -213,15 +194,10 @@ fn normalize_quota_time(reply: Vec<u8>) -> Vec<u8> {
 }
 
 #[test]
-fn login_account_reads_and_delete_match_legacy_wire() {
-    let old = fixture(
-        LOOPBACK,
-        Path::new("missing-test-codex"),
-        TestDriver::reference(),
-    );
-    fixture(LOOPBACK, Path::new("missing-test-codex"), TestDriver::Candidate).run_wire(async |new, candidate| {
-        let pair = Pair { old: &old, new, candidate };
-        pair.post(
+fn login_account_reads_and_delete_preserve_auth_and_state() {
+    fixture(LOOPBACK, Path::new("missing-test-codex")).run_wire(async |fixture, _| {
+
+        fixture.post(
             IMPORT,
             br#"{"id":"login","prefix":"login","auth_json":{"tokens":{"access_token":"fixture-token","account_id":"fixture-owner"}}}"#,
             200,
@@ -232,92 +208,82 @@ fn login_account_reads_and_delete_match_legacy_wire() {
         let history = "/api/accounts/login/quota-history?start=1&end=100";
         let account = "/api/accounts/login/";
         for (method, path) in [("GET", models), ("GET", history), ("DELETE", account)] {
-            pair.parity(
-                |port, _| request(port, method, path, &[], b""),
-                401,
-                |reply| reply,
-            )
+            fixture.request_json(|port, _| request(port, method, path, &[], b""), 401)
             .await;
         }
-        assert_eq!(pair.read(models).await["models"], json!([]));
-        assert_eq!(pair.read(history).await["account_id"], "login");
-        let deleted = pair.parity(
-            |port, session| request(port, "DELETE", account, &[session], b""),
-            200,
-            |reply| reply,
-        )
+        assert_eq!(fixture.read(models).await["models"], json!([]));
+        assert_eq!(fixture.read(history).await["account_id"], "login");
+        let deleted = fixture.request_json(|port, session| request(port, "DELETE", account, &[session], b""), 200)
         .await;
         assert_eq!(deleted, json!({"status":"ok"}));
-        assert_eq!(pair.read("/api/accounts").await["accounts"], json!([]));
+        assert_eq!(fixture.read("/api/accounts").await["accounts"], json!([]));
     });
-    old.legacy.shutdown().unwrap();
 }
 
 #[test]
-fn account_writes_match_legacy_wire_and_persist_the_same_state() {
+fn account_writes_persist_configuration_and_credentials() {
     let upstream = TcpListener::bind(LOOPBACK).unwrap();
     upstream.set_nonblocking(true).unwrap();
     let executable = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let codex = executable.path().join("codex");
     fake_codex(&codex);
-    let old = fixture(
-        upstream.local_addr().unwrap(),
-        &codex,
-        TestDriver::reference(),
-    );
-    fixture(upstream.local_addr().unwrap(), &codex, TestDriver::Candidate).run_wire(async |new, candidate| {
-        let pair = Pair { old: &old, new, candidate };
+
+    fixture(upstream.local_addr().unwrap(), &codex).run_wire(async |fixture, _| {
+
         let upstream = AsyncListener::from_std(upstream).unwrap();
 
         for path in [IMPORT, CONFIG, MODELS, QUOTA, RESET] {
-            pair.parity(|port, _| json_request(port, path, &[], b"{"), 401, |reply| reply).await;
-            assert!(pair.post(path, b"{", 400).await["error"]["message"].as_str().unwrap().contains("valid JSON"));
-            assert_eq!(pair.post(path, b"[]", 400).await["error"]["message"], "request body must be a JSON object");
-            let oversized = pair.parity(|port, session| request(
+            fixture.request_json(|port, _| json_request(port, path, &[], b"{"), 401).await;
+            assert!(fixture.post(path, b"{", 400).await["error"]["message"].as_str().unwrap().contains("valid JSON"));
+            assert_eq!(fixture.post(path, b"[]", 400).await["error"]["message"], "request body must be a JSON object");
+            let oversized = fixture.request_json(|port, session| request(
                 port, "POST", path, &[session, "Content-Type: application/json", "Content-Length: 5242881"], b""
-            ), 413, |reply| reply).await;
+            ), 413).await;
             assert_eq!(oversized["error"]["limit_bytes"], 5242880);
         }
-        assert_eq!(pair.post(IMPORT, b"{}", 400).await["error"]["message"], "auth_json is required");
-        assert_eq!(pair.post(IMPORT, br#"{"auth_json":true}"#, 400).await["error"]["message"], "auth_json must be a JSON object");
-        pair.post(CONFIG, br#"{"accounts":[{"id":"absent","prefix":"absent","auth_file":"unmanaged"}]}"#, 400).await;
-        assert_eq!(pair.post(MODELS, b"{}", 400).await["error"]["message"], "Subscription account is unavailable");
+        assert_eq!(fixture.post(IMPORT, b"{}", 400).await["error"]["message"], "auth_json is required");
+        assert_eq!(fixture.post(IMPORT, br#"{"auth_json":true}"#, 400).await["error"]["message"], "auth_json must be a JSON object");
+        fixture.post(CONFIG, br#"{"accounts":[{"id":"absent","prefix":"absent","auth_file":"unmanaged"}]}"#, 400).await;
+        assert_eq!(fixture.post(MODELS, b"{}", 400).await["error"]["message"], "Subscription account is unavailable");
         for path in [QUOTA, RESET] {
-            let missing = pair.post(path, b"{}", 503).await;
+            let missing = fixture.post(path, b"{}", 503).await;
             assert_eq!(missing["error"]["message"], "unknown account: demo");
         }
-        pair.parity(|port, _| request(port, "DELETE", ACCOUNT, &[], b""), 401, |reply| reply).await;
-        pair.parity(|port, session| request(port, "DELETE", "/api/accounts/", &[session], b""), 404, |reply| reply).await;
-        pair.parity(|port, session| request(port, "DELETE", ACCOUNT, &[session], b""), 400, |reply| reply).await;
+        fixture.request_json(|port, _| request(port, "DELETE", ACCOUNT, &[], b""), 401).await;
+        fixture.request_json(|port, session| request(port, "DELETE", "/api/accounts/", &[session], b""), 404).await;
+        fixture.request_json(|port, session| request(port, "DELETE", ACCOUNT, &[session], b""), 400).await;
 
         let oversized = gzip(&vec![b' '; 5 * 1024 * 1024 + 1], Vec::new());
-        let rejected = pair
-            .parity(
-                |port, session| {
+        let rejected = fixture.request_json(|port, session| {
                     json_request(port, IMPORT, &[session, "Content-Encoding: gzip"], &oversized)
-                },
-                413,
-                |reply| reply,
-            )
+                }, 413)
             .await;
         assert_eq!(rejected["error"]["limit_bytes"], 5242880);
 
-        let imported = pair.post(IMPORT, IMPORT_BODY, 200).await;
+        let imported = fixture.post(IMPORT, IMPORT_BODY, 200).await;
         assert_eq!(imported["account"]["name"], "Initial");
-        assert_eq!(pair.saved()[0]["name"], "Initial");
-        for fixture in [&old, new] {
+        assert_eq!(fixture.saved()[0]["name"], "Initial");
+        {
             let path = fixture.directory.path().canonicalize().unwrap().join(AUTH);
-            let auth = fixture.legacy.state.backend.configuration.vault.read_encrypted_json(&path).unwrap();
+            let auth = fixture.server.state.backend.configuration.vault.read_encrypted_json(&path).unwrap();
             assert_eq!(auth["tokens"]["access_token"], "fixture-token");
         }
         let (models, ()) = tokio::join!(
-            pair.post(MODELS, br#"{"other":7}"#, 200),
+            fixture.post(MODELS, br#"{"other":7}"#, 200),
             async {
-                let (first, second) = tokio::join!(wait_for_model_fetch(&upstream), wait_for_model_fetch(&upstream));
-                tokio::join!(send_models(first, "persisted-model"), send_models(second, "persisted-model"));
+                send_models(wait_for_model_fetch(&upstream).await, "persisted-model").await;
             }
         );
-        assert_eq!(models, pair.read(ACCOUNT_READ).await);
+        assert!(timeout(Duration::ZERO, upstream.accept()).await.is_err());
+        assert_eq!(models, fixture.read(ACCOUNT_READ).await);
+        assert_eq!(
+            crate::tests::live_journal(fixture.directory.path()).iter().filter(|record| {
+                record["event"] == "operation_finished"
+                    && record["fields"]["operation"] == "subscription_catalog_refresh"
+                    && record["fields"]["checks"]["account_catalog_persisted"] == true
+            }).count(),
+            1,
+        );
         assert_eq!(models["models"][0]["id"], "persisted-model");
         let config = json!({
             "codex_base_url": format!("http://{}/v1", upstream.local_addr().unwrap()),
@@ -325,59 +291,48 @@ fn account_writes_match_legacy_wire_and_persist_the_same_state() {
                          "model_context_windows":{"persisted-model":8192}}],
             "unknown":true,
         }).to_string();
-        let edited = pair.parity(
-            |port, session| json_request(port, CONFIG, &[session], config.as_bytes()),
-            200,
-            |reply| normalize_body(reply, |body| {
-                [&old, new].iter().fold(body.to_owned(), |body, fixture| {
-                    body.replace(fixture.directory.path().canonicalize().unwrap().to_str().unwrap(), "/fixture")
-                })
-            }),
-        ).await;
+        let edited = fixture.request_checked(|port, session| json_request(port, CONFIG, &[session], config.as_bytes()), 200, |reply| normalize_body(reply, |body| {
+                body.replace(fixture.directory.path().canonicalize().unwrap().to_str().unwrap(), "/fixture")
+            })).await;
         assert_eq!(edited["accounts"][0]["name"], "Edited");
-        let saved = pair.saved();
+        let saved = fixture.saved();
         assert_eq!(saved[0]["hidden_models"], json!(["hidden"]));
         assert_eq!(saved[0]["model_context_windows"]["persisted-model"], 8192);
-        assert_eq!(pair.read("/api/accounts").await["accounts"][0]["name"], "Edited");
+        assert_eq!(fixture.read("/api/accounts").await["accounts"][0]["name"], "Edited");
 
-        let invalid = pair.post(RESET, br#"{"credit_id":null}"#, 400).await;
+        let invalid = fixture.post(RESET, br#"{"credit_id":null}"#, 400).await;
         assert_eq!(invalid["error"]["message"], "reset credit id is invalid");
-        assert_eq!(pair.post(RESET, b"{}", 400).await["error"]["code"], "quota_reset_invalid_request");
+        assert_eq!(fixture.post(RESET, b"{}", 400).await["error"]["code"], "quota_reset_invalid_request");
         for path in [QUOTA, RESET] {
             let body = if path == RESET { RESET_BODY } else { br#"{"other":true}"# };
-            let reply = pair.parity(
-                |port, session| json_request(port, path, &[session], body),
-                200,
-                normalize_quota_time,
-            ).await;
+            let reply = fixture.request_checked(|port, session| json_request(port, path, &[session], body), 200, normalize_quota_time).await;
             assert_eq!(reply["account"]["quota"]["rate_limits"]["primary"]["usedPercent"], 7);
-            assert_eq!(pair.saved()[0]["quota"]["rate_limits"]["primary"]["usedPercent"], 7);
+            assert_eq!(fixture.saved()[0]["quota"]["rate_limits"]["primary"]["usedPercent"], 7);
             if path == RESET {
                 assert_eq!(reply["outcome"], "reset");
                 assert!(reply["refresh_error"].is_null());
             }
         }
 
-        let deleted = pair.parity(|port, session| request(
+        let deleted = fixture.request_json(|port, session| request(
             port, "DELETE", "/api/accounts/%64emo//", &[session, "Content-Type: text/plain", "Content-Length: 1"], b"{"
-        ), 200, |reply| reply).await;
+        ), 200).await;
         assert_eq!(deleted, json!({"status":"ok"}));
-        assert_eq!(pair.saved(), json!([]));
-        assert_eq!(pair.read("/api/accounts").await["accounts"], json!([]));
-        for fixture in [&old, new] {
+        assert_eq!(fixture.saved(), json!([]));
+        assert_eq!(fixture.read("/api/accounts").await["accounts"], json!([]));
+        {
             assert!(matches!(std::fs::metadata(fixture.directory.path().join(AUTH)), Err(error) if error.kind() == ErrorKind::NotFound));
-            assert!(fixture.legacy.state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(fixture.server.state.lifecycle.updates().drain_for_test(Duration::ZERO));
         }
         for path in [IMPORT, CONFIG, MODELS, QUOTA, RESET] {
-            let denied = pair.parity(|port, _| json_request(port, path, &[], b"{"), 503, |reply| reply).await;
+            let denied = fixture.request_json(|port, _| json_request(port, path, &[], b"{"), 503).await;
             assert_eq!(denied["error"]["code"], "updating");
         }
-        let denied = pair.parity(|port, _| request(port, "DELETE", ACCOUNT, &[], b""), 503, |reply| reply).await;
+        let denied = fixture.request_json(|port, _| request(port, "DELETE", ACCOUNT, &[], b""), 503).await;
         assert_eq!(denied["error"]["code"], "updating");
-        assert_eq!(pair.read("/api/accounts").await["accounts"], json!([]));
-        assert_eq!(pair.saved(), json!([]));
+        assert_eq!(fixture.read("/api/accounts").await["accounts"], json!([]));
+        assert_eq!(fixture.saved(), json!([]));
     });
-    old.legacy.shutdown().unwrap();
 }
 
 #[test]
@@ -387,24 +342,19 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
     let executable = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let codex = executable.path().join("codex");
     fake_codex(&codex);
-    fixture(
-        upstream.local_addr().unwrap(),
-        &codex,
-        TestDriver::Candidate,
-    )
-    .run_wire(async |fixture, candidate| {
+    fixture(upstream.local_addr().unwrap(), &codex).run_wire(async |fixture, endpoint| {
         let upstream = AsyncListener::from_std(upstream).unwrap();
         let session = &fixture.session();
         let port = fixture.port();
         let import = json_request(port, IMPORT, &[session], IMPORT_BODY);
-        assert_status(&exchange_wire(candidate, &import, true).await, 200);
+        assert_status(&exchange_wire(endpoint, &import, true).await, 200);
         let refresh = json_request(port, MODELS, &[session], b"{}");
-        let (mut client, task) = connect_submitted_write(fixture, candidate).await;
+        let (mut client, task) = connect_submitted_write(fixture).await;
         client.write_all(&refresh).await.unwrap();
         let upstream_request = wait_for_model_fetch(&upstream).await;
         assert!(
             !fixture
-                .legacy
+                .server
                 .state
                 .lifecycle
                 .updates()
@@ -413,7 +363,7 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
         disconnect_submitted_write(fixture, client, task).await;
         send_models(upstream_request, "after-disconnect").await;
 
-        let state = fixture.legacy.state.clone();
+        let state = fixture.server.state.clone();
         tokio::task::spawn_blocking(move || {
             assert!(
                 state
@@ -427,7 +377,7 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
         .unwrap();
 
         let read = request(port, "GET", ACCOUNT_READ, &[session], b"");
-        let reply = exchange_wire(candidate, &read, false).await;
+        let reply = exchange_wire(endpoint, &read, false).await;
         assert_status(&reply, 200);
         assert_eq!(json_body(&reply)["models"][0]["id"], "after-disconnect");
         assert!(timeout(Duration::ZERO, upstream.accept()).await.is_err());

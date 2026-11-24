@@ -276,10 +276,24 @@ fn bootstrap_token_expires_unused() {
         server.state.bootstrap.token,
     );
     let request = parse_request(&raw).expect("request");
-    let response = route_request_at(request, &server.state, expires_at);
+    use crate::server::http::management::BootstrapExchange;
+    let exchange = || {
+        BootstrapExchange::parse(request, server.local_addr().port())
+            .ok()
+            .expect("bootstrap request")
+    };
+    let response = exchange()
+        .execute(&server.state, expires_at)
+        .unwrap_err()
+        .reply()
+        .encode();
     assert!(response.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
     assert!(!server.state.bootstrap.used.load(Ordering::Acquire));
-    let response = route_request_at(request, &server.state, expires_at - 1.0);
+    let response = exchange()
+        .execute(&server.state, expires_at - 1.0)
+        .ok()
+        .expect("unexpired bootstrap")
+        .encode();
     assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
     server.shutdown().expect("shutdown");
 }
@@ -427,80 +441,6 @@ fn management_body_rejects_ambiguous_framing_headers() {
         );
     }
     server.shutdown().expect("shutdown");
-}
-
-#[test]
-fn request_head_has_an_overall_deadline() {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind");
-    let address = listener.local_addr().expect("address");
-    let writer = thread::spawn(move || {
-        let mut client = TcpStream::connect(address).expect("connect");
-        client
-            .write_all(b"GET / HTTP/1.1\r\n")
-            .expect("request line");
-        // Trickle one byte at a time, never finishing the head and never
-        // idling long enough for the per-read timeout.
-        for _ in 0..40 {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "按固定间隔逐字节发送，验证持续有数据时请求头仍受总时限约束"
-            )]
-            thread::sleep(Duration::from_millis(50));
-            if client.write_all(b"X").is_err() {
-                break;
-            }
-        }
-    });
-    let (mut stream, _) = listener.accept().expect("accept");
-    let started = Instant::now();
-    let head = crate::http::request::read_request_head_before(
-        &mut stream,
-        started + Duration::from_millis(400),
-    );
-    assert!(head.is_none());
-    let elapsed = started.elapsed();
-    assert!(elapsed >= Duration::from_millis(400), "{elapsed:?}");
-    assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");
-    drop(stream);
-    writer.join().expect("writer");
-}
-
-#[test]
-fn request_body_has_an_overall_deadline() {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind");
-    let address = listener.local_addr().expect("address");
-    let writer = thread::spawn(move || {
-        let mut client = TcpStream::connect(address).expect("connect");
-        for _ in 0..40 {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "按固定间隔逐字节发送，验证请求体读取总时限"
-            )]
-            thread::sleep(Duration::from_millis(50));
-            if client.write_all(b"X").is_err() {
-                break;
-            }
-        }
-    });
-    let (mut stream, _) = listener.accept().expect("accept");
-    let started = Instant::now();
-    let mut body = Vec::new();
-    let result = crate::http::request::read_exact_before(
-        &mut stream,
-        &mut body,
-        40,
-        started + Duration::from_millis(400),
-    );
-    assert_eq!(
-        result.expect_err("body deadline").kind(),
-        std::io::ErrorKind::TimedOut
-    );
-    let elapsed = started.elapsed();
-    assert!(elapsed >= Duration::from_millis(400), "{elapsed:?}");
-    assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");
-    assert!(body.len() < 40);
-    drop(stream);
-    writer.join().expect("writer");
 }
 
 #[test]

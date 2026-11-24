@@ -4,7 +4,8 @@ use super::{
 };
 use crate::app::ServerState;
 use emp_state::{
-    FileTransaction, VaultStore, normalize_account, normalize_configuration, validate_auth_json,
+    FileTransaction, VaultStore, config::normalize_configuration_with_registry, normalize_account,
+    validate_auth_json,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -254,8 +255,11 @@ fn import_credentials(
             accounts.push(account);
             let mut updated = config.clone();
             updated["accounts"] = Value::Array(accounts);
-            let mut updated =
-                normalize_configuration(Some(&updated)).map_err(|error| error.to_string())?;
+            let mut updated = normalize_configuration_with_registry(
+                Some(&updated),
+                state.backend.configuration.official_models,
+            )
+            .map_err(|error| error.to_string())?;
             emp_state::config::preserve_service_route_names(&config, &mut updated);
             emp_state::config::validate_service_names(&config, &updated).map_err(str::to_owned)?;
             if config["accounts"]

@@ -190,6 +190,14 @@ pub(super) fn response_parts(wire: &str) -> (&str, &[u8]) {
     (head, body.as_bytes())
 }
 
+pub(super) fn response_header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .find(|(field, _)| field.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.trim())
+}
+
 pub(super) fn masked_websocket_text(value: &Value) -> Vec<u8> {
     let payload = serde_json::to_vec(value).unwrap();
     let mask = [1u8, 2, 3, 4];
@@ -238,6 +246,7 @@ pub(super) fn receive_websocket_json(stream: &mut TcpStream) -> Value {
 pub(super) struct NativeSseUpstream {
     address: SocketAddr,
     observed: mpsc::Receiver<ObservedNativeRequest>,
+    stopping: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -246,8 +255,14 @@ impl NativeSseUpstream {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind native SSE");
         let address = listener.local_addr().unwrap();
         let (sender, observed) = mpsc::sync_channel(1);
+        let stopping = Arc::new(AtomicBool::new(false));
+        let stopped = stopping.clone();
         let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept native SSE");
+            let accept = || {
+                let (stream, _) = listener.accept().expect("accept native SSE");
+                (!stopped.load(Ordering::Acquire)).then_some(stream)
+            };
+            let Some(mut stream) = accept() else { return };
             let raw = read_request_head(&mut stream).unwrap();
             let request = parse_request(&raw.head).unwrap();
             let observed = if request
@@ -257,7 +272,7 @@ impl NativeSseUpstream {
                 stream.write_all(b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
                 stream.flush().unwrap();
                 drop(stream);
-                let (mut stream2, _) = listener.accept().expect("accept HTTP fallback");
+                let Some(mut stream2) = accept() else { return };
                 let observed = receive_native_request(&mut stream2);
                 stream = stream2;
                 observed
@@ -289,6 +304,7 @@ impl NativeSseUpstream {
         Self {
             address,
             observed,
+            stopping,
             worker: Some(worker),
         }
     }
@@ -302,6 +318,8 @@ impl NativeSseUpstream {
 impl Drop for NativeSseUpstream {
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
+            self.stopping.store(true, Ordering::Release);
+            let _ = TcpStream::connect(self.address);
             worker.join().unwrap();
         }
     }

@@ -2,9 +2,9 @@ use crate::api::failure_response::request_router_error_response;
 use crate::api::failure_response::route_resolution_response;
 use crate::api::history_response::destination_error_response;
 use crate::api::history_response::history_http_error;
-use crate::api::streaming::ReplySink;
 use crate::app::ServerState;
 use crate::http::request::Request;
+use crate::server::http::stream::BodyOutput;
 use crate::server::http::{error::HttpReply, inference::InferenceOutcome};
 use crate::services::compaction::external_compaction_response;
 use crate::services::history::prepare_destination_context;
@@ -18,7 +18,7 @@ use crate::services::request_preparation::{
 use crate::util::projection_ids;
 
 pub(crate) fn execute(
-    downstream: &mut ReplySink<'_>,
+    downstream: &mut BodyOutput,
     request: Request<'_>,
     body: serde_json::Value,
     state: &ServerState,

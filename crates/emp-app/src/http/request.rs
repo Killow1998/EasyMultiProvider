@@ -1,5 +1,5 @@
 use crate::http::auth::session_header_value;
-pub(crate) use crate::server::http::body::{BodyError, read_json_body};
+use crate::server::http::body::BodyError;
 use std::io::Read;
 use std::net::TcpStream;
 use std::time::Duration;
@@ -138,11 +138,6 @@ pub(crate) struct RequestHead {
     pub(crate) body_prefix: Vec<u8>,
 }
 
-/// Deadline for a request body of `length` bytes, starting now.
-pub(crate) fn request_body_deadline(length: usize) -> Instant {
-    Instant::now() + request_body_timeout(length)
-}
-
 pub(crate) fn request_body_timeout(length: usize) -> Duration {
     let grace = (length / REQUEST_BODY_GRACE_BYTES_PER_SECOND) as u64;
     REQUEST_BODY_DEADLINE + Duration::from_secs(grace)
@@ -175,25 +170,6 @@ pub(crate) fn restore_read_timeout(stream: &TcpStream) {
     let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
 }
 
-pub(crate) fn read_exact_before(
-    stream: &mut TcpStream,
-    body: &mut Vec<u8>,
-    length: usize,
-    deadline: Instant,
-) -> std::io::Result<()> {
-    while body.len() < length {
-        let remaining = length - body.len();
-        let mut chunk = [0_u8; 64 * 1024];
-        let read_length = remaining.min(chunk.len());
-        let count = read_before(stream, &mut chunk[..read_length], deadline)?;
-        if count == 0 {
-            return Err(std::io::ErrorKind::UnexpectedEof.into());
-        }
-        body.extend_from_slice(&chunk[..count]);
-    }
-    Ok(())
-}
-
 pub(crate) fn read_request_head(stream: &mut TcpStream) -> Option<RequestHead> {
     let head = read_request_head_before(stream, Instant::now() + REQUEST_HEAD_DEADLINE);
     restore_read_timeout(stream);
@@ -214,10 +190,7 @@ pub(crate) fn request_head_end(request: &[u8], previous_len: usize) -> Result<Op
     }
 }
 
-pub(crate) fn read_request_head_before(
-    stream: &mut TcpStream,
-    deadline: Instant,
-) -> Option<RequestHead> {
+fn read_request_head_before(stream: &mut TcpStream, deadline: Instant) -> Option<RequestHead> {
     let mut buffer = [0_u8; 1024];
     let mut request = Vec::new();
     loop {
@@ -304,4 +277,46 @@ pub(crate) fn query_values(target: &str, name: &str) -> Vec<String> {
         .filter(|(key, _)| percent_decode(key, true) == name)
         .map(|(_, value)| percent_decode(value, true))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write as _;
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn request_head_has_an_overall_deadline() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind");
+        let address = listener.local_addr().expect("address");
+        let writer = thread::spawn(move || {
+            let mut client = TcpStream::connect(address).expect("connect");
+            client
+                .write_all(b"GET / HTTP/1.1\r\n")
+                .expect("request line");
+            // Trickle one byte at a time, never finishing the head and never
+            // idling long enough for the per-read timeout.
+            for _ in 0..40 {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "按固定间隔逐字节发送，验证持续有数据时请求头仍受总时限约束"
+                )]
+                thread::sleep(Duration::from_millis(50));
+                if client.write_all(b"X").is_err() {
+                    break;
+                }
+            }
+        });
+        let (mut stream, _) = listener.accept().expect("accept");
+        let started = Instant::now();
+        let head =
+            super::read_request_head_before(&mut stream, started + Duration::from_millis(400));
+        assert!(head.is_none());
+        let elapsed = started.elapsed();
+        assert!(elapsed >= Duration::from_millis(400), "{elapsed:?}");
+        assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");
+        drop(stream);
+        writer.join().expect("writer");
+    }
 }

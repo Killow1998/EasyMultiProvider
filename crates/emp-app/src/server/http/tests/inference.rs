@@ -21,11 +21,11 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
     use crate::services::modules::aero::CallLease;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    for &driver in TestDriver::selected() {
+    {
         let upstream = TcpListener::bind(LOOPBACK).unwrap();
         upstream.set_nonblocking(true).unwrap();
         let base = format!("http://{}/v1", upstream.local_addr().unwrap());
-        fixture_with_driver(&base, driver).run_wire(async move |fixture, address| {
+        fixture(&base).run_wire(async move |fixture, address| {
             let upstream = tokio::net::TcpListener::from_std(upstream).unwrap();
             let sender = tokio::spawn(async move {
                 let mut held = Vec::new();
@@ -57,7 +57,7 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
                 }
                 held
             });
-            let state = &fixture.legacy.state;
+            let state = &fixture.server.state;
             let delegation = state.backend.aero_callers.delegate(
                 Caller { id: "local".into(), name: String::new() },
                 None,
@@ -78,7 +78,7 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
             for path in ["/healthz", "/"] {
                 let reply = exchange_wire(address, &request(port, "GET", path, &[], b""), false).await;
                 assert!(reply.starts_with(b"HTTP/1.1 200 "),
-                    "{path} blocked by 64 active callbacks ({driver:?})");
+                    "{path} blocked by 64 active callbacks");
             }
             let state_for_wait = state.clone();
             tokio::task::spawn_blocking(move || {
@@ -107,7 +107,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
     use crate::services::modules::aero::CallLease;
 
     let (release, released) = mpsc::channel();
-    let upstream = OneShotUpstream::serve(TestDriver::selected().len(), move |socket| {
+    let upstream = OneShotUpstream::serve(1, move |socket| {
         upstream_reply(
             socket,
             200,
@@ -119,10 +119,8 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
         released.recv_timeout(DEADLINE).unwrap();
         socket.write_all(LAST).unwrap();
     });
-    let mut heads = Vec::new();
-    for &driver in TestDriver::selected() {
-        fixture_with_driver(&upstream.base_url(), driver).run_wire(async |fixture, address| {
-            let state = &fixture.legacy.state;
+    fixture(&upstream.base_url()).run_wire(async |fixture, address| {
+            let state = &fixture.server.state;
             let admission = &state.lifecycle.admission;
             let updates = state.lifecycle.updates();
             let callers = &state.backend.aero_callers;
@@ -177,55 +175,56 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
                 io,
                 head: String::from_utf8(head).unwrap(),
             };
-            if callback.head.starts_with("HTTP/1.1 200 ") {
-                assert_eq!(
-                    admission.active_requests(),
-                    1,
-                    "callback kept the temporary public slot"
-                );
-                assert_eq!(
-                    updates.active_for_test(),
-                    1,
-                    "callback used a separate work permit"
-                );
-                drop(parent);
-                assert_eq!(
-                    admission.active_requests(),
-                    1,
-                    "callback lost the parent's connection permit"
-                );
-                assert_eq!(
-                    updates.active_for_test(),
-                    1,
-                    "callback lost the parent's work permit"
-                );
-                assert!(
-                    !draining.is_finished(),
-                    "drain finished while the callback was open"
-                );
-                release.send(()).unwrap();
-                assert!(
-                    String::from_utf8_lossy(&callback.rest().await).contains("response.completed")
-                );
-            } else {
-                drop(parent);
-            }
+            assert!(
+                callback.head.starts_with("HTTP/1.1 200 "),
+                "callback during drain: {}",
+                callback.head
+            );
+            assert_eq!(
+                admission.active_requests(),
+                1,
+                "callback kept the temporary public slot"
+            );
+            assert_eq!(
+                updates.active_for_test(),
+                1,
+                "callback used a separate work permit"
+            );
+            drop(parent);
+            assert_eq!(
+                admission.active_requests(),
+                1,
+                "callback lost the parent's connection permit"
+            );
+            assert_eq!(
+                updates.active_for_test(),
+                1,
+                "callback lost the parent's work permit"
+            );
+            assert!(
+                !draining.is_finished(),
+                "drain finished while the callback was open"
+            );
+            release.send(()).unwrap();
+            assert!(
+                {
+                    let mut received = Vec::new();
+                    let outcome = timeout(DEADLINE, callback.io.read_to_end(&mut received)).await;
+                    assert!(
+                        matches!(outcome, Ok(Ok(_))),
+                        "Aero callback drain: waiting for downstream EOF after releasing the upstream, received {} bytes: {outcome:?}",
+                        received.len()
+                    );
+                    String::from_utf8_lossy(&received).contains("response.completed")
+                },
+                "Aero callback drain: no response.completed before downstream EOF"
+            );
             assert!(draining.await.unwrap());
             drop(header_slots);
-            heads.push(callback.head);
         });
-    }
-    assert!(
-        heads.iter().all(|head| head.starts_with("HTTP/1.1 200 ")),
-        "callback during drain: {heads:?}"
-    );
 }
 
-fn fixture(base: &str) -> Fixture {
-    fixture_with_driver(base, TestDriver::reference())
-}
-
-pub(super) fn fixture_with_driver(base: &str, driver: TestDriver) -> Fixture {
+pub(super) fn fixture(base: &str) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let config = root.join("config.json");
@@ -250,7 +249,7 @@ pub(super) fn fixture_with_driver(base: &str, driver: TestDriver) -> Fixture {
         .to_string(),
     )
     .unwrap();
-    Fixture::with_driver(directory, driver)
+    Fixture::with_directory(directory)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -299,25 +298,6 @@ async fn assert_buffered(address: SocketAddr, wire: &[u8], status: u16) -> Vec<u
     let (head, body) = split_response(&reply);
     head.assert_security();
     assert_eq!(head.headers["content-length"], [body.len().to_string()]);
-    reply
-}
-
-async fn buffered_parity(
-    fixture: &Fixture,
-    address: SocketAddr,
-    wire: &[u8],
-    status: u16,
-) -> Vec<u8> {
-    let reply = assert_buffered(address, wire, status).await;
-    if TestDriver::compares_drivers() {
-        let reference = assert_buffered(fixture.legacy.local_addr(), wire, status).await;
-        assert_eq!(
-            split_response(&reference),
-            split_response(&reply),
-            "{}",
-            String::from_utf8_lossy(wire)
-        );
-    }
     reply
 }
 
@@ -388,57 +368,48 @@ fn inference_buffered_routes_preserve_wire_bytes_and_headers() {
             "",
         ),
     ] {
-        let mut heads = Vec::new();
-        for &driver in TestDriver::selected() {
+        {
             let upstream = OneShotUpstream::serve(1, move |socket| {
                 upstream_reply(socket, 200, "application/json", raw.len(), extra);
                 socket.write_all(raw).unwrap();
             });
-            let head = fixture_with_driver(&upstream.base_url(), driver).run_wire(
-                async |fixture, address| {
-                    let session = fixture.session();
-                    let mut headers =
-                        vec![session.as_str(), "Authorization: Bearer fixture-caller"];
-                    if path.contains("/images/") {
-                        headers.push("X-EMP-Provider: demo");
-                    }
-                    let wire = json_request(address.port(), path, &headers, request_body);
-                    let reply = assert_buffered(address, &wire, 200).await;
-                    let (head, body) = split_response(&reply);
-                    assert_eq!(head.headers["content-type"], ["application/json"]);
-                    assert_eq!(head.headers["cache-control"], ["no-store"]);
-                    assert_eq!(body, raw);
-                    if path.starts_with("/v1/responses") {
-                        assert_eq!(head.headers["openai-model"], ["native/alias"]);
-                        assert_ne!(
-                            head.headers.get("x-models-etag"),
-                            Some(&vec!["stale".to_owned()])
-                        );
-                    }
-                    if path.contains("/images/") {
-                        assert_eq!(
-                            head.headers["x-codex-imagegen-request-id"],
-                            ["image-fixture"]
-                        );
-                    }
-                    if matches!(path, "/v1/decisions" | "/v1/systemone") {
-                        assert_eq!(head.headers["retry-after"], ["7"]);
-                    }
-                    head
-                },
-            );
+            fixture(&upstream.base_url()).run_wire(async |fixture, address| {
+                let session = fixture.session();
+                let mut headers = vec![session.as_str(), "Authorization: Bearer fixture-caller"];
+                if path.contains("/images/") {
+                    headers.push("X-EMP-Provider: demo");
+                }
+                let wire = json_request(address.port(), path, &headers, request_body);
+                let reply = assert_buffered(address, &wire, 200).await;
+                let (head, body) = split_response(&reply);
+                assert_eq!(head.headers["content-type"], ["application/json"]);
+                assert_eq!(head.headers["cache-control"], ["no-store"]);
+                assert_eq!(body, raw);
+                if path.starts_with("/v1/responses") {
+                    assert_eq!(head.headers["openai-model"], ["native/alias"]);
+                    assert_ne!(
+                        head.headers.get("x-models-etag"),
+                        Some(&vec!["stale".to_owned()])
+                    );
+                }
+                if path.contains("/images/") {
+                    assert_eq!(
+                        head.headers["x-codex-imagegen-request-id"],
+                        ["image-fixture"]
+                    );
+                }
+                if matches!(path, "/v1/decisions" | "/v1/systemone") {
+                    assert_eq!(head.headers["retry-after"], ["7"]);
+                }
+            });
             assert_eq!(upstream.observed().0, upstream_path);
-            heads.push(head);
-        }
-        for pair in heads.windows(2) {
-            assert_eq!(pair[0], pair[1]);
         }
     }
 }
 
 #[test]
 fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
-    Fixture::new().run_candidate(async |fixture, address| {
+    Fixture::new().run_wire(async |fixture, address| {
         for path in [
             "/v1/responses",
             "/v1/responses/compact",
@@ -451,9 +422,9 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
             let auth = fixture.session();
             let unauthenticated =
                 request(fixture.port(), "POST", path, &["Content-Length: 100"], b"");
-            buffered_parity(fixture, address, &unauthenticated, 401).await;
+            assert_buffered(address, &unauthenticated, 401).await;
             let invalid = json_request(fixture.port(), path, &[&auth], b"{invalid");
-            buffered_parity(fixture, address, &invalid, 400).await;
+            assert_buffered(address, &invalid, 400).await;
         }
         let too_large = format!(
             "Content-Length: {}",
@@ -470,7 +441,7 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
             ],
             b"",
         );
-        let reply = buffered_parity(fixture, address, &oversized, 413).await;
+        let reply = assert_buffered(address, &oversized, 413).await;
         assert_eq!(json_body(&reply)["error"]["code"], "request_too_large");
 
         let multipart = request(
@@ -484,7 +455,7 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
             ],
             b"",
         );
-        let reply = buffered_parity(fixture, address, &multipart, 400).await;
+        let reply = assert_buffered(address, &multipart, 400).await;
         assert_eq!(
             json_body(&reply)["error"]["message"],
             "Content-Type must be application/json"
@@ -502,13 +473,13 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
             ],
             b"",
         );
-        let reply = buffered_parity(fixture, address, &duplicate, 400).await;
+        let reply = assert_buffered(address, &duplicate, 400).await;
         assert_eq!(
             json_body(&reply)["error"]["message"],
             "X-EMP-Provider must name one configured API service"
         );
 
-        let state = fixture.legacy.state.clone();
+        let state = fixture.server.state.clone();
         tokio::task::spawn_blocking(move || {
             wait_for(DEADLINE, || {
                 state.lifecycle.updates().active_for_test() == 0
@@ -517,8 +488,7 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
         })
         .await
         .unwrap();
-        let reply = buffered_parity(
-            fixture,
+        let reply = assert_buffered(
             address,
             &request(
                 fixture.port(),
@@ -538,8 +508,7 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
 fn inference_projects_upstream_4xx_5xx_and_connection_failure() {
     let raw = br#"{ "error":{"message":"fixture"}, "z":2.00 }"#;
     for status in [400, 502] {
-        let mut heads = Vec::new();
-        for &driver in TestDriver::selected() {
+        {
             let upstream = OneShotUpstream::start_repeated_wire(
                 status,
                 "application/json",
@@ -547,68 +516,56 @@ fn inference_projects_upstream_4xx_5xx_and_connection_failure() {
                 1,
                 vec![raw.to_vec()],
             );
-            let head = fixture_with_driver(&upstream.base_url(), driver).run_wire(
-                async |fixture, address| {
-                    let wire = json_request(
-                        address.port(),
-                        "/v1/decisions",
-                        &[&fixture.session()],
-                        br#"{"model":"upstream-model","input":"fixture"}"#,
-                    );
-                    let reply = assert_buffered(address, &wire, status).await;
-                    let (head, body) = split_response(&reply);
-                    assert_eq!(body, raw);
-                    head
-                },
-            );
+            fixture(&upstream.base_url()).run_wire(async |fixture, address| {
+                let wire = json_request(
+                    address.port(),
+                    "/v1/decisions",
+                    &[&fixture.session()],
+                    br#"{"model":"upstream-model","input":"fixture"}"#,
+                );
+                let reply = assert_buffered(address, &wire, status).await;
+                assert_eq!(split_response(&reply).1, raw);
+            });
             assert_eq!(upstream.observed().0, "/v1/decisions");
-            heads.push(head);
-        }
-        for pair in heads.windows(2) {
-            assert_eq!(pair[0], pair[1]);
         }
     }
     let listener = TcpListener::bind(LOOPBACK).unwrap();
     let unavailable = listener.local_addr().unwrap();
     drop(listener);
-    fixture(&format!("http://{unavailable}/v1")).run_candidate(async |fixture, address| {
+    fixture(&format!("http://{unavailable}/v1")).run_wire(async |fixture, address| {
         let wire = json_request(
             fixture.port(),
             "/v1/decisions",
             &[&fixture.session()],
             br#"{"model":"upstream-model","input":"fixture"}"#,
         );
-        let reply = buffered_parity(fixture, address, &wire, 503).await;
+        let reply = assert_buffered(address, &wire, 503).await;
         assert_eq!(json_body(&reply)["error"]["code"], "network_error");
     });
 }
 
 pub(super) struct SseClient {
-    head: ResponseHead,
     io: tokio::io::BufReader<TcpStream>,
-    chunked: bool,
     pending: Vec<u8>,
 }
 
 impl SseClient {
-    async fn open(address: SocketAddr, wire: &[u8], candidate: bool) -> Self {
-        Self::from_raw(RawClient::request(address, wire).await, candidate)
+    async fn open(address: SocketAddr, wire: &[u8]) -> Self {
+        Self::from_raw(RawClient::request(address, wire).await)
     }
 
-    pub(super) fn from_raw(raw: RawClient, candidate: bool) -> Self {
+    pub(super) fn from_raw(raw: RawClient) -> Self {
         let RawClient { io, head } = raw;
         let mut head = ResponseHead::parse(&head);
         let chunked = head.headers.remove("transfer-encoding");
-        assert_eq!(chunked, candidate.then(|| vec!["chunked".to_owned()]));
+        assert_eq!(chunked, Some(vec!["chunked".to_owned()]));
         assert_eq!(head.status, "HTTP/1.1 200 OK");
         assert_eq!(head.headers["content-type"], ["text/event-stream"]);
         assert_eq!(head.headers["cache-control"], ["no-cache"]);
         assert!(!head.headers.contains_key("content-length"));
         head.assert_security();
         Self {
-            head,
             io: tokio::io::BufReader::new(io),
-            chunked: candidate,
             pending: Vec::new(),
         }
     }
@@ -631,7 +588,7 @@ impl SseClient {
                 {
                     break self.pending.drain(..frame_end).collect::<Vec<_>>();
                 }
-                if self.chunked {
+                {
                     let mut line = String::new();
                     assert_ne!(
                         self.io.read_line(&mut line).await.unwrap(),
@@ -654,9 +611,6 @@ impl SseClient {
                         assert!(self.pending.is_empty(), "truncated SSE event");
                         return None;
                     }
-                } else if self.io.read_until(b'\n', &mut self.pending).await.unwrap() == 0 {
-                    assert!(self.pending.is_empty(), "truncated SSE event");
-                    return None;
                 }
             };
             let text = std::str::from_utf8(&bytes).unwrap();
@@ -708,7 +662,7 @@ async fn assert_settled(
     token_reports: u64,
 ) -> Value {
     let root = fixture.directory.path().to_owned();
-    let state = fixture.legacy.state.clone();
+    let state = fixture.server.state.clone();
     let receipt = tokio::task::spawn_blocking(move || {
         let _drained = state
             .lifecycle
@@ -731,7 +685,7 @@ async fn assert_settled(
     .unwrap();
 
     let now = system_now();
-    let ledger = &fixture.legacy.state.backend.usage.ledger;
+    let ledger = &fixture.server.state.backend.usage.ledger;
     let usage = ledger.query(0.0, now, "external", now, None).unwrap();
     let totals = &usage["totals"];
     assert_eq!(totals["requests"], 1, "{totals}");
@@ -741,20 +695,9 @@ async fn assert_settled(
     receipt
 }
 
-fn delivery_fields(receipt: &Value) -> [&Value; 5] {
-    [
-        &receipt["delivery"],
-        &receipt["writes_completed"],
-        &receipt["response_status"],
-        &receipt["downstream_terminal"],
-        &receipt["last_phase"],
-    ]
-}
-
 #[test]
 fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
-    let mut results = Vec::new();
-    for &driver in TestDriver::selected() {
+    {
         let (release, released) = mpsc::channel();
         let upstream = OneShotUpstream::serve(1, move |socket| {
             upstream_reply(
@@ -770,89 +713,81 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
                 .expect("client received visible output before release");
             socket.write_all(LAST).unwrap();
         });
-        let result =
-            fixture_with_driver(&upstream.base_url(), driver).run_wire(async |fixture, address| {
-                let wire = json_request(
-                    fixture.port(),
-                    "/v1/responses",
-                    &[&fixture.session()],
-                    STREAM_REQUEST,
-                );
-                let mut downstream =
-                    SseClient::open(address, &wire, matches!(driver, TestDriver::Candidate)).await;
-                let mut events = downstream.first_output().await;
-                assert!(
-                    !fixture
-                        .legacy
-                        .state
-                        .lifecycle
-                        .updates()
-                        .drain_for_test(Duration::ZERO),
-                    "SSE released the update permit before its body ended"
-                );
-                release.send(()).unwrap();
-                timeout(DEADLINE, async {
-                    while let Some(event) = downstream.next().await {
-                        events.push(event);
-                    }
-                })
-                .await
-                .unwrap();
-                assert_eq!(events.last().unwrap()["type"], "response.completed");
-                assert_eq!(events.last().unwrap()["response"]["status"], "completed");
-                assert_eq!(
-                    events.last().unwrap()["response"]["usage"]["total_tokens"],
-                    5
-                );
-                let sequence = events
-                    .iter()
-                    .map(|event| event["type"].as_str().unwrap())
-                    .collect::<Vec<_>>();
-                assert_eq!(
-                    sequence,
-                    [
-                        "response.created",
-                        "response.output_item.added",
-                        "response.content_part.added",
-                        "response.output_text.delta",
-                        "response.output_text.done",
-                        "response.content_part.done",
-                        "response.output_item.done",
-                        "response.completed",
-                    ],
-                );
-                assert_eq!(events[4]["text"], "answer");
-                assert_eq!(events[5]["part"]["text"], "answer");
-                assert_eq!(events[6]["item"]["content"][0]["text"], "answer");
-                let id = upstream.observed().1["x-emp-request-id"].clone();
-                let receipt = assert_settled(fixture, id, true, 1).await;
-                assert_eq!(receipt["delivery"], "terminal_written", "{receipt}");
-                assert!(
-                    receipt["writes_completed"]
-                        .as_u64()
-                        .is_some_and(|count| count > 1),
-                    "{receipt}"
-                );
-                assert_eq!(
-                    receipt.get("response_status"),
-                    Some(&Value::Null),
-                    "{receipt}"
-                );
-                assert_eq!(receipt["downstream_terminal"], "completed", "{receipt}");
-                assert_eq!(receipt["last_phase"], "execute_and_relay", "{receipt}");
-                (downstream.head, delivery_fields(&receipt).map(Clone::clone))
-            });
-        results.push(result);
-    }
-    for pair in results.windows(2) {
-        assert_eq!(pair[0], pair[1]);
+        fixture(&upstream.base_url()).run_wire(async |fixture, address| {
+            let wire = json_request(
+                fixture.port(),
+                "/v1/responses",
+                &[&fixture.session()],
+                STREAM_REQUEST,
+            );
+            let mut downstream = SseClient::open(address, &wire).await;
+            let mut events = downstream.first_output().await;
+            assert!(
+                !fixture
+                    .server
+                    .state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(Duration::ZERO),
+                "SSE released the update permit before its body ended"
+            );
+            release.send(()).unwrap();
+            timeout(DEADLINE, async {
+                while let Some(event) = downstream.next().await {
+                    events.push(event);
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(events.last().unwrap()["type"], "response.completed");
+            assert_eq!(events.last().unwrap()["response"]["status"], "completed");
+            assert_eq!(
+                events.last().unwrap()["response"]["usage"]["total_tokens"],
+                5
+            );
+            let sequence = events
+                .iter()
+                .map(|event| event["type"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                sequence,
+                [
+                    "response.created",
+                    "response.output_item.added",
+                    "response.content_part.added",
+                    "response.output_text.delta",
+                    "response.output_text.done",
+                    "response.content_part.done",
+                    "response.output_item.done",
+                    "response.completed",
+                ],
+            );
+            assert_eq!(events[4]["text"], "answer");
+            assert_eq!(events[5]["part"]["text"], "answer");
+            assert_eq!(events[6]["item"]["content"][0]["text"], "answer");
+            let id = upstream.observed().1["x-emp-request-id"].clone();
+            let receipt = assert_settled(fixture, id, true, 1).await;
+            assert_eq!(receipt["delivery"], "terminal_written", "{receipt}");
+            assert!(
+                receipt["writes_completed"]
+                    .as_u64()
+                    .is_some_and(|count| count > 1),
+                "{receipt}"
+            );
+            assert_eq!(
+                receipt.get("response_status"),
+                Some(&Value::Null),
+                "{receipt}"
+            );
+            assert_eq!(receipt["downstream_terminal"], "completed", "{receipt}");
+            assert_eq!(receipt["last_phase"], "execute_and_relay", "{receipt}");
+        });
     }
 }
 
 #[test]
 fn inference_stream_disconnect_closes_upstream_and_settles_once() {
-    let mut outcomes = Vec::new();
-    for &driver in TestDriver::selected() {
+    {
         let (closed, closure) = oneshot::channel();
         let mut closed = Some(closed);
         let upstream = OneShotUpstream::serve(1, move |socket| {
@@ -867,38 +802,58 @@ fn inference_stream_disconnect_closes_upstream_and_settles_once() {
             assert_upstream_cancelled(socket);
             closed.take().unwrap().send(()).unwrap();
         });
-        let receipt =
-            fixture_with_driver(&upstream.base_url(), driver).run_wire(async |fixture, address| {
-                let wire = json_request(
-                    address.port(),
-                    "/v1/responses",
-                    &[&fixture.session()],
-                    STREAM_REQUEST,
-                );
-                let mut downstream =
-                    SseClient::open(address, &wire, matches!(driver, TestDriver::Candidate)).await;
-                downstream.first_output().await;
-                downstream.io.get_ref().set_zero_linger().unwrap();
-                drop(downstream);
-                timeout(DEADLINE, closure)
-                    .await
-                    .expect("upstream was closed")
-                    .unwrap();
-                let id = upstream.observed().1["x-emp-request-id"].clone();
-                assert_settled(fixture, id, false, 0).await
-            });
-        outcomes.push(delivery_fields(&receipt).map(Clone::clone));
-    }
-    for pair in outcomes.windows(2) {
-        assert_eq!(pair[0], pair[1]);
+        let receipt = fixture(&upstream.base_url()).run_wire(async |fixture, address| {
+            let wire = json_request(
+                address.port(),
+                "/v1/responses",
+                &[&fixture.session()],
+                STREAM_REQUEST,
+            );
+            let mut downstream = SseClient::open(address, &wire).await;
+            downstream.first_output().await;
+            downstream.io.get_ref().set_zero_linger().unwrap();
+            drop(downstream);
+            timeout(DEADLINE, closure)
+                .await
+                .expect("upstream was closed")
+                .unwrap();
+            let id = upstream.observed().1["x-emp-request-id"].clone();
+            assert_settled(fixture, id, false, 0).await
+        });
+        assert_eq!(
+            receipt.get("delivery"),
+            Some(&json!("partial")),
+            "{receipt}"
+        );
+        assert!(
+            receipt
+                .get("writes_completed")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count > 1),
+            "{receipt}"
+        );
+        assert_eq!(
+            receipt.get("response_status"),
+            Some(&Value::Null),
+            "{receipt}"
+        );
+        assert_eq!(
+            receipt.get("downstream_terminal"),
+            Some(&json!("unknown")),
+            "{receipt}"
+        );
+        assert_eq!(
+            receipt.get("last_phase"),
+            Some(&json!("execute_and_relay")),
+            "{receipt}"
+        );
     }
 }
 
 #[test]
 fn inference_buffered_disconnect_preserves_cancel_and_finish_policies() {
     for (path, cancel) in [("/v1/responses/compact", true), ("/v1/responses", false)] {
-        let mut outcomes = Vec::new();
-        for &driver in TestDriver::selected() {
+        {
             let (dispatched, dispatch) = oneshot::channel();
             let mut dispatched = Some(dispatched);
             let upstream = OneShotUpstream::serve(1, move |socket| {
@@ -916,37 +871,60 @@ fn inference_buffered_disconnect_preserves_cancel_and_finish_policies() {
                 }
                 closed.send(()).unwrap();
             });
-            let receipt = fixture_with_driver(&upstream.base_url(), driver).run_wire(
-                async |fixture, address| {
-                    let wire = json_request(
-                        address.port(),
-                        path,
-                        &[&fixture.session()],
-                        COMPLETE_REQUEST,
-                    );
-                    let mut downstream = TcpStream::connect(address).await.unwrap();
-                    downstream.write_all(&wire).await.unwrap();
-                    let (release, closure) = timeout(DEADLINE, dispatch)
-                        .await
-                        .expect("EMP dispatched upstream")
-                        .unwrap();
-                    downstream.set_zero_linger().unwrap();
-                    drop(downstream);
-                    if !cancel {
-                        release.send(()).unwrap();
-                    }
-                    timeout(DEADLINE, closure)
-                        .await
-                        .expect("upstream finished")
-                        .unwrap();
-                    let id = upstream.observed().1["x-emp-request-id"].clone();
-                    assert_settled(fixture, id, false, u64::from(!cancel)).await
-                },
+            let receipt = fixture(&upstream.base_url()).run_wire(async |fixture, address| {
+                let wire = json_request(
+                    address.port(),
+                    path,
+                    &[&fixture.session()],
+                    COMPLETE_REQUEST,
+                );
+                let mut downstream = TcpStream::connect(address).await.unwrap();
+                downstream.write_all(&wire).await.unwrap();
+                let (release, closure) = timeout(DEADLINE, dispatch)
+                    .await
+                    .expect("EMP dispatched upstream")
+                    .unwrap();
+                downstream.set_zero_linger().unwrap();
+                drop(downstream);
+                if !cancel {
+                    release.send(()).unwrap();
+                }
+                timeout(DEADLINE, closure)
+                    .await
+                    .expect("upstream finished")
+                    .unwrap();
+                let id = upstream.observed().1["x-emp-request-id"].clone();
+                assert_settled(fixture, id, false, u64::from(!cancel)).await
+            });
+            assert_eq!(
+                receipt.get("delivery"),
+                Some(&json!(if cancel {
+                    "not_observed"
+                } else {
+                    "write_failed"
+                })),
+                "{path}: {receipt}"
             );
-            outcomes.push(delivery_fields(&receipt).map(Clone::clone));
-        }
-        for pair in outcomes.windows(2) {
-            assert_eq!(pair[0], pair[1]);
+            assert_eq!(
+                receipt.get("writes_completed"),
+                Some(&json!(0)),
+                "{path}: {receipt}"
+            );
+            assert_eq!(
+                receipt.get("response_status"),
+                Some(&if cancel { Value::Null } else { json!(200) }),
+                "{path}: {receipt}"
+            );
+            assert_eq!(
+                receipt.get("downstream_terminal"),
+                Some(&json!("unknown")),
+                "{path}: {receipt}"
+            );
+            assert_eq!(
+                receipt.get("last_phase"),
+                Some(&json!("execute_and_relay")),
+                "{path}: {receipt}"
+            );
         }
     }
 }

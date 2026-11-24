@@ -7,8 +7,6 @@ pub(crate) mod gateway;
 pub(crate) mod images;
 pub(crate) mod inspection;
 pub(crate) mod integration;
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) mod lifecycle;
 pub(crate) mod modules;
 pub(crate) mod provider_quota;
 pub(crate) mod quota;

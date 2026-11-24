@@ -24,7 +24,11 @@ fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_p
     }
     let handshake = String::from_utf8(handshake).unwrap();
     assert!(handshake.starts_with("HTTP/1.1 101 Switching Protocols\r\n"));
-    assert!(handshake.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"));
+    assert_eq!(
+        response_header(&handshake, "sec-websocket-accept"),
+        Some("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+        "{handshake}"
+    );
     let mut events = Vec::new();
     loop {
         let event = receive_websocket_json(&mut stream);
@@ -136,17 +140,7 @@ fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_p
 }
 
 #[test]
-fn responses_websocket_disconnect_cancels_external_http_stream() {
-    external_http_stream_cancels_on_disconnect(crate::lifecycle::TestDriver::reference());
-}
-
-#[cfg(unix)]
-#[test]
-fn candidate_websocket_streams_the_first_external_event_and_cancels_on_disconnect() {
-    external_http_stream_cancels_on_disconnect(crate::lifecycle::TestDriver::Candidate);
-}
-
-fn external_http_stream_cancels_on_disconnect(driver: crate::lifecycle::TestDriver) {
+fn responses_websocket_streams_first_external_event_and_cancels_on_disconnect() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let (request_sender, request_ready) = mpsc::sync_channel::<()>(1);
@@ -204,11 +198,10 @@ fn external_http_stream_cancels_on_disconnect(driver: crate::lifecycle::TestDriv
         .unwrap(),
     )
     .unwrap();
-    let server = ServerHandle::start_with_test_driver(
+    let server = ServerHandle::start_for_test(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         &config,
         root.join("codex/auth.json"),
-        driver,
     )
     .unwrap();
     let cookie = session_header(&server);

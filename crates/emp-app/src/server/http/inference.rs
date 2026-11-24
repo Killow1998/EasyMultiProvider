@@ -6,11 +6,11 @@ use super::{
     stream::{BodyOutput, StreamConnection},
 };
 use crate::{
-    api::{compact, decisions, images, responses, search, streaming::ReplySink},
+    api::{compact, decisions, images, responses, search},
     app::ServerState,
     http::{
         auth::same_origin,
-        request::{Request, RequestMethod, read_json_body},
+        request::{Request, RequestMethod},
     },
     server::{connection::ConnectionContext, run_blocking},
     services::observation::request::{Phase, RequestObservation},
@@ -109,7 +109,7 @@ impl InferenceRoute {
 
     fn execute(
         self,
-        sink: &mut ReplySink<'_>,
+        sink: &mut BodyOutput,
         request: Request<'_>,
         body: Value,
         state: &ServerState,
@@ -135,35 +135,6 @@ impl InferenceRoute {
                 images::execute(sink.socket(), request, body, state, operation).into()
             }
             Self::Search => search::execute(request, body, state).into(),
-        }
-    }
-
-    pub(crate) fn legacy(
-        self,
-        stream: &mut TcpStream,
-        request: Request<'_>,
-        prefix: Vec<u8>,
-        state: &ServerState,
-        now: f64,
-        mut observation: Option<&mut RequestObservation>,
-    ) -> Option<Vec<u8>> {
-        if let Err(reply) = self.authorize(request, state, now, observation.as_deref_mut()) {
-            return Some(reply.wire_response());
-        }
-        let body = match read_json_body(stream, request, prefix, state) {
-            Ok(body) => body,
-            Err(error) => return Some(EntryError::from(error).wire_response()),
-        };
-        match self.execute(
-            &mut ReplySink::Legacy(stream),
-            request,
-            body,
-            state,
-            observation,
-        ) {
-            InferenceOutcome::Buffered(reply) => Some(reply.wire_response()),
-            InferenceOutcome::Closed => Some(Vec::new()),
-            InferenceOutcome::Streamed => None,
         }
     }
 }
@@ -259,13 +230,7 @@ async fn submit(
             request.source = Some(&source);
             request.observation_id = context.request_id();
             let mut sink = BodyOutput::new(inference.socket.clone(), delivery, sender);
-            let reply = route.execute(
-                &mut ReplySink::Candidate(&mut sink),
-                request,
-                body,
-                &state,
-                observation.as_mut(),
-            );
+            let reply = route.execute(&mut sink, request, body, &state, observation.as_mut());
             sink.finish(|| match reply {
                 InferenceOutcome::Buffered(reply) => {
                     buffered(reply, observation.as_ref(), &inference.receipt)

@@ -5,7 +5,8 @@ use crate::accounts::{
     account_auth_path, normalize_account, same_account_auth, validate_auth_json,
 };
 use crate::config::{
-    load_configuration, normalize_configuration, save_configuration_in_transaction,
+    load_configuration_with_registry, normalize_configuration_with_registry,
+    save_configuration_in_transaction_with_registry,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE;
@@ -250,7 +251,10 @@ pub use export::{
 };
 use import::id_of;
 pub use import::{
-    DecryptedMigration, apply_migration_import, decrypt_migration_bundle, import_migration_bundle,
-    persist_migration_import, preview_migration_import, validate_migration_payload,
+    DecryptedMigration, apply_migration_import, apply_migration_import_with_registry,
+    decrypt_migration_bundle, decrypt_migration_bundle_with_registry, import_migration_bundle,
+    persist_migration_import, persist_migration_import_with_registry, preview_migration_import,
+    preview_migration_import_with_registry, validate_migration_payload,
+    validate_migration_payload_with_registry,
 };
 pub use selection::select_migration_payload;

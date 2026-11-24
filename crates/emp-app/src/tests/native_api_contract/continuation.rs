@@ -451,13 +451,13 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
 
 #[cfg(unix)]
 #[test]
-fn prefill_disconnect_waits_for_the_client_to_retry_on_both_listeners() {
+fn prefill_disconnect_waits_for_the_client_to_retry() {
     use crate::server::raw_tcp::{RawClient, read_websocket_frame, websocket_frame};
     use tokio::io::AsyncWriteExt;
 
-    for &driver in crate::lifecycle::TestDriver::selected() {
+    {
         let upstream = Upstream::with_fault(10 * 1024 * 1024, Fault::SilentPrefill);
-        let (_directory, server, model) = fixture::server_with_driver(&upstream, true, driver);
+        let (_directory, server, model) = fixture::server(&upstream, true);
         let address = server.local_addr();
         let runtime = &server.state.backend.transport.runtime;
         let thread_id = "11111111-1111-4111-8111-111111111111";

@@ -1,8 +1,8 @@
 use crate::app::ServerState;
 use emp_domain::ResolvedRoute;
 use emp_state::VaultStore;
+use emp_state::config::remember_resolved_protocol_with_registry;
 use emp_state::provider_api_key;
-use emp_state::remember_resolved_protocol;
 use serde_json::Value;
 
 pub(crate) fn hydrate_provider_keys(config: &mut Value, vault: &VaultStore) {
@@ -21,11 +21,12 @@ pub(crate) fn persist_protocol_observation(state: &ServerState, route: &Resolved
     let Ok(mut config) = state.backend.configuration.edit() else {
         return;
     };
-    let Ok(Some(updated)) = remember_resolved_protocol(
+    let Ok(Some(updated)) = remember_resolved_protocol_with_registry(
         &config,
         &route.provider_id,
         &route.requested_model,
         route.protocol.as_config_str(),
+        state.backend.configuration.official_models,
     ) else {
         return;
     };

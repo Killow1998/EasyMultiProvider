@@ -8,7 +8,6 @@ use super::{
 use crate::{
     api::team,
     app::ServerState,
-    http::request::{Request, RequestMethod, read_json_body},
     server::{connection::ConnectionContext, run_blocking},
     services::team::Command,
 };
@@ -18,7 +17,7 @@ use axum::{
     routing::post,
 };
 use serde_json::Value;
-use std::{net::TcpStream, sync::Arc};
+use std::sync::Arc;
 
 const READS: [(&str, ManagementRead); 2] = [
     ("/api/team/status", team::read),
@@ -26,16 +25,6 @@ const READS: [(&str, ManagementRead); 2] = [
 ];
 const WRITE_PREFIX: &str = "/api/team/";
 const PUBLISH_SOURCE: &str = "/api/team/publish_source";
-
-pub(crate) fn read_handler(path: &str) -> Option<ManagementRead> {
-    READS
-        .iter()
-        .find_map(|&(route, read)| (route == path).then_some(read))
-}
-
-pub(crate) fn matches_write(request: Request<'_>) -> bool {
-    request.method == RequestMethod::Post && request.raw_path().starts_with(WRITE_PREFIX)
-}
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     READS.into_iter().fold(
@@ -65,18 +54,6 @@ fn parse(path: &str, body: Value) -> Command {
         path.strip_prefix(WRITE_PREFIX).expect("team write path"),
         body,
     )
-}
-
-pub(crate) fn legacy(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-) -> Result<JsonReply, EntryError> {
-    ManagementSession::require(request, state, now)?;
-    let body = read_json_body(stream, request, prefix, state)?;
-    Ok(team::command(state, parse(request.raw_path(), body)))
 }
 
 impl FromRequest<Arc<ServerState>> for JsonBody<Command> {

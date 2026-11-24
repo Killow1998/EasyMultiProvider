@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     app::ServerState,
-    http::request::{Request, RequestMethod, read_json_body},
+    http::request::{Request, RequestMethod},
     server::{connection::ConnectionContext, run_blocking},
     services::{
         app_icon::Selection,
@@ -21,7 +21,7 @@ use axum::{
     routing::post,
 };
 use serde_json::{Value, json};
-use std::{net::TcpStream, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub(crate) enum LocalWriteRoute {
@@ -77,19 +77,6 @@ impl LocalWriteRoute {
             Self::ClientEvent => LocalWrite::ClientEvent(ClientEvent::parse(&body)?),
             Self::RuntimeScan => LocalWrite::RuntimeScan,
         })
-    }
-
-    pub(crate) fn legacy(
-        self,
-        stream: &mut TcpStream,
-        request: Request<'_>,
-        prefix: Vec<u8>,
-        state: &ServerState,
-        now: f64,
-    ) -> Result<JsonReply, EntryError> {
-        ManagementSession::require(request, state, now)?;
-        let body = read_json_body(stream, request, prefix, state)?;
-        Ok(self.with_body(body)?.execute(state))
     }
 }
 

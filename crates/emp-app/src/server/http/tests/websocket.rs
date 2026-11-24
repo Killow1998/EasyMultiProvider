@@ -1,8 +1,9 @@
 use super::*;
 use crate::api::realtime::MAX_REALTIME_REQUEST_BYTES;
+use crate::http::request::parse_request;
 use crate::server::raw_tcp::{DEADLINE, RawClient, head, read_websocket_frame, websocket_frame};
 use crate::tests::realtime_contract::{
-    RealtimeUpstream, UpstreamResponse, app_server_with_driver, multipart_offer,
+    RealtimeUpstream, UpstreamResponse, app_server_for, multipart_offer,
 };
 use crate::tests::{live_journal, wait_for};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -20,7 +21,7 @@ const SWITCHING_PROTOCOLS: &str = concat!(
     "HTTP/1.1 101 Switching Protocols\r\n",
     "Upgrade: websocket\r\n",
     "Connection: Upgrade\r\n",
-    "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
+    "Sec-Websocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
 );
 
 pub(super) fn upgrade(
@@ -37,12 +38,7 @@ pub(super) fn upgrade(
 }
 
 fn assert_upgrade(client: &RawClient) {
-    assert_eq!(
-        client
-            .head
-            .replace("Sec-Websocket-Accept:", "Sec-WebSocket-Accept:"),
-        SWITCHING_PROTOCOLS
-    );
+    assert_eq!(client.head, SWITCHING_PROTOCOLS);
 }
 
 fn close_payload(code: u16, reason: &str) -> Vec<u8> {
@@ -64,9 +60,9 @@ fn begin_restore(
 }
 
 #[test]
-fn websocket_handshake_errors_match_legacy_bytes() {
+fn websocket_handshake_errors_preserve_status() {
     let fixture = Fixture::new();
-    fixture.run_candidate(async |fixture, new| {
+    fixture.run_wire(async |fixture, address| {
         let port = fixture.port();
         let session = fixture.session();
         for path in ["/v1/responses", "/v1/live/rtc_valid"] {
@@ -87,22 +83,30 @@ fn websocket_handshake_errors_match_legacy_bytes() {
                         all.push(header);
                     }
                 }
-                fixture
-                    .parity(new, &request(port, "GET", path, &all, &[]), status)
-                    .await;
+                assert_wire(
+                    address,
+                    &request(port, "GET", path, &all, &[]),
+                    false,
+                    status,
+                )
+                .await;
             }
         }
         for path in ["/v1/live/", "/v1/live/rtc_bad%2Fid", "/v1/live/rtc_bad/id"] {
-            fixture
-                .parity(new, &upgrade(port, path, &session, &[], &[]), 400)
-                .await;
+            assert_wire(
+                address,
+                &upgrade(port, path, &session, &[], &[]),
+                false,
+                400,
+            )
+            .await;
         }
     });
 }
 
 #[test]
-fn tab_separated_websocket_request_line_matches_legacy() {
-    Fixture::new().run_candidate(async |fixture, address| {
+fn tab_separated_websocket_request_line_is_accepted() {
+    Fixture::new().run_wire(async |fixture, address| {
         let session = fixture.session();
         let mut wire = upgrade(
             fixture.port(),
@@ -116,7 +120,8 @@ fn tab_separated_websocket_request_line_matches_legacy() {
                 *byte = b'\t';
             }
         }
-        for (_, peer) in driver_endpoints(fixture.legacy.local_addr(), address) {
+        {
+            let peer = address;
             let mut client = RawClient::request(peer, &wire).await;
             assert_upgrade(&client);
             assert_eq!(
@@ -130,8 +135,8 @@ fn tab_separated_websocket_request_line_matches_legacy() {
 }
 
 #[test]
-fn tab_separated_http_request_line_matches_legacy() {
-    Fixture::new().run_candidate(async |fixture, address| {
+fn tab_separated_http_request_line_is_accepted() {
+    Fixture::new().run_wire(async |fixture, address| {
         let mut wire = request(
             fixture.port(),
             "GET",
@@ -144,22 +149,21 @@ fn tab_separated_http_request_line_matches_legacy() {
                 *byte = b'\t';
             }
         }
-        fixture.parity(address, &wire, 200).await;
+        assert_wire(address, &wire, false, 200).await;
     });
 }
 
 #[test]
-fn websocket_upgrade_carries_prefix_and_keeps_legacy_capacity_rejections() {
+fn websocket_upgrade_carries_prefix_and_keeps_capacity_rejections() {
     let fixture = Fixture::new();
-    fixture.run_candidate(async |fixture, new| {
+    fixture.run_wire(async |fixture, address| {
         let port = fixture.port();
         let session = fixture.session();
-        let old = fixture.legacy.local_addr();
-        let state = &fixture.legacy.state;
+        let state = &fixture.server.state;
         let slots = std::iter::from_fn(|| state.lifecycle.admission.acquire_websocket())
             .collect::<Vec<_>>();
         let sideband = upgrade(port, "/v1/live/rtc_busy", &session, &[], &[]);
-        let reply = fixture.parity(new, &sideband, 503).await;
+        let reply = assert_wire(address, &sideband, false, 503).await;
         assert!(
             reply
                 .windows(b"Retry-After: 2".len())
@@ -170,7 +174,7 @@ fn websocket_upgrade_carries_prefix_and_keeps_legacy_capacity_rejections() {
             "realtime_capacity_unavailable"
         );
         let responses = upgrade(port, "/v1/responses", &session, &[], &[]);
-        for (_, address) in driver_endpoints(old, new) {
+        {
             let mut client = RawClient::request(address, &responses).await;
             assert_upgrade(&client);
             assert_eq!(
@@ -191,7 +195,7 @@ fn websocket_upgrade_carries_prefix_and_keeps_legacy_capacity_rejections() {
             ],
             &websocket_frame(0x89, MASK, b"coalesced"),
         );
-        for (driver, address) in driver_endpoints(old, new) {
+        {
             let mut client = RawClient::request(address, &wire).await;
             assert_upgrade(&client);
             assert_eq!(
@@ -199,10 +203,7 @@ fn websocket_upgrade_carries_prefix_and_keeps_legacy_capacity_rejections() {
                 (0x8a, b"coalesced".to_vec())
             );
             assert_eq!(state.lifecycle.admission.active_websockets(), 1);
-            assert_eq!(
-                state.lifecycle.admission.active_requests(),
-                usize::from(matches!(driver, TestDriver::Legacy))
-            );
+            assert_eq!(state.lifecycle.admission.active_requests(), 0);
             client
                 .io
                 .write_all(&websocket_frame(0x88, MASK, &1000u16.to_be_bytes()))
@@ -221,10 +222,10 @@ fn websocket_upgrade_carries_prefix_and_keeps_legacy_capacity_rejections() {
 #[test]
 fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
     let fixture = Fixture::new();
-    fixture.run_candidate(async |fixture, new| {
+    fixture.run_wire(async |fixture, address| {
         let port = fixture.port();
         let session = fixture.session();
-        for (_, address) in driver_endpoints(fixture.legacy.local_addr(), new) {
+        {
             let wire = upgrade(
                 port,
                 "/v1/responses",
@@ -237,15 +238,14 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
                 read_websocket_frame(&mut client.io, false).await,
                 (0x8a, b"ready".to_vec())
             );
-            let state = fixture.legacy.state.clone();
-            let exempt = usize::from(address != new);
+            let state = fixture.server.state.clone();
             let (ready, drained) = tokio::sync::oneshot::channel();
             let (reopen, wait) = tokio::sync::oneshot::channel();
             let worker = tokio::task::spawn_blocking(move || {
                 let guard = state
                     .lifecycle
                     .admission
-                    .quiesce(exempt, Duration::from_secs(5))
+                    .quiesce(0, Duration::from_secs(5))
                     .unwrap();
                 ready.send(()).unwrap();
                 wait.blocking_recv().unwrap();
@@ -264,7 +264,7 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
                 .unwrap();
             assert!(result.is_err(), "drain must not send an HTTP response");
             assert_eq!(
-                fixture.legacy.state.lifecycle.admission.active_websockets(),
+                fixture.server.state.lifecycle.admission.active_websockets(),
                 0
             );
             reopen.send(()).unwrap();
@@ -283,8 +283,8 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
 
 #[test]
 fn responses_upgrade_cannot_start_after_restore_reopens_admission() {
-    Fixture::new().run_candidate(async |fixture, address| {
-        let state = &fixture.legacy.state;
+    Fixture::new().run_wire(async |fixture, address| {
+        let state = &fixture.server.state;
         let admission = &state.lifecycle.admission;
         let (reached, handoff) = tokio::sync::oneshot::channel();
         let (resume, paused) = tokio::sync::oneshot::channel();
@@ -329,8 +329,8 @@ fn slow_device_revalidation_leaves_other_websockets_responsive() {
         .enable_all()
         .build()
         .unwrap();
-    Fixture::new().run_candidate(async |fixture, _| {
-        let state = &fixture.legacy.state;
+    Fixture::new().run_wire(async |fixture, _| {
+        let state = &fixture.server.state;
         let gateway = &state.backend.gateway_clients;
         let issued = serde_json::to_value(
             gateway
@@ -424,7 +424,7 @@ fn slow_device_revalidation_leaves_other_websockets_responsive() {
 
 #[test]
 fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
-    Fixture::new().run_candidate(async |fixture, address| {
+    Fixture::new().run_wire(async |fixture, address| {
         let wire = upgrade(
             fixture.port(),
             "/v1/responses",
@@ -443,9 +443,8 @@ fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
                 })
                 .collect::<Vec<_>>()
         };
-        for (previous, (_, address)) in
-            driver_endpoints(fixture.legacy.local_addr(), address).enumerate()
         {
+            let previous = 0;
             let mut client = RawClient::request(address, &wire).await;
             assert_upgrade(&client);
             assert_eq!(
@@ -472,10 +471,7 @@ fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
     });
 }
 
-pub(super) fn realtime_fixture(
-    upstream: &RealtimeUpstream,
-    driver: TestDriver,
-) -> (tempfile::TempDir, Fixture) {
+pub(super) fn realtime_fixture(upstream: &RealtimeUpstream) -> (tempfile::TempDir, Fixture) {
     let native = tempfile::tempdir().unwrap();
     let auth = native.path().join("auth.json");
     std::fs::write(
@@ -483,12 +479,12 @@ pub(super) fn realtime_fixture(
         br#"{"tokens":{"access_token":"native-secret","account_id":"acct-native"}}"#,
     )
     .unwrap();
-    let (directory, legacy) = app_server_with_driver(upstream, &auth, driver);
+    let (directory, server) = app_server_for(upstream, &auth);
     (
         native,
         Fixture {
             directory,
-            legacy,
+            server,
             upstream: Arc::default(),
         },
     )
@@ -512,16 +508,14 @@ fn realtime_call_preserves_multipart_rejection_location_and_upstream_error() {
             body: b"",
         },
     ] {
-        let mut results = Vec::new();
-        for &driver in TestDriver::selected() {
+        {
             let upstream = RealtimeUpstream::start(response);
-            let (_auth, fixture) = realtime_fixture(&upstream, driver);
-            let replies = fixture.run_wire(async |fixture, address| {
+            let (_auth, fixture) = realtime_fixture(&upstream);
+            fixture.run_wire(async |fixture, address| {
                 let boundary = "Content-Type: multipart/form-data; boundary=VoiceFixtureBoundary";
                 let body = multipart_offer();
                 let valid_length = format!("Content-Length: {}", body.len());
                 let big_length = format!("Content-Length: {}", MAX_REALTIME_REQUEST_BYTES + 1);
-                let mut replies = Vec::new();
                 for (status, length, body) in [
                     (413, &big_length, &[][..]),
                     (response.status, &valid_length, body.as_slice()),
@@ -548,15 +542,9 @@ fn realtime_call_preserves_multipart_rejection_location_and_upstream_error() {
                             "native_subscription_auth_failed"
                         );
                     }
-                    replies.push(reply);
                 }
-                replies
             });
             upstream.assert_only_call();
-            results.push(replies);
-        }
-        for pair in results.windows(2) {
-            assert_eq!(pair[0], pair[1]);
         }
     }
 }
@@ -564,7 +552,7 @@ fn realtime_call_preserves_multipart_rejection_location_and_upstream_error() {
 #[test]
 fn realtime_rejections_retain_update_access_until_response_write() {
     Fixture::new().run(async |fixture, _| {
-        let state = &fixture.legacy.state;
+        let state = &fixture.server.state;
         let updates = state.lifecycle.updates();
         let session = fixture.session();
         let boundary = "Content-Type: multipart/form-data; boundary=VoiceFixtureBoundary";
@@ -628,7 +616,7 @@ pub(super) async fn accept_upstream(
         .unwrap();
     let accept = emp_transport::websocket_accept(key).unwrap();
     let wire = format!(
-        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n{extensions}\r\n"
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-Websocket-Accept: {accept}\r\n{extensions}\r\n"
     );
     io.write_all(wire.as_bytes()).await.unwrap();
     (io, headers)
@@ -639,10 +627,10 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
     let listener = TcpListener::bind(LOOPBACK).unwrap();
     listener.set_nonblocking(true).unwrap();
     let fixture = native_fixture(listener.local_addr().unwrap());
-    fixture.run_candidate(async |fixture, new| {
+    fixture.run_wire(async |fixture, address| {
         let listener = AsyncListener::from_std(listener).unwrap();
         fixture
-            .legacy
+            .server
             .state
             .test_sideband_address
             .set(listener.local_addr().unwrap())
@@ -650,10 +638,8 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
         let session = fixture.session();
         let first = br#"{ "type": "client.first" }"#;
         let event = br#"{ "type": "server.event" }"#;
-        for (_, (address, call_id)) in driver_endpoints(
-            (fixture.legacy.local_addr(), "rtc_relay"),
-            (new, "rtc_candidate"),
-        ) {
+        {
+            let call_id = "rtc_relay";
             let peer = async {
                 let (mut io, headers) = accept_upstream(&listener, "").await;
                 let request = parse_request(&headers).unwrap();
@@ -693,7 +679,7 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
                     (0x81, event.to_vec())
                 );
                 assert_eq!(
-                    fixture.legacy.state.lifecycle.admission.active_websockets(),
+                    fixture.server.state.lifecycle.admission.active_websockets(),
                     1
                 );
                 client.io.shutdown().await.unwrap();
@@ -704,11 +690,7 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
     });
 }
 
-fn native_fixture(address: SocketAddr) -> Fixture {
-    native_fixture_with_driver(address, TestDriver::reference())
-}
-
-pub(super) fn native_fixture_with_driver(address: SocketAddr, driver: TestDriver) -> Fixture {
+pub(super) fn native_fixture(address: SocketAddr) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("config.json");
     let catalog = directory.path().join("catalog.json");
@@ -733,11 +715,10 @@ pub(super) fn native_fixture_with_driver(address: SocketAddr, driver: TestDriver
         br#"{"tokens":{"access_token":"native-secret","account_id":"acct-native"}}"#,
     )
     .unwrap();
-    let legacy =
-        LegacyServer::start_with_test_driver(LOOPBACK.ip(), &config, auth, driver).unwrap();
+    let server = RunningServer::start_for_test(LOOPBACK.ip(), &config, auth).unwrap();
     Fixture {
         directory,
-        legacy,
+        server,
         upstream: Arc::default(),
     }
 }
@@ -749,7 +730,7 @@ const NATIVE_CREATE: &[u8] =
 fn native_http_fallback_drain_cancels_open_and_allows_restore() {
     let listener = TcpListener::bind(LOOPBACK).unwrap();
     listener.set_nonblocking(true).unwrap();
-    native_fixture(listener.local_addr().unwrap()).run_candidate(async |fixture, address| {
+    native_fixture(listener.local_addr().unwrap()).run_wire(async |fixture, address| {
         let listener = AsyncListener::from_std(listener).unwrap();
         let session = fixture.session();
         let wire = upgrade(
@@ -819,7 +800,7 @@ fn native_http_fallback_drain_cancels_open_and_allows_restore() {
             .unwrap();
         assert_status(&reply, 200);
         assert_eq!(
-            fixture.legacy.state.lifecycle.admission.active_websockets(),
+            fixture.server.state.lifecycle.admission.active_websockets(),
             0
         );
     });
@@ -827,10 +808,10 @@ fn native_http_fallback_drain_cancels_open_and_allows_restore() {
 
 #[test]
 fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
-    for &driver in TestDriver::selected() {
+    {
         let listener = TcpListener::bind(LOOPBACK).unwrap();
         listener.set_nonblocking(true).unwrap();
-        native_fixture_with_driver(listener.local_addr().unwrap(), driver).run_wire(async |fixture, address| {
+        native_fixture(listener.local_addr().unwrap()).run_wire(async |fixture, address| {
             let listener = AsyncListener::from_std(listener).unwrap();
             let session = fixture.session();
             let wire = upgrade(
@@ -899,13 +880,12 @@ fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
 fn native_generation_records_server_drain_separately_from_client_disconnect() {
     let listener = TcpListener::bind(LOOPBACK).unwrap();
     listener.set_nonblocking(true).unwrap();
-    native_fixture(listener.local_addr().unwrap()).run_candidate(async |fixture, candidate| {
+    native_fixture(listener.local_addr().unwrap()).run_wire(async |fixture, endpoint| {
         let listener = AsyncListener::from_std(listener).unwrap();
-        let old = fixture.legacy.local_addr();
         let session = fixture.session();
         let mut outcomes = Vec::new();
         let mut drain_ids = Vec::new();
-        for (_, address) in driver_endpoints(old, candidate) {
+        { let address = endpoint;
             for drain in [true, false] {
                 let label = format!("ws-{}-{}", address.port(), if drain {"drain"} else {"disconnect"});
                 let session_id = format!("Session-Id: {label}");
@@ -934,7 +914,7 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
                     assert_eq!(client.rest().await, b"\x88\x00");
                 }
                 assert_eq!(read_websocket_frame(&mut upstream, true).await, (0x88, 1000u16.to_be_bytes().to_vec()));
-                let calls = exchange_wire(old, &request(fixture.port(), "GET", "/api/calls?start=0&end=9999999999", &[&session], &[]), false).await;
+                let calls = exchange_wire(endpoint, &request(fixture.port(), "GET", "/api/calls?start=0&end=9999999999", &[&session], &[]), false).await;
                 let calls = json_body(&calls);
                 let record = calls["records"].as_array().unwrap().iter().find(|record| record["session_id"] == label).unwrap_or_else(|| panic!("missing call for {label} in {calls}"));
                 outcomes.push((address, drain, record["error_origin"].clone(), record["error_class"].clone()));
@@ -947,13 +927,13 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
                 assert_eq!(calls["summary"]["success_samples"], 0);
             }
         }
-        let expected = driver_endpoints(old, candidate).flat_map(|(_, address)| [
+        let expected = [endpoint].into_iter().flat_map(|address| [
             (address, true, json!("emp"), json!("server_draining")),
             (address, false, json!("client"), json!("client_disconnect")),
         ]).collect::<Vec<_>>();
         assert_eq!(outcomes, expected);
         let requests = expected.len();
-        let diagnostics = exchange_wire(candidate, &request(fixture.port(), "GET", "/api/diagnostics", &[&session], &[]), false).await;
+        let diagnostics = exchange_wire(endpoint, &request(fixture.port(), "GET", "/api/diagnostics", &[&session], &[]), false).await;
         let diagnostics = json_body(&diagnostics);
         assert_eq!(diagnostics["health"]["cancelled_count"], requests);
         assert_eq!(diagnostics["health"]["failure_count"], 0);
@@ -1017,14 +997,14 @@ fn responses_native_prefetch_and_deflate_context_survive_turns_and_disconnect() 
     let listener = TcpListener::bind(LOOPBACK).unwrap();
     listener.set_nonblocking(true).unwrap();
     let fixture = native_fixture(listener.local_addr().unwrap());
-    fixture.run_candidate(async |fixture, new| {
+    fixture.run_wire(async |fixture, address| {
         let listener = AsyncListener::from_std(listener).unwrap();
         let session = fixture.session();
         let shared_text: String = (0..1800).scan(13_u32, |state, _| {
             *state = state.wrapping_mul(1664525).wrapping_add(1013904223);
             Some(char::from(b'!' + (*state >> 24) as u8 % 90))
         }).collect();
-        for (_, address) in driver_endpoints(fixture.legacy.local_addr(), new) {
+        {
             let (queued, wait_for_next) = tokio::sync::oneshot::channel();
             let peer = async {
                 let (mut io, headers) = accept_upstream(

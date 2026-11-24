@@ -210,6 +210,7 @@ impl Context {
             route: route.clone(),
             incoming: incoming.clone(),
             client: Arc::clone(&state.backend.transport.client),
+            official_models: state.backend.configuration.official_models,
             runtime: state.backend.transport.runtime.handle().clone(),
             shutdown: Arc::clone(&state.lifecycle.shutdown),
             cancelled,

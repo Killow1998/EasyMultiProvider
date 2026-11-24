@@ -11,8 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const CHILD_FLAG: &str = "EMP_TEST_ACCEPT_EMFILE_CHILD";
-const TEST_NAME: &str =
-    "lifecycle::connections::tests::listener_survives_real_descriptor_exhaustion";
+const TEST_NAME: &str = "server::accept::tests::listener_survives_real_descriptor_exhaustion";
 
 struct OwnedChild(Child);
 

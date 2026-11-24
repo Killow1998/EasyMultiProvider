@@ -56,10 +56,12 @@ pub(crate) fn receive(
     let code = wire::Code::parse(code).map_err(MigrationError::invalid)?;
     let nonce = wire::nonce(receiver).map_err(MigrationError::invalid)?;
     match wire::receive(&code, &nonce).map_err(MigrationError::invalid)? {
-        Some(bundle) => state
-            .backend
-            .migration_previews
-            .decode(session, &bundle, &code.password()),
+        Some(bundle) => state.backend.migration_previews.decode(
+            session,
+            &bundle,
+            &code.password(),
+            state.backend.configuration.official_models,
+        ),
         None => Ok(json!({"status":"waiting"})),
     }
 }

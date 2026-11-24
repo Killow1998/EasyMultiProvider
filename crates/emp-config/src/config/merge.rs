@@ -2,7 +2,7 @@ use super::provider_url::{hostname, parse_provider_url};
 use super::{
     ConfigError, ConfigResult, MASKED_API_KEY, MODEL_BOOLEAN_CAPABILITIES, Map,
     TOP_LEVEL_PROVENANCE_FIELDS, Value, deployment_identity, endpoint_fingerprint, json_truthy,
-    normalize_configuration, normalize_input_modalities,
+    normalize_configuration_with_registry, normalize_input_modalities,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,6 +54,24 @@ pub fn remember_resolved_protocol_at(
     requested_model: &str,
     protocol: &str,
     observed_at: &str,
+) -> ConfigResult<Option<Value>> {
+    remember_resolved_protocol_at_with_registry(
+        config,
+        provider_id,
+        requested_model,
+        protocol,
+        observed_at,
+        super::official_registry::snapshot,
+    )
+}
+
+fn remember_resolved_protocol_at_with_registry(
+    config: &Value,
+    provider_id: &str,
+    requested_model: &str,
+    protocol: &str,
+    observed_at: &str,
+    registry: super::RegistrySource,
 ) -> ConfigResult<Option<Value>> {
     if !matches!(
         protocol,
@@ -133,7 +151,7 @@ pub fn remember_resolved_protocol_at(
         );
         model.insert("protocol_observation".to_owned(), observation);
     }
-    normalize_configuration(Some(&updated)).map(Some)
+    normalize_configuration_with_registry(Some(&updated), registry).map(Some)
 }
 
 pub fn remember_resolved_protocol(
@@ -142,12 +160,29 @@ pub fn remember_resolved_protocol(
     requested_model: &str,
     protocol: &str,
 ) -> ConfigResult<Option<Value>> {
-    remember_resolved_protocol_at(
+    remember_resolved_protocol_with_registry(
+        config,
+        provider_id,
+        requested_model,
+        protocol,
+        super::official_registry::snapshot,
+    )
+}
+
+pub fn remember_resolved_protocol_with_registry(
+    config: &Value,
+    provider_id: &str,
+    requested_model: &str,
+    protocol: &str,
+    registry: super::RegistrySource,
+) -> ConfigResult<Option<Value>> {
+    remember_resolved_protocol_at_with_registry(
         config,
         provider_id,
         requested_model,
         protocol,
         &observed_at_now(),
+        registry,
     )
 }
 
@@ -229,6 +264,7 @@ fn merge_web_update_at_time(
     current: &Value,
     incoming: &Value,
     mut observed_at: impl FnMut() -> String,
+    registry: super::RegistrySource,
 ) -> ConfigResult<Value> {
     let Value::Object(_) = incoming else {
         return Err(ConfigError::new("request body must be an object"));
@@ -561,12 +597,20 @@ fn merge_web_update_at_time(
             }
         }
     }
-    normalize_configuration(Some(&merged))
+    normalize_configuration_with_registry(Some(&merged), registry)
 }
 
 /// Apply a Web update preserving secrets and discovery metadata; private paths are not canonicalized.
 pub fn merge_web_update(current: &Value, incoming: &Value) -> ConfigResult<Value> {
-    merge_web_update_at_time(current, incoming, observed_at_now)
+    merge_web_update_with_registry(current, incoming, super::official_registry::snapshot)
+}
+
+pub fn merge_web_update_with_registry(
+    current: &Value,
+    incoming: &Value,
+    registry: super::RegistrySource,
+) -> ConfigResult<Value> {
+    merge_web_update_at_time(current, incoming, observed_at_now, registry)
 }
 
 pub fn merge_web_update_with_time(
@@ -574,5 +618,10 @@ pub fn merge_web_update_with_time(
     incoming: &Value,
     observed_at: &str,
 ) -> ConfigResult<Value> {
-    merge_web_update_at_time(current, incoming, || observed_at.to_owned())
+    merge_web_update_at_time(
+        current,
+        incoming,
+        || observed_at.to_owned(),
+        super::official_registry::snapshot,
+    )
 }

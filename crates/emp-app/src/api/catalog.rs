@@ -2,40 +2,13 @@ use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::request::percent_decode;
 use crate::http::request::query_values;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::http::request::read_json_body;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::http::response::body_error_response;
 use crate::http::response::json_error_body;
 use crate::server::http::error::{EntryError, JsonReply};
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::server::http::management::ManagementSession;
 use crate::services::catalog::discovery::{self, DiscoveryError};
 use crate::services::catalog::server_catalog;
 use emp_codex::preserve_native_catalog;
 use serde_json::Value;
 use serde_json::json;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use std::net::TcpStream;
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn management_request(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    body_prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-) -> Vec<u8> {
-    if let Err(error) = ManagementSession::require(request, state, now) {
-        return error.wire_response();
-    }
-    let body = match read_json_body(stream, request, body_prefix, state) {
-        Ok(body) => body,
-        Err(error) => return body_error_response(error),
-    };
-    metadata_request(request.observation_id, state, &body).wire_response()
-}
-
 pub(crate) fn discovery_reply(
     result: Result<Value, DiscoveryError>,
 ) -> Result<JsonReply, emp_router::RouterError> {
@@ -65,11 +38,6 @@ pub(crate) fn metadata_request(
             metadata_error_response(error)
         }
     })
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn models_path(path: &str) -> bool {
-    path == "/v1/models" || path.starts_with("/v1/models/")
 }
 
 pub(crate) fn models_request(

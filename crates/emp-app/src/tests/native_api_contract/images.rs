@@ -243,7 +243,11 @@ fn image_tools_follow_their_own_http_and_websocket_turn_accounts() {
                 ],
             );
             assert!(wire.starts_with("HTTP/1.1 200"), "{wire}");
-            assert!(wire.contains("x-codex-imagegen-request-id: image-request-fixture\r\n"));
+            assert_eq!(
+                response_header(response_parts(&wire).0, "x-codex-imagegen-request-id"),
+                Some("image-request-fixture"),
+                "{wire}"
+            );
             assert!(!wire.to_ascii_lowercase().contains("set-cookie"));
             let observed = upstream.next();
             assert_eq!(
@@ -314,10 +318,26 @@ fn image_tools_keep_upstream_quota_and_error_metadata_without_retrying() {
             ],
         );
         assert!(wire.starts_with(&format!("HTTP/1.1 {status}")), "{wire}");
-        assert!(wire.contains("retry-after: 17\r\n"));
-        assert!(wire.contains("x-codex-active-limit: image_gen\r\n"));
-        assert!(wire.contains("x-image-gen-primary-used-percent: 100\r\n"));
-        assert!(wire.contains("x-codex-imagegen-request-id: image-request-fixture\r\n"));
+        assert_eq!(
+            response_header(response_parts(&wire).0, "retry-after"),
+            Some("17"),
+            "{wire}"
+        );
+        assert_eq!(
+            response_header(response_parts(&wire).0, "x-codex-active-limit"),
+            Some("image_gen"),
+            "{wire}"
+        );
+        assert_eq!(
+            response_header(response_parts(&wire).0, "x-image-gen-primary-used-percent"),
+            Some("100"),
+            "{wire}"
+        );
+        assert_eq!(
+            response_header(response_parts(&wire).0, "x-codex-imagegen-request-id"),
+            Some("image-request-fixture"),
+            "{wire}"
+        );
         assert_eq!(
             serde_json::from_slice::<Value>(response_parts(&wire).1).unwrap()["error"]["type"],
             "usage_limit_reached"

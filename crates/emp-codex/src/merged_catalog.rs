@@ -1,4 +1,7 @@
-use emp_state::normalize_reasoning_levels;
+use emp_state::{
+    normalize_reasoning_levels,
+    official_registry::{self, RegistrySource},
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 mod aggregates;
@@ -14,6 +17,22 @@ pub fn build_catalog(
     native: &Value,
     account_catalogs: &BTreeMap<String, Value>,
     duplicates: &BTreeMap<String, String>,
+) -> Value {
+    build_catalog_with_registry(
+        config,
+        native,
+        account_catalogs,
+        duplicates,
+        official_registry::snapshot,
+    )
+}
+
+pub fn build_catalog_with_registry(
+    config: &Value,
+    native: &Value,
+    account_catalogs: &BTreeMap<String, Value>,
+    duplicates: &BTreeMap<String, String>,
+    registry: RegistrySource,
 ) -> Value {
     let mut hidden = strings(config.get("native_hidden_models"));
     for account in array(config.get("accounts")) {
@@ -132,7 +151,7 @@ pub fn build_catalog(
             .position(|provider| text(provider, "id") == provider_id)
             .unwrap_or(providers.len());
         let provider = providers.get(provider_index).unwrap_or(&empty);
-        let mut entry = external::entry(model, &template, provider);
+        let mut entry = external::entry(model, &template, provider, registry);
         let family = family_identity(model, text(model, "id"));
         let verified = ["family_id", "upstream_id"]
             .iter()

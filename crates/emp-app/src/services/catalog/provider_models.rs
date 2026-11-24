@@ -86,11 +86,14 @@ pub(super) fn load(state: &ServerState, provider: &Value) -> Option<SavedModels>
     if saved.identity != connection_identity_digest(provider) {
         return None;
     }
-    saved.models =
-        emp_state::official_registry::enrich_saved_models(provider.as_object()?, saved.models);
+    let registry = (state.backend.configuration.official_models)();
+    let provider = provider.as_object()?;
+    saved.models = registry.enrich_saved_models(provider, saved.models);
     state.backend.usage.ledger.prices.enrich_models(
-        provider.as_object()?,
-        emp_state::official_registry::identify_provider(provider.as_object()?).as_deref(),
+        provider,
+        (state.backend.configuration.official_models)()
+            .identify_provider(provider)
+            .as_deref(),
         &mut saved.models,
     );
     Some(saved)

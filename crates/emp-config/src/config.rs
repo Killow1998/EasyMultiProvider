@@ -240,10 +240,13 @@ pub use paths::{
     resolve_user_path,
 };
 
+use crate::official_registry::{self, RegistrySource};
+
 mod merge;
 pub use merge::{
-    merge_web_update, merge_web_update_with_time, observed_at_now, remember_resolved_protocol,
-    remember_resolved_protocol_at,
+    merge_web_update, merge_web_update_with_registry, merge_web_update_with_time, observed_at_now,
+    remember_resolved_protocol, remember_resolved_protocol_at,
+    remember_resolved_protocol_with_registry,
 };
 
 /// Save a normalized configuration and its derived secret files atomically.
@@ -252,8 +255,17 @@ pub fn save_configuration(
     path: Option<&Path>,
     vault: &VaultStore,
 ) -> ConfigResult<PathBuf> {
+    save_configuration_with_registry(config, path, vault, official_registry::snapshot)
+}
+
+pub fn save_configuration_with_registry(
+    config: &Value,
+    path: Option<&Path>,
+    vault: &VaultStore,
+    registry: RegistrySource,
+) -> ConfigResult<PathBuf> {
     with_file_transaction(|transaction| {
-        save_configuration_in_transaction(config, path, vault, transaction)
+        save_configuration_in_transaction_with_registry(config, path, vault, transaction, registry)
     })
 }
 
@@ -264,6 +276,22 @@ pub fn save_configuration_in_transaction(
     vault: &VaultStore,
     transaction: &mut FileTransaction,
 ) -> ConfigResult<PathBuf> {
+    save_configuration_in_transaction_with_registry(
+        config,
+        path,
+        vault,
+        transaction,
+        official_registry::snapshot,
+    )
+}
+
+pub fn save_configuration_in_transaction_with_registry(
+    config: &Value,
+    path: Option<&Path>,
+    vault: &VaultStore,
+    transaction: &mut FileTransaction,
+    registry: RegistrySource,
+) -> ConfigResult<PathBuf> {
     let path = match path {
         Some(path) => path.to_path_buf(),
         None => config_path(),
@@ -271,7 +299,7 @@ pub fn save_configuration_in_transaction(
 
     let mut previous_secret_files = Vec::new();
     if path.exists()
-        && let Ok(previous) = load_configuration(Some(&path))
+        && let Ok(previous) = load_configuration_with_registry(Some(&path), registry)
     {
         let mut values = previous
             .get("providers")
@@ -291,7 +319,7 @@ pub fn save_configuration_in_transaction(
         previous_secret_files = values;
     }
 
-    let mut config = normalize_configuration(Some(config))?;
+    let mut config = normalize_configuration_with_registry(Some(config), registry)?;
     canonicalize_private_paths(&mut config, &path)?;
     let secret_root = canonical_secret_root(&config, &path);
     if let Some(Value::Array(providers)) = config.get_mut("providers") {
@@ -359,12 +387,19 @@ pub fn save_configuration_in_transaction(
 /// Load JSON, normalize configuration and canonicalize managed private paths.
 /// Missing files use defaults; I/O failures retain their legacy error classes.
 pub fn load_configuration(path: Option<&Path>) -> ConfigResult<Value> {
+    load_configuration_with_registry(path, official_registry::snapshot)
+}
+
+pub fn load_configuration_with_registry(
+    path: Option<&Path>,
+    registry: RegistrySource,
+) -> ConfigResult<Value> {
     let path = match path {
         Some(path) => path.to_path_buf(),
         None => config_path(),
     };
     if !path.exists() {
-        return normalize_configuration(None);
+        return normalize_configuration_with_registry(None, registry);
     }
 
     let raw = read_file_limited(&path, MAX_CONFIG_FILE_BYTES).map_err(|error| {
@@ -388,7 +423,7 @@ pub fn load_configuration(path: Option<&Path>) -> ConfigResult<Value> {
     let value = serde_json::from_str::<Value>(&raw).map_err(|error| {
         ConfigError::new(format!("invalid JSON in {}: {}", path.display(), error))
     })?;
-    let mut config = normalize_configuration(Some(&value))?;
+    let mut config = normalize_configuration_with_registry(Some(&value), registry)?;
     canonicalize_private_paths(&mut config, &path)?;
     Ok(config)
 }
@@ -431,6 +466,13 @@ pub fn is_team_service_id(id: &str) -> bool {
 
 /// Normalize the full top-level configuration without filesystem path canonicalization.
 pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
+    normalize_configuration_with_registry(raw, official_registry::snapshot)
+}
+
+pub fn normalize_configuration_with_registry(
+    raw: Option<&Value>,
+    registry: RegistrySource,
+) -> ConfigResult<Value> {
     if raw.is_none() || raw.is_some_and(Value::is_null) {
         return Ok(default_configuration());
     }
@@ -512,11 +554,12 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
             .iter()
             .find(|provider| provider["id"] == model["provider"])
         {
-            model = crate::official_registry::enrich_saved_models(
-                provider.as_object().expect("normalized provider"),
-                vec![model],
-            )
-            .remove(0);
+            model = registry()
+                .enrich_saved_models(
+                    provider.as_object().expect("normalized provider"),
+                    vec![model],
+                )
+                .remove(0);
             model = normalize_model(&model)?;
         }
         models.push(model);

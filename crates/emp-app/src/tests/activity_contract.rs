@@ -220,7 +220,7 @@ fn activity_request_body(stream: bool) -> Vec<u8> {
 }
 
 fn next_activity_snapshot(
-    events: &mut BufReader<TcpStream>,
+    events: &mut impl BufRead,
     mut matches: impl FnMut(&Value) -> bool,
 ) -> Value {
     loop {

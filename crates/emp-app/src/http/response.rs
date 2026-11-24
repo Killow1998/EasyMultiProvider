@@ -1,7 +1,3 @@
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::http::request::BodyError;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::server::http::error::EntryError;
 use serde_json::Value;
 use std::io::Write;
 
@@ -55,42 +51,6 @@ pub(crate) fn response_with_headers<'a>(
     response
 }
 
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn not_found_response() -> Vec<u8> {
-    EntryError::NotFound.wire_response()
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn unauthorized_response() -> Vec<u8> {
-    EntryError::ManagementSession.wire_response()
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn cross_origin_response(message: &'static str) -> Vec<u8> {
-    EntryError::CrossOrigin(message).wire_response()
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn bad_request_response() -> Vec<u8> {
-    EntryError::InvalidHead.wire_response()
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn json_error_response(
-    status: u16,
-    status_text: &str,
-    message: &str,
-    code: Option<&str>,
-    headers: &[(&str, &str)],
-) -> Vec<u8> {
-    response(
-        &format!("HTTP/1.1 {status} {status_text}"),
-        "application/json",
-        &json_error_body(message, code),
-        headers,
-    )
-}
-
 pub(crate) fn json_error_body(message: &str, code: Option<&str>) -> Vec<u8> {
     let mut error = serde_json::Map::new();
     error.insert("origin".to_owned(), Value::String("emp".to_owned()));
@@ -125,11 +85,6 @@ pub(crate) fn status_text(status: u16) -> &'static str {
     }
 }
 
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn body_error_response(error: BodyError) -> Vec<u8> {
-    EntryError::from(error).wire_response()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,7 +106,14 @@ mod tests {
             )
             .unwrap();
             let error = limits.request(TransportKind::Http).ensure(65).unwrap_err();
-            let wire = String::from_utf8(body_error_response(BodyError::Capacity(error))).unwrap();
+            let wire = String::from_utf8(
+                crate::server::http::error::EntryError::from(
+                    crate::server::http::body::BodyError::Capacity(error),
+                )
+                .reply()
+                .encode(),
+            )
+            .unwrap();
             assert!(wire.starts_with("HTTP/1.1 503 Service Unavailable"));
             let (_, body) = wire.split_once("\r\n\r\n").unwrap();
             let error = serde_json::from_str::<Value>(body).unwrap()["error"].clone();

@@ -2,7 +2,6 @@ use crate::api::failure_response::pre_output_failure_response;
 use crate::api::failure_response::pre_output_router_error_response_for_route;
 use crate::api::failure_response::stream_failure_value_for_route;
 use crate::app::ServerState;
-use crate::http::response::SECURITY_HEADERS;
 use crate::http::response::is_security_header;
 use crate::server::http::{error::HttpReply, stream::BodyOutput};
 use crate::services::disconnect::DisconnectMonitor;
@@ -21,33 +20,10 @@ use emp_router::RouterError;
 use emp_router::native_http::NativeStream;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::net::TcpStream;
 
 const MAX_PRE_OUTPUT_BUFFER_BYTES: usize = 1024 * 1024;
 
 const MAX_PRE_OUTPUT_BUFFER_EVENTS: usize = 256;
-
-pub(crate) fn write_stream_head(stream: &mut TcpStream) -> std::io::Result<()> {
-    write_stream_head_with_headers(stream, &BTreeMap::new())
-}
-
-fn write_stream_head_with_headers(
-    stream: &mut TcpStream,
-    headers: &BTreeMap<String, String>,
-) -> std::io::Result<()> {
-    stream.write_all(
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n",
-    )?;
-    stream.write_all(SECURITY_HEADERS)?;
-    for (name, value) in stream_headers(headers) {
-        stream.write_all(name.as_bytes())?;
-        stream.write_all(b": ")?;
-        stream.write_all(value.as_bytes())?;
-        stream.write_all(b"\r\n")?;
-    }
-    stream.write_all(b"Connection: close\r\n\r\n")
-}
 
 fn stream_headers(headers: &BTreeMap<String, String>) -> impl Iterator<Item = (&str, &str)> {
     headers.iter().filter_map(|(name, value)| {
@@ -64,79 +40,15 @@ fn stream_headers(headers: &BTreeMap<String, String>) -> impl Iterator<Item = (&
     })
 }
 
-pub(crate) enum ReplySink<'a> {
-    Legacy(&'a mut TcpStream),
-    Candidate(&'a mut BodyOutput),
-}
-
-impl ReplySink<'_> {
-    pub(crate) fn socket(&self) -> &TcpStream {
-        match self {
-            Self::Legacy(stream) => stream,
-            Self::Candidate(output) => output.socket(),
-        }
-    }
-
-    fn head(&mut self, headers: &BTreeMap<String, String>) -> std::io::Result<()> {
-        match self {
-            Self::Legacy(stream) => write_stream_head_with_headers(stream, headers),
-            Self::Candidate(output) => {
-                output.head(200, "text/event-stream", stream_headers(headers))
-            }
-        }
-    }
-
-    pub(crate) fn aero_head(&mut self, status: u16, content_type: &str) -> std::io::Result<()> {
-        match self {
-            Self::Legacy(stream) => {
-                let status_text = crate::http::response::status_text(status);
-                write!(
-                    stream,
-                    "HTTP/1.1 {status} {status_text}\r\nContent-Type: {content_type}\r\nConnection: close\r\nCache-Control: no-cache\r\n"
-                )?;
-                stream.write_all(SECURITY_HEADERS)?;
-                stream.write_all(b"\r\n")
-            }
-            Self::Candidate(output) => output.head(status, content_type, std::iter::empty()),
-        }
-    }
-
-    pub(crate) fn frame(&mut self, frame: &[u8]) -> std::io::Result<()> {
-        match self {
-            Self::Legacy(stream) => stream.write_all(frame),
-            Self::Candidate(output) => output.frame(frame),
-        }
-    }
-
-    fn frames(&mut self, frames: &[Vec<u8>]) -> std::io::Result<()> {
-        match self {
-            Self::Legacy(stream) => write_stream_frames(stream, frames),
-            Self::Candidate(output) => {
-                for frame in frames {
-                    output.frame(frame)?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-fn write_stream_frames(stream: &mut TcpStream, frames: &[Vec<u8>]) -> std::io::Result<()> {
-    for frame in frames {
-        stream.write_all(frame)?;
-    }
-    stream.flush()
-}
-
 /// Records downstream delivery while returning the writer's original I/O results.
-pub(crate) struct ObservedSse<'a, 'socket> {
-    sink: &'a mut ReplySink<'socket>,
+pub(crate) struct ObservedSse<'a> {
+    sink: &'a mut BodyOutput,
     observation: &'a mut RequestObservation,
     codex: bool,
 }
-impl<'a, 'socket> ObservedSse<'a, 'socket> {
+impl<'a> ObservedSse<'a> {
     pub(crate) fn new(
-        sink: &'a mut ReplySink<'socket>,
+        sink: &'a mut BodyOutput,
         observation: &'a mut RequestObservation,
         incoming: &BTreeMap<String, String>,
     ) -> Self {
@@ -147,11 +59,17 @@ impl<'a, 'socket> ObservedSse<'a, 'socket> {
         }
     }
     pub(crate) fn head(&mut self) -> std::io::Result<()> {
-        self.observation
-            .written(self.sink.head(&BTreeMap::new()), false)
+        self.observation.written(
+            self.sink.head(200, "text/event-stream", std::iter::empty()),
+            false,
+        )
     }
     fn head_with_headers(&mut self, headers: &BTreeMap<String, String>) -> std::io::Result<()> {
-        self.observation.written(self.sink.head(headers), false)
+        self.observation.written(
+            self.sink
+                .head(200, "text/event-stream", stream_headers(headers)),
+            false,
+        )
     }
     pub(crate) fn frames(&mut self, frames: &[Vec<u8>], last_event: &str) -> std::io::Result<()> {
         let result = self.write_frames(frames, last_event, false);
@@ -175,7 +93,7 @@ impl<'a, 'socket> ObservedSse<'a, 'socket> {
         upstream: bool,
     ) -> std::io::Result<()> {
         if !matches!(event_type, "response.failed" | "error") {
-            return self.sink.frames(frames);
+            return frames.iter().try_for_each(|frame| self.sink.frame(frame));
         }
         let formatted = frames
             .iter()
@@ -186,12 +104,14 @@ impl<'a, 'socket> ObservedSse<'a, 'socket> {
                     .unwrap_or_else(|| frame.clone())
             })
             .collect::<Vec<_>>();
-        self.sink.frames(&formatted)
+        formatted
+            .iter()
+            .try_for_each(|frame| self.sink.frame(frame))
     }
 }
 
 pub(crate) fn serve_external_stream(
-    downstream: ObservedSse<'_, '_>,
+    downstream: ObservedSse<'_>,
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
@@ -231,7 +151,7 @@ pub(crate) fn serve_external_stream(
 }
 
 pub(crate) fn serve_native_stream(
-    downstream: ObservedSse<'_, '_>,
+    downstream: ObservedSse<'_>,
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
@@ -352,8 +272,8 @@ impl RelaySource for ExternalRelay {
     }
 }
 
-struct RelayContext<'a, 'socket> {
-    downstream: ObservedSse<'a, 'socket>,
+struct RelayContext<'a> {
+    downstream: ObservedSse<'a>,
     state: &'a ServerState,
     route: &'a ResolvedRoute,
     body: &'a Value,
@@ -362,7 +282,7 @@ struct RelayContext<'a, 'socket> {
 }
 
 fn relay_stream(
-    context: RelayContext<'_, '_>,
+    context: RelayContext<'_>,
     mut source: impl RelaySource,
     monitor: Option<DisconnectMonitor>,
 ) -> Result<bool, HttpReply> {
@@ -482,7 +402,7 @@ fn relay_stream(
 }
 
 pub(crate) fn serve_generated_response(
-    mut downstream: ObservedSse<'_, '_>,
+    mut downstream: ObservedSse<'_>,
     response_value: Value,
     ids: &ProjectionIds,
 ) -> Result<(), HttpReply> {

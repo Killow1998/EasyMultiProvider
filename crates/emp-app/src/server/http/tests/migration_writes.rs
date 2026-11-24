@@ -1,4 +1,4 @@
-use super::{account_writes::Pair, team_writes, *};
+use super::{team_writes, *};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD},
@@ -21,24 +21,8 @@ const OPERATIONS: [&str; 11] = [
     "lan/receive",
 ];
 
-fn endpoints<'a>(pair: &Pair<'a>) -> [(&'a Fixture, SocketAddr); 2] {
-    [
-        (pair.old, pair.old.legacy.local_addr()),
-        (pair.new, pair.candidate),
-    ]
-}
-
-fn pair_with(make: impl Fn(TestDriver) -> Fixture, test: impl AsyncFnOnce(&Pair<'_>)) {
-    let old = make(TestDriver::reference());
-    make(TestDriver::Candidate).run_wire(async |new, candidate| {
-        test(&Pair {
-            old: &old,
-            new,
-            candidate,
-        })
-        .await;
-    });
-    old.legacy.shutdown().unwrap();
+fn with_fixture(make: impl FnOnce() -> Fixture, test: impl AsyncFnOnce(&Fixture)) {
+    make().run_wire(async |fixture, _| test(fixture).await);
 }
 
 fn provider(id: &str) -> Value {
@@ -49,7 +33,7 @@ fn model(id: &str) -> Value {
     json!({"id":format!("{id}/model"),"provider":id,"upstream_id":"model","enabled":true})
 }
 
-fn source(driver: TestDriver) -> Fixture {
+fn source() -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let mut service = provider("source");
     service["api_key"] = KEY.into();
@@ -61,7 +45,7 @@ fn source(driver: TestDriver) -> Fixture {
         .to_string(),
     )
     .unwrap();
-    Fixture::with_driver(directory, driver)
+    Fixture::with_directory(directory)
 }
 
 fn selection(id: &str) -> Value {
@@ -92,14 +76,6 @@ fn split_wire(reply: &[u8]) -> (&str, &[u8]) {
     assert_eq!(length.len(), 1);
     assert_eq!(length[0].parse::<usize>().unwrap(), body.len());
     (head, body)
-}
-
-fn replace_body(head: &str, length: usize, body: &[u8]) -> Vec<u8> {
-    let head = head.replace(
-        &format!("Content-Length: {length}\r\n"),
-        &format!("Content-Length: {}\r\n", body.len()),
-    );
-    [head.as_bytes(), b"\r\n", body].concat()
 }
 
 fn validate_bundle(bundle: &[u8]) {
@@ -140,27 +116,26 @@ fn validate_code(code: &str) {
     assert_ne!(&bytes[5..7], &[0, 0]);
 }
 
-fn check_migration_reply(fixture: &Fixture, operation: &str, reply: &[u8]) -> Vec<u8> {
+fn check_migration_reply(operation: &str, reply: &[u8]) {
     let (head, body) = split_wire(reply);
     if head.starts_with("HTTP/1.1 200 ")
         && head.contains("Content-Type: application/octet-stream\r\n")
     {
         validate_bundle(body);
-        return replace_body(head, body.len(), &vec![0; body.len()]);
+        return;
     }
     let value: Value = serde_json::from_slice(body).expect("migration response JSON");
-    let mut normalized = std::str::from_utf8(body).unwrap().to_owned();
+    let text = std::str::from_utf8(body).unwrap();
     assert!(
-        !normalized.contains(KEY) && !normalized.contains(PASSWORD),
+        !text.contains(KEY) && !text.contains(PASSWORD),
         "migration {operation} response contains fixture credentials"
     );
     if let Some(confirmation) = value["confirmation"].as_str() {
         assert_eq!(confirmation.len(), 43);
         assert_eq!(URL_SAFE_NO_PAD.decode(confirmation).unwrap().len(), 32);
-        normalized = normalized.replace(confirmation, &"c".repeat(43));
     }
     if value.get("token").is_some() {
-        normalized = normalized.replace(&token_field(&value, "token"), &"a".repeat(48));
+        token_field(&value, "token");
     }
     if operation == "preview"
         && let Some(providers) = value["config"]["providers"].as_array()
@@ -169,53 +144,17 @@ fn check_migration_reply(fixture: &Fixture, operation: &str, reply: &[u8]) -> Ve
             .iter()
             .filter(|row| row.get("_shadow_migration_token").is_some())
         {
-            normalized = normalized.replace(
-                &token_field(provider, "_shadow_migration_token"),
-                &"a".repeat(48),
-            );
+            token_field(provider, "_shadow_migration_token");
         }
     }
     if let Some(code) = value["code"].as_str() {
         validate_code(code);
-        normalized = normalized.replace(code, &"e".repeat(49));
         let remaining = value["remaining_seconds"].as_u64().unwrap();
         assert!((1..=300).contains(&remaining));
-        normalized = normalized.replace(
-            &format!("\"remaining_seconds\":{remaining}"),
-            "\"remaining_seconds\":0",
-        );
     }
     if let Some(encoded) = value["bundle"].as_str() {
         validate_bundle(&STANDARD.decode(encoded).unwrap());
-        normalized = normalized.replace(encoded, &"b".repeat(encoded.len()));
     }
-    let root = fixture.directory.path().canonicalize().unwrap();
-    normalized = normalized.replace(root.to_str().unwrap(), "/fixture");
-    replace_body(head, body.len(), normalized.as_bytes())
-}
-
-async fn assert_migration_wire_parity(
-    pair: &Pair<'_>,
-    operation: &str,
-    requests: [&[u8]; 2],
-    status: u16,
-) -> [Vec<u8>; 2] {
-    let [(old, old_addr), (new, new_addr)] = endpoints(pair);
-    let ((old_reply, old_checked), (new_reply, new_checked)) = tokio::join!(
-        assert_wire_with(old_addr, requests[0], false, status, |reply| {
-            let checked = check_migration_reply(old, operation, &reply);
-            (reply, checked)
-        }),
-        assert_wire_with(new_addr, requests[1], false, status, |reply| {
-            let checked = check_migration_reply(new, operation, &reply);
-            (reply, checked)
-        }),
-    );
-    assert!(
-        old_checked == new_checked,
-        "wire response differs for {operation}"
-    );
-    [old_reply, new_reply]
 }
 
 fn wire(fixture: &Fixture, operation: &str, authenticated: bool, body: &[u8]) -> Vec<u8> {
@@ -229,36 +168,36 @@ fn wire(fixture: &Fixture, operation: &str, authenticated: bool, body: &[u8]) ->
     )
 }
 
-async fn post_wire(
-    pair: &Pair<'_>,
+async fn exchange(
+    fixture: &Fixture,
     operation: &str,
-    bodies: [Value; 2],
+    authenticated: bool,
+    body: &[u8],
     status: u16,
-) -> [Vec<u8>; 2] {
-    let [old_body, new_body] = bodies;
-    let old = wire(pair.old, operation, true, old_body.to_string().as_bytes());
-    let new = wire(pair.new, operation, true, new_body.to_string().as_bytes());
-    assert_migration_wire_parity(pair, operation, [&old, &new], status).await
+) -> Vec<u8> {
+    let wire = wire(fixture, operation, authenticated, body);
+    let reply = assert_wire(fixture.server.local_addr(), &wire, false, status).await;
+    check_migration_reply(operation, &reply);
+    reply
 }
 
-async fn post(pair: &Pair<'_>, operation: &str, bodies: [Value; 2], status: u16) -> [Value; 2] {
-    post_wire(pair, operation, bodies, status)
-        .await
-        .map(|reply| json_body(&reply))
+async fn post(fixture: &Fixture, operation: &str, body: Value, status: u16) -> Value {
+    json_body(
+        &exchange(
+            fixture,
+            operation,
+            true,
+            body.to_string().as_bytes(),
+            status,
+        )
+        .await,
+    )
 }
 
-async fn same(pair: &Pair<'_>, operation: &str, body: Value, status: u16) -> Value {
-    let [old, _] = post(pair, operation, [body.clone(), body], status).await;
-    old
-}
-
-async fn confirmations(pair: &Pair<'_>) -> [String; 2] {
-    post(pair, "export/confirm", [json!({}), json!({})], 200)
-        .await
-        .map(|value| {
-            assert_eq!(value["expires_in"], 60);
-            value["confirmation"].as_str().unwrap().to_owned()
-        })
+async fn confirmation(fixture: &Fixture) -> String {
+    let value = post(fixture, "export/confirm", json!({}), 200).await;
+    assert_eq!(value["expires_in"], 60);
+    value["confirmation"].as_str().unwrap().to_owned()
 }
 
 fn verify_payload(bundle: &[u8]) {
@@ -271,49 +210,44 @@ fn verify_payload(bundle: &[u8]) {
 
 #[test]
 fn migration_exports_match_wire_and_consume_confirmation_once() {
-    pair_with(source, async |pair| {
-        let bodies = confirmations(pair).await.map(|confirmation| {
-            json!({
-                "confirmation":confirmation, "password":PASSWORD, "groups":["external"],
-            })
+    with_fixture(source, async |fixture| {
+        let body = json!({
+            "confirmation":confirmation(fixture).await, "password":PASSWORD, "groups":["external"],
         });
-        for reply in post_wire(pair, "export", bodies.clone(), 200).await {
-            let (head, body) = split_wire(&reply);
-            assert!(head.contains("Content-Type: application/octet-stream\r\n"));
-            assert!(head.contains("Content-Disposition: attachment; filename=\"EMP.emp\"\r\n"));
-            assert!(head.contains("X-EMP-Export-Summary: "));
-            verify_payload(body);
-        }
-        for result in post(pair, "export", bodies, 403).await {
-            assert_eq!(result["error"]["code"], "export_confirmation_required");
-        }
+        let reply = exchange(fixture, "export", true, body.to_string().as_bytes(), 200).await;
+        let (head, payload) = split_wire(&reply);
+        assert!(head.contains("Content-Type: application/octet-stream\r\n"));
+        assert!(head.contains("Content-Disposition: attachment; filename=\"EMP.emp\"\r\n"));
+        assert!(head.contains("X-EMP-Export-Summary: "));
+        verify_payload(payload);
+        let result = post(fixture, "export", body, 403).await;
+        assert_eq!(result["error"]["code"], "export_confirmation_required");
 
-        let selected = confirmations(pair).await.map(|confirmation| {
-            json!({
-                "confirmation":confirmation, "password":PASSWORD, "selections":selection("source"),
-                "include_context":false,"include_rename":false,
-            })
+        let selection = json!({
+            "confirmation":confirmation(fixture).await, "password":PASSWORD, "selections":selection("source"),
+            "include_context":false,"include_rename":false,
         });
-        for value in post(pair, "export", selected, 200).await {
-            verify_payload(&STANDARD.decode(value["bundle"].as_str().unwrap()).unwrap());
-            assert_eq!(value["summary"]["providers"], 1);
-        }
+        let value = post(fixture, "export", selection, 200).await;
+        verify_payload(&STANDARD.decode(value["bundle"].as_str().unwrap()).unwrap());
+        assert_eq!(value["summary"]["providers"], 1);
 
-        let expired = [pair.old, pair.new].map(|fixture| {
-            let confirmation = fixture
-                .legacy
-                .state
-                .sessions
-                .issue_export_confirmation(
-                    crate::http::auth::EXPORT_CONFIRMATION_OPERATION,
-                    system_now() - 61.0,
-                )
-                .unwrap();
-            json!({"confirmation":confirmation,"password":PASSWORD})
-        });
-        for value in post(pair, "export", expired, 403).await {
-            assert_eq!(value["error"]["code"], "export_confirmation_required");
-        }
+        let expired = fixture
+            .server
+            .state
+            .sessions
+            .issue_export_confirmation(
+                crate::http::auth::EXPORT_CONFIRMATION_OPERATION,
+                system_now() - 61.0,
+            )
+            .unwrap();
+        let value = post(
+            fixture,
+            "export",
+            json!({"confirmation":expired,"password":PASSWORD}),
+            403,
+        )
+        .await;
+        assert_eq!(value["error"]["code"], "export_confirmation_required");
     });
 }
 
@@ -322,245 +256,186 @@ fn saved_config(fixture: &Fixture) -> Value {
     serde_json::from_slice(&fs::read(root.join("config.json")).unwrap()).unwrap()
 }
 
-fn assert_imported(pair: &Pair<'_>, ids: &[&str]) {
-    let [old, new] = [pair.old, pair.new].map(|fixture| {
-        let config = saved_config(fixture);
-        let state = &fixture.legacy.state;
-        let catalog = fs::read(crate::services::catalog::generated_catalog_path(state)).unwrap();
-        let models: Value = serde_json::from_slice(&catalog).unwrap();
-        let providers = config["providers"].as_array().unwrap();
-        assert_eq!(providers.len(), ids.len());
-        let keys = ids
-            .iter()
-            .map(|id| {
-                let provider = providers
+fn assert_imported(fixture: &Fixture, ids: &[&str]) {
+    let config = saved_config(fixture);
+    let state = &fixture.server.state;
+    let catalog = fs::read(crate::services::catalog::generated_catalog_path(state)).unwrap();
+    let models: Value = serde_json::from_slice(&catalog).unwrap();
+    let providers = config["providers"].as_array().unwrap();
+    assert_eq!(providers.len(), ids.len());
+    let keys = ids
+        .iter()
+        .map(|id| {
+            let provider = providers
+                .iter()
+                .find(|provider| provider["id"] == *id)
+                .unwrap();
+            let key_path = Path::new(provider["api_key_file"].as_str().unwrap());
+            assert!(
+                fs::read(key_path)
+                    .unwrap()
+                    .starts_with(emp_state::vault::VAULT_MAGIC)
+            );
+            assert!(
+                models["models"]
+                    .as_array()
+                    .unwrap()
                     .iter()
-                    .find(|provider| provider["id"] == *id)
-                    .unwrap();
-                let key_path = Path::new(provider["api_key_file"].as_str().unwrap());
-                assert!(
-                    fs::read(key_path)
-                        .unwrap()
-                        .starts_with(emp_state::vault::VAULT_MAGIC)
-                );
-                assert!(
-                    models["models"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|model| model["slug"] == format!("{id}/model"))
-                );
-                emp_state::config::provider_api_key(provider, &state.backend.configuration.vault)
-            })
-            .collect::<Vec<_>>();
-        assert!(keys.iter().all(|key| key == KEY));
-        let root = fixture.directory.path().canonicalize().unwrap();
-        (
-            config
-                .to_string()
-                .replace(root.to_str().unwrap(), "/fixture"),
-            catalog,
-            keys,
-        )
-    });
-    assert!(
-        old == new,
-        "persisted migration config, credentials and catalog differ"
-    );
+                    .any(|model| model["slug"] == format!("{id}/model"))
+            );
+            emp_state::config::provider_api_key(provider, &state.backend.configuration.vault)
+        })
+        .collect::<Vec<_>>();
+    assert!(keys.iter().all(|key| key == KEY));
 }
 
 #[test]
 fn migration_previews_match_wire_and_bind_expire_and_consume_tokens() {
-    pair_with(Fixture::new_with_driver, async |pair| {
+    with_fixture(Fixture::new, async |fixture| {
         let body = json!({"bundle":STANDARD.encode(bundle("direct")),"password":PASSWORD});
-        let direct = same(pair, "import", body.clone(), 200).await;
+        let direct = post(fixture, "import", body.clone(), 200).await;
         assert_eq!(direct["status"], "ok");
-        assert_imported(pair, &["direct"]);
+        assert_imported(fixture, &["direct"]);
         let with_token = json!({"token":null,"bundle":body["bundle"],"password":PASSWORD});
         assert_eq!(
-            same(pair, "import", with_token, 400).await["error"]["message"],
+            post(fixture, "import", with_token, 400).await["error"]["message"],
             "Reopen the migration package"
         );
 
         let body = json!({"bundle":STANDARD.encode(bundle("selected")),"password":PASSWORD});
-        let decoded = post(pair, "decode", [body.clone(), body], 200).await;
-        let inputs = decoded.map(|value| {
-            assert_eq!(value["credential_providers"], json!(["selected"]));
-            assert!(value["payload"].get("provider_keys").is_none());
-            json!({"token":token_field(&value,"token"),"selections":selection("selected")})
-        });
-        for (preview, input) in post(pair, "preview", inputs.clone(), 200)
-            .await
-            .into_iter()
-            .zip(&inputs)
-        {
-            let providers = preview["config"]["providers"].as_array().unwrap();
-            let selected = providers
-                .iter()
-                .find(|provider| provider["id"] == "selected")
-                .unwrap();
-            assert!(selected["_shadow_migration_token"] == input["token"]);
-            assert_eq!(selected["api_key_set"], true);
-        }
-        assert_imported(pair, &["direct"]);
-        for result in post(pair, "import", inputs.clone(), 200).await {
-            assert_eq!(result["status"], "ok");
-        }
-        assert_imported(pair, &["direct", "selected"]);
-        for result in post(pair, "import", inputs, 400).await {
-            assert_eq!(result["error"]["message"], "Reopen the migration package");
-        }
-
-        let demo = post(pair, "demo", [json!({}), json!({})], 200).await;
-        let inputs = demo.map(
-            |value| json!({"token":token_field(&value,"token"),"selections":selection("direct")}),
+        let decoded = post(fixture, "decode", body, 200).await;
+        assert_eq!(decoded["credential_providers"], json!(["selected"]));
+        assert!(decoded["payload"].get("provider_keys").is_none());
+        let input =
+            json!({"token":token_field(&decoded,"token"),"selections":selection("selected")});
+        let preview = post(fixture, "preview", input.clone(), 200).await;
+        let selected = preview["config"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|provider| provider["id"] == "selected")
+            .unwrap();
+        assert!(selected["_shadow_migration_token"] == input["token"]);
+        assert_eq!(selected["api_key_set"], true);
+        assert_imported(fixture, &["direct"]);
+        assert_eq!(
+            post(fixture, "import", input.clone(), 200).await["status"],
+            "ok"
         );
-        for result in post(pair, "import", inputs.clone(), 400).await {
-            assert_eq!(
-                result["error"]["message"],
-                "Demo packages cannot be imported"
-            );
-        }
-        for (fixture, input) in [pair.old, pair.new].into_iter().zip(&inputs) {
-            let cache = &fixture.legacy.state.backend.migration_previews;
-            cache.expire_for_test(input["token"].as_str().unwrap());
-        }
-        for result in post(pair, "preview", inputs, 400).await {
-            assert_eq!(result["error"]["message"], "Reopen the migration package");
-        }
-        for (fixture, _) in endpoints(pair) {
-            assert_eq!(
-                fixture
-                    .legacy
-                    .state
-                    .backend
-                    .migration_previews
-                    .len_for_test(),
-                0
-            );
-        }
-
-        let demo = post(pair, "demo", [json!({}), json!({})], 200).await;
-        let inputs = demo.map(
-            |value| json!({"token":token_field(&value,"token"),"selections":selection("direct")}),
+        assert_imported(fixture, &["direct", "selected"]);
+        assert_eq!(
+            post(fixture, "import", input, 400).await["error"]["message"],
+            "Reopen the migration package"
         );
-        for (fixture, _) in endpoints(pair) {
-            assert!(fixture.legacy.state.sessions.rotate(system_now()).is_some());
-        }
-        for result in post(pair, "preview", inputs, 400).await {
-            assert_eq!(result["error"]["message"], "Reopen the migration package");
-        }
+
+        let demo = post(fixture, "demo", json!({}), 200).await;
+        let input = json!({"token":token_field(&demo,"token"),"selections":selection("direct")});
+        assert_eq!(
+            post(fixture, "import", input.clone(), 400).await["error"]["message"],
+            "Demo packages cannot be imported"
+        );
+        let previews = &fixture.server.state.backend.migration_previews;
+        previews.expire_for_test(input["token"].as_str().unwrap());
+        assert_eq!(
+            post(fixture, "preview", input, 400).await["error"]["message"],
+            "Reopen the migration package"
+        );
+        assert_eq!(previews.len_for_test(), 0);
+
+        let demo = post(fixture, "demo", json!({}), 200).await;
+        let input = json!({"token":token_field(&demo,"token"),"selections":selection("direct")});
+        assert!(fixture.server.state.sessions.rotate(system_now()).is_some());
+        assert_eq!(
+            post(fixture, "preview", input, 400).await["error"]["message"],
+            "Reopen the migration package"
+        );
     });
 }
 
 #[test]
 fn migration_lan_writes_match_wire_through_loopback_delivery_and_cancel() {
-    pair_with(source, async |pair| {
-        let start = confirmations(pair).await.map(|confirmation| json!({
-            "confirmation":confirmation, "address":"127.0.0.1", "selections":selection("source"),
-        }));
-        let codes = post(pair, "lan/start", start.clone(), 200)
-            .await
-            .map(|value| {
-                assert_eq!(value["status"], "waiting");
-                value["code"].as_str().unwrap().to_owned()
-            });
-        for result in post(pair, "lan/start", start, 403).await {
-            assert_eq!(result["error"]["code"], "export_confirmation_required");
-            assert_eq!(
-                result["error"]["message"],
-                "export confirmation is required"
-            );
-        }
-        let receive = codes
-            .each_ref()
-            .map(|code| json!({"code":code,"receiver":"42".repeat(32)}));
-        for result in post(pair, "lan/receive", receive.clone(), 200).await {
-            assert!(
-                result == json!({"status":"waiting"}),
-                "receiver must wait for approval"
-            );
-        }
-        for (status, code) in post(pair, "lan/status", [json!({}), json!({})], 200)
-            .await
-            .into_iter()
-            .zip(&codes)
-        {
-            assert_eq!(status["status"], "confirmation");
-            assert_eq!(status["receiver"], "127.0.0.1");
-            assert!(status["code"].as_str() == Some(code.as_str()));
-        }
-        for result in post(
-            pair,
-            "lan/approve",
-            codes.each_ref().map(|code| json!({"code":code})),
-            200,
-        )
-        .await
-        {
-            assert_eq!(result["status"], "confirmation");
-        }
-        let received = post(pair, "lan/receive", receive, 200).await;
-        let review = received.map(|value| {
-            assert_eq!(value["credential_providers"], json!(["source"]));
-            json!({"token":token_field(&value,"token"),"selections":selection("source")})
+    with_fixture(source, async |fixture| {
+        let start = json!({
+            "confirmation":confirmation(fixture).await, "address":"127.0.0.1", "selections":selection("source"),
         });
-        for result in post(pair, "preview", review, 200).await {
-            assert_eq!(result["config"]["providers"][0]["id"], "source");
-            assert_eq!(result["config"]["providers"][0]["api_key_set"], true);
-        }
+        let waiting = post(fixture, "lan/start", start.clone(), 200).await;
+        assert_eq!(waiting["status"], "waiting");
+        let code = waiting["code"].as_str().unwrap();
+        let result = post(fixture, "lan/start", start, 403).await;
+        assert_eq!(result["error"]["code"], "export_confirmation_required");
         assert_eq!(
-            same(pair, "lan/cancel", json!({}), 200).await["status"],
+            result["error"]["message"],
+            "export confirmation is required"
+        );
+
+        let receive = json!({"code":code,"receiver":"42".repeat(32)});
+        let result = post(fixture, "lan/receive", receive.clone(), 200).await;
+        assert!(
+            result == json!({"status":"waiting"}),
+            "receiver must wait for approval"
+        );
+        let status = post(fixture, "lan/status", json!({}), 200).await;
+        assert_eq!(status["status"], "confirmation");
+        assert_eq!(status["receiver"], "127.0.0.1");
+        assert!(status["code"].as_str() == Some(code));
+        let result = post(fixture, "lan/approve", json!({"code":code}), 200).await;
+        assert_eq!(result["status"], "confirmation");
+        let received = post(fixture, "lan/receive", receive, 200).await;
+        assert_eq!(received["credential_providers"], json!(["source"]));
+        let review =
+            json!({"token":token_field(&received,"token"),"selections":selection("source")});
+        let result = post(fixture, "preview", review, 200).await;
+        assert_eq!(result["config"]["providers"][0]["id"], "source");
+        assert_eq!(result["config"]["providers"][0]["api_key_set"], true);
+        assert_eq!(
+            post(fixture, "lan/cancel", json!({}), 200).await["status"],
             "cancelled"
         );
 
-        let start = confirmations(pair).await.map(|confirmation| json!({
-            "confirmation":confirmation, "address":"127.0.0.1", "selections":selection("source"),
-        }));
-        let cancelled = post(pair, "lan/start", start, 200).await.map(|value| {
-            assert_eq!(value["status"], "waiting");
-            value["code"].as_str().unwrap().to_owned()
+        let start = json!({
+            "confirmation":confirmation(fixture).await, "address":"127.0.0.1", "selections":selection("source"),
         });
+        let waiting = post(fixture, "lan/start", start, 200).await;
+        assert_eq!(waiting["status"], "waiting");
+        let code = waiting["code"].as_str().unwrap();
         assert_eq!(
-            same(pair, "lan/cancel", json!({}), 200).await["status"],
+            post(fixture, "lan/cancel", json!({}), 200).await["status"],
             "cancelled"
         );
         assert_eq!(
-            same(pair, "lan/status", json!({}), 200).await["status"],
+            post(fixture, "lan/status", json!({}), 200).await["status"],
             "idle"
         );
-        let receive = cancelled.map(|code| json!({"code":code,"receiver":"42".repeat(32)}));
-        for result in post(pair, "lan/receive", receive, 400).await {
-            assert_eq!(result["error"]["message"], "lan_unreachable");
-        }
+        let receive = json!({"code":code,"receiver":"42".repeat(32)});
         assert_eq!(
-            same(pair, "lan/receive", json!({"code":"invalid"}), 400).await["error"]["message"],
+            post(fixture, "lan/receive", receive, 400).await["error"]["message"],
+            "lan_unreachable"
+        );
+        assert_eq!(
+            post(fixture, "lan/receive", json!({"code":"invalid"}), 400).await["error"]["message"],
             "lan_invalid_code"
         );
         assert_eq!(
-            same(pair, "lan/approve", json!({"code":"invalid"}), 400).await["error"]["message"],
+            post(fixture, "lan/approve", json!({"code":"invalid"}), 400).await["error"]["message"],
             "lan_expired"
         );
     });
 }
 
-async fn malformed(pair: &Pair<'_>, operation: &str, authenticated: bool, status: u16) -> Value {
-    let old = wire(pair.old, operation, authenticated, b"[");
-    let new = wire(pair.new, operation, authenticated, b"[");
-    let [reply, _] = assert_migration_wire_parity(pair, operation, [&old, &new], status).await;
-    json_body(&reply)
+async fn malformed(fixture: &Fixture, operation: &str, authenticated: bool, status: u16) -> Value {
+    json_body(&exchange(fixture, operation, authenticated, b"[", status).await)
 }
 
 #[test]
 fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
-    team_writes::run_pair(async |pair, upstream, base| {
+    team_writes::run_team(async |fixture, upstream, base| {
         for operation in OPERATIONS {
-            let unauthenticated = malformed(pair, operation, false, 401).await;
+            let unauthenticated = malformed(fixture, operation, false, 401).await;
             assert_eq!(
                 unauthenticated["error"]["message"],
                 "management session is required"
             );
-            let invalid = malformed(pair, operation, true, 400).await;
+            let invalid = malformed(fixture, operation, true, 400).await;
             assert!(
                 invalid["error"]["message"]
                     .as_str()
@@ -568,8 +443,8 @@ fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
                     .starts_with("request body must be valid JSON:")
             );
         }
-        team_writes::login(pair, upstream, base).await;
-        let unauthenticated = malformed(pair, "lan/status", false, 401).await;
+        team_writes::login(fixture, upstream, base).await;
+        let unauthenticated = malformed(fixture, "lan/status", false, 401).await;
         assert_eq!(
             unauthenticated["error"]["message"],
             "management session is required"
@@ -577,46 +452,34 @@ fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
 
         let mut downgraded = team_writes::identity("Refreshed team");
         downgraded["member"]["role"] = json!("member");
-        let mut clients = Vec::new();
-        for (fixture, address) in endpoints(pair) {
-            let mut client = TcpStream::connect(address).await.unwrap();
-            let wire = wire(fixture, "lan/status", true, b"[");
-            client.write_all(&wire[..wire.len() - 1]).await.unwrap();
-            clients.push(client);
-        }
+        let mut client = TcpStream::connect(fixture.server.local_addr())
+            .await
+            .unwrap();
+        let wire = wire(fixture, "lan/status", true, b"[");
+        client.write_all(&wire[..wire.len() - 1]).await.unwrap();
         team_writes::respond(upstream, "status", None, 200, &downgraded).await;
-        let mut replies = Vec::new();
-        for mut client in clients {
-            let mut reply = Vec::new();
-            timeout(Duration::from_secs(5), client.read_to_end(&mut reply))
-                .await
-                .unwrap()
-                .unwrap();
-            assert!(reply.starts_with(b"HTTP/1.1 403 "));
-            assert_eq!(
-                json_body(&reply)["error"]["code"],
-                "workspace_migration_permission_required"
-            );
-            replies.push(reply);
-        }
-        assert!(
-            replies[0] == replies[1],
-            "Team refresh preceding the body differs"
+        let mut reply = Vec::new();
+        timeout(Duration::from_secs(5), client.read_to_end(&mut reply))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_status(&reply, 403);
+        assert_eq!(
+            json_body(&reply)["error"]["code"],
+            "workspace_migration_permission_required"
         );
-        for (fixture, _) in endpoints(pair) {
-            let profile = team_writes::read_team_profile(fixture);
-            assert!(profile["session"]["identity"] == downgraded);
-        }
+        let profile = team_writes::read_team_profile(fixture);
+        assert!(profile["session"]["identity"] == downgraded);
 
         for operation in OPERATIONS {
-            let denied = malformed(pair, operation, true, 403).await;
+            let denied = malformed(fixture, operation, true, 403).await;
             assert_eq!(
                 denied["error"]["code"],
                 "workspace_migration_permission_required"
             );
         }
-        for (fixture, _) in endpoints(pair) {
-            let state = fixture.legacy.state.clone();
+        {
+            let state = fixture.server.state.clone();
             tokio::task::spawn_blocking(move || {
                 assert!(
                     state
@@ -629,7 +492,7 @@ fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
             .unwrap();
         }
         for operation in OPERATIONS {
-            let updating = malformed(pair, operation, false, 503).await;
+            let updating = malformed(fixture, operation, false, 503).await;
             assert_eq!(updating["error"]["code"], "updating");
         }
     });
@@ -641,10 +504,10 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
 
     let body =
         json!({"bundle":STANDARD.encode(bundle("detached")),"password":PASSWORD}).to_string();
-    pair_with(Fixture::new_with_driver, async |pair| {
-        for (fixture, address) in endpoints(pair) {
-            let state = &fixture.legacy.state;
-            let (mut client, task) = connect_submitted_write(fixture, address).await;
+    with_fixture(Fixture::new, async |fixture| {
+        {
+            let state = &fixture.server.state;
+            let (mut client, task) = connect_submitted_write(fixture).await;
             let wire = wire(fixture, "import", true, body.as_bytes());
             client
                 .write_all(&wire[..wire.len() - body.len()])
@@ -723,6 +586,6 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
                 text.contains(KEY) || text.contains(PASSWORD)
             }));
         }
-        assert_imported(pair, &["detached"]);
+        assert_imported(fixture, &["detached"]);
     });
 }

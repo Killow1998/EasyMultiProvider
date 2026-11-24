@@ -30,6 +30,7 @@ pub(super) struct Context {
     route: ResolvedRoute,
     incoming: BTreeMap<String, String>,
     client: Arc<emp_transport::HttpClient>,
+    official_models: emp_state::official_registry::RegistrySource,
     runtime: tokio::runtime::Handle,
     shutdown: Arc<AtomicBool>,
     cancelled: Arc<Cancellation>,
@@ -139,10 +140,7 @@ pub(super) fn run(
             output
                 .send(super::Reply::Dispatched)
                 .map_err(|_| ClaudeCliError::Disconnected)?;
-            let router = emp_router::ExternalRouter::new(
-                &context.client,
-                emp_state::official_registry::snapshot,
-            );
+            let router = emp_router::ExternalRouter::new(&context.client, context.official_models);
             let mut message_id = String::new();
             let mut has_text = false;
             let mut observe = |event: &Value| {

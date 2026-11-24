@@ -4,10 +4,7 @@ use crate::api::realtime::{
     multipart::{RealtimeRead, validate_headers},
 };
 use crate::app::ServerState;
-use crate::http::request::{
-    REQUEST_READ_TIMEOUT, Request, read_exact_before, request_body_deadline, request_body_timeout,
-    restore_read_timeout,
-};
+use crate::http::request::{REQUEST_READ_TIMEOUT, Request, request_body_timeout};
 use crate::server::run_blocking;
 use axum::extract::{FromRequest, Request as AxumRequest};
 use emp_transport::ContentDecodeError;
@@ -23,7 +20,7 @@ use emp_transport::TransportKind;
 use emp_transport::decode_content;
 use hyper::body::Body as _;
 use serde_json::Value;
-use std::{future::poll_fn, net::TcpStream, pin::Pin, sync::Arc};
+use std::{future::poll_fn, pin::Pin, sync::Arc};
 use tokio::time::{Instant, timeout_at};
 
 pub(crate) enum BodyError {
@@ -137,47 +134,6 @@ fn prepare_json(request: Request<'_>, limits: &Arc<RequestLimits>) -> Result<Jso
     Ok(prepared)
 }
 
-pub(crate) fn read_json_body(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    body: Vec<u8>,
-    state: &ServerState,
-) -> Result<Value, BodyError> {
-    read_json_body_with_limits(
-        stream,
-        request,
-        body,
-        &state.backend.transport.request_limits,
-    )
-}
-
-pub(super) fn read_json_body_with_limits(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    mut body: Vec<u8>,
-    limits: &Arc<RequestLimits>,
-) -> Result<Value, BodyError> {
-    let input = prepare_json(request, limits)?;
-    body.truncate(input.length);
-    reserve_body_capacity(&mut body, input.length)
-        .map_err(|_| allocation_capacity_error(input.length))?;
-    let deadline = request_body_deadline(input.length);
-    let read = read_exact_before(stream, &mut body, input.length, deadline);
-    restore_read_timeout(stream);
-    read.map_err(|error| {
-        if error.kind() == std::io::ErrorKind::TimedOut {
-            BodyError::Timeout
-        } else {
-            BodyError::incomplete()
-        }
-    })?;
-    decode_json(
-        body,
-        request.header("Content-Encoding").unwrap_or_default(),
-        input,
-    )
-}
-
 fn decode_json(
     body: Vec<u8>,
     content_encoding: &str,
@@ -204,6 +160,7 @@ fn decode_json(
 
 pub(crate) struct JsonBody<T = Value>(pub(crate) T);
 
+#[cfg(test)]
 impl JsonBody {
     pub(crate) fn into_typed<T: serde::de::DeserializeOwned>(self) -> Result<T, EntryError> {
         serde_json::from_value(self.0).map_err(|error| {

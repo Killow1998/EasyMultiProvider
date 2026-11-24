@@ -214,19 +214,8 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
         server.local_addr().port()
     )
     .unwrap();
-    let mut reader = BufReader::new(events);
-    let read_frame = |reader: &mut BufReader<TcpStream>| {
-        let mut frame = String::new();
-        loop {
-            let mut line = String::new();
-            assert!(reader.read_line(&mut line).unwrap() > 0);
-            frame.push_str(&line);
-            if line == "\n" || line == "\r\n" {
-                return frame;
-            }
-        }
-    };
-    assert!(read_frame(&mut reader).starts_with("HTTP/1.1 200"));
+    let (head, mut reader) = read_sse_head(BufReader::new(events));
+    assert!(head.starts_with("HTTP/1.1 200"));
     // Queue before starting the worker: admission must not imply completion.
     let queued = post(&server, "/api/usage/scan", b"{}", &[&session]);
     assert!(queued.starts_with("HTTP/1.1 202"));
@@ -236,7 +225,7 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
     assert_eq!(status["completed"], 0);
     let workers = crate::services::usage::workers(&server.state).unwrap();
     let completed = loop {
-        let frame = read_frame(&mut reader);
+        let frame = read_sse_frame(&mut reader);
         if frame.contains("event: usage-updated") {
             let reply = request(&server, "/api/usage", &[&session]);
             let payload: Value =
@@ -254,7 +243,7 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
     let receipt: Value = serde_json::from_str(queued.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(receipt["command_id"], 2);
     loop {
-        if read_frame(&mut reader).contains("event: usage-updated") {
+        if read_sse_frame(&mut reader).contains("event: usage-updated") {
             let reply = request(&server, "/api/usage", &[&session]);
             let payload: Value =
                 serde_json::from_str(reply.split_once("\r\n\r\n").unwrap().1).unwrap();

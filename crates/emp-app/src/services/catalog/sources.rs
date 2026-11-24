@@ -8,6 +8,7 @@ pub(super) struct CatalogSources {
     pub(super) accounts: BTreeMap<String, Value>,
     duplicates: BTreeMap<String, String>,
     native_is_local_key: bool,
+    registry: emp_state::official_registry::RegistrySource,
 }
 
 impl CatalogSources {
@@ -57,15 +58,17 @@ impl CatalogSources {
             accounts,
             duplicates,
             native_is_local_key,
+            registry: state.backend.configuration.official_models,
         }
     }
 
     pub(super) fn merged(&self, config: &Value) -> Value {
-        let mut catalog = emp_codex::merged_catalog::build_catalog(
+        let mut catalog = emp_codex::merged_catalog::build_catalog_with_registry(
             config,
             &self.native,
             &self.accounts,
             &self.duplicates,
+            self.registry,
         );
         if self.native_is_local_key {
             emp_codex::merged_catalog::hide_native_models(&mut catalog, &self.native);

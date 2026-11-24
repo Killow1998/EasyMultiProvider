@@ -5,7 +5,8 @@ use crate::services::configuration::{ConfigurationState, load_server_configurati
 use crate::services::integration::IntegrationState;
 use crate::services::observation::diagnostics::Diagnostics;
 use crate::util::{random_hex, system_now};
-use emp_state::save_configuration;
+use emp_state::config::save_configuration_with_registry;
+use emp_state::official_registry::RegistrySource;
 use emp_transport::{
     HttpClientPolicy, ProxyEnvironment, ProxyPolicy, RequestLimitsConfig, TimeoutPolicy,
 };
@@ -42,7 +43,7 @@ pub(crate) struct ServerState {
     pub(crate) backend: BackendState,
     pub(crate) port: u16,
     pub(crate) base_url: String,
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(crate) test_sideband_address: std::sync::OnceLock<std::net::SocketAddr>,
     #[cfg(all(test, unix))]
     pub(crate) test_upgrade_handoff: Mutex<Option<UpgradeHandoffGate>>,
@@ -112,6 +113,11 @@ pub(crate) struct TransportState {
     pub(crate) gemini_signatures: Arc<emp_state::gemini_signatures::GeminiSignatures>,
 }
 
+pub(crate) struct BackendSources {
+    pub(crate) external_key: bool,
+    pub(crate) official_models: RegistrySource,
+}
+
 impl BackendState {
     pub(crate) fn new(
         config_path: &Path,
@@ -120,14 +126,16 @@ impl BackendState {
         http_client_override: Option<HttpClient>,
         diagnostics: Arc<Diagnostics>,
         updating: crate::services::modules::Startup,
+        sources: BackendSources,
     ) -> Result<Self, AppError> {
         crate::startup_recovery::check_pending(config_path)?;
-        let mut config = load_server_configuration(config_path)?;
+        let mut config = load_server_configuration(config_path, sources.official_models)?;
         let state_root = config_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("state");
-        let vault = crate::startup_recovery::open_vault(&config, &state_root)?;
+        let vault =
+            crate::startup_recovery::open_vault(&config, &state_root, sources.external_key)?;
         if config
             .get("providers")
             .and_then(Value::as_array)
@@ -140,8 +148,13 @@ impl BackendState {
                 })
             })
         {
-            save_configuration(&config, Some(config_path), &vault)?;
-            config = load_server_configuration(config_path)?;
+            save_configuration_with_registry(
+                &config,
+                Some(config_path),
+                &vault,
+                sources.official_models,
+            )?;
+            config = load_server_configuration(config_path, sources.official_models)?;
         }
         let proxy_snapshot = ProxyEnvironment::capture_current();
         let support_network = crate::services::network_evidence::NetworkSnapshot::capture(
@@ -212,7 +225,12 @@ impl BackendState {
                 Arc::clone(&management_events),
             ),
             diagnostics,
-            configuration: ConfigurationState::new(config, config_path.to_path_buf(), vault),
+            configuration: ConfigurationState::new(
+                config,
+                config_path.to_path_buf(),
+                vault,
+                sources.official_models,
+            ),
             native_websocket_connections: Default::default(),
             transport: TransportState {
                 client: Arc::new(client),

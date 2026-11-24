@@ -128,9 +128,17 @@ fn native_sse_and_ordinary_json_cross_the_real_endpoint() {
         );
         assert!(wire.starts_with("HTTP/1.1 200 OK\r\n"), "{wire}");
         let (head, events) = wire.split_once("\r\n\r\n").unwrap();
-        assert!(head.contains("openai-model: native/alias\r\n"), "{head}");
+        assert_eq!(
+            response_header(head, "openai-model"),
+            Some("native/alias"),
+            "{head}"
+        );
         if !ordinary {
-            assert!(head.contains("x-codex-turn-state: stream-turn\r\n"));
+            assert_eq!(
+                response_header(head, "x-codex-turn-state"),
+                Some("stream-turn"),
+                "{head}"
+            );
             assert!(!head.contains("stale-stream-etag"));
             assert!(events.contains("response.created"));
             assert!(events.contains("response.output_text.delta"));
@@ -185,7 +193,11 @@ fn native_sse_context_and_incomplete_boundaries_match_codex_http_behavior() {
             assert!(response.contains("stream_incomplete"));
         }
         if name == "failed" {
-            assert!(response.contains("Retry-After: 3\r\n"));
+            assert_eq!(
+                response_header(response_parts(&response).0, "retry-after"),
+                Some("3"),
+                "{response}"
+            );
         }
         server.shutdown().unwrap();
     }

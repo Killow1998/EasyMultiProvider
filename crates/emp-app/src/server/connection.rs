@@ -47,7 +47,7 @@ use tokio::{
 };
 use tower::ServiceExt;
 
-struct CandidateRequest {
+struct HttpRequestContext {
     #[cfg(all(test, unix))]
     state: Arc<ServerState>,
     observation: HttpObservation,
@@ -147,7 +147,7 @@ impl ConnectionContext {
     }
 }
 
-pub(super) async fn drive_candidate(
+pub(super) async fn drive_http(
     mut io: tokio::net::TcpStream,
     peer: SocketAddr,
     accepted: Instant,
@@ -173,16 +173,13 @@ pub(super) async fn drive_candidate(
         &state,
         Some(peer.ip()),
     ) else {
-        let _ = run_blocking(move || {
-            crate::lifecycle::connections::request_rejected(&state, "connection_capacity")
-        })
-        .await;
+        let _ = run_blocking(move || super::request_rejected(&state, "connection_capacity")).await;
         return;
     };
     let head = match head {
         Ok(head) => head,
         Err(error) => {
-            let bytes = error.wire_response();
+            let bytes = error.reply().encode();
             let result = io.write_all(&bytes).await;
             let _ = io.shutdown().await;
             let _ = run_blocking(move || observation.response_finished(&bytes, result)).await;
@@ -244,7 +241,7 @@ pub(super) async fn drive_candidate(
     } else {
         (None, socket.map(Arc::new), None)
     };
-    let candidate = CandidateRequest {
+    let http_context = HttpRequestContext {
         #[cfg(all(test, unix))]
         state: state.clone(),
         observation,
@@ -258,14 +255,14 @@ pub(super) async fn drive_candidate(
         catalog_write,
         local_write,
     };
-    drive_http(
+    drive_connection(
         io,
         peer,
         router,
         state.lifecycle.clone(),
         permit,
         head,
-        Some(candidate),
+        Some(http_context),
     )
     .await;
 }
@@ -283,13 +280,13 @@ pub(super) async fn drive(
         Ok(head) => head,
         Err(response) => {
             if matches!(mode, ServerMode::Http) {
-                let _ = io.write_all(&response.wire_response()).await;
+                let _ = io.write_all(&response.reply().encode()).await;
             }
             let _ = io.shutdown().await;
             return;
         }
     };
-    drive_http(io, peer, router, control, Arc::new(permit), head, None).await;
+    drive_connection(io, peer, router, control, Arc::new(permit), head, None).await;
 }
 
 impl ServerMode {
@@ -301,38 +298,42 @@ impl ServerMode {
     }
 }
 
-async fn drive_http(
+async fn drive_connection(
     io: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
     peer: SocketAddr,
     router: Router,
     control: Arc<ServerControl>,
     permit: Arc<ConnectionPermit>,
     head: GuardedHead,
-    candidate: Option<CandidateRequest>,
+    http_context: Option<HttpRequestContext>,
 ) {
     let mode = control.mode;
     let half_close = matches!(mode, ServerMode::Recovery)
-        || candidate.as_ref().is_some_and(|request| request.half_close);
-    let account_write = candidate
+        || http_context
+            .as_ref()
+            .is_some_and(|request| request.half_close);
+    let account_write = http_context
         .as_ref()
         .and_then(|request| request.account_write.as_ref());
-    let catalog_write = candidate
+    let catalog_write = http_context
         .as_ref()
         .and_then(|request| request.catalog_write.as_ref());
-    let local_write = candidate.as_ref().and_then(|request| request.local_write);
-    let report_socket = candidate
+    let local_write = http_context
+        .as_ref()
+        .and_then(|request| request.local_write);
+    let report_socket = http_context
         .as_ref()
         .and_then(|request| request.report_socket.as_ref());
-    let websocket_probe = candidate
+    let websocket_probe = http_context
         .as_ref()
         .and_then(|request| request.websocket_probe.as_ref());
-    let inference = candidate
+    let inference = http_context
         .as_ref()
         .and_then(|request| request.inference.clone());
-    let stream = candidate
+    let stream = http_context
         .as_ref()
         .and_then(|request| request.stream.as_ref());
-    let delegation = candidate
+    let delegation = http_context
         .as_ref()
         .and_then(|request| request.delegation.as_ref());
     let delivery = stream.map(|stream| stream.delivery.clone());
@@ -343,7 +344,7 @@ async fn drive_http(
         Some(permit)
     };
     let raw = head.raw.clone();
-    let request_id = candidate
+    let request_id = http_context
         .as_ref()
         .and_then(|request| request.observation.request_id())
         .map(str::to_owned);
@@ -355,9 +356,9 @@ async fn drive_http(
         request_id,
         shutdown_after_response: Mutex::default(),
     }));
-    let wire_response = Arc::new(OnceLock::new());
+    let encoded_reply = Arc::new(OnceLock::new());
     let raw_request = raw.request();
-    let (transport_target, routing_uri) = if candidate.is_some() {
+    let (transport_target, routing_uri) = if http_context.is_some() {
         let uri = match super::http::routing_path(raw_request.target) {
             Cow::Borrowed(target) => Uri::try_from(target),
             Cow::Owned(target) => Uri::try_from(target),
@@ -371,7 +372,7 @@ async fn drive_http(
         let router = router.clone();
         let raw = raw.clone();
         let context = context.clone();
-        let wire_response = &wire_response;
+        let encoded_reply = &encoded_reply;
         let inference = inference.as_ref();
         let routing_uri = routing_uri.as_ref();
         async move {
@@ -411,7 +412,7 @@ async fn drive_http(
             {
                 stream.delivery.await_flush(flushed);
             }
-            let _ = wire_response.set(
+            let _ = encoded_reply.set(
                 response
                     .extensions()
                     .get::<EntryWire>()
@@ -447,7 +448,7 @@ async fn drive_http(
             TokioIo::new(head.replay(
                 io,
                 transport_target,
-                Arc::clone(&wire_response),
+                Arc::clone(&encoded_reply),
                 mode,
                 delivery.clone(),
             )),
@@ -482,7 +483,7 @@ async fn drive_http(
                     .take(),
             );
             #[cfg(all(test, unix))]
-            if let Some(request) = &candidate {
+            if let Some(request) = &http_context {
                 let gate = request.state.test_upgrade_handoff.lock().unwrap().take();
                 if let Some((reached, resume)) = gate {
                     let admission = &context.0.control.admission;
@@ -502,11 +503,11 @@ async fn drive_http(
         run(io, websocket_permit.clone()).await;
         drop(websocket_permit);
     }
-    if let Some(CandidateRequest {
+    if let Some(HttpRequestContext {
         mut observation,
         stream,
         ..
-    }) = candidate
+    }) = http_context
     {
         if let Some(stream) = stream {
             let worker = stream.worker.lock().expect("stream worker").take();
@@ -520,7 +521,7 @@ async fn drive_http(
         let _ = run_blocking(move || {
             match inference.as_ref().and_then(|request| request.receipt.get()) {
                 Some(BufferedReceipt::Response { status, body }) => {
-                    let result = if wire_response.get().is_none() {
+                    let result = if encoded_reply.get().is_none() {
                         Err(std::io::ErrorKind::BrokenPipe.into())
                     } else {
                         result
@@ -534,7 +535,7 @@ async fn drive_http(
                 }
                 Some(BufferedReceipt::Closed) => observation.response_finished(&[], Ok(())),
                 None => {
-                    if let Some(Some(wire)) = wire_response.get()
+                    if let Some(Some(wire)) = encoded_reply.get()
                         && (inference.is_none() || !wire.is_empty())
                     {
                         observation.response_finished(wire, result);

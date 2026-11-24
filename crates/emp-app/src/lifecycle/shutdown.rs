@@ -2,7 +2,6 @@
 use super::ServerHandle;
 use crate::app::ServerState;
 use crate::error::AppError;
-use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -97,7 +96,6 @@ impl ServerHandle {
         });
         let credential_operations = &self.state.backend.accounts.credential_operations;
         let _ = credential_operations.close_and_drain(Duration::ZERO);
-        let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_millis(100));
         self.state.backend.usage.stop();
         let accounts = &self.state.backend.accounts;
         self.state.backend.management_events.close();

@@ -1,5 +1,5 @@
 use super::{
-    body::{JsonBody, read_json_body},
+    body::JsonBody,
     error::{EntryError, JsonReply, response_head},
     login,
     management::ManagementSession,
@@ -25,7 +25,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde_json::Value;
-use std::{net::TcpStream, sync::Arc};
+use std::sync::Arc;
 use tokio::time::timeout;
 
 pub(in crate::server) fn matches(request: Request<'_>) -> bool {
@@ -177,29 +177,6 @@ impl AccountWriteRoute {
                 AccountWrite::EditConfiguration(body)
             }
             Self::Delete(_) | Self::MissingAccount => unreachable!("route does not read a body"),
-        }
-    }
-
-    pub(crate) fn legacy(
-        self,
-        stream: &mut TcpStream,
-        request: Request<'_>,
-        body_prefix: Vec<u8>,
-        state: &ServerState,
-        now: f64,
-    ) -> Vec<u8> {
-        let command = (|| {
-            ManagementSession::require(request, state, now)?;
-            if let Some(command) = self.without_body()? {
-                return Ok(command);
-            }
-            Ok(self.with_body(read_json_body(stream, request, body_prefix, state)?))
-        })();
-        match command {
-            Ok(command) => command
-                .execute(state, request.observation_id)
-                .wire_response(),
-            Err(error) => EntryError::wire_response(error),
         }
     }
 }

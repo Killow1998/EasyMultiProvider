@@ -1,7 +1,7 @@
 use super::*;
 use emp_transport::{HttpClient, HttpClientConfig, HttpClientPolicy, ProxyPolicy, TimeoutPolicy};
 
-mod candidate;
+mod routes;
 
 pub(super) struct CatalogUpstream {
     address: SocketAddr,
@@ -165,13 +165,6 @@ impl Drop for CatalogUpstream {
     }
 }
 pub(super) fn catalog_server(upstream: &CatalogUpstream) -> (TempDir, ServerHandle) {
-    catalog_server_with_driver(upstream, crate::lifecycle::TestDriver::Legacy)
-}
-
-fn catalog_server_with_driver(
-    upstream: &CatalogUpstream,
-    driver: crate::lifecycle::TestDriver,
-) -> (TempDir, ServerHandle) {
     let directory = tempfile::tempdir().expect("temp dir");
     let root = canonical_root(&directory);
     let config_path = root.join("config.json");
@@ -195,7 +188,6 @@ fn catalog_server_with_driver(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         &config_path,
         root.join("codex").join("auth.json"),
-        driver,
         "codex",
         None,
     )
@@ -211,18 +203,10 @@ fn metadata_server_with_policy(
     upstream: &CatalogUpstream,
     policy: HttpClientPolicy,
 ) -> (TempDir, ServerHandle) {
-    metadata_server_at_with_driver(
-        upstream.address,
-        policy,
-        crate::lifecycle::TestDriver::Legacy,
-    )
+    metadata_server_at(upstream.address, policy)
 }
 
-fn metadata_server_at_with_driver(
-    upstream: SocketAddr,
-    policy: HttpClientPolicy,
-    driver: crate::lifecycle::TestDriver,
-) -> (TempDir, ServerHandle) {
+fn metadata_server_at(upstream: SocketAddr, policy: HttpClientPolicy) -> (TempDir, ServerHandle) {
     let mut transport_config = HttpClientConfig::default();
     transport_config
         .add_dns_override("generativelanguage.googleapis.com", upstream)
@@ -252,7 +236,6 @@ fn metadata_server_at_with_driver(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         &config_path,
         root.join("codex").join("auth.json"),
-        driver,
         "codex",
         Some(client),
     )

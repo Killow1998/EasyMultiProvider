@@ -4,26 +4,10 @@ use emp_transport::{
 };
 use serde_json::Value;
 use std::sync::Arc;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use std::{io, net::TcpStream};
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf},
     sync::Mutex,
 };
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-use tokio::{net::TcpStream as AsyncTcpStream, runtime::Handle};
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(in crate::api) fn legacy_websocket_io(
-    stream: &TcpStream,
-    runtime: &Handle,
-) -> io::Result<AsyncTcpStream> {
-    let socket = stream.try_clone()?;
-    socket.set_nonblocking(true)?;
-    let _runtime = runtime.enter();
-    AsyncTcpStream::from_std(socket)
-}
 
 pub(super) trait WebSocketIo: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> WebSocketIo for T {}

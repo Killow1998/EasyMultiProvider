@@ -1,12 +1,9 @@
-pub(crate) mod connections;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 mod memory;
 mod resources;
 mod shutdown;
 mod signals;
 mod startup;
-#[cfg(test)]
-pub(crate) use startup::TestDriver;
 #[cfg(windows)]
 mod windows;
 
@@ -20,8 +17,6 @@ use std::thread::{self, JoinHandle};
 
 pub(crate) struct ServerHandle {
     local_addr: SocketAddr,
-    #[cfg(test)]
-    pub(crate) test_driver: TestDriver,
     pub(crate) state: Arc<ServerState>,
     workers: Vec<JoinHandle<()>>,
     _service_owner: emp_state::IntegrationFileLock,
@@ -46,6 +41,11 @@ impl ServerHandle {
             .map_err(AppError::Io)?;
         self.workers.push(worker);
         Ok(())
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn listener_finished(&self) -> bool {
+        self.workers[0].is_finished()
     }
 
     pub fn local_addr(&self) -> SocketAddr {

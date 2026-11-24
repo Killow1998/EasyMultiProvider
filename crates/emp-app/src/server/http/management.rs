@@ -217,8 +217,10 @@ pub(crate) fn page_origin(request: Request<'_>, port: u16) -> Result<(), EntryEr
     }))
 }
 
+#[cfg(test)]
 pub(crate) struct PageOrigin;
 
+#[cfg(test)]
 impl FromRequestParts<Arc<ServerState>> for PageOrigin {
     type Rejection = EntryError;
 

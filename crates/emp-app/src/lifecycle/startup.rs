@@ -1,5 +1,5 @@
 use super::{ServerHandle, UpdateStartupMarkers};
-use crate::app::{BackendState, ServerState};
+use crate::app::{BackendSources, BackendState, ServerState};
 use crate::cli::is_loopback;
 use crate::error::AppError;
 use crate::http::auth::{BOOTSTRAP_LIFETIME_SECONDS, BootstrapToken, SessionStore};
@@ -15,35 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-#[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum TestDriver {
-    Legacy,
-    Candidate,
-}
-
-#[cfg(test)]
-impl TestDriver {
-    pub(crate) fn selected() -> &'static [Self] {
-        match std::env::var("EMP_TEST_HTTP_DRIVER").as_deref() {
-            Err(std::env::VarError::NotPresent) => &[Self::Legacy, Self::Candidate],
-            Ok("candidate") => &[Self::Candidate],
-            _ => panic!("EMP_TEST_HTTP_DRIVER must be unset or candidate"),
-        }
-    }
-
-    pub(crate) fn reference() -> Self {
-        Self::selected()[0]
-    }
-
-    pub(crate) fn compares_drivers() -> bool {
-        Self::selected().len() > 1
-    }
-}
-
 struct StartupContext<'a> {
-    #[cfg(test)]
-    driver: TestDriver,
     host: IpAddr,
     port: u16,
     config_path: &'a Path,
@@ -54,6 +26,8 @@ struct StartupContext<'a> {
     http_client_override: Option<emp_transport::HttpClient>,
     admission: ConnectionAdmissionConfig,
     enable_catalog_refresh_worker: bool,
+    external_key: bool,
+    official_models: emp_state::official_registry::RegistrySource,
 }
 
 impl ServerHandle {
@@ -74,17 +48,15 @@ impl ServerHandle {
     }
 
     #[cfg(test)]
-    pub(crate) fn start_with_test_driver(
+    pub(crate) fn start_for_test(
         host: IpAddr,
         config_path: &Path,
         native_auth_path: PathBuf,
-        driver: TestDriver,
     ) -> Result<Self, AppError> {
         Self::start_with_test_options(
             host,
             config_path,
             native_auth_path,
-            driver,
             "missing-test-codex",
             None,
         )
@@ -95,12 +67,10 @@ impl ServerHandle {
         host: IpAddr,
         config_path: &Path,
         native_auth_path: PathBuf,
-        driver: TestDriver,
         codex_binary: &str,
         http_client_override: Option<emp_transport::HttpClient>,
     ) -> Result<Self, AppError> {
         Self::start_with_config_options_inner(StartupContext {
-            driver,
             host,
             port: 0,
             config_path,
@@ -111,6 +81,8 @@ impl ServerHandle {
             http_client_override,
             admission: ConnectionAdmissionConfig::default(),
             enable_catalog_refresh_worker: false,
+            external_key: false,
+            official_models: emp_state::official_registry::bundled_snapshot,
         })
     }
 
@@ -122,15 +94,20 @@ impl ServerHandle {
         codex_binary: &str,
         native_auth_path: PathBuf,
     ) -> Result<Self, AppError> {
-        Self::start_with_config_options_and_browser(
+        Self::start_with_config_options_inner(StartupContext {
             host,
             port,
             config_path,
             codex_binary,
             native_auth_path,
-            false,
-            UpdateStartupMarkers::default(),
-        )
+            open_browser: false,
+            markers: UpdateStartupMarkers::default(),
+            http_client_override: None,
+            admission: ConnectionAdmissionConfig::default(),
+            enable_catalog_refresh_worker: false,
+            external_key: false,
+            official_models: emp_state::official_registry::bundled_snapshot,
+        })
     }
 
     pub(super) fn start_with_config_options_and_browser(
@@ -143,8 +120,6 @@ impl ServerHandle {
         markers: UpdateStartupMarkers,
     ) -> Result<Self, AppError> {
         Self::start_with_config_options_inner(StartupContext {
-            #[cfg(test)]
-            driver: TestDriver::Legacy,
             host,
             port,
             config_path,
@@ -154,7 +129,9 @@ impl ServerHandle {
             markers,
             http_client_override: None,
             admission: ConnectionAdmissionConfig::default(),
-            enable_catalog_refresh_worker: !cfg!(test),
+            enable_catalog_refresh_worker: true,
+            external_key: crate::startup_recovery::external_key(),
+            official_models: emp_state::official_registry::snapshot,
         })
     }
 
@@ -167,8 +144,6 @@ impl ServerHandle {
         native_auth_path: PathBuf,
     ) -> Result<Self, AppError> {
         Self::start_with_config_options_inner(StartupContext {
-            #[cfg(test)]
-            driver: TestDriver::Legacy,
             host,
             port,
             config_path,
@@ -179,6 +154,8 @@ impl ServerHandle {
             http_client_override: None,
             admission: ConnectionAdmissionConfig::default(),
             enable_catalog_refresh_worker: true,
+            external_key: false,
+            official_models: emp_state::official_registry::bundled_snapshot,
         })
     }
 
@@ -192,8 +169,6 @@ impl ServerHandle {
         client: emp_transport::HttpClient,
     ) -> Result<Self, AppError> {
         Self::start_with_config_options_inner(StartupContext {
-            #[cfg(test)]
-            driver: TestDriver::Legacy,
             host,
             port,
             config_path,
@@ -204,6 +179,8 @@ impl ServerHandle {
             http_client_override: Some(client),
             admission: ConnectionAdmissionConfig::default(),
             enable_catalog_refresh_worker: false,
+            external_key: false,
+            official_models: emp_state::official_registry::bundled_snapshot,
         })
     }
 
@@ -219,8 +196,6 @@ impl ServerHandle {
             .unwrap_or_else(|| Path::new("."))
             .join("codex/auth.json");
         Self::start_with_config_options_inner(StartupContext {
-            #[cfg(test)]
-            driver: TestDriver::Legacy,
             host,
             port,
             config_path,
@@ -231,6 +206,8 @@ impl ServerHandle {
             http_client_override: None,
             admission,
             enable_catalog_refresh_worker: false,
+            external_key: false,
+            official_models: emp_state::official_registry::bundled_snapshot,
         })
     }
 
@@ -287,8 +264,6 @@ impl ServerHandle {
         diagnostics: Arc<Diagnostics>,
     ) -> Result<Self, AppError> {
         let StartupContext {
-            #[cfg(test)]
-            driver,
             host,
             port,
             config_path,
@@ -299,6 +274,8 @@ impl ServerHandle {
             http_client_override,
             admission,
             enable_catalog_refresh_worker,
+            external_key,
+            official_models,
         } = context;
         let admission = super::resources::prepare().admission(admission);
         if !is_loopback(host) {
@@ -339,6 +316,10 @@ impl ServerHandle {
             http_client_override,
             diagnostics,
             update,
+            BackendSources {
+                external_key,
+                official_models,
+            },
         )?;
         let listener = TcpListener::bind((host, port))?;
         let local_addr = listener.local_addr()?;
@@ -366,7 +347,7 @@ impl ServerHandle {
                     ))
             });
         let state = Arc::new(ServerState {
-            #[cfg(all(test, unix))]
+            #[cfg(test)]
             test_sideband_address: Default::default(),
             #[cfg(all(test, unix))]
             test_upgrade_handoff: Default::default(),
@@ -393,42 +374,23 @@ impl ServerHandle {
         );
         let mut handle = Self {
             local_addr,
-            #[cfg(test)]
-            test_driver: driver,
             state,
             workers: Vec::new(),
             _service_owner: service_owner,
         };
         let started = (|| {
-            #[cfg(test)]
-            let use_candidate = matches!(driver, TestDriver::Candidate);
-            #[cfg(all(not(test), feature = "server-candidate"))]
-            let use_candidate = true;
-
-            #[cfg(any(test, feature = "server-candidate"))]
-            if use_candidate {
-                listener.set_nonblocking(true)?;
-                let listener = {
-                    let _entered = handle.state.backend.transport.runtime.enter();
-                    tokio::net::TcpListener::from_std(listener)?
-                };
-                handle.spawn_worker("emp-http", move |state| {
-                    state
-                        .backend
-                        .transport
-                        .runtime
-                        .block_on(crate::server::serve_candidate(listener, Arc::clone(&state)))
-                        .expect("HTTP server worker");
-                })?;
-            } else {
-                #[cfg(test)]
-                handle.spawn_worker("emp-http", move |state| {
-                    super::connections::accept(listener, state);
-                })?;
-            }
-            #[cfg(not(any(test, feature = "server-candidate")))]
+            listener.set_nonblocking(true)?;
+            let listener = {
+                let _entered = handle.state.backend.transport.runtime.enter();
+                tokio::net::TcpListener::from_std(listener)?
+            };
             handle.spawn_worker("emp-http", move |state| {
-                super::connections::accept(listener, state);
+                state
+                    .backend
+                    .transport
+                    .runtime
+                    .block_on(crate::server::serve_http(listener, Arc::clone(&state)))
+                    .expect("HTTP server worker");
             })?;
             if enable_catalog_refresh_worker {
                 handle.spawn_worker("emp-catalog-refresh", |state| {

@@ -1,4 +1,4 @@
-use super::account_writes::{Pair, expect_upstream_get, normalize_body};
+use super::account_writes::{expect_upstream_get, normalize_body};
 use super::*;
 use crate::tests::{fixture_tls, live_journal, wait_for};
 use emp_storage::quota_history::SAMPLE_INTERVAL_SECONDS;
@@ -19,12 +19,7 @@ const DISCOVER_MODELS: &[u8] = br#"{"data":[{"id":"gpt-6-luna","name":"Fixture m
 const POOL_QUOTA: &[u8] = br#"{"scope":"shared_pool","provider":"claude","accounts":[{"id":"pool-account","enabled":true,"stale":false,"status":"ok","windows":{"five_hour":{"remaining_percent":73}}}]}"#;
 const BALANCE_BODY: &[u8] = br#"{"balance_infos":[{"currency":"USD","total_balance":"7.50"}]}"#;
 
-fn fixture(
-    upstream: SocketAddr,
-    balance: SocketAddr,
-    root_certificate: &[u8],
-    driver: TestDriver,
-) -> Fixture {
+fn fixture(upstream: SocketAddr, balance: SocketAddr, root_certificate: &[u8]) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let config = root.join("config.json");
@@ -48,18 +43,17 @@ fn fixture(
         .unwrap();
     transport.use_only_configured_root_certificates().unwrap();
     transport.add_dns_override(BALANCE_HOST, balance).unwrap();
-    let legacy = LegacyServer::start_with_test_options(
+    let server = RunningServer::start_with_test_options(
         LOOPBACK.ip(),
         &config,
         root.join("codex/auth.json"),
-        driver,
         "missing-test-codex",
         Some(HttpClient::with_config(HttpClientPolicy::default(), transport).unwrap()),
     )
     .unwrap();
     Fixture {
         directory,
-        legacy,
+        server,
         upstream: Arc::default(),
     }
 }
@@ -76,26 +70,22 @@ fn read_file(path: &Path) -> Value {
 
 fn published(fixture: &Fixture) -> Value {
     read_file(&crate::services::catalog::generated_catalog_path(
-        &fixture.legacy.state,
+        &fixture.server.state,
     ))
 }
 
-fn normalize_root(reply: Vec<u8>, pair: &Pair<'_>) -> Vec<u8> {
+fn normalize_root(reply: Vec<u8>, fixture: &Fixture) -> Vec<u8> {
     normalize_body(reply, |body| {
-        [pair.old, pair.new]
-            .iter()
-            .fold(body.to_owned(), |body, fixture| {
-                body.replace(
-                    fixture
-                        .directory
-                        .path()
-                        .canonicalize()
-                        .unwrap()
-                        .to_str()
-                        .unwrap(),
-                    "/fixture",
-                )
-            })
+        body.replace(
+            fixture
+                .directory
+                .path()
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/fixture",
+        )
     })
 }
 
@@ -134,11 +124,9 @@ async fn send_http(mut peer: TcpStream, body: &[u8]) {
     peer.write_all(&reply).await.unwrap();
 }
 
-async fn serve_pair(upstream: &AsyncListener, path: &str, body: &[u8]) {
-    for _ in 0..2 {
-        let peer = expect_upstream_get(upstream, path, "fixture-key").await;
-        send_http(peer, body).await;
-    }
+async fn serve_model_query(upstream: &AsyncListener, path: &str, body: &[u8]) {
+    let peer = expect_upstream_get(upstream, path, "fixture-key").await;
+    send_http(peer, body).await;
 }
 
 async fn wait_for_balance(
@@ -224,62 +212,48 @@ fn assert_selected(fixture: &Fixture) {
 }
 
 #[test]
-fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
+fn catalog_writes_persist_models_and_provider_observations() {
     let upstream = listener();
     let balance = listener();
     let (tls, root) = fixture_tls(BALANCE_HOST);
-    let old = fixture(
-        upstream.local_addr().unwrap(),
-        balance.local_addr().unwrap(),
-        &root,
-        TestDriver::reference(),
-    );
+
     fixture(
         upstream.local_addr().unwrap(),
         balance.local_addr().unwrap(),
         &root,
-        TestDriver::Candidate,
     )
-    .run_wire(async |new, candidate| {
-        let pair = Pair {
-            old: &old,
-            new,
-            candidate,
-        };
+    .run_wire(async |fixture, endpoint| {
         let upstream = AsyncListener::from_std(upstream).unwrap();
         let balance = AsyncListener::from_std(balance).unwrap();
         for path in [DISCOVER, DECISION, REFRESH, PREFERENCE, QUOTA, BALANCE] {
-            pair.parity(
-                |port, _| json_request(port, path, &[], b"{"),
-                401,
-                |reply| reply,
-            )
-            .await;
-            pair.parity(
-                |port, session| {
-                    json_request(
-                        port,
-                        path,
-                        &[session, "Origin: https://other.invalid"],
-                        b"{",
-                    )
-                },
-                403,
-                |reply| reply,
-            )
-            .await;
+            fixture
+                .request_json(|port, _| json_request(port, path, &[], b"{"), 401)
+                .await;
+            fixture
+                .request_json(
+                    |port, session| {
+                        json_request(
+                            port,
+                            path,
+                            &[session, "Origin: https://other.invalid"],
+                            b"{",
+                        )
+                    },
+                    403,
+                )
+                .await;
             assert!(
-                pair.post(path, b"{", 400).await["error"]["message"]
+                fixture.post(path, b"{", 400).await["error"]["message"]
                     .as_str()
                     .unwrap()
                     .contains("valid JSON")
             );
             assert_eq!(
-                pair.post(path, b"[]", 400).await["error"]["message"],
+                fixture.post(path, b"[]", 400).await["error"]["message"],
                 "request body must be a JSON object"
             );
-            let oversized = pair
-                .parity(
+            let oversized = fixture
+                .request_json(
                     |port, session| {
                         request(
                             port,
@@ -294,7 +268,6 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
                         )
                     },
                     413,
-                    |reply| reply,
                 )
                 .await;
             assert_eq!(oversized["error"]["limit_bytes"], 5242880);
@@ -307,11 +280,11 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
                 br#"{"provider":""}"#,
             ] {
                 assert_eq!(
-                    pair.post(path, body, 400).await["error"]["message"],
+                    fixture.post(path, body, 400).await["error"]["message"],
                     "provider is required"
                 );
             }
-            let absent = pair
+            let absent = fixture
                 .post(
                     path,
                     br#"{"provider":"absent","protocol":"openai","selected":false}"#,
@@ -328,7 +301,7 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
             br#"{"provider":"absent","protocol":false}"#,
         ] {
             assert_eq!(
-                pair.post(DECISION, body, 400).await["error"]["message"],
+                fixture.post(DECISION, body, 400).await["error"]["message"],
                 "decision API type is invalid"
             );
         }
@@ -336,25 +309,25 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
             (QUOTA, "/api/providers/absent/quota"),
             (BALANCE, "/api/providers/absent/balance"),
         ] {
-            pair.post(absent, b"{}", 404).await;
+            fixture.post(absent, b"{}", 404).await;
             for body in [br#"{"force":null}"#.as_slice(), br#"{"force":7}"#] {
                 assert_eq!(
-                    pair.post(path, body, 400).await["error"]["message"],
+                    fixture.post(path, body, 400).await["error"]["message"],
                     "force must be boolean"
                 );
                 assert_eq!(
-                    pair.post(absent, body, 400).await["error"]["message"],
+                    fixture.post(absent, body, 400).await["error"]["message"],
                     "force must be boolean"
                 );
             }
         }
-        pair.post("/api/providers/quota", b"{}", 404).await;
+        fixture.post("/api/providers/quota", b"{}", 404).await;
         for body in [
             b"{}".as_slice(),
             br#"{"catalog_show_context":false,"ignored":true}"#,
         ] {
             assert_eq!(
-                pair.post(PREFERENCE, body, 400).await["error"]["message"],
+                fixture.post(PREFERENCE, body, 400).await["error"]["message"],
                 "catalog preference request must contain only catalog_show_context"
             );
         }
@@ -363,18 +336,18 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
             br#"{"catalog_show_context":"false"}"#,
         ] {
             assert_eq!(
-                pair.post(PREFERENCE, body, 400).await["error"]["message"],
+                fixture.post(PREFERENCE, body, 400).await["error"]["message"],
                 "catalog_show_context must be boolean"
             );
         }
 
         let (decision, ()) = tokio::join!(
-            pair.post(
+            fixture.post(
                 DECISION,
                 br#"{"provider":"fixture","protocol":"openai","ignored":true}"#,
                 200
             ),
-            serve_pair(&upstream, "/v1/models", DISCOVER_MODELS),
+            serve_model_query(&upstream, "/v1/models", DISCOVER_MODELS),
         );
         assert_eq!(
             decision,
@@ -382,19 +355,19 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
         );
 
         let (invalid_selection, ()) = tokio::join!(
-            pair.post(
+            fixture.post(
                 DISCOVER,
                 br#"{"provider":"fixture","cached":"true","selected":false}"#,
                 400
             ),
-            serve_pair(&upstream, "/v1/models", DISCOVER_MODELS),
+            serve_model_query(&upstream, "/v1/models", DISCOVER_MODELS),
         );
         assert_eq!(
             invalid_selection["error"]["message"],
             "selected models must be a list of model IDs"
         );
-        let preview = pair
-            .parity(
+        let preview = fixture
+            .request_checked(
                 |port, session| {
                     json_request(
                         port,
@@ -408,8 +381,8 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
             )
             .await;
         assert_eq!(preview["models"][0]["upstream_id"], "gpt-6-luna");
-        let fetched = pair
-            .parity(
+        let fetched = fixture
+            .request_checked(
                 |port, session| {
                     request(
                         port,
@@ -425,59 +398,58 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
             .await;
         assert_eq!(fetched["models"], preview["models"]);
         assert_eq!(
-            pair.post(
-                DISCOVER,
-                br#"{"provider":"fixture","cached":true,"selected":["missing"]}"#,
-                400
-            )
-            .await["error"]["message"],
+            fixture
+                .post(
+                    DISCOVER,
+                    br#"{"provider":"fixture","cached":true,"selected":["missing"]}"#,
+                    400
+                )
+                .await["error"]["message"],
             "selected model is not in the discovered list"
         );
-        let selected = pair
-            .parity(
+        let selected = fixture
+            .request_checked(
                 |port, session| json_request(port, DISCOVER, &[session], SELECT),
                 200,
-                |reply| normalize_root(reply, &pair),
+                |reply| normalize_root(reply, fixture),
             )
             .await;
         assert_eq!(selected["added"], 1);
-        for fixture in [&old, new] {
+        {
             assert_selected(fixture);
         }
-        assert_eq!(published(&old), published(new));
 
-        let refresh = pair
-            .parity(
+        let refresh = fixture
+            .request_checked(
                 |port, session| json_request(port, REFRESH, &[session], br#"{"ignored":true}"#),
                 200,
-                |reply| normalize_root(reply, &pair),
+                |reply| normalize_root(reply, fixture),
             )
             .await;
         assert_eq!(refresh["status"], "ok");
-        assert_eq!(published(&old), published(new));
-        let preference = pair
+
+        let preference = fixture
             .post(PREFERENCE, br#"{"catalog_show_context":false}"#, 200)
             .await;
         assert_eq!(preference, json!({"catalog_show_context":false}));
-        for fixture in [&old, new] {
+        {
             assert_eq!(
                 read_file(&fixture.directory.path().join("config.json"))["catalog_show_context"],
                 false
             );
         }
-        assert_eq!(published(&old), published(new));
 
         let (quota, ()) = tokio::join!(
-            pair.parity(
+            fixture.request_checked(
                 |port, session| json_request(port, QUOTA, &[session], br#"{"ignored":true}"#),
                 200,
                 |reply| normalize_time(reply, "observed_at")
             ),
-            serve_pair(&upstream, "/v1/quota", POOL_QUOTA),
+            serve_model_query(&upstream, "/v1/quota", POOL_QUOTA),
         );
         assert_eq!(quota_used(&quota["observation"]), 27.0);
         let (amounts, ()) = tokio::join!(
-            pair.parity(
+            fixture.request_checked(
                 |port, session| json_request(
                     port,
                     BALANCE,
@@ -488,7 +460,7 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
                 |reply| normalize_time(reply, "observed_at")
             ),
             async {
-                for _ in 0..2 {
+                {
                     send_balance(wait_for_balance(&balance, &tls).await).await;
                 }
             },
@@ -498,11 +470,10 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
             json!([{"currency":"USD","available":7.5}])
         );
 
-        let mut snapshots = Vec::new();
-        for (fixture, address) in [(&old, old.legacy.local_addr()), (new, candidate)] {
+        {
+            let (fixture, address) = (fixture, endpoint);
             let mut config = get(fixture, address, "/api/config").await;
             assert_eq!(config["catalog_show_context"], false);
-            let mut rows = Vec::new();
             for (service, id, expected) in [
                 ("provider_quotas", "fixture-cpa", &quota),
                 ("provider_balances", "deepseek", &amounts),
@@ -512,24 +483,21 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
                 assert!(entry["observation"]["observed_at"].as_f64().unwrap() > 0.0);
                 entry["observation"]["observed_at"] = json!(0);
                 assert_eq!(entry["observation"], expected["observation"]);
-                rows.push(entry.take());
             }
-            snapshots.push(rows);
             assert!(
                 fixture
-                    .legacy
+                    .server
                     .state
                     .lifecycle
                     .updates()
                     .drain_for_test(Duration::ZERO)
             );
         }
-        assert_eq!(snapshots[0], snapshots[1]);
 
         for path in [DISCOVER, DECISION, REFRESH, PREFERENCE, QUOTA, BALANCE] {
             for session_required in [false, true] {
-                let denied = pair
-                    .parity(
+                let denied = fixture
+                    .request_json(
                         |port, session| {
                             let headers = [session];
                             json_request(
@@ -540,52 +508,45 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
                             )
                         },
                         503,
-                        |reply| reply,
                     )
                     .await;
                 assert_eq!(denied["error"]["code"], "updating");
             }
         }
         assert_eq!(
-            pair.read("/v1/models/fixture/gpt-6-luna").await["id"],
+            fixture.read("/v1/models/fixture/gpt-6-luna").await["id"],
             "fixture/gpt-6-luna"
         );
-        for fixture in [&old, new] {
+        {
             fixture
-                .legacy
+                .server
                 .state
                 .backend
                 .modules
                 .mark_unavailable(emp_modules::Module::Decision, "fixture_disabled");
         }
-        let disabled = pair
-            .parity(
-                |port, _| json_request(port, DECISION, &[], b"{"),
-                404,
-                |reply| reply,
-            )
+        let disabled = fixture
+            .request_json(|port, _| json_request(port, DECISION, &[], b"{"), 404)
             .await;
         assert_eq!(disabled["error"]["code"], "module_disabled");
         assert!(timeout(Duration::ZERO, upstream.accept()).await.is_err());
         assert!(timeout(Duration::ZERO, balance.accept()).await.is_err());
     });
-    old.legacy.shutdown().unwrap();
 }
 
 async fn submit(
     fixture: &Fixture,
-    address: SocketAddr,
     path: &str,
     body: &[u8],
-) -> (TcpStream, Option<tokio::task::JoinHandle<()>>) {
-    let (mut client, task) = connect_submitted_write(fixture, address).await;
+) -> (TcpStream, tokio::task::JoinHandle<()>) {
+    let (mut client, task) = connect_submitted_write(fixture).await;
     let wire = json_request(fixture.port(), path, &[&fixture.session()], body);
     client.write_all(&wire).await.unwrap();
     (client, task)
 }
 
 async fn wait_for_write(fixture: &Fixture) {
-    let state = Arc::clone(&fixture.legacy.state);
+    let state = Arc::clone(&fixture.server.state);
     tokio::task::spawn_blocking(move || {
         assert!(
             state
@@ -599,13 +560,13 @@ async fn wait_for_write(fixture: &Fixture) {
     .unwrap();
 }
 
-async fn refresh_after_disconnect(fixture: &Fixture, address: SocketAddr) {
-    let state = &fixture.legacy.state;
+async fn refresh_after_disconnect(fixture: &Fixture) {
+    let state = &fixture.server.state;
     let catalog = crate::services::catalog::generated_catalog_path(state);
     std::fs::remove_file(&catalog).unwrap();
     let body = b"{}";
     let wire = json_request(fixture.port(), REFRESH, &[&fixture.session()], body);
-    let (mut client, task) = connect_submitted_write(fixture, address).await;
+    let (mut client, task) = connect_submitted_write(fixture).await;
     client
         .write_all(&wire[..wire.len() - body.len()])
         .await
@@ -674,25 +635,18 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
     let upstream = listener();
     let balance = listener();
     let (tls, root) = fixture_tls(BALANCE_HOST);
-    let old = fixture(
-        upstream.local_addr().unwrap(),
-        balance.local_addr().unwrap(),
-        &root,
-        TestDriver::reference(),
-    );
+
     let new = fixture(
         upstream.local_addr().unwrap(),
         balance.local_addr().unwrap(),
         &root,
-        TestDriver::Candidate,
     );
-    new.run_wire(async |new, candidate| {
+    new.run_wire(async |fixture, endpoint| {
         let upstream = AsyncListener::from_std(upstream).unwrap();
         let balance = AsyncListener::from_std(balance).unwrap();
-        let mut histories = Vec::new();
-        for (fixture, address) in [(&old, old.legacy.local_addr()), (new, candidate)] {
-            let state = &fixture.legacy.state;
-            let (client, task) = submit(fixture, address, DISCOVER, br#"{"provider":"fixture","selected":["gpt-6-luna"]}"#).await;
+        { let (fixture, address) = (fixture, endpoint);
+            let state = &fixture.server.state;
+            let (client, task) = submit(fixture, DISCOVER, br#"{"provider":"fixture","selected":["gpt-6-luna"]}"#).await;
             let peer = expect_upstream_get(&upstream, "/v1/models", "fixture-key").await;
             assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
             disconnect_submitted_write(fixture, client, task).await;
@@ -700,17 +654,17 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
             wait_for_write(fixture).await;
             assert_selected(fixture);
             assert_eq!(get(fixture, address, "/api/providers/fixture/models").await["models"][0]["upstream_id"], "gpt-6-luna");
-            refresh_after_disconnect(fixture, address).await;
+            refresh_after_disconnect(fixture).await;
 
             let start = system_now() as i64 - SAMPLE_INTERVAL_SECONDS;
-            let (client, task) = submit(fixture, address, QUOTA, br#"{"force":true}"#).await;
+            let (client, task) = submit(fixture, QUOTA, br#"{"force":true}"#).await;
             let peer = expect_upstream_get(&upstream, "/v1/quota", "fixture-key").await;
             assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
             disconnect_submitted_write(fixture, client, task).await;
             send_http(peer, POOL_QUOTA).await;
             wait_for_write(fixture).await;
 
-            let (client, task) = submit(fixture, address, BALANCE, b"{}").await;
+            let (client, task) = submit(fixture, BALANCE, b"{}").await;
             let peer = wait_for_balance(&balance, &tls).await;
             assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
             disconnect_submitted_write(fixture, client, task).await;
@@ -734,9 +688,7 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
                 assert_eq!(points.len(), 1);
                 assert_eq!(points[0]["remaining_percent"], 73.0);
                 assert_eq!(points[0]["observed_at"], bucket);
-                points[0]["observed_at"] = json!(0);
             }
-            histories.push(series);
 
             for path in [QUOTA, BALANCE] {
                 let wire = json_request(fixture.port(), path, &[&fixture.session()], b"{}");
@@ -745,13 +697,11 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
             assert!(timeout(Duration::ZERO, upstream.accept()).await.is_err());
             assert!(timeout(Duration::ZERO, balance.accept()).await.is_err());
         }
-        assert_eq!(histories[0], histories[1]);
-        assert_eq!(published(&old), published(new));
-        for fixture in [&old, new] {
+
+        {
             assert_writes_completed_once(&live_journal(fixture.directory.path()));
         }
     });
-    old.legacy.shutdown().unwrap();
 }
 
 fn assert_writes_completed_once(records: &[Value]) {

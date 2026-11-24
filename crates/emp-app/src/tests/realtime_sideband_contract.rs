@@ -1,10 +1,7 @@
 use super::realtime_contract::{RealtimeUpstream, UpstreamResponse, app_server_for};
 use super::*;
 use crate::api::realtime::sideband::SIDEBAND_EVENT_CAPACITY;
-use crate::api::realtime::sideband::{
-    MAX_REALTIME_SIDEBAND_MESSAGE_BYTES, prepare_sideband,
-    serve_realtime_sideband_with_test_connector,
-};
+use crate::api::realtime::sideband::{MAX_REALTIME_SIDEBAND_MESSAGE_BYTES, prepare_sideband};
 use emp_transport::websocket_accept;
 use std::net::TcpListener;
 
@@ -73,8 +70,8 @@ fn sideband_rejects_caller_before_call_id_or_upstream() {
     ));
     assert_eq!(status, 401);
     assert_eq!(payload["error"]["code"], "realtime_caller_unauthorized");
-    assert!(upstream.no_request());
     server.shutdown().expect("shutdown server");
+    upstream.assert_no_more_requests();
 }
 
 #[test]
@@ -112,8 +109,8 @@ fn sideband_validates_call_id_and_upgrade_before_admission() {
     assert_eq!(status, 400);
     assert_eq!(payload["error"]["message"], "invalid Sec-WebSocket-Key");
     assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
-    assert!(upstream.no_request());
     server.shutdown().expect("shutdown server");
+    upstream.assert_no_more_requests();
 }
 
 #[test]
@@ -196,8 +193,8 @@ fn sideband_target_uses_native_credentials_allowlisted_headers_proxy_and_message
     assert_eq!(server.state.lifecycle.admission.active_websockets(), 1);
     drop(prepared);
     assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
-    assert!(upstream.no_request());
     server.shutdown().expect("shutdown server");
+    upstream.assert_no_more_requests();
 }
 
 #[test]
@@ -213,43 +210,17 @@ fn sideband_without_native_subscription_is_rejected_after_caller_auth() {
     assert_eq!(status, 401);
     assert_eq!(payload["error"]["code"], "native_subscription_unavailable");
     assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
-    assert!(upstream.no_request());
     server.shutdown().expect("shutdown server");
+    upstream.assert_no_more_requests();
 }
 
 #[test]
 fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     let (_fixture, app_directory, idle_upstream, server) = server_fixture(true);
     let fake = FakeSideband::start();
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind direct handler");
-    let address = listener.local_addr().unwrap();
-    let state = Arc::clone(&server.state);
+    let address = server.local_addr();
     let cookie = session_header(&server);
-    let fake_url = fake.url.clone();
-    let app = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept downstream sideband");
-        let request_head = read_request_head(&mut stream).expect("read downstream handshake");
-        let request = parse_request(&request_head.head).expect("parse downstream handshake");
-        serve_realtime_sideband_with_test_connector(
-            &mut stream,
-            request,
-            "rtc_relay_contract",
-            request_head.body_prefix,
-            &state,
-            crate::util::system_now(),
-            move |prepared| {
-                let headers = &prepared.headers;
-                assert_eq!(headers["Authorization"], "Bearer native-secret");
-                assert!(
-                    !headers
-                        .values()
-                        .any(|value| value == "Bearer caller-secret")
-                );
-                prepared.url = fake_url;
-                prepared.proxy = None;
-            },
-        );
-    });
+    set_sideband_upstream(&server, &fake.url);
 
     let first_client = masked_frame(1, br#"{"type":"client.first"}"#);
     let request = format!(
@@ -329,7 +300,6 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     assert_eq!(observed.path, "/v1/live/rtc_relay_contract");
     assert_eq!(observed.headers["authorization"], "Bearer native-secret");
     assert_eq!(observed.headers["session-id"], "session-voice");
-    app.join().expect("join sideband handler");
     let deadline = Instant::now() + Duration::from_secs(1);
     while server.state.lifecycle.admission.active_websockets() != 0 && Instant::now() < deadline {
         #[expect(
@@ -339,8 +309,8 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
         thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
-    assert!(idle_upstream.no_request());
     server.shutdown().expect("shutdown server");
+    idle_upstream.assert_no_more_requests();
     let records = super::internal_events_contract::final_journal(app_directory.path());
     let admitted: Vec<_> = records
         .iter()
@@ -386,8 +356,8 @@ fn sideband_upstream_handshake_errors_return_http_before_downstream_101() {
         assert!(!response.starts_with("HTTP/1.1 101"));
         fake_worker.join().expect("join rejected fake upstream");
         assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
-        assert!(idle_upstream.no_request());
         server.shutdown().expect("shutdown fixture server");
+        idle_upstream.assert_no_more_requests();
     }
 }
 
@@ -407,8 +377,8 @@ fn sideband_connection_refused_maps_to_502_and_releases_admission() {
     assert_eq!(payload["error"]["code"], "native_realtime_transport_error");
     assert!(!response.starts_with("HTTP/1.1 101"));
     assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
-    assert!(idle_upstream.no_request());
     server.shutdown().expect("shutdown fixture server");
+    idle_upstream.assert_no_more_requests();
 }
 
 struct FakeSideband {
@@ -533,29 +503,21 @@ fn rejecting_sideband(status: u16) -> (String, JoinHandle<()>) {
     (url, worker)
 }
 
+fn set_sideband_upstream(server: &ServerHandle, url: &str) {
+    let address = url
+        .strip_prefix("ws://")
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    server.state.test_sideband_address.set(address).unwrap();
+}
+
 fn direct_sideband_request(server: &ServerHandle, call_id: &str, fake_url: &str) -> String {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind sideband handler");
-    let address = listener.local_addr().unwrap();
-    let state = Arc::clone(&server.state);
-    let owned_url = fake_url.to_owned();
-    let owned_call_id = call_id.to_owned();
-    let handler = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept sideband handler");
-        let head = read_request_head(&mut stream).expect("read sideband request");
-        let request = parse_request(&head.head).expect("parse sideband request");
-        serve_realtime_sideband_with_test_connector(
-            &mut stream,
-            request,
-            &owned_call_id,
-            head.body_prefix,
-            &state,
-            crate::util::system_now(),
-            move |prepared| {
-                prepared.url = owned_url;
-                prepared.proxy = None;
-            },
-        );
-    });
+    let address = server.local_addr();
+    set_sideband_upstream(server, fake_url);
     let cookie = session_header(server);
     let raw = format!(
         "GET /v1/live/{call_id} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{cookie}\r\nAuthorization: Bearer caller-secret\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
@@ -568,9 +530,7 @@ fn direct_sideband_request(server: &ServerHandle, call_id: &str, fake_url: &str)
     client
         .write_all(raw.as_bytes())
         .expect("write sideband request");
-    let response = response_until_close(&mut client);
-    handler.join().expect("join sideband handler");
-    response
+    response_until_close(&mut client)
 }
 
 fn read_http_head(stream: &mut TcpStream) -> String {

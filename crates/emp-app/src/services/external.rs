@@ -28,7 +28,7 @@ pub(crate) fn complete(
     let started = Instant::now();
     let router = ExternalRouter::new(
         &state.backend.transport.client,
-        emp_state::official_registry::snapshot,
+        state.backend.configuration.official_models,
     )
     .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
     let router = &router;
@@ -92,7 +92,7 @@ pub(crate) async fn open_stream_async<'a>(
     let started = Instant::now();
     let router = ExternalRouter::new(
         &state.backend.transport.client,
-        emp_state::official_registry::snapshot,
+        state.backend.configuration.official_models,
     )
     .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
     let router = &router;

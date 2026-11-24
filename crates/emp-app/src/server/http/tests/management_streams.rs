@@ -21,12 +21,11 @@ const ACCEPT: &str = "Accept: text/event-stream";
 struct Stream {
     io: BufReader<TcpStream>,
     headers: BTreeMap<String, String>,
-    chunked: bool,
     pending: Vec<u8>,
 }
 
 impl Stream {
-    async fn open(address: SocketAddr, wire: &[u8], candidate: bool, cache: &str) -> Self {
+    async fn open(address: SocketAddr, wire: &[u8], cache: &str) -> Self {
         let RawClient { io, head } = RawClient::request(address, wire).await;
         assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
         let mut headers = head
@@ -37,10 +36,7 @@ impl Stream {
                 Some((name.to_ascii_lowercase(), value.trim().to_owned()))
             })
             .collect::<BTreeMap<_, _>>();
-        assert_eq!(
-            headers.remove("transfer-encoding"),
-            candidate.then(|| "chunked".into())
-        );
+        assert_eq!(headers.remove("transfer-encoding"), Some("chunked".into()));
         assert!(!headers.contains_key("content-length"));
         assert_eq!(headers["content-type"], "text/event-stream");
         assert_eq!(headers["cache-control"], cache);
@@ -51,7 +47,6 @@ impl Stream {
         Self {
             io: BufReader::new(io),
             headers,
-            chunked: candidate,
             pending: Vec::new(),
         }
     }
@@ -64,7 +59,7 @@ impl Stream {
                         String::from_utf8(self.pending.drain(..end + 2).collect()).unwrap(),
                     );
                 }
-                if self.chunked {
+                {
                     let mut line = String::new();
                     assert_ne!(self.io.read_line(&mut line).await.unwrap(), 0);
                     let size = usize::from_str_radix(line.trim_end(), 16).unwrap();
@@ -81,8 +76,6 @@ impl Stream {
                     if size == 0 {
                         break;
                     }
-                } else if self.io.read_until(b'\n', &mut self.pending).await.unwrap() == 0 {
-                    break;
                 }
             }
             assert!(self.pending.is_empty(), "partial SSE event");
@@ -132,64 +125,43 @@ async fn account_snapshot(stream: &mut Stream) -> String {
 
 #[test]
 fn account_stream_snapshot_heartbeat_and_quit_match_while_updates_drain() {
-    Fixture::new().run_candidate(async |fixture, candidate| {
-        let state = &fixture.legacy.state;
+    Fixture::new().run_wire(async |fixture, endpoint| {
+        let state = &fixture.server.state;
         let session = fixture.session();
         let wire = request(fixture.port(), "GET", ACCOUNT_EVENTS, &[&session], b"");
-        let mut streams = Vec::new();
-        let mut snapshots = Vec::new();
-        for (driver, address) in driver_endpoints(fixture.legacy.local_addr(), candidate) {
-            let mut stream = Stream::open(
-                address,
-                &wire,
-                matches!(driver, TestDriver::Candidate),
-                "no-store",
-            )
-            .await;
-            snapshots.push((stream.headers.clone(), account_snapshot(&mut stream).await));
-            streams.push(stream);
-        }
-        for snapshots in snapshots.windows(2) {
-            assert_eq!(snapshots[0], snapshots[1]);
-        }
+        let mut stream = Stream::open(endpoint, &wire, "no-store").await;
+        account_snapshot(&mut stream).await;
         assert_eq!(state.lifecycle.admission.active_requests(), 0);
         assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
         state.backend.management_events.publish(Change::Integration);
-        for stream in &mut streams {
-            assert_eq!(
-                stream.next(DEADLINE).await.as_deref(),
-                Some("event: integration-updated\ndata: {}\n\n")
-            );
-        }
+        assert_eq!(
+            stream.next(DEADLINE).await.as_deref(),
+            Some("event: integration-updated\ndata: {}\n\n")
+        );
 
         let started = Instant::now();
-        for stream in &mut streams {
-            let frame = stream.next(Duration::from_secs(22)).await;
-            assert_eq!(frame.as_deref(), Some(": keep-alive\n\n"));
-            assert!(
-                (Duration::from_millis(14_500)..Duration::from_secs(22))
-                    .contains(&started.elapsed())
-            );
-        }
+        let frame = stream.next(Duration::from_secs(22)).await;
+        assert_eq!(frame.as_deref(), Some(": keep-alive\n\n"));
+        assert!(
+            (Duration::from_millis(14_500)..Duration::from_secs(22)).contains(&started.elapsed())
+        );
 
         state.backend.management_events.publish(Change::Quit);
         state.backend.management_events.close();
-        for stream in &mut streams {
-            assert_eq!(
-                stream.next(DEADLINE).await.as_deref(),
-                Some("event: emp-exiting\ndata: {}\n\n")
-            );
-            assert!(stream.next(DEADLINE).await.is_none());
-        }
+        assert_eq!(
+            stream.next(DEADLINE).await.as_deref(),
+            Some("event: emp-exiting\ndata: {}\n\n")
+        );
+        assert!(stream.next(DEADLINE).await.is_none());
         let admission = state.lifecycle.admission.quiesce(0, Duration::ZERO);
         assert!(admission.is_some());
     });
 }
 
 #[test]
-fn candidate_account_stream_disconnect_releases_subscription_without_another_event() {
-    Fixture::new().run_candidate(async |fixture, address| {
-        let state = &fixture.legacy.state;
+fn account_stream_disconnect_releases_subscription_without_another_event() {
+    Fixture::new().run_wire(async |fixture, address| {
+        let state = &fixture.server.state;
         let wire = request(
             fixture.port(),
             "GET",
@@ -199,11 +171,11 @@ fn candidate_account_stream_disconnect_releases_subscription_without_another_eve
         );
         let mut streams = Vec::new();
         for _ in 0..crate::api::quota::QUOTA_EVENT_SLOT_LIMIT {
-            let mut stream = Stream::open(address, &wire, true, "no-store").await;
+            let mut stream = Stream::open(address, &wire, "no-store").await;
             account_snapshot(&mut stream).await;
             streams.push(stream);
         }
-        let denied = fixture.parity(address, &wire, 503).await;
+        let denied = assert_wire(address, &wire, false, 503).await;
         assert!(
             str::from_utf8(&denied)
                 .unwrap()
@@ -223,11 +195,11 @@ fn candidate_account_stream_disconnect_releases_subscription_without_another_eve
         .await
         .unwrap();
 
-        let mut replacement = Stream::open(address, &wire, true, "no-store").await;
+        let mut replacement = Stream::open(address, &wire, "no-store").await;
         account_snapshot(&mut replacement).await;
         assert_eq!(
             fixture
-                .legacy
+                .server
                 .state
                 .backend
                 .management_events
@@ -236,7 +208,7 @@ fn candidate_account_stream_disconnect_releases_subscription_without_another_eve
         );
         drop(replacement);
         drop(streams);
-        let state = fixture.legacy.state.clone();
+        let state = fixture.server.state.clone();
         tokio::task::spawn_blocking(move || {
             wait_for(DEADLINE, || {
                 state.backend.management_events.subscriber_count() == 0
@@ -258,7 +230,7 @@ fn report_gate(fixture: &Fixture) -> (oneshot::Receiver<Arc<AtomicBool>>, onesho
     let (first_frame, received) = oneshot::channel();
     let (release, wait) = oneshot::channel();
     *fixture
-        .legacy
+        .server
         .state
         .backend
         .usage
@@ -272,7 +244,7 @@ fn report_gate(fixture: &Fixture) -> (oneshot::Receiver<Arc<AtomicBool>>, onesho
 }
 
 fn seed_reports(fixture: &Fixture) {
-    let ledger = &fixture.legacy.state.backend.usage.ledger;
+    let ledger = &fixture.server.state.backend.usage.ledger;
     ledger.query(1.0, 10.0, "all", system_now(), None).unwrap();
     let database =
         rusqlite::Connection::open(fixture.directory.path().join("state/usage.sqlite3")).unwrap();
@@ -288,8 +260,8 @@ fn seed_reports(fixture: &Fixture) {
 fn report_first_progress_precedes_later_events_and_matches_during_update_drain() {
     let fixture = Fixture::new();
     seed_reports(&fixture);
-    fixture.run_candidate(async |fixture, address| {
-        let state = &fixture.legacy.state;
+    fixture.run_wire(async |fixture, address| {
+        let state = &fixture.server.state;
         for path in [CALLS, USAGE] {
             let wire = request(
                 fixture.port(),
@@ -298,11 +270,10 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                 &[&fixture.session(), ACCEPT],
                 b"",
             );
-            let mut results = Vec::new();
-            for (driver, endpoint) in driver_endpoints(fixture.legacy.local_addr(), address) {
-                let candidate = matches!(driver, TestDriver::Candidate);
+            {
+                let endpoint = address;
                 let (reached, release) = report_gate(fixture);
-                let mut stream = Stream::open(endpoint, &wire, candidate, "no-cache").await;
+                let mut stream = Stream::open(endpoint, &wire, "no-cache").await;
                 let first = stream.next(DEADLINE).await.unwrap();
                 assert_eq!(
                     event(&first),
@@ -328,7 +299,6 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                     assert_eq!(payload["groups"][0]["owner"], "fixture");
                     assert_eq!(payload["first_record_at"].as_f64(), Some(2.0));
                 }
-                results.push((stream.headers, frames));
                 let state = state.clone();
                 tokio::task::spawn_blocking(move || {
                     wait_for(DEADLINE, || {
@@ -338,16 +308,13 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                 .await
                 .unwrap();
             }
-            for pair in results.windows(2) {
-                assert_eq!(pair[0], pair[1], "{path}");
-            }
         }
     });
 }
 
 #[test]
 fn report_disconnect_cancels_query_and_releases_admission() {
-    Fixture::new().run_candidate(async |fixture, address| {
+    Fixture::new().run_wire(async |fixture, address| {
         for path in [CALLS, USAGE] {
             let wire = request(
                 fixture.port(),
@@ -356,10 +323,10 @@ fn report_disconnect_cancels_query_and_releases_admission() {
                 &[&fixture.session(), ACCEPT],
                 b"",
             );
-            for (driver, endpoint) in driver_endpoints(fixture.legacy.local_addr(), address) {
-                let candidate = matches!(driver, TestDriver::Candidate);
+            {
+                let endpoint = address;
                 let (reached, release) = report_gate(fixture);
-                let mut stream = Stream::open(endpoint, &wire, candidate, "no-cache").await;
+                let mut stream = Stream::open(endpoint, &wire, "no-cache").await;
                 let first = stream.next(DEADLINE).await.unwrap();
                 assert_eq!(
                     event(&first),
@@ -368,7 +335,7 @@ fn report_disconnect_cancels_query_and_releases_admission() {
                 let cancelled = timeout(DEADLINE, reached).await.unwrap().unwrap();
                 assert!(!cancelled.load(Ordering::Acquire));
                 assert_eq!(
-                    fixture.legacy.state.lifecycle.admission.active_requests(),
+                    fixture.server.state.lifecycle.admission.active_requests(),
                     1
                 );
                 stream.io.get_ref().set_zero_linger().unwrap();
@@ -381,7 +348,7 @@ fn report_disconnect_cancels_query_and_releases_admission() {
                 .await
                 .unwrap();
                 release.send(()).unwrap();
-                let state = fixture.legacy.state.clone();
+                let state = fixture.server.state.clone();
                 tokio::task::spawn_blocking(move || {
                     wait_for(DEADLINE, || {
                         Arc::strong_count(&cancelled) == 1
@@ -404,10 +371,10 @@ fn report_disconnect_cancels_query_and_releases_admission() {
 
 #[test]
 fn management_stream_access_and_selection_match_during_update_drain() {
-    Fixture::new().run_candidate(async |fixture, address| {
+    Fixture::new().run_wire(async |fixture, address| {
         assert!(
             fixture
-                .legacy
+                .server
                 .state
                 .lifecycle
                 .updates()
@@ -420,13 +387,13 @@ fn management_stream_access_and_selection_match_during_update_drain() {
                 (vec![ACCEPT, &session, &session], 401),
                 (vec![ACCEPT, &session, "Origin: https://other.invalid"], 403),
             ] {
-                fixture
-                    .parity(
-                        address,
-                        &request(fixture.port(), "GET", path, &headers, b""),
-                        status,
-                    )
-                    .await;
+                assert_wire(
+                    address,
+                    &request(fixture.port(), "GET", path, &headers, b""),
+                    false,
+                    status,
+                )
+                .await;
             }
         }
         for (path, status) in [
@@ -434,13 +401,13 @@ fn management_stream_access_and_selection_match_during_update_drain() {
             ("/api/usage?lifetime=true", 400),
             ("/api/usage?lifetime=true&account_id=unknown", 404),
         ] {
-            fixture
-                .parity(
-                    address,
-                    &request(fixture.port(), "GET", path, &[&session, ACCEPT], b""),
-                    status,
-                )
-                .await;
+            assert_wire(
+                address,
+                &request(fixture.port(), "GET", path, &[&session, ACCEPT], b""),
+                false,
+                status,
+            )
+            .await;
         }
         for (path, headers) in [
             (CALLS, vec!["Accept: application/json", ACCEPT]),
@@ -454,7 +421,7 @@ fn management_stream_access_and_selection_match_during_update_drain() {
             let mut headers = headers;
             headers.push(&session);
             let wire = request(fixture.port(), "GET", path, &headers, b"");
-            let reply = fixture.parity(address, &wire, 200).await;
+            let reply = assert_wire(address, &wire, false, 200).await;
             assert!(
                 str::from_utf8(&reply)
                     .unwrap()
@@ -468,7 +435,7 @@ fn management_stream_access_and_selection_match_during_update_drain() {
             &[&session, ACCEPT, "Accept: application/json"],
             b"",
         );
-        assert_sse_wire_parity(fixture.legacy.local_addr(), address, &wire).await;
+        assert_sse_wire(address, &wire).await;
 
         let wire = request(
             fixture.port(),
@@ -477,38 +444,22 @@ fn management_stream_access_and_selection_match_during_update_drain() {
             &[&session, "Accept: application/json"],
             b"",
         );
-        let mut streams = Vec::new();
-        let mut snapshots = Vec::new();
-        for (driver, endpoint) in driver_endpoints(fixture.legacy.local_addr(), address) {
-            let mut stream = Stream::open(
-                endpoint,
-                &wire,
-                matches!(driver, TestDriver::Candidate),
-                "no-store",
-            )
-            .await;
-            snapshots.push(account_snapshot(&mut stream).await);
-            streams.push(stream);
-        }
-        for snapshots in snapshots.windows(2) {
-            assert_eq!(snapshots[0], snapshots[1]);
-        }
-        let state = &fixture.legacy.state;
+        let mut stream = Stream::open(address, &wire, "no-store").await;
+        account_snapshot(&mut stream).await;
+        let state = &fixture.server.state;
         state.sessions.rotate(system_now()).unwrap();
         state.backend.management_events.publish(Change::Quota);
-        for stream in &mut streams {
-            assert!(stream.next(DEADLINE).await.is_none());
-        }
+        assert!(stream.next(DEADLINE).await.is_none());
     });
 }
 
 #[test]
-fn report_query_failures_match_legacy_error_terminator() {
+fn report_query_failures_send_error_terminator() {
     let fixture = Fixture::new();
     let path = fixture.directory.path().join("state/usage.sqlite3");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, "invalid SQLite database").unwrap();
-    fixture.run_candidate(async |fixture, address| {
+    fixture.run_wire(async |fixture, address| {
         for (path, message) in [
             (CALLS, "Call history is unavailable"),
             (USAGE, "Usage history is unavailable"),
@@ -520,25 +471,16 @@ fn report_query_failures_match_legacy_error_terminator() {
                 &[&fixture.session(), ACCEPT],
                 b"",
             );
-            let mut frames = Vec::new();
-            for (driver, endpoint) in driver_endpoints(fixture.legacy.local_addr(), address) {
-                let mut stream = Stream::open(
-                    endpoint,
-                    &wire,
-                    matches!(driver, TestDriver::Candidate),
-                    "no-cache",
-                )
-                .await;
+
+            {
+                let endpoint = address;
+                let mut stream = Stream::open(endpoint, &wire, "no-cache").await;
                 let error = stream.next(DEADLINE).await.unwrap();
                 assert_eq!(
                     event(&error),
                     ("error", json!({"error":{"message":message}}))
                 );
                 assert!(stream.next(DEADLINE).await.is_none());
-                frames.push(error);
-            }
-            for frames in frames.windows(2) {
-                assert_eq!(frames[0], frames[1]);
             }
         }
     });

@@ -1,5 +1,5 @@
 use super::{
-    body::{JsonBody, RealtimeBody, read_json_body_with_limits},
+    body::{JsonBody, RealtimeBody},
     error::{EntryError, JsonReply},
     management::{
         ManagementSession, PageOrigin, RecoveryAccess, RecoveryMutation, RecoveryOrigin,
@@ -10,16 +10,11 @@ use super::{
     with_entry_state,
 };
 use crate::{
-    http::{
-        request::{parse_request, read_request_head},
-        response::body_error_response,
-    },
-    lifecycle::{ServerHandle as LegacyServer, TestDriver},
+    lifecycle::ServerHandle as RunningServer,
     server::{
         ServerHandle,
         tests::{LOOPBACK, admission},
     },
-    services::error_presentation::ErrorPresentation,
     services::gateway_clients::Caller,
     util::system_now,
 };
@@ -32,9 +27,11 @@ use emp_transport::{MemoryStatus, RequestLimits, RequestLimitsConfig};
 use flate2::{Compression, GzBuilder};
 use serde::Deserialize;
 use serde_json::{Value, json};
+#[cfg(unix)]
+use std::net::TcpListener;
 use std::{
     io::Write,
-    net::{SocketAddr, TcpListener},
+    net::SocketAddr,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -63,49 +60,41 @@ pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input
 }
 
 #[cfg(unix)]
-async fn connect_submitted_write(
-    fixture: &Fixture,
-    address: SocketAddr,
-) -> (TcpStream, Option<tokio::task::JoinHandle<()>>) {
-    use crate::server::{candidate_router, connection::drive_candidate};
+async fn connect_submitted_write(fixture: &Fixture) -> (TcpStream, tokio::task::JoinHandle<()>) {
+    use crate::server::{connection::drive_http, http_router};
 
-    if matches!(fixture.legacy.test_driver, TestDriver::Legacy)
-        && address == fixture.legacy.local_addr()
-    {
-        return (TcpStream::connect(address).await.unwrap(), None);
-    }
     let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
     let client = TcpStream::connect(listener.local_addr().unwrap())
         .await
         .unwrap();
     let (stream, peer) = listener.accept().await.unwrap();
-    let state = &fixture.legacy.state;
+    let state = &fixture.server.state;
     let admission = &state.lifecycle.admission;
-    let task = tokio::spawn(drive_candidate(
+    let task = tokio::spawn(drive_http(
         stream,
         peer,
         tokio::time::Instant::now(),
-        candidate_router(state.clone()),
+        http_router(state.clone()),
         state.clone(),
         super::proxy::ConnectionIntake::Public(Arc::new(admission.acquire_request().unwrap())),
     ));
-    (client, Some(task))
+    (client, task)
 }
 
 #[cfg(unix)]
 async fn disconnect_submitted_write(
     fixture: &Fixture,
     client: TcpStream,
-    task: Option<tokio::task::JoinHandle<()>>,
+    task: tokio::task::JoinHandle<()>,
 ) {
     client.set_zero_linger().unwrap();
     drop(client);
-    if let Some(task) = task {
+    {
         task.abort();
         if let Err(error) = task.await {
             assert!(error.is_cancelled(), "{error}");
         }
-        let state = &fixture.legacy.state;
+        let state = &fixture.server.state;
         let drained = state.lifecycle.updates().drain_for_test(Duration::ZERO);
         let quiet = state
             .lifecycle
@@ -157,43 +146,6 @@ pub(crate) async fn assert_wire(
     reply
 }
 
-pub(crate) async fn assert_wire_parity(
-    old: SocketAddr,
-    new: SocketAddr,
-    request: &[u8],
-    end_input: bool,
-    status: u16,
-) -> Vec<u8> {
-    assert_wire_parity_with(
-        [(old, request), (new, request)],
-        end_input,
-        status,
-        |reply| reply,
-    )
-    .await
-}
-
-pub(crate) async fn assert_sse_wire_parity(
-    old: SocketAddr,
-    new: SocketAddr,
-    request: &[u8],
-) -> Vec<u8> {
-    let (old_reply, new_reply) = tokio::join!(
-        async {
-            if TestDriver::compares_drivers() {
-                Some(assert_sse_wire(old, request).await)
-            } else {
-                None
-            }
-        },
-        assert_sse_wire(new, request),
-    );
-    if let Some(old_reply) = old_reply {
-        assert_wire_response_parity(request, &old_reply, &new_reply);
-    }
-    new_reply
-}
-
 pub(crate) async fn assert_sse_wire(address: SocketAddr, request: &[u8]) -> Vec<u8> {
     decode_report_wire(assert_wire(address, request, false, 200).await)
 }
@@ -215,10 +167,7 @@ fn decode_report_wire(wire: Vec<u8>) -> Vec<u8> {
     headers.sort_unstable();
     let mut decoded = format!("{status}\r\n{}\r\n\r\n", headers.join("\r\n")).into_bytes();
     let mut body = &wire[split + 4..];
-    if chunked.is_none() {
-        decoded.extend_from_slice(body);
-        return decoded;
-    }
+    assert!(chunked.is_some(), "missing chunked transfer encoding");
     loop {
         let end = body.windows(2).position(|bytes| bytes == b"\r\n").unwrap();
         let size = usize::from_str_radix(std::str::from_utf8(&body[..end]).unwrap(), 16).unwrap();
@@ -241,53 +190,6 @@ async fn assert_wire_with<T>(
     check_reply: impl FnOnce(Vec<u8>) -> T,
 ) -> T {
     check_reply(assert_wire(address, request, end_input, status).await)
-}
-
-async fn assert_wire_parity_with(
-    [(old, old_request), (new, new_request)]: [(SocketAddr, &[u8]); 2],
-    end_input: bool,
-    status: u16,
-    check_reply: impl Fn(Vec<u8>) -> Vec<u8>,
-) -> Vec<u8> {
-    let (old_reply, new_reply) = tokio::join!(
-        async {
-            if TestDriver::compares_drivers() {
-                Some(assert_wire_with(old, old_request, end_input, status, &check_reply).await)
-            } else {
-                None
-            }
-        },
-        assert_wire_with(new, new_request, end_input, status, &check_reply),
-    );
-    if let Some(old_reply) = old_reply {
-        assert_wire_response_parity(old_request, &old_reply, &new_reply);
-    }
-    new_reply
-}
-
-pub(crate) fn driver_endpoints<T: Copy>(
-    legacy: T,
-    candidate: T,
-) -> impl Iterator<Item = (TestDriver, T)> {
-    TestDriver::selected().iter().copied().map(move |driver| {
-        (
-            driver,
-            match driver {
-                TestDriver::Legacy => legacy,
-                TestDriver::Candidate => candidate,
-            },
-        )
-    })
-}
-
-pub(crate) fn assert_wire_response_parity(old_request: &[u8], old: &[u8], new: &[u8]) {
-    assert!(
-        new == old,
-        "different responses for {}\nnew: {}\nold: {}",
-        String::from_utf8_lossy(old_request.split(|&byte| byte == b'\r').next().unwrap()),
-        String::from_utf8_lossy(new),
-        String::from_utf8_lossy(old),
-    );
 }
 
 pub(crate) fn assert_status(reply: &[u8], status: u16) {
@@ -337,35 +239,26 @@ pub(crate) fn json_request(port: u16, path: &str, headers: &[&str], body: &[u8])
 
 struct Fixture {
     directory: tempfile::TempDir,
-    legacy: LegacyServer,
+    server: RunningServer,
     upstream: Arc<AtomicUsize>,
 }
 
 impl Fixture {
     fn new() -> Self {
-        Self::new_with_driver(TestDriver::reference())
-    }
-
-    fn new_with_driver(driver: TestDriver) -> Self {
-        Self::with_driver(tempfile::tempdir().unwrap(), driver)
+        Self::with_directory(tempfile::tempdir().unwrap())
     }
 
     fn with_directory(directory: tempfile::TempDir) -> Self {
-        Self::with_driver(directory, TestDriver::reference())
-    }
-
-    fn with_driver(directory: tempfile::TempDir, driver: TestDriver) -> Self {
         let root = emp_state::config::resolve_user_path(directory.path());
-        let legacy = LegacyServer::start_with_test_driver(
+        let server = RunningServer::start_for_test(
             LOOPBACK.ip(),
             &root.join("config.json"),
             root.join("codex/auth.json"),
-            driver,
         )
         .unwrap();
         Self {
             directory,
-            legacy,
+            server,
             upstream: Arc::default(),
         }
     }
@@ -375,8 +268,8 @@ impl Fixture {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(test(&self, self.legacy.local_addr()));
-        self.legacy.shutdown().unwrap();
+            .block_on(test(&self, self.server.local_addr()));
+        self.server.shutdown().unwrap();
         result
     }
 
@@ -392,28 +285,7 @@ impl Fixture {
                 test(&self, server.local_addr()).await;
                 server.shutdown().await.unwrap();
             });
-        self.legacy.shutdown().unwrap();
-    }
-
-    fn run_candidate(self, test: impl AsyncFnOnce(&Self, SocketAddr)) {
-        if matches!(self.legacy.test_driver, TestDriver::Candidate) {
-            return self.run_wire(test);
-        }
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
-                let address = listener.local_addr().unwrap();
-                let state = &self.legacy.state;
-                let candidate =
-                    tokio::spawn(crate::server::serve_candidate(listener, state.clone()));
-                test(&self, address).await;
-                state.request_shutdown();
-                candidate.await.unwrap().unwrap();
-            });
-        self.legacy.shutdown().unwrap();
+        self.server.shutdown().unwrap();
     }
 
     fn router(&self) -> Router {
@@ -464,26 +336,22 @@ impl Fixture {
                 JsonReply::new(200, crate::http::response::HEALTH_JSON_BYTES.to_vec())
             }))
             .layer(Extension(self.upstream.clone()));
-        with_entry_state(router, self.legacy.state.clone())
+        with_entry_state(router, self.server.state.clone())
     }
 
     fn port(&self) -> u16 {
-        self.legacy.local_addr().port()
+        self.server.local_addr().port()
     }
 
     fn session(&self) -> String {
-        format!("X-EMP-Session: {}", self.legacy.session_token())
-    }
-
-    async fn parity(&self, new: SocketAddr, request: &[u8], status: u16) -> Vec<u8> {
-        assert_wire_parity(self.legacy.local_addr(), new, request, false, status).await
+        format!("X-EMP-Session: {}", self.server.session_token())
     }
 }
 
 #[test]
-fn update_module_and_gateway_reads_match_legacy_wire() {
+fn update_module_and_gateway_reads_keep_json_and_auth() {
     let fixture = Fixture::new();
-    let backend = &fixture.legacy.state.backend;
+    let backend = &fixture.server.state.backend;
     let device = backend
         .gateway_clients
         .issue(
@@ -527,7 +395,7 @@ fn update_module_and_gateway_reads_match_legacy_wire() {
         ),
     ];
     let bearer = format!("Authorization: Bearer {}", backend.gateway_key);
-    fixture.run_candidate(async |fixture, address| {
+    fixture.run_wire(async |fixture, address| {
         let session = fixture.session();
         let port = fixture.port();
         for (path, field, expected, cache_headers) in routes {
@@ -538,8 +406,7 @@ fn update_module_and_gateway_reads_match_legacy_wire() {
                 &[&session, "Accept: text/event-stream"],
                 b"",
             );
-            let reply =
-                assert_wire_parity(fixture.legacy.local_addr(), address, &wire, true, 200).await;
+            let reply = assert_wire(address, &wire, true, 200).await;
             assert_eq!(json_body(&reply)[field], expected);
             assert_eq!(
                 str::from_utf8(&reply)
@@ -561,24 +428,28 @@ fn update_module_and_gateway_reads_match_legacy_wire() {
                 ("GET", &missing, [&*session].as_slice(), 404),
                 ("HEAD", path, [&*session].as_slice(), 404),
             ] {
-                fixture
-                    .parity(address, &request(port, method, path, headers, b""), status)
-                    .await;
+                assert_wire(
+                    address,
+                    &request(port, method, path, headers, b""),
+                    false,
+                    status,
+                )
+                .await;
             }
         }
-        let reply = fixture
-            .parity(
-                address,
-                &request(
-                    port,
-                    "GET",
-                    "/api/gateway/usage?start=invalid",
-                    &[&session],
-                    b"",
-                ),
-                400,
-            )
-            .await;
+        let reply = assert_wire(
+            address,
+            &request(
+                port,
+                "GET",
+                "/api/gateway/usage?start=invalid",
+                &[&session],
+                b"",
+            ),
+            false,
+            400,
+        )
+        .await;
         assert_eq!(
             json_body(&reply)["error"]["message"],
             "Invalid report period"
@@ -589,29 +460,29 @@ fn update_module_and_gateway_reads_match_legacy_wire() {
 #[test]
 fn gateway_and_decision_module_gates_precede_management_authentication() {
     let fixture = Fixture::new();
-    let modules = &fixture.legacy.state.backend.modules;
+    let modules = &fixture.server.state.backend.modules;
     modules.mark_unavailable(emp_modules::Module::Gateway, "test");
     modules.mark_unavailable(emp_modules::Module::Decision, "test");
-    fixture.run_candidate(async |fixture, address| {
+    fixture.run_wire(async |fixture, address| {
         for path in [
             "/api/gateway",
             "/api/gateway/clients",
             "/api/gateway/usage?start=invalid",
             "/api/decisions/connection",
         ] {
-            let reply = fixture
-                .parity(
-                    address,
-                    &request(
-                        fixture.port(),
-                        "GET",
-                        path,
-                        &["Origin: https://foreign.invalid"],
-                        b"",
-                    ),
-                    404,
-                )
-                .await;
+            let reply = assert_wire(
+                address,
+                &request(
+                    fixture.port(),
+                    "GET",
+                    path,
+                    &["Origin: https://foreign.invalid"],
+                    b"",
+                ),
+                false,
+                404,
+            )
+            .await;
             assert_eq!(json_body(&reply)["error"]["code"], "module_disabled");
         }
     });
@@ -666,8 +537,8 @@ fn install_worker_fixture(
 }
 
 #[test]
-fn pages_and_health_match_legacy_wire() {
-    Fixture::new().run_candidate(async |fixture, address| {
+fn pages_and_health_keep_origin_and_method_policy() {
+    Fixture::new().run_wire(async |fixture, address| {
         let port = fixture.port();
         let foreign = ["Origin: https://foreign.invalid"];
         for (path, content_type, body, error) in [
@@ -691,13 +562,13 @@ fn pages_and_health_match_legacy_wire() {
             ),
         ] {
             for method in ["GET", "HEAD"] {
-                let reply = fixture
-                    .parity(
-                        address,
-                        &request(port, method, path, &["Accept: text/event-stream"], b""),
-                        200,
-                    )
-                    .await;
+                let reply = assert_wire(
+                    address,
+                    &request(port, method, path, &["Accept: text/event-stream"], b""),
+                    false,
+                    200,
+                )
+                .await;
                 let (head, received) = page_reply_parts(&reply, content_type, "no-store");
                 assert!(received == body, "{method} {path} body changed");
                 if content_type == "text/html; charset=utf-8" {
@@ -707,9 +578,13 @@ fn pages_and_health_match_legacy_wire() {
                         crate::http::auth::CLEAR_LEGACY_SESSION_COOKIE,
                     )));
                 }
-                let denied = fixture
-                    .parity(address, &request(port, method, path, &foreign, b""), 403)
-                    .await;
+                let denied = assert_wire(
+                    address,
+                    &request(port, method, path, &foreign, b""),
+                    false,
+                    403,
+                )
+                .await;
                 assert_eq!(json_body(&denied)["error"]["message"], error);
             }
         }
@@ -734,7 +609,7 @@ fn page_reply_parts<'a>(reply: &'a [u8], content_type: &str, cache: &str) -> (&'
 }
 
 #[test]
-fn guides_and_assets_match_legacy_wire() {
+fn guides_and_assets_keep_wire_contracts() {
     use base64::{Engine, engine::general_purpose::STANDARD};
 
     let directory = tempfile::tempdir().unwrap();
@@ -751,7 +626,7 @@ fn guides_and_assets_match_legacy_wire() {
         .to_string(),
     )
     .unwrap();
-    Fixture::with_directory(directory).run_candidate(async |fixture, address| {
+    Fixture::with_directory(directory).run_wire(async |fixture, address| {
         let port = fixture.port();
         let same_origin = format!("Origin: http://localhost:{port}");
         let foreign = ["Host: foreign.invalid"];
@@ -808,13 +683,13 @@ fn guides_and_assets_match_legacy_wire() {
                 "cross-origin Web UI request rejected",
             ),
         ] {
-            let reply = fixture
-                .parity(
-                    address,
-                    &request(port, "GET", path, &[&same_origin], b""),
-                    200,
-                )
-                .await;
+            let reply = assert_wire(
+                address,
+                &request(port, "GET", path, &[&same_origin], b""),
+                false,
+                200,
+            )
+            .await;
             let (_, received) = page_reply_parts(&reply, content_type, cache);
             if let Some(body) = body {
                 assert!(received == body, "{path} body changed");
@@ -823,20 +698,22 @@ fn guides_and_assets_match_legacy_wire() {
                 assert!(html.starts_with("<!doctype html><html lang=\"zh-CN\">"));
                 assert!(html.contains("href=\"/assets/guide.css\""));
             }
-            let denied = fixture
-                .parity(address, &request(port, "GET", path, &foreign, b""), 403)
-                .await;
+            let denied = assert_wire(
+                address,
+                &request(port, "GET", path, &foreign, b""),
+                false,
+                403,
+            )
+            .await;
             assert_eq!(json_body(&denied)["error"]["message"], denied_message);
-            fixture
-                .parity(address, &request(port, "HEAD", path, &[], b""), 404)
-                .await;
+            assert_wire(address, &request(port, "HEAD", path, &[], b""), false, 404).await;
         }
     });
 }
 
 #[test]
-fn page_and_asset_misses_keep_legacy_status_and_origin_order() {
-    Fixture::new().run_candidate(async |fixture, address| {
+fn page_and_asset_misses_keep_status_and_origin_order() {
+    Fixture::new().run_wire(async |fixture, address| {
         let port = fixture.port();
         let foreign = ["Origin: https://foreign.invalid"];
         for (path, foreign_status) in [
@@ -853,81 +730,78 @@ fn page_and_asset_misses_keep_legacy_status_and_origin_order() {
             ("/assets/tutorial-missing.gif", 403),
             ("/assets/module-unknown.js", 404),
         ] {
-            let not_found = fixture
-                .parity(address, &request(port, "GET", path, &[], b""), 404)
-                .await;
+            let not_found =
+                assert_wire(address, &request(port, "GET", path, &[], b""), false, 404).await;
             assert_eq!(json_body(&not_found)["error"]["message"], "not found");
-            fixture
-                .parity(
-                    address,
-                    &request(port, "GET", path, &foreign, b""),
-                    foreign_status,
-                )
-                .await;
+            assert_wire(
+                address,
+                &request(port, "GET", path, &foreign, b""),
+                false,
+                foreign_status,
+            )
+            .await;
         }
         for method in ["POST", "DELETE"] {
             for path in ["/", "/index.html", "/healthz"] {
-                fixture
-                    .parity(address, &request(port, method, path, &[], b""), 200)
-                    .await;
-                fixture
-                    .parity(address, &request(port, method, path, &foreign, b""), 403)
-                    .await;
+                assert_wire(address, &request(port, method, path, &[], b""), false, 200).await;
+                assert_wire(
+                    address,
+                    &request(port, method, path, &foreign, b""),
+                    false,
+                    403,
+                )
+                .await;
             }
             for path in ["/unregistered", "/guide/README.md", "/assets/app-icon.png"] {
-                fixture
-                    .parity(address, &request(port, method, path, &[], b""), 404)
-                    .await;
+                assert_wire(address, &request(port, method, path, &[], b""), false, 404).await;
             }
         }
         for method in ["PUT", "OPTIONS"] {
             for path in ["/", "/unregistered"] {
-                fixture
-                    .parity(address, &request(port, method, path, &[], b""), 400)
-                    .await;
+                assert_wire(address, &request(port, method, path, &[], b""), false, 400).await;
             }
         }
-        fixture
-            .parity(
-                address,
-                &request(port, "HEAD", "/unregistered", &[], b""),
-                404,
-            )
-            .await;
-        fixture
-            .parity(
-                address,
-                &request(port, "GET", "/api/unregistered", &[], b""),
-                401,
-            )
-            .await;
-        fixture
-            .parity(
-                address,
-                &request(port, "GET", "/api/unregistered", &[&fixture.session()], b""),
-                404,
-            )
-            .await;
+        assert_wire(
+            address,
+            &request(port, "HEAD", "/unregistered", &[], b""),
+            false,
+            404,
+        )
+        .await;
+        assert_wire(
+            address,
+            &request(port, "GET", "/api/unregistered", &[], b""),
+            false,
+            401,
+        )
+        .await;
+        assert_wire(
+            address,
+            &request(port, "GET", "/api/unregistered", &[&fixture.session()], b""),
+            false,
+            404,
+        )
+        .await;
     });
 }
 
 #[cfg(unix)]
 #[test]
-fn module_panel_matches_legacy_wire_for_origin_and_revision() {
+fn module_panel_checks_origin_and_revision() {
     let directory = tempfile::tempdir().unwrap();
     let panel = "export const panel = \"fixture\";\n";
     let revision = install_panel_fixture(directory.path(), emp_modules::Module::Gateway, panel);
-    Fixture::with_directory(directory).run_candidate(async |fixture, address| {
+    Fixture::with_directory(directory).run_wire(async |fixture, address| {
         let port = fixture.port();
         let same_origin = format!("Origin: http://localhost:{port}");
         let path = format!("/assets/module-gateway.js?revision={revision}");
-        let reply = fixture
-            .parity(
-                address,
-                &request(port, "GET", &path, &[&same_origin], b""),
-                200,
-            )
-            .await;
+        let reply = assert_wire(
+            address,
+            &request(port, "GET", &path, &[&same_origin], b""),
+            false,
+            200,
+        )
+        .await;
         let (head, body) = str::from_utf8(&reply)
             .unwrap()
             .split_once("\r\n\r\n")
@@ -935,19 +809,19 @@ fn module_panel_matches_legacy_wire_for_origin_and_revision() {
         assert!(head.contains("\r\nContent-Type: text/javascript; charset=utf-8\r\n"));
         assert!(head.contains("\r\nCache-Control: no-store\r\n"));
         assert_eq!(body, panel);
-        let stale = fixture
-            .parity(
-                address,
-                &request(
-                    port,
-                    "GET",
-                    "/assets/module-gateway.js?revision=old",
-                    &[],
-                    b"",
-                ),
-                404,
-            )
-            .await;
+        let stale = assert_wire(
+            address,
+            &request(
+                port,
+                "GET",
+                "/assets/module-gateway.js?revision=old",
+                &[],
+                b"",
+            ),
+            false,
+            404,
+        )
+        .await;
         let (head, body) = str::from_utf8(&stale)
             .unwrap()
             .split_once("\r\n\r\n")
@@ -963,24 +837,28 @@ fn module_panel_matches_legacy_wire_for_origin_and_revision() {
             ("GET", "/assets/module-unknown.js", [].as_slice()),
             ("HEAD", &*path, [].as_slice()),
         ] {
-            let reply = fixture
-                .parity(address, &request(port, method, path, headers, b""), 404)
-                .await;
-            assert_eq!(json_body(&reply)["error"]["message"], "not found");
-        }
-        fixture
-            .parity(
+            let reply = assert_wire(
                 address,
-                &request(port, "GET", "/assets/module-settings.js", &[], b""),
-                200,
+                &request(port, method, path, headers, b""),
+                false,
+                404,
             )
             .await;
+            assert_eq!(json_body(&reply)["error"]["message"], "not found");
+        }
+        assert_wire(
+            address,
+            &request(port, "GET", "/assets/module-settings.js", &[], b""),
+            false,
+            200,
+        )
+        .await;
     });
 }
 
 #[cfg(unix)]
 #[test]
-fn team_reads_match_legacy_wire_on_candidate_listener() {
+fn team_reads_preserve_identity_and_auth() {
     use emp_modules::Module;
 
     let directory = tempfile::tempdir().unwrap();
@@ -1011,7 +889,7 @@ fn team_reads_match_legacy_wire_on_candidate_listener() {
         {"workspace":workspace_id,"member":"cccccccccccccccccccccccccccccccc","day":1,"at":2,"reached":true,"used":20,"limit":20},
     ]).to_string()).unwrap();
 
-    Fixture::with_directory(directory).run_candidate(async |fixture, address| {
+    Fixture::with_directory(directory).run_wire(async |fixture, address| {
         let port = fixture.port();
         let session = fixture.session();
         let foreign_origin = "Origin: https://foreign.invalid";
@@ -1029,7 +907,7 @@ fn team_reads_match_legacy_wire_on_candidate_listener() {
                     request(port, "GET", target, headers, b"")
                 }
             };
-            let reply = fixture.parity(address, &valid(path, &signed), 200).await;
+            let reply = assert_wire(address, &valid(path, &signed), false, 200).await;
             let head = str::from_utf8(&reply)
                 .unwrap()
                 .split_once("\r\n\r\n")
@@ -1063,29 +941,35 @@ fn team_reads_match_legacy_wire_on_candidate_listener() {
                     if post { 401 } else { 403 },
                 ),
             ] {
-                fixture.parity(address, &valid(path, headers), status).await;
+                assert_wire(address, &valid(path, headers), false, status).await;
             }
-            fixture
-                .parity(
-                    address,
-                    &valid(&format!("{path}/missing"), &[&session]),
-                    if post { 400 } else { 404 },
-                )
-                .await;
-            fixture
-                .parity(address, &request(port, "HEAD", path, &[&session], b""), 404)
-                .await;
+            assert_wire(
+                address,
+                &valid(&format!("{path}/missing"), &[&session]),
+                false,
+                if post { 400 } else { 404 },
+            )
+            .await;
+            assert_wire(
+                address,
+                &request(port, "HEAD", path, &[&session], b""),
+                false,
+                404,
+            )
+            .await;
         }
         let path = "/api/team/publish_source";
-        fixture
-            .parity(address, &json_request(port, path, &[&session], b"[]"), 400)
-            .await;
-        fixture
-            .parity(address, &json_request(port, path, &[], b"[]"), 401)
-            .await;
+        assert_wire(
+            address,
+            &json_request(port, path, &[&session], b"[]"),
+            false,
+            400,
+        )
+        .await;
+        assert_wire(address, &json_request(port, path, &[], b"[]"), false, 401).await;
 
         fixture
-            .legacy
+            .server
             .state
             .backend
             .modules
@@ -1095,20 +979,20 @@ fn team_reads_match_legacy_wire_on_candidate_listener() {
             request(port, "GET", "/api/team/notices", &[&session], b""),
             json_request(port, path, &[], b"[]"),
         ] {
-            let reply = fixture.parity(address, &request, 404).await;
+            let reply = assert_wire(address, &request, false, 404).await;
             assert_eq!(json_body(&reply)["error"]["code"], "module_disabled");
         }
     });
 }
 
 #[test]
-fn inspection_reads_match_legacy_wire_on_candidate_listener() {
+fn inspection_reads_preserve_auth_and_hide_credentials() {
     let fixture = Fixture::new();
-    let auth = &fixture.legacy.state.backend.accounts.native_auth_path;
+    let auth = &fixture.server.state.backend.accounts.native_auth_path;
     std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
     std::fs::write(auth, br#"{"tokens":{"access_token":"parity-private-token","account_id":"parity-private-account"}}"#).unwrap();
     fixture
-        .legacy
+        .server
         .state
         .backend
         .configuration
@@ -1118,7 +1002,7 @@ fn inspection_reads_match_legacy_wire_on_candidate_listener() {
         "provider":"parity-provider","cycle_started_at":1,"expires_at":4_102_444_800_i64,
         "budget_cents":250,"percent":80,
     });
-    fixture.run_candidate(async |fixture, address| {
+    fixture.run_wire(async |fixture, address| {
         let port = fixture.port();
         let session = fixture.session();
         for (path, field, cache_headers) in [
@@ -1139,20 +1023,10 @@ fn inspection_reads_match_legacy_wire_on_candidate_listener() {
             let reply = if path == "/api/support-report" {
                 let new =
                     assert_wire_with(address, &wire, false, 200, checked_support_report).await;
-                if TestDriver::compares_drivers() {
-                    let old = assert_wire_with(
-                        fixture.legacy.local_addr(),
-                        &wire,
-                        false,
-                        200,
-                        checked_support_report,
-                    )
-                    .await;
-                    assert_eq!(old.1, new.1);
-                }
+
                 new.0
             } else {
-                fixture.parity(address, &wire, 200).await
+                assert_wire(address, &wire, false, 200).await
             };
             assert_status(&reply, 200);
             let text = str::from_utf8(&reply).unwrap();
@@ -1201,20 +1075,28 @@ fn inspection_reads_match_legacy_wire_on_candidate_listener() {
                     403,
                 ),
             ] {
-                fixture
-                    .parity(address, &request(port, "GET", path, headers, b""), status)
-                    .await;
-            }
-            fixture
-                .parity(
+                assert_wire(
                     address,
-                    &request(port, "GET", &format!("{path}/missing"), &[&session], b""),
-                    404,
+                    &request(port, "GET", path, headers, b""),
+                    false,
+                    status,
                 )
                 .await;
-            fixture
-                .parity(address, &request(port, "HEAD", path, &[&session], b""), 404)
-                .await;
+            }
+            assert_wire(
+                address,
+                &request(port, "GET", &format!("{path}/missing"), &[&session], b""),
+                false,
+                404,
+            )
+            .await;
+            assert_wire(
+                address,
+                &request(port, "HEAD", path, &[&session], b""),
+                false,
+                404,
+            )
+            .await;
         }
     });
 }
@@ -1242,25 +1124,6 @@ fn checked_support_report(reply: Vec<u8>) -> (Vec<u8>, String) {
     (reply, normalized)
 }
 
-#[test]
-fn legacy_account_event_stream_has_unframed_wire_prefix() {
-    Fixture::new_with_driver(TestDriver::Legacy).run(async |fixture, _| {
-        let wire = request(fixture.port(), "GET", "/api/accounts/events", &[&fixture.session(), "Accept: text/event-stream"], b"");
-        let expected = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\n{}Connection: close\r\n\r\nevent: quota-updated\ndata: {{}}\n\n",
-            str::from_utf8(crate::http::response::SECURITY_HEADERS).unwrap()
-        );
-        let endpoint = fixture.legacy.local_addr();
-        timeout(Duration::from_secs(15), async {
-                let mut stream = TcpStream::connect(endpoint).await.unwrap();
-                stream.write_all(&wire).await.unwrap();
-                let mut prefix = vec![0; expected.len()];
-                stream.read_exact(&mut prefix).await.unwrap();
-                assert_eq!(str::from_utf8(&prefix).unwrap(), expected);
-            }).await.expect("account event stream prefix");
-    });
-}
-
 async fn proxy_probe(
     _access: RequestAccess,
     _caller: ProxyCaller,
@@ -1271,9 +1134,9 @@ async fn proxy_probe(
 }
 
 #[test]
-fn account_reads_match_legacy_wire_on_the_candidate_listener() {
+fn account_reads_preserve_json_and_auth() {
     let fixture = Fixture::new();
-    let state = &fixture.legacy.state;
+    let state = &fixture.server.state;
     let auth_path = &state.backend.accounts.native_auth_path;
     std::fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
     std::fs::write(
@@ -1282,7 +1145,7 @@ fn account_reads_match_legacy_wire_on_the_candidate_listener() {
     )
     .unwrap();
 
-    fixture.run_candidate(async |fixture, address| {
+    fixture.run_wire(async |fixture, address| {
         let session = fixture.session();
         let port = fixture.port();
         for (path, field, missing, missing_status) in [
@@ -1300,9 +1163,13 @@ fn account_reads_match_legacy_wire_on_the_candidate_listener() {
                 404,
             ),
         ] {
-            let reply = fixture
-                .parity(address, &request(port, "GET", path, &[&session], b""), 200)
-                .await;
+            let reply = assert_wire(
+                address,
+                &request(port, "GET", path, &[&session], b""),
+                false,
+                200,
+            )
+            .await;
             assert!(json_body(&reply)[field].is_array());
             for (method, path, headers, status) in [
                 ("GET", path, [].as_slice(), 401),
@@ -1316,9 +1183,13 @@ fn account_reads_match_legacy_wire_on_the_candidate_listener() {
                 ("GET", missing, [&*session].as_slice(), missing_status),
                 ("HEAD", path, [&*session].as_slice(), 404),
             ] {
-                fixture
-                    .parity(address, &request(port, method, path, headers, b""), status)
-                    .await;
+                assert_wire(
+                    address,
+                    &request(port, method, path, headers, b""),
+                    false,
+                    status,
+                )
+                .await;
             }
         }
         for (path, status) in [
@@ -1326,22 +1197,22 @@ fn account_reads_match_legacy_wire_on_the_candidate_listener() {
             ("/api/accounts//quota-history", 404),
             ("/api/accounts/%40native/quota-history?range=invalid", 400),
         ] {
-            fixture
-                .parity(
-                    address,
-                    &request(port, "GET", path, &[&session], b""),
-                    status,
-                )
-                .await;
+            assert_wire(
+                address,
+                &request(port, "GET", path, &[&session], b""),
+                false,
+                status,
+            )
+            .await;
         }
     });
 }
 
 #[test]
-fn usage_and_settings_reads_match_legacy_wire_on_candidate_listener() {
+fn usage_and_settings_reads_preserve_json_and_auth() {
     let fixture = Fixture::new();
     fixture
-        .legacy
+        .server
         .state
         .backend
         .configuration
@@ -1354,7 +1225,7 @@ fn usage_and_settings_reads_match_legacy_wire_on_candidate_listener() {
         "execution_backend": "claude_cli",
         "enabled": false,
     }]);
-    fixture.run_candidate(async |fixture, address| {
+    fixture.run_wire(async |fixture, address| {
         let port = fixture.port();
         let session = fixture.session();
         for (path, field, invalid, invalid_status) in [
@@ -1396,9 +1267,13 @@ fn usage_and_settings_reads_match_legacy_wire_on_candidate_listener() {
                 404,
             ),
         ] {
-            let reply = fixture
-                .parity(address, &request(port, "GET", path, &[&session], b""), 200)
-                .await;
+            let reply = assert_wire(
+                address,
+                &request(port, "GET", path, &[&session], b""),
+                false,
+                200,
+            )
+            .await;
             assert!(
                 !json_body(&reply)[field].is_null(),
                 "missing {field} for {path}"
@@ -1420,9 +1295,13 @@ fn usage_and_settings_reads_match_legacy_wire_on_candidate_listener() {
                 ("GET", invalid, [&*session].as_slice(), invalid_status),
                 ("HEAD", path, [&*session].as_slice(), 404),
             ] {
-                fixture
-                    .parity(address, &request(port, method, path, headers, b""), status)
-                    .await;
+                assert_wire(
+                    address,
+                    &request(port, method, path, headers, b""),
+                    false,
+                    status,
+                )
+                .await;
             }
         }
         for (path, status) in [
@@ -1437,20 +1316,20 @@ fn usage_and_settings_reads_match_legacy_wire_on_candidate_listener() {
                 400,
             ),
         ] {
-            fixture
-                .parity(
-                    address,
-                    &request(port, "GET", path, &[&session], b""),
-                    status,
-                )
-                .await;
+            assert_wire(
+                address,
+                &request(port, "GET", path, &[&session], b""),
+                false,
+                status,
+            )
+            .await;
         }
     });
 }
 
 #[test]
-fn report_stream_selection_matches_legacy() {
-    Fixture::new().run_candidate(async |fixture, address| {
+fn report_stream_selection_obeys_accept_header() {
+    Fixture::new().run_wire(async |fixture, address| {
         let session = fixture.session();
         let accept = "Accept: text/event-stream";
         for path in [
@@ -1458,7 +1337,7 @@ fn report_stream_selection_matches_legacy() {
             "/api/usage?lifetime=%74rue&owner=fixture",
         ] {
             let wire = request(fixture.port(), "GET", path, &[&session, accept], b"");
-            let reply = assert_sse_wire_parity(fixture.legacy.local_addr(), address, &wire).await;
+            let reply = assert_sse_wire(address, &wire).await;
             let reply = str::from_utf8(&reply).unwrap();
             assert!(reply.contains("\r\nContent-Type: text/event-stream\r\n"));
             assert!(reply.contains("event: progress\n"));
@@ -1477,22 +1356,22 @@ fn report_stream_selection_matches_legacy() {
                 "records",
             ),
         ] {
-            let reply = fixture
-                .parity(
-                    address,
-                    &request(fixture.port(), "GET", path, &[&session, accept], b""),
-                    200,
-                )
-                .await;
+            let reply = assert_wire(
+                address,
+                &request(fixture.port(), "GET", path, &[&session, accept], b""),
+                false,
+                200,
+            )
+            .await;
             assert!(!json_body(&reply)[field].is_null());
         }
     });
 }
 
 #[test]
-fn closing_report_input_cancels_legacy_and_candidate_json_queries() {
+fn closing_report_input_cancels_json_queries() {
     let fixture = Fixture::new();
-    let ledger = &fixture.legacy.state.backend.usage.ledger;
+    let ledger = &fixture.server.state.backend.usage.ledger;
     ledger.query(1.0, 10.0, "all", system_now(), None).unwrap();
     let database =
         rusqlite::Connection::open(fixture.directory.path().join("state/usage.sqlite3")).unwrap();
@@ -1505,24 +1384,23 @@ fn closing_report_input_cancels_legacy_and_candidate_json_queries() {
          SELECT n,2,'external','fixture','model','','responses','{}','realtime','','model','' FROM records;",
     ).unwrap();
     drop(database);
-    fixture.run_candidate(async |fixture, address| {
+    fixture.run_wire(async |fixture, address| {
         let session = fixture.session();
         for (path, message) in [
             ("/api/usage?start=1&end=10", "Usage history is unavailable"),
             ("/api/calls?start=1&end=10", "Call history is unavailable"),
         ] {
             let wire = request(fixture.port(), "GET", path, &[&session], b"");
-            let reply =
-                assert_wire_parity(fixture.legacy.local_addr(), address, &wire, true, 503).await;
+            let reply = assert_wire(address, &wire, true, 503).await;
             assert_eq!(json_body(&reply)["error"]["message"], message);
-            fixture.parity(address, &wire, 200).await;
+            assert_wire(address, &wire, false, 200).await;
         }
     });
 }
 
 #[test]
 fn identity_rejections_stop_before_fake_upstream_and_body() {
-    Fixture::new().run(async |fixture, new| {
+    Fixture::new().run(async |fixture, address| {
         let port = fixture.port();
         let session = fixture.session();
         let common = [
@@ -1543,13 +1421,13 @@ fn identity_rejections_stop_before_fake_upstream_and_body() {
             (vec!["Transfer-Encoding: chunked"], 401),
         ] {
             let headers = [common.as_slice(), &extra].concat();
-            fixture
-                .parity(
-                    new,
-                    &request(port, "POST", "/api/language", &headers, b""),
-                    status,
-                )
-                .await;
+            assert_wire(
+                address,
+                &request(port, "POST", "/api/language", &headers, b""),
+                false,
+                status,
+            )
+            .await;
         }
         for length in [
             "Content-Length: -1",
@@ -1558,9 +1436,12 @@ fn identity_rejections_stop_before_fake_upstream_and_body() {
         ] {
             let slow = ["Content-Type: application/json", length];
             let wire = request(port, "POST", "/api/language", &slow, b"{");
-            timeout(Duration::from_secs(2), fixture.parity(new, &wire, 401))
-                .await
-                .expect("auth rejection precedes the body idle deadline");
+            timeout(
+                Duration::from_secs(2),
+                assert_wire(address, &wire, false, 401),
+            )
+            .await
+            .expect("auth rejection precedes the body idle deadline");
         }
         let expired = emp_state::load_or_create_web_session(
             &fixture.directory.path().join("expired-session.json"),
@@ -1568,24 +1449,24 @@ fn identity_rejections_stop_before_fake_upstream_and_body() {
         )
         .unwrap();
         let expired_header = format!("X-EMP-Session: {}", expired.token());
-        *fixture.legacy.state.sessions.session.lock().unwrap() = expired;
-        fixture
-            .parity(
-                new,
-                &json_request(port, "/api/language", &[&expired_header], b"{}"),
-                401,
-            )
-            .await;
+        *fixture.server.state.sessions.session.lock().unwrap() = expired;
+        assert_wire(
+            address,
+            &json_request(port, "/api/language", &[&expired_header], b"{}"),
+            false,
+            401,
+        )
+        .await;
         assert_eq!(fixture.upstream.load(Ordering::Relaxed), 0);
 
         let current = emp_state::load_or_create_web_session(
-            &fixture.legacy.state.sessions.path,
+            &fixture.server.state.sessions.path,
             system_now(),
         )
         .unwrap();
-        *fixture.legacy.state.sessions.session.lock().unwrap() = current;
+        *fixture.server.state.sessions.session.lock().unwrap() = current;
         let reply = exchange_wire(
-            new,
+            address,
             &json_request(
                 port,
                 "/api/language",
@@ -1602,7 +1483,7 @@ fn identity_rejections_stop_before_fake_upstream_and_body() {
 
 #[test]
 fn proxy_identity_rebuilds_headers_and_requires_live_delegation() {
-    Fixture::new().run(async |fixture, new| {
+    Fixture::new().run(async |fixture, address| {
         let port = fixture.port();
         let spoof = [
             "X-EMP-Caller-Id: forged",
@@ -1615,18 +1496,26 @@ fn proxy_identity_rebuilds_headers_and_requires_live_delegation() {
             "/v1/images/generations",
             "/v1/alpha/search",
         ] {
-            fixture
-                .parity(new, &json_request(port, path, &spoof, b"{}"), 401)
-                .await;
+            assert_wire(
+                address,
+                &json_request(port, path, &spoof, b"{}"),
+                false,
+                401,
+            )
+            .await;
         }
         let ws = [spoof.as_slice(), &["Upgrade: websocket"]].concat();
-        fixture
-            .parity(new, &request(port, "GET", "/v1/responses", &ws, b""), 401)
-            .await;
+        assert_wire(
+            address,
+            &request(port, "GET", "/v1/responses", &ws, b""),
+            false,
+            401,
+        )
+        .await;
         assert_eq!(fixture.upstream.load(Ordering::Relaxed), 0);
 
         let delegation = fixture
-            .legacy
+            .server
             .state
             .backend
             .aero_callers
@@ -1642,7 +1531,7 @@ fn proxy_identity_rebuilds_headers_and_requires_live_delegation() {
         let auth = format!("Authorization: Bearer {}", delegation.key);
         let headers = [spoof.as_slice(), &[auth.as_str()]].concat();
         let wire = json_request(port, "/v1/responses", &headers, br#"{"new_field":1}"#);
-        let reply = exchange_wire(new, &wire, false).await;
+        let reply = exchange_wire(address, &wire, false).await;
         assert_status(&reply, 200);
         let body = json_body(&reply);
         assert_eq!(body["id"], "trusted");
@@ -1654,14 +1543,14 @@ fn proxy_identity_rebuilds_headers_and_requires_live_delegation() {
         assert_eq!(body["body"]["new_field"], 1);
 
         drop(delegation);
-        fixture.parity(new, &wire, 401).await;
+        assert_wire(address, &wire, false, 401).await;
         assert_eq!(fixture.upstream.load(Ordering::Relaxed), 1);
     });
 }
 
 #[test]
 fn public_origins_and_models_keep_their_route_policies() {
-    Fixture::new().run(async |fixture, new| {
+    Fixture::new().run(async |fixture, address| {
         for (method, path, message) in [
             ("HEAD", "/", "cross-origin Web UI request rejected"),
             (
@@ -1681,29 +1570,29 @@ fn public_origins_and_models_keep_their_route_policies() {
                 "cross-origin model catalog request rejected",
             ),
         ] {
-            let received = fixture
-                .parity(
-                    new,
-                    &request(
-                        fixture.port(),
-                        method,
-                        path,
-                        &["Host: outside.invalid"],
-                        b"",
-                    ),
-                    403,
-                )
-                .await;
+            let received = assert_wire(
+                address,
+                &request(
+                    fixture.port(),
+                    method,
+                    path,
+                    &["Host: outside.invalid"],
+                    b"",
+                ),
+                false,
+                403,
+            )
+            .await;
             assert_eq!(json_body(&received)["error"]["message"], message);
         }
         let local = request(fixture.port(), "POST", "/healthz", &[], b"");
-        fixture.parity(new, &local, 200).await;
+        assert_wire(address, &local, false, 200).await;
         let local = request(fixture.port(), "GET", "/v1/models", &[], b"");
-        assert_status(&exchange_wire(new, &local, false).await, 200);
+        assert_status(&exchange_wire(address, &local, false).await, 200);
 
         let auth = format!(
             "Authorization: Bearer {}",
-            fixture.legacy.state.backend.gateway_key
+            fixture.server.state.backend.gateway_key
         );
         let outside = request(
             fixture.port(),
@@ -1712,17 +1601,13 @@ fn public_origins_and_models_keep_their_route_policies() {
             &["Host: outside.invalid", &auth],
             b"",
         );
-        assert_status(
-            &exchange_wire(fixture.legacy.local_addr(), &outside, false).await,
-            200,
-        );
-        assert_status(&exchange_wire(new, &outside, false).await, 200);
+        assert_status(&exchange_wire(address, &outside, false).await, 200);
     });
 }
 
 #[test]
 fn route_access_precedes_identity_and_preserves_management_exceptions() {
-    Fixture::new().run(async |fixture, new| {
+    Fixture::new().run(async |fixture, address| {
         let decisions = request(
             fixture.port(),
             "POST",
@@ -1730,18 +1615,18 @@ fn route_access_precedes_identity_and_preserves_management_exceptions() {
             &["Content-Length: -1"],
             b"",
         );
-        let reply = fixture.parity(new, &decisions, 401).await;
+        let reply = assert_wire(address, &decisions, false, 401).await;
         assert_eq!(
             json_body(&reply)["error"]["message"],
             "EMP gateway authentication is required"
         );
         fixture
-            .legacy
+            .server
             .state
             .backend
             .modules
             .mark_unavailable(emp_modules::Module::Decision, "test");
-        let reply = fixture.parity(new, &decisions, 404).await;
+        let reply = assert_wire(address, &decisions, false, 404).await;
         assert_eq!(json_body(&reply)["error"]["code"], "module_disabled");
         assert_eq!(fixture.upstream.load(Ordering::Relaxed), 0);
 
@@ -1752,7 +1637,7 @@ fn route_access_precedes_identity_and_preserves_management_exceptions() {
             &["Origin: https://outside.invalid", &fixture.session()],
             b"",
         );
-        let reply = fixture.parity(new, &modules, 401).await;
+        let reply = assert_wire(address, &modules, false, 401).await;
         assert_eq!(
             json_body(&reply)["error"]["message"],
             "management session is required"
@@ -1770,7 +1655,7 @@ fn gzip(payload: &[u8], comment: Vec<u8>) -> Vec<u8> {
 
 #[test]
 fn json_errors_match_wire_for_limits_encodings_and_framing() {
-    Fixture::new().run(async |fixture, new| {
+    Fixture::new().run(async |fixture, address| {
         const MAX: usize = 5 * 1024 * 1024;
         let port = fixture.port();
         let session = fixture.session();
@@ -1794,19 +1679,19 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
                 "unsupported Transfer-Encoding",
             ),
         ] {
-            let reply = fixture
-                .parity(
-                    new,
-                    &request(
-                        port,
-                        "POST",
-                        "/api/language",
-                        &[headers.as_slice(), &extra].concat(),
-                        b"",
-                    ),
-                    status,
-                )
-                .await;
+            let reply = assert_wire(
+                address,
+                &request(
+                    port,
+                    "POST",
+                    "/api/language",
+                    &[headers.as_slice(), &extra].concat(),
+                    b"",
+                ),
+                false,
+                status,
+            )
+            .await;
             assert!(
                 json_body(&reply)["error"]["message"]
                     .as_str()
@@ -1818,19 +1703,19 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
             "Content-Length: {}",
             RequestLimitsConfig::default().maximum + 1
         );
-        let reply = fixture
-            .parity(
-                new,
-                &request(
-                    port,
-                    "POST",
-                    "/v1/responses",
-                    &[headers.as_slice(), &[&declared]].concat(),
-                    b"",
-                ),
-                413,
-            )
-            .await;
+        let reply = assert_wire(
+            address,
+            &request(
+                port,
+                "POST",
+                "/v1/responses",
+                &[headers.as_slice(), &[&declared]].concat(),
+                b"",
+            ),
+            false,
+            413,
+        )
+        .await;
         assert_eq!(json_body(&reply)["error"]["code"], "request_too_large");
 
         let gzip_json = gzip(b"{}", Vec::new());
@@ -1868,13 +1753,13 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
             ),
         ] {
             let content_encoding = format!("Content-Encoding: {encoding}");
-            let reply = fixture
-                .parity(
-                    new,
-                    &json_request(port, "/api/language", &[&session, &content_encoding], &body),
-                    status,
-                )
-                .await;
+            let reply = assert_wire(
+                address,
+                &json_request(port, "/api/language", &[&session, &content_encoding], &body),
+                false,
+                status,
+            )
+            .await;
             assert!(
                 json_body(&reply)["error"]["message"]
                     .as_str()
@@ -1889,7 +1774,7 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
             &[headers.as_slice(), &["Content-Length: +2"]].concat(),
             b"{}ignored",
         );
-        let reply = fixture.parity(new, &padded, 400).await;
+        let reply = assert_wire(address, &padded, false, 400).await;
         assert_eq!(
             json_body(&reply)["error"]["message"],
             "language is required"
@@ -1901,8 +1786,7 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
             &[headers.as_slice(), &["Content-Length: 2"]].concat(),
             b"{",
         );
-        let reply =
-            assert_wire_parity(fixture.legacy.local_addr(), new, &incomplete, true, 400).await;
+        let reply = assert_wire(address, &incomplete, true, 400).await;
         assert_eq!(
             json_body(&reply)["error"]["message"],
             "request body is incomplete"
@@ -1915,13 +1799,13 @@ fn json_errors_match_wire_for_limits_encodings_and_framing() {
             &[headers.as_slice(), &["Content-Length: 2"]].concat(),
             b"{",
         );
-        let reply = fixture.parity(new, &timed_out, 408).await;
+        let reply = assert_wire(address, &timed_out, false, 408).await;
         assert_eq!(json_body(&reply)["error"]["code"], "request_timeout");
     });
 }
 
 #[test]
-fn insufficient_body_budget_matches_legacy_before_read() {
+fn insufficient_body_budget_rejects_before_read() {
     Fixture::new().run(async |fixture, _| {
         let limits = RequestLimits::new(
             RequestLimitsConfig {
@@ -1935,29 +1819,6 @@ fn insufficient_body_budget_matches_legacy_before_read() {
             "H03-memory",
         )
         .unwrap();
-        let reference = TestDriver::compares_drivers().then(|| {
-            let legacy = TcpListener::bind(LOOPBACK).unwrap();
-            let legacy_address = legacy.local_addr().unwrap();
-            let legacy_limits = limits.clone();
-            let presentation = ErrorPresentation::new(&fixture.legacy.state);
-            let worker = tokio::task::spawn_blocking(move || {
-                let (mut stream, _) = legacy.accept().unwrap();
-                let raw = read_request_head(&mut stream).unwrap();
-                let parsed = parse_request(&raw.head).unwrap();
-                let error = read_json_body_with_limits(
-                    &mut stream,
-                    parsed,
-                    raw.body_prefix,
-                    &legacy_limits,
-                )
-                .expect_err("body budget rejects request");
-                let wire = body_error_response(error);
-                stream
-                    .write_all(&presentation.http(&wire).unwrap_or(wire))
-                    .unwrap();
-            });
-            (legacy_address, worker)
-        });
         let router = with_entry_state(
             Router::new().route(
                 "/v1/responses",
@@ -1967,7 +1828,7 @@ fn insufficient_body_budget_matches_legacy_before_read() {
                         .map(|_| "unexpected upstream")
                 }),
             ),
-            fixture.legacy.state.clone(),
+            fixture.server.state.clone(),
         );
         let runtime = ServerHandle::bind(LOOPBACK, router, admission())
             .await
@@ -1985,11 +1846,6 @@ fn insufficient_body_budget_matches_legacy_before_read() {
         );
         let address = runtime.local_addr();
         let reply = assert_wire(address, &wire, false, 503).await;
-        if let Some((legacy_address, worker)) = reference {
-            let old = assert_wire(legacy_address, &wire, false, 503).await;
-            assert_wire_response_parity(&wire, &old, &reply);
-            worker.await.unwrap();
-        }
         assert!(String::from_utf8_lossy(&reply).contains("\r\nRetry-After: 2\r\n"));
         assert_eq!(json_body(&reply)["error"]["memory"]["available_bytes"], 0);
         runtime.shutdown().await.unwrap();
@@ -1998,28 +1854,28 @@ fn insufficient_body_budget_matches_legacy_before_read() {
 
 #[test]
 fn bootstrap_and_export_confirmations_are_consumed_once() {
-    Fixture::new().run(async |fixture, new| {
+    Fixture::new().run(async |fixture, address| {
         let port = fixture.port();
         let original_session = fixture.session();
-        let header = format!("X-EMP-Bootstrap: {}", fixture.legacy.state.bootstrap.token);
+        let header = format!("X-EMP-Bootstrap: {}", fixture.server.state.bootstrap.token);
         let duplicate = request(port, "POST", "/api/session", &[&header, &header], b"");
-        fixture.parity(new, &duplicate, 401).await;
+        assert_wire(address, &duplicate, false, 401).await;
         let bootstrap = request(port, "POST", "/api/session", &[&header], b"");
-        let accepted = exchange_wire(new, &bootstrap, false).await;
+        let accepted = exchange_wire(address, &bootstrap, false).await;
         assert_status(&accepted, 200);
         assert!(
             String::from_utf8_lossy(&accepted)
                 .contains(crate::http::auth::CLEAR_LEGACY_SESSION_COOKIE)
         );
-        fixture.parity(new, &bootstrap, 401).await;
+        assert_wire(address, &bootstrap, false, 401).await;
         assert_ne!(fixture.session(), original_session);
         let invalidated = json_request(port, "/api/language", &[&original_session], b"{}");
-        fixture.parity(new, &invalidated, 401).await;
+        assert_wire(address, &invalidated, false, 401).await;
 
         let session = fixture.session();
         let issue = json_request(port, "/api/migration/export/confirm", &[&session], b"{}");
         for first_is_valid in [true, false] {
-            let issued = exchange_wire(new, &issue, false).await;
+            let issued = exchange_wire(address, &issue, false).await;
             assert_status(&issued, 200);
             let good = json_body(&issued)["confirmation"]
                 .as_str()
@@ -2034,12 +1890,12 @@ fn bootstrap_and_export_confirmations_are_consumed_once() {
                 )
             };
             if first_is_valid {
-                assert_status(&exchange_wire(new, &export(&good), false).await, 200);
+                assert_status(&exchange_wire(address, &export(&good), false).await, 200);
             } else {
-                let rejected = exchange_wire(new, &export("wrong"), false).await;
+                let rejected = exchange_wire(address, &export("wrong"), false).await;
                 assert_status(&rejected, 403);
             }
-            let rejected = fixture.parity(new, &export(&good), 403).await;
+            let rejected = assert_wire(address, &export(&good), false, 403).await;
             assert_eq!(
                 json_body(&rejected)["error"]["code"],
                 "export_confirmation_required"
@@ -2050,7 +1906,7 @@ fn bootstrap_and_export_confirmations_are_consumed_once() {
 
 #[test]
 fn realtime_uses_its_own_auth_and_multipart_errors() {
-    Fixture::new().run(async |fixture, new| {
+    Fixture::new().run(async |fixture, address| {
         let port = fixture.port();
         let unauthenticated = request(
             port,
@@ -2059,14 +1915,14 @@ fn realtime_uses_its_own_auth_and_multipart_errors() {
             &["Content-Length: 9", "content-length: 8"],
             b"",
         );
-        let reply = fixture.parity(new, &unauthenticated, 401).await;
+        let reply = assert_wire(address, &unauthenticated, false, 401).await;
         assert_eq!(
             json_body(&reply)["error"]["code"],
             "native_subscription_unavailable"
         );
 
         let sideband = request(port, "GET", "/v1/live/rtc_demo", &[], b"");
-        let reply = fixture.parity(new, &sideband, 401).await;
+        let reply = assert_wire(address, &sideband, false, 401).await;
         assert_eq!(
             json_body(&reply)["error"]["code"],
             "realtime_caller_unauthorized"
@@ -2104,7 +1960,7 @@ fn realtime_uses_its_own_auth_and_multipart_errors() {
                 &[&[session.as_str(), content_type], headers.as_slice()].concat(),
                 b"",
             );
-            let reply = fixture.parity(new, &wire, status).await;
+            let reply = assert_wire(address, &wire, false, status).await;
             assert_eq!(json_body(&reply)["error"]["code"], code);
         }
     });
@@ -2112,139 +1968,132 @@ fn realtime_uses_its_own_auth_and_multipart_errors() {
 
 #[test]
 fn recovery_keeps_flat_errors_and_auth_precedes_empty_body_policy() {
-    Fixture::new().run(async |fixture, _| {
-        let reference = TestDriver::compares_drivers().then(|| {
-            let legacy = TcpListener::bind(LOOPBACK).unwrap();
-            let address = legacy.local_addr().unwrap();
-            let config = fixture.directory.path().join("config.json");
-            let worker = std::thread::spawn(move || {
-                crate::startup_recovery::serve_for_test(legacy, &config, "recovery-fixture")
-                    .unwrap()
-            });
-            (address, worker)
-        });
-        let port = reference
-            .as_ref()
-            .map_or(fixture.port(), |(address, _)| address.port());
-        let state = RecoveryAccess {
-            port,
-            token: Arc::from("recovery-fixture"),
-        };
-        let router = Router::new()
-            .route("/", get(|_: RecoveryOrigin| async { "recovery" }))
-            .route(
-                "/api/recovery",
-                get(|_: RecoverySession| async { "private recovery" }),
-            )
-            .route(
-                "/api/recovery/reset",
-                post(|_: RecoveryMutation| async { "confirmed" }),
-            )
-            .route(
-                "/api/recovery/exit",
-                post(|_: RecoveryMutation| async {
-                    JsonReply::new(200, br#"{"exiting":true}"#.to_vec())
-                }),
-            )
-            .with_state(state);
-        let server = ServerHandle::bind_recovery(LOOPBACK, router, admission())
-            .await
-            .unwrap();
-        let address = server.local_addr();
-        for (method, path, headers, status, code) in [
-            (
-                "GET",
-                "/",
-                vec!["Host: outside.invalid"],
-                403,
-                "origin_rejected",
-            ),
-            (
-                "GET",
-                "/api/recovery",
-                vec![],
-                401,
-                "recovery_session_required",
-            ),
-            (
-                "POST",
-                "/api/recovery/reset",
-                vec!["Content-Length: 999"],
-                401,
-                "recovery_session_required",
-            ),
-            (
-                "POST",
-                "/api/recovery/reset",
-                vec!["X-EMP-Recovery: recovery-fixture", "Content-Length: 999"],
-                400,
-                "invalid_request",
-            ),
-            (
-                "POST",
-                "/api/recovery/reset",
-                vec!["X-EMP-Recovery: recovery-fixture", "Content-Length: 0"],
-                409,
-                "confirmation_required",
-            ),
-        ] {
-            let wire = request(port, method, path, &headers, b"");
-            let reply = assert_wire_parity(
-                reference.as_ref().map_or(address, |entry| entry.0),
-                address,
-                &wire,
-                false,
-                status,
-            )
-            .await;
-            assert_eq!(json_body(&reply), json!({"error":code}));
-        }
-        for address in reference.iter().map(|entry| entry.0).chain([address]) {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let port = address.port();
+            let state = RecoveryAccess {
+                port,
+                token: Arc::from("recovery-fixture"),
+            };
+            let router = Router::new()
+                .route("/", get(|_: RecoveryOrigin| async { "recovery" }))
+                .route(
+                    "/api/recovery",
+                    get(|_: RecoverySession| async { "private recovery" }),
+                )
+                .route(
+                    "/api/recovery/reset",
+                    post(|_: RecoveryMutation| async { "confirmed" }),
+                )
+                .route(
+                    "/api/recovery/exit",
+                    post(|_: RecoveryMutation| async {
+                        JsonReply::new(200, br#"{"exiting":true}"#.to_vec())
+                    }),
+                )
+                .with_state(state);
+            let control = Arc::new(crate::server::ServerControl::recovery(admission()));
+            let server = tokio::spawn(crate::server::serve_recovery(
+                listener,
+                router,
+                control.clone(),
+            ));
+            for (path, headers) in [
+                ("/", [].as_slice()),
+                (
+                    "/api/recovery",
+                    ["X-EMP-Recovery: recovery-fixture"].as_slice(),
+                ),
+            ] {
+                assert_wire(
+                    address,
+                    &request(port, "GET", path, headers, b""),
+                    false,
+                    200,
+                )
+                .await;
+            }
+            for (method, path, headers, status, code) in [
+                (
+                    "GET",
+                    "/",
+                    vec!["Host: outside.invalid"],
+                    403,
+                    "origin_rejected",
+                ),
+                (
+                    "GET",
+                    "/api/recovery",
+                    vec![],
+                    401,
+                    "recovery_session_required",
+                ),
+                (
+                    "POST",
+                    "/api/recovery/reset",
+                    vec!["Content-Length: 999"],
+                    401,
+                    "recovery_session_required",
+                ),
+                (
+                    "POST",
+                    "/api/recovery/reset",
+                    vec!["X-EMP-Recovery: recovery-fixture", "Content-Length: 999"],
+                    400,
+                    "invalid_request",
+                ),
+                (
+                    "POST",
+                    "/api/recovery/reset",
+                    vec!["X-EMP-Recovery: recovery-fixture", "Content-Length: 0"],
+                    409,
+                    "confirmation_required",
+                ),
+            ] {
+                let wire = request(port, method, path, &headers, b"");
+                let reply = assert_wire(address, &wire, false, status).await;
+                assert_eq!(json_body(&reply), json!({"error":code}));
+            }
             assert!(
                 exchange_wire(address, b"PUT / HTTP/1.1\r\n\r\n", false)
                     .await
                     .is_empty()
             );
-        }
-        let exit = request(
-            port,
-            "POST",
-            "/api/recovery/exit",
-            &["X-EMP-Recovery: recovery-fixture", "Content-Length: 0"],
-            b"",
-        );
-        assert_wire_parity(
-            reference.as_ref().map_or(address, |entry| entry.0),
-            address,
-            &exit,
-            false,
-            200,
-        )
-        .await;
-        if let Some((_, worker)) = reference {
-            assert!(!worker.join().unwrap());
-        }
-        server.shutdown().await.unwrap();
-    });
+            let exit = request(
+                port,
+                "POST",
+                "/api/recovery/exit",
+                &["X-EMP-Recovery: recovery-fixture", "Content-Length: 0"],
+                b"",
+            );
+            assert_wire(address, &exit, false, 200).await;
+            control.stop(crate::server::ShutdownReason::Requested);
+            server.await.unwrap().unwrap();
+        });
 }
 
 #[test]
-fn rejected_routing_uri_matches_legacy_wire() {
-    Fixture::new().run_candidate(async |fixture, candidate| {
+fn rejected_routing_uri_returns_not_found() {
+    Fixture::new().run_wire(async |fixture, endpoint| {
         let target = "example.invalid[";
         assert!(axum::http::Uri::try_from(target).is_err());
-        fixture
-            .parity(
-                candidate,
-                &request(fixture.port(), "GET", target, &[], b""),
-                404,
-            )
-            .await;
+        assert_wire(
+            endpoint,
+            &request(fixture.port(), "GET", target, &[], b""),
+            false,
+            404,
+        )
+        .await;
     });
 }
 
 #[test]
-fn candidate_router_receives_original_query() {
+fn http_router_receives_original_query() {
     let fixture = Fixture::new();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -2253,14 +2102,14 @@ fn candidate_router_receives_original_query() {
         .block_on(async {
             let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
             let address = listener.local_addr().unwrap();
-            let state = &fixture.legacy.state;
+            let state = &fixture.server.state;
             let router = Router::new().fallback(|uri: axum::http::Uri| async move {
                 JsonReply::new(
                     200,
                     json!({"path": uri.path(), "query": uri.query()}).to_string(),
                 )
             });
-            let candidate = tokio::spawn(crate::server::serve(
+            let endpoint = tokio::spawn(crate::server::serve(
                 listener,
                 router,
                 state.lifecycle.clone(),
@@ -2282,14 +2131,14 @@ fn candidate_router_receives_original_query() {
                 );
             }
             state.request_shutdown();
-            candidate.await.unwrap().unwrap();
+            endpoint.await.unwrap().unwrap();
         });
-    fixture.legacy.shutdown().unwrap();
+    fixture.server.shutdown().unwrap();
 }
 
 #[test]
 fn hyper_parse_rejection_uses_emp_response_before_dispatch() {
-    Fixture::new().run(async |fixture, new| {
+    Fixture::new().run(async |fixture, address| {
         let wire = request(
             fixture.port(),
             "GET",
@@ -2297,11 +2146,9 @@ fn hyper_parse_rejection_uses_emp_response_before_dispatch() {
             &["Invalid Header: x"],
             b"",
         );
-        if TestDriver::compares_drivers() {
-            assert_wire(fixture.legacy.local_addr(), &wire, false, 200).await;
-        }
-        let reply = assert_wire(new, &wire, false, 400).await;
-        assert_eq!(reply, crate::http::response::bad_request_response());
+
+        let reply = assert_wire(address, &wire, false, 400).await;
+        assert_eq!(reply, EntryError::InvalidHead.reply().encode());
         assert_eq!(fixture.upstream.load(Ordering::Relaxed), 0);
     });
 }

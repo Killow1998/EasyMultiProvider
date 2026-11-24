@@ -3,82 +3,8 @@ use super::{
     RealtimeCall, RealtimeError,
 };
 use crate::http::request::Request;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::http::request::read_before;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::http::request::request_body_deadline;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::http::request::restore_read_timeout;
 use serde_json::Value;
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::io::Read;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use std::net::TcpStream;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use std::time::Instant;
-
-#[cfg(test)]
-pub(crate) fn read_realtime_call<R: Read>(
-    headers: &BTreeMap<String, String>,
-    prefix: Vec<u8>,
-    stream: &mut R,
-) -> Result<RealtimeCall, RealtimeError> {
-    read_realtime_call_with_reader(headers, prefix, |buffer, deadline| {
-        let count = stream.read(buffer)?;
-        if Instant::now() >= deadline {
-            return Err(std::io::ErrorKind::TimedOut.into());
-        }
-        Ok(count)
-    })
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn read_realtime_call_from_socket(
-    headers: &BTreeMap<String, String>,
-    prefix: Vec<u8>,
-    stream: &mut TcpStream,
-) -> Result<RealtimeCall, RealtimeError> {
-    let result = read_realtime_call_with_reader(headers, prefix, |buffer, deadline| {
-        read_before(stream, buffer, deadline)
-    });
-    restore_read_timeout(stream);
-    result
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-fn read_realtime_call_with_reader(
-    headers: &BTreeMap<String, String>,
-    mut prefix: Vec<u8>,
-    mut read: impl FnMut(&mut [u8], Instant) -> std::io::Result<usize>,
-) -> Result<RealtimeCall, RealtimeError> {
-    let input = RealtimeRead::prepare(headers)?;
-    let length = input.length;
-    prefix.truncate(length);
-    input.reserve(&mut prefix, length)?;
-    let deadline = request_body_deadline(length);
-    while prefix.len() < length {
-        if Instant::now() >= deadline {
-            return Err(RealtimeRead::timeout());
-        }
-        let remaining = length - prefix.len();
-        let mut chunk = [0u8; 32 * 1024];
-        let chunk_length = remaining.min(chunk.len());
-        let count = read(&mut chunk[..chunk_length], deadline).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::TimedOut {
-                RealtimeRead::timeout()
-            } else {
-                RealtimeRead::incomplete()
-            }
-        })?;
-        if count == 0 {
-            return Err(RealtimeRead::incomplete());
-        }
-        prefix.extend_from_slice(&chunk[..count]);
-    }
-    input.parse(&prefix)
-}
-
 pub(crate) fn validate_headers(request: Request<'_>) -> Result<(), RealtimeError> {
     if [
         "Content-Length",
@@ -482,7 +408,6 @@ fn invalid_multipart(message: &str) -> RealtimeError {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::io::Cursor;
 
     const BOUNDARY: &str = "CodexRealtimeBoundary";
 
@@ -520,15 +445,12 @@ mod tests {
     #[test]
     fn parses_exact_two_part_codex_request() {
         let raw = body(false);
-        let mut stream = Cursor::new(Vec::<u8>::new());
-        let call = read_realtime_call(
-            &headers(
-                &format!("multipart/form-data; boundary={BOUNDARY}"),
-                raw.len(),
-            ),
-            raw,
-            &mut stream,
-        )
+        let call = RealtimeRead::prepare(&headers(
+            &format!("multipart/form-data; boundary={BOUNDARY}"),
+            raw.len(),
+        ))
+        .unwrap()
+        .parse(&raw)
         .unwrap();
         assert_eq!(call.sdp, "v=0\r\no=offer\r\n");
         assert_eq!(
@@ -543,9 +465,9 @@ mod tests {
     #[test]
     fn rejects_wrong_top_level_content_type() {
         let raw = body(false);
-        let mut stream = Cursor::new(Vec::<u8>::new());
-        let error = read_realtime_call(&headers("application/json", raw.len()), raw, &mut stream)
-            .unwrap_err();
+        let error = RealtimeRead::prepare(&headers("application/json", raw.len()))
+            .err()
+            .unwrap();
         assert_eq!(error.status, 415);
         assert_eq!(error.code, "realtime_invalid_content_type");
         assert!(error.close);
@@ -553,22 +475,12 @@ mod tests {
 
     #[test]
     fn rejects_declared_request_over_limit_before_reading() {
-        struct NoRead;
-        impl Read for NoRead {
-            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-                panic!("oversized body must be rejected before reading")
-            }
-        }
-        let mut stream = NoRead;
-        let error = read_realtime_call(
-            &headers(
-                &format!("multipart/form-data; boundary={BOUNDARY}"),
-                MAX_REALTIME_REQUEST_BYTES + 1,
-            ),
-            Vec::new(),
-            &mut stream,
-        )
-        .unwrap_err();
+        let error = RealtimeRead::prepare(&headers(
+            &format!("multipart/form-data; boundary={BOUNDARY}"),
+            MAX_REALTIME_REQUEST_BYTES + 1,
+        ))
+        .err()
+        .unwrap();
         assert_eq!(error.status, 413);
         assert!(error.close);
     }

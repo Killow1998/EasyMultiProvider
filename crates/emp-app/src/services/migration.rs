@@ -2,7 +2,10 @@ use crate::app::ServerState;
 use crate::services::observation::operation::{OperationObservation, observe};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use emp_state::{ExportGroups, decrypt_migration_bundle, export_migration_bundle_with_summary};
+use emp_state::{
+    ExportGroups, export_migration_bundle_with_summary,
+    migration::decrypt_migration_bundle_with_registry,
+};
 use serde_json::Value;
 
 const MIN_EXPORT_PASSWORD_UTF8_BYTES: usize = 12;
@@ -193,7 +196,11 @@ pub(crate) fn import(
                 .map_err(|_| MigrationError::invalid("migration bundle is not valid base64"))?;
             let decrypted = receipt
                 .step("decrypt_bundle", || {
-                    decrypt_migration_bundle(&bundle, password)
+                    decrypt_migration_bundle_with_registry(
+                        &bundle,
+                        password,
+                        state.backend.configuration.official_models,
+                    )
                 })
                 .map_err(MigrationError::invalid)?;
             let summary = receipt.step("commit_bundle", || {
@@ -233,14 +240,16 @@ fn commit_selected(
     let summary = receipt.step("commit_bundle", || {
         crate::services::accounts::replacing_account_credentials(state, |config| {
             let resolution = preferences::resolve(state, config, payload, choices, true)?;
-            let (mut target, auth, summary) = emp_state::migration::preview_migration_import(
-                config,
-                &resolution.payload,
-                &state.backend.configuration.config_path,
-                &state.backend.configuration.vault,
-                &std::collections::BTreeMap::new(),
-            )
-            .map_err(MigrationError::invalid)?;
+            let (mut target, auth, summary) =
+                emp_state::migration::preview_migration_import_with_registry(
+                    config,
+                    &resolution.payload,
+                    &state.backend.configuration.config_path,
+                    &state.backend.configuration.vault,
+                    &std::collections::BTreeMap::new(),
+                    state.backend.configuration.official_models,
+                )
+                .map_err(MigrationError::invalid)?;
             preferences::apply(&mut target, &resolution.updates);
             emp_state::config::validate_service_names(config, &target)
                 .map_err(MigrationError::invalid)?;

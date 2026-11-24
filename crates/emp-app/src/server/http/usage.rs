@@ -22,7 +22,7 @@ use axum::{
 use emp_state::usage::ledger::CallFilter;
 use serde_json::json;
 use std::{
-    io::{self, Write},
+    io,
     net::TcpStream,
     sync::{Arc, Mutex, atomic::AtomicBool},
 };
@@ -47,34 +47,6 @@ impl Report {
         request.header("Accept") == Some("text/event-stream")
             && (matches!(self, Self::Calls)
                 || query_values(request.target, "lifetime").as_slice() == ["true"])
-    }
-
-    pub(crate) fn serve_legacy(
-        self,
-        stream: &mut TcpStream,
-        request: Request<'_>,
-        state: &ServerState,
-        now: f64,
-    ) -> Option<Vec<u8>> {
-        let session = ManagementSession::require(request, state, now);
-        if self.is_stream(request) {
-            match session
-                .map_err(EntryError::reply)
-                .and_then(|_| self.prepare_stream(request, state, now))
-            {
-                Ok(query) => {
-                    let _ = query.legacy(stream, state);
-                }
-                Err(reply) => {
-                    let _ = stream.write_all(&reply.wire_response());
-                }
-            }
-            return None;
-        }
-        Some(match session {
-            Ok(_) => self.read(request, state, Some(stream)).wire_response(),
-            Err(error) => error.wire_response(),
-        })
     }
 
     fn prepare_stream(
@@ -118,18 +90,6 @@ enum ReportQuery {
 }
 
 impl ReportQuery {
-    fn legacy(self, socket: &mut TcpStream, state: &ServerState) -> io::Result<()> {
-        let mut monitor = DisconnectMonitor::start(socket)?;
-        let writer = Arc::new(socket.try_clone()?);
-        crate::api::streaming::write_stream_head(socket)?;
-        socket.flush()?;
-        self.stream(state, monitor.cancellation(), move |frame| {
-            let mut writer = writer.as_ref();
-            writer.write_all(frame)?;
-            writer.flush()
-        })
-    }
-
     fn stream(
         self,
         state: &ServerState,

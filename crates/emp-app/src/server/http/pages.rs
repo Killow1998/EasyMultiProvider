@@ -77,14 +77,6 @@ impl FromRequestParts<Arc<ServerState>> for PageRead {
     }
 }
 
-pub(crate) fn legacy_reply(request: Request<'_>, state: &ServerState) -> Option<HttpReply> {
-    Some(
-        PageRead::authorize(request, state.port)?
-            .and_then(|page| page.read(state))
-            .unwrap_or_else(EntryError::reply),
-    )
-}
-
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/", get(read).post(read).delete(read))

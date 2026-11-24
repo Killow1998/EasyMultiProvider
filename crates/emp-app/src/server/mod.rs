@@ -1,14 +1,14 @@
+mod accept;
 pub(crate) mod connection;
 pub(crate) mod head;
 pub(crate) mod http;
 
 use crate::app::ServerState;
-use crate::lifecycle::connections::{ACCEPT_RETRY, AcceptLog, request_rejected};
 use crate::services::{connection_admission::ConnectionAdmission, updates::UpdateState};
+use accept::{ACCEPT_RETRY, AcceptLog, request_rejected};
 use axum::{Router, middleware::from_fn_with_state};
 use std::{
     io,
-    net::SocketAddr,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -17,9 +17,11 @@ use std::{
 use tokio::{
     net::TcpListener,
     sync::watch,
-    task::{JoinError, JoinHandle, JoinSet},
+    task::{JoinError, JoinSet},
     time::{Instant, sleep},
 };
+#[cfg(test)]
+use {std::net::SocketAddr, tokio::task::JoinHandle};
 
 #[cfg(test)]
 #[path = "../../tests/support/raw_tcp.rs"]
@@ -113,6 +115,7 @@ impl ServerControl {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct ServerHandle {
     address: SocketAddr,
     control: Arc<ServerControl>,
@@ -125,35 +128,16 @@ pub(crate) enum ServeError {
     Worker(JoinError),
 }
 
+#[cfg(test)]
 impl ServerHandle {
     pub(crate) async fn bind(
         address: SocketAddr,
         router: Router,
         admission: Arc<ConnectionAdmission>,
     ) -> io::Result<Self> {
-        Self::bind_with_mode(address, router, admission, ServerMode::Http).await
-    }
-
-    pub(crate) async fn bind_recovery(
-        address: SocketAddr,
-        router: Router,
-        admission: Arc<ConnectionAdmission>,
-    ) -> io::Result<Self> {
-        Self::bind_with_mode(address, router, admission, ServerMode::Recovery).await
-    }
-
-    async fn bind_with_mode(
-        address: SocketAddr,
-        router: Router,
-        admission: Arc<ConnectionAdmission>,
-        mode: ServerMode,
-    ) -> io::Result<Self> {
         let socket = TcpListener::bind(address).await?;
         let address = socket.local_addr()?;
-        let control = Arc::new(ServerControl {
-            mode,
-            ..ServerControl::new(admission)
-        });
+        let control = Arc::new(ServerControl::new(admission));
         let listener = tokio::spawn(serve(socket, router, Arc::clone(&control), None));
         Ok(Self {
             address,
@@ -180,17 +164,18 @@ impl ServerHandle {
     }
 }
 
+#[cfg(test)]
 impl Drop for ServerHandle {
     fn drop(&mut self) {
         self.control.stop(ShutdownReason::Requested);
     }
 }
 
-pub(crate) async fn serve_candidate(
+pub(crate) async fn serve_http(
     listener: TcpListener,
     state: Arc<ServerState>,
 ) -> Result<(), ServeError> {
-    let router = candidate_router(state.clone());
+    let router = http_router(state.clone());
     serve(listener, router, state.lifecycle.clone(), Some(state)).await
 }
 
@@ -202,7 +187,7 @@ pub(crate) async fn serve_recovery(
     serve(listener, router, control, None).await
 }
 
-fn candidate_router(state: Arc<ServerState>) -> Router {
+fn http_router(state: Arc<ServerState>) -> Router {
     http::with_entry_state(
         http::accounts::routes()
             .route(
@@ -250,7 +235,7 @@ async fn serve(
     listener: TcpListener,
     router: Router,
     control: Arc<ServerControl>,
-    candidate: Option<Arc<ServerState>>,
+    http_state: Option<Arc<ServerState>>,
 ) -> Result<(), ServeError> {
     let mut connections = JoinSet::new();
     let mut worker_failure = None;
@@ -273,7 +258,7 @@ async fn serve(
                     .map(|connection| (connection, Instant::now()));
             }
             Ok(accept_with_retry(accept, |accepted| {
-                if let Some(state) = &candidate {
+                if let Some(state) = &http_state {
                     accept_log.record(state, accepted);
                 }
             })
@@ -293,9 +278,9 @@ async fn serve(
                 }
                 result = &mut accept, if !recovery_busy => {
                     let ((stream, peer), accepted) = result.map_err(ServeError::Accept)?;
-                    if let Some(state) = &candidate {
+                    if let Some(state) = &http_state {
                         if let Some(intake) = http::proxy::ConnectionIntake::accept(state, peer.ip()) {
-                            connections.spawn(connection::drive_candidate(
+                            connections.spawn(connection::drive_http(
                                 stream, peer, accepted, router.clone(), Arc::clone(state), intake,
                             ));
                         } else {

@@ -58,44 +58,60 @@ const NOT_FOUND: &str = json_head!("404 Not Found", "33");
 const MISSING: &[u8] = br#"{"error":{"message":"not found"}}"#;
 const SESSION_REQUIRED: &[u8] = br#"{"error":{"message":"management session is required"}}"#;
 
-pub(crate) use crate::lifecycle::TestDriver as Driver;
-
-fn assert_head(driver: Driver, name: &str, head: &str, expected: &str) {
-    assert_eq!(head, expected, "{driver:?} {name}");
+fn assert_head(name: &str, head: &str, expected: &str) {
+    assert_eq!(head, expected, "{name}");
 }
 
-pub(crate) fn assert_reply(
-    driver: Driver,
-    name: &str,
-    reply: &[u8],
-    expected_head: &str,
-    expected_body: &[u8],
-) {
+pub(crate) fn assert_reply(name: &str, reply: &[u8], expected_head: &str, expected_body: &[u8]) {
     let split = reply
         .windows(4)
         .position(|part| part == b"\r\n\r\n")
-        .unwrap_or_else(|| panic!("{driver:?} {name}: missing complete response head"))
+        .unwrap_or_else(|| panic!("{name}: missing complete response head"))
         + 4;
     assert_head(
-        driver,
         name,
         std::str::from_utf8(&reply[..split]).unwrap(),
         expected_head,
     );
     assert!(
         reply[split..] == *expected_body,
-        "{driver:?} {name}: response body differs"
+        "{name}: response body differs"
     );
 }
 
 #[test]
 fn fixture_defaults_stay_under_config_root() {
     const UNUSED_HOME: &str = "EMP_FIXTURE_UNUSED_HOME";
+    const OVERRIDE_PROVIDER: &str = "fixture-external-registry";
+    const OVERRIDE_URL: &str = "https://registry-fixture.example/v1";
+    const OVERRIDE_MODEL: &str = "fixture-model-from-env";
     if let Some(unused_home) = std::env::var_os(UNUSED_HOME) {
-        for &driver in Driver::selected() {
-            Fixture::new_with_driver(driver).run_wire(async |fixture, address| {
+        {
+            let directory = tempfile::tempdir().unwrap();
+            let config = json!({
+                "providers": [{"id": "external", "base_url": OVERRIDE_URL}],
+                "models": [{"id": OVERRIDE_MODEL, "provider": "external"}],
+            });
+            std::fs::write(directory.path().join("config.json"), config.to_string()).unwrap();
+            assert_eq!(
+                emp_state::normalize_configuration(Some(&config)).unwrap()["models"][0]["input_modalities"],
+                json!(["text", "image"]),
+            );
+            Fixture::with_directory(directory).run_wire(async |fixture, address| {
                 let root = emp_state::config::resolve_user_path(fixture.directory.path());
-                let backend = &fixture.legacy.state.backend;
+                let backend = &fixture.server.state.backend;
+                let provider = json!({"base_url": OVERRIDE_URL});
+                let fields = provider.as_object().unwrap();
+                assert_eq!(
+                    emp_state::official_registry::snapshot()
+                        .identify_provider(fields)
+                        .as_deref(),
+                    Some(OVERRIDE_PROVIDER)
+                );
+                assert_eq!(
+                    (backend.configuration.official_models)().identify_provider(fields),
+                    None
+                );
                 let auth = root.join("codex/auth.json");
                 assert_eq!(backend.accounts.native_auth_path, auth);
                 assert_eq!(
@@ -130,10 +146,18 @@ fn fixture_defaults_stay_under_config_root() {
                     200,
                 )
                 .await;
+                let body = json_body(&reply);
                 assert_eq!(
-                    json_body(&reply)["native_catalog_path"],
+                    body["native_catalog_path"],
                     json!(root.join("codex/models_cache.json"))
                 );
+                let model = &body["models"][0];
+                assert_eq!(model["id"], OVERRIDE_MODEL);
+                assert_eq!(
+                    model["capability_sources"]["input_modalities"]["source"],
+                    "unknown"
+                );
+                assert_eq!(model["input_modalities"], json!(["text"]));
             });
         }
         let unused_home = std::path::Path::new(&unused_home);
@@ -156,6 +180,22 @@ fn fixture_defaults_stay_under_config_root() {
 
     let parent = tempfile::tempdir().unwrap();
     let home = parent.path().join("unused");
+    let registry = parent.path().join("official-models.json");
+    std::fs::write(
+        &registry,
+        json!({
+            "schema_version": 1,
+            "reviewed_at": "2026-01-02",
+            "providers": [{"key": OVERRIDE_PROVIDER, "api_base_urls": [OVERRIDE_URL]}],
+            "models": [{
+                "model_id": OVERRIDE_MODEL,
+                "provider_key": OVERRIDE_PROVIDER,
+                "input_modalities": ["text", "image"],
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
     let (_, module) = module_path!().split_once("::").unwrap();
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command.args([
@@ -183,10 +223,7 @@ fn fixture_defaults_stay_under_config_root() {
     command
         .env("XDG_CACHE_HOME", parent.path().join("cache"))
         .env("EASY_MULTI_PROVIDER_CONFIG", home.join("config.json"))
-        .env(
-            "EMP_OFFICIAL_MODELS_PATH",
-            home.join("official-models.json"),
-        )
+        .env("EMP_OFFICIAL_MODELS_PATH", &registry)
         .env("EMP_UPDATE_READY", home.join("ready.json"))
         .env(
             emp_state::filesystem::MASTER_KEY_FILE_ENV,
@@ -210,8 +247,8 @@ fn fixture_defaults_stay_under_config_root() {
 
 #[test]
 fn pages_and_embedded_assets() {
-    for &driver in Driver::selected() {
-        Fixture::new_with_driver(driver).run_wire(async |fixture, address| {
+    {
+        Fixture::new().run_wire(async |fixture, address| {
             let port = fixture.port();
             let index = include_bytes!("../../../../web/index.html").as_slice();
             let script = include_bytes!("../../../../web/i18n.js").as_slice();
@@ -253,7 +290,7 @@ fn pages_and_embedded_assets() {
             ] {
                 let wire = request(port, method, path, &[], b"");
                 let reply = exchange_wire(address, &wire, false).await;
-                assert_reply(driver, &format!("{method} {path}"), &reply, head, body);
+                assert_reply(&format!("{method} {path}"), &reply, head, body);
             }
         });
     }
@@ -263,11 +300,11 @@ fn pages_and_embedded_assets() {
 fn management_json_and_error_responses() {
     const ACCOUNTS: &[u8] = br#"{"accounts":[],"claude_quota":null,"memory_routing_status":null,"native_account":{"auth_mode":"missing","credential_set":false,"hidden_models":[],"id":"@native","model_context_windows":{},"name":"Current Codex login","native":true,"prefix":"","quota":null},"provider_quotas":{},"refresh_errors":{}}"#;
     const TOO_LARGE: &[u8] = br#"{"error":{"code":"request_too_large","limit_bytes":5242880,"message":"request body is too large (EMP limit: 5242880 bytes)","reason":"hard_limit"}}"#;
-    for &driver in Driver::selected() {
+    {
         let directory = tempfile::tempdir().unwrap();
         let config = directory.path().join("config.json");
         std::fs::write(&config, br#"{"language":"en"}"#).unwrap();
-        Fixture::with_driver(directory, driver).run_wire(async |fixture, address| {
+        Fixture::with_directory(directory).run_wire(async |fixture, address| {
             let port = fixture.port();
             let session = fixture.session();
             let origin = format!("Origin: http://{address}");
@@ -286,7 +323,7 @@ fn management_json_and_error_responses() {
                 ("invalid request line", b"GET /healthz HTTP/1.x\r\n\r\n".to_vec(), json_head!("400 Bad Request", "44"), br#"{"error":{"message":"invalid HTTP request"}}"#.as_slice()),
             ] {
                 let reply = exchange_wire(address, &wire, false).await;
-                assert_reply(driver, name, &reply, head, body);
+                assert_reply(name, &reply, head, body);
             }
             let config = std::fs::read(config).unwrap();
             assert_eq!(serde_json::from_slice::<Value>(&config).unwrap()["language"], "zh-CN");
@@ -298,7 +335,7 @@ fn management_json_and_error_responses() {
 #[test]
 fn management_sse_and_update_drain() {
     // H05.1 accepts Hyper's header order and chunked framing for management streams.
-    const CANDIDATE: &str = concat!(
+    const HEAD: &str = concat!(
         "HTTP/1.1 200 OK\r\n",
         "Content-Type: text/event-stream\r\n",
         "Connection: close\r\n",
@@ -309,38 +346,21 @@ fn management_sse_and_update_drain() {
         "X-Accel-Buffering: no\r\n",
         "Transfer-Encoding: chunked\r\n\r\n",
     );
-    const LEGACY: &str = concat!(
-        "HTTP/1.1 200 OK\r\n",
-        "Content-Type: text/event-stream\r\n",
-        "Cache-Control: no-store\r\n",
-        "X-Accel-Buffering: no\r\n",
-        "X-Frame-Options: DENY\r\n",
-        "Content-Security-Policy: frame-ancestors 'none'\r\n",
-        "X-Content-Type-Options: nosniff\r\n",
-        "Connection: close\r\n\r\n",
-    );
-    for &driver in Driver::selected() {
-        Fixture::new_with_driver(driver).run_wire(async |fixture, address| {
+    {
+        Fixture::new().run_wire(async |fixture, address| {
             let port = fixture.port();
             let session = fixture.session();
             let stream = RawClient::request(
                 address,
                 &request(port, "GET", "/api/accounts/events", &[&session], b""),
             ).await;
-            assert_head(driver, "management SSE", &stream.head, match driver {
-                Driver::Candidate => CANDIDATE,
-                Driver::Legacy => LEGACY,
-            });
+            assert_head( "management SSE", &stream.head, HEAD);
             drop(stream);
 
-            assert!(fixture.legacy.state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(fixture.server.state.lifecycle.updates().drain_for_test(Duration::ZERO));
             let wire = json_request(port, "/api/language", &[&session], br#"{"language":"en"}"#);
             let reply = exchange_wire(address, &wire, false).await;
-            assert_reply(
-                driver, "update drain", &reply,
-                json_head!("503 Service Unavailable", "107", "Retry-After: 2"),
-                br#"{"error":{"code":"updating","message":"EMP is installing an update. Please retry shortly.","origin":"emp"}}"#,
-            );
+            assert_reply("update drain", &reply, json_head!("503 Service Unavailable", "107", "Retry-After: 2"), br#"{"error":{"code":"updating","message":"EMP is installing an update. Please retry shortly.","origin":"emp"}}"#);
         });
     }
 }
@@ -348,11 +368,11 @@ fn management_sse_and_update_drain() {
 #[cfg(unix)]
 #[test]
 fn inference_responses() {
-    use super::inference::{SseClient, fixture_with_driver};
+    use super::inference::{SseClient, fixture};
     use crate::tests::OneShotUpstream;
 
     // H05.0 accepts Hyper's header order for proxy replies and chunked framing for SSE.
-    macro_rules! candidate_json {
+    macro_rules! proxy_json {
         ($status:literal, $length:literal) => {
             concat!(
                 "HTTP/1.1 ",
@@ -371,7 +391,7 @@ fn inference_responses() {
             )
         };
     }
-    const SSE_CANDIDATE: &str = concat!(
+    const SSE_HEAD: &str = concat!(
         "HTTP/1.1 200 OK\r\n",
         "Content-Type: text/event-stream\r\n",
         "Connection: close\r\n",
@@ -384,32 +404,17 @@ fn inference_responses() {
         "X-Codex-Turn-State: stream-turn\r\n",
         "Transfer-Encoding: chunked\r\n\r\n",
     );
-    const SSE_LEGACY: &str = concat!(
-        "HTTP/1.1 200 OK\r\n",
-        "Content-Type: text/event-stream\r\n",
-        "Cache-Control: no-cache\r\n",
-        "X-Frame-Options: DENY\r\n",
-        "Content-Security-Policy: frame-ancestors 'none'\r\n",
-        "X-Content-Type-Options: nosniff\r\n",
-        "X-Models-Etag: \"emp-c06f76a4a5f2e0f1ba43a5d9b87dc25a8bd5544f424041a6df950a3402b776d5\"\r\n",
-        "openai-model: native/alias\r\n",
-        "x-codex-turn-state: stream-turn\r\n",
-        "Connection: close\r\n\r\n",
-    );
-
-    for &driver in Driver::selected() {
-        for (status, raw, candidate, legacy) in [
+    {
+        for (status, raw, expected) in [
             (
                 200,
                 br#"{ "data":[{"opaque":true}], "z":1.2300e+2, "a":null }"#.as_slice(),
-                candidate_json!("200 OK", "53"),
-                json_head!("200 OK", "53", "Retry-After: 7"),
+                proxy_json!("200 OK", "53"),
             ),
             (
                 502,
                 br#"{ "error":{"message":"fixture"}, "z":2.00 }"#.as_slice(),
-                candidate_json!("502 Bad Gateway", "43"),
-                json_head!("502 Bad Gateway", "43", "Retry-After: 7"),
+                proxy_json!("502 Bad Gateway", "43"),
             ),
         ] {
             let upstream = OneShotUpstream::start_repeated_wire(
@@ -419,7 +424,7 @@ fn inference_responses() {
                 1,
                 vec![raw.to_vec()],
             );
-            fixture_with_driver(&upstream.base_url(), driver).run_wire(async |fixture, address| {
+            fixture(&upstream.base_url()).run_wire(async |fixture, address| {
                 let wire = json_request(
                     fixture.port(),
                     "/v1/decisions",
@@ -427,16 +432,7 @@ fn inference_responses() {
                     br#"{"model":"upstream-model","input":"fixture"}"#,
                 );
                 let reply = exchange_wire(address, &wire, false).await;
-                assert_reply(
-                    driver,
-                    "POST /v1/decisions",
-                    &reply,
-                    match driver {
-                        Driver::Candidate => candidate,
-                        Driver::Legacy => legacy,
-                    },
-                    raw,
-                );
+                assert_reply("POST /v1/decisions", &reply, expected, raw);
             });
             assert_eq!(upstream.observed().0, "/v1/decisions");
         }
@@ -453,7 +449,7 @@ fn inference_responses() {
                 "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture\",\"status\":\"completed\",\"output\":[],\"future\":{\"opaque\":true}}}\n\n",
             ).as_bytes()).unwrap();
         });
-        fixture_with_driver(&upstream.base_url(), driver).run_wire(async |fixture, address| {
+        fixture(&upstream.base_url()).run_wire(async |fixture, address| {
             let wire = json_request(
                 fixture.port(),
                 "/v1/responses",
@@ -461,16 +457,8 @@ fn inference_responses() {
                 br#"{"model":"native/alias","stream":true,"input":"fixture"}"#,
             );
             let stream = RawClient::request(address, &wire).await;
-            assert_head(
-                driver,
-                "POST /v1/responses (SSE)",
-                &stream.head,
-                match driver {
-                    Driver::Candidate => SSE_CANDIDATE,
-                    Driver::Legacy => SSE_LEGACY,
-                },
-            );
-            let mut stream = SseClient::from_raw(stream, matches!(driver, Driver::Candidate));
+            assert_head("POST /v1/responses (SSE)", &stream.head, SSE_HEAD);
+            let mut stream = SseClient::from_raw(stream);
             timeout(crate::server::raw_tcp::DEADLINE, async {
                 assert_eq!(
                     stream.next().await,
@@ -496,64 +484,51 @@ fn inference_responses() {
 #[cfg(unix)]
 #[test]
 fn responses_and_realtime_websocket_upgrades() {
-    use super::websocket::{accept_upstream, native_fixture_with_driver, upgrade};
+    use super::websocket::{accept_upstream, native_fixture, upgrade};
 
     // H06b records Hyper's Sec-Websocket-Accept spelling on both upgrade routes.
-    const CANDIDATE: &str = concat!(
+    const HEAD: &str = concat!(
         "HTTP/1.1 101 Switching Protocols\r\n",
         "Upgrade: websocket\r\n",
         "Connection: Upgrade\r\n",
         "Sec-Websocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
     );
-    const LEGACY: &str = concat!(
-        "HTTP/1.1 101 Switching Protocols\r\n",
-        "Upgrade: websocket\r\n",
-        "Connection: Upgrade\r\n",
-        "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
-    );
-    for &driver in Driver::selected() {
-        let expected = match driver {
-            Driver::Candidate => CANDIDATE,
-            Driver::Legacy => LEGACY,
-        };
+    {
+        let expected = HEAD;
         let listener = TcpListener::bind(LOOPBACK).unwrap();
         listener.set_nonblocking(true).unwrap();
-        native_fixture_with_driver(listener.local_addr().unwrap(), driver).run_wire(
-            async |fixture, address| {
-                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-                fixture
-                    .legacy
-                    .state
-                    .test_sideband_address
-                    .set(listener.local_addr().unwrap())
-                    .unwrap();
-                let port = fixture.port();
-                let session = fixture.session();
-                let responses = RawClient::request(
-                    address,
-                    &upgrade(port, "/v1/responses", &session, &[], b""),
-                )
-                .await;
-                assert_head(driver, "Responses WS", &responses.head, expected);
-                drop(responses);
+        native_fixture(listener.local_addr().unwrap()).run_wire(async |fixture, address| {
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            fixture
+                .server
+                .state
+                .test_sideband_address
+                .set(listener.local_addr().unwrap())
+                .unwrap();
+            let port = fixture.port();
+            let session = fixture.session();
+            let responses =
+                RawClient::request(address, &upgrade(port, "/v1/responses", &session, &[], b""))
+                    .await;
+            assert_head("Responses WS", &responses.head, expected);
+            drop(responses);
 
-                let wire = upgrade(
-                    port,
-                    "/v1/live/rtc_fixture",
-                    &session,
-                    &[
-                        "Authorization: Bearer caller-secret",
-                        "Session-Id: voice-fixture",
-                    ],
-                    b"",
-                );
-                let (realtime, (_upstream, _)) = tokio::join!(
-                    RawClient::request(address, &wire),
-                    accept_upstream(&listener, ""),
-                );
-                assert_head(driver, "realtime WS", &realtime.head, expected);
-            },
-        );
+            let wire = upgrade(
+                port,
+                "/v1/live/rtc_fixture",
+                &session,
+                &[
+                    "Authorization: Bearer caller-secret",
+                    "Session-Id: voice-fixture",
+                ],
+                b"",
+            );
+            let (realtime, (_upstream, _)) = tokio::join!(
+                RawClient::request(address, &wire),
+                accept_upstream(&listener, ""),
+            );
+            assert_head("realtime WS", &realtime.head, expected);
+        });
     }
 }
 
@@ -563,7 +538,7 @@ fn realtime_upstream_method_not_allowed() {
     use super::websocket::realtime_fixture;
     use crate::tests::realtime_contract::{RealtimeUpstream, UpstreamResponse, multipart_offer};
 
-    for &driver in Driver::selected() {
+    {
         let upstream = RealtimeUpstream::start(UpstreamResponse {
             status: 405,
             reason: "Method Not Allowed",
@@ -571,7 +546,7 @@ fn realtime_upstream_method_not_allowed() {
             location: None,
             body: b"",
         });
-        let (_native, fixture) = realtime_fixture(&upstream, driver);
+        let (_native, fixture) = realtime_fixture(&upstream);
         fixture.run_wire(async |fixture, address| {
             let body = multipart_offer();
             let wire = request(
@@ -582,8 +557,7 @@ fn realtime_upstream_method_not_allowed() {
                 &body,
             );
             let reply = exchange_wire(address, &wire, false).await;
-            assert_reply(driver, "realtime upstream 405", &reply, json_head!("405 Method Not Allowed", "121"),
-                br#"{"error":{"code":"native_realtime_unsupported","message":"The native subscription backend does not support Codex Voice"}}"#);
+            assert_reply("realtime upstream 405", &reply, json_head!("405 Method Not Allowed", "121"), br#"{"error":{"code":"native_realtime_unsupported","message":"The native subscription backend does not support Codex Voice"}}"#);
         });
     }
 }

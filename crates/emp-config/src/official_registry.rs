@@ -6,6 +6,8 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::{Map, Value};
 
+pub type RegistrySource = fn() -> OfficialModels;
+
 const MAX_REGISTRY_BYTES: usize = 4 * 1024 * 1024;
 
 fn bundled_registry() -> &'static Arc<Map<String, Value>> {
@@ -39,6 +41,10 @@ fn registry_from_path(path: Option<&Path>) -> Arc<Map<String, Value>> {
     override_data
         .map(Arc::new)
         .unwrap_or_else(|| Arc::clone(bundled_registry()))
+}
+
+pub fn bundled_snapshot() -> OfficialModels {
+    OfficialModels::new(Arc::clone(bundled_registry()))
 }
 
 pub fn snapshot() -> OfficialModels {

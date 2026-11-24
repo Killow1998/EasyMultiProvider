@@ -1,7 +1,7 @@
 use super::ChangeError;
 use crate::app::ServerState;
 use crate::services::catalog::{refresh_catalog, validate_update};
-use emp_state::{canonicalize_private_paths, merge_web_update};
+use emp_state::{canonicalize_private_paths, config::merge_web_update_with_registry};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,7 +26,12 @@ pub(crate) fn update(
                 .configuration
                 .edit()
                 .map_err(|_| ChangeError::Unavailable)?;
-            let mut updated = merge_web_update(&current, incoming).map_err(ChangeError::invalid)?;
+            let mut updated = merge_web_update_with_registry(
+                &current,
+                incoming,
+                state.backend.configuration.official_models,
+            )
+            .map_err(ChangeError::invalid)?;
             emp_state::config::validate_service_names(&current, &updated)
                 .map_err(ChangeError::invalid)?;
             canonicalize_private_paths(&mut updated, &state.backend.configuration.config_path)

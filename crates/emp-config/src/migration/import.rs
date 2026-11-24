@@ -9,7 +9,12 @@ struct ValidatedImport {
     provider_keys: Map<String, Value>,
 }
 
-fn validate_import_payload(payload: &Value) -> MigrationResult<ValidatedImport> {
+use crate::official_registry::{self, RegistrySource};
+
+fn validate_import_payload(
+    payload: &Value,
+    registry: RegistrySource,
+) -> MigrationResult<ValidatedImport> {
     let payload = payload
         .as_object()
         .ok_or(MigrationError::UnsupportedVersion)?;
@@ -26,7 +31,7 @@ fn validate_import_payload(payload: &Value) -> MigrationResult<ValidatedImport> 
     let catalog_show_context = raw_config
         .get("catalog_show_context")
         .and_then(Value::as_bool);
-    let source = normalize_configuration(Some(raw_config))
+    let source = normalize_configuration_with_registry(Some(raw_config), registry)
         .map_err(|_| MigrationError::InvalidConfiguration)?;
 
     let records = payload
@@ -176,6 +181,7 @@ fn merge_import(
     config_path: &Path,
     vault: &VaultStore,
     preview_auth: &BTreeMap<String, Value>,
+    registry: RegistrySource,
 ) -> MigrationResult<(Value, BTreeMap<String, Value>, MigrationImportSummary)> {
     let ValidatedImport {
         mut source,
@@ -422,8 +428,8 @@ fn merge_import(
         );
 
     crate::config::preserve_service_route_names(current, &mut target);
-    let mut target =
-        normalize_configuration(Some(&target)).map_err(|_| MigrationError::StateUpdateFailed)?;
+    let mut target = normalize_configuration_with_registry(Some(&target), registry)
+        .map_err(|_| MigrationError::StateUpdateFailed)?;
     let path_config = target.clone();
     if let Some(accounts) = target.get_mut("accounts").and_then(Value::as_array_mut) {
         for account in accounts {
@@ -435,8 +441,8 @@ fn merge_import(
             }
         }
     }
-    target =
-        normalize_configuration(Some(&target)).map_err(|_| MigrationError::StateUpdateFailed)?;
+    target = normalize_configuration_with_registry(Some(&target), registry)
+        .map_err(|_| MigrationError::StateUpdateFailed)?;
     verify_model_capability_migration(&source, &target)?;
 
     let summary = MigrationImportSummary {
@@ -454,7 +460,14 @@ fn merge_import(
 pub struct DecryptedMigration(ValidatedImport);
 
 pub fn validate_migration_payload(payload: &Value) -> MigrationResult<DecryptedMigration> {
-    validate_import_payload(payload).map(DecryptedMigration)
+    validate_migration_payload_with_registry(payload, official_registry::snapshot)
+}
+
+pub fn validate_migration_payload_with_registry(
+    payload: &Value,
+    registry: RegistrySource,
+) -> MigrationResult<DecryptedMigration> {
+    validate_import_payload(payload, registry).map(DecryptedMigration)
 }
 
 /// Decrypt and validate the `.emp` bundle before taking the configuration lock; scrypt needs no config.
@@ -462,10 +475,18 @@ pub fn decrypt_migration_bundle(
     bundle: &[u8],
     password: &str,
 ) -> MigrationResult<DecryptedMigration> {
+    decrypt_migration_bundle_with_registry(bundle, password, official_registry::snapshot)
+}
+
+pub fn decrypt_migration_bundle_with_registry(
+    bundle: &[u8],
+    password: &str,
+    registry: RegistrySource,
+) -> MigrationResult<DecryptedMigration> {
     let plaintext = decode_migration(password, bundle)?;
     let payload: Value =
         serde_json::from_slice(&plaintext).map_err(|_| MigrationError::DecryptFailed)?;
-    validate_import_payload(&payload).map(DecryptedMigration)
+    validate_migration_payload_with_registry(&payload, registry)
 }
 
 /// Preview without writes using the real import's identity and collision rules.
@@ -476,8 +497,33 @@ pub fn preview_migration_import(
     vault: &VaultStore,
     preview_auth: &BTreeMap<String, Value>,
 ) -> MigrationResult<(Value, BTreeMap<String, Value>, MigrationImportSummary)> {
-    let validated = validate_import_payload(payload)?;
-    merge_import(current, validated, config_path, vault, preview_auth)
+    preview_migration_import_with_registry(
+        current,
+        payload,
+        config_path,
+        vault,
+        preview_auth,
+        official_registry::snapshot,
+    )
+}
+
+pub fn preview_migration_import_with_registry(
+    current: &Value,
+    payload: &Value,
+    config_path: &Path,
+    vault: &VaultStore,
+    preview_auth: &BTreeMap<String, Value>,
+    registry: RegistrySource,
+) -> MigrationResult<(Value, BTreeMap<String, Value>, MigrationImportSummary)> {
+    let validated = validate_import_payload(payload, registry)?;
+    merge_import(
+        current,
+        validated,
+        config_path,
+        vault,
+        preview_auth,
+        registry,
+    )
 }
 
 pub fn import_migration_bundle(
@@ -498,13 +544,41 @@ pub fn apply_migration_import(
     config_path: &Path,
     vault: &VaultStore,
 ) -> MigrationResult<(Value, MigrationImportSummary)> {
-    let (target, imported_auth, summary) =
-        merge_import(current, decrypted.0, config_path, vault, &BTreeMap::new())?;
+    apply_migration_import_with_registry(
+        current,
+        decrypted,
+        config_path,
+        vault,
+        official_registry::snapshot,
+    )
+}
+
+pub fn apply_migration_import_with_registry(
+    current: &Value,
+    decrypted: DecryptedMigration,
+    config_path: &Path,
+    vault: &VaultStore,
+    registry: RegistrySource,
+) -> MigrationResult<(Value, MigrationImportSummary)> {
+    let (target, imported_auth, summary) = merge_import(
+        current,
+        decrypted.0,
+        config_path,
+        vault,
+        &BTreeMap::new(),
+        registry,
+    )?;
 
     crate::config::validate_service_names(current, &target)
         .map_err(|_| MigrationError::DuplicateServiceName)?;
 
-    let result = persist_migration_import(&target, &imported_auth, config_path, vault)?;
+    let result = persist_migration_import_with_registry(
+        &target,
+        &imported_auth,
+        config_path,
+        vault,
+        registry,
+    )?;
     Ok((result, summary))
 }
 
@@ -515,8 +589,24 @@ pub fn persist_migration_import(
     config_path: &Path,
     vault: &VaultStore,
 ) -> MigrationResult<Value> {
-    let target =
-        normalize_configuration(Some(target)).map_err(|_| MigrationError::StateUpdateFailed)?;
+    persist_migration_import_with_registry(
+        target,
+        imported_auth,
+        config_path,
+        vault,
+        official_registry::snapshot,
+    )
+}
+
+pub fn persist_migration_import_with_registry(
+    target: &Value,
+    imported_auth: &BTreeMap<String, Value>,
+    config_path: &Path,
+    vault: &VaultStore,
+    registry: RegistrySource,
+) -> MigrationResult<Value> {
+    let target = normalize_configuration_with_registry(Some(target), registry)
+        .map_err(|_| MigrationError::StateUpdateFailed)?;
     with_file_transaction(|transaction| {
         for (account_id, auth) in imported_auth {
             let path = account_auth_path(&target, account_id, config_path)
@@ -524,9 +614,16 @@ pub fn persist_migration_import(
             transaction.remember(&path)?;
             vault.write_encrypted_json(&path, auth)?;
         }
-        save_configuration_in_transaction(&target, Some(config_path), vault, transaction)
-            .map_err(|_| MigrationError::StateUpdateFailed)?;
-        load_configuration(Some(config_path)).map_err(|_| MigrationError::StateUpdateFailed)
+        save_configuration_in_transaction_with_registry(
+            &target,
+            Some(config_path),
+            vault,
+            transaction,
+            registry,
+        )
+        .map_err(|_| MigrationError::StateUpdateFailed)?;
+        load_configuration_with_registry(Some(config_path), registry)
+            .map_err(|_| MigrationError::StateUpdateFailed)
     })
 }
 

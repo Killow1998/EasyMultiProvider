@@ -4,8 +4,6 @@ use crate::api::history_response::history_stream_error;
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::server::http::error::HttpReply;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::server::http::proxy::require_proxy;
 use crate::services::catalog::response_catalog_etag;
 use crate::services::history::DestinationPrepareError;
 use crate::services::history::prepare_destination_context;
@@ -19,10 +17,6 @@ use emp_transport::FailureClass;
 use emp_transport::websocket_accept;
 use serde_json::Value;
 use std::collections::BTreeMap;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use std::io::Write;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use std::net::TcpStream;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::task::block_in_place;
@@ -34,8 +28,6 @@ mod control;
 mod http_stream;
 mod native_socket;
 pub(crate) mod socket;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use socket::legacy_websocket_io;
 use socket::{Downstream, DownstreamEvent};
 
 use native_socket::{NativeSession, NativeTurnResult, native_stream_error_value};
@@ -176,49 +168,6 @@ pub(crate) fn prepare_upgrade(
     }
     websocket_accept(request.header("Sec-WebSocket-Key").unwrap_or_default())
         .map_err(|error| HttpReply::error(400, &key_error(error), None))
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn serve_responses_websocket(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    body_prefix: Vec<u8>,
-    state: &Arc<ServerState>,
-    now: f64,
-    connection_id: Option<&str>,
-) {
-    let accept = match require_proxy(request, state, now)
-        .map_err(|error| error.reply())
-        .and_then(|()| prepare_upgrade(request, |error| error.to_string()))
-    {
-        Ok(accept) => accept,
-        Err(reply) => {
-            let _ = stream.write_all(&reply.wire_response());
-            let _ = stream.flush();
-            return;
-        }
-    };
-    let head = format!(
-        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
-    );
-    if stream.write_all(head.as_bytes()).is_err() || stream.flush().is_err() {
-        return;
-    }
-    let runtime = state.backend.transport.runtime.handle();
-    let Ok(io) = legacy_websocket_io(stream, runtime) else {
-        return;
-    };
-    let monitor = legacy_websocket_io(stream, runtime).ok().map(Arc::new);
-    let permit = state.lifecycle.admission.acquire_websocket();
-    runtime.block_on(run_responses(
-        state,
-        request,
-        connection_id,
-        io,
-        &body_prefix,
-        monitor,
-        permit.map(Arc::new),
-    ));
 }
 
 pub(crate) async fn run_responses(

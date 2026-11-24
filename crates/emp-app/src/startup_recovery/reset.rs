@@ -9,8 +9,9 @@ use std::fs;
 pub(super) fn rebuild(
     config: &Path,
     keep_backup: bool,
+    external_key: bool,
 ) -> Result<(Option<PathBuf>, bool), &'static str> {
-    if external_key() {
+    if external_key {
         return Err("external_key");
     }
     rebuild_with(config, keep_backup, || Ok(()))

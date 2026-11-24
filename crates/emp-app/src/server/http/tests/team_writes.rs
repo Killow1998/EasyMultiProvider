@@ -1,4 +1,4 @@
-use super::{account_writes::Pair, *};
+use super::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use emp_modules::{
     Module,
@@ -52,7 +52,7 @@ fn payload(owner: &str) -> SharePayload {
     }
 }
 
-fn fixture(base: &str, driver: TestDriver) -> Fixture {
+fn fixture(base: &str) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let worker = format!(
         r#"
@@ -107,15 +107,15 @@ done
     )
     .unwrap();
 
-    let fixture = Fixture::with_driver(directory, driver);
+    let fixture = Fixture::with_directory(directory);
     fixture
-        .legacy
+        .server
         .state
         .backend
         .team
         .isolate_discovery_for_test();
     fixture
-        .legacy
+        .server
         .state
         .backend
         .team
@@ -123,27 +123,14 @@ done
     fixture
 }
 
-pub(super) fn run_pair(test: impl AsyncFnOnce(&Pair<'_>, &AsyncListener, &str)) {
+pub(super) fn run_team(test: impl AsyncFnOnce(&Fixture, &AsyncListener, &str)) {
     let upstream = TcpListener::bind(LOOPBACK).unwrap();
     upstream.set_nonblocking(true).unwrap();
     let base = format!("http://{}", upstream.local_addr().unwrap());
-    let old = fixture(&base, TestDriver::reference());
-    fixture(&base, TestDriver::Candidate).run_wire(async |new, candidate| {
-        let pair = Pair {
-            old: &old,
-            new,
-            candidate,
-        };
-        test(&pair, &AsyncListener::from_std(upstream).unwrap(), &base).await;
-    });
-    old.legacy.shutdown().unwrap();
-}
 
-fn endpoints<'a>(pair: &Pair<'a>) -> [(&'a Fixture, SocketAddr); 2] {
-    [
-        (pair.old, pair.old.legacy.local_addr()),
-        (pair.new, pair.candidate),
-    ]
+    fixture(&base).run_wire(async |fixture, _| {
+        test(fixture, &AsyncListener::from_std(upstream).unwrap(), &base).await;
+    });
 }
 
 struct UpstreamRequest {
@@ -230,12 +217,9 @@ pub(super) async fn respond(
     status: u16,
     reply: &Value,
 ) {
-    let first = UpstreamRequest::accept(upstream, path).await;
-    first.expect(path, body);
-    let second = UpstreamRequest::accept(upstream, path).await;
-    assert_eq!(first.head, second.head);
-    assert!(first.body == second.body, "{path} upstream bodies differ");
-    tokio::join!(first.reply(status, reply), second.reply(status, reply));
+    let request = UpstreamRequest::accept(upstream, path).await;
+    request.expect(path, body);
+    request.reply(status, reply).await;
 }
 
 fn credentials(base: &str) -> Value {
@@ -252,10 +236,10 @@ fn login_reply() -> Value {
     reply
 }
 
-pub(super) async fn login(pair: &Pair<'_>, upstream: &AsyncListener, base: &str) -> Value {
+pub(super) async fn login(fixture: &Fixture, upstream: &AsyncListener, base: &str) -> Value {
     let body = credentials(base).to_string();
     let (reply, ()) = tokio::join!(
-        pair.post("/api/team/login?fixture=1", body.as_bytes(), 200),
+        fixture.post("/api/team/login?fixture=1", body.as_bytes(), 200),
         async {
             respond(
                 upstream,
@@ -275,7 +259,7 @@ pub(super) async fn login(pair: &Pair<'_>, upstream: &AsyncListener, base: &str)
 }
 
 async fn forward(
-    pair: &Pair<'_>,
+    fixture: &Fixture,
     upstream: &AsyncListener,
     operation: &str,
     path: &str,
@@ -284,7 +268,8 @@ async fn forward(
 ) {
     let (actual, ()) = tokio::join!(
         async {
-            pair.post(&format!("/api/team/{operation}"), IGNORED, 200)
+            fixture
+                .post(&format!("/api/team/{operation}"), IGNORED, 200)
                 .await
         },
         respond(upstream, path, data, 200, reply),
@@ -293,33 +278,34 @@ async fn forward(
 }
 
 #[test]
-fn team_writes_match_legacy_wire_upstream_bytes_and_gate_order() {
-    run_pair(async |pair, upstream, base| {
+fn team_writes_preserve_upstream_bytes_and_gate_order() {
+    run_team(async |fixture, upstream, base| {
         let unknown = "/api/team/missing";
         assert_eq!(
-            pair.post(unknown, b"{}", 401).await["error"]["code"],
+            fixture.post(unknown, b"{}", 401).await["error"]["code"],
             "workspace_login_required"
         );
         for path in ["/api/team/login", "/api/team/join"] {
             assert_eq!(
-                pair.post(path, b"{}", 400).await["error"]["code"],
+                fixture.post(path, b"{}", 400).await["error"]["code"],
                 "invalid_workspace_request"
             );
         }
-        let discovered = pair.post("/api/team/discover", IGNORED, 200).await;
+        let discovered = fixture.post("/api/team/discover", IGNORED, 200).await;
         assert_eq!(discovered, json!({"workspaces":[]}));
 
         let join = json!({"base":base,"name":"Applicant","nickname":"A","password":"example","code":"fixture","extra":{"future":[1,null]}});
         let (joined, ()) = tokio::join!(
             async {
-                pair.post("/api/team/join", join.to_string().as_bytes(), 200)
+                fixture
+                    .post("/api/team/join", join.to_string().as_bytes(), 200)
                     .await
             },
             async { respond(upstream, "join", Some(&join), 200, &json!({"pending":true})).await },
         );
         assert_eq!(joined, json!({"pending":true}));
-        assert_eq!(pair.read("/api/team/status").await["joined"], false);
-        login(pair, upstream, base).await;
+        assert_eq!(fixture.read("/api/team/status").await["joined"], false);
+        login(fixture, upstream, base).await;
 
         let whole_object = serde_json::from_slice::<Value>(IGNORED).unwrap();
         for (operation, path) in [
@@ -338,7 +324,7 @@ fn team_writes_match_legacy_wire_upstream_bytes_and_gate_order() {
             ("audit", "audit"),
         ] {
             forward(
-                pair,
+                fixture,
                 upstream,
                 operation,
                 path,
@@ -357,7 +343,7 @@ fn team_writes_match_legacy_wire_upstream_bytes_and_gate_order() {
             ("join_code", "join-code"),
         ] {
             forward(
-                pair,
+                fixture,
                 upstream,
                 operation,
                 path,
@@ -367,7 +353,7 @@ fn team_writes_match_legacy_wire_upstream_bytes_and_gate_order() {
             .await;
         }
         forward(
-            pair,
+            fixture,
             upstream,
             "issue_invite",
             "join-code",
@@ -375,11 +361,20 @@ fn team_writes_match_legacy_wire_upstream_bytes_and_gate_order() {
             &json!({"code":"fixture","expires_in":60}),
         )
         .await;
-        forward(pair, upstream, "usage", "usage", None, &json!({"rows":[]})).await;
+        forward(
+            fixture,
+            upstream,
+            "usage",
+            "usage",
+            None,
+            &json!({"rows":[]}),
+        )
+        .await;
         for period in [json!("lifetime"), Value::Null] {
             let body = json!({"period":period,"extra":true}).to_string();
-            let (actual, ()) =
-                tokio::join!(pair.post("/api/team/usage", body.as_bytes(), 200), async {
+            let (actual, ()) = tokio::join!(
+                fixture.post("/api/team/usage", body.as_bytes(), 200),
+                async {
                     respond(
                         upstream,
                         "usage",
@@ -388,7 +383,8 @@ fn team_writes_match_legacy_wire_upstream_bytes_and_gate_order() {
                         &json!({"rows":[]}),
                     )
                     .await
-                },);
+                },
+            );
             assert_eq!(actual, json!({"rows":[]}));
         }
 
@@ -401,59 +397,56 @@ fn team_writes_match_legacy_wire_upstream_bytes_and_gate_order() {
             "/api/team/publish_source#fragment",
         ] {
             assert_eq!(
-                pair.post(path, b"{}", 400).await["error"]["code"],
+                fixture.post(path, b"{}", 400).await["error"]["code"],
                 "invalid_workspace_request"
             );
         }
         let path = "/api/team/members";
-        pair.parity(
-            |port, _| json_request(port, path, &[], b"{"),
-            401,
-            |reply| reply,
-        )
-        .await;
-        pair.parity(
-            |port, session| {
-                json_request(
-                    port,
-                    path,
-                    &[session, "Origin: https://foreign.invalid"],
-                    b"[",
-                )
-            },
-            401,
-            |reply| reply,
-        )
-        .await;
+        fixture
+            .request_json(|port, _| json_request(port, path, &[], b"{"), 401)
+            .await;
+        fixture
+            .request_json(
+                |port, session| {
+                    json_request(
+                        port,
+                        path,
+                        &[session, "Origin: https://foreign.invalid"],
+                        b"[",
+                    )
+                },
+                401,
+            )
+            .await;
         assert_eq!(
-            pair.post(path, b"[]", 400).await["error"]["message"],
+            fixture.post(path, b"[]", 400).await["error"]["message"],
             "request body must be a JSON object"
         );
-        pair.post(path, b"{", 400).await;
+        fixture.post(path, b"{", 400).await;
         assert_eq!(
-            pair.parity(
-                |port, session| request(
-                    port,
-                    "POST",
-                    path,
-                    &[
-                        session,
-                        "Content-Type: application/json",
-                        "Content-Length: 5242881"
-                    ],
-                    b""
-                ),
-                413,
-                |reply| reply,
-            )
-            .await["error"]["limit_bytes"],
+            fixture
+                .request_json(
+                    |port, session| request(
+                        port,
+                        "POST",
+                        path,
+                        &[
+                            session,
+                            "Content-Type: application/json",
+                            "Content-Length: 5242881"
+                        ],
+                        b""
+                    ),
+                    413,
+                )
+                .await["error"]["limit_bytes"],
             5242880
         );
 
-        for (fixture, _) in endpoints(pair) {
+        {
             assert!(
                 fixture
-                    .legacy
+                    .server
                     .state
                     .lifecycle
                     .updates()
@@ -461,30 +454,22 @@ fn team_writes_match_legacy_wire_upstream_bytes_and_gate_order() {
             );
         }
         for (path, code, status) in [(path, "updating", 503), (unknown, "updating", 503)] {
-            let rejected = pair
-                .parity(
-                    |port, _| json_request(port, path, &[], b"{"),
-                    status,
-                    |reply| reply,
-                )
+            let rejected = fixture
+                .request_json(|port, _| json_request(port, path, &[], b"{"), status)
                 .await;
             assert_eq!(rejected["error"]["code"], code);
         }
-        assert_eq!(pair.read("/api/team/status").await["joined"], true);
-        for (fixture, _) in endpoints(pair) {
+        assert_eq!(fixture.read("/api/team/status").await["joined"], true);
+        {
             fixture
-                .legacy
+                .server
                 .state
                 .backend
                 .modules
                 .mark_unavailable(Module::Team, "fixture-disabled");
         }
-        let disabled = pair
-            .parity(
-                |port, _| json_request(port, path, &[], b"{"),
-                404,
-                |reply| reply,
-            )
+        let disabled = fixture
+            .request_json(|port, _| json_request(port, path, &[], b"{"), 404)
             .await;
         assert_eq!(disabled["error"]["code"], "module_disabled");
     });
@@ -498,7 +483,7 @@ pub(super) fn read_team_profile(fixture: &Fixture) -> Value {
             .starts_with(emp_state::vault::VAULT_MAGIC)
     );
     fixture
-        .legacy
+        .server
         .state
         .backend
         .configuration
@@ -507,20 +492,14 @@ pub(super) fn read_team_profile(fixture: &Fixture) -> Value {
         .unwrap()
 }
 
-fn saved_config(pair: &Pair<'_>) -> Value {
-    let [old, new] = [pair.old, pair.new].map(|fixture| {
-        let root = fixture.directory.path().canonicalize().unwrap();
-        let config = fs::read_to_string(root.join("config.json")).unwrap();
-        serde_json::from_str::<Value>(&config.replace(root.to_str().unwrap(), "/fixture")).unwrap()
-    });
-    assert_eq!(old, new);
-    old
+fn saved_config(fixture: &Fixture) -> Value {
+    let root = fixture.directory.path().canonicalize().unwrap();
+    let config = fs::read_to_string(root.join("config.json")).unwrap();
+    serde_json::from_str::<Value>(&config.replace(root.to_str().unwrap(), "/fixture")).unwrap()
 }
 
-fn saved_profile(pair: &Pair<'_>) -> Value {
-    let old = read_team_profile(pair.old);
-    assert_eq!(old, read_team_profile(pair.new));
-    old
+fn saved_profile(fixture: &Fixture) -> Value {
+    read_team_profile(fixture)
 }
 
 fn shared_auth(fixture: &Fixture) -> PathBuf {
@@ -531,26 +510,25 @@ fn shared_auth(fixture: &Fixture) -> PathBuf {
 }
 
 fn catalog_path(fixture: &Fixture) -> PathBuf {
-    crate::services::catalog::generated_catalog_path(&fixture.legacy.state)
+    crate::services::catalog::generated_catalog_path(&fixture.server.state)
 }
 
-fn expect_catalog_refresh(pair: &Pair<'_>) {
-    for (fixture, _) in endpoints(pair) {
+fn expect_catalog_refresh(fixture: &Fixture) {
+    {
         let path = catalog_path(fixture);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, b"{\"stale\":true}").unwrap();
     }
 }
 
-fn assert_refreshed_catalog(pair: &Pair<'_>) {
-    let [old, new] = [pair.old, pair.new].map(|fixture| fs::read(catalog_path(fixture)).unwrap());
-    assert_eq!(old, new);
-    assert!(serde_json::from_slice::<Value>(&old).unwrap()["models"].is_array());
+fn assert_refreshed_catalog(fixture: &Fixture) {
+    let catalog = fs::read(catalog_path(fixture)).unwrap();
+    assert!(serde_json::from_slice::<Value>(&catalog).unwrap()["models"].is_array());
 }
 
-async fn sync_share(pair: &Pair<'_>, upstream: &AsyncListener, current_identity: &Value) {
-    expect_catalog_refresh(pair);
-    let (synced, ()) = tokio::join!(pair.post("/api/team/sync", IGNORED, 200), async {
+async fn sync_share(fixture: &Fixture, upstream: &AsyncListener, current_identity: &Value) {
+    expect_catalog_refresh(fixture);
+    let (synced, ()) = tokio::join!(fixture.post("/api/team/sync", IGNORED, 200), async {
         respond(upstream, "status", None, 200, current_identity).await;
         let shares = json!({"workspace_id":WORKSPACE,"shares":[
             {"id":SHARE,"version":1,"owner":"Shared Codex","payload":payload("shared-account")}
@@ -558,19 +536,19 @@ async fn sync_share(pair: &Pair<'_>, upstream: &AsyncListener, current_identity:
         respond(upstream, "shares", None, 200, &shares).await;
     });
     assert_eq!(synced, json!({"synced":1,"unchanged":0,"skipped_native":0}));
-    let profile = saved_profile(pair);
+    let profile = saved_profile(fixture);
     assert_eq!(profile["session"]["identity"], *current_identity);
     let share_id = format!("team-{SHARE}");
     assert_eq!(profile["imported"][&share_id]["available"], true);
     assert!(
-        saved_config(pair)["accounts"]
+        saved_config(fixture)["accounts"]
             .as_array()
             .unwrap()
             .iter()
             .any(|row| { row["id"] == share_id && row["workspace_shared"] == true })
     );
     let expected = subscription("shared-account").auth_document();
-    for (fixture, _) in endpoints(pair) {
+    {
         let path = shared_auth(fixture);
         assert!(
             fs::read(&path)
@@ -578,7 +556,7 @@ async fn sync_share(pair: &Pair<'_>, upstream: &AsyncListener, current_identity:
                 .starts_with(emp_state::vault::VAULT_MAGIC)
         );
         let auth = fixture
-            .legacy
+            .server
             .state
             .backend
             .configuration
@@ -587,15 +565,15 @@ async fn sync_share(pair: &Pair<'_>, upstream: &AsyncListener, current_identity:
             .unwrap();
         assert_eq!(auth, expected);
     }
-    assert_refreshed_catalog(pair);
+    assert_refreshed_catalog(fixture);
 }
 
-async fn assert_signed_out(pair: &Pair<'_>) {
+async fn assert_signed_out(fixture: &Fixture) {
     assert_eq!(
-        pair.read("/api/team/status").await,
+        fixture.read("/api/team/status").await,
         json!({"joined":false,"recovery_required":false})
     );
-    for (fixture, _) in endpoints(pair) {
+    {
         assert!(!fixture.directory.path().join(PROFILE).exists());
         assert!(!shared_auth(fixture).exists());
         assert!(
@@ -606,56 +584,57 @@ async fn assert_signed_out(pair: &Pair<'_>) {
                 .is_file()
         );
     }
-    let config = saved_config(pair);
+    let config = saved_config(fixture);
     let accounts = config["accounts"].as_array().unwrap();
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0]["id"], "retained");
-    assert_refreshed_catalog(pair);
+    assert_refreshed_catalog(fixture);
 }
 
 #[test]
 fn team_login_status_publish_sync_handover_and_logout_persist_the_same_state() {
-    run_pair(async |pair, upstream, base| {
-        expect_catalog_refresh(pair);
-        let signed_in = login(pair, upstream, base).await;
-        assert_eq!(pair.read("/api/team/status").await, signed_in);
+    run_team(async |fixture, upstream, base| {
+        expect_catalog_refresh(fixture);
+        let signed_in = login(fixture, upstream, base).await;
+        assert_eq!(fixture.read("/api/team/status").await, signed_in);
         assert_eq!(
-            saved_profile(pair)["session"],
+            saved_profile(fixture)["session"],
             json!({"base":base,"token":SESSION,"identity":identity("Initial team")})
         );
-        assert_refreshed_catalog(pair);
+        assert_refreshed_catalog(fixture);
 
         let latest = identity("Renamed team");
-        expect_catalog_refresh(pair);
+        expect_catalog_refresh(fixture);
         let (status, ()) = tokio::join!(
-            pair.post("/api/team/status", IGNORED, 200),
+            fixture.post("/api/team/status", IGNORED, 200),
             respond(upstream, "status", None, 200, &latest),
         );
         assert_eq!(status["identity"], latest);
-        assert_eq!(pair.read("/api/team/status").await, status);
-        assert_eq!(saved_profile(pair)["session"]["identity"], latest);
-        assert_refreshed_catalog(pair);
+        assert_eq!(fixture.read("/api/team/status").await, status);
+        assert_eq!(saved_profile(fixture)["session"]["identity"], latest);
+        assert_refreshed_catalog(fixture);
 
         assert_eq!(
-            pair.post(
-                "/api/team/publish",
-                br#"{"provider":false,"account_id":null}"#,
-                400
-            )
-            .await["error"]["code"],
+            fixture
+                .post(
+                    "/api/team/publish",
+                    br#"{"provider":false,"account_id":null}"#,
+                    400
+                )
+                .await["error"]["code"],
             "workspace_only_native_subscription"
         );
         let version_reply = json!({"version":3});
         let (invalid, ()) = tokio::join!(
-            pair.post("/api/team/publish", br#"{"account_id":null}"#, 400),
+            fixture.post("/api/team/publish", br#"{"account_id":null}"#, 400),
             respond(upstream, "publish-version", None, 200, &version_reply),
         );
         assert_eq!(invalid["error"]["code"], "invalid_workspace_request");
 
-        let original_config = saved_config(pair);
-        let original_profile = saved_profile(pair);
+        let original_config = saved_config(fixture);
+        let original_profile = saved_profile(fixture);
         let (published, ()) = tokio::join!(
-            pair.post(
+            fixture.post(
                 "/api/team/publish",
                 br#"{"provider":"subscription:@native","account_id":"retained","extra":true}"#,
                 200
@@ -671,52 +650,53 @@ fn team_login_status_publish_sync_handover_and_logout_persist_the_same_state() {
             "status":"kept","account_id":"retained",
             "identity":emp_state::accounts::account_auth_identity(&subscription("retained-account").auth_document()),
         });
-        for (fixture, _) in endpoints(pair) {
+        {
             let selected: Value =
                 serde_json::from_slice(&fs::read(fixture.directory.path().join(RETAINED)).unwrap())
                     .unwrap();
             assert_eq!(selected, selection);
         }
-        assert_eq!(saved_config(pair), original_config);
-        assert_eq!(saved_profile(pair), original_profile);
-        assert_refreshed_catalog(pair);
+        assert_eq!(saved_config(fixture), original_config);
+        assert_eq!(saved_profile(fixture), original_profile);
+        assert_refreshed_catalog(fixture);
 
-        sync_share(pair, upstream, &latest).await;
-        expect_catalog_refresh(pair);
+        sync_share(fixture, upstream, &latest).await;
+        expect_catalog_refresh(fixture);
         let handover = json!({"successor":MEMBER,"extra":{"future":true}});
         let handover_body = handover.to_string();
         let (handed_over, ()) = tokio::join!(
-            pair.post("/api/team/handover", handover_body.as_bytes(), 200),
+            fixture.post("/api/team/handover", handover_body.as_bytes(), 200),
             async {
                 respond(upstream, "handover", Some(&handover), 200, &json!({})).await;
                 respond(upstream, "logout", Some(&json!({})), 200, &json!({})).await;
             }
         );
         assert_eq!(handed_over["joined"], false);
-        assert_signed_out(pair).await;
+        assert_signed_out(fixture).await;
 
-        login(pair, upstream, base).await;
-        sync_share(pair, upstream, &latest).await;
-        expect_catalog_refresh(pair);
-        let (logged_out, ()) = tokio::join!(pair.post("/api/team/logout", IGNORED, 200), async {
-            respond(upstream, "logout", Some(&json!({})), 200, &json!({})).await
-        },);
+        login(fixture, upstream, base).await;
+        sync_share(fixture, upstream, &latest).await;
+        expect_catalog_refresh(fixture);
+        let (logged_out, ()) =
+            tokio::join!(fixture.post("/api/team/logout", IGNORED, 200), async {
+                respond(upstream, "logout", Some(&json!({})), 200, &json!({})).await
+            },);
         assert_eq!(logged_out, handed_over);
-        assert_signed_out(pair).await;
+        assert_signed_out(fixture).await;
     });
 }
 
 #[test]
 fn team_upstream_401_clears_the_persisted_session_and_refreshes_the_catalog() {
-    run_pair(async |pair, upstream, base| {
-        login(pair, upstream, base).await;
-        sync_share(pair, upstream, &identity("Initial team")).await;
-        let before = saved_profile(pair);
+    run_team(async |fixture, upstream, base| {
+        login(fixture, upstream, base).await;
+        sync_share(fixture, upstream, &identity("Initial team")).await;
+        let before = saved_profile(fixture);
         assert_eq!(before["session"]["token"], SESSION);
-        expect_catalog_refresh(pair);
+        expect_catalog_refresh(fixture);
 
         let code = "workspace_authentication_required";
-        let (error, ()) = tokio::join!(pair.post("/api/team/overview", IGNORED, 401), async {
+        let (error, ()) = tokio::join!(fixture.post("/api/team/overview", IGNORED, 401), async {
             respond(
                 upstream,
                 "overview",
@@ -728,20 +708,20 @@ fn team_upstream_401_clears_the_persisted_session_and_refreshes_the_catalog() {
         },);
         assert_eq!(error["error"]["code"], code);
         assert_eq!(
-            pair.read("/api/team/status").await,
+            fixture.read("/api/team/status").await,
             json!({"joined":false,"recovery_required":true})
         );
-        let cleared = saved_profile(pair);
+        let cleared = saved_profile(fixture);
         assert_eq!(cleared["session"], Value::Null);
         assert_eq!(cleared["imported"], before["imported"]);
-        assert_refreshed_catalog(pair);
+        assert_refreshed_catalog(fixture);
         assert_eq!(
-            pair.post("/api/team/overview", IGNORED, 401).await["error"]["code"],
+            fixture.post("/api/team/overview", IGNORED, 401).await["error"]["code"],
             "workspace_login_required"
         );
 
-        for (fixture, _) in endpoints(pair) {
-            let state = &fixture.legacy.state;
+        {
+            let state = &fixture.server.state;
             let config = state.backend.configuration.read().unwrap();
             let reopened = crate::services::team::TeamState::open(
                 fixture.directory.path().join(PROFILE),
@@ -758,13 +738,12 @@ fn team_upstream_401_clears_the_persisted_session_and_refreshes_the_catalog() {
 
 #[test]
 fn submitted_team_login_survives_disconnect_once_and_holds_drain() {
-    run_pair(async |pair, upstream, base| {
-        expect_catalog_refresh(pair);
+    run_team(async |fixture, upstream, base| {
+        expect_catalog_refresh(fixture);
         let body = credentials(base).to_string();
-        let mut captured = Vec::new();
-        for (fixture, address) in endpoints(pair) {
-            let state = &fixture.legacy.state;
-            let (mut client, task) = connect_submitted_write(fixture, address).await;
+        {
+            let state = &fixture.server.state;
+            let (mut client, task) = connect_submitted_write(fixture).await;
             let request = json_request(
                 fixture.port(),
                 "/api/team/login",
@@ -774,7 +753,6 @@ fn submitted_team_login_survives_disconnect_once_and_holds_drain() {
             client.write_all(&request).await.unwrap();
             let request = UpstreamRequest::accept(upstream, "login").await;
             request.expect("login", Some(&login_payload()));
-            captured.push((request.head.clone(), request.body.clone()));
             assert!(!fixture.directory.path().join(PROFILE).exists());
             assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
             disconnect_submitted_write(fixture, client, task).await;
@@ -799,7 +777,6 @@ fn submitted_team_login_survives_disconnect_once_and_holds_drain() {
             .await
             .unwrap();
         }
-        assert_eq!(captured[0], captured[1]);
         let accept = std::pin::pin!(upstream.accept());
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(
@@ -807,10 +784,10 @@ fn submitted_team_login_survives_disconnect_once_and_holds_drain() {
             "duplicate upstream login"
         );
         assert_eq!(
-            pair.read("/api/team/status").await["identity"],
+            fixture.read("/api/team/status").await["identity"],
             identity("Initial team")
         );
-        assert_eq!(saved_profile(pair)["session"]["token"], SESSION);
-        assert_refreshed_catalog(pair);
+        assert_eq!(saved_profile(fixture)["session"]["token"], SESSION);
+        assert_refreshed_catalog(fixture);
     });
 }

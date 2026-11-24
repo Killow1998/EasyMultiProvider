@@ -30,12 +30,12 @@ pub fn run(args: &[String]) -> Result {
         if !root.join(&path).is_file() {
             continue;
         }
+        let bytes = fs::read(root.join(&path)).map_err(|error| format!("{path}: {error}"))?;
+        if let Ok(source) = std::str::from_utf8(&bytes) {
+            single_http_driver(&path, source, &mut errors);
+        }
         if path.starts_with("crates/") && path.split('/').nth(2) == Some("tests") {
-            test_boundary(
-                &path,
-                &fs::read(root.join(&path)).map_err(|e| format!("{path}: {e}"))?,
-                &mut errors,
-            );
+            test_boundary(&path, &bytes, &mut errors);
         } else if prose::includes(&path) {
             prose::check(&path, &read(&root, &path)?, &mut errors);
         } else if path.starts_with(".github/workflows/") && path.ends_with(".yml") {
@@ -44,11 +44,30 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-version, test-boundary, docs-prose, no-python-on-main, comments, disguised-sleep, msvc-only, domain-purity passed"
+            "check: arch, module-version, test-boundary, docs-prose, no-python-on-main, comments, disguised-sleep, msvc-only, domain-purity, single-http-driver passed"
         );
         Ok(())
     } else {
         Err(errors.join("\n"))
+    }
+}
+
+fn single_http_driver(path: &str, source: &str, errors: &mut Vec<String>) {
+    const RETIRED: &[&str] = &[
+        concat!("server-", "candidate"),
+        concat!("EMP_TEST_HTTP_", "DRIVER"),
+        concat!("legacy_", "reply"),
+        concat!("wire_", "response"),
+        concat!("serve_", "legacy"),
+        concat!("legacy_", "websocket_io"),
+    ];
+    for (index, line) in source.lines().enumerate() {
+        for name in RETIRED.iter().filter(|name| line.contains(**name)) {
+            errors.push(format!(
+                "[single-http-driver] {path}:{}: {name} 已退役；使用正式的 Axum 入口",
+                index + 1
+            ));
+        }
     }
 }
 

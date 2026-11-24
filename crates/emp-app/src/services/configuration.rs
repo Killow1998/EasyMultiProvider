@@ -1,8 +1,10 @@
 //! Readers cannot publish edits; serialize writes and publish only after durable transactions and reloads succeed.
 
 use emp_state::{
-    ConfigError, FileTransaction, VaultStore, load_configuration,
-    save_configuration_in_transaction, with_file_transaction,
+    ConfigError, FileTransaction, VaultStore,
+    config::{load_configuration_with_registry, save_configuration_in_transaction_with_registry},
+    official_registry::RegistrySource,
+    with_file_transaction,
 };
 use serde_json::Value;
 use std::ops::Deref;
@@ -11,8 +13,11 @@ use std::sync::{Mutex, MutexGuard};
 
 pub(crate) mod settings;
 
-pub(crate) fn load_server_configuration(path: &Path) -> Result<Value, ConfigError> {
-    let config = load_configuration(Some(path))?;
+pub(crate) fn load_server_configuration(
+    path: &Path,
+    registry: RegistrySource,
+) -> Result<Value, ConfigError> {
+    let config = load_configuration_with_registry(Some(path), registry)?;
     #[cfg(test)]
     let config = {
         let mut config = config;
@@ -48,6 +53,7 @@ pub(crate) struct ConfigurationState {
     pub(crate) discovery_lock: Mutex<()>,
     pub(crate) config_path: PathBuf,
     pub(crate) vault: VaultStore,
+    pub(crate) official_models: RegistrySource,
 }
 
 pub(crate) struct ConfigurationRead<'a>(MutexGuard<'a, Value>);
@@ -72,12 +78,18 @@ impl Deref for ConfigurationEdit<'_> {
 }
 
 impl ConfigurationState {
-    pub(crate) fn new(config: Value, config_path: PathBuf, vault: VaultStore) -> Self {
+    pub(crate) fn new(
+        config: Value,
+        config_path: PathBuf,
+        vault: VaultStore,
+        official_models: RegistrySource,
+    ) -> Self {
         Self {
             config: Mutex::new(config),
             discovery_lock: Mutex::new(()),
             config_path,
             vault,
+            official_models,
         }
     }
 
@@ -118,13 +130,14 @@ impl ConfigurationEdit<'_> {
     ) -> Result<Value, ConfigError> {
         let mut candidate = candidate.clone();
         emp_state::config::preserve_service_route_names(&self.current, &mut candidate);
-        save_configuration_in_transaction(
+        save_configuration_in_transaction_with_registry(
             &candidate,
             Some(&self.store.config_path),
             &self.store.vault,
             files,
+            self.store.official_models,
         )?;
-        load_server_configuration(&self.store.config_path)
+        load_server_configuration(&self.store.config_path, self.store.official_models)
     }
 
     pub(super) fn commit(&mut self, candidate: &Value) -> Result<(), ConfigError> {
@@ -172,11 +185,12 @@ impl ConfigurationEdit<'_> {
         decrypted: emp_state::migration::DecryptedMigration,
     ) -> Result<emp_state::migration::MigrationImportSummary, emp_state::migration::MigrationError>
     {
-        let (saved, summary) = emp_state::migration::apply_migration_import(
+        let (saved, summary) = emp_state::migration::apply_migration_import_with_registry(
             &self.current,
             decrypted,
             &self.store.config_path,
             &self.store.vault,
+            self.store.official_models,
         )?;
         *self.current.0 = saved;
         Ok(summary)
@@ -187,11 +201,12 @@ impl ConfigurationEdit<'_> {
         target: &Value,
         auth: &std::collections::BTreeMap<String, Value>,
     ) -> Result<(), emp_state::migration::MigrationError> {
-        let saved = emp_state::migration::persist_migration_import(
+        let saved = emp_state::migration::persist_migration_import_with_registry(
             target,
             auth,
             &self.store.config_path,
             &self.store.vault,
+            self.store.official_models,
         )?;
         *self.current.0 = saved;
         Ok(())

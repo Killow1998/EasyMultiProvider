@@ -2,12 +2,19 @@ use super::{
     DEFAULT_EFFECTIVE_CONTEXT_PERCENT, description_with_context, display_name, integer, nonempty,
     text,
 };
-use emp_state::{codex_input_modalities, normalize_reasoning_levels};
+use emp_state::{
+    codex_input_modalities, normalize_reasoning_levels, official_registry::RegistrySource,
+};
 use serde_json::{Map, Value, json};
 
 const UNKNOWN_MODEL_TRUNCATION_BYTES: u64 = 10_000;
 
-pub(super) fn entry(model: &Value, template: &Value, provider: &Value) -> Value {
+pub(super) fn entry(
+    model: &Value,
+    template: &Value,
+    provider: &Value,
+    registry: RegistrySource,
+) -> Value {
     let claude_cli = text(provider, "execution_backend") == "claude_cli";
     let mut entry = Map::new();
     entry.insert(
@@ -118,9 +125,7 @@ pub(super) fn entry(model: &Value, template: &Value, provider: &Value) -> Value 
         .extend(fields.as_object().expect("object").clone());
     if !levels.is_empty() {
         let cli_default = claude_cli
-            .then(|| {
-                emp_state::official_registry::claude_cli_default_effort(text(model, "upstream_id"))
-            })
+            .then(|| registry().claude_cli_default_effort(text(model, "upstream_id")))
             .flatten()
             .filter(|level| levels.contains(level));
         entry["default_reasoning_level"] = json!(

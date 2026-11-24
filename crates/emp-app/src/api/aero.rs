@@ -1,7 +1,7 @@
 use crate::{
-    api::streaming::ReplySink,
     app::ServerState,
     http::request::Request,
+    server::http::stream::BodyOutput,
     server::http::{error::HttpReply, inference::InferenceOutcome},
     services::{
         disconnect::{DisconnectMonitor, DisconnectRace},
@@ -57,7 +57,7 @@ pub(super) async fn await_module<F: std::future::Future>(
 }
 
 pub(crate) fn relay(
-    downstream: &mut ReplySink<'_>,
+    downstream: &mut BodyOutput,
     state: &ServerState,
     config: &Value,
     body: &Value,
@@ -103,7 +103,10 @@ pub(crate) fn relay(
         .unwrap_or("application/json")
         .to_owned();
     if observation
-        .written(downstream.aero_head(status, &content_type), false)
+        .written(
+            downstream.head(status, &content_type, std::iter::empty()),
+            false,
+        )
         .is_err()
     {
         return InferenceOutcome::Streamed;

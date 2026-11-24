@@ -101,7 +101,7 @@ impl Drop for HeldActivityUpstream {
     }
 }
 
-fn next_activity_snapshot(reader: &mut BufReader<TcpStream>, in_flight: u64) -> Value {
+fn next_activity_snapshot(reader: &mut impl BufRead, in_flight: u64) -> Value {
     loop {
         let frame = read_sse_frame(reader);
         let Some(data) = frame.strip_prefix("event: activity-updated\ndata: ") else {

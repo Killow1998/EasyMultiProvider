@@ -138,7 +138,7 @@ mod tests {
             let http = String::from_utf8(
                 crate::api::claude_response::http_response(&error)
                     .unwrap()
-                    .wire_response(),
+                    .encode(),
             )
             .expect("HTTP response UTF-8");
             let (head, body) = http.split_once("\r\n\r\n").expect("HTTP response body");
@@ -208,12 +208,8 @@ mod tests {
             ),
         ] {
             let error = ClaudeCliError::Failure(reason);
-            let http = String::from_utf8(
-                http_response_for_route(&error, &route)
-                    .unwrap()
-                    .wire_response(),
-            )
-            .unwrap();
+            let http = String::from_utf8(http_response_for_route(&error, &route).unwrap().encode())
+                .unwrap();
             let (head, body) = http.split_once("\r\n\r\n").unwrap();
             assert!(head.starts_with(&format!("HTTP/1.1 {status} ")));
             let http: Value = serde_json::from_str(body).unwrap();

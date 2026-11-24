@@ -1,4 +1,4 @@
-use super::{account_writes::Pair, *};
+use super::*;
 use crate::{
     services::app_icon::{AppIcon, DEFAULT_PNG},
     tests::{live_journal, wait_for},
@@ -53,7 +53,7 @@ fn with_temporary_home(test_name: &str, test: impl FnOnce(&Path)) {
     );
 }
 
-fn fixture(home: &Path, executable: &Path, driver: TestDriver) -> Fixture {
+fn fixture(home: &Path, executable: &Path) -> Fixture {
     let directory = tempfile::tempdir_in(home).unwrap();
     let root = directory.path();
     let config = root.join("config.json");
@@ -67,18 +67,17 @@ fn fixture(home: &Path, executable: &Path, driver: TestDriver) -> Fixture {
         .to_string(),
     )
     .unwrap();
-    let legacy = LegacyServer::start_with_test_options(
+    let server = RunningServer::start_with_test_options(
         LOOPBACK.ip(),
         &config,
         root.join("codex/auth.json"),
-        driver,
         executable.to_str().unwrap(),
         None,
     )
     .unwrap();
     Fixture {
         directory,
-        legacy,
+        server,
         upstream: Arc::default(),
     }
 }
@@ -119,7 +118,7 @@ fn assert_icon(fixture: &Fixture, home: &Path, expected: &Value, metadata: &Valu
     );
 }
 
-async fn compare_icon(pair: &Pair<'_>, home: &Path) -> Value {
+async fn compare_icon(fixture: &Fixture, home: &Path) -> Value {
     let mut source = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut source, 1, 1);
@@ -138,39 +137,18 @@ async fn compare_icon(pair: &Pair<'_>, home: &Path) -> Value {
     let mut body = expected.clone();
     body["ignored"] = json!("x".repeat(3 * 1024 * 1024));
     let body = body.to_string();
-    let old_request = json_request(
-        pair.old.port(),
-        ICON,
-        &[&pair.old.session()],
-        body.as_bytes(),
-    );
-    let new_request = json_request(
-        pair.new.port(),
-        ICON,
-        &[&pair.new.session()],
-        body.as_bytes(),
-    );
-    let old = assert_wire(pair.old.legacy.local_addr(), &old_request, false, 200).await;
-    let result = json_body(&old);
+    let new_request = json_request(fixture.port(), ICON, &[&fixture.session()], body.as_bytes());
+    let reply = assert_wire(fixture.server.local_addr(), &new_request, false, 200).await;
+    let result = json_body(&reply);
     assert_eq!(result["launcher_updated"], true);
     let metadata = &result["app_icon"];
     assert_eq!(metadata["preset"], "fixture-custom");
     assert_eq!(metadata["monochrome"], true);
-    assert_icon(pair.old, home, &expected, metadata, DEFAULT_PNG);
-    let new = assert_wire(pair.candidate, &new_request, false, 200).await;
-    assert_wire_response_parity(&old_request, &old, &new);
-    assert_icon(pair.new, home, &expected, metadata, DEFAULT_PNG);
+    assert_icon(fixture, home, &expected, metadata, DEFAULT_PNG);
 
     for (path, png) in ASSETS.into_iter().zip([DEFAULT_PNG, source.as_slice()]) {
-        let old = request(pair.old.port(), "GET", path, &[], b"");
-        let new = request(pair.new.port(), "GET", path, &[], b"");
-        let reply = assert_wire_parity_with(
-            [(pair.old.legacy.local_addr(), &old), (pair.candidate, &new)],
-            false,
-            200,
-            |reply| reply,
-        )
-        .await;
+        let wire = request(fixture.port(), "GET", path, &[], b"");
+        let reply = assert_wire(fixture.server.local_addr(), &wire, false, 200).await;
         let (_, body) = reply.split_at(
             reply
                 .windows(4)
@@ -184,7 +162,7 @@ async fn compare_icon(pair: &Pair<'_>, home: &Path) -> Value {
 }
 
 async fn assert_catalog_refresh_queued(fixture: &Fixture) {
-    let state = fixture.legacy.state.clone();
+    let state = fixture.server.state.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let mut pending = tokio::task::spawn_blocking({
         let state = state.clone();
@@ -206,58 +184,46 @@ async fn assert_catalog_refresh_queued(fixture: &Fixture) {
 }
 
 #[test]
-fn local_writes_match_legacy_wire_and_read_back_state() {
+fn local_writes_persist_and_read_back_state() {
     with_temporary_home(
-        "local_writes_match_legacy_wire_and_read_back_state",
+        "local_writes_persist_and_read_back_state",
         compare_local_writes,
     );
 }
 
 fn compare_local_writes(home: &Path) {
     let executable = home.join("fixture-runtime");
-    let old = fixture(home, &executable, TestDriver::reference());
-    fixture(home, &executable, TestDriver::Candidate).run_wire(async |new, candidate| {
-        let pair = Pair { old: &old, new, candidate };
+
+    fixture(home, &executable).run_wire(async |fixture, endpoint| {
+
         let oversized = gzip(&vec![b' '; 5 * 1024 * 1024 + 1], Vec::new());
         for path in PATHS {
-            pair.parity(|port, _| json_request(port, path, &[], b"{"), 401, |reply| reply).await;
-            pair.parity(
-                |port, session| json_request(port, path, &[session, "Origin: https://other.invalid"], b"{"),
-                403,
-                |reply| reply,
-            ).await;
-            pair.post(path, b"{", 400).await;
+            fixture.request_json(|port, _| json_request(port, path, &[], b"{"), 401).await;
+            fixture.request_json(|port, session| json_request(port, path, &[session, "Origin: https://other.invalid"], b"{"), 403).await;
+            fixture.post(path, b"{", 400).await;
             assert_eq!(
-                pair.post(path, b"[]", 400).await["error"]["message"],
+                fixture.post(path, b"[]", 400).await["error"]["message"],
                 "request body must be a JSON object"
             );
-            let limit = pair.parity(
-                |port, session| request(port, "POST", path, &[
+            let limit = fixture.request_json(|port, session| request(port, "POST", path, &[
                     session, "Content-Type: application/json", "Content-Length: 5242881",
-                ], b""),
-                413,
-                |reply| reply,
-            ).await;
+                ], b""), 413).await;
             assert_eq!(limit["error"]["limit_bytes"], 5 * 1024 * 1024);
-            let decoded = pair.parity(
-                |port, session| json_request(port, path, &[session, "Content-Encoding: gzip"], &oversized),
-                413,
-                |reply| reply,
-            ).await;
+            let decoded = fixture.request_json(|port, session| json_request(port, path, &[session, "Content-Encoding: gzip"], &oversized), 413).await;
             assert_eq!(decoded["error"]["limit_bytes"], 5 * 1024 * 1024);
         }
         for body in [b"{}".as_slice(), br#"{"language":null}"#, br#"{"language":12}"#] {
             assert_eq!(
-                pair.post(LANGUAGE, body, 400).await["error"]["message"],
+                fixture.post(LANGUAGE, body, 400).await["error"]["message"],
                 "language is required"
             );
         }
         assert_eq!(
-            pair.post(LANGUAGE, br#"{"language":"fr"}"#, 400).await["error"]["message"],
+            fixture.post(LANGUAGE, br#"{"language":"fr"}"#, 400).await["error"]["message"],
             "language must be en or zh-CN"
         );
         assert_eq!(
-            pair.post(LANGUAGE, br#"{"language":"zh-CN","ignored":true}"#, 200).await,
+            fixture.post(LANGUAGE, br#"{"language":"zh-CN","ignored":true}"#, 200).await,
             json!({"language":"zh-CN"})
         );
         for body in [
@@ -267,11 +233,11 @@ fn compare_local_writes(home: &Path) {
             br#"{"preset":"emp","monochrome":false,"original_png":17}"#,
             br#"{"preset":"emp","monochrome":false,"png":"bad"}"#,
         ] {
-            assert_eq!(pair.post(ICON, body, 400).await["error"]["code"], "app_icon_invalid");
+            assert_eq!(fixture.post(ICON, body, 400).await["error"]["code"], "app_icon_invalid");
         }
-        let icon = compare_icon(&pair, home).await;
+        let icon = compare_icon(fixture, home).await;
 
-        let mut history = pair.post(USAGE, br#"{"ignored":[1]}"#, 202).await;
+        let mut history = fixture.post(USAGE, br#"{"ignored":[1]}"#, 202).await;
         assert_eq!(history["command_id"], 1);
         assert_eq!(history["requested"], 1);
         assert_eq!(history["queued"], true);
@@ -285,16 +251,16 @@ fn compare_local_writes(home: &Path) {
             br#"{"kind":"window_error","phase":"unknown"}"#,
         ] {
             assert_eq!(
-                pair.post(EVENTS, body, 400).await["error"]["message"],
+                fixture.post(EVENTS, body, 400).await["error"]["message"],
                 "invalid web client diagnostic event"
             );
         }
-        assert_eq!(pair.post(EVENTS, VALID_EVENT, 200).await, json!({"ok":true}));
+        assert_eq!(fixture.post(EVENTS, VALID_EVENT, 200).await, json!({"ok":true}));
         let bounded = br#"{
             "kind":"window_error","phase":"failed","failure_class":null,"page_id":" panel/settings ",
             "duration_ms":"9000000","http_status":999,"line":-10,"column":{},"private":"ignored"
         }"#;
-        assert_eq!(pair.post(EVENTS, bounded, 200).await, json!({"ok":true}));
+        assert_eq!(fixture.post(EVENTS, bounded, 200).await, json!({"ok":true}));
         let events = vec![
             (json!("info"), json!({
                 "kind":"integration_load","phase":"render_completed","failure_class":"none"
@@ -309,17 +275,17 @@ fn compare_local_writes(home: &Path) {
             inventory["runtimes"].as_array().unwrap().iter()
                 .find(|runtime| runtime["source"] == "configured").unwrap().clone()
         };
-        for fixture in [&old, new] {
-            let before = fixture.legacy.state.backend.integration.inventory.snapshot(false);
+        {
+            let before = fixture.server.state.backend.integration.inventory.snapshot(false);
             assert_eq!(configured(&before)["failure"], "not_found");
         }
         fs::write(&executable, "#!/bin/sh\nprintf 'codex-cli 0.159.2\\n'\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        let inventory = pair.post(RUNTIME, br#"{"ignored":true}"#, 200).await;
+        let inventory = fixture.post(RUNTIME, br#"{"ignored":true}"#, 200).await;
         assert_eq!(configured(&inventory)["path"], json!(executable));
         assert_ne!(configured(&inventory)["failure"], "not_found");
 
-        for (fixture, address) in [(&old, old.legacy.local_addr()), (new, candidate)] {
+        { let (fixture, address) = (fixture, endpoint);
             let root = fixture.directory.path();
             assert_eq!(read_json(&root.join("config.json"))["language"], "zh-CN");
             let config = read(fixture, address, "/api/config").await;
@@ -332,10 +298,10 @@ fn compare_local_writes(home: &Path) {
                 read(fixture, address, "/api/integration").await["codex_compatibility"],
                 inventory
             );
-            assert!(fixture.legacy.state.lifecycle.updates().drain_for_test(Duration::ZERO));
+            assert!(fixture.server.state.lifecycle.updates().drain_for_test(Duration::ZERO));
         }
         for path in PATHS {
-            assert_eq!(pair.post(path, b"{", 503).await["error"]["code"], "updating");
+            assert_eq!(fixture.post(path, b"{", 503).await["error"]["code"], "updating");
         }
         for (path, body) in [
             (LANGUAGE, br#"{"language":"en"}"#.as_slice()),
@@ -344,13 +310,11 @@ fn compare_local_writes(home: &Path) {
             (EVENTS, VALID_EVENT),
             (RUNTIME, b"{}"),
         ] {
-            assert_eq!(pair.post(path, body, 503).await["error"]["code"], "updating");
+            assert_eq!(fixture.post(path, body, 503).await["error"]["code"], "updating");
         }
-        let denied = pair.parity(
-            |port, _| json_request(port, EVENTS, &[], VALID_EVENT), 503, |reply| reply,
-        ).await;
+        let denied = fixture.request_json(|port, _| json_request(port, EVENTS, &[], VALID_EVENT), 503).await;
         assert_eq!(denied["error"]["code"], "updating");
-        for (fixture, address) in [(&old, old.legacy.local_addr()), (new, candidate)] {
+        { let (fixture, address) = (fixture, endpoint);
             let config = read(fixture, address, "/api/config").await;
             assert_eq!(config["language"], "zh-CN");
             assert_eq!(config["app_icon"], icon);
@@ -358,7 +322,6 @@ fn compare_local_writes(home: &Path) {
             assert_eq!(event_fields(fixture), events);
         }
     });
-    old.legacy.shutdown().unwrap();
 }
 
 #[test]
@@ -367,65 +330,63 @@ fn submitted_app_icon_write_finishes_once_after_disconnect() {
         "submitted_app_icon_write_finishes_once_after_disconnect",
         |home| {
             let executable = home.join("fixture-runtime");
-            let old = fixture(home, &executable, TestDriver::reference());
-            fixture(home, &executable, TestDriver::Candidate).run_wire(async |new, candidate| {
-                for (fixture, address) in [(&old, old.legacy.local_addr()), (new, candidate)] {
-                    let state = &fixture.legacy.state;
-                    let (locked, ready) = tokio::sync::oneshot::channel();
-                    let (release, unlocked) = tokio::sync::oneshot::channel();
-                    let gated = state.clone();
-                    let hold_image = tokio::task::spawn_blocking(move || {
-                        let _image = gated.backend.app_icon.lock_image_for_test();
-                        locked.send(()).unwrap();
-                        let _ = unlocked.blocking_recv();
-                    });
-                    ready.await.unwrap();
 
-                    let (mut client, task) = connect_submitted_write(fixture, address).await;
-                    let selected = json!({
-                        "preset":"fixture-disconnect",
-                        "monochrome":true,
-                        "png":STANDARD.encode(DEFAULT_PNG),
-                    });
-                    let wire = json_request(
-                        fixture.port(),
-                        ICON,
-                        &[&fixture.session()],
-                        selected.to_string().as_bytes(),
+            fixture(home, &executable).run_wire(async |fixture, endpoint| {
+                let (fixture, address) = (fixture, endpoint);
+                let state = &fixture.server.state;
+                let (locked, ready) = tokio::sync::oneshot::channel();
+                let (release, unlocked) = tokio::sync::oneshot::channel();
+                let gated = state.clone();
+                let hold_image = tokio::task::spawn_blocking(move || {
+                    let _image = gated.backend.app_icon.lock_image_for_test();
+                    locked.send(()).unwrap();
+                    let _ = unlocked.blocking_recv();
+                });
+                ready.await.unwrap();
+
+                let (mut client, task) = connect_submitted_write(fixture).await;
+                let selected = json!({
+                    "preset":"fixture-disconnect",
+                    "monochrome":true,
+                    "png":STANDARD.encode(DEFAULT_PNG),
+                });
+                let wire = json_request(
+                    fixture.port(),
+                    ICON,
+                    &[&fixture.session()],
+                    selected.to_string().as_bytes(),
+                );
+                client.write_all(&wire).await.unwrap();
+                let saved = fixture.directory.path().join("state/appearance.json");
+                tokio::task::spawn_blocking(move || {
+                    wait_for(Duration::from_secs(5), || saved.is_file())
+                })
+                .await
+                .unwrap();
+                assert_eq!(state.backend.app_icon.revision.load(Ordering::Acquire), 0);
+                assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
+                disconnect_submitted_write(fixture, client, task).await;
+                release.send(()).unwrap();
+                hold_image.await.unwrap();
+                let state = state.clone();
+                tokio::task::spawn_blocking(move || {
+                    assert!(
+                        state
+                            .lifecycle
+                            .admission
+                            .quiesce(0, Duration::from_secs(5))
+                            .is_some()
                     );
-                    client.write_all(&wire).await.unwrap();
-                    let saved = fixture.directory.path().join("state/appearance.json");
-                    tokio::task::spawn_blocking(move || {
-                        wait_for(Duration::from_secs(5), || saved.is_file())
-                    })
-                    .await
-                    .unwrap();
-                    assert_eq!(state.backend.app_icon.revision.load(Ordering::Acquire), 0);
-                    assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
-                    disconnect_submitted_write(fixture, client, task).await;
-                    release.send(()).unwrap();
-                    hold_image.await.unwrap();
-                    let state = state.clone();
-                    tokio::task::spawn_blocking(move || {
-                        assert!(
-                            state
-                                .lifecycle
-                                .admission
-                                .quiesce(0, Duration::from_secs(5))
-                                .is_some()
-                        );
-                        assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
-                        assert_eq!(state.backend.app_icon.revision.load(Ordering::Acquire), 1);
-                    })
-                    .await
-                    .unwrap();
-                    let metadata = read(fixture, address, "/api/config").await["app_icon"].clone();
-                    assert_eq!(metadata["preset"], "fixture-disconnect");
-                    assert_eq!(metadata["monochrome"], true);
-                    assert_icon(fixture, home, &selected, &metadata, DEFAULT_PNG);
-                }
+                    assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
+                    assert_eq!(state.backend.app_icon.revision.load(Ordering::Acquire), 1);
+                })
+                .await
+                .unwrap();
+                let metadata = read(fixture, address, "/api/config").await["app_icon"].clone();
+                assert_eq!(metadata["preset"], "fixture-disconnect");
+                assert_eq!(metadata["monochrome"], true);
+                assert_icon(fixture, home, &selected, &metadata, DEFAULT_PNG);
             });
-            old.legacy.shutdown().unwrap();
         },
     );
 }

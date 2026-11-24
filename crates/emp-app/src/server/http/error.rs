@@ -141,7 +141,7 @@ impl HttpReply {
         }
     }
 
-    pub(crate) fn wire_response(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         response_with_headers(
             &format!("HTTP/1.1 {} {}", self.status, self.status_text),
             &self.content_type,
@@ -176,7 +176,7 @@ pub(super) fn no_response() -> Response {
 
 impl IntoResponse for HttpReply {
     fn into_response(self) -> Response {
-        let wire = EntryWire(Bytes::from(self.wire_response()));
+        let wire = EntryWire(Bytes::from(self.encode()));
         let mut response = self.into_http_response();
         response.extensions_mut().insert(wire);
         response
@@ -186,10 +186,6 @@ impl IntoResponse for HttpReply {
 impl EntryError {
     pub(crate) fn internal() -> Self {
         Self::Json(500, "internal server error", None)
-    }
-
-    pub(crate) fn wire_response(self) -> Vec<u8> {
-        self.reply().wire_response()
     }
 
     pub(crate) fn reply(self) -> JsonReply {

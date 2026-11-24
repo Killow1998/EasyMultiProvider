@@ -24,11 +24,12 @@ impl MigrationPreviews {
         session: &str,
         bundle: &[u8],
         password: &str,
+        registry: emp_state::official_registry::RegistrySource,
     ) -> Result<Value, MigrationError> {
         let plain = emp_state::migration::decode_migration(password, bundle)
             .map_err(MigrationError::invalid)?;
         let payload: Value = serde_json::from_slice(&plain).map_err(MigrationError::invalid)?;
-        emp_state::migration::validate_migration_payload(&payload)
+        emp_state::migration::validate_migration_payload_with_registry(&payload, registry)
             .map_err(MigrationError::invalid)?;
         self.store(session, payload, false)
     }
@@ -127,10 +128,12 @@ pub(crate) fn decode(
     password: &str,
 ) -> Result<Value, MigrationError> {
     let bundle = STANDARD.decode(bundle).map_err(MigrationError::invalid)?;
-    state
-        .backend
-        .migration_previews
-        .decode(session, &bundle, password)
+    state.backend.migration_previews.decode(
+        session,
+        &bundle,
+        password,
+        state.backend.configuration.official_models,
+    )
 }
 
 pub(crate) fn demo(state: &ServerState, session: &str) -> Result<Value, MigrationError> {
@@ -232,12 +235,13 @@ fn preview(
     token: &str,
 ) -> Result<Value, MigrationError> {
     let payload = &resolution.payload;
-    let (mut config, auth, summary) = emp_state::migration::preview_migration_import(
+    let (mut config, auth, summary) = emp_state::migration::preview_migration_import_with_registry(
         current,
         payload,
         &state.backend.configuration.config_path,
         &state.backend.configuration.vault,
         &BTreeMap::new(),
+        state.backend.configuration.official_models,
     )
     .map_err(MigrationError::invalid)?;
     preferences::apply(&mut config, &resolution.updates);

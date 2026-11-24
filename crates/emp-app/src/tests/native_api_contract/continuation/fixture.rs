@@ -294,14 +294,6 @@ impl Drop for Upstream {
 }
 
 pub(super) fn server(upstream: &Upstream, imported: bool) -> (TempDir, ServerHandle, String) {
-    server_with_driver(upstream, imported, crate::lifecycle::TestDriver::Legacy)
-}
-
-pub(super) fn server_with_driver(
-    upstream: &Upstream,
-    imported: bool,
-    driver: crate::lifecycle::TestDriver,
-) -> (TempDir, ServerHandle, String) {
     let directory = tempfile::tempdir().unwrap();
     let root = crate::tests::credential_root(&directory);
     let config_path = root.join("config.json");
@@ -322,13 +314,9 @@ pub(super) fn server_with_driver(
         None
     };
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
-    let server = ServerHandle::start_with_test_driver(
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        &config_path,
-        native,
-        driver,
-    )
-    .unwrap();
+    let server =
+        ServerHandle::start_for_test(IpAddr::V4(Ipv4Addr::LOCALHOST), &config_path, native)
+            .unwrap();
     if let Some(path) = auth_path {
         server
             .state

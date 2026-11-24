@@ -29,7 +29,7 @@ fn missing_key_does_not_silently_replace_saved_credentials_key() {
     fs::remove_file(&key).unwrap();
     let config: Value = serde_json::from_slice(&fs::read(config).unwrap()).unwrap();
     assert!(matches!(
-        open_vault_with(&config, &dir.path().join("state"), false),
+        open_vault(&config, &dir.path().join("state"), false),
         Err(AppError::CredentialKeyMissing)
     ));
     assert!(!key.exists());
@@ -43,7 +43,7 @@ fn saved_device_keys_use_credential_recovery_without_rotating_the_master_key() {
     let path = state.join("gateway-clients.json");
     fs::write(&path, b"[]").unwrap();
     let config = json!({"providers": [], "accounts": []});
-    let vault = open_vault_with(&config, &state, false).unwrap();
+    let vault = open_vault(&config, &state, false).unwrap();
     let clients =
         crate::services::gateway_clients::GatewayClients::open(path.clone(), &vault).unwrap();
     use crate::services::modules::{Modules, Startup};
@@ -52,13 +52,13 @@ fn saved_device_keys_use_credential_recovery_without_rotating_the_master_key() {
         serde_json::to_value(clients.issue("Test PC", None, &vault, &modules).unwrap()).unwrap();
     fs::remove_file(state.join("master.key")).unwrap();
     assert!(matches!(
-        open_vault_with(&config, &state, false),
+        open_vault(&config, &state, false),
         Err(AppError::CredentialKeyMissing)
     ));
     assert!(!state.join("master.key").exists());
     let wrong = VaultStore::from_sources(None, &state.join("master.key")).unwrap();
     assert!(matches!(
-        open_vault_with(&config, &state, false),
+        open_vault(&config, &state, false),
         Err(AppError::Filesystem(
             FilesystemError::CredentialDecryptFailed
         ))
@@ -82,7 +82,7 @@ fn mismatched_key_is_visible_but_one_bad_account_does_not_block_good_accounts() 
     let vault = VaultStore::from_sources(None, &state.join("master.key")).unwrap();
     let mut config: Value = serde_json::from_slice(&fs::read(config).unwrap()).unwrap();
     assert!(matches!(
-        open_vault_with(&config, &state, false),
+        open_vault(&config, &state, false),
         Err(AppError::Filesystem(
             FilesystemError::CredentialDecryptFailed
         ))
@@ -92,7 +92,7 @@ fn mismatched_key_is_visible_but_one_bad_account_does_not_block_good_accounts() 
         .write_encrypted_text(&good, "another-fixture")
         .unwrap();
     config["accounts"] = json!([{"auth_file":good}]);
-    assert!(open_vault_with(&config, &state, false).is_ok());
+    assert!(open_vault(&config, &state, false).is_ok());
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn incomplete_marker_blocks_startup_but_confirmed_reset_recovers() {
     reset::rebuild_with(&config, false, || Ok(())).unwrap();
     assert!(check_pending(&config).is_ok());
     let fresh = emp_state::load_configuration(Some(&config)).unwrap();
-    assert!(open_vault_with(&fresh, &dir.path().join("state"), false).is_ok());
+    assert!(open_vault(&fresh, &dir.path().join("state"), false).is_ok());
 }
 
 #[test]
@@ -214,7 +214,7 @@ fn interrupted_moves_can_be_reset_again_with_or_without_backup() {
             assert!(check_pending(&config).is_ok());
             let fresh = emp_state::load_configuration(Some(&config)).unwrap();
             assert!(fresh["providers"].as_array().unwrap().is_empty());
-            assert!(open_vault_with(&fresh, &state, false).is_ok());
+            assert!(open_vault(&fresh, &state, false).is_ok());
             assert_ne!(fs::read(state.join("master.key")).unwrap(), old_key);
             if keep && phase >= 2 {
                 assert_eq!(fs::read(saved.join("state/master.key")).unwrap(), old_key);
@@ -281,7 +281,7 @@ fn recovery_wire_contract_before_reset_or_exit() {
         ServerControl,
         http::tests::{
             exchange_wire, request,
-            wire_contract::{Driver, assert_reply, asset_head, json_head},
+            wire_contract::{assert_reply, asset_head, json_head},
         },
     };
     use crate::services::connection_admission::{ConnectionAdmission, ConnectionAdmissionConfig};
@@ -303,26 +303,24 @@ fn recovery_wire_contract_before_reset_or_exit() {
     const BAD_REQUEST: &str = json_head!("400 Bad Request", "27");
     const INVALID: &[u8] = br#"{"error":"invalid_request"}"#;
 
-    for &driver in Driver::selected() {
+    {
         for restart in [false, true] {
             let (directory, config, _) = fixture();
             let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
             let address = listener.local_addr().unwrap();
             let worker_config = config.clone();
-            let worker = std::thread::spawn(move || match driver {
-                Driver::Legacy => {
-                    super::serve_for_test(listener, &worker_config, "recovery-fixture").unwrap()
-                }
-                Driver::Candidate => server::serve_candidate(
+            let worker = std::thread::spawn(move || {
+                server::serve(
                     listener,
                     &worker_config,
+                    false,
                     "config_invalid",
                     "recovery-fixture",
                     Arc::new(ServerControl::recovery(Arc::new(ConnectionAdmission::new(
                         ConnectionAdmissionConfig::default(),
                     )))),
                 )
-                .unwrap(),
+                .unwrap()
             });
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -443,7 +441,7 @@ fn recovery_wire_contract_before_reset_or_exit() {
                     for (method, path, headers, head, body) in cases {
                         let wire = request(address.port(), method, path, &headers, b"");
                         let reply = exchange_wire(address, &wire, true).await;
-                        assert_reply(driver, &format!("{method} {path}"), &reply, head, body);
+                        assert_reply(&format!("{method} {path}"), &reply, head, body);
                     }
                 });
             assert_eq!(worker.join().unwrap(), restart);
@@ -454,7 +452,6 @@ fn recovery_wire_contract_before_reset_or_exit() {
     }
 }
 
-#[cfg(feature = "server-candidate")]
 #[test]
 fn recovery_accept_failure_returns_from_startup_and_releases_service_lock() {
     use std::{io, sync::mpsc, time::Duration};
@@ -464,7 +461,7 @@ fn recovery_accept_failure_returns_from_startup_and_releases_service_lock() {
     let owner =
         emp_state::IntegrationFileLock::acquire(&path, Duration::ZERO, Duration::ZERO).unwrap();
     assert!(matches!(
-        run(&config, &AppError::CredentialKeyMissing, false),
+        run(&config, &AppError::CredentialKeyMissing, false, false),
         Err(AppError::ServiceOwned)
     ));
     drop(owner);
@@ -472,7 +469,7 @@ fn recovery_accept_failure_returns_from_startup_and_releases_service_lock() {
     let (send, receive) = mpsc::channel();
     let worker = std::thread::spawn(move || {
         crate::server::RECOVERY_ACCEPT_FAILURE.set(Some(io::ErrorKind::PermissionDenied));
-        let result = run(&config, &AppError::CredentialKeyMissing, false);
+        let result = run(&config, &AppError::CredentialKeyMissing, false, false);
         send.send(result).unwrap();
     });
     let result = receive

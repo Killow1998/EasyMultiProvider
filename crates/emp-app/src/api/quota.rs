@@ -1,11 +1,7 @@
 use crate::app::ServerState;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use crate::http::{request::Request, response::SECURITY_HEADERS};
 use crate::server::http::{error::JsonReply, management::ManagementSession};
 use crate::services::management_events::{Changes, Subscription};
 use crate::util::system_now;
-#[cfg(any(test, not(feature = "server-candidate")))]
-use std::{io::Write, net::TcpStream};
 use std::{sync::atomic::Ordering, time::Duration};
 
 #[cfg(test)]
@@ -16,52 +12,6 @@ const QUOTA_EVENT_KEEP_ALIVE: Duration = Duration::from_secs(15);
 
 pub(crate) fn subscriber_limit() -> JsonReply {
     JsonReply::error(503, "Too many quota subscribers", None).with_header("Retry-After", "15")
-}
-
-#[cfg(any(test, not(feature = "server-candidate")))]
-pub(crate) fn serve_quota_events(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    state: &ServerState,
-    now: f64,
-) {
-    let (session, mut subscription) = match ManagementSession::require(request, state, now)
-        .map_err(|error| error.reply())
-        .and_then(|session| {
-            state
-                .backend
-                .management_events
-                .subscribe()
-                .map(|subscription| (session, subscription))
-                .ok_or_else(subscriber_limit)
-        }) {
-        Ok(authorized) => authorized,
-        Err(reply) => {
-            let _ = stream.write_all(&reply.wire_response());
-            let _ = stream.flush();
-            return;
-        }
-    };
-    let mut head = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\n".to_vec();
-    head.extend_from_slice(SECURITY_HEADERS);
-    head.extend_from_slice(b"Connection: close\r\n\r\n");
-    if stream.set_write_timeout(Some(EVENT_WRITE_TIMEOUT)).is_err()
-        || stream.write_all(&head).is_err()
-        || stream.flush().is_err()
-    {
-        return;
-    }
-    while let Some((frame, quit)) =
-        state
-            .backend
-            .transport
-            .runtime
-            .block_on(next_frame(&mut subscription, &session, state))
-    {
-        if stream.write_all(&frame).is_err() || stream.flush().is_err() || quit {
-            break;
-        }
-    }
 }
 
 pub(crate) async fn next_frame(

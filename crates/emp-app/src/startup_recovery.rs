@@ -8,26 +8,9 @@ use crate::error::AppError;
 use emp_state::{FilesystemError, VaultStore};
 use serde_json::Value;
 pub(crate) use server::run;
-#[cfg(test)]
-pub(crate) fn serve_for_test(
-    listener: std::net::TcpListener,
-    config: &Path,
-    token: &str,
-) -> Result<bool, AppError> {
-    server::serve(
-        listener,
-        config,
-        "config_invalid",
-        token,
-        &std::sync::atomic::AtomicBool::new(false),
-    )
-}
 use std::path::{Path, PathBuf};
 
 pub(crate) fn external_key() -> bool {
-    if cfg!(test) {
-        return false;
-    }
     [
         emp_state::filesystem::MASTER_KEY_ENV,
         emp_state::filesystem::MASTER_KEY_FILE_ENV,
@@ -54,11 +37,7 @@ fn credential_paths(config: &Value) -> Vec<PathBuf> {
         .collect()
 }
 
-pub(crate) fn open_vault(config: &Value, state_root: &Path) -> Result<VaultStore, AppError> {
-    open_vault_with(config, state_root, external_key())
-}
-
-fn open_vault_with(
+pub(crate) fn open_vault(
     config: &Value,
     state_root: &Path,
     external: bool,

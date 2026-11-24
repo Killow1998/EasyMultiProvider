@@ -202,13 +202,14 @@ fn serve(
         if !crate::startup_recovery::recoverable(&error) {
             return Err(error);
         }
-        if crate::startup_recovery::external_key() {
+        let external_key = crate::startup_recovery::external_key();
+        if external_key {
             eprintln!(
                 "EMP uses an external master key override. Correct EASY_MULTI_PROVIDER_MASTER_KEY or EASY_MULTI_PROVIDER_MASTER_KEY_FILE before restarting. Local settings were not reset."
             );
             return Err(error);
         }
-        if !crate::startup_recovery::run(&config, &error, open_browser)? {
+        if !crate::startup_recovery::run(&config, &error, open_browser, external_key)? {
             return Ok(());
         }
     }

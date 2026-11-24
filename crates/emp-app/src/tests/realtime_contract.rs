@@ -19,65 +19,45 @@ struct UpstreamRequest {
 pub(crate) struct RealtimeUpstream {
     address: SocketAddr,
     request: mpsc::Receiver<UpstreamRequest>,
-    stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl RealtimeUpstream {
     pub(crate) fn start(response: UpstreamResponse) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind Voice upstream");
-        listener
-            .set_nonblocking(true)
-            .expect("nonblocking Voice upstream");
         let address = listener.local_addr().expect("Voice upstream address");
         let (sender, request) = mpsc::channel();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stopped = Arc::clone(&stop);
         let worker = thread::spawn(move || {
-            while !stopped.load(Ordering::Acquire) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        stream
-                            .set_nonblocking(true)
-                            .expect("nonblocking accepted Voice stream");
-                        stream
-                            .set_nonblocking(false)
-                            .expect("blocking accepted Voice stream");
-                        let observed = receive_request(&mut stream);
-                        sender.send(observed).expect("record Voice call");
-                        let location = response
-                            .location
-                            .map(|value| format!("Location: {value}\r\n"))
-                            .unwrap_or_default();
-                        write!(
-                            stream,
-                            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{location}Connection: close\r\n\r\n",
-                            response.status,
-                            response.reason,
-                            response.content_type,
-                            response.body.len()
-                        )
-                        .expect("write Voice response headers");
-                        stream
-                            .write_all(response.body)
-                            .expect("write Voice response body");
-                        break;
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        #[expect(
-                            clippy::disallowed_methods,
-                            reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
-                        )]
-                        thread::sleep(Duration::from_millis(2));
-                    }
-                    Err(_) => break,
+            while let Ok((mut stream, _)) = listener.accept() {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("upstream read timeout");
+                if stream.peek(&mut [0]).expect("peek Voice request") == 0 {
+                    break;
                 }
+                let observed = receive_request(&mut stream);
+                sender.send(observed).expect("record Voice call");
+                let location = response
+                    .location
+                    .map(|value| format!("Location: {value}\r\n"))
+                    .unwrap_or_default();
+                write!(
+                    stream,
+                    "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{location}Connection: close\r\n\r\n",
+                    response.status,
+                    response.reason,
+                    response.content_type,
+                    response.body.len()
+                )
+                .expect("write Voice response headers");
+                stream
+                    .write_all(response.body)
+                    .expect("write Voice response body");
             }
         });
         Self {
             address,
             request,
-            stop,
             worker: Some(worker),
         }
     }
@@ -93,30 +73,41 @@ impl RealtimeUpstream {
     }
 
     #[cfg(unix)]
-    pub(crate) fn assert_only_call(&self) {
+    pub(crate) fn assert_only_call(self) {
         assert_eq!(self.observed().method, "POST");
-        assert!(self.request.try_recv().is_err());
+        self.assert_no_more_requests();
+    }
+
+    pub(super) fn assert_no_more_requests(mut self) {
+        self.finish();
+        assert!(
+            matches!(
+                self.request.try_recv(),
+                Err(mpsc::TryRecvError::Disconnected)
+            ),
+            "unexpected Voice request"
+        );
     }
 
     pub(crate) fn no_request(&self) -> bool {
         matches!(self.request.try_recv(), Err(mpsc::TryRecvError::Empty))
     }
-}
 
-impl Drop for RealtimeUpstream {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        let _ = TcpStream::connect(self.address);
+    fn finish(&mut self) {
         if let Some(worker) = self.worker.take() {
+            drop(TcpStream::connect(self.address).expect("wake Voice fake upstream"));
             worker.join().expect("join Voice fake upstream");
         }
     }
 }
 
+impl Drop for RealtimeUpstream {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
 fn receive_request(stream: &mut TcpStream) -> UpstreamRequest {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .expect("upstream read timeout");
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     let (separator, body_length) = loop {
@@ -195,14 +186,6 @@ pub(crate) fn app_server_for(
     upstream: &RealtimeUpstream,
     native_auth: &Path,
 ) -> (TempDir, ServerHandle) {
-    app_server_with_driver(upstream, native_auth, crate::lifecycle::TestDriver::Legacy)
-}
-
-pub(crate) fn app_server_with_driver(
-    upstream: &RealtimeUpstream,
-    native_auth: &Path,
-    driver: crate::lifecycle::TestDriver,
-) -> (TempDir, ServerHandle) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let app_config = canonical_root(&directory).join("config.json");
     std::fs::write(
@@ -215,11 +198,10 @@ pub(crate) fn app_server_with_driver(
         .expect("encode fixture config"),
     )
     .expect("write fixture config");
-    let server = ServerHandle::start_with_test_driver(
+    let server = ServerHandle::start_for_test(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         &app_config,
         native_auth.to_path_buf(),
-        driver,
     )
     .expect("start realtime fixture server");
     (directory, server)
@@ -287,6 +269,7 @@ fn live_call_forwards_the_native_session_over_real_http() {
     assert_eq!(request.headers["chatgpt-account-id"], "acct-native");
     assert!(!request.headers.contains_key("x-ignored-secret"));
     server.shutdown().expect("shutdown realtime fixture server");
+    upstream.assert_no_more_requests();
 }
 
 #[test]
@@ -328,6 +311,7 @@ fn live_call_preserves_non_success_redirect_without_retry() {
         "/backend/realtime/calls?intent=quicksilver&architecture=avas"
     );
     server.shutdown().expect("shutdown realtime fixture server");
+    upstream.assert_no_more_requests();
 }
 
 #[test]
@@ -388,6 +372,7 @@ fn live_call_preserves_upstream_auth_error_and_clarifies_empty_unsupported_error
         let observed = upstream.observed();
         assert_eq!(observed.path, "/backend/realtime/calls?intent=quicksilver&architecture=avas");
         server.shutdown().expect("shutdown realtime fixture server");
+    upstream.assert_no_more_requests();
     }
 }
 
@@ -433,6 +418,7 @@ fn live_success_requires_location_before_sideband_can_start() {
         "/backend/realtime/calls?intent=quicksilver&architecture=avas"
     );
     server.shutdown().expect("shutdown realtime fixture server");
+    upstream.assert_no_more_requests();
 }
 
 #[test]
@@ -465,11 +451,8 @@ fn live_caller_auth_is_checked_before_upstream_connect() {
     let (status, _, _) = response_parts(&response);
     assert_eq!(status, 401);
     assert_eq!(error_code(&response), "realtime_caller_unauthorized");
-    assert!(matches!(
-        upstream.request.try_recv(),
-        Err(mpsc::TryRecvError::Empty)
-    ));
     server.shutdown().expect("shutdown realtime fixture server");
+    upstream.assert_no_more_requests();
 }
 
 #[test]
@@ -508,11 +491,8 @@ fn live_call_rejects_duplicate_framing_and_media_headers() {
         assert_eq!(response_parts(&response).0, 400, "{response}");
         assert_eq!(error_code(&response), "realtime_invalid_request");
     }
-    assert!(matches!(
-        upstream.request.try_recv(),
-        Err(mpsc::TryRecvError::Empty)
-    ));
     server.shutdown().expect("shutdown realtime fixture server");
+    upstream.assert_no_more_requests();
 }
 
 #[test]
@@ -541,9 +521,6 @@ fn live_reports_missing_native_auth_after_caller_authentication() {
     let (status, _, _) = response_parts(&response);
     assert_eq!(status, 401);
     assert_eq!(error_code(&response), "native_subscription_unavailable");
-    assert!(matches!(
-        upstream.request.try_recv(),
-        Err(mpsc::TryRecvError::Empty)
-    ));
     server.shutdown().expect("shutdown realtime fixture server");
+    upstream.assert_no_more_requests();
 }
