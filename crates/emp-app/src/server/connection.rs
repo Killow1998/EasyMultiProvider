@@ -23,11 +23,7 @@ use crate::{
         observation::http::HttpObservation,
     },
 };
-use axum::{
-    Router,
-    extract::ConnectInfo,
-    http::{StatusCode, Uri},
-};
+use axum::{Router, extract::ConnectInfo, http::Uri};
 use hyper::{
     server::conn::http1,
     upgrade::{OnUpgrade, Upgraded},
@@ -411,25 +407,19 @@ async fn drive_connection(
                 *request.uri_mut() = uri.clone();
             }
             let token = business.lock().expect("request work").take();
-            let (mut response, token) = BUSINESS_TOKEN
+            let (mut response, mut token) = BUSINESS_TOKEN
                 .scope(RefCell::new(token), async {
                     let response = router.oneshot(request).await?;
                     Ok::<_, std::convert::Infallible>((response, take_business()))
                 })
                 .await?;
             let flushed = response.extensions_mut().remove::<Flushed>();
-            let token = if response.status() == StatusCode::SWITCHING_PROTOCOLS {
-                context
-                    .0
-                    .upgrade
-                    .lock()
-                    .expect("upgrade registration")
-                    .as_mut()
-                    .expect("switching protocols has an upgrade")
-                    .request = token;
-                None
-            } else {
-                token
+            let local_upgrade = {
+                let mut upgrade = context.0.upgrade.lock().expect("upgrade registration");
+                if let Some(upgrade) = upgrade.as_mut() {
+                    upgrade.request = token.take();
+                }
+                upgrade.is_some()
             };
             if let Some(flushed) = flushed
                 && let Some(stream) = stream
@@ -437,7 +427,7 @@ async fn drive_connection(
                 let _ = unbuffered_status.set(response.status().as_u16());
                 stream.delivery.await_flush(flushed);
             }
-            if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+            if local_upgrade {
                 let _ = unbuffered_status.set(response.status().as_u16());
             }
             let _ = encoded_reply.set(
@@ -446,18 +436,8 @@ async fn drive_connection(
                     .get::<EntryWire>()
                     .map(|wire| wire.0.clone()),
             );
-            if response.status().is_success()
-                || response.status() == StatusCode::SWITCHING_PROTOCOLS
-            {
+            if response.status().is_success() || local_upgrade {
                 raw.allow_body();
-            }
-            if response.status() != StatusCode::SWITCHING_PROTOCOLS {
-                context
-                    .0
-                    .upgrade
-                    .lock()
-                    .expect("upgrade registration")
-                    .take();
             }
             if response.extensions().get::<BufferedResponse>().is_some() {
                 Ok::<_, std::convert::Infallible>(handoff_response(token, || response))

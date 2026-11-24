@@ -985,8 +985,8 @@ fn inference_buffered_disconnect_preserves_cancel_and_finish_policies() {
                     dispatch.wait().unwrap();
                     downstream.set_zero_linger().unwrap();
                     let deadline = Deadline::after(wire_timeout());
-                    let closure = upstream.begin(deadline, "upstream finished");
                     drop(downstream);
+                    let closure = upstream.begin(deadline, "upstream finished");
                     closure.wait().unwrap();
                     let id = upstream.worker().observed().1["x-emp-request-id"].clone();
                     assert_settled(fixture, id, false, u64::from(!cancel)).await

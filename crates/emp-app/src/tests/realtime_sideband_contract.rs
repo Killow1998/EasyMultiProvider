@@ -234,6 +234,10 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     let handshake = fake
         .observation
         .begin(deadline, "fake sideband handshake and queued events");
+    let command = fake.observation.begin(
+        deadline,
+        "downstream command is serviced while upstream events are queued",
+    );
     let mut downstream = deadline.io(downstream);
     downstream
         .write_all(&one_write)
@@ -257,10 +261,6 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
             );
         }
     }
-    let command = fake.observation.begin(
-        Deadline::after(test_timeout(Duration::from_millis(250))),
-        "downstream command is serviced while upstream events are queued",
-    );
     let SidebandObservation::FirstClient(first) = command.wait().unwrap() else {
         panic!("expected first sideband client message");
     };

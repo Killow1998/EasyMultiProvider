@@ -12,9 +12,8 @@ use axum::{
     http::response::Builder,
     response::Response,
 };
-use emp_transport::SseJsonParser;
 use hyper::body::{Body as HttpBody, Frame};
-use serde_json::{Map, Value, json};
+use serde_json::json;
 use std::{
     convert::Infallible,
     io,
@@ -134,56 +133,46 @@ impl BodyOutput {
     pub(crate) fn response_event(&mut self, kind: &str, frames: &[Vec<u8>]) -> io::Result<()> {
         if let Some((last, preceding)) = frames.split_last() {
             for frame in preceding {
-                self.write_frame(Bytes::copy_from_slice(frame), false)?;
+                self.write_frame(Bytes::copy_from_slice(frame))?;
             }
-            self.write_frame(Bytes::copy_from_slice(last), terminal_event_type(kind))?;
+            let bytes = Bytes::copy_from_slice(last);
+            if terminal_event_type(kind) {
+                self.finish_frame(bytes, || ())?;
+            } else {
+                self.write_frame(bytes)?;
+            }
         }
         Ok(())
     }
 
-    pub(crate) fn aero_chunk(
-        &mut self,
-        chunk: &[u8],
-        parser: Option<&mut SseJsonParser>,
-    ) -> io::Result<Vec<Map<String, Value>>> {
-        let events = parser
-            .and_then(|parser| parser.push(chunk).ok())
-            .unwrap_or_default();
-        let terminal = events.last().is_some_and(|event| {
-            event
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(terminal_event_type)
-        });
-        self.write_frame(Bytes::copy_from_slice(chunk), terminal)?;
-        Ok(events)
-    }
-
     pub(super) fn report_progress(&mut self, completed: i64, total: i64) -> io::Result<()> {
         let frame = sse_frame("progress", &json!({"completed":completed,"total":total}))?;
-        self.write_frame(Bytes::from(frame), false)
+        self.write_frame(Bytes::from(frame))
     }
 
-    pub(super) fn finish_report(&mut self, bytes: Vec<u8>) -> io::Result<()> {
-        self.write_frame(Bytes::from(bytes), true)
-    }
-
-    fn write_frame(&mut self, bytes: Bytes, terminal: bool) -> io::Result<()> {
+    pub(crate) fn write_frame(&mut self, bytes: Bytes) -> io::Result<()> {
         let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
-        if terminal {
-            let permit = tokio::runtime::Handle::current()
-                .block_on(stream.send.reserve())
-                .map_err(|_| io::ErrorKind::BrokenPipe)?;
-            handoff_response(self.business.take(), || {
-                permit.send(bytes);
-                self.hooks.output_queued();
-            });
-        } else {
-            stream
-                .send
-                .blocking_send(bytes)
-                .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        }
+        stream
+            .send
+            .blocking_send(bytes)
+            .map_err(|_| io::ErrorKind::BrokenPipe)?;
+        stream.wait_for_flush()
+    }
+
+    pub(crate) fn finish_frame(
+        &mut self,
+        bytes: Bytes,
+        before_handoff: impl FnOnce(),
+    ) -> io::Result<()> {
+        let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
+        let permit = tokio::runtime::Handle::current()
+            .block_on(stream.send.reserve())
+            .map_err(|_| io::ErrorKind::BrokenPipe)?;
+        before_handoff();
+        handoff_response(self.business.take(), || {
+            permit.send(bytes);
+            self.hooks.output_queued();
+        });
         stream.wait_for_flush()
     }
 

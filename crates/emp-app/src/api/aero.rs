@@ -5,10 +5,12 @@ use crate::{
     server::http::{error::HttpReply, inference::InferenceOutcome},
     services::{
         disconnect::{DisconnectMonitor, DisconnectRace},
+        events::terminal_event_type,
         modules::aero::{Call, Relay},
         observation::request::{Phase, RequestObservation},
     },
 };
+use axum::body::Bytes;
 use emp_transport::{HttpMethod, HttpResponse, SseJsonParser};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -40,8 +42,38 @@ impl RelayError {
 
 pub(super) struct Upstream<'a> {
     pub(super) response: HttpResponse,
-    _caller: Call<'a>,
+    caller: Option<Call<'a>>,
     _relay: Relay,
+}
+
+#[derive(Default)]
+struct SseTerminal {
+    line: Vec<u8>,
+    terminal_event: bool,
+}
+
+impl SseTerminal {
+    fn push(&mut self, chunk: &[u8]) -> bool {
+        const LINE_PREFIX_LIMIT: usize = b"event: response.incomplete\r".len() + 1;
+        let mut terminal = false;
+        for segment in chunk.split_inclusive(|&byte| byte == b'\n') {
+            let line = segment.strip_suffix(b"\n").unwrap_or(segment);
+            let available = LINE_PREFIX_LIMIT - self.line.len();
+            self.line
+                .extend_from_slice(&line[..line.len().min(available)]);
+            if line.len() != segment.len() {
+                let line = self.line.strip_suffix(b"\r").unwrap_or(&self.line);
+                if line.is_empty() {
+                    terminal |= std::mem::take(&mut self.terminal_event);
+                } else if let Some(name) = line.strip_prefix(b"event:") {
+                    let name = name.strip_prefix(b" ").unwrap_or(name);
+                    self.terminal_event = str::from_utf8(name).is_ok_and(terminal_event_type);
+                }
+                self.line.clear();
+            }
+        }
+        terminal
+    }
 }
 
 pub(super) async fn await_module<F: std::future::Future>(
@@ -100,20 +132,28 @@ pub(crate) fn relay(
     let content_type = upstream
         .response
         .header("content-type")
-        .unwrap_or("application/json")
-        .to_owned();
+        .unwrap_or("application/json");
+    let sse = content_type.starts_with("text/event-stream");
+    let content_length = if content_type.starts_with("application/json") {
+        upstream
+            .response
+            .header("content-length")
+            .and_then(|length| length.parse::<u64>().ok())
+    } else {
+        None
+    };
     if observation
         .written(
-            downstream.head(status, &content_type, std::iter::empty()),
+            downstream.head(status, content_type, std::iter::empty()),
             false,
         )
         .is_err()
     {
         return InferenceOutcome::Streamed;
     }
-    let mut parser = content_type
-        .starts_with("text/event-stream")
-        .then(SseJsonParser::new);
+    let mut parser = sse.then(SseJsonParser::new);
+    let mut sse_terminal = sse.then(SseTerminal::default);
+    let mut received = 0_u64;
     loop {
         match state.backend.transport.runtime.block_on(await_module(
             state,
@@ -121,18 +161,29 @@ pub(crate) fn relay(
             upstream.response.next_chunk(),
         )) {
             DisconnectRace::Ready(Ok(Some(chunk))) => {
-                let Ok(events) =
-                    observation.written(downstream.aero_chunk(&chunk, parser.as_mut()), false)
-                else {
-                    break;
+                received += chunk.len() as u64;
+                let terminal = content_length == Some(received)
+                    || sse_terminal.as_mut().is_some_and(|sse| sse.push(&chunk));
+                let events = parser
+                    .as_mut()
+                    .and_then(|parser| parser.push(&chunk).ok())
+                    .unwrap_or_default();
+                let chunk = Bytes::from(chunk);
+                let written = if terminal {
+                    downstream.finish_frame(chunk, || drop(upstream.caller.take()))
+                } else {
+                    downstream.write_frame(chunk)
                 };
+                if observation.written(written, false).is_err() {
+                    break;
+                }
                 for event in events {
                     let _ = observation
                         .event_written(&Value::Object(event), Ok::<(), std::io::Error>(()));
                 }
             }
             DisconnectRace::Ready(Ok(None)) => {
-                if !content_type.starts_with("text/event-stream") {
+                if !sse {
                     observation.http_response(&json!(status), Ok(()));
                 }
                 break;
@@ -270,7 +321,7 @@ pub(super) async fn open<'a>(
     }
     Ok(Upstream {
         response,
-        _caller: call,
+        caller: Some(call),
         _relay: endpoint,
     })
 }

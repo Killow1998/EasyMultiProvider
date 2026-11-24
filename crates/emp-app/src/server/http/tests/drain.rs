@@ -578,6 +578,41 @@ fn drain_buffered_search_handoff_before_connection_resumes() {
     assert_eq!(upstream.observed().0, "/v1/alpha/search");
 }
 
+#[cfg(unix)]
+#[test]
+fn drain_search_switching_protocols_without_local_upgrade() {
+    use super::inference::{fixture, upstream_reply};
+    use crate::tests::OneShotUpstream;
+
+    let upstream = OneShotUpstream::serve(1, |socket| {
+        upstream_reply(socket, 101, "application/json", 0, "");
+    });
+    fixture(&upstream.base_url()).run_wire(async |fixture, address| {
+        let reply = exchange_wire(
+            address,
+            &json_request(
+                fixture.port(),
+                "/v1/alpha/search",
+                &[&fixture.session(), "Authorization: Bearer caller"],
+                br#"{"query":"fixture"}"#,
+            ),
+            false,
+        )
+        .await;
+        assert_status(&reply, 101);
+        assert_eq!(upstream.observed().0, "/v1/alpha/search");
+    });
+}
+
+#[test]
+fn drain_buffered_reports_handoff_before_connection_resumes() {
+    for path in ["/api/calls?start=1&end=10", "/api/usage"] {
+        drain_buffered_handoff(Fixture::new(), |fixture| {
+            request(fixture.port(), "GET", path, &[&fixture.session()], b"")
+        });
+    }
+}
+
 #[test]
 fn drain_report_early_reply_handoff_before_connection_resumes() {
     drain_buffered_handoff(Fixture::new(), |fixture| {
@@ -687,6 +722,180 @@ fn drain_aero_callback() {
 }
 
 #[cfg(unix)]
+fn install_aero_fixture(directory: &std::path::Path, endpoint: &str) {
+    let path = directory.join("config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["aero_profiles"] = json!([{
+        "id":"aero/fixture","name":"fixture","planner":{"model":"demo/model"},"executor":{"model":"demo/model"}
+    }]);
+    std::fs::write(path, config.to_string()).unwrap();
+    let started = json!({"value":{"endpoint":endpoint},"error":null});
+    install_worker_fixture(
+        directory,
+        emp_modules::Module::Aero,
+        "{}",
+        &format!("while read -r line; do printf '%s\\n' '{started}'; done"),
+    );
+}
+
+#[cfg(unix)]
+fn aero_request(fixture: &Fixture, stream: bool) -> Vec<u8> {
+    json_request(
+        fixture.port(),
+        "/v1/responses",
+        &[&fixture.session(), "session_id: fixture"],
+        &serde_json::to_vec(&json!({"model":"aero/fixture","stream":stream,"input":"fixture"}))
+            .unwrap(),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_aero_json_at_content_length_before_write_finishes() {
+    aero_terminal_case(
+        "application/json",
+        br#"{"id":"resp_aero_fixture","output":""#.to_vec(),
+        b"aero-terminal\"}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_aero_oversized_sse_at_event_boundary_before_write_finishes() {
+    let mut prefix = b"event: response.completed\r\ndata: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"".to_vec();
+    prefix.extend(std::iter::repeat_n(b'x', 1024 * 1024));
+    aero_terminal_case("text/event-stream", prefix, b"aero-terminal\"}}\r\n\r\n");
+}
+
+#[cfg(unix)]
+fn aero_terminal_case(content_type: &'static str, prefix: Vec<u8>, last: &'static [u8]) {
+    use super::inference::{fixture_directory, upstream_reply};
+    use crate::tests::OneShotUpstream;
+
+    let (release, wait) = oneshot::channel();
+    let mut wait = Some(wait);
+    let prefix_len = prefix.len();
+    let upstream = OneShotUpstream::serve(1, move |socket| {
+        upstream_reply(socket, 200, content_type, prefix_len + last.len(), "");
+        socket.write_all(&prefix).unwrap();
+        if wait.take().unwrap().blocking_recv().is_ok() {
+            socket.write_all(last).unwrap();
+        }
+    });
+    let directory = fixture_directory("http://127.0.0.1:1/v1");
+    install_aero_fixture(directory.path(), &upstream.base_url());
+    run_case(
+        Fixture::with_directory(directory),
+        content_type,
+        Sending,
+        false,
+        async |fixture| {
+            let address = fixture.server.local_addr();
+            let probe = Probe::arm(fixture, "/v1/responses", Some(b"aero-terminal"));
+            let mut client = RawClient::request(
+                address,
+                &aero_request(fixture, content_type == "text/event-stream"),
+            )
+            .await;
+            assert!(client.head.starts_with("HTTP/1.1 200 OK\r\n"));
+            assert_eq!(upstream.observed().0, "/v1/responses");
+            timeout(wire_timeout(), async {
+                let mut prefix = vec![0; prefix_len];
+                client.io.read_exact(&mut prefix).await.unwrap();
+            })
+            .await
+            .expect("the prefix reaches the client before the final chunk");
+            assert!(fixture.server.state.lifecycle.admission.has_business_work());
+            Work::new(probe, client.io, Some(release), 200, "aero-terminal").await
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_aero_revokes_delegation_at_terminal_handoff() {
+    use super::inference::{STREAM_REQUEST, fixture_directory, upstream_reply};
+    use crate::tests::OneShotUpstream;
+    use std::io::ErrorKind;
+
+    let terminal = b"event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n";
+    let aero = OneShotUpstream::serve(1, |socket| {
+        upstream_reply(socket, 200, "text/event-stream", terminal.len(), "");
+        socket.write_all(terminal).unwrap();
+    });
+    let inference_calls = Arc::new(AtomicUsize::new(0));
+    let upstream = OneShotUpstream::serve(1, {
+        let inference_calls = inference_calls.clone();
+        move |_| {
+            inference_calls.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    let directory = fixture_directory(&upstream.base_url());
+    install_aero_fixture(directory.path(), &aero.base_url());
+    Fixture::with_directory(directory).run_wire(async |fixture, address| {
+        let control = &fixture.server.state.lifecycle;
+        let parent = Probe::arm(fixture, "/v1/responses", Some(b"event: response.completed"));
+        let _parent_client = RawClient::request(address, &aero_request(fixture, true)).await;
+        let (paused, resume_parent) = parent.write.unwrap();
+        receive(paused, "Aero terminal write paused after queueing").await;
+        assert!(!control.admission.has_business_work());
+        let authorization = format!(
+            "Authorization: Bearer {}",
+            aero.observed().1["x-aero-caller-key"]
+        );
+        let callback = json_request(
+            fixture.port(),
+            "/v1/responses",
+            &[&authorization],
+            STREAM_REQUEST,
+        );
+        let reply = exchange_wire(address, &callback, false).await;
+        assert_status(&reply, 401);
+        assert!(
+            json_body(&reply)["error"]["message"]
+                .as_str()
+                .unwrap()
+                .ends_with("proxy caller authentication is required")
+        );
+
+        let quit = Probe::arm(fixture, "/api/quit", Some(b"200 OK"));
+        let wire = json_request(fixture.port(), "/api/quit", &[&fixture.session()], b"{}");
+        let quit_client = submit(address, &wire).await;
+        let mut quit = Work::new(quit, quit_client, None, 200, "stopping").await;
+        quit.writing().await;
+        assert!(!control.admission.has_business_work());
+
+        let mut reply = Vec::new();
+        let result = timeout(wire_timeout(), async {
+            let mut client = TcpStream::connect(address).await?;
+            client.write_all(&callback).await?;
+            client.read_to_end(&mut reply).await
+        })
+        .await
+        .expect("callback rejected while quit response is paused");
+        assert!(
+            matches!(result, Ok(0))
+                || result.is_err_and(|error| matches!(
+                    error.kind(),
+                    ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+                ))
+        );
+        assert!(reply.is_empty());
+        assert!(!control.admission.has_business_work());
+        assert_eq!(inference_calls.load(Ordering::Relaxed), 0);
+
+        resume_parent.send(()).unwrap();
+        quit.write.take().unwrap().1.send(()).unwrap();
+        wire_contract::assert_json_reply(
+            "quit after Aero handoff",
+            &quit.read_to_end("quit response").await,
+            "200 OK",
+            &json!({"status":"stopping"}),
+        );
+    });
+}
+
+#[cfg(unix)]
 fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
     use super::inference::{FIRST, LAST, STREAM_REQUEST, fixture_directory, upstream_reply};
     use crate::tests::OneShotUpstream;
@@ -716,22 +925,13 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
     let parent = delegated.then(|| {
         let (disconnect, wait) = oneshot::channel();
         let mut wait = Some(wait);
-        let upstream = (disconnect, OneShotUpstream::serve(1, move |_| {
-            let _ = wait.take().unwrap().blocking_recv();
-        }));
-        let path = directory.path().join("config.json");
-        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        config["aero_profiles"] = json!([{
-            "id":"aero/fixture","name":"fixture","planner":{"model":"demo/model"},"executor":{"model":"demo/model"}
-        }]);
-        std::fs::write(path, config.to_string()).unwrap();
-        let started = json!({"value":{"endpoint":upstream.1.base_url()},"error":null});
-        install_worker_fixture(
-            directory.path(),
-            emp_modules::Module::Aero,
-            "{}",
-            &format!("while read -r line; do printf '%s\\n' '{started}'; done"),
+        let upstream = (
+            disconnect,
+            OneShotUpstream::serve(1, move |_| {
+                let _ = wait.take().unwrap().blocking_recv();
+            }),
         );
+        install_aero_fixture(directory.path(), &upstream.1.base_url());
         upstream
     });
     let name = if delegated {
@@ -749,12 +949,7 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
             let path = "/v1/responses";
             let session = fixture.session();
             let parent = if let Some(upstream) = parent {
-                let wire = json_request(
-                    fixture.port(),
-                    path,
-                    &[&session, "session_id: fixture"],
-                    br#"{"model":"aero/fixture","stream":false,"input":"fixture"}"#,
-                );
+                let wire = aero_request(fixture, false);
                 let task = tokio::spawn(async move { exchange_wire(address, &wire, false).await });
                 let (upstream, headers) = tokio::task::spawn_blocking(move || {
                     let (_, headers, _) = upstream.1.observed();

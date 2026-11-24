@@ -9,12 +9,13 @@ use crate::{
     api::{calls, provider_quota, usage},
     app::ServerState,
     http::request::{Request, query_values},
-    server::run_blocking,
+    server::{handoff_response, run_blocking, spawn_response_work},
     services::{disconnect::DisconnectMonitor, events::sse_frame},
     util::system_now,
 };
 use axum::{
     Extension, Router,
+    body::Bytes,
     extract::State,
     response::{IntoResponse, Response},
     routing::get,
@@ -155,62 +156,67 @@ async fn read_report(
 ) -> Result<Response, EntryError> {
     let raw = raw_head(request.extensions())?.clone();
     let report = Report::for_path(raw.request().raw_path()).ok_or(EntryError::NotFound)?;
-    if let Some(stream) = request.extensions().get::<Arc<StreamConnection>>() {
-        let socket = socket.expect("report stream socket").0;
-        let delivery = stream.delivery.clone();
-        let (sender, response) = oneshot::channel();
-        let hooks = state.lifecycle.test_hooks.clone();
-        let worker = crate::server::spawn_response_work({
-            let hooks = hooks.clone();
-            move |business| {
-                let mut output = BodyOutput::new(socket, delivery, sender, business, hooks);
-                let query = match report.prepare_stream(raw.request(), &state, system_now()) {
-                    Ok(query) => query,
-                    Err(reply) => {
-                        output.finish(|| reply.into_response());
-                        return;
-                    }
-                };
-                let Ok(mut monitor) = DisconnectMonitor::start(output.socket()) else {
-                    output.finish(no_response);
+    let stream = request.extensions().get::<Arc<StreamConnection>>();
+    let delivery = stream.map(|stream| stream.delivery.clone());
+    let (sender, response) = oneshot::channel();
+    let hooks = state.lifecycle.test_hooks.clone();
+    let worker = spawn_response_work({
+        let hooks = hooks.clone();
+        move |business| {
+            let Some(delivery) = delivery else {
+                let response = report
+                    .read(
+                        raw.request(),
+                        &state,
+                        socket.as_ref().map(|Extension(socket)| socket.as_ref()),
+                    )
+                    .into_response();
+                handoff_response(Some(business), || {
+                    let _ = sender.send(response);
+                    hooks.output_queued();
+                });
+                return;
+            };
+            let socket = socket.expect("report stream socket").0;
+            let mut output = BodyOutput::new(socket, delivery, sender, business, hooks);
+            let query = match report.prepare_stream(raw.request(), &state, system_now()) {
+                Ok(query) => query,
+                Err(reply) => {
+                    output.finish(|| reply.into_response());
                     return;
-                };
-                if output
-                    .head(200, "text/event-stream", std::iter::empty())
-                    .is_ok()
-                {
-                    let output = Arc::new(Mutex::new(output));
-                    let progress_output = output.clone();
-                    let terminal =
-                        query.stream(&state, monitor.cancellation(), move |completed, total| {
-                            progress_output
-                                .lock()
-                                .expect("report output")
-                                .report_progress(completed, total)
-                        });
-                    if let Ok(terminal) = terminal {
-                        let _ = output
+                }
+            };
+            let Ok(mut monitor) = DisconnectMonitor::start(output.socket()) else {
+                output.finish(no_response);
+                return;
+            };
+            if output
+                .head(200, "text/event-stream", std::iter::empty())
+                .is_ok()
+            {
+                let output = Arc::new(Mutex::new(output));
+                let progress_output = output.clone();
+                let terminal =
+                    query.stream(&state, monitor.cancellation(), move |completed, total| {
+                        progress_output
                             .lock()
                             .expect("report output")
-                            .finish_report(terminal);
-                    }
+                            .report_progress(completed, total)
+                    });
+                if let Ok(terminal) = terminal {
+                    let _ = output
+                        .lock()
+                        .expect("report output")
+                        .finish_frame(Bytes::from(terminal), || ());
                 }
             }
-        });
+        }
+    });
+    if let Some(stream) = stream {
         *stream.worker.lock().expect("stream worker") = Some(worker);
-        hooks.before_response_receive().await;
-        return response.await.map_err(|_| EntryError::internal());
     }
-    run_blocking(move || {
-        report.read(
-            raw.request(),
-            &state,
-            socket.as_ref().map(|Extension(socket)| socket.as_ref()),
-        )
-    })
-    .await
-    .map(IntoResponse::into_response)
-    .map_err(|_| EntryError::internal())
+    hooks.before_response_receive().await;
+    response.await.map_err(|_| EntryError::internal())
 }
 
 async fn read_provider_quota(
