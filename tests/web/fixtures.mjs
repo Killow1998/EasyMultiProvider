@@ -364,7 +364,7 @@ export const test = base.extend({
         const response = await route.fetch();
         arrived.resolve({ request, response });
         await released.promise;
-        if (request.failure()) return;
+        // Always settle the route: an aborted request still goes through fulfill (which throws), otherwise unrouteAll waits forever.
         try { await route.fulfill({ response }); }
         catch (error) {
           if (!request.failure()) throw error;
