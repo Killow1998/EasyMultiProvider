@@ -69,7 +69,9 @@ impl BuiltModule {
                     )]
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
-                result => break result.unwrap_or_else(|error| panic!("{}: {error}", binary.display())),
+                result => {
+                    break result.unwrap_or_else(|error| panic!("{}: {error}", binary.display()));
+                }
             }
         };
         assert!(
