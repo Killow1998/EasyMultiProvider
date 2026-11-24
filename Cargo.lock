@@ -4351,10 +4351,13 @@ dependencies = [
 name = "xtask"
 version = "0.15.9"
 dependencies = [
+ "base64 0.22.1",
  "emp-modules",
  "emp-updater",
  "flate2",
  "proc-macro2",
+ "ring",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "syn 2.0.119",
