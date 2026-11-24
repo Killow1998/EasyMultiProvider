@@ -540,7 +540,28 @@ fn image_disconnect_cancels_upstream_without_retry() {
     let body = r#"{"model":"gpt-image-2","prompt":"fixture"}"#;
     write!(socket,"POST /v1/images/generations HTTP/1.1\r\nHost: {}\r\n{}\r\nx-codex-image-turn-id: cancel-turn\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", server.local_addr(), session_header(&server), body.len()).unwrap();
     assert!(upstream.next().path.ends_with("/images/generations"));
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     drop(socket);
-    assert_eq!(upstream.next().path, "/cancelled");
+    assert!(
+        upstream.observe_cancellation(deadline).wait().unwrap(),
+        "gateway must disconnect the image upstream"
+    );
     server.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn image_cancellation_probe_and_observer_share_the_scaled_deadline() {
+    let upstream = ImageUpstream::start(499);
+    let mut socket = TcpStream::connect(upstream.address).unwrap();
+    socket
+        .write_all(b"POST /images/generations HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}")
+        .unwrap();
+    assert_eq!(upstream.next().path, "/images/generations");
+
+    let budget = test_timeout(Duration::from_secs(5));
+    let cancellation = upstream.observe_cancellation(Deadline::after(budget));
+    let observed = tokio::task::spawn_blocking(move || cancellation.wait());
+    tokio::time::sleep(budget.mul_f64(0.7)).await;
+    drop(socket);
+    assert!(observed.await.unwrap().unwrap());
 }

@@ -216,7 +216,9 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
     ));
     assert!(head.starts_with("HTTP/1.1 200"));
     // Queue before starting the worker: admission must not imply completion.
-    let queued = post(&server, "/api/usage/scan", b"{}", &[&session]);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
+    set_sse_deadline(&mut reader, &deadline);
+    let queued = post_before(&server, "/api/usage/scan", b"{}", &[&session], &deadline);
     assert!(queued.starts_with("HTTP/1.1 202"));
     let status: Value = serde_json::from_str(queued.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(status["command_id"], 1);
@@ -226,7 +228,7 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
     let completed = loop {
         let frame = read_sse_frame(&mut reader);
         if frame.contains("event: usage-updated") {
-            let reply = request(&server, "/api/usage", &[&session]);
+            let reply = request_before(&server, "/api/usage", &[&session], &deadline);
             let payload: Value =
                 serde_json::from_str(reply.split_once("\r\n\r\n").unwrap().1).unwrap();
             if payload["history"]["completed"] == 1 {
@@ -238,12 +240,14 @@ fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
     assert_eq!(completed["files"], 1);
     assert_eq!(completed["errors"], 0);
     assert_eq!(completed["queued"], false);
-    let queued = post(&server, "/api/usage/scan", b"{}", &[&session]);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
+    set_sse_deadline(&mut reader, &deadline);
+    let queued = post_before(&server, "/api/usage/scan", b"{}", &[&session], &deadline);
     let receipt: Value = serde_json::from_str(queued.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(receipt["command_id"], 2);
     loop {
         if read_sse_frame(&mut reader).contains("event: usage-updated") {
-            let reply = request(&server, "/api/usage", &[&session]);
+            let reply = request_before(&server, "/api/usage", &[&session], &deadline);
             let payload: Value =
                 serde_json::from_str(reply.split_once("\r\n\r\n").unwrap().1).unwrap();
             if payload["history"]["completed"] == 2 {

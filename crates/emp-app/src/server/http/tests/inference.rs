@@ -742,13 +742,14 @@ impl SseClient {
     }
 }
 
-fn assert_upstream_cancelled(socket: &mut std::net::TcpStream) {
+fn assert_upstream_cancelled(socket: &std::net::TcpStream, deadline: &Deadline) {
     let mut byte = [0];
-    match socket.read(&mut byte) {
+    match deadline.io(socket).read(&mut byte) {
         Ok(0) => {}
         Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
         outcome => panic!("upstream connection did not close: {outcome:?}"),
     }
+    deadline.accept((), "upstream cancellation").unwrap();
 }
 
 async fn assert_settled(
@@ -885,6 +886,7 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
 fn inference_stream_disconnect_closes_upstream_and_settles_once() {
     {
         let (closed, closure) = oneshot::channel();
+        let (probe, cancelled) = mpsc::channel();
         let mut closed = Some(closed);
         let upstream = OneShotUpstream::serve(1, move |socket| {
             upstream_reply(
@@ -895,7 +897,10 @@ fn inference_stream_disconnect_closes_upstream_and_settles_once() {
                 "",
             );
             socket.write_all(FIRST).unwrap();
-            assert_upstream_cancelled(socket);
+            let Ok(deadline) = cancelled.recv() else {
+                return;
+            };
+            assert_upstream_cancelled(socket, &deadline);
             closed.take().unwrap().send(()).unwrap();
         });
         let receipt = fixture(&upstream.base_url()).run_wire(async |fixture, address| {
@@ -908,8 +913,10 @@ fn inference_stream_disconnect_closes_upstream_and_settles_once() {
             let mut downstream = SseClient::open(address, &wire).await;
             downstream.first_output().await;
             downstream.io.get_ref().set_zero_linger().unwrap();
+            let deadline = Deadline::after(wire_timeout());
+            probe.send(deadline).unwrap();
             drop(downstream);
-            timeout(wire_timeout(), closure)
+            timeout(deadline.remaining(), closure)
                 .await
                 .expect("upstream was closed")
                 .unwrap();
@@ -956,12 +963,12 @@ fn inference_buffered_disconnect_preserves_cancel_and_finish_policies() {
                 let (release, released) = mpsc::channel();
                 let (closed, closure) = oneshot::channel();
                 dispatched.take().unwrap().send((release, closure)).unwrap();
+                let Ok(deadline) = released.recv() else {
+                    return;
+                };
                 if cancel {
-                    assert_upstream_cancelled(socket);
+                    assert_upstream_cancelled(socket, &deadline);
                 } else {
-                    released
-                        .recv_timeout(wire_timeout())
-                        .expect("downstream is closed");
                     upstream_reply(socket, 200, "application/json", CHAT_COMPLETE.len(), "");
                     socket.write_all(CHAT_COMPLETE).unwrap();
                 }
@@ -981,11 +988,10 @@ fn inference_buffered_disconnect_preserves_cancel_and_finish_policies() {
                     .expect("EMP dispatched upstream")
                     .unwrap();
                 downstream.set_zero_linger().unwrap();
+                let deadline = Deadline::after(wire_timeout());
                 drop(downstream);
-                if !cancel {
-                    release.send(()).unwrap();
-                }
-                timeout(wire_timeout(), closure)
+                release.send(deadline).unwrap();
+                timeout(deadline.remaining(), closure)
                     .await
                     .expect("upstream finished")
                     .unwrap();

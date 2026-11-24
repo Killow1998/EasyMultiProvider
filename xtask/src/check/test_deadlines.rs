@@ -8,7 +8,7 @@ use syn::{
     visit::{self, Visit},
 };
 
-const ALLOWED: &[(&str, usize)] = &[("emp-app", 73), ("emp-codex", 2), ("emp-transport", 9)];
+const ALLOWED: &[(&str, usize)] = &[("emp-app", 70), ("emp-codex", 2), ("emp-transport", 9)];
 
 const SOCKET_TIMEOUTS: &[(&str, usize)] = &[("emp-app", 5)];
 
@@ -159,6 +159,7 @@ impl Deadlines {
             | "eventually"
             | "drain_for_test" => args.first(),
             "connect_timeout"
+            | "poll_receive_text_with_timeout"
             | "wait_for_state"
             | "wait_for_error"
             | "quiesce"
@@ -217,11 +218,13 @@ fn bare_duration(expr: &Expr, constants: bool, emp_app: bool, arithmetic: bool) 
         }
         Expr::Path(path) if constants => {
             if emp_app
-                && (path_matches(path, &["crate", "server", "REQUEST_DRAIN_TIMEOUT"])
-                    || path_matches(
-                        path,
-                        &["crate", "services", "shutdown", "QUIT_PRECHECK_WAIT"],
-                    ))
+                && [
+                    &["crate", "server", "REQUEST_DRAIN_TIMEOUT"][..],
+                    &["crate", "services", "shutdown", "QUIT_PRECHECK_WAIT"],
+                    &["crate", "services", "runtime", "CODEX_CATALOG_APPLY_DELAY"],
+                ]
+                .iter()
+                .any(|expected| path_matches(path, expected))
             {
                 return false;
             }
@@ -464,11 +467,13 @@ fn drain() {
     rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + wire_timeout());
     let budget = Deadline::after(crate::services::shutdown::QUIT_PRECHECK_WAIT + crate::server::raw_tcp::wire_timeout());
     let budget = Deadline::after(crate::services::shutdown::QUIT_PRECHECK_WAIT + Duration::from_secs(5));
+    let budget = Deadline::after(crate::services::runtime::CODEX_CATALOG_APPLY_DELAY + test_timeout(Duration::from_secs(3)));
+    let budget = Deadline::after(crate::services::runtime::CODEX_CATALOG_APPLY_DELAY + Duration::from_secs(3));
 }
 "#;
         assert_eq!(
             violations("crates/emp-app/tests/wire.rs", source).unwrap(),
-            [6, 7, 8, 10, 11, 14, 16]
+            [6, 7, 8, 10, 11, 14, 16, 18]
         );
     }
 
@@ -499,6 +504,22 @@ fn deadlines() {
         assert_eq!(
             violations("crates/emp-app/src/lib.rs", source).unwrap(),
             [4, 5, 5]
+        );
+    }
+
+    #[test]
+    fn checks_the_explicit_websocket_poll_timeout() {
+        let source = r#"
+fn poll() {
+    socket.poll_receive_text_with_timeout(Duration::from_secs(5));
+    ClientWebSocket::poll_receive_text_with_timeout(&mut socket, Duration::from_secs(5));
+    socket.poll_receive_text_with_timeout(test_timeout(Duration::from_secs(5)));
+    socket.poll_receive_text_with_timeout(deadline.remaining());
+}
+"#;
+        assert_eq!(
+            violations("crates/emp-app/tests/wire.rs", source).unwrap(),
+            [3, 4]
         );
     }
 

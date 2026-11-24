@@ -42,7 +42,7 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
 }
 
 fn violations(path: &str, contents: &str) -> Result<Vec<(usize, &'static str)>> {
-    if !contents.contains("temp") && !contents.contains("Temp") && !contents.contains("make") {
+    if !contents.contains("temp") && !contents.contains("Temp") {
         return Ok(Vec::new());
     }
     let file = syn::parse_file(contents).map_err(|error| format!("{path}: {error}"))?;
@@ -69,6 +69,34 @@ struct FixtureRoots {
     scopes: comments::TestScopes,
     production_roots_remaining: usize,
     violations: Vec<(usize, &'static str)>,
+}
+
+fn tempfile_builder_call(path: &syn::ExprPath, method: &str) -> bool {
+    path.path
+        .segments
+        .iter()
+        .map(|segment| &segment.ident)
+        .eq(["tempfile", "Builder", method])
+}
+
+fn tempfile_builder_receiver(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call(call) => matches!(
+            call.func.as_ref(),
+            Expr::Path(path) if tempfile_builder_call(path, "new")
+        ),
+        Expr::MethodCall(call)
+            if matches!(
+                call.method.to_string().as_str(),
+                "prefix" | "suffix" | "rand_bytes" | "permissions" | "append" | "disable_cleanup"
+            ) =>
+        {
+            tempfile_builder_receiver(&call.receiver)
+        }
+        Expr::Paren(paren) => tempfile_builder_receiver(&paren.expr),
+        Expr::Group(group) => tempfile_builder_receiver(&group.expr),
+        _ => false,
+    }
 }
 
 impl FixtureRoots {
@@ -113,7 +141,7 @@ impl<'ast> Visit<'ast> for FixtureRoots {
                     || name == "temp_dir"
                     || name == "tempfile"
                     || name == "spooled_tempfile"
-                    || name == "make" && owner.is_some_and(|owner| owner == "Builder")
+                    || name == "make" && tempfile_builder_call(path, "make")
                     || name == "new" && owner.is_some_and(|owner| owner == "SpooledTempFile")
                     || (name == "new" || name == "with_prefix" || name == "with_suffix")
                         && owner.is_some_and(|owner| owner == "TempDir" || owner == "NamedTempFile")
@@ -128,7 +156,10 @@ impl<'ast> Visit<'ast> for FixtureRoots {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if call.method == "tempdir" || call.method == "tempfile" || call.method == "make" {
+        if call.method == "tempdir"
+            || call.method == "tempfile"
+            || call.method == "make" && tempfile_builder_receiver(&call.receiver)
+        {
             self.uses_implicit_root(call.method.span().start().line);
         }
         visit::visit_expr_method_call(self, call);
@@ -193,6 +224,10 @@ fn fixture() {
     tempfile::Builder::new().make_in(root, create);
     tempfile::spooled_tempfile_in(0, root);
     tempfile::SpooledTempFile::new_in(0, root);
+    Factory::new().prefix("case-").make(create);
+    Factory::make(&factory, create);
+    other::Builder::make(&builder, create);
+    factory.make(create);
 }
 "#;
         assert_eq!(

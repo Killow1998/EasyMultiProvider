@@ -6,24 +6,39 @@ use emp_transport::{ClientWebSocket, WebSocketPoll};
 
 fn event(client: &mut ClientWebSocket, kind: &str) -> Value {
     let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
-    loop {
-        assert!(!deadline.is_expired(), "waiting for {kind}");
-        let remaining = deadline
-            .remaining()
-            .min(test_timeout(Duration::from_millis(20)));
-        match client.poll_receive_text_with_timeout(remaining).unwrap() {
+    event_before(client, kind, &deadline).unwrap()
+}
+
+fn event_before(
+    client: &mut ClientWebSocket,
+    kind: &str,
+    deadline: &Deadline,
+) -> Result<Value, String> {
+    let mut last_event = Value::Null;
+    while !deadline.is_expired() {
+        match client
+            .poll_receive_text_with_timeout(deadline.remaining())
+            .map_err(|error| format!("waiting for {kind}, last event {last_event}: {error:?}"))?
+        {
             WebSocketPoll::Text(text) => {
-                let value: Value = serde_json::from_str(&text).unwrap();
+                let value: Value = serde_json::from_str(&text).map_err(|error| {
+                    format!("invalid event while waiting for {kind}: {error}: {text}")
+                })?;
                 if value["type"] == kind {
-                    return deadline.accept(value, kind).unwrap();
+                    return deadline
+                        .accept(value, kind)
+                        .map_err(|error| format!("{kind} arrived after deadline: {error}"));
                 }
-                assert_ne!(value["type"], "error", "{value}");
-                assert_ne!(value["type"], "response.failed", "{value}");
+                if matches!(value["type"].as_str(), Some("error" | "response.failed")) {
+                    return Err(format!("waiting for {kind}, received {value}"));
+                }
+                last_event = value;
             }
             WebSocketPoll::Pending => {}
-            other => panic!("unexpected frame {other:?}"),
+            other => return Err(format!("waiting for {kind}, received {other:?}")),
         }
     }
+    Err(format!("waiting for {kind}, last event {last_event}"))
 }
 
 #[test]
@@ -124,9 +139,21 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             "invalid_request"
         );
         let interrupt = json!({"type":"response.interrupt","response_id":"resp_steer","mode":"discard_partial_items"});
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
+        let upstream_deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
+        let downstream_deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let cancellation = start_cancellation_probe(&probe, upstream_deadline);
         client.send_json(&interrupt).unwrap();
-        let incomplete = event(&mut client, "response.incomplete");
+        let receipt = event_before(&mut client, "response.incomplete", &downstream_deadline);
+        let closed = cancellation.wait();
+        let incomplete = receipt.unwrap_or_else(|error| {
+            panic!("interrupt receipt: {error}; upstream cancellation: {closed:?}")
+        });
+        assert!(
+            closed.unwrap_or_else(|error| {
+                panic!("upstream cancellation: {error}; interrupt receipt: {incomplete}")
+            }),
+            "steering retained HTTP inference; interrupt receipt: {incomplete}"
+        );
         assert_eq!(
             incomplete["response"]["incomplete_details"]["reason"],
             "interrupted"
@@ -135,10 +162,6 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
         assert!(
             incomplete["response"].get("usage").is_none(),
             "unreported tokens must not become zero"
-        );
-        assert!(
-            wait_for_cancellation(&probe, &deadline),
-            "steering retained HTTP inference"
         );
         // An incremental request must ask Codex for full history rather than
         // pretending the cancelled HTTP upstream has a resumable WS state.
@@ -171,4 +194,35 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
         server.shutdown().unwrap();
         worker.join().unwrap();
     }
+}
+
+#[tokio::test]
+async fn interrupt_can_collect_an_on_time_upstream_close_after_a_later_receipt() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (upstream, _) = listener.accept().unwrap();
+    let (probe, cancelled) = mpsc::channel();
+    let worker = tokio::task::spawn_blocking(move || {
+        report_cancellation(&cancelled, |deadline| {
+            upstream_closed_before(&upstream, deadline)
+        });
+    });
+    let upstream_deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
+    let downstream_deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let cancellation = start_cancellation_probe(&probe, upstream_deadline);
+    let ((), receipt) = tokio::join!(
+        async {
+            tokio::time::sleep(test_timeout(Duration::from_secs(1))).await;
+            drop(client);
+        },
+        async {
+            tokio::time::sleep(test_timeout(Duration::from_secs(3))).await;
+            downstream_deadline.accept("response.incomplete", "interrupt receipt")
+        }
+    );
+    assert!(upstream_deadline.is_expired());
+    let closed = cancellation.wait();
+    assert_eq!(receipt.unwrap(), "response.incomplete");
+    assert!(closed.unwrap());
+    worker.await.unwrap();
 }

@@ -3,7 +3,7 @@
 mod hotpath_profile;
 use crate::api::quota::QUOTA_EVENT_SLOT_LIMIT;
 use base64::engine::general_purpose::STANDARD;
-use emp_test_support::{Deadline, test_timeout};
+use emp_test_support::{Deadline, DeadlineIo, test_timeout};
 
 use crate::cli::Cli;
 use crate::cli::parse_cli;
@@ -263,6 +263,12 @@ struct ChunkedSse<R> {
     ended: bool,
 }
 
+type SseReader = BufReader<ChunkedSse<BufReader<DeadlineIo<TcpStream>>>>;
+
+fn set_sse_deadline(reader: &mut SseReader, deadline: &Deadline) {
+    reader.get_mut().input.get_mut().set_deadline(deadline);
+}
+
 impl<R: BufRead> Read for ChunkedSse<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         if self.ended || buffer.is_empty() {
@@ -332,7 +338,7 @@ fn read_sse_frame(reader: &mut impl BufRead) -> String {
     }
 }
 
-fn open_quota_events(server: &ServerHandle, session: &str) -> impl BufRead + use<> {
+fn open_quota_events(server: &ServerHandle, session: &str) -> SseReader {
     let mut stream = TcpStream::connect(server.local_addr()).expect("connect SSE");
     stream
             .write_all(
@@ -479,26 +485,52 @@ fn websocket_event_before(
     }
 }
 
-type CancellationProbe = (Deadline, mpsc::Sender<bool>);
+type CancellationProbe = (Deadline, mpsc::Sender<std::io::Result<bool>>);
+
+struct CancellationObservation {
+    deadline: Deadline,
+    observed: mpsc::Receiver<std::io::Result<bool>>,
+}
+
+impl CancellationObservation {
+    fn wait(self) -> std::io::Result<bool> {
+        self.observed
+            .recv_timeout(self.deadline.remaining())
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "no upstream cancellation result before deadline",
+                ),
+                mpsc::RecvTimeoutError::Disconnected => std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "upstream cancellation probe disconnected",
+                ),
+            })?
+    }
+}
 
 fn report_cancellation(
     probe: &mpsc::Receiver<CancellationProbe>,
     observe: impl FnOnce(&Deadline) -> bool,
 ) {
     if let Ok((deadline, result)) = probe.recv() {
-        let _ = result.send(observe(&deadline));
+        let _ = result.send(deadline.accept(observe(&deadline), "upstream cancellation"));
     }
 }
 
-fn wait_for_cancellation(probe: &mpsc::Sender<CancellationProbe>, deadline: &Deadline) -> bool {
+fn start_cancellation_probe(
+    probe: &mpsc::Sender<CancellationProbe>,
+    deadline: Deadline,
+) -> CancellationObservation {
     let (result, observed) = mpsc::channel();
     probe
-        .send((*deadline, result))
+        .send((deadline, result))
         .expect("start cancellation probe");
-    let closed = observed
-        .recv_timeout(deadline.remaining())
-        .expect("upstream observes cancellation");
-    deadline.accept(closed, "upstream cancellation").unwrap()
+    CancellationObservation { deadline, observed }
+}
+
+fn wait_for_cancellation(probe: &mpsc::Sender<CancellationProbe>, deadline: &Deadline) -> bool {
+    start_cancellation_probe(probe, *deadline).wait().unwrap()
 }
 
 fn upstream_closed_before(stream: &TcpStream, deadline: &Deadline) -> bool {

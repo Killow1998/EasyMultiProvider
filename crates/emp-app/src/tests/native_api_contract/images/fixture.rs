@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct ImageUpstream {
     pub(super) address: SocketAddr,
     pub(super) observed: mpsc::Receiver<ObservedNativeRequest>,
+    probe: Option<mpsc::Sender<CancellationProbe>>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -13,6 +14,7 @@ impl ImageUpstream {
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let (sender, observed) = mpsc::channel();
+        let (probe, cancelled) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
         let worker = thread::spawn(move || {
@@ -73,22 +75,12 @@ impl ImageUpstream {
                 let streaming = request.body["stream"] == true;
                 sender.send(request).unwrap();
                 if image && status == 499 {
-                    let mut byte = [0];
-                    assert_eq!(
-                        Deadline::after(test_timeout(Duration::from_secs(5)))
+                    report_cancellation(&cancelled, |deadline| {
+                        deadline
                             .io(&socket)
-                            .read(&mut byte)
-                            .unwrap(),
-                        0,
-                        "gateway must disconnect the image upstream"
-                    );
-                    sender
-                        .send(ObservedNativeRequest {
-                            path: "/cancelled".into(),
-                            headers: BTreeMap::new(),
-                            body: Value::Null,
-                        })
-                        .unwrap();
+                            .read(&mut [0])
+                            .is_ok_and(|count| count == 0)
+                    });
                     continue;
                 }
                 let status = if image { status } else { 200 };
@@ -119,6 +111,7 @@ impl ImageUpstream {
         Self {
             address,
             observed,
+            probe: Some(probe),
             stop,
             worker: Some(worker),
         }
@@ -130,10 +123,15 @@ impl ImageUpstream {
     pub(super) fn next(&self) -> ObservedNativeRequest {
         self.observed.recv_timeout(Duration::from_secs(5)).unwrap()
     }
+
+    pub(super) fn observe_cancellation(&self, deadline: Deadline) -> CancellationObservation {
+        start_cancellation_probe(self.probe.as_ref().unwrap(), deadline)
+    }
 }
 
 impl Drop for ImageUpstream {
     fn drop(&mut self) {
+        self.probe.take();
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
             worker.join().unwrap();

@@ -281,7 +281,7 @@ pub(crate) fn mark_active_pending(state: &ServerState, detail: &str) {
     }
 }
 
-const CODEX_CATALOG_APPLY_DELAY: Duration = Duration::from_secs(2);
+pub(crate) const CODEX_CATALOG_APPLY_DELAY: Duration = Duration::from_secs(2);
 const CODEX_CATALOG_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Default)]

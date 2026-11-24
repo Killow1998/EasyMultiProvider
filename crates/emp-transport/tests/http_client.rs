@@ -307,7 +307,7 @@ fn serve_connection(
     shutdown: Arc<AtomicBool>,
 ) {
     loop {
-        let Some((head, _body)) = read_request(&mut stream, &shutdown) else {
+        let Some((head, _body)) = read_request(&stream, &shutdown) else {
             return;
         };
         let text = String::from_utf8(head).expect("HTTP request is ASCII");
@@ -425,26 +425,28 @@ fn serve_connection(
     }
 }
 
-fn read_request(stream: &mut TcpStream, shutdown: &AtomicBool) -> Option<(Vec<u8>, Vec<u8>)> {
+fn read_request(stream: &TcpStream, shutdown: &AtomicBool) -> Option<(Vec<u8>, Vec<u8>)> {
     let interval = test_timeout(Duration::from_millis(50));
-    let mut stream = Deadline::after(interval).io(&*stream);
-    let mut received = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    let count = loop {
+        match Deadline::after(interval).io(stream).read(&mut buffer) {
+            Ok(0) => return None,
+            Ok(count) => break count,
+            Err(error)
+                if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+                    && !shutdown.load(Ordering::Acquire) => {}
+            Err(_) => return None,
+        }
+    };
+    let mut stream = Deadline::after(test_timeout(Duration::from_secs(5))).io(stream);
+    let mut received = buffer[..count].to_vec();
     let header_end = loop {
         if let Some(position) = received.windows(4).position(|part| part == b"\r\n\r\n") {
             break position + 4;
         }
-        if received.is_empty() {
-            stream.set_deadline(&Deadline::after(interval));
-        }
-        let mut buffer = [0_u8; 4096];
         match stream.read(&mut buffer) {
             Ok(0) => return None,
             Ok(count) => received.extend_from_slice(&buffer[..count]),
-            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                if !received.is_empty() || shutdown.load(Ordering::Acquire) {
-                    return None;
-                }
-            }
             Err(_) => return None,
         }
     };
@@ -458,7 +460,6 @@ fn read_request(stream: &mut TcpStream, shutdown: &AtomicBool) -> Option<(Vec<u8
         })
         .unwrap_or(0);
     while received.len() < header_end + content_length {
-        let mut buffer = [0_u8; 4096];
         match stream.read(&mut buffer) {
             Ok(0) => return None,
             Ok(count) => received.extend_from_slice(&buffer[..count]),
@@ -468,6 +469,28 @@ fn read_request(stream: &mut TcpStream, shutdown: &AtomicBool) -> Option<(Vec<u8
     let body = received[header_end..header_end + content_length].to_vec();
     received.truncate(header_end);
     Some((received, body))
+}
+
+#[tokio::test]
+async fn request_header_can_straddle_the_idle_shutdown_poll() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    client.set_nodelay(true).unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let request = tokio::task::spawn_blocking(move || {
+        started.send(tokio::time::Instant::now()).unwrap();
+        read_request(&stream, &AtomicBool::new(false))
+    });
+
+    let start = ready.await.unwrap();
+    tokio::time::sleep_until(start + test_timeout(Duration::from_millis(45))).await;
+    client.write_all(b"POST /split HTTP/1.1\r\nCont").unwrap();
+    tokio::time::sleep_until(start + test_timeout(Duration::from_millis(55))).await;
+    client.write_all(b"ent-Length: 2\r\n\r\nOK").unwrap();
+    let (head, body) = request.await.unwrap().expect("complete split HTTP request");
+    assert_eq!(head, b"POST /split HTTP/1.1\r\nContent-Length: 2\r\n\r\n");
+    assert_eq!(body, b"OK");
 }
 
 fn headers(authorization: &str) -> BTreeMap<String, String> {

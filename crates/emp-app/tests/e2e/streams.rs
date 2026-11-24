@@ -257,16 +257,18 @@ fn responses_websocket_reuses_upstream_across_turns_and_closes_it_on_client_clos
         if let Some(previous) = previous {
             body["previous_response_id"] = json!(previous);
         }
-        client.send_json(&body);
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        upstream.begin_observation(&deadline);
+        client.send_json(&body, &deadline);
         if index == 0 {
-            let handshake = upstream.handshake();
+            let handshake = upstream.handshake(&deadline);
             assert_eq!(handshake.path, "/v1/responses");
             assert_eq!(
                 handshake.headers["authorization"],
                 format!("Bearer {NATIVE_TOKEN}")
             );
         }
-        let turn = upstream.next_turn();
+        let turn = upstream.next_turn(&deadline);
         assert_eq!(turn["type"], "response.create");
         assert_eq!(turn["model"], "upstream-model");
         assert_eq!(
@@ -274,7 +276,6 @@ fn responses_websocket_reuses_upstream_across_turns_and_closes_it_on_client_clos
             previous.map(|id| json!(id)).as_ref()
         );
         assert!(turn["input"].to_string().contains(text), "{turn}");
-        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
         let mut answer = String::new();
         loop {
             let event = client
@@ -303,6 +304,8 @@ fn responses_websocket_reuses_upstream_across_turns_and_closes_it_on_client_clos
             }
         }
     }
-    client.close();
-    upstream.assert_closed();
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    upstream.begin_observation(&deadline);
+    client.close(&deadline);
+    upstream.assert_closed(&deadline);
 }

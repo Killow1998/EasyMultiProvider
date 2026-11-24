@@ -253,6 +253,8 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
     assert_eq!(headers["authorization"], "Bearer upstream-secret");
     assert_eq!(upstream_body["model"], "upstream-model");
 
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    set_sse_deadline(&mut events, &deadline);
     let mut second = open_post_stream(
         &server,
         "/v1/responses",
@@ -311,6 +313,8 @@ fn upstream_error_finishes_the_activity_guard() {
         configured_protocol_server(&upstream.base_url(), "responses", "api_key");
     let session = session_header(&server);
     let mut events = open_quota_events(&server, &session);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    set_sse_deadline(&mut events, &deadline);
     let mut downstream = open_post_stream(
         &server,
         "/v1/responses",
@@ -393,26 +397,6 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
     };
     assert_eq!(only_route(&finished)["in_flight"], 0);
     server.shutdown().expect("shutdown activity test server");
-}
-
-#[tokio::test]
-async fn cancellation_probe_and_observer_share_the_scaled_deadline() {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (upstream, _) = listener.accept().unwrap();
-    let (probe, cancelled) = mpsc::channel();
-    let budget = test_timeout(Duration::from_secs(5));
-    let deadline = Deadline::after(budget);
-    let worker = thread::spawn(move || {
-        report_cancellation(&cancelled, |deadline| {
-            upstream_closed_before(&upstream, deadline)
-        });
-    });
-    let observed = tokio::task::spawn_blocking(move || wait_for_cancellation(&probe, &deadline));
-    tokio::time::sleep(budget.mul_f64(0.7)).await;
-    drop(client);
-    assert!(observed.await.unwrap());
-    worker.join().unwrap();
 }
 
 #[test]

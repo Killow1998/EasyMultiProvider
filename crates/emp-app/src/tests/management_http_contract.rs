@@ -512,7 +512,11 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
             json!({"id":slug,"displayName":model["display_name"].as_str().unwrap_or(slug),"description":model["description"].as_str().unwrap_or("")})
         })
         .collect();
-    let _ = request(&server, "/v1/models", &[]);
+    let deadline = Deadline::after(
+        crate::services::runtime::CODEX_CATALOG_APPLY_DELAY + test_timeout(Duration::from_secs(3)),
+    );
+    set_sse_deadline(&mut events, &deadline);
+    let _ = request_before(&server, "/v1/models", &[], &deadline);
 
     assert_eq!(
         read_sse_frame(&mut events),

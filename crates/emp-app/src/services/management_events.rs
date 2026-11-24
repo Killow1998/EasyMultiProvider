@@ -132,6 +132,7 @@ impl Drop for Subscription {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use emp_test_support::{Deadline, test_timeout};
     use std::sync::{Arc, mpsc};
 
     #[tokio::test]
@@ -167,6 +168,7 @@ mod tests {
         let waiting = Arc::clone(&feed);
         let (ready, began) = mpsc::channel();
         let (sent, received) = mpsc::channel();
+        let (probe, observation) = mpsc::channel::<Deadline>();
         let worker = std::thread::spawn(move || {
             tokio::runtime::Builder::new_current_thread()
                 .enable_time()
@@ -176,16 +178,23 @@ mod tests {
                     let mut subscription = waiting.subscribe().unwrap();
                     subscription.next(Duration::ZERO).await.unwrap();
                     ready.send(()).unwrap();
-                    let change = subscription.next(Duration::from_secs(5)).await.unwrap();
-                    sent.send(change.activity).unwrap();
-                    assert!(subscription.next(Duration::from_secs(5)).await.is_none());
+                    let deadline = observation.recv().unwrap();
+                    let change = subscription.next(deadline.remaining()).await.unwrap();
+                    sent.send(deadline.accept(change.activity, "activity publication"))
+                        .unwrap();
+                    let deadline = observation.recv().unwrap();
+                    assert!(subscription.next(deadline.remaining()).await.is_none());
                 });
         });
         began.recv_timeout(Duration::from_secs(1)).unwrap();
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(1)));
+        probe.send(deadline).unwrap();
         feed.publish(Change::Activity);
-        let changed = received.recv_timeout(Duration::from_secs(1));
+        let changed = received.recv_timeout(deadline.remaining());
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        probe.send(deadline).unwrap();
         feed.close();
         worker.join().unwrap();
-        assert!(changed.unwrap());
+        assert!(changed.unwrap().unwrap());
     }
 }

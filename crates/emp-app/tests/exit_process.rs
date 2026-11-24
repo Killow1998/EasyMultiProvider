@@ -144,6 +144,5 @@ fn exit_restores_while_runtime_observation_is_stalled() {
     drop(socket);
     drop(listener);
     assert_eq!(emp.wait_exit(), Some(0));
-    // The terminating service may close this request without an HTTP reply.
-    let _ = observation.read_to_end(&mut Vec::new());
+    drop(observation);
 }

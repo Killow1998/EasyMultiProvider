@@ -72,9 +72,9 @@ impl HeldActivityUpstream {
         format!("http://{}/v1", self.address)
     }
 
-    fn next_request(&self) -> (String, BTreeMap<String, String>, Value) {
+    fn next_request(&self, deadline: &Deadline) -> (String, BTreeMap<String, String>, Value) {
         self.requests
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(deadline.remaining())
             .expect("held upstream request")
     }
 
@@ -124,12 +124,9 @@ fn send_turn(socket: &mut emp_transport::ClientWebSocket, input: &str) {
         .expect("send WebSocket response.create");
 }
 
-fn receive_completed_turn(socket: &mut emp_transport::ClientWebSocket) {
+fn receive_completed_turn(socket: &mut emp_transport::ClientWebSocket, deadline: &Deadline) {
     for _ in 0..16 {
-        let event = socket
-            .receive_json()
-            .expect("receive WebSocket event")
-            .expect("WebSocket remains open");
+        let event = websocket_event_before(socket, deadline);
         if event["type"] == "response.completed" {
             return;
         }
@@ -174,23 +171,18 @@ fn websocket_idle_connection_is_inactive_and_each_turn_has_its_own_activity() {
             .expect("connect idle WebSocket");
     let mut activity = open_quota_events(&server, &session);
 
-    send_turn(&mut socket, "first activity turn");
-    let (path, _, body) = upstream.next_request();
-    assert_eq!(path, "/v1/responses");
-    assert_eq!(body["stream"], true);
-    assert_one_active_route(&next_activity_snapshot(&mut activity, 1));
-    upstream.release_one();
-    receive_completed_turn(&mut socket);
-    assert_one_finished_route(&next_activity_snapshot(&mut activity, 0));
-
-    send_turn(&mut socket, "second activity turn");
-    let (path, _, body) = upstream.next_request();
-    assert_eq!(path, "/v1/responses");
-    assert_eq!(body["stream"], true);
-    assert_one_active_route(&next_activity_snapshot(&mut activity, 1));
-    upstream.release_one();
-    receive_completed_turn(&mut socket);
-    assert_one_finished_route(&next_activity_snapshot(&mut activity, 0));
+    for input in ["first activity turn", "second activity turn"] {
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        set_sse_deadline(&mut activity, &deadline);
+        send_turn(&mut socket, input);
+        let (path, _, body) = upstream.next_request(&deadline);
+        assert_eq!(path, "/v1/responses");
+        assert_eq!(body["stream"], true);
+        assert_one_active_route(&next_activity_snapshot(&mut activity, 1));
+        upstream.release_one();
+        receive_completed_turn(&mut socket, &deadline);
+        assert_one_finished_route(&next_activity_snapshot(&mut activity, 0));
+    }
 
     drop(socket);
     drop(activity);

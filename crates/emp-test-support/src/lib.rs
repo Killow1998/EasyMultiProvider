@@ -61,6 +61,11 @@ impl Deadline {
     }
 }
 
+/// Applies a deadline to reads, peeks, and writes on a blocking TCP stream.
+/// The deadline is checked before starting the operation. Once started, a
+/// successful operation returns its byte count even if the deadline passes.
+/// Socket timeouts are reported as `TimedOut`. Changing the deadline leaves
+/// the stream and its position intact.
 pub struct DeadlineIo<T> {
     stream: T,
     deadline: Deadline,
@@ -89,7 +94,7 @@ impl<T: Borrow<TcpStream>> DeadlineIo<T> {
             .deadline
             .accept(self.deadline.remaining(), "TCP read deadline")?;
         stream.set_read_timeout(Some(remaining))?;
-        self.deadline.accept(read(stream), "TCP read deadline")?
+        read(stream).map_err(socket_timeout)
     }
 }
 
@@ -100,12 +105,19 @@ impl<T: Borrow<TcpStream>> Write for DeadlineIo<T> {
             .deadline
             .accept(self.deadline.remaining(), "TCP write deadline")?;
         stream.set_write_timeout(Some(remaining))?;
-        self.deadline
-            .accept(stream.write(buf), "TCP write deadline")?
+        stream.write(buf).map_err(socket_timeout)
     }
 
     fn flush(&mut self) -> io::Result<()> {
         self.stream.borrow().flush()
+    }
+}
+
+fn socket_timeout(error: io::Error) -> io::Error {
+    if error.kind() == io::ErrorKind::WouldBlock {
+        io::Error::new(io::ErrorKind::TimedOut, error)
+    } else {
+        error
     }
 }
 
@@ -139,4 +151,43 @@ pub fn write_executable(path: &std::path::Path, script: &str) {
         status.success(),
         "write fixture executable at {path:?}: {status}"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn read_returns_partial_frame_even_if_the_deadline_expires_after_consuming_it() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let first = [0x81, 5, b'h', b'e'];
+        peer.write_all(&first).unwrap();
+        let deadline = Deadline::after(test_timeout(Duration::from_millis(200)));
+        let mut input = deadline.io(stream);
+        let mut bytes = [0; 4];
+        let count = input
+            .read_with(|mut stream| {
+                stream.read_exact(&mut bytes)?;
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "模型化读取取走字节后恰好跨过期限"
+                )]
+                std::thread::sleep(deadline.remaining());
+                Ok(bytes.len())
+            })
+            .unwrap();
+        assert_eq!(&bytes[..count], &first);
+
+        peer.write_all(b"llo").unwrap();
+        assert_eq!(
+            input.read(&mut bytes).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        input.set_deadline(&Deadline::after(test_timeout(Duration::from_secs(5))));
+        input.read_exact(&mut bytes[..3]).unwrap();
+        assert_eq!(&bytes[..3], b"llo");
+    }
 }

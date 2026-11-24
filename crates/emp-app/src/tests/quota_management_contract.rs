@@ -99,12 +99,14 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
     );
     assert!(excess.contains("Retry-After: 15\r\n"));
 
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    set_sse_deadline(&mut streams[0], &deadline);
     notify_quota_update(&server.state, "@native", Some("quota_auth_required"));
     assert_eq!(
         read_sse_frame(&mut streams[0]),
         "event: quota-updated\ndata: {}\n"
     );
-    let accounts = request(&server, "/api/accounts", &[&session]);
+    let accounts = request_before(&server, "/api/accounts", &[&session], &deadline);
     assert!(accounts.starts_with("HTTP/1.1 200 OK\r\n"), "{accounts}");
     let accounts: Value = serde_json::from_str(
         accounts
@@ -115,10 +117,16 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
     .expect("account state");
     assert_eq!(accounts["refresh_errors"]["@native"], "quota_auth_required");
 
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    set_sse_deadline(&mut streams[0], &deadline);
     notify_quota_update(&server.state, "@native", None);
     assert_eq!(
         read_sse_frame(&mut streams[0]),
         "event: quota-updated\ndata: {}\n"
+    );
+    set_sse_deadline(
+        &mut streams[0],
+        &Deadline::after(test_timeout(Duration::from_secs(5))),
     );
     server.shutdown().expect("shutdown");
     let mut tail = Vec::new();
