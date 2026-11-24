@@ -144,8 +144,8 @@ fn account_stream_snapshot_heartbeat_and_quit_match_while_updates_drain() {
         let (old_snapshot, new_snapshot) =
             tokio::join!(account_snapshot(&mut old), account_snapshot(&mut new));
         assert_eq!(old_snapshot, new_snapshot);
-        assert_eq!(state.connection_admission.active_requests(), 0);
-        assert!(state.updates.drain_for_test(Duration::ZERO));
+        assert_eq!(state.lifecycle.admission.active_requests(), 0);
+        assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
         state.backend.management_events.publish(Change::Integration);
         let (first, second) = tokio::join!(old.next(DEADLINE), new.next(DEADLINE));
         let expected = Some("event: integration-updated\ndata: {}\n\n".to_owned());
@@ -172,7 +172,7 @@ fn account_stream_snapshot_heartbeat_and_quit_match_while_updates_drain() {
             );
             assert!(stream.next(DEADLINE).await.is_none());
         }
-        let admission = state.connection_admission.quiesce(0, Duration::ZERO);
+        let admission = state.lifecycle.admission.quiesce(0, Duration::ZERO);
         assert!(admission.is_some());
     });
 }
@@ -203,7 +203,7 @@ fn candidate_account_stream_disconnect_releases_subscription_without_another_eve
 
         let count = state.backend.management_events.subscriber_count();
         assert_eq!(count, streams.len());
-        assert_eq!(state.connection_admission.active_requests(), 0);
+        assert_eq!(state.lifecycle.admission.active_requests(), 0);
         drop(streams.pop().unwrap());
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
@@ -234,7 +234,8 @@ fn candidate_account_stream_disconnect_releases_subscription_without_another_eve
             });
             assert!(
                 state
-                    .connection_admission
+                    .lifecycle
+                    .admission
                     .quiesce(0, Duration::ZERO)
                     .is_some()
             );
@@ -302,8 +303,8 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                 );
                 let cancelled = timeout(DEADLINE, reached).await.unwrap().unwrap();
                 assert!(!cancelled.load(Ordering::Acquire));
-                assert_eq!(state.connection_admission.active_requests(), 1);
-                assert!(state.updates.drain_for_test(Duration::ZERO));
+                assert_eq!(state.lifecycle.admission.active_requests(), 1);
+                assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
                 release.send(()).unwrap();
                 let mut frames = vec![first];
                 while let Some(frame) = stream.next(DEADLINE).await {
@@ -321,7 +322,7 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                 let state = state.clone();
                 tokio::task::spawn_blocking(move || {
                     wait_for(DEADLINE, || {
-                        state.connection_admission.active_requests() == 0
+                        state.lifecycle.admission.active_requests() == 0
                     })
                 })
                 .await
@@ -354,7 +355,7 @@ fn report_disconnect_cancels_query_and_releases_admission() {
                 let cancelled = timeout(DEADLINE, reached).await.unwrap().unwrap();
                 assert!(!cancelled.load(Ordering::Acquire));
                 assert_eq!(
-                    fixture.legacy.state.connection_admission.active_requests(),
+                    fixture.legacy.state.lifecycle.admission.active_requests(),
                     1
                 );
                 stream.io.get_ref().set_zero_linger().unwrap();
@@ -371,11 +372,12 @@ fn report_disconnect_cancels_query_and_releases_admission() {
                 tokio::task::spawn_blocking(move || {
                     wait_for(DEADLINE, || {
                         Arc::strong_count(&cancelled) == 1
-                            && state.connection_admission.active_requests() == 0
+                            && state.lifecycle.admission.active_requests() == 0
                     });
                     assert!(
                         state
-                            .connection_admission
+                            .lifecycle
+                            .admission
                             .quiesce(0, Duration::ZERO)
                             .is_some()
                     );
@@ -390,7 +392,14 @@ fn report_disconnect_cancels_query_and_releases_admission() {
 #[test]
 fn management_stream_access_and_selection_match_during_update_drain() {
     Fixture::new().run_candidate(async |fixture, address| {
-        assert!(fixture.legacy.state.updates.drain_for_test(Duration::ZERO));
+        assert!(
+            fixture
+                .legacy
+                .state
+                .lifecycle
+                .updates()
+                .drain_for_test(Duration::ZERO)
+        );
         let session = fixture.session();
         for path in [ACCOUNT_EVENTS, CALLS, USAGE] {
             for (headers, status) in [

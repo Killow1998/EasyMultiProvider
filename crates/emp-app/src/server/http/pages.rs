@@ -85,24 +85,11 @@ pub(crate) fn legacy_reply(request: Request<'_>, state: &ServerState) -> Option<
     )
 }
 
-pub(in crate::server) fn matches(request: Request<'_>) -> bool {
-    let path = request.raw_path();
-    match request.method {
-        RequestMethod::Get => {
-            matches!(path, "/" | "/index.html" | "/healthz")
-                || path.starts_with("/guide/")
-                || path.starts_with("/assets/")
-        }
-        RequestMethod::Head => matches!(path, "/" | "/index.html" | "/healthz"),
-        _ => false,
-    }
-}
-
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
-        .route("/", get(read))
-        .route("/index.html", get(read))
-        .route("/healthz", get(read))
+        .route("/", get(read).post(read).delete(read))
+        .route("/index.html", get(read).post(read).delete(read))
+        .route("/healthz", get(read).post(read).delete(read))
         .route("/guide/", get(read))
         .route("/guide/{*path}", get(read))
         .route("/assets/", get(read))

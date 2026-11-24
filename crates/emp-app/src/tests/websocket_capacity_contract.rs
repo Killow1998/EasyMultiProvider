@@ -214,11 +214,11 @@ fn websocket_admission_closes_overflow_and_reuses_a_released_slot() {
     let (_directory, server) = server_with_admission(tiny_admission(8, 2));
     let first = websocket(&server);
     wait_for(Duration::from_secs(2), || {
-        server.state.connection_admission.active_websockets() == 1
+        server.state.lifecycle.admission.active_websockets() == 1
     });
     let second = websocket(&server);
     wait_for(Duration::from_secs(2), || {
-        server.state.connection_admission.active_websockets() == 2
+        server.state.lifecycle.admission.active_websockets() == 2
     });
     let health_while_websockets_full = health_status(&server);
 
@@ -236,7 +236,7 @@ fn websocket_admission_closes_overflow_and_reuses_a_released_slot() {
 
     drop(first);
     wait_for(Duration::from_secs(2), || {
-        server.state.connection_admission.active_websockets() == 1
+        server.state.lifecycle.admission.active_websockets() == 1
     });
     let mut replacement = websocket(&server);
     send_masked_text(
@@ -248,7 +248,7 @@ fn websocket_admission_closes_overflow_and_reuses_a_released_slot() {
     drop(replacement);
     drop(second);
     wait_for(Duration::from_secs(2), || {
-        server.state.connection_admission.active_websockets() == 0
+        server.state.lifecycle.admission.active_websockets() == 0
     });
     server.shutdown().expect("shutdown test server");
 
@@ -266,22 +266,22 @@ fn request_admission_rejects_overflow_and_releases_after_disconnect() {
     let (_directory, server) = server_with_admission(tiny_admission(2, 2));
     let first = stall_request(&server);
     wait_for(Duration::from_secs(2), || {
-        server.state.connection_admission.active_requests() == 1
+        server.state.lifecycle.admission.active_requests() == 1
     });
     let second = stall_request(&server);
     wait_for(Duration::from_secs(2), || {
-        server.state.connection_admission.active_requests() == 2
+        server.state.lifecycle.admission.active_requests() == 2
     });
 
     let overflow_health = health_status(&server);
     drop(first);
     wait_for(Duration::from_secs(2), || {
-        server.state.connection_admission.active_requests() == 1
+        server.state.lifecycle.admission.active_requests() == 1
     });
     let available_health = health_status(&server);
     drop(second);
     wait_for(Duration::from_secs(2), || {
-        server.state.connection_admission.active_requests() == 0
+        server.state.lifecycle.admission.active_requests() == 0
     });
     server.shutdown().expect("shutdown test server");
 
@@ -314,12 +314,12 @@ fn responses_half_close_replies_and_releases_its_websocket_permit() {
         let mut pong = [0; 3];
         tokio::time::timeout(DEADLINE, client.io.read_exact(&mut pong)).await.unwrap().unwrap();
         assert_eq!(&pong, b"\x8a\x01p");
-        assert_eq!(server.state.connection_admission.active_websockets(), 1);
+        assert_eq!(server.state.lifecycle.admission.active_websockets(), 1);
         client.io.shutdown().await.unwrap();
         assert_eq!(client.rest().await, b"\x88\x00");
     });
     wait_for(Duration::from_secs(2), || {
-        server.state.connection_admission.active_websockets() == 0
+        server.state.lifecycle.admission.active_websockets() == 0
     });
     server.shutdown().unwrap();
 }
@@ -329,13 +329,14 @@ fn responses_drain_flushes_close_before_returning_permit_and_reopens() {
     let (_directory, server) = server_with_admission(tiny_admission(8, 1));
     let mut client = websocket(&server);
     wait_for(Duration::from_secs(2), || {
-        server.state.connection_admission.active_websockets() == 1
+        server.state.lifecycle.admission.active_websockets() == 1
     });
     thread::scope(|scope| {
         let drain = scope.spawn(|| {
             let guard = server
                 .state
-                .connection_admission
+                .lifecycle
+                .admission
                 .quiesce(0, Duration::from_secs(2))
                 .expect("the idle websocket returns its permit");
             drop(guard);

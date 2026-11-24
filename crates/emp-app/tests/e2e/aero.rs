@@ -301,3 +301,188 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
     }));
     emp.stop();
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
+    use std::{
+        io::{Read, Write},
+        net::TcpStream,
+        os::unix::fs::PermissionsExt,
+        thread,
+    };
+
+    let workspace = Workspace::new();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../modules/aero/worker.py")
+        .canonicalize()
+        .unwrap();
+    let launcher = workspace.root.join("aero-worker");
+    let pid_file = workspace.root.join("aero-pid");
+    let source = source.to_str().unwrap().replace('\'', "'\\''");
+    std::fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$$\" > '{}'\nexec python3 -B '{source}'\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let module = BuiltModule::from_binary(&launcher, "aero");
+    let upstream = Upstream::start();
+    let completed = response(
+        "resp-aero-saturation",
+        message("msg-saturation", "AERO_CALLBACK_COMPLETED"),
+        3,
+        2,
+    );
+    let gate = upstream.gate_stream(
+        ": waiting\n\n".into(),
+        Some(format!(
+            "data: {}\n\n",
+            json!({"type":"response.completed", "response":completed})
+        )),
+    );
+    workspace.write_config(json!({
+        "auto_enable_on_start": false,
+        "providers": [{"id":"fixture","base_url":upstream.base_url(),"protocol":"responses","auth_mode":"api_key","api_key":"fixture-provider-key"}],
+        "models": [{"id":"fixture/model","provider":"fixture","upstream_id":"callback-upstream","enabled":true}],
+        "aero_profiles": [{"id":"aero/saturation","name":"Saturation","planner":{"model":"fixture/model"},"executor":{"model":"fixture/model"}}]
+    }));
+    let release = ModuleRelease::start(std::slice::from_ref(&module));
+    let emp = release.start_emp(&workspace);
+    emp.change("aero", "install");
+    assert_eq!(emp.status("aero")["active"], true);
+    let pid: u32 = std::fs::read_to_string(pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let command = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap();
+    assert!(String::from_utf8_lossy(&command).contains("modules/aero/worker.py"));
+    let port = emp.port;
+    let address = ("127.0.0.1", port);
+    let held = (0..255)
+        .map(|_| TcpStream::connect(address).unwrap())
+        .collect::<Vec<_>>();
+    let start_call = |session: &'static str| {
+        thread::spawn(move || {
+            http(
+                port,
+                "POST",
+                "/v1/responses",
+                &[
+                    ("Authorization", &format!("Bearer {NATIVE_TOKEN}")),
+                    ("Content-Type", "application/json"),
+                    ("session-id", session),
+                ],
+                br#"{"model":"aero/Saturation","input":"Check callback admission","stream":true}"#,
+            )
+        })
+    };
+    let result = start_call("saturation-fixture");
+    let callback = upstream.next_forwarded();
+    assert_eq!(callback.path, "/v1/responses");
+    assert_eq!(callback.body.unwrap()["model"], "callback-upstream");
+    let mut ordinary = TcpStream::connect(address).unwrap();
+    ordinary
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let _ = write!(
+        ordinary,
+        "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"
+    );
+    let rejected = ordinary.read(&mut [0]);
+    assert!(
+        matches!(rejected, Ok(0))
+            || rejected.is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset)
+    );
+    gate.finish();
+    let reply = result.join().unwrap();
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert!(reply.sse_events().iter().any(|event| {
+        event["type"] == "response.completed"
+            && event["response"]["output"][0]["content"][0]["text"] == "AERO_CALLBACK_COMPLETED"
+    }));
+    drop(held);
+    let mut idle = crate::support::WebSocket::connect(port);
+    let plan = response(
+        "resp-aero-drain-plan",
+        json!({
+            "type":"function_call","name":"exit_plan_mode","call_id":"call-drain-plan",
+            "arguments":r#"{"plan":"Complete the admitted Aero call"}"#,"status":"completed"
+        }),
+        3,
+        2,
+    );
+    let gate = upstream.gate_stream(
+        ": waiting\n\n".into(),
+        Some(format!(
+            "data: {}\n\n",
+            json!({"type":"response.completed", "response":plan})
+        )),
+    );
+    let result = start_call("drain-fixture");
+    assert_eq!(upstream.next_forwarded().path, "/v1/responses");
+    upstream.reply_response_script(&[
+        response(
+            "resp-aero-drain-execute",
+            message("msg-drain-execute", "AERO_EXECUTED"),
+            3,
+            2,
+        ),
+        response(
+            "resp-aero-drain-review",
+            message("msg-drain-review", "AERO_DRAIN_COMPLETED"),
+            3,
+            2,
+        ),
+    ]);
+    let session = emp.session.clone();
+    let quit = thread::spawn(move || {
+        http(
+            port,
+            "POST",
+            "/api/quit",
+            &[
+                ("X-EMP-Session", &session),
+                ("Content-Type", "application/json"),
+            ],
+            b"{}",
+        )
+    });
+    assert_eq!(
+        idle.next_json().unwrap(),
+        None,
+        "quit drains the idle WebSocket"
+    );
+    gate.finish();
+    let reply = result.join().unwrap();
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert!(
+        reply.sse_events().iter().any(|event| {
+            event["type"] == "response.completed"
+                && event["response"]["output"]
+                    .as_array()
+                    .is_some_and(|output| {
+                        output
+                            .iter()
+                            .any(|item| item["content"][0]["text"] == "AERO_DRAIN_COMPLETED")
+                    })
+        }),
+        "{}",
+        reply.text()
+    );
+    for _ in 0..2 {
+        assert_eq!(upstream.next_forwarded().path, "/v1/responses");
+    }
+    assert_eq!(quit.join().unwrap().json(), json!({"status":"stopping"}));
+    eventually(
+        Duration::from_secs(5),
+        "Aero process survived shutdown",
+        || (!std::path::Path::new(&format!("/proc/{pid}")).exists()).then_some(()),
+    );
+
+    emp.stop();
+}

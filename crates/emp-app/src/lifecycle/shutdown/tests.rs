@@ -51,8 +51,8 @@ fn fixture() -> (tempfile::TempDir, ServerHandle) {
 fn exit_restores_before_active_requests_and_websockets_release() {
     let (_directory, server) = fixture();
     let state = Arc::clone(&server.state);
-    let request = state.connection_admission.acquire_request().unwrap();
-    let websocket = state.connection_admission.acquire_websocket().unwrap();
+    let request = state.lifecycle.admission.acquire_request().unwrap();
+    let websocket = state.lifecycle.admission.acquire_websocket().unwrap();
     let start = Instant::now();
     let shutdown = std::thread::spawn(move || server.shutdown());
     while state.backend.integration.manager.status().unwrap().state != "restored" {
@@ -66,8 +66,8 @@ fn exit_restores_before_active_requests_and_websockets_release() {
     assert_original(
         &std::fs::read_to_string(state.backend.integration.manager.config_path()).unwrap(),
     );
-    assert!(state.connection_admission.acquire_request().is_none());
-    assert!(state.connection_admission.acquire_websocket().is_none());
+    assert!(state.lifecycle.admission.acquire_request().is_none());
+    assert!(state.lifecycle.admission.acquire_websocket().is_none());
     assert!(
         !shutdown.is_finished(),
         "exit waits for admitted handlers after restoring"
@@ -88,7 +88,7 @@ fn exit_unwind_restores_before_the_process_finishes() {
     assert_original(
         &std::fs::read_to_string(state.backend.integration.manager.config_path()).unwrap(),
     );
-    assert!(state.shutdown.load(Ordering::Acquire));
+    assert!(state.lifecycle.shutdown.load(Ordering::Acquire));
     server.shutdown().unwrap();
 }
 
@@ -192,7 +192,7 @@ fn exit_serializes_an_admitted_enable_and_rejects_later_activation() {
     let exit_state = Arc::clone(&state);
     let exit = std::thread::spawn(move || prepare_exit(&exit_state, false));
     let deadline = Instant::now() + Duration::from_secs(1);
-    while !state.shutdown.load(Ordering::Acquire) {
+    while !state.lifecycle.shutdown.load(Ordering::Acquire) {
         assert!(Instant::now() < deadline);
         std::thread::yield_now();
     }

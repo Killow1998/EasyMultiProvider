@@ -13,7 +13,10 @@ use crate::{
         request::{Request, RequestMethod, read_json_body},
     },
     server::{connection::ConnectionContext, run_blocking},
-    services::observation::request::{Phase, RequestObservation},
+    services::{
+        modules::aero::CallerDelegation,
+        observation::request::{Phase, RequestObservation},
+    },
     util::system_now,
 };
 use axum::{
@@ -218,6 +221,8 @@ async fn submit(
     let raw = raw_head(request.extensions())
         .map_err(EntryError::reply)?
         .clone();
+    let delegation = request.extensions().get::<CallerDelegation>().cloned();
+    let lease = context.aero_call_lease();
     let source = run_blocking({
         let state = state.clone();
         let inference = inference.clone();
@@ -225,7 +230,8 @@ async fn submit(
         move || {
             let now = system_now();
             let mut request = raw.request();
-            let source = request_source(request, &state, now, Some(peer.ip()));
+            let mut source = request_source(request, &state, now, Some(peer.ip()), delegation);
+            source.aero_lease = lease;
             request.source = Some(&source);
             route.authorize(
                 request,

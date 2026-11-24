@@ -274,7 +274,11 @@ pub(crate) fn sample_due(state: &ServerState) {
         Err(_) => return,
     };
     for id in ids {
-        if state.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+        if state
+            .lifecycle
+            .shutdown
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
             break;
         }
         let _ = refresh(state, &id, false);

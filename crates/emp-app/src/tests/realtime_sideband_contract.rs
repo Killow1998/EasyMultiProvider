@@ -89,7 +89,7 @@ fn sideband_validates_call_id_and_upgrade_before_admission() {
     ));
     assert_eq!(status, 400);
     assert_eq!(payload["error"]["code"], "realtime_invalid_call_id");
-    assert_eq!(server.state.connection_admission.active_websockets(), 0);
+    assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
 
     let headers = vec![cookie.clone()];
     let (status, payload) = status_and_body(&request_with_owned_headers(
@@ -99,7 +99,7 @@ fn sideband_validates_call_id_and_upgrade_before_admission() {
     ));
     assert_eq!(status, 400);
     assert_eq!(payload["error"]["message"], "invalid websocket upgrade");
-    assert_eq!(server.state.connection_admission.active_websockets(), 0);
+    assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
 
     let mut headers = upgrade_headers(&cookie);
     headers.retain(|header| !header.starts_with("Sec-WebSocket-Key:"));
@@ -111,7 +111,7 @@ fn sideband_validates_call_id_and_upgrade_before_admission() {
     ));
     assert_eq!(status, 400);
     assert_eq!(payload["error"]["message"], "invalid Sec-WebSocket-Key");
-    assert_eq!(server.state.connection_admission.active_websockets(), 0);
+    assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
     assert!(upstream.no_request());
     server.shutdown().expect("shutdown server");
 }
@@ -123,12 +123,13 @@ fn sideband_capacity_is_reserved_after_upgrade_validation_before_native_connect(
         .map(|_| {
             server
                 .state
-                .connection_admission
+                .lifecycle
+                .admission
                 .acquire_websocket()
                 .expect("fill adaptive websocket pool")
         })
         .collect::<Vec<_>>();
-    assert_eq!(server.state.connection_admission.active_websockets(), 224);
+    assert_eq!(server.state.lifecycle.admission.active_websockets(), 224);
     let cookie = session_header(&server);
     let headers = upgrade_headers(&cookie);
     let wire = request_with_owned_headers(&server, "/v1/live/rtc_capacity_test", &headers);
@@ -142,7 +143,7 @@ fn sideband_capacity_is_reserved_after_upgrade_validation_before_native_connect(
     );
     assert!(upstream.no_request());
     drop(permits);
-    assert_eq!(server.state.connection_admission.active_websockets(), 0);
+    assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
     server.shutdown().expect("shutdown server");
 }
 
@@ -192,9 +193,9 @@ fn sideband_target_uses_native_credentials_allowlisted_headers_proxy_and_message
             .websocket_proxy_for(&prepared.url)
             .unwrap()
     );
-    assert_eq!(server.state.connection_admission.active_websockets(), 1);
+    assert_eq!(server.state.lifecycle.admission.active_websockets(), 1);
     drop(prepared);
-    assert_eq!(server.state.connection_admission.active_websockets(), 0);
+    assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
     assert!(upstream.no_request());
     server.shutdown().expect("shutdown server");
 }
@@ -211,7 +212,7 @@ fn sideband_without_native_subscription_is_rejected_after_caller_auth() {
     ));
     assert_eq!(status, 401);
     assert_eq!(payload["error"]["code"], "native_subscription_unavailable");
-    assert_eq!(server.state.connection_admission.active_websockets(), 0);
+    assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
     assert!(upstream.no_request());
     server.shutdown().expect("shutdown server");
 }
@@ -330,14 +331,14 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     assert_eq!(observed.headers["session-id"], "session-voice");
     app.join().expect("join sideband handler");
     let deadline = Instant::now() + Duration::from_secs(1);
-    while server.state.connection_admission.active_websockets() != 0 && Instant::now() < deadline {
+    while server.state.lifecycle.admission.active_websockets() != 0 && Instant::now() < deadline {
         #[expect(
             clippy::disallowed_methods,
             reason = "WebSocket 准入释放没有通知接口，以固定间隔轮询"
         )]
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(server.state.connection_admission.active_websockets(), 0);
+    assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
     assert!(idle_upstream.no_request());
     server.shutdown().expect("shutdown server");
     let records = super::internal_events_contract::final_journal(app_directory.path());
@@ -384,7 +385,7 @@ fn sideband_upstream_handshake_errors_return_http_before_downstream_101() {
         assert_eq!(payload["error"]["code"], expected_code);
         assert!(!response.starts_with("HTTP/1.1 101"));
         fake_worker.join().expect("join rejected fake upstream");
-        assert_eq!(server.state.connection_admission.active_websockets(), 0);
+        assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
         assert!(idle_upstream.no_request());
         server.shutdown().expect("shutdown fixture server");
     }
@@ -405,7 +406,7 @@ fn sideband_connection_refused_maps_to_502_and_releases_admission() {
     assert_eq!(status, 502);
     assert_eq!(payload["error"]["code"], "native_realtime_transport_error");
     assert!(!response.starts_with("HTTP/1.1 101"));
-    assert_eq!(server.state.connection_admission.active_websockets(), 0);
+    assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
     assert!(idle_upstream.no_request());
     server.shutdown().expect("shutdown fixture server");
 }

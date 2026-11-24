@@ -354,7 +354,7 @@ fn account_writes_match_legacy_wire_and_persist_the_same_state() {
         assert_eq!(pair.read("/api/accounts").await["accounts"], json!([]));
         for fixture in [&old, new] {
             assert!(matches!(std::fs::metadata(fixture.directory.path().join(AUTH)), Err(error) if error.kind() == ErrorKind::NotFound));
-            assert!(fixture.legacy.state.updates.drain_for_test(Duration::ZERO));
+            assert!(fixture.legacy.state.lifecycle.updates().drain_for_test(Duration::ZERO));
         }
         for path in [IMPORT, CONFIG, MODELS, QUOTA, RESET] {
             let denied = pair.parity(|port, _| json_request(port, path, &[], b"{"), 503, |reply| reply).await;
@@ -385,7 +385,14 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
         let (mut client, task) = connect_submitted_write(fixture, candidate).await;
         client.write_all(&refresh).await.unwrap();
         let upstream_request = wait_for_model_fetch(&upstream).await;
-        assert!(!fixture.legacy.state.updates.drain_for_test(Duration::ZERO));
+        assert!(
+            !fixture
+                .legacy
+                .state
+                .lifecycle
+                .updates()
+                .drain_for_test(Duration::ZERO)
+        );
         disconnect_submitted_write(fixture, client, task).await;
         send_models(upstream_request, "after-disconnect").await;
 
@@ -393,7 +400,8 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
         tokio::task::spawn_blocking(move || {
             assert!(
                 state
-                    .connection_admission
+                    .lifecycle
+                    .admission
                     .quiesce(0, Duration::from_secs(5))
                     .is_some()
             );

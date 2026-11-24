@@ -207,7 +207,7 @@ pub(crate) fn wait(state: Arc<ServerState>) -> bool {
     #[cfg(windows)]
     crate::cli::desktop::hide_owned_console();
     let mut current = initial;
-    while !state.shutdown.load(Ordering::Acquire) {
+    while !state.lifecycle.shutdown.load(Ordering::Acquire) {
         tray.pump();
         #[cfg(windows)]
         if let Some((title, message)) = state.backend.team.take_desktop_notice() {

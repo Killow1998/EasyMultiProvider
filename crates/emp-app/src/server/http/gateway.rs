@@ -8,7 +8,6 @@ use super::{
 use crate::{
     api::gateway::{GatewayRead, json_reply},
     app::ServerState,
-    http::request::{Request, RequestMethod},
     server::{connection::ConnectionContext, run_blocking},
 };
 use axum::{
@@ -20,11 +19,6 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub(crate) const CLIENTS_PATH: &str = "/api/gateway/clients";
-
-pub(crate) fn matches_write(request: Request<'_>) -> bool {
-    matches!(request.method, RequestMethod::Post | RequestMethod::Delete)
-        && request.raw_path() == CLIENTS_PATH
-}
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()

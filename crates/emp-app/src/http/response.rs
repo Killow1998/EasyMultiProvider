@@ -1,4 +1,6 @@
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::http::request::BodyError;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::server::http::error::EntryError;
 use serde_json::Value;
 use std::io::Write;
@@ -53,22 +55,27 @@ pub(crate) fn response_with_headers<'a>(
     response
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn not_found_response() -> Vec<u8> {
     EntryError::NotFound.wire_response()
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn unauthorized_response() -> Vec<u8> {
     EntryError::ManagementSession.wire_response()
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn cross_origin_response(message: &'static str) -> Vec<u8> {
     EntryError::CrossOrigin(message).wire_response()
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn bad_request_response() -> Vec<u8> {
     EntryError::InvalidHead.wire_response()
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn json_error_response(
     status: u16,
     status_text: &str,
@@ -118,6 +125,7 @@ pub(crate) fn status_text(status: u16) -> &'static str {
     }
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn body_error_response(error: BodyError) -> Vec<u8> {
     EntryError::from(error).wire_response()
 }

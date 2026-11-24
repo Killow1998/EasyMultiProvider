@@ -7,7 +7,6 @@ use super::{
 use crate::{
     api::{catalog, inspection, integration, runtime},
     app::ServerState,
-    http::request::{Request, RequestMethod},
     server::run_blocking,
 };
 use axum::{Router, extract::State, routing::get};
@@ -39,10 +38,6 @@ impl SettingsRead {
             Self::RequestLimits => inspection::request_limits(state),
         }
     }
-}
-
-pub(in crate::server) fn matches(request: Request<'_>) -> bool {
-    request.method == RequestMethod::Get && SettingsRead::for_path(request.raw_path()).is_some()
 }
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {

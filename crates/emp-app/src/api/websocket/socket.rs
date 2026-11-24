@@ -3,14 +3,18 @@ use emp_transport::{
     WebSocketReader, WebSocketWriter, split_websocket,
 };
 use serde_json::Value;
-use std::{io, net::TcpStream, sync::Arc};
+use std::sync::Arc;
+#[cfg(any(test, not(feature = "server-candidate")))]
+use std::{io, net::TcpStream};
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf},
-    net::TcpStream as AsyncTcpStream,
-    runtime::Handle,
     sync::Mutex,
 };
 
+#[cfg(any(test, not(feature = "server-candidate")))]
+use tokio::{net::TcpStream as AsyncTcpStream, runtime::Handle};
+
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(in crate::api) fn legacy_websocket_io(
     stream: &TcpStream,
     runtime: &Handle,

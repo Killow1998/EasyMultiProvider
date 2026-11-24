@@ -3,6 +3,7 @@ use crate::app::ServerState;
 use crate::http::request::{Request, RequestMethod};
 use crate::services::observation::diagnostics::Diagnostics;
 use serde_json::{Value, json};
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
@@ -77,6 +78,7 @@ impl HttpObservation {
         }
     }
 
+    #[cfg(any(test, not(feature = "server-candidate")))]
     pub(crate) fn write_response(&mut self, stream: &mut impl Write, bytes: &[u8]) {
         let formatted = self
             .model

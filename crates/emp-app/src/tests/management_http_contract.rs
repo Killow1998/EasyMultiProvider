@@ -660,6 +660,7 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
     assert!(
         !server
             .state
+            .lifecycle
             .shutdown
             .load(std::sync::atomic::Ordering::Acquire)
     );

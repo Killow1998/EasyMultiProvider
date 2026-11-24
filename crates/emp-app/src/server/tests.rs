@@ -1,5 +1,5 @@
 use super::{
-    connection::{ConnectionContext, ShutdownAfterResponse, drive},
+    connection::{ConnectionContext, drive},
     head::RawRequestHead,
     raw_tcp::{DEADLINE, RawClient},
     *,
@@ -269,7 +269,7 @@ async fn upgrade_releases_request_permit_and_graceful_shutdown_waits_for_session
                             reserved,
                             |socket, admitted, shutdown| async move {
                                 let mut socket = socket.unwrap();
-                                assert!(admitted);
+                                assert!(admitted.is_some());
                                 assert_eq!(socket.read_u8().await.unwrap(), b'x');
                                 socket.write_all(b"ready").await.unwrap();
                                 assert_eq!(shutdown.wait().await, ShutdownReason::Requested);
@@ -338,7 +338,15 @@ async fn exit_signals_after_socket_write_and_distinguishes_failed_write() {
         ))));
         let router = Router::new().route(
             "/",
-            get(|| async { (Extension(ShutdownAfterResponse), "stopping") }),
+            get(
+                |Extension(context): Extension<ConnectionContext>| async move {
+                    context
+                        .shutdown_after_response()
+                        .send(ShutdownReason::Requested)
+                        .unwrap();
+                    "stopping"
+                },
+            ),
         );
         let (entered, attempting_write) = oneshot::channel();
         let (release, wait) = oneshot::channel();

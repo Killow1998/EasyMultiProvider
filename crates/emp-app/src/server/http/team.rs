@@ -37,14 +37,6 @@ pub(crate) fn matches_write(request: Request<'_>) -> bool {
     request.method == RequestMethod::Post && request.raw_path().starts_with(WRITE_PREFIX)
 }
 
-pub(in crate::server) fn matches(request: Request<'_>) -> bool {
-    match request.method {
-        RequestMethod::Get => read_handler(request.raw_path()).is_some(),
-        RequestMethod::Post => matches_write(request),
-        _ => false,
-    }
-}
-
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     READS.into_iter().fold(
         Router::new()

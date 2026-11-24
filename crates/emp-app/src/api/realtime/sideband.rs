@@ -1,14 +1,18 @@
 use super::call::{incoming_headers, native_headers, safe_forwarded_headers};
 use super::{RealtimeError, valid_call_id};
 use crate::VERSION;
-use crate::api::websocket::{prepare_upgrade, socket::legacy_websocket_io};
+use crate::api::websocket::prepare_upgrade;
+#[cfg(any(test, not(feature = "server-candidate")))]
+use crate::api::websocket::socket::legacy_websocket_io;
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::server::http::error::HttpReply;
 use crate::server::http::proxy::require_proxy;
 use emp_transport::{AsyncClientWebSocket, DEFAULT_WEBSOCKET_MESSAGE_BYTES};
 use std::collections::BTreeMap;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::io::Write;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::net::TcpStream;
 use std::time::Duration;
 pub(crate) mod relay;
@@ -44,7 +48,7 @@ pub(crate) fn prepare_sideband(
         .into());
     }
     let accept = prepare_upgrade(request, |_| "invalid Sec-WebSocket-Key".into())?;
-    let Some(permit) = state.connection_admission.acquire_websocket() else {
+    let Some(permit) = state.lifecycle.admission.acquire_websocket() else {
         state.backend.diagnostics.journal.event("warning", "request_rejected", &serde_json::json!({"transport":"websocket", "reason":"connection_capacity", "route":"realtime_sideband"}));
         return Err(HttpReply::error(
             503,
@@ -89,6 +93,7 @@ pub(crate) fn prepare_sideband(
     })
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn serve_realtime_sideband(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -113,6 +118,7 @@ pub(crate) fn serve_realtime_sideband_with_test_connector(
     serve_sideband(stream, request, call_id, body_prefix, state, now, configure);
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 fn serve_sideband(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -163,6 +169,7 @@ fn serve_sideband(
     ));
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 fn write_http_response(stream: &mut TcpStream, response: &[u8]) {
     let _ = stream.write_all(response);
     let _ = stream.flush();

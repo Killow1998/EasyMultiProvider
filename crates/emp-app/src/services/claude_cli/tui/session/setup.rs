@@ -211,7 +211,7 @@ impl Context {
             incoming: incoming.clone(),
             client: Arc::clone(&state.backend.transport.client),
             runtime: state.backend.transport.runtime.handle().clone(),
-            shutdown: Arc::clone(&state.shutdown),
+            shutdown: Arc::clone(&state.lifecycle.shutdown),
             cancelled,
         })
     }

@@ -60,7 +60,7 @@ pub(crate) fn execute_complete(
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
     let started = Instant::now();
     let result = (|| {
-        if state.shutdown.load(Ordering::Acquire) {
+        if state.lifecycle.shutdown.load(Ordering::Acquire) {
             return Err(ClaudeCliError::ShuttingDown);
         }
         preflight_input(body)?;
@@ -109,7 +109,7 @@ fn cancellation_reason(
     state: &ServerState,
     monitor: &mut Option<&mut DisconnectMonitor>,
 ) -> Option<process::CancellationReason> {
-    if state.shutdown.load(Ordering::Acquire) {
+    if state.lifecycle.shutdown.load(Ordering::Acquire) {
         return Some(process::CancellationReason::ServerShutdown);
     }
     monitor.as_deref_mut().and_then(|monitor| {

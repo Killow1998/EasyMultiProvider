@@ -93,7 +93,8 @@ fn execute_inner(
     let _restore_admission = if operation == "restore" {
         match receipt.step("quiesce", || {
             state
-                .connection_admission
+                .lifecycle
+                .admission
                 .quiesce(management_connections, Duration::from_secs(15))
                 .ok_or(())
         }) {
@@ -119,7 +120,7 @@ fn execute_inner(
         Ok(lock) => lock,
         Err(_) => return unavailable(409),
     };
-    if state.shutdown.load(Ordering::Acquire) {
+    if state.lifecycle.shutdown.load(Ordering::Acquire) {
         return unavailable(503);
     }
     if matches!(operation, "reload" | "verify") {

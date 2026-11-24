@@ -35,7 +35,7 @@ pub(super) fn run(
     actions: mpsc::Receiver<Action>,
     updates: mpsc::SyncSender<Snapshot>,
 ) {
-    while !state.shutdown.load(Ordering::Acquire) {
+    while !state.lifecycle.shutdown.load(Ordering::Acquire) {
         let current = snapshot(&state, None);
         let _ = updates.try_send(current);
         let action = match actions.recv_timeout(Duration::from_millis(750)) {
@@ -65,7 +65,7 @@ pub(super) fn run(
         });
         let error = execute(&state, action);
         let _ = updates.try_send(snapshot(&state, None));
-        if state.shutdown.load(Ordering::Acquire) {
+        if state.lifecycle.shutdown.load(Ordering::Acquire) {
             break;
         }
         if let Some(reason) = error {

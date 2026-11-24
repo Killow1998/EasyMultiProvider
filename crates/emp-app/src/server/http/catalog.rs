@@ -1,6 +1,6 @@
 use super::{
     body::JsonBody,
-    error::{EntryError, JsonReply},
+    error::{EntryError, JsonReply, no_response},
     management::ManagementSession,
     proxy::{ModelCatalog, RequestAccess},
     raw_head,
@@ -26,19 +26,11 @@ use crate::{
 use axum::{
     Extension, Router,
     extract::{FromRequest, State},
+    response::Response,
     routing::{get, post},
 };
 use serde_json::{Value, json};
 use std::{net::TcpStream, sync::Arc};
-
-pub(in crate::server) fn matches(request: Request<'_>) -> bool {
-    let path = request.raw_path();
-    match request.method {
-        RequestMethod::Get => catalog::models_path(path) || catalog::provider_models_path(path),
-        RequestMethod::Post => path == "/api/models/metadata",
-        _ => false,
-    }
-}
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
@@ -47,7 +39,9 @@ pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
         .route("/v1/models/{*path}", get(models))
         .nest(
             "/api/providers",
-            Router::new().fallback(get(provider_models).post(write)),
+            Router::new()
+                .route("/balance", post(missing_balance))
+                .fallback(get(provider_read).post(write).fallback(super::unmatched)),
         )
         .route("/api/decisions/models", post(write))
         .route("/api/catalog/refresh", post(write))
@@ -67,16 +61,32 @@ async fn models(
         .map_err(|_| EntryError::internal())?
 }
 
-async fn provider_models(
+async fn provider_read(
     _access: RequestAccess,
     _session: ManagementSession,
     State(state): State<Arc<ServerState>>,
     request: axum::extract::Request,
 ) -> Result<JsonReply, EntryError> {
     let raw = raw_head(request.extensions())?.clone();
-    run_blocking(move || catalog::provider_models_request(raw.request().raw_path(), &state))
-        .await
-        .map_err(|_| EntryError::internal())
+    run_blocking(move || {
+        let request = raw.request();
+        if let Some(id) = provider_quota::history_id(request.raw_path()) {
+            provider_quota::history(request, &state, id, crate::util::system_now())
+        } else {
+            catalog::provider_models_request(request.raw_path(), &state)
+        }
+    })
+    .await
+    .map_err(|_| EntryError::internal())
+}
+
+async fn missing_balance(
+    _access: RequestAccess,
+    _session: ManagementSession,
+    JsonBody(body): JsonBody,
+) -> Result<Response, EntryError> {
+    force(&body)?;
+    Ok(no_response())
 }
 
 async fn metadata(

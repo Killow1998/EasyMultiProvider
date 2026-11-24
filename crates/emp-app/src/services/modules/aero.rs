@@ -3,7 +3,12 @@ mod catalog;
 pub(crate) use catalog::{augment_catalog, augment_public, validate_update};
 
 use super::{ActiveWorker, Modules};
-use crate::{app::ServerState, services::gateway_clients::Caller};
+use crate::{
+    app::ServerState,
+    services::{
+        connection_admission::ConnectionPermit, gateway_clients::Caller, updates::RequestPermit,
+    },
+};
 use emp_modules::{Command, Module};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -18,13 +23,32 @@ pub(super) struct Endpoint {
     profiles: Value,
 }
 
-#[derive(Default)]
-pub(crate) struct Callers(Mutex<BTreeMap<String, CallerDelegation>>);
+pub(crate) struct Callers {
+    active: Mutex<BTreeMap<String, CallerDelegation>>,
+    pending_headers: Arc<tokio::sync::Semaphore>,
+}
+
+impl Default for Callers {
+    fn default() -> Self {
+        Self {
+            active: Mutex::default(),
+            pending_headers: Arc::new(tokio::sync::Semaphore::new(64)),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CallLease {
+    pub(crate) connection: Arc<ConnectionPermit>,
+    pub(crate) work: Arc<RequestPermit>,
+}
 
 #[derive(Clone)]
 pub(crate) struct CallerDelegation {
     pub(crate) caller: Caller,
     pub(crate) authorization: Option<String>,
+    pub(crate) lease: Option<CallLease>,
+    pub(crate) admitted_header: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
 }
 
 pub(crate) struct Call<'a> {
@@ -37,26 +61,39 @@ impl Callers {
         &self,
         caller: Caller,
         authorization: Option<String>,
+        lease: Option<CallLease>,
     ) -> Option<Call<'_>> {
         let key = crate::util::random_hex(32).ok()?;
-        self.0.lock().ok()?.insert(
+        self.active.lock().ok()?.insert(
             key.clone(),
             CallerDelegation {
                 caller,
                 authorization,
+                lease,
+                admitted_header: None,
             },
         );
         Some(Call { callers: self, key })
     }
 
+    pub(crate) fn classifies_callbacks(&self) -> bool {
+        self.active
+            .lock()
+            .is_ok_and(|calls| calls.values().any(|call| call.lease.is_some()))
+    }
+
+    pub(crate) fn acquire_header(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        self.pending_headers.clone().try_acquire_owned().ok()
+    }
+
     pub(crate) fn identify(&self, key: &str) -> Option<CallerDelegation> {
-        self.0.lock().ok()?.get(key).cloned()
+        self.active.lock().ok()?.get(key).cloned()
     }
 }
 
 impl Drop for Call<'_> {
     fn drop(&mut self) {
-        if let Ok(mut calls) = self.callers.0.lock() {
+        if let Ok(mut calls) = self.callers.active.lock() {
             calls.remove(&self.key);
         }
     }

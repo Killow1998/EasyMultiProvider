@@ -87,7 +87,7 @@ fn websocket_upgrade_carries_prefix_and_keeps_legacy_capacity_rejections() {
         let session = fixture.session();
         let old = fixture.legacy.local_addr();
         let state = &fixture.legacy.state;
-        let slots = std::iter::from_fn(|| state.connection_admission.acquire_websocket())
+        let slots = std::iter::from_fn(|| state.lifecycle.admission.acquire_websocket())
             .collect::<Vec<_>>();
         let sideband = upgrade(port, "/v1/live/rtc_busy", &session, &[], &[]);
         let reply = fixture.parity(new, &sideband, 503).await;
@@ -129,9 +129,9 @@ fn websocket_upgrade_carries_prefix_and_keeps_legacy_capacity_rejections() {
                 read_websocket_frame(&mut client.io, false).await,
                 (0x8a, b"coalesced".to_vec())
             );
-            assert_eq!(state.connection_admission.active_websockets(), 1);
+            assert_eq!(state.lifecycle.admission.active_websockets(), 1);
             assert_eq!(
-                state.connection_admission.active_requests(),
+                state.lifecycle.admission.active_requests(),
                 usize::from(address == old)
             );
             client
@@ -145,7 +145,7 @@ fn websocket_upgrade_carries_prefix_and_keeps_legacy_capacity_rejections() {
             );
             assert!(client.rest().await.is_empty());
         }
-        assert_eq!(state.connection_admission.active_websockets(), 0);
+        assert_eq!(state.lifecycle.admission.active_websockets(), 0);
     });
 }
 
@@ -174,7 +174,8 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
             let (reopen, wait) = tokio::sync::oneshot::channel();
             let worker = tokio::task::spawn_blocking(move || {
                 let guard = state
-                    .connection_admission
+                    .lifecycle
+                    .admission
                     .quiesce(exempt, Duration::from_secs(5))
                     .unwrap();
                 ready.send(()).unwrap();
@@ -194,11 +195,7 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
                 .unwrap();
             assert!(result.is_err(), "drain must not send an HTTP response");
             assert_eq!(
-                fixture
-                    .legacy
-                    .state
-                    .connection_admission
-                    .active_websockets(),
+                fixture.legacy.state.lifecycle.admission.active_websockets(),
                 0
             );
             reopen.send(()).unwrap();
@@ -375,11 +372,7 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
                     (0x81, event.to_vec())
                 );
                 assert_eq!(
-                    fixture
-                        .legacy
-                        .state
-                        .connection_admission
-                        .active_websockets(),
+                    fixture.legacy.state.lifecycle.admission.active_websockets(),
                     1
                 );
                 client.io.shutdown().await.unwrap();

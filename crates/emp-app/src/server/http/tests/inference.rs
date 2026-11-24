@@ -297,8 +297,10 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
 
         let state = fixture.legacy.state.clone();
         tokio::task::spawn_blocking(move || {
-            wait_for(DEADLINE, || state.updates.active_for_test() == 0);
-            assert!(state.updates.drain_for_test(Duration::ZERO));
+            wait_for(DEADLINE, || {
+                state.lifecycle.updates().active_for_test() == 0
+            });
+            assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
         })
         .await
         .unwrap();
@@ -541,7 +543,12 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
             let mut downstream = SseClient::open(address, &wire, candidate).await;
             let mut events = downstream.first_output().await;
             assert!(
-                !fixture.legacy.state.updates.drain_for_test(Duration::ZERO),
+                !fixture
+                    .legacy
+                    .state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(Duration::ZERO),
                 "SSE released the update permit before its body ended"
             );
             release.send(()).unwrap();

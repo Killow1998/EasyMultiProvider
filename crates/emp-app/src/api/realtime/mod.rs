@@ -6,7 +6,9 @@ mod call;
 pub(crate) mod multipart;
 pub(crate) mod sideband;
 
-pub(crate) use call::{prepare_call, serve_realtime_call};
+pub(crate) use call::prepare_call;
+#[cfg(any(test, not(feature = "server-candidate")))]
+pub(crate) use call::serve_realtime_call;
 
 pub(crate) const MAX_REALTIME_REQUEST_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_REALTIME_PART_BYTES: usize = 128 * 1024;
@@ -69,6 +71,7 @@ impl RealtimeError {
         self
     }
 
+    #[cfg(any(test, not(feature = "server-candidate")))]
     pub(crate) fn wire_response(&self) -> Vec<u8> {
         EntryError::from(self.clone()).wire_response()
     }

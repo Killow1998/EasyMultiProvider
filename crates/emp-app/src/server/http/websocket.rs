@@ -40,11 +40,6 @@ pub(in crate::server) fn is_upgrade_route(request: Request<'_>) -> bool {
         || (request.method == RequestMethod::Get && request.raw_path().starts_with(SIDEBAND_PREFIX))
 }
 
-pub(in crate::server) fn matches(request: Request<'_>) -> bool {
-    is_upgrade_route(request)
-        || (request.method == RequestMethod::Post && request.raw_path() == LIVE)
-}
-
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/v1/responses", get(responses))
@@ -62,6 +57,9 @@ async fn responses(
     let raw = raw_head(request.extensions())
         .map_err(EntryError::reply)?
         .clone();
+    if !is_responses_upgrade(raw.request()) {
+        return Err(EntryError::NotFound.reply());
+    }
     let probe = request
         .extensions_mut()
         .remove::<Arc<tokio::net::TcpStream>>();
@@ -71,7 +69,7 @@ async fn responses(
         move || {
             let mut head = raw.request();
             let now = system_now();
-            let source = request_source(head, &prepare_state, now, Some(peer.ip()));
+            let source = request_source(head, &prepare_state, now, Some(peer.ip()), None);
             head.source = Some(&source);
             require_proxy(head, &prepare_state, now).map_err(EntryError::reply)?;
             let accept = prepare_upgrade(head, |error| error.to_string())?;
@@ -139,7 +137,7 @@ async fn sideband(
     let prepared = run_blocking(move || {
         let mut head = raw.request();
         let now = system_now();
-        let source = request_source(head, &prepare_state, now, Some(peer.ip()));
+        let source = request_source(head, &prepare_state, now, Some(peer.ip()), None);
         head.source = Some(&source);
         let call_id = percent_decode(&head.raw_path()[SIDEBAND_PREFIX.len()..], false);
         sideband::prepare_sideband(head, &call_id, &prepare_state, now)

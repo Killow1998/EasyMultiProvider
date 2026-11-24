@@ -12,7 +12,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf},
-    time::{Instant, timeout_at},
+    time::{Duration, Instant, Sleep, sleep, timeout_at},
 };
 
 #[derive(Clone)]
@@ -50,13 +50,6 @@ pub(super) struct GuardedHead {
 }
 
 impl GuardedHead {
-    pub(super) fn into_legacy(self) -> crate::http::request::RequestHead {
-        crate::http::request::RequestHead {
-            head: self.raw.0.to_string(),
-            body_prefix: self.body_prefix,
-        }
-    }
-
     pub(super) async fn read(
         io: &mut (impl AsyncRead + Unpin),
         deadline: Instant,
@@ -165,6 +158,7 @@ impl GuardedHead {
             response,
             mode,
             written: 0,
+            recovery_write_deadline: None,
             delivery,
         }
     }
@@ -178,6 +172,7 @@ pub(super) struct Prefixed<I> {
     response: Arc<OnceLock<Option<Bytes>>>,
     mode: ServerMode,
     written: usize,
+    recovery_write_deadline: Option<Pin<Box<Sleep>>>,
     delivery: Option<Arc<Delivery>>,
 }
 
@@ -239,8 +234,17 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
         });
         if let Some(response) = response {
             while this.written < response.len() {
+                if matches!(this.mode, ServerMode::Recovery) {
+                    let deadline = this
+                        .recovery_write_deadline
+                        .get_or_insert_with(|| Box::pin(sleep(Duration::from_secs(3))));
+                    if deadline.as_mut().poll(cx).is_ready() {
+                        return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
+                    }
+                }
                 let count =
                     ready!(Pin::new(&mut this.io).poll_write(cx, &response[this.written..]))?;
+                this.recovery_write_deadline = None;
                 if count == 0 {
                     return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
                 }

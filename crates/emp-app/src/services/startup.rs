@@ -14,7 +14,7 @@ fn reconcile_with_base_url(state: &ServerState, base_url: &str) -> Result<(), ()
     let integration = &state.backend.integration;
     let manager = &integration.manager;
     let _operation = manager.operation_lock().map_err(|_| ())?;
-    if state.shutdown.load(Ordering::Acquire) {
+    if state.lifecycle.shutdown.load(Ordering::Acquire) {
         return Ok(());
     }
     let status = manager.status().map_err(|_| ())?;

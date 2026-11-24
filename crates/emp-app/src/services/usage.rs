@@ -56,7 +56,9 @@ impl UsageState {
     }
     pub(crate) fn queue_scan(&self, state: &ServerState) -> Option<u64> {
         let mut progress = self.progress.lock().expect("history refresh");
-        if self.history.stop.load(Ordering::Acquire) || state.shutdown.load(Ordering::Acquire) {
+        if self.history.stop.load(Ordering::Acquire)
+            || state.lifecycle.shutdown.load(Ordering::Acquire)
+        {
             return None;
         }
         progress.requested = progress.requested.checked_add(1)?;
@@ -94,7 +96,7 @@ impl UsageState {
             event,
             &json!({
                 "command_id":id, "files":summary["files"], "updated":summary["updated"],
-                "errors":summary["errors"], "cancelled":self.history.stop.load(Ordering::Acquire) || state.shutdown.load(Ordering::Acquire),
+                "errors":summary["errors"], "cancelled":self.history.stop.load(Ordering::Acquire) || state.lifecycle.shutdown.load(Ordering::Acquire),
             }),
         );
         self.notify_scan();
@@ -113,7 +115,7 @@ impl UsageState {
         let _ = self
             .scan_wake
             .wait_timeout_while(guard, Duration::from_secs(60), |progress| {
-                !state.shutdown.load(Ordering::Acquire)
+                !state.lifecycle.shutdown.load(Ordering::Acquire)
                     && !self.history.stop.load(Ordering::Acquire)
                     && progress.requested == revision
             });
@@ -124,7 +126,7 @@ impl UsageState {
             guard,
             Duration::from_secs_f64(seconds.max(0.0)),
             |_| {
-                !state.shutdown.load(Ordering::Acquire)
+                !state.lifecycle.shutdown.load(Ordering::Acquire)
                     && !self.history.stop.load(Ordering::Acquire)
             },
         );
@@ -137,7 +139,7 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
         .name("emp-usage-history".into())
         .spawn(move || {
             let usage = &history_state.backend.usage;
-            while !history_state.shutdown.load(Ordering::Acquire)
+            while !history_state.lifecycle.shutdown.load(Ordering::Acquire)
                 && !usage.history.stop.load(Ordering::Acquire)
             {
                 let revision = {
@@ -154,7 +156,9 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
                     .map(|config| config.clone())
                     .unwrap_or(json!({}));
                 if usage.ledger.prices.set_aliases(&config["pricing_aliases"]) {
-                    usage.ledger.price_pending(&history_state.shutdown);
+                    usage
+                        .ledger
+                        .price_pending(&history_state.lifecycle.shutdown);
                 }
                 usage.history.scan(
                     &usage.ledger,
@@ -162,7 +166,7 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
                     &config,
                     system_now(),
                 );
-                if !history_state.shutdown.load(Ordering::Acquire)
+                if !history_state.lifecycle.shutdown.load(Ordering::Acquire)
                     && !usage.history.stop.load(Ordering::Acquire)
                 {
                     usage.progress.lock().expect("history completion").completed = revision;
@@ -193,9 +197,9 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
                 .unwrap_or(0)
                 > 0
             {
-                usage.ledger.price_pending(&price_state.shutdown);
+                usage.ledger.price_pending(&price_state.lifecycle.shutdown);
             }
-            while !price_state.shutdown.load(Ordering::Acquire)
+            while !price_state.lifecycle.shutdown.load(Ordering::Acquire)
                 && !usage.history.stop.load(Ordering::Acquire)
             {
                 let snapshot = usage.ledger.prices.snapshot(system_now());
@@ -210,8 +214,8 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
                     continue;
                 }
                 if refresh_prices(&price_state) {
-                    usage.ledger.price_pending(&price_state.shutdown);
-                } else if !price_state.shutdown.load(Ordering::Acquire) {
+                    usage.ledger.price_pending(&price_state.lifecycle.shutdown);
+                } else if !price_state.lifecycle.shutdown.load(Ordering::Acquire) {
                     usage.ledger.prices.refresh_failed();
                     usage.wait_for_prices(&price_state, 3600.0);
                 }

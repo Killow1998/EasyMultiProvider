@@ -164,7 +164,11 @@ pub(crate) fn execute(
         };
         if let Some(result) = result {
             let result = result.and_then(|auth| {
-                if state.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+                if state
+                    .lifecycle
+                    .shutdown
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
                     return Err("login_cancelled");
                 }
                 if let Some(name) = &pending.account_name {

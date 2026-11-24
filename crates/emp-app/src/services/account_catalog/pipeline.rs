@@ -160,7 +160,7 @@ fn fetch_and_persist_inner(state: &ServerState, source: &RefreshSource) -> Fetch
         Ok(catalog) => catalog,
         Err(error) => return FetchAndPersistOutcome::UpstreamError(error),
     };
-    if state.shutdown.load(Ordering::Acquire) {
+    if state.lifecycle.shutdown.load(Ordering::Acquire) {
         return FetchAndPersistOutcome::Stopped;
     }
     match persist_fetched_catalog(state, source, catalog) {

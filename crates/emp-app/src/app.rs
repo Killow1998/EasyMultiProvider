@@ -28,18 +28,14 @@ use std::sync::atomic::AtomicBool;
 use tokio::runtime::Runtime;
 
 pub(crate) struct ServerState {
-    pub(crate) shutdown: Arc<AtomicBool>,
-    pub(crate) shutdown_wake: Arc<tokio::sync::Notify>,
+    pub(crate) lifecycle: Arc<crate::server::ServerControl>,
     pub(crate) catalog_refresh: crate::services::account_catalog::CatalogRefreshState,
     pub(crate) sessions: Arc<SessionStore>,
-    pub(crate) connection_admission:
-        Arc<crate::services::connection_admission::ConnectionAdmission>,
     pub(crate) bootstrap: BootstrapToken,
     pub(crate) reopen_bootstrap: Mutex<Option<BootstrapToken>>,
     pub(crate) backend: BackendState,
     pub(crate) port: u16,
     pub(crate) base_url: String,
-    pub(crate) updates: crate::services::updates::UpdateState,
     #[cfg(all(test, unix))]
     pub(crate) test_sideband_url: std::sync::OnceLock<String>,
 }
@@ -60,18 +56,12 @@ impl ServerState {
     }
 
     pub(crate) fn request_shutdown(&self) {
-        self.shutdown
-            .store(true, std::sync::atomic::Ordering::Release);
-        self.shutdown_wake.notify_waiters();
+        self.lifecycle
+            .stop(crate::server::ShutdownReason::Requested);
     }
 
     pub(crate) async fn wait_for_shutdown(&self) {
-        let notified = self.shutdown_wake.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-        if !self.shutdown.load(std::sync::atomic::Ordering::Acquire) {
-            notified.await;
-        }
+        self.lifecycle.signal().wait().await;
     }
 }
 

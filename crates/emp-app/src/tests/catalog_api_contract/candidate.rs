@@ -319,7 +319,8 @@ fn metadata_finishes_admitted_upstream_work_after_the_client_disconnects() {
             tokio::task::spawn_blocking(move || {
                 assert!(
                     state
-                        .connection_admission
+                        .lifecycle
+                        .admission
                         .quiesce(0, Duration::from_secs(5))
                         .is_some()
                 );

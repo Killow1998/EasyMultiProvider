@@ -105,6 +105,7 @@ impl Recovery {
 
     fn normal_quit(&mut self) {
         let url = self.wait_line("Open in browser: ");
+        assert!(std::net::TcpStream::connect(("127.0.0.1", self.port)).is_err());
         let (base, bootstrap) = url.split_once("/?bootstrap=").unwrap();
         let port = base.rsplit(':').next().unwrap().parse().unwrap();
         let session = http(
@@ -194,6 +195,7 @@ fn invalid_key_shows_recovery_and_exit_keeps_every_old_file() {
     );
     assert_eq!(recovery.action("exit", None).status, 200);
     recovery.wait_exit();
+    assert!(std::net::TcpStream::connect(("127.0.0.1", recovery.port)).is_err());
     assert_eq!(std::fs::read(&workspace.config_path).unwrap(), config);
     assert_eq!(
         std::fs::read(workspace.root.join("state/master.key")).unwrap(),

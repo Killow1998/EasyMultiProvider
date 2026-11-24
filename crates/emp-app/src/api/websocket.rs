@@ -4,6 +4,7 @@ use crate::api::history_response::history_stream_error;
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::server::http::error::HttpReply;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::server::http::proxy::require_proxy;
 use crate::services::catalog::response_catalog_etag;
 use crate::services::history::DestinationPrepareError;
@@ -18,7 +19,9 @@ use emp_transport::FailureClass;
 use emp_transport::websocket_accept;
 use serde_json::Value;
 use std::collections::BTreeMap;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::io::Write;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::net::TcpStream;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -31,7 +34,9 @@ mod control;
 mod http_stream;
 mod native_socket;
 pub(crate) mod socket;
-use socket::{Downstream, DownstreamEvent, legacy_websocket_io};
+#[cfg(any(test, not(feature = "server-candidate")))]
+use socket::legacy_websocket_io;
+use socket::{Downstream, DownstreamEvent};
 
 use native_socket::{NativeSession, NativeTurnResult, native_stream_error_value};
 
@@ -173,6 +178,7 @@ pub(crate) fn prepare_upgrade(
         .map_err(|error| HttpReply::error(400, &key_error(error), None))
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn serve_responses_websocket(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -203,7 +209,7 @@ pub(crate) fn serve_responses_websocket(
         return;
     };
     let monitor = legacy_websocket_io(stream, runtime).ok().map(Arc::new);
-    let permit = state.connection_admission.acquire_websocket();
+    let permit = state.lifecycle.admission.acquire_websocket();
     runtime.block_on(run_responses(
         state,
         request,
@@ -211,7 +217,7 @@ pub(crate) fn serve_responses_websocket(
         io,
         &body_prefix,
         monitor,
-        permit.is_some(),
+        permit.map(Arc::new),
     ));
 }
 
@@ -222,7 +228,7 @@ pub(crate) async fn run_responses(
     io: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
     prefix: &[u8],
     monitor: Option<Arc<tokio::net::TcpStream>>,
-    admitted: bool,
+    permit: Option<Arc<crate::services::connection_admission::ConnectionPermit>>,
 ) {
     let Ok(websocket) = Downstream::new(
         io,
@@ -231,7 +237,7 @@ pub(crate) async fn run_responses(
     ) else {
         return;
     };
-    if !admitted {
+    let Some(permit) = permit else {
         state.backend.diagnostics.journal.event(
             "warning",
             "request_rejected",
@@ -241,7 +247,7 @@ pub(crate) async fn run_responses(
             .close(1013, "too many websocket connections")
             .await;
         return;
-    }
+    };
     let mut native_session = NativeSession::default();
     let session = responses_turns(
         state,
@@ -249,7 +255,7 @@ pub(crate) async fn run_responses(
         connection_id,
         &websocket,
         monitor.as_ref(),
-        &mut native_session,
+        (&mut native_session, &permit),
     );
     session.await;
     native_session.close_upstream().await;
@@ -258,7 +264,7 @@ pub(crate) async fn run_responses(
 async fn wait_for_drain(state: &ServerState) {
     tokio::select! {
         _ = state.wait_for_shutdown() => {}
-        _ = state.connection_admission.wait_for_websocket_drain() => {}
+        _ = state.lifecycle.admission.wait_for_websocket_drain() => {}
     }
 }
 
@@ -268,7 +274,10 @@ async fn responses_turns(
     connection_id: Option<&str>,
     websocket: &Downstream,
     monitor: Option<&Arc<tokio::net::TcpStream>>,
-    native_session: &mut NativeSession,
+    (native_session, permit): (
+        &mut NativeSession,
+        &Arc<crate::services::connection_admission::ConnectionPermit>,
+    ),
 ) {
     let mut last_response_id = None;
     let incoming = request.incoming();
@@ -312,7 +321,7 @@ async fn responses_turns(
             websocket.close(1008, "device key was revoked").await;
             return;
         }
-        if state.connection_admission.is_quiescing() {
+        if state.lifecycle.admission.is_quiescing() {
             websocket.close(1001, "EMP connection is draining").await;
             return;
         }
@@ -366,7 +375,7 @@ async fn responses_turns(
             last_response_id: &mut last_response_id,
         };
         websocket.observation.phase(Phase::ReadBody);
-        let Some(_permit) = state.updates.enter() else {
+        let Some(work) = state.lifecycle.updates().enter() else {
             let _ = websocket
                 .send_json(&emp_websocket_error(
                     503,
@@ -438,6 +447,15 @@ async fn responses_turns(
             request_body["stream"] = Value::Bool(true);
             let request_headers = websocket.observation.headers(incoming.clone());
             let (control, mut monitor) = control::TurnControl::start(state, &mut websocket);
+            let mut source = request.source.expect("authorized WebSocket caller").clone();
+            source.aero_lease = Some(crate::services::modules::aero::CallLease {
+                connection: permit.clone(),
+                work: Arc::new(work),
+            });
+            let request = Request {
+                source: Some(&source),
+                ..request
+            };
             let result = aero::serve(
                 state,
                 &config,

@@ -274,3 +274,117 @@ fn recovery_refuses_config_symlinks_and_never_deletes_link_targets() {
     reset::rebuild_with(&config, false, || Ok(())).unwrap();
     assert_eq!(fs::read_to_string(outside).unwrap(), "keep-outside");
 }
+
+#[test]
+fn recovery_routes_match_legacy_bytes_before_reset_or_exit() {
+    use crate::server::{
+        ServerControl,
+        http::tests::{assert_status, exchange_wire, json_body, request},
+    };
+    use crate::services::connection_admission::{ConnectionAdmission, ConnectionAdmissionConfig};
+    use std::{net::TcpListener, sync::Arc};
+
+    for restart in [false, true] {
+        let (old_dir, old_config, _) = fixture();
+        let (new_dir, new_config, _) = fixture();
+        let old_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let new_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let (old, new) = (
+            old_listener.local_addr().unwrap(),
+            new_listener.local_addr().unwrap(),
+        );
+        let legacy_config = old_config.clone();
+        let candidate_config = new_config.clone();
+        let legacy = std::thread::spawn(move || {
+            super::serve_for_test(old_listener, &legacy_config, "recovery-fixture").unwrap()
+        });
+        let candidate = std::thread::spawn(move || {
+            server::serve_candidate(
+                new_listener,
+                &candidate_config,
+                "config_invalid",
+                "recovery-fixture",
+                Arc::new(ServerControl::recovery(Arc::new(ConnectionAdmission::new(
+                    ConnectionAdmissionConfig::default(),
+                )))),
+            )
+            .unwrap()
+        });
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let auth = "X-EMP-Recovery: recovery-fixture";
+                let cases = [
+                    ("GET", "/", vec![], 200),
+                    ("GET", "/healthz", vec![], 503),
+                    ("GET", "/assets/i18n.js", vec![], 200),
+                    ("GET", "/assets/copy-recovery.js", vec![], 200),
+                    ("GET", "/api/recovery", vec![auth], 200),
+                    ("GET", "/api/recovery", vec![], 401),
+                    ("GET", "/api/recovery?extra=1", vec![auth], 400),
+                    ("HEAD", "/", vec![auth], 400),
+                    ("GET", "/", vec!["Origin: https://other.invalid"], 403),
+                    (
+                        "POST",
+                        "/api/recovery/reset",
+                        vec![auth, "Content-Length: 0"],
+                        409,
+                    ),
+                    (
+                        "POST",
+                        "/api/recovery/exit",
+                        vec![auth, "Content-Length: 1"],
+                        400,
+                    ),
+                    (
+                        "POST",
+                        "/api/recovery/reset",
+                        vec!["Content-Length: 0"],
+                        401,
+                    ),
+                    ("POST", "/api/recovery/exit", vec!["Content-Length: 0"], 401),
+                ];
+                for (method, path, headers, status) in cases {
+                    let a = request(old.port(), method, path, &headers, b"");
+                    let b = request(new.port(), method, path, &headers, b"");
+                    let (a, b) =
+                        tokio::join!(exchange_wire(old, &a, true), exchange_wire(new, &b, true));
+                    assert_status(&a, status);
+                    assert_eq!(a, b, "{method} {path}");
+                }
+                let path = if restart {
+                    "/api/recovery/reset"
+                } else {
+                    "/api/recovery/exit"
+                };
+                let headers = [
+                    auth,
+                    "Content-Length: 0",
+                    "X-EMP-Recovery-Confirm: clear-and-reset",
+                ];
+                let a = request(old.port(), "POST", path, &headers, b"");
+                let b = request(new.port(), "POST", path, &headers, b"");
+                let (a, b) =
+                    tokio::join!(exchange_wire(old, &a, true), exchange_wire(new, &b, true));
+                assert_status(&a, 200);
+                assert_eq!(a, b);
+                let response = json_body(&b);
+                assert_eq!(
+                    response[if restart { "restarting" } else { "exiting" }],
+                    true
+                );
+            });
+        assert_eq!(legacy.join().unwrap(), restart);
+        assert_eq!(candidate.join().unwrap(), restart);
+        for (address, config, root) in [
+            (old, old_config, old_dir.path()),
+            (new, new_config, new_dir.path()),
+        ] {
+            assert!(std::net::TcpStream::connect(address).is_err());
+            assert_eq!(root.join("state/old.enc").exists(), !restart);
+            assert!(config.is_file());
+        }
+    }
+}

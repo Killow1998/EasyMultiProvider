@@ -384,7 +384,14 @@ fn module_and_gateway_writes_match_legacy_wire_and_drain_order() {
         {
             assert!(reply["clients"] == json!([]));
             assert!(persisted_clients(fixture) == json!([]));
-            assert!(fixture.legacy.state.updates.drain_for_test(Duration::ZERO));
+            assert!(
+                fixture
+                    .legacy
+                    .state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(Duration::ZERO)
+            );
         }
 
         for (route, body) in [
@@ -460,16 +467,22 @@ fn submitted_gateway_issue_saves_once_after_disconnect_and_holds_drain() {
                 .expect("write reached the vault gate")
                 .unwrap();
             assert!(!client_file(fixture).exists());
-            assert!(!state.updates.drain_for_test(Duration::ZERO));
+            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
 
             disconnect_submitted_write(fixture, client, task).await;
             release.send(()).unwrap();
             let state = state.clone();
             tokio::task::spawn_blocking(move || {
-                assert!(state.updates.drain_for_test(Duration::from_secs(5)));
                 assert!(
                     state
-                        .connection_admission
+                        .lifecycle
+                        .updates()
+                        .drain_for_test(Duration::from_secs(5))
+                );
+                assert!(
+                    state
+                        .lifecycle
+                        .admission
                         .quiesce(0, Duration::from_secs(5))
                         .is_some()
                 );

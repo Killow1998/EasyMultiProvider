@@ -163,8 +163,8 @@ pub(crate) fn run_server(
         }
         Ok::<bool, std::io::Error>(signals.external_exit())
     });
-    let handoff =
-        matches!(result, Ok(false)) && server.state.updates.snapshot().state == "installing";
+    let handoff = matches!(result, Ok(false))
+        && server.state.lifecycle.updates().snapshot().state == "installing";
     if handoff {
         restore.disarm();
     }

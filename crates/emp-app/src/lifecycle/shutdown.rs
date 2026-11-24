@@ -16,7 +16,6 @@ pub(super) fn prepare_exit(
     state: &ServerState,
     preserve_integration: bool,
 ) -> Result<(), AppError> {
-    state.connection_admission.close();
     state.request_shutdown();
     if preserve_integration {
         return Ok(());
@@ -82,7 +81,8 @@ impl ServerHandle {
         self.state.catalog_refresh.stop();
         let admitted_work_drained = if let Some(gate) = self
             .state
-            .connection_admission
+            .lifecycle
+            .admission
             .quiesce(0, Duration::from_secs(30))
         {
             gate.keep_closed();
@@ -108,6 +108,7 @@ impl ServerHandle {
         for worker in self.workers {
             let _: () = worker.join().map_err(|_| AppError::ServerStopped)?;
         }
+        self.state.backend.modules.stop();
         let unfinished = credential_operations.close_and_drain(CREDENTIAL_DRAIN_TIMEOUT);
         let unsaved = unfinished + crate::services::quota::flush_pending_rotations(&self.state);
         drop(self._service_owner);

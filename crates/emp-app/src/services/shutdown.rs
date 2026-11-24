@@ -13,17 +13,23 @@ pub(crate) fn prepare_quit(
     management_connections: usize,
 ) -> Result<(), ShutdownError> {
     observe(&state.backend.diagnostics, request_id, "quit", |receipt| {
-        if matches!(
-            state.updates.snapshot().state.as_str(),
-            "downloading" | "verifying" | "waiting" | "installing"
-        ) {
-            return Err(ShutdownError {
-                code: None,
-                message: "Wait for the update to finish before exiting EMP",
-            });
-        }
+        let ensure_update_inactive = || {
+            if matches!(
+                state.lifecycle.updates().snapshot().state.as_str(),
+                "downloading" | "verifying" | "waiting" | "installing"
+            ) {
+                Err(ShutdownError {
+                    code: None,
+                    message: "Wait for the update to finish before exiting EMP",
+                })
+            } else {
+                Ok(())
+            }
+        };
+        ensure_update_inactive()?;
         let Some(restore_gate) = state
-            .connection_admission
+            .lifecycle
+            .admission
             .quiesce(management_connections, Duration::from_secs(15))
         else {
             return Err(ShutdownError {
@@ -31,6 +37,7 @@ pub(crate) fn prepare_quit(
                 message: "Finish active Codex requests and WebSockets, then retry shutdown",
             });
         };
+        ensure_update_inactive()?;
         if let Err(error) = receipt.step("restore_owned_configuration", || {
             state.backend.integration.restore_owned()
         }) {

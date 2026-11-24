@@ -8,7 +8,7 @@ use super::{
 use crate::{
     api::{calls, provider_quota, usage},
     app::ServerState,
-    http::request::{Request, RequestMethod, query_values},
+    http::request::{Request, query_values},
     server::run_blocking,
     services::{disconnect::DisconnectMonitor, events::sse_frame},
     util::system_now,
@@ -179,12 +179,6 @@ impl ReportQuery {
         };
         write_frame(&frame)
     }
-}
-
-pub(in crate::server) fn matches_provider_quota(request: Request<'_>) -> bool {
-    request.method == RequestMethod::Get
-        && provider_quota::history_id(request.raw_path())
-            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
 }
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {

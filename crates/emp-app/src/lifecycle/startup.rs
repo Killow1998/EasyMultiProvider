@@ -284,30 +284,35 @@ impl ServerHandle {
         )?;
         let listener = TcpListener::bind((host, port))?;
         let local_addr = listener.local_addr()?;
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let shutdown_wake = Arc::new(tokio::sync::Notify::new());
         let sessions = Arc::new(SessionStore::new(session, session_path));
         let mut random = [0_u8; WEB_SESSION_TOKEN_BYTES];
         getrandom::getrandom(&mut random).map_err(|_| AppError::RandomUnavailable)?;
-        let updates = crate::services::updates::UpdateState::new(
-            config_path,
-            crate::VERSION,
-            local_addr,
-            open_browser,
-            markers.rolled_back,
-            Arc::clone(&shutdown),
-            Arc::clone(&shutdown_wake),
-            Arc::clone(&backend.diagnostics),
-            Arc::clone(&backend.modules),
-        );
+        let lifecycle =
+            Arc::new_cyclic(|control: &std::sync::Weak<crate::server::ServerControl>| {
+                let control = control.clone();
+                crate::server::ServerControl::new(Arc::new(ConnectionAdmission::new(admission)))
+                    .with_updates(crate::services::updates::UpdateState::new(
+                        config_path,
+                        crate::VERSION,
+                        local_addr,
+                        open_browser,
+                        markers.rolled_back,
+                        move || {
+                            if let Some(control) = control.upgrade() {
+                                control.stop(crate::server::ShutdownReason::Requested);
+                            }
+                            Ok(())
+                        },
+                        Arc::clone(&backend.diagnostics),
+                        Arc::clone(&backend.modules),
+                    ))
+            });
         let state = Arc::new(ServerState {
             #[cfg(all(test, unix))]
             test_sideband_url: Default::default(),
-            shutdown,
-            shutdown_wake,
+            lifecycle,
             catalog_refresh: crate::services::account_catalog::CatalogRefreshState::default(),
             sessions,
-            connection_admission: Arc::new(ConnectionAdmission::new(admission)),
             bootstrap: BootstrapToken {
                 token: URL_SAFE_NO_PAD.encode(random),
                 used: AtomicBool::new(false),
@@ -317,7 +322,6 @@ impl ServerHandle {
             backend,
             port: local_addr.port(),
             base_url: crate::services::integration::endpoint::codex_base_url(local_addr),
-            updates,
         });
         let journal = &state.backend.diagnostics.journal;
         journal.event(

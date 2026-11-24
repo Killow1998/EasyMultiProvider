@@ -2,14 +2,20 @@ use super::{
     MAX_REALTIME_PART_BYTES, MAX_REALTIME_PART_HEADER_BYTES, MAX_REALTIME_REQUEST_BYTES,
     RealtimeCall, RealtimeError,
 };
+use crate::http::request::Request;
+#[cfg(any(test, not(feature = "server-candidate")))]
+use crate::http::request::read_before;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::http::request::request_body_deadline;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::http::request::restore_read_timeout;
-use crate::http::request::{Request, read_before};
 use serde_json::Value;
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::io::Read;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::net::TcpStream;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::time::Instant;
 
 #[cfg(test)]
@@ -27,6 +33,7 @@ pub(crate) fn read_realtime_call<R: Read>(
     })
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn read_realtime_call_from_socket(
     headers: &BTreeMap<String, String>,
     prefix: Vec<u8>,
@@ -39,6 +46,7 @@ pub(crate) fn read_realtime_call_from_socket(
     result
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 fn read_realtime_call_with_reader(
     headers: &BTreeMap<String, String>,
     mut prefix: Vec<u8>,

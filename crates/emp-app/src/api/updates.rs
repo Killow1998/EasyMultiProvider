@@ -1,15 +1,21 @@
 use crate::app::ServerState;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::http::request::{Request, read_json_body};
-use crate::http::response::{body_error_response, json_error_response, response, status_text};
+#[cfg(any(test, not(feature = "server-candidate")))]
+use crate::http::response::body_error_response;
 use crate::server::http::error::JsonReply;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::server::http::management::ManagementSession;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::net::TcpStream;
 
 pub(crate) fn read(state: &ServerState) -> JsonReply {
-    let body = serde_json::to_vec(&state.updates.snapshot()).unwrap_or_else(|_| b"{}".to_vec());
+    let body = serde_json::to_vec(&state.lifecycle.updates().snapshot())
+        .unwrap_or_else(|_| b"{}".to_vec());
     JsonReply::new(200, body)
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn start(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -24,11 +30,15 @@ pub(crate) fn start(
         return body_error_response(error);
     }
     let operation = request.raw_path().rsplit('/').next().unwrap_or_default();
-    match state.updates.start(operation) {
+    start_operation(state, operation).wire_response()
+}
+
+pub(crate) fn start_operation(state: &ServerState, operation: &str) -> JsonReply {
+    match state.lifecycle.updates().start(operation) {
         Ok(snapshot) => {
             let body = serde_json::to_vec(&snapshot).unwrap_or_else(|_| b"{}".to_vec());
-            response("HTTP/1.1 202 Accepted", "application/json", &body, &[])
+            JsonReply::new(202, body)
         }
-        Err(code) => json_error_response(409, status_text(409), code, Some(code), &[]),
+        Err(code) => JsonReply::error(409, code, Some(code)),
     }
 }

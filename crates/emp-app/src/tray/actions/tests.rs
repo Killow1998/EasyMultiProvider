@@ -37,7 +37,7 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
             .integration
             .owned
             .store(true, Ordering::Release);
-        let admitted = state.connection_admission.acquire_request().unwrap();
+        let admitted = state.lifecycle.admission.acquire_request().unwrap();
         let waiting = Arc::clone(&state);
         let (actions, receive) = mpsc::sync_channel(4);
         let (updates, observed) = mpsc::sync_channel(8);
@@ -64,7 +64,7 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
         );
         assert!(busy.tooltip().contains("历史"));
         let deadline = Instant::now() + Duration::from_secs(2);
-        while state.connection_admission.acquire_request().is_some() {
+        while state.lifecycle.admission.acquire_request().is_some() {
             assert!(Instant::now() < deadline);
             #[expect(
                 clippy::disallowed_methods,
@@ -85,7 +85,7 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
             state.backend.integration.manager.status().unwrap().state,
             "active"
         );
-        assert!(!state.shutdown.load(Ordering::Acquire));
+        assert!(!state.lifecycle.shutdown.load(Ordering::Acquire));
         drop(admitted);
         let ready = observed.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(ready.busy, None);
@@ -107,7 +107,7 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
             "native" | "restored"
         ));
         assert_eq!(
-            state.shutdown.load(Ordering::Acquire),
+            state.lifecycle.shutdown.load(Ordering::Acquire),
             action == Action::Quit
         );
         assert!(

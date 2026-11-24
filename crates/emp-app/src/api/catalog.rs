@@ -2,18 +2,23 @@ use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::request::percent_decode;
 use crate::http::request::query_values;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::http::request::read_json_body;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::http::response::body_error_response;
 use crate::http::response::json_error_body;
 use crate::server::http::error::{EntryError, JsonReply};
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::server::http::management::ManagementSession;
 use crate::services::catalog::discovery::{self, DiscoveryError};
 use crate::services::catalog::server_catalog;
 use emp_codex::preserve_native_catalog;
 use serde_json::Value;
 use serde_json::json;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::net::TcpStream;
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn management_request(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -62,6 +67,7 @@ pub(crate) fn metadata_request(
     })
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn models_path(path: &str) -> bool {
     path == "/v1/models" || path.starts_with("/v1/models/")
 }
@@ -129,6 +135,7 @@ pub(crate) fn read_configuration(state: &ServerState) -> JsonReply {
     catalog_json(&public)
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn provider_models_path(path: &str) -> bool {
     path.starts_with("/api/providers/") && path.ends_with("/models")
 }

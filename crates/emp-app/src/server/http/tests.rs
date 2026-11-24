@@ -67,7 +67,7 @@ async fn connect_submitted_write(
     fixture: &Fixture,
     address: SocketAddr,
 ) -> (TcpStream, Option<tokio::task::JoinHandle<()>>) {
-    use crate::server::{ServerControl, candidate_router, connection::drive_candidate};
+    use crate::server::{candidate_router, connection::drive_candidate};
 
     if address == fixture.legacy.local_addr() {
         return (TcpStream::connect(address).await.unwrap(), None);
@@ -78,18 +78,14 @@ async fn connect_submitted_write(
         .unwrap();
     let (stream, peer) = listener.accept().await.unwrap();
     let state = &fixture.legacy.state;
-    let admission = &state.connection_admission;
-    let control = Arc::new(ServerControl {
-        candidate: Some(state.clone()),
-        ..ServerControl::new(admission.clone())
-    });
+    let admission = &state.lifecycle.admission;
     let task = tokio::spawn(drive_candidate(
         stream,
         peer,
         tokio::time::Instant::now(),
         candidate_router(state.clone()),
-        control,
-        admission.acquire_request().unwrap(),
+        state.clone(),
+        super::proxy::ConnectionIntake::Public(Arc::new(admission.acquire_request().unwrap())),
     ));
     (client, Some(task))
 }
@@ -108,9 +104,10 @@ async fn disconnect_submitted_write(
             assert!(error.is_cancelled(), "{error}");
         }
         let state = &fixture.legacy.state;
-        let drained = state.updates.drain_for_test(Duration::ZERO);
+        let drained = state.lifecycle.updates().drain_for_test(Duration::ZERO);
         let quiet = state
-            .connection_admission
+            .lifecycle
+            .admission
             .quiesce(0, Duration::ZERO)
             .is_some();
         assert_eq!(
@@ -127,6 +124,7 @@ mod account_writes;
 mod catalog_writes;
 #[cfg(unix)]
 mod inference;
+mod lifecycle;
 #[cfg(target_os = "linux")]
 mod local_writes;
 #[cfg(unix)]
@@ -1566,6 +1564,7 @@ fn proxy_identity_rebuilds_headers_and_requires_live_delegation() {
                     name: "Trusted Caller".into(),
                 },
                 Some("Bearer restored".into()),
+                None,
             )
             .unwrap();
         let auth = format!("Authorization: Bearer {}", delegation.key);

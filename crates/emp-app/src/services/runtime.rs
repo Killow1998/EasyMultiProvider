@@ -85,7 +85,7 @@ pub(crate) fn sync_runtime(
         .manager
         .operation_lock()
         .map_err(|error| error.to_string())?;
-    if state.shutdown.load(Ordering::Acquire) {
+    if state.lifecycle.shutdown.load(Ordering::Acquire) {
         return Err("EMP is stopping".to_owned());
     }
     let status = integration
@@ -174,7 +174,7 @@ pub(crate) fn sync_runtime(
         .manager
         .status()
         .map_err(|error| error.to_string())?;
-    if state.shutdown.load(Ordering::Acquire) || current != status {
+    if state.lifecycle.shutdown.load(Ordering::Acquire) || current != status {
         return Err("Codex configuration changed during runtime observation".to_owned());
     }
     integration.runtime.publish(&result, &status.relation)?;
@@ -331,7 +331,7 @@ pub(crate) fn watch_runtime(state: &ServerState) {
         let Ok(mut pending) = watch.pending.lock() else {
             return;
         };
-        while !*pending && !state.shutdown.load(Ordering::Acquire) {
+        while !*pending && !state.lifecycle.shutdown.load(Ordering::Acquire) {
             pending = match watch.wake.wait(pending) {
                 Ok(pending) => pending,
                 Err(_) => return,
@@ -342,7 +342,7 @@ pub(crate) fn watch_runtime(state: &ServerState) {
         });
         let deadline = Instant::now() + CODEX_CATALOG_APPLY_DELAY.max(gap);
         loop {
-            if state.shutdown.load(Ordering::Acquire) {
+            if state.lifecycle.shutdown.load(Ordering::Acquire) {
                 return;
             }
             let now = Instant::now();

@@ -30,6 +30,7 @@ fn query(state: &ServerState) -> Result<Value, &'static str> {
         let stdout =
             process::run_control(process::control_command(config), input, cancelled, || {
                 state
+                    .lifecycle
                     .shutdown
                     .load(std::sync::atomic::Ordering::Acquire)
                     .then_some(process::CancellationReason::ServerShutdown)

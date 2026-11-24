@@ -451,7 +451,14 @@ fn team_writes_match_legacy_wire_upstream_bytes_and_gate_order() {
         );
 
         for (fixture, _) in endpoints(pair) {
-            assert!(fixture.legacy.state.updates.drain_for_test(Duration::ZERO));
+            assert!(
+                fixture
+                    .legacy
+                    .state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(Duration::ZERO)
+            );
         }
         for (path, code, status) in [(path, "updating", 503), (unknown, "updating", 503)] {
             let rejected = pair
@@ -769,16 +776,22 @@ fn submitted_team_login_survives_disconnect_once_and_holds_drain() {
             request.expect("login", Some(&login_payload()));
             captured.push((request.head.clone(), request.body.clone()));
             assert!(!fixture.directory.path().join(PROFILE).exists());
-            assert!(!state.updates.drain_for_test(Duration::ZERO));
+            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
             disconnect_submitted_write(fixture, client, task).await;
             request.reply(200, &login_reply()).await;
 
             let state = state.clone();
             tokio::task::spawn_blocking(move || {
-                assert!(state.updates.drain_for_test(Duration::from_secs(5)));
                 assert!(
                     state
-                        .connection_admission
+                        .lifecycle
+                        .updates()
+                        .drain_for_test(Duration::from_secs(5))
+                );
+                assert!(
+                    state
+                        .lifecycle
+                        .admission
                         .quiesce(0, Duration::from_secs(5))
                         .is_some()
                 );

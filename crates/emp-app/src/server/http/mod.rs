@@ -5,6 +5,7 @@ pub(crate) mod error;
 pub(crate) mod gateway;
 pub(crate) mod inference;
 pub(crate) mod inspection;
+pub(super) mod lifecycle;
 pub(crate) mod local_writes;
 pub(crate) mod login;
 pub(crate) mod management;
@@ -21,7 +22,13 @@ pub(super) mod websocket;
 
 use super::head::RawRequestHead;
 use crate::app::ServerState;
-use axum::{Router, http::Extensions, middleware::from_fn_with_state};
+use axum::{
+    Extension, Router,
+    extract::{FromRequestParts, Request, State},
+    http::{Extensions, Method},
+    middleware::{Next, from_fn_with_state},
+    response::{IntoResponse, Response},
+};
 use std::sync::Arc;
 
 pub(crate) fn with_entry_state(
@@ -34,6 +41,45 @@ pub(crate) fn with_entry_state(
             error::present_entry_errors,
         ))
         .with_state(state)
+}
+
+pub(super) async fn unmatched(
+    _access: proxy::RequestAccess,
+    State(state): State<Arc<ServerState>>,
+    Extension(raw): Extension<RawRequestHead>,
+) -> error::EntryError {
+    let request = raw.request();
+    if request.raw_path().starts_with("/api/")
+        && let Err(error) =
+            management::ManagementSession::require(request, &state, crate::util::system_now())
+    {
+        return error;
+    }
+    error::EntryError::NotFound
+}
+
+pub(super) async fn guard_route_method(
+    state: State<Arc<ServerState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = match raw_head(request.extensions()) {
+        Ok(raw) => raw.request().raw_path(),
+        Err(error) => return error.into_response(),
+    };
+    if path.starts_with('/')
+        && (request.method() != Method::HEAD || matches!(path, "/" | "/index.html" | "/healthz"))
+    {
+        return next.run(request).await;
+    }
+    let (mut parts, _) = request.into_parts();
+    let result = async {
+        let access = proxy::RequestAccess::from_request_parts(&mut parts, &state.0).await?;
+        let raw = raw_head(&parts.extensions)?.clone();
+        Ok::<_, error::EntryError>(unmatched(access, state, Extension(raw)).await)
+    }
+    .await;
+    result.unwrap_or_else(|error| error).into_response()
 }
 
 fn raw_head(extensions: &Extensions) -> Result<&RawRequestHead, error::EntryError> {

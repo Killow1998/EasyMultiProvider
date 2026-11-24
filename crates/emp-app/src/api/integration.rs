@@ -1,16 +1,22 @@
 use crate::app::ServerState;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::http::auth::same_origin;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::http::request::{Request, read_json_body};
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::http::response::{body_error_response, cross_origin_response, unauthorized_response};
 use crate::server::http::error::JsonReply;
 use crate::services::integration::commands::{self, Body, Reply};
+#[cfg(any(test, not(feature = "server-candidate")))]
 use serde_json::Value;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::net::TcpStream;
 
 pub(crate) fn read_integration_request(state: &ServerState) -> JsonReply {
     render(commands::read(state))
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn management_integration_request(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -37,7 +43,7 @@ pub(crate) fn management_integration_request(
     render(reply).wire_response()
 }
 
-fn render(reply: Reply) -> JsonReply {
+pub(crate) fn render(reply: Reply) -> JsonReply {
     match reply.body {
         Body::Summary(value) => JsonReply::new(
             reply.status,

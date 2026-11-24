@@ -3,26 +3,24 @@ use super::{
     head::GuardedHead,
     http::{
         accounts::{self, AccountWriteRoute},
-        catalog::{self, CatalogWriteRoute},
+        catalog::CatalogWriteRoute,
         error::EntryWire,
-        gateway,
         inference::{BufferedReceipt, InferenceConnection, InferenceRoute},
-        inspection,
         local_writes::LocalWriteRoute,
-        login, management,
-        migration::MigrationRoute,
-        modules, pages,
-        proxy::RequestAccess,
-        settings,
+        proxy::{ConnectionIntake, RequestAccess},
         stream::{Flushed, StreamConnection},
-        team, usage, websocket,
+        usage, websocket,
     },
     run_blocking,
 };
 use crate::{
-    api::gateway::GatewayRead,
+    app::ServerState,
     http::request::{MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE, RequestMethod},
-    services::{connection_admission::ConnectionPermit, observation::http::HttpObservation},
+    services::{
+        connection_admission::ConnectionPermit,
+        modules::aero::{CallLease, CallerDelegation},
+        observation::http::HttpObservation,
+    },
 };
 use axum::{Router, extract::ConnectInfo, http::StatusCode};
 use hyper::{
@@ -36,22 +34,18 @@ use hyper_util::{
 use std::{
     net::{SocketAddr, TcpStream},
     pin::Pin,
-    sync::{
-        Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex, OnceLock},
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
+    sync::oneshot,
     time::{Duration, Instant},
 };
 use tower::ServiceExt;
 
-#[derive(Clone, Copy)]
-pub(crate) struct ShutdownAfterResponse;
-
 struct CandidateRequest {
     observation: HttpObservation,
+    delegation: Option<CallerDelegation>,
     report_socket: Option<Arc<TcpStream>>,
     websocket_probe: Option<Arc<tokio::net::TcpStream>>,
     inference: Option<Arc<InferenceConnection>>,
@@ -70,9 +64,10 @@ pub(crate) struct ConnectionContext(Arc<Connection>);
 struct Connection {
     control: Arc<ServerControl>,
     upgrade: Mutex<Option<UpgradeSession>>,
-    request_permit: Mutex<Option<ConnectionPermit>>,
+    request_permit: Mutex<Option<Arc<ConnectionPermit>>>,
     request_access: OnceLock<RequestAccess>,
     request_id: Option<String>,
+    shutdown_after_response: Mutex<Option<oneshot::Receiver<ShutdownReason>>>,
 }
 
 impl ConnectionContext {
@@ -80,8 +75,31 @@ impl ConnectionContext {
         assert!(self.0.request_access.set(access).is_ok());
     }
 
+    pub(super) fn aero_call_lease(&self) -> Option<CallLease> {
+        Some(CallLease {
+            connection: self
+                .0
+                .request_permit
+                .lock()
+                .expect("request admission")
+                .as_ref()?
+                .clone(),
+            work: self.0.request_access.get()?.permit.as_ref()?.clone(),
+        })
+    }
+
     pub(super) fn request_id(&self) -> Option<&str> {
         self.0.request_id.as_deref()
+    }
+
+    pub(crate) fn shutdown_after_response(&self) -> oneshot::Sender<ShutdownReason> {
+        let (sender, receiver) = oneshot::channel();
+        *self
+            .0
+            .shutdown_after_response
+            .lock()
+            .expect("lifecycle response") = Some(receiver);
+        sender
     }
 
     pub(crate) fn shutdown_signal(&self) -> ShutdownSignal {
@@ -97,17 +115,25 @@ impl ConnectionContext {
         &self,
         upgrade: OnUpgrade,
         reserved: Option<ConnectionPermit>,
-        session: impl FnOnce(Option<TokioIo<Upgraded>>, bool, ShutdownSignal) -> F + Send + 'static,
+        session: impl FnOnce(
+            Option<TokioIo<Upgraded>>,
+            Option<Arc<ConnectionPermit>>,
+            ShutdownSignal,
+        ) -> F
+        + Send
+        + 'static,
     ) {
         let control = Arc::clone(&self.0.control);
         let shutdown = self.shutdown_signal();
         let session = async move {
             let io = upgrade.await.ok().map(TokioIo::new);
-            let permit = reserved.or_else(|| {
-                io.as_ref()
-                    .and_then(|_| control.admission.acquire_websocket())
-            });
-            session(io, permit.is_some(), shutdown).await;
+            let permit = reserved
+                .or_else(|| {
+                    io.as_ref()
+                        .and_then(|_| control.admission.acquire_websocket())
+                })
+                .map(Arc::new);
+            session(io, permit.clone(), shutdown).await;
         };
         *self.0.upgrade.lock().expect("upgrade registration") = Some(Box::pin(session));
     }
@@ -118,15 +144,14 @@ pub(super) async fn drive_candidate(
     peer: SocketAddr,
     accepted: Instant,
     router: Router,
-    control: Arc<ServerControl>,
-    permit: ConnectionPermit,
+    state: Arc<ServerState>,
+    intake: ConnectionIntake,
 ) {
-    let state = control
-        .candidate
-        .as_ref()
-        .expect("candidate listener state");
-    let observation_state = Arc::clone(state);
-    let Ok(mut observation) = run_blocking(move || HttpObservation::new(&observation_state)).await
+    let Ok(mut observation) = run_blocking({
+        let state = state.clone();
+        move || HttpObservation::new(&state)
+    })
+    .await
     else {
         return;
     };
@@ -134,7 +159,19 @@ pub(super) async fn drive_candidate(
         let _ = run_blocking(move || observation.failure("socket_setup_failed")).await;
         return;
     }
-    let head = match GuardedHead::read(&mut io, accepted + REQUEST_HEAD_DEADLINE).await {
+    let head = GuardedHead::read(&mut io, accepted + REQUEST_HEAD_DEADLINE).await;
+    let Some((permit, delegation)) = intake.admit(
+        head.as_ref().ok().map(|head| head.raw.request()),
+        &state,
+        Some(peer.ip()),
+    ) else {
+        let _ = run_blocking(move || {
+            crate::lifecycle::connections::request_rejected(&state, "connection_capacity")
+        })
+        .await;
+        return;
+    };
+    let head = match head {
         Ok(head) => head,
         Err(error) => {
             let bytes = error.wire_response();
@@ -147,8 +184,7 @@ pub(super) async fn drive_candidate(
     let request = head.raw.request();
     let responses_upgrade = websocket::is_responses_upgrade(request);
     let account_write = AccountWriteRoute::for_request(request);
-    let catalog_write = CatalogWriteRoute::for_request(request)
-        .filter(|route| !matches!(route, CatalogWriteRoute::Balance(None)));
+    let catalog_write = CatalogWriteRoute::for_request(request);
     let local_write = LocalWriteRoute::for_request(request);
     let inference = InferenceRoute::for_request(request).is_some();
     let report = (request.method == RequestMethod::Get)
@@ -158,51 +194,9 @@ pub(super) async fn drive_candidate(
     let streaming =
         inference || account_events || report.is_some_and(|report| report.is_stream(request));
     let watch_report = report.is_some();
-    let half_close = if watch_report
-        || usage::matches_provider_quota(request)
-        || inference
-        || websocket::matches(request)
-        || account_write.is_some()
-        || catalog_write.is_some()
-        || local_write.is_some()
-        || login::matches(request)
-        || MigrationRoute::for_request(request).is_some()
-        || (request.method == RequestMethod::Post && request.raw_path() == management::SESSION_PATH)
-        || settings::matches(request)
-        || catalog::matches(request)
-        || modules::matches_write(request)
-        || gateway::matches_write(request)
-        || module_or_update_read(request)
-        || pages::matches(request)
-        || team::matches(request)
-        || (request.method == RequestMethod::Get
-            && inspection::read_handler(request.raw_path()).is_some())
-    {
-        true
-    } else if accounts::matches(request) || account_events {
-        false
-    } else {
-        match io.into_std() {
-            Ok(stream) => {
-                let raw = head.into_legacy();
-                crate::lifecycle::connections::spawn_request(state, move |state| {
-                    crate::http::connection::handle_connection(
-                        stream,
-                        state,
-                        permit,
-                        Some(raw),
-                        observation,
-                    );
-                });
-            }
-            Err(_) => {
-                let _ = run_blocking(move || observation.failure("socket_setup_failed")).await;
-            }
-        }
-        return;
-    };
+    let half_close = !(accounts::matches(request) || account_events);
     observation.received(request);
-    crate::services::runtime::codex_contacted(request, state);
+    crate::services::runtime::codex_contacted(request, &state);
     let (io, socket) = if watch_report || inference || responses_upgrade {
         match io.into_std().and_then(|stream| {
             let socket = stream.try_clone();
@@ -244,6 +238,7 @@ pub(super) async fn drive_candidate(
     };
     let candidate = CandidateRequest {
         observation,
+        delegation,
         report_socket,
         websocket_probe,
         inference,
@@ -253,7 +248,16 @@ pub(super) async fn drive_candidate(
         catalog_write,
         local_write,
     };
-    drive_http(io, peer, router, control, permit, head, Some(candidate)).await;
+    drive_http(
+        io,
+        peer,
+        router,
+        state.lifecycle.clone(),
+        permit,
+        head,
+        Some(candidate),
+    )
+    .await;
 }
 
 pub(super) async fn drive(
@@ -275,7 +279,7 @@ pub(super) async fn drive(
             return;
         }
     };
-    drive_http(io, peer, router, control, permit, head, None).await;
+    drive_http(io, peer, router, control, Arc::new(permit), head, None).await;
 }
 
 impl ServerMode {
@@ -292,12 +296,13 @@ async fn drive_http(
     peer: SocketAddr,
     router: Router,
     control: Arc<ServerControl>,
-    permit: ConnectionPermit,
+    permit: Arc<ConnectionPermit>,
     head: GuardedHead,
     candidate: Option<CandidateRequest>,
 ) {
     let mode = control.mode;
-    let half_close = candidate.as_ref().is_some_and(|request| request.half_close);
+    let half_close = matches!(mode, ServerMode::Recovery)
+        || candidate.as_ref().is_some_and(|request| request.half_close);
     let account_write = candidate
         .as_ref()
         .and_then(|request| request.account_write.as_ref());
@@ -317,6 +322,9 @@ async fn drive_http(
     let stream = candidate
         .as_ref()
         .and_then(|request| request.stream.as_ref());
+    let delegation = candidate
+        .as_ref()
+        .and_then(|request| request.delegation.as_ref());
     let delivery = stream.map(|stream| stream.delivery.clone());
     let permit = if head.release_request_permit {
         drop(permit);
@@ -335,20 +343,22 @@ async fn drive_http(
         request_permit: Mutex::new(permit),
         request_access: OnceLock::new(),
         request_id,
+        shutdown_after_response: Mutex::default(),
     }));
-    let stop_after_write = AtomicBool::new(false);
     let wire_response = Arc::new(OnceLock::new());
     let service = tower::service_fn(|mut request: axum::http::Request<hyper::body::Incoming>| {
         let router = router.clone();
         let raw = raw.clone();
         let context = context.clone();
-        let stop_after_write = &stop_after_write;
         let wire_response = &wire_response;
         let inference = inference.as_ref();
         async move {
             request.extensions_mut().insert(ConnectInfo(peer));
             request.extensions_mut().insert(raw.clone());
             request.extensions_mut().insert(context.clone());
+            if let Some(delegation) = delegation {
+                request.extensions_mut().insert(delegation.clone());
+            }
             if let Some(route) = account_write {
                 request.extensions_mut().insert(route.clone());
             }
@@ -381,13 +391,6 @@ async fn drive_http(
                     .extensions()
                     .get::<EntryWire>()
                     .map(|wire| wire.0.clone()),
-            );
-            stop_after_write.store(
-                response
-                    .extensions()
-                    .get::<ShutdownAfterResponse>()
-                    .is_some(),
-                Ordering::Relaxed,
             );
             if response.status().is_success()
                 || response.status() == StatusCode::SWITCHING_PROTOCOLS
@@ -490,21 +493,22 @@ async fn drive_http(
         .await;
     }
 
-    if stop_after_write.into_inner() {
-        context.0.control.stop(if written {
-            ShutdownReason::ResponseWritten
-        } else {
-            ShutdownReason::ResponseWriteFailed
+    let deferred = context
+        .0
+        .shutdown_after_response
+        .lock()
+        .expect("lifecycle response")
+        .take();
+    if let Some(deferred) = deferred
+        && let Ok(reason) = deferred.await
+    {
+        context.0.control.stop(match reason {
+            ShutdownReason::Requested if written => ShutdownReason::ResponseWritten,
+            ShutdownReason::Requested => ShutdownReason::ResponseWriteFailed,
+            reason => reason,
         });
     }
     if let Some(session) = upgrade {
         session.await;
     }
-}
-
-fn module_or_update_read(request: crate::http::request::Request<'_>) -> bool {
-    let path = request.raw_path();
-    request.method == RequestMethod::Get
-        && (matches!(path, "/api/updates" | "/api/modules")
-            || GatewayRead::for_path(path).is_some())
 }

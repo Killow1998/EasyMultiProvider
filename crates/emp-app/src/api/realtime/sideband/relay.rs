@@ -40,7 +40,7 @@ pub(crate) async fn run(
                     writer.close(1001, "EMP connection is draining").await;
                     break (1001, "EMP connection is draining");
                 }
-                _ = state.connection_admission.wait_for_websocket_drain() => {
+                _ = state.lifecycle.admission.wait_for_websocket_drain() => {
                     writer.close(1001, "EMP connection is draining").await;
                     break (1001, "EMP connection is draining");
                 }

@@ -30,10 +30,12 @@ pub(crate) struct Request<'a> {
     pub(crate) source: Option<&'a RequestSource>,
 }
 
+#[derive(Clone)]
 pub(crate) struct RequestSource {
     pub(crate) caller: Option<crate::services::gateway_clients::Caller>,
     pub(crate) peer: Option<std::net::IpAddr>,
     pub(crate) delegation: Option<crate::services::modules::aero::CallerDelegation>,
+    pub(crate) aero_lease: Option<crate::services::modules::aero::CallLease>,
 }
 
 impl<'a> Request<'a> {

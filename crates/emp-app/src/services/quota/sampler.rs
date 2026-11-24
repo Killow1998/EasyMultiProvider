@@ -21,13 +21,13 @@ pub(crate) fn run(state: &Arc<ServerState>) {
     } else {
         Instant::now()
     };
-    while !state.shutdown.load(Ordering::Acquire) {
+    while !state.lifecycle.shutdown.load(Ordering::Acquire) {
         let mut wait = match state.backend.accounts.quota_sampler_wait.lock() {
             Ok(wait) => wait,
             Err(_) => return,
         };
         loop {
-            if state.shutdown.load(Ordering::Acquire) {
+            if state.lifecycle.shutdown.load(Ordering::Acquire) {
                 return;
             }
             let now = Instant::now();
@@ -46,7 +46,7 @@ pub(crate) fn run(state: &Arc<ServerState>) {
         }
         drop(wait);
         deadline = Instant::now() + QUOTA_SAMPLE_INTERVAL;
-        if !state.shutdown.load(Ordering::Acquire) {
+        if !state.lifecycle.shutdown.load(Ordering::Acquire) {
             super::sample_quotas_once(state);
             crate::services::cpa_quota::sample_due(state);
             super::flush_pending_rotations(state);
@@ -114,7 +114,7 @@ pub(crate) fn sample_quotas_once(state: &ServerState) -> QuotaSampleCounts {
                 .name("emp-quota-refresh".to_owned())
                 .spawn_scoped(scope, move || {
                     for account_id in targets.iter().skip(offset).step_by(worker_count) {
-                        if state.shutdown.load(Ordering::Acquire) {
+                        if state.lifecycle.shutdown.load(Ordering::Acquire) {
                             return;
                         }
                         if super::refresh_account_serialized(state, account_id).is_ok() {

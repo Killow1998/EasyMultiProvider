@@ -613,7 +613,12 @@ fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
         for (fixture, _) in endpoints(pair) {
             let state = fixture.legacy.state.clone();
             tokio::task::spawn_blocking(move || {
-                assert!(state.updates.drain_for_test(Duration::from_secs(5)));
+                assert!(
+                    state
+                        .lifecycle
+                        .updates()
+                        .drain_for_test(Duration::from_secs(5))
+                );
             })
             .await
             .unwrap();
@@ -643,7 +648,7 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
             let admitted = state.clone();
             tokio::task::spawn_blocking(move || {
                 wait_for(Duration::from_secs(5), || {
-                    admitted.updates.active_for_test() == 1
+                    admitted.lifecycle.updates().active_for_test() == 1
                 });
             })
             .await
@@ -672,16 +677,22 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
             })
             .await
             .unwrap();
-            assert!(!state.updates.drain_for_test(Duration::ZERO));
+            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
             disconnect_submitted_write(fixture, client, task).await;
             release.send(()).unwrap();
             hold_config.await.unwrap();
             let state = state.clone();
             tokio::task::spawn_blocking(move || {
-                assert!(state.updates.drain_for_test(Duration::from_secs(5)));
                 assert!(
                     state
-                        .connection_admission
+                        .lifecycle
+                        .updates()
+                        .drain_for_test(Duration::from_secs(5))
+                );
+                assert!(
+                    state
+                        .lifecycle
+                        .admission
                         .quiesce(0, Duration::from_secs(5))
                         .is_some()
                 );

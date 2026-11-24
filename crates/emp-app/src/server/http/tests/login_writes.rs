@@ -46,7 +46,7 @@ fn session_exchange_uses_admission_time_while_blocking_worker_is_queued() {
             let gated = state.clone();
             let hold_worker = tokio::task::spawn_blocking(move || {
                 crate::tests::wait_for(Duration::from_secs(5), || {
-                    gated.updates.active_for_test() == 1
+                    gated.lifecycle.updates().active_for_test() == 1
                 });
                 admitted.send(()).unwrap();
                 unlocked.blocking_recv().unwrap();
@@ -194,9 +194,12 @@ fn session_exchange_matches_legacy_wire_and_rotates_once() {
 async fn drain_updates(fixture: &Fixture) {
     let state = fixture.legacy.state.clone();
     assert!(
-        tokio::task::spawn_blocking(move || state.updates.drain_for_test(Duration::from_secs(5)))
-            .await
-            .unwrap()
+        tokio::task::spawn_blocking(move || state
+            .lifecycle
+            .updates()
+            .drain_for_test(Duration::from_secs(5)))
+        .await
+        .unwrap()
     );
 }
 

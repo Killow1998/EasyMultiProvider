@@ -35,7 +35,7 @@ use std::time::Duration;
 fn quota_control(state: &ServerState) -> QuotaControl<'_> {
     QuotaControl {
         timeout: Duration::from_secs(45),
-        cancelled: Some(&state.shutdown),
+        cancelled: Some(&state.lifecycle.shutdown),
         account_cancelled: None,
     }
 }

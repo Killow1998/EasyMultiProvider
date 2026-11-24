@@ -47,7 +47,11 @@ pub(super) fn install(
 ) -> Result<Value, &'static str> {
     let manager = &state.backend.integration.manager;
     let _operation = manager.operation_lock().map_err(|_| "login_busy")?;
-    if state.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+    if state
+        .lifecycle
+        .shutdown
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
         return Err("login_cancelled");
     }
     if !local_auth::install(&state.backend.accounts.native_auth_path, expected, auth)

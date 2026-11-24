@@ -180,6 +180,17 @@ impl Modules {
         Ok(modules)
     }
 
+    pub(crate) fn stop(&self) {
+        for runtime in self.runtime.values() {
+            let worker = runtime
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .worker
+                .take();
+            drop(worker);
+        }
+    }
+
     fn start(&self, module: Module, digest: &str) -> Result<Arc<ActiveWorker>, &'static str> {
         let path = self.packages.verified_path(module, digest)?;
         let worker = Worker::open(&path, module)?;

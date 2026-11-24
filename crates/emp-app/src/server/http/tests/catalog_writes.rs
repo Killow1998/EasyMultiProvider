@@ -508,7 +508,14 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
                 rows.push(entry.take());
             }
             snapshots.push(rows);
-            assert!(fixture.legacy.state.updates.drain_for_test(Duration::ZERO));
+            assert!(
+                fixture
+                    .legacy
+                    .state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(Duration::ZERO)
+            );
         }
         assert_eq!(snapshots[0], snapshots[1]);
 
@@ -575,7 +582,8 @@ async fn wait_for_write(fixture: &Fixture) {
     tokio::task::spawn_blocking(move || {
         assert!(
             state
-                .connection_admission
+                .lifecycle
+                .admission
                 .quiesce(0, Duration::from_secs(5))
                 .is_some()
         );
@@ -598,7 +606,7 @@ async fn refresh_after_disconnect(fixture: &Fixture, address: SocketAddr) {
     let admitted = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
         wait_for(Duration::from_secs(5), || {
-            admitted.updates.active_for_test() == 1
+            admitted.lifecycle.updates().active_for_test() == 1
         });
     })
     .await
@@ -626,7 +634,7 @@ async fn refresh_after_disconnect(fixture: &Fixture, address: SocketAddr) {
     })
     .await
     .unwrap();
-    assert!(!state.updates.drain_for_test(Duration::ZERO));
+    assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
     disconnect_submitted_write(fixture, client, task).await;
     assert!(!catalog.exists());
     release.send(()).unwrap();
@@ -677,7 +685,7 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
             let state = &fixture.legacy.state;
             let (client, task) = submit(fixture, address, DISCOVER, br#"{"provider":"fixture","selected":["gpt-6-luna"]}"#).await;
             let peer = expect_upstream_get(&upstream, "/v1/models", "fixture-key").await;
-            assert!(!state.updates.drain_for_test(Duration::ZERO));
+            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
             disconnect_submitted_write(fixture, client, task).await;
             send_http(peer, DISCOVER_MODELS).await;
             wait_for_write(fixture).await;
@@ -688,14 +696,14 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
             let start = system_now() as i64 - SAMPLE_INTERVAL_SECONDS;
             let (client, task) = submit(fixture, address, QUOTA, br#"{"force":true}"#).await;
             let peer = expect_upstream_get(&upstream, "/v1/quota", "fixture-key").await;
-            assert!(!state.updates.drain_for_test(Duration::ZERO));
+            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
             disconnect_submitted_write(fixture, client, task).await;
             send_http(peer, POOL_QUOTA).await;
             wait_for_write(fixture).await;
 
             let (client, task) = submit(fixture, address, BALANCE, b"{}").await;
             let peer = wait_for_balance(&balance, &tls).await;
-            assert!(!state.updates.drain_for_test(Duration::ZERO));
+            assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
             disconnect_submitted_write(fixture, client, task).await;
             send_balance(peer).await;
             wait_for_write(fixture).await;

@@ -208,7 +208,11 @@ pub(super) async fn open<'a>(
     let call = state
         .backend
         .aero_callers
-        .delegate(caller, request.header("Authorization").map(str::to_owned))
+        .delegate(
+            caller,
+            request.header("Authorization").map(str::to_owned),
+            request.source.and_then(|source| source.aero_lease.clone()),
+        )
         .ok_or_else(RelayError::unavailable)?;
     let mut headers = BTreeMap::from([
         (

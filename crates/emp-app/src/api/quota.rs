@@ -1,9 +1,12 @@
 use crate::app::ServerState;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::http::{request::Request, response::SECURITY_HEADERS};
 use crate::server::http::{error::JsonReply, management::ManagementSession};
 use crate::services::management_events::{Changes, Subscription};
 use crate::util::system_now;
-use std::{io::Write, net::TcpStream, sync::atomic::Ordering, time::Duration};
+#[cfg(any(test, not(feature = "server-candidate")))]
+use std::{io::Write, net::TcpStream};
+use std::{sync::atomic::Ordering, time::Duration};
 
 #[cfg(test)]
 pub(crate) use crate::services::management_events::SUBSCRIBER_LIMIT as QUOTA_EVENT_SLOT_LIMIT;
@@ -15,6 +18,7 @@ pub(crate) fn subscriber_limit() -> JsonReply {
     JsonReply::error(503, "Too many quota subscribers", None).with_header("Retry-After", "15")
 }
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn serve_quota_events(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -72,7 +76,7 @@ pub(crate) async fn next_frame(
     if changes.quit {
         return Some((b"event: emp-exiting\ndata: {}\n\n".to_vec(), true));
     }
-    if state.shutdown.load(Ordering::Acquire) {
+    if state.lifecycle.shutdown.load(Ordering::Acquire) {
         return None;
     }
     Some((change_frame(changes, state), false))

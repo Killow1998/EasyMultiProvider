@@ -1,3 +1,4 @@
+#[cfg(any(test, not(feature = "server-candidate")))]
 use super::multipart::{read_realtime_call_from_socket, validate_headers};
 use super::{
     MAX_REALTIME_RESPONSE_BYTES, REALTIME_TIMEOUT, RealtimeCall, RealtimeError, RealtimeResponse,
@@ -7,14 +8,17 @@ use crate::VERSION;
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::server::http::error::HttpReply;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use crate::server::http::proxy::require_proxy;
 use crate::services::accounts::native_auth_document;
 use emp_codex::account_auth_headers;
 use emp_transport::{HttpMethod, HttpTransportErrorKind};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::net::TcpStream;
 
+#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn serve_realtime_call(
     stream: &mut TcpStream,
     request: Request<'_>,

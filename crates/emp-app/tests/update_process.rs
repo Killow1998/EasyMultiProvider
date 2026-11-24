@@ -543,6 +543,28 @@ fn wait_for_error(
     }
 }
 
+fn assert_update_accepted_wire(response: &[u8]) {
+    let body = response_body(response);
+    let head = format!(
+        concat!(
+            "HTTP/1.1 202 Accepted\r\n",
+            "Content-Type: application/json\r\n",
+            "Content-Length: {}\r\n",
+            "Cache-Control: no-store\r\n",
+            "X-Frame-Options: DENY\r\n",
+            "Content-Security-Policy: frame-ancestors 'none'\r\n",
+            "X-Content-Type-Options: nosniff\r\n",
+            "Connection: close\r\n\r\n"
+        ),
+        body.len()
+    );
+    assert_eq!(&response[..response.len() - body.len()], head.as_bytes());
+    assert_eq!(
+        body_json(response)["current_version"],
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
 fn check_for_available(emp: &RunningEmp) {
     let check = request(
         emp.port,
@@ -551,12 +573,7 @@ fn check_for_available(emp: &RunningEmp) {
         Some(&emp.session),
         Some(b"{}"),
     );
-    assert_eq!(
-        status(&check),
-        202,
-        "check request: {}",
-        String::from_utf8_lossy(&check)
-    );
+    assert_update_accepted_wire(&check);
     let available = wait_for_state(emp.port, &emp.session, "available", Duration::from_secs(10));
     assert_eq!(available["latest_version"], candidate_version());
 }
@@ -714,11 +731,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
     }
     install_gate.wait();
     for install in installs {
-        assert_eq!(
-            status(&install.join().unwrap()),
-            202,
-            "concurrent install request"
-        );
+        assert_update_accepted_wire(&install.join().unwrap());
     }
 
     let gate_deadline = Instant::now() + Duration::from_secs(10);

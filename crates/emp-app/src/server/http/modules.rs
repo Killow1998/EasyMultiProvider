@@ -8,7 +8,7 @@ use super::{
 use crate::{
     api::modules,
     app::ServerState,
-    http::request::{Request, RequestMethod},
+    http::request::Request,
     server::{connection::ConnectionContext, run_blocking},
     services::modules::Action,
 };
@@ -24,10 +24,6 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub(crate) const PATH: &str = "/api/modules";
-
-pub(crate) fn matches_write(request: Request<'_>) -> bool {
-    request.method == RequestMethod::Post && request.raw_path() == PATH
-}
 
 pub(crate) struct ModulePanel(Module);
 
@@ -146,7 +142,7 @@ impl ModuleAction {
 
     pub(crate) fn execute(self, state: &ServerState) -> JsonReply {
         let backend = &state.backend;
-        let updater = &state.updates.manager;
+        let updater = &state.lifecycle.updates().manager;
         let Self::Change {
             module,
             action,

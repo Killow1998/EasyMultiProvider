@@ -1,9 +1,11 @@
 use crate::app::ServerState;
 #[cfg(any(test, not(feature = "server-candidate")))]
 use std::net::TcpListener;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::sync::Arc;
 #[cfg(any(test, not(feature = "server-candidate")))]
 use std::sync::atomic::Ordering;
+#[cfg(any(test, not(feature = "server-candidate")))]
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -56,10 +58,8 @@ pub(crate) fn request_rejected(state: &ServerState, reason: &'static str) {
     );
 }
 
-pub(crate) fn spawn_request(
-    state: &Arc<ServerState>,
-    work: impl FnOnce(&Arc<ServerState>) + Send + 'static,
-) {
+#[cfg(any(test, not(feature = "server-candidate")))]
+fn spawn_request(state: &Arc<ServerState>, work: impl FnOnce(&Arc<ServerState>) + Send + 'static) {
     let request_state = Arc::clone(state);
     if thread::Builder::new()
         .name("emp-request".to_owned())
@@ -73,10 +73,10 @@ pub(crate) fn spawn_request(
 #[cfg(any(test, not(feature = "server-candidate")))]
 pub(super) fn accept(listener: TcpListener, state: Arc<ServerState>) {
     let mut log = AcceptLog::default();
-    while !state.shutdown.load(Ordering::Acquire) {
+    while !state.lifecycle.shutdown.load(Ordering::Acquire) {
         let accepted = listener.accept();
         log.record(&state, &accepted);
-        let (stream, _) = match accepted {
+        let (stream, peer) = match accepted {
             Ok(accepted) => accepted,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => {
@@ -88,10 +88,11 @@ pub(super) fn accept(listener: TcpListener, state: Arc<ServerState>) {
                 continue;
             }
         };
-        if state.shutdown.load(Ordering::Acquire) {
+        if state.lifecycle.shutdown.load(Ordering::Acquire) {
             break;
         }
-        let Some(request_permit) = state.connection_admission.acquire_request() else {
+        let Some(intake) = crate::server::http::proxy::ConnectionIntake::accept(&state, peer.ip())
+        else {
             request_rejected(&state, "connection_capacity");
             continue;
         };
@@ -99,8 +100,7 @@ pub(super) fn accept(listener: TcpListener, state: Arc<ServerState>) {
             crate::http::connection::handle_connection(
                 stream,
                 state,
-                request_permit,
-                None,
+                intake,
                 crate::services::observation::http::HttpObservation::new(state),
             );
         });

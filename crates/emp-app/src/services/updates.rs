@@ -3,7 +3,6 @@ use emp_updater::manager::{Snapshot, UpdateHooks, UpdateManager};
 use emp_updater::release::UpdateEndpoints;
 use emp_updater::{Result as UpdateResult, UpdateError};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -20,6 +19,7 @@ struct Gate {
 struct GateState {
     active: usize,
     draining: bool,
+    closed: bool,
 }
 
 pub(crate) struct RequestPermit(Arc<Gate>);
@@ -44,8 +44,7 @@ impl UpdateState {
         address: std::net::SocketAddr,
         open_browser: bool,
         installation_rolled_back: bool,
-        shutdown: Arc<AtomicBool>,
-        shutdown_wake: Arc<tokio::sync::Notify>,
+        handoff: impl Fn() -> UpdateResult<()> + Send + Sync + 'static,
         diagnostics: Arc<Diagnostics>,
         modules: Arc<super::modules::Modules>,
     ) -> Self {
@@ -54,6 +53,7 @@ impl UpdateState {
             state: Mutex::new(GateState {
                 active: 0,
                 draining: false,
+                closed: false,
             }),
             wake: Condvar::new(),
         });
@@ -68,15 +68,9 @@ impl UpdateState {
         let reopen_gate = Arc::clone(&gate);
         let reopen_handoff = move || {
             if let Ok(mut state) = reopen_gate.state.lock() {
-                state.draining = false;
+                state.draining = state.closed;
                 reopen_gate.wake.notify_all();
             }
-        };
-        let handoff_shutdown = Arc::clone(&shutdown);
-        let handoff = move || -> UpdateResult<()> {
-            handoff_shutdown.store(true, Ordering::Release);
-            shutdown_wake.notify_waiters();
-            Ok(())
         };
         let mut restart_args = vec![
             "serve".to_owned(),
@@ -128,6 +122,13 @@ impl UpdateState {
         self.gate.state.lock().unwrap().active
     }
 
+    pub(crate) fn close(&self) {
+        if let Ok(mut state) = self.gate.state.lock() {
+            state.closed = true;
+            state.draining = true;
+        }
+    }
+
     pub(crate) fn snapshot(&self) -> Snapshot {
         self.manager.snapshot()
     }
@@ -155,7 +156,7 @@ fn drain(gate: &Gate, timeout: Duration) -> bool {
     while state.active > 0 {
         let now = Instant::now();
         if now >= deadline {
-            state.draining = false;
+            state.draining = state.closed;
             gate.wake.notify_all();
             return false;
         }
@@ -164,7 +165,7 @@ fn drain(gate: &Gate, timeout: Duration) -> bool {
         };
         state = next;
         if wait.timed_out() && state.active > 0 {
-            state.draining = false;
+            state.draining = state.closed;
             gate.wake.notify_all();
             return false;
         }

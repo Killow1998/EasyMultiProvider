@@ -332,7 +332,7 @@ fn compare_local_writes(home: &Path) {
                 read(fixture, address, "/api/integration").await["codex_compatibility"],
                 inventory
             );
-            assert!(fixture.legacy.state.updates.drain_for_test(Duration::ZERO));
+            assert!(fixture.legacy.state.lifecycle.updates().drain_for_test(Duration::ZERO));
         }
         for path in PATHS {
             assert_eq!(pair.post(path, b"{", 503).await["error"]["code"], "updating");
@@ -401,7 +401,7 @@ fn submitted_app_icon_write_finishes_once_after_disconnect() {
                     .await
                     .unwrap();
                     assert_eq!(state.backend.app_icon.revision.load(Ordering::Acquire), 0);
-                    assert!(!state.updates.drain_for_test(Duration::ZERO));
+                    assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
                     disconnect_submitted_write(fixture, client, task).await;
                     release.send(()).unwrap();
                     hold_image.await.unwrap();
@@ -409,11 +409,12 @@ fn submitted_app_icon_write_finishes_once_after_disconnect() {
                     tokio::task::spawn_blocking(move || {
                         assert!(
                             state
-                                .connection_admission
+                                .lifecycle
+                                .admission
                                 .quiesce(0, Duration::from_secs(5))
                                 .is_some()
                         );
-                        assert!(state.updates.drain_for_test(Duration::ZERO));
+                        assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
                         assert_eq!(state.backend.app_icon.revision.load(Ordering::Acquire), 1);
                     })
                     .await

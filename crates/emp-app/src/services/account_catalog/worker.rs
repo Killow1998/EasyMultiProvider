@@ -16,7 +16,7 @@ pub(crate) fn run(state: &ServerState) {
     loop {
         let Some(force) = state
             .catalog_refresh
-            .wait_for_work(|| state.shutdown.load(Ordering::Acquire))
+            .wait_for_work(|| state.lifecycle.shutdown.load(Ordering::Acquire))
         else {
             return;
         };
@@ -35,7 +35,7 @@ fn refresh_due_sources(state: &ServerState, force: bool) {
         .map(|source| source.id.clone())
         .collect::<BTreeSet<_>>();
     for source in sources {
-        if state.shutdown.load(Ordering::Acquire) {
+        if state.lifecycle.shutdown.load(Ordering::Acquire) {
             return;
         }
         let fingerprint = source.fingerprint();

@@ -4,9 +4,16 @@ pub(crate) mod http;
 
 use crate::app::ServerState;
 use crate::lifecycle::connections::{ACCEPT_RETRY, AcceptLog, request_rejected};
-use crate::services::connection_admission::ConnectionAdmission;
-use axum::Router;
-use std::{io, net::SocketAddr, sync::Arc};
+use crate::services::{connection_admission::ConnectionAdmission, updates::UpdateState};
+use axum::{Router, middleware::from_fn_with_state};
+use std::{
+    io,
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use tokio::{
     net::TcpListener,
     sync::watch,
@@ -25,6 +32,7 @@ pub(crate) enum ShutdownReason {
     Requested,
     ResponseWritten,
     ResponseWriteFailed,
+    RecoveryReset,
 }
 
 #[derive(Clone)]
@@ -48,33 +56,57 @@ enum ServerMode {
     Recovery,
 }
 
-struct ServerControl {
+pub(crate) struct ServerControl {
     mode: ServerMode,
-    admission: Arc<ConnectionAdmission>,
-    shutdown: watch::Sender<Option<ShutdownReason>>,
-    candidate: Option<Arc<ServerState>>,
+    pub(crate) admission: Arc<ConnectionAdmission>,
+    pub(crate) shutdown: Arc<AtomicBool>,
+    stopped: watch::Sender<Option<ShutdownReason>>,
+    updates: Option<UpdateState>,
 }
 
 impl ServerControl {
-    fn new(admission: Arc<ConnectionAdmission>) -> Self {
+    pub(crate) fn new(admission: Arc<ConnectionAdmission>) -> Self {
         Self {
             admission,
             mode: ServerMode::Http,
-            shutdown: watch::Sender::new(None),
-            candidate: None,
+            shutdown: Arc::default(),
+            stopped: watch::Sender::new(None),
+            updates: None,
         }
     }
 
-    fn signal(&self) -> ShutdownSignal {
-        ShutdownSignal(self.shutdown.subscribe())
+    pub(crate) fn with_updates(self, updates: UpdateState) -> Self {
+        Self {
+            updates: Some(updates),
+            ..self
+        }
     }
 
-    fn stop(&self, reason: ShutdownReason) {
-        self.shutdown.send_if_modified(|state| {
+    pub(crate) fn updates(&self) -> &UpdateState {
+        self.updates.as_ref().expect("normal application lifecycle")
+    }
+
+    pub(crate) fn recovery(admission: Arc<ConnectionAdmission>) -> Self {
+        Self {
+            mode: ServerMode::Recovery,
+            ..Self::new(admission)
+        }
+    }
+
+    pub(crate) fn signal(&self) -> ShutdownSignal {
+        ShutdownSignal(self.stopped.subscribe())
+    }
+
+    pub(crate) fn stop(&self, reason: ShutdownReason) {
+        self.stopped.send_if_modified(|state| {
             if state.is_some() {
                 return false;
             }
             self.admission.close();
+            if let Some(updates) = &self.updates {
+                updates.close();
+            }
+            self.shutdown.store(true, Ordering::Release);
             *state = Some(reason);
             true
         });
@@ -116,7 +148,7 @@ impl ServerHandle {
             mode,
             ..ServerControl::new(admission)
         });
-        let listener = tokio::spawn(serve(socket, router, Arc::clone(&control)));
+        let listener = tokio::spawn(serve(socket, router, Arc::clone(&control), None));
         Ok(Self {
             address,
             control,
@@ -153,11 +185,15 @@ pub(crate) async fn serve_candidate(
     state: Arc<ServerState>,
 ) -> Result<(), JoinError> {
     let router = candidate_router(state.clone());
-    let control = Arc::new(ServerControl {
-        candidate: Some(state.clone()),
-        ..ServerControl::new(state.connection_admission.clone())
-    });
-    serve(listener, router, control).await
+    serve(listener, router, state.lifecycle.clone(), Some(state)).await
+}
+
+pub(crate) async fn serve_recovery(
+    listener: TcpListener,
+    router: Router,
+    control: Arc<ServerControl>,
+) -> Result<(), JoinError> {
+    serve(listener, router, control, None).await
 }
 
 fn candidate_router(state: Arc<ServerState>) -> Router {
@@ -173,70 +209,76 @@ fn candidate_router(state: Arc<ServerState>) -> Router {
             .merge(http::settings::routes())
             .merge(http::catalog::routes())
             .merge(http::updates::routes())
+            .merge(http::lifecycle::routes())
             .merge(http::modules::routes())
             .merge(http::gateway::routes())
             .merge(http::inspection::routes())
             .merge(http::pages::routes())
             .merge(http::team::routes())
             .merge(http::migration::routes())
-            .merge(http::websocket::routes()),
+            .merge(http::websocket::routes())
+            .merge(declared_module_routes(&[]))
+            .fallback(http::unmatched)
+            .method_not_allowed_fallback(http::unmatched),
         state.clone(),
     )
-    .merge(http::inference::routes().with_state(state))
+    .merge(http::inference::routes().with_state(state.clone()))
+    .layer(from_fn_with_state(state, http::guard_route_method))
+}
+
+enum ModuleRoute {}
+
+/// TODO(A2-S11): Check route conflicts when enabling or switching module declarations.
+fn declared_module_routes(_declarations: &[ModuleRoute]) -> Router<Arc<ServerState>> {
+    Router::new()
 }
 
 async fn serve(
     listener: TcpListener,
     router: Router,
     control: Arc<ServerControl>,
+    candidate: Option<Arc<ServerState>>,
 ) -> Result<(), JoinError> {
     let mut connections = JoinSet::new();
     let mut worker_failure = None;
     let shutdown = control.signal();
     let mut accept_log = AcceptLog::default();
-    let app_shutdown = async {
-        match &control.candidate {
-            Some(state) => state.wait_for_shutdown().await,
-            None => std::future::pending().await,
-        }
-    };
-    tokio::pin!(app_shutdown);
     'accepting: loop {
         let accept = accept_with_retry(
             || listener.accept(),
             |accepted| {
-                if let Some(state) = &control.candidate {
+                if let Some(state) = &candidate {
                     accept_log.record(state, accepted);
                 }
             },
         );
         tokio::pin!(accept);
         loop {
+            let recovery_busy =
+                matches!(control.mode, ServerMode::Recovery) && !connections.is_empty();
             tokio::select! {
                 biased;
                 _ = shutdown.clone().wait() => break 'accepting,
-                _ = &mut app_shutdown => {
-                    control.stop(ShutdownReason::Requested);
-                    break 'accepting;
-                }
                 completed = connections.join_next(), if !connections.is_empty() => {
                     if let Some(Err(error)) = completed {
                         worker_failure.get_or_insert(error);
                     }
                 }
-                ((stream, peer), accepted) = &mut accept => {
-                    if let Some(permit) = control.admission.acquire_request() {
-                        if control.candidate.is_some() {
+                ((stream, peer), accepted) = &mut accept, if !recovery_busy => {
+                    if let Some(state) = &candidate {
+                        if let Some(intake) = http::proxy::ConnectionIntake::accept(state, peer.ip()) {
                             connections.spawn(connection::drive_candidate(
-                                stream, peer, accepted, router.clone(), Arc::clone(&control), permit,
+                                stream, peer, accepted, router.clone(), Arc::clone(state), intake,
                             ));
-                        } else if stream.set_nodelay(true).is_ok() {
-                            connections.spawn(connection::drive(
-                                stream, peer, accepted, router.clone(), Arc::clone(&control), permit,
-                            ));
+                        } else {
+                            request_rejected(state, "connection_capacity");
                         }
-                    } else if let Some(state) = &control.candidate {
-                        request_rejected(state, "connection_capacity");
+                    } else if let Some(permit) = control.admission.acquire_request()
+                        && stream.set_nodelay(true).is_ok()
+                    {
+                        connections.spawn(connection::drive(
+                            stream, peer, accepted, router.clone(), Arc::clone(&control), permit,
+                        ));
                     }
                     break;
                 }
