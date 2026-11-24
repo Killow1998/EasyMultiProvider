@@ -4,14 +4,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const LOCAL_NETWORK_ENV: &[&str] = &[
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "NO_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-    "no_proxy",
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     "NODE_EXTRA_CA_CERTS",
@@ -19,6 +11,11 @@ const LOCAL_NETWORK_ENV: &[&str] = &[
 ];
 
 fn copy_local_network_environment(command: &mut Command) {
+    command.envs(
+        emp_transport::ProxyEnvironment::capture_current()
+            .environment
+            .child_variables(),
+    );
     for name in LOCAL_NETWORK_ENV {
         if let Some(value) = std::env::var_os(name) {
             command.env(name, value);

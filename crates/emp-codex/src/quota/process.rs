@@ -242,6 +242,11 @@ fn app_server_command(binary: &TrustedBinary, directory: &Path) -> Result<Comman
         .arg("--stdio")
         .current_dir(directory)
         .env_clear()
+        .envs(
+            emp_transport::ProxyEnvironment::capture_current()
+                .environment
+                .child_variables(),
+        )
         .env("CODEX_HOME", directory)
         .env("HOME", directory)
         .env("USERPROFILE", directory)

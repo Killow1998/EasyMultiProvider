@@ -23,7 +23,7 @@ pub(super) async fn discover(
         }
         return Ok(models);
     }
-    let mut headers = crate::vertex::headers(provider, &BTreeMap::new()).await?;
+    let mut headers = crate::vertex::headers(client, provider, &BTreeMap::new()).await?;
     headers.insert(
         "x-goog-user-project".into(),
         provider["vertex"]["project"]
@@ -150,7 +150,7 @@ async fn verify_express_models(
     if models.len() > MAX_DISCOVERED_MODELS {
         return Err(model_count_error());
     }
-    let headers = crate::vertex::headers(provider, &common_discovery_headers()).await?;
+    let headers = crate::vertex::headers(client, provider, &common_discovery_headers()).await?;
     let probe =
         serde_json::to_vec(&json!({"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}))
             .expect("token probe JSON");

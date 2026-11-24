@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const FIRST_MAINTAINED_SERIES: u64 = 167;
+const FIRST_MAINTAINED_SERIES: u64 = 168;
 
 struct Cached {
     checked: Instant,

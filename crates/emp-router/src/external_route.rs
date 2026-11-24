@@ -31,7 +31,7 @@ impl<'a> ExternalRouter<'a> {
         let mut tools = external_tools(route);
         let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
         let body = prepared.as_ref();
-        let (endpoint, headers) = target(route, incoming, false).await?;
+        let (endpoint, headers) = target(self.client, route, incoming, false).await?;
         let mut payload = project_prepared_external_payload(route, body)?;
         let gemini = vertex::GeminiContext::for_route(route, self.gemini_signatures.as_ref())?;
         if let Some(context) = &gemini {
@@ -286,7 +286,7 @@ impl<'a> ExternalRouter<'a> {
         let mut tools = external_tools(route);
         let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
         let body = prepared.as_ref();
-        let (endpoint, mut headers) = target(route, incoming, true).await?;
+        let (endpoint, mut headers) = target(self.client, route, incoming, true).await?;
         headers.insert("Accept".to_owned(), "text/event-stream".to_owned());
         let mut payload = project_prepared_external_payload(route, body)?;
         let gemini = vertex::GeminiContext::for_route(route, self.gemini_signatures.as_ref())?;
@@ -423,6 +423,7 @@ impl<'a> ExternalRouter<'a> {
 }
 
 async fn target(
+    client: &HttpClient,
     route: &ResolvedRoute,
     incoming: &BTreeMap<String, String>,
     stream: bool,
@@ -431,7 +432,7 @@ async fn target(
     if provider.contains_key("vertex") {
         Ok((
             vertex::endpoint(route, stream)?,
-            vertex::headers(provider, incoming).await?,
+            vertex::headers(client, provider, incoming).await?,
         ))
     } else {
         Ok((
