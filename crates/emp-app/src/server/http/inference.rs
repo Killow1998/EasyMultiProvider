@@ -1,13 +1,9 @@
-mod body;
-
-pub(crate) use body::BodyOutput;
-pub(in crate::server) use body::{Delivery, Flushed};
-
 use super::{
     body::JsonBody,
-    error::{EntryError, EntryWire, HttpReply},
+    error::{EntryError, HttpReply, no_response},
     proxy::{RequestAccess, request_source, require_proxy},
     raw_head,
+    stream::{BodyOutput, StreamConnection},
 };
 use crate::{
     api::{compact, decisions, images, responses, search, streaming::ReplySink},
@@ -22,7 +18,7 @@ use crate::{
 };
 use axum::{
     Extension, Router,
-    body::{Body, Bytes},
+    body::Bytes,
     extract::{ConnectInfo, FromRequest, Request as AxumRequest, State},
     response::Response,
     routing::post,
@@ -32,7 +28,7 @@ use std::{
     net::{SocketAddr, TcpStream},
     sync::{Arc, Mutex, OnceLock},
 };
-use tokio::{sync::oneshot, task::JoinHandle};
+use tokio::sync::oneshot;
 
 #[derive(Clone, Copy)]
 pub(crate) enum InferenceRoute {
@@ -180,9 +176,8 @@ pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
 
 pub(in crate::server) struct InferenceConnection {
     pub(in crate::server) socket: Arc<TcpStream>,
+    pub(in crate::server) stream: Arc<StreamConnection>,
     pub(in crate::server) model: Mutex<Option<RequestObservation>>,
-    pub(in crate::server) worker: Mutex<Option<JoinHandle<()>>>,
-    pub(in crate::server) delivery: Arc<Delivery>,
     pub(in crate::server) receipt: OnceLock<BufferedReceipt>,
 }
 
@@ -248,6 +243,7 @@ async fn submit(
         .await
         .map_err(EntryError::reply)?;
     let (sender, response) = oneshot::channel();
+    let delivery = inference.stream.delivery.clone();
     let worker = tokio::task::spawn_blocking({
         let state = state.clone();
         let inference = inference.clone();
@@ -256,8 +252,7 @@ async fn submit(
             let mut request = raw.request();
             request.source = Some(&source);
             request.observation_id = context.request_id();
-            let mut sink =
-                BodyOutput::new(inference.socket.clone(), inference.delivery.clone(), sender);
+            let mut sink = BodyOutput::new(inference.socket.clone(), delivery, sender);
             let reply = route.execute(
                 &mut ReplySink::Candidate(&mut sink),
                 request,
@@ -278,7 +273,7 @@ async fn submit(
             *inference.model.lock().expect("model observation") = observation;
         }
     });
-    *inference.worker.lock().expect("inference worker") = Some(worker);
+    *inference.stream.worker.lock().expect("stream worker") = Some(worker);
     response.await.map_err(|_| EntryError::internal().reply())
 }
 
@@ -292,10 +287,4 @@ fn buffered(
     }
     let _ = receipt.set(reply.receipt());
     reply.into_http_response()
-}
-
-fn no_response() -> Response {
-    let mut response = Response::new(Body::empty());
-    response.extensions_mut().insert(EntryWire(Bytes::new()));
-    response
 }

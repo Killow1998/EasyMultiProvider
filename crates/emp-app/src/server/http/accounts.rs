@@ -1,13 +1,17 @@
 use super::{
     body::{JsonBody, read_json_body},
-    error::{EntryError, JsonReply},
+    error::{EntryError, JsonReply, response_head},
     login,
     management::ManagementSession,
     proxy::RequestAccess,
     raw_head,
+    stream::{StreamConnection, StreamFrames},
 };
 use crate::{
-    api::accounts::{AccountRead, AccountWrite},
+    api::{
+        accounts::{AccountRead, AccountWrite},
+        quota,
+    },
     app::ServerState,
     http::request::{Request, RequestMethod, percent_decode},
     server::{connection::ConnectionContext, run_blocking},
@@ -17,10 +21,12 @@ use crate::{
 use axum::{
     Extension, Router,
     extract::{FromRequest, State},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use serde_json::Value;
 use std::{net::TcpStream, sync::Arc};
+use tokio::time::timeout;
 
 pub(in crate::server) fn matches(request: Request<'_>) -> bool {
     request.method == RequestMethod::Get && AccountRead::for_path(request.raw_path()).is_some()
@@ -29,6 +35,7 @@ pub(in crate::server) fn matches(request: Request<'_>) -> bool {
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/api/accounts", get(read))
+        .route("/api/accounts/events", get(events).delete(write))
         .route("/api/accounts/{*path}", get(read).post(write).delete(write))
         .route("/api/accounts/", delete(write))
         .route(login::ACCOUNTS_PREFIX, post(login::write).delete(write))
@@ -37,6 +44,55 @@ pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
             get(read).post(login::write).delete(write),
         )
         .route("/api/config", post(write))
+}
+
+async fn events(
+    _access: RequestAccess,
+    session: ManagementSession,
+    State(state): State<Arc<ServerState>>,
+    Extension(stream): Extension<Arc<StreamConnection>>,
+) -> Response {
+    let Some(subscription) = state.backend.management_events.subscribe() else {
+        return quota::subscriber_limit().into_response();
+    };
+    let (response, mut output) = StreamFrames::start(
+        response_head(200, "text/event-stream")
+            .header("cache-control", "no-store")
+            .header("x-accel-buffering", "no"),
+        stream.delivery.clone(),
+    );
+    let worker = tokio::spawn({
+        let stream = stream.clone();
+        async move {
+            let mut subscription = subscription;
+            let result = timeout(quota::EVENT_WRITE_TIMEOUT, output.flushed()).await;
+            if result.is_err() {
+                stream.write_timed_out.notify_one();
+            }
+            if !matches!(result, Ok(Ok(()))) {
+                return;
+            }
+            loop {
+                let next = tokio::select! {
+                    biased;
+                    () = output.closed() => break,
+                    frame = quota::next_frame(&mut subscription, &session, &state) => frame,
+                };
+                let Some((frame, quit)) = next else {
+                    break;
+                };
+                let result = timeout(quota::EVENT_WRITE_TIMEOUT, output.frame(frame)).await;
+                if result.is_err() {
+                    stream.write_timed_out.notify_one();
+                }
+                if !matches!(result, Ok(Ok(()))) || quit {
+                    break;
+                }
+            }
+        }
+    });
+    *stream.worker.lock().expect("stream worker") = Some(worker);
+    response
 }
 
 async fn read(

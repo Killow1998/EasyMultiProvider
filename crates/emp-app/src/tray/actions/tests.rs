@@ -21,7 +21,8 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
         .unwrap();
         let state = Arc::clone(&server.state);
         let mut changes = state.backend.management_events.subscribe().unwrap();
-        changes.next(Duration::ZERO).unwrap();
+        let runtime = &state.backend.transport.runtime;
+        runtime.block_on(changes.next(Duration::ZERO)).unwrap();
         assert!(
             state
                 .backend
@@ -91,7 +92,8 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
         drop(actions);
         worker.join().unwrap();
         if action == Action::Restore {
-            assert!(changes.next(Duration::ZERO).unwrap().integration);
+            let change = runtime.block_on(changes.next(Duration::ZERO)).unwrap();
+            assert!(change.integration);
         }
         assert!(matches!(
             state

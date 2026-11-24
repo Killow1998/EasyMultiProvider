@@ -13,6 +13,7 @@ pub(crate) mod modules;
 pub(crate) mod pages;
 pub(crate) mod proxy;
 pub(crate) mod settings;
+pub(crate) mod stream;
 pub(crate) mod team;
 pub(super) mod updates;
 pub(crate) mod usage;

@@ -2,7 +2,7 @@ use super::ServerMode;
 use crate::http::request::{
     REQUEST_READ_TIMEOUT, Request, parse_request, request_head_end, reserved_source_header,
 };
-use crate::server::http::{error::EntryError, inference::Delivery};
+use crate::server::http::{error::EntryError, stream::Delivery};
 use axum::body::Bytes;
 use std::{
     io::{self, Cursor},

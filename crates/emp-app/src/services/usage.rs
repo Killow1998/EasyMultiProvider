@@ -16,6 +16,8 @@ use std::time::Duration;
 
 pub(crate) struct UsageState {
     pub(crate) ledger: Arc<UsageLedger>,
+    #[cfg(test)]
+    pub(crate) report_gate: Arc<Mutex<Option<crate::server::http::usage::ReportGate>>>,
     pub(crate) sessions: emp_codex::session_directory::SessionDirectory,
     pub(crate) tool_timings: emp_codex::history::tool_timing::ToolTimings,
     pub(crate) history: UsageHistoryScanner,
@@ -41,6 +43,8 @@ impl UsageState {
         ));
         Self {
             ledger: Arc::new(UsageLedger::new(root.join("usage.sqlite3"), prices)),
+            #[cfg(test)]
+            report_gate: Arc::default(),
             sessions: Default::default(),
             tool_timings: Default::default(),
             history: UsageHistoryScanner::default(),

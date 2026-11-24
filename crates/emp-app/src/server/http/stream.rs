@@ -1,6 +1,7 @@
 use crate::{http::response::status_text, server::http::error::response_head};
 use axum::{
     body::{Body, Bytes},
+    http::response::Builder,
     response::Response,
 };
 use hyper::body::{Body as HttpBody, Frame};
@@ -15,7 +16,17 @@ use std::{
     },
     task::{Context, Poll},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    sync::{Notify, mpsc, oneshot},
+    task::JoinHandle,
+};
+
+#[derive(Default)]
+pub(in crate::server) struct StreamConnection {
+    pub(in crate::server) delivery: Arc<Delivery>,
+    pub(in crate::server) write_timed_out: Notify,
+    pub(in crate::server) worker: Mutex<Option<JoinHandle<()>>>,
+}
 
 #[derive(Default)]
 pub(in crate::server) struct Delivery {
@@ -55,7 +66,7 @@ pub(crate) struct BodyOutput {
     socket: Arc<TcpStream>,
     delivery: Arc<Delivery>,
     response: Option<oneshot::Sender<Response>>,
-    stream: Option<(mpsc::Sender<Bytes>, mpsc::Receiver<()>)>,
+    stream: Option<StreamFrames>,
 }
 
 impl BodyOutput {
@@ -82,43 +93,36 @@ impl BodyOutput {
         content_type: &str,
         headers: impl IntoIterator<Item = (&'a str, &'a str)>,
     ) -> io::Result<()> {
-        let (send, frames) = mpsc::channel(1);
-        let (flushed, mut confirmation) = mpsc::channel(1);
-        let flushed = Flushed(flushed);
         let builder = response_head(status, content_type)
             .header("cache-control", "no-cache")
             .extension(hyper::ext::ReasonPhrase::from_static(
                 status_text(status).as_bytes(),
-            ))
-            .extension(flushed.clone());
-        let response = headers
-            .into_iter()
-            .fold(builder, |builder, (name, value)| {
-                builder.header(name, value)
-            })
-            .body(Body::new(EventBody {
-                frames,
-                flushed,
-                delivery: self.delivery.clone(),
-            }))
-            .expect("EMP streaming response");
+            ));
+        let builder = headers.into_iter().fold(builder, |builder, (name, value)| {
+            builder.header(name, value)
+        });
+        let (response, mut stream) = StreamFrames::start(builder, self.delivery.clone());
         self.response
             .take()
             .expect("response head is sent once")
             .send(response)
             .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        confirmation
+        stream
+            .confirmation
             .blocking_recv()
             .ok_or(io::ErrorKind::BrokenPipe)?;
-        self.stream = Some((send, confirmation));
+        self.stream = Some(stream);
         Ok(())
     }
 
     pub(crate) fn frame(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let (send, confirmation) = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
-        send.blocking_send(Bytes::copy_from_slice(bytes))
+        let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
+        stream
+            .send
+            .blocking_send(Bytes::copy_from_slice(bytes))
             .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        confirmation
+        stream
+            .confirmation
             .blocking_recv()
             .ok_or(io::ErrorKind::BrokenPipe)?;
         Ok(())
@@ -128,6 +132,47 @@ impl BodyOutput {
         if let Some(sender) = self.response {
             let _ = sender.send(response());
         }
+    }
+}
+
+pub(super) struct StreamFrames {
+    send: mpsc::Sender<Bytes>,
+    confirmation: mpsc::Receiver<()>,
+}
+
+impl StreamFrames {
+    pub(super) fn start(builder: Builder, delivery: Arc<Delivery>) -> (Response, Self) {
+        let (send, frames) = mpsc::channel(1);
+        let (flushed, confirmation) = mpsc::channel(1);
+        let flushed = Flushed(flushed);
+        let response = builder
+            .extension(flushed.clone())
+            .body(Body::new(EventBody {
+                frames,
+                flushed,
+                delivery,
+            }))
+            .expect("EMP streaming response");
+        (response, Self { send, confirmation })
+    }
+
+    pub(super) async fn flushed(&mut self) -> io::Result<()> {
+        self.confirmation
+            .recv()
+            .await
+            .ok_or(io::ErrorKind::BrokenPipe.into())
+    }
+
+    pub(super) async fn frame(&mut self, bytes: Vec<u8>) -> io::Result<()> {
+        self.send
+            .send(Bytes::from(bytes))
+            .await
+            .map_err(|_| io::ErrorKind::BrokenPipe)?;
+        self.flushed().await
+    }
+
+    pub(super) async fn closed(&self) {
+        self.send.closed().await;
     }
 }
 

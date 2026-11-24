@@ -1,21 +1,17 @@
 use crate::app::ServerState;
-use crate::http::auth::same_origin;
 use crate::http::request::{Request, query_values};
-use crate::http::response::{cross_origin_response, unauthorized_response};
 use crate::server::http::error::JsonReply;
-use crate::services::events::sse_frame;
 use emp_state::usage::ledger::{CallFilter, UsageError};
 use serde_json::{Value, json};
-use std::io::Write;
-use std::net::TcpStream;
 
 pub(crate) fn read(
     request: Request<'_>,
     state: &ServerState,
     cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> JsonReply {
-    let Some(filter) = call_filter(request) else {
-        return invalid();
+    let filter = match call_filter(request) {
+        Ok(filter) => filter,
+        Err(reply) => return reply,
     };
     match query(state, &filter, |_, _| Ok(()), cancelled) {
         Ok(report) => JsonReply::new(200, serde_json::to_vec(&report).expect("call report")),
@@ -23,59 +19,13 @@ pub(crate) fn read(
     }
 }
 
-pub(crate) fn stream(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    state: &ServerState,
-    now: f64,
-) -> std::io::Result<()> {
-    if !same_origin(request, state.port) {
-        return stream.write_all(&cross_origin_response("management session is required"));
-    }
-    if !state
-        .sessions
-        .contains(request.session_token().as_deref(), now)
-    {
-        return stream.write_all(&unauthorized_response());
-    }
-    let Some(filter) = call_filter(request) else {
-        return stream.write_all(&invalid().wire_response());
-    };
-    let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream)?;
-    let progress_stream = stream.try_clone()?;
-    crate::api::streaming::write_stream_head(stream)?;
-    stream.flush()?;
-    let report = query(
-        state,
-        &filter,
-        move |completed, total| {
-            let mut writer = &progress_stream;
-            writer.write_all(&sse_frame(
-                "progress",
-                &json!({"completed":completed,"total":total}),
-            )?)?;
-            writer.flush()
-        },
-        Some(monitor.cancellation()),
-    );
-    let frame = match report {
-        Ok(report) => sse_frame("result", &report)?,
-        Err(_) => sse_frame(
-            "error",
-            &json!({"error":{"message":"Call history is unavailable"}}),
-        )?,
-    };
-    stream.write_all(&frame)?;
-    stream.flush()
-}
-
-fn call_filter(request: Request<'_>) -> Option<CallFilter> {
+pub(crate) fn call_filter(request: Request<'_>) -> Result<CallFilter, JsonReply> {
     let now = crate::util::system_now();
     let value = |name: &str| query_values(request.target, name).first().cloned();
     let number =
         |name: &str, default: f64| value(name).map_or(Ok(default), |raw| raw.parse::<f64>());
     let (Ok(start), Ok(end)) = (number("start", now - 86400.0), number("end", now)) else {
-        return None;
+        return Err(invalid());
     };
     let integer =
         |name: &str, default: usize| value(name).map_or(Ok(default), |raw| raw.parse::<usize>());
@@ -84,7 +34,7 @@ fn call_filter(request: Request<'_>) -> Option<CallFilter> {
         integer("limit", 50),
         integer("models_offset", 0),
     ) else {
-        return None;
+        return Err(invalid());
     };
     let filter = CallFilter {
         start,
@@ -111,12 +61,12 @@ fn call_filter(request: Request<'_>) -> Option<CallFilter> {
         || !emp_state::usage::ledger::UsageLedger::valid_period(start, end, "all")
         || !(1..=100).contains(&limit)
     {
-        return None;
+        return Err(invalid());
     }
-    Some(filter)
+    Ok(filter)
 }
 
-fn query(
+pub(crate) fn query(
     state: &ServerState,
     filter: &CallFilter,
     progress: impl Fn(i64, i64) -> std::io::Result<()> + Send + 'static,

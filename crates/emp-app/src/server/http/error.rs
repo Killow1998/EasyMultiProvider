@@ -167,6 +167,12 @@ pub(crate) fn response_head(status: u16, content_type: &str) -> axum::http::resp
     builder
 }
 
+pub(super) fn no_response() -> Response {
+    let mut response = Response::new(Body::empty());
+    response.extensions_mut().insert(EntryWire(Bytes::new()));
+    response
+}
+
 impl IntoResponse for HttpReply {
     fn into_response(self) -> Response {
         let wire = EntryWire(Bytes::from(self.wire_response()));

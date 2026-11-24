@@ -1,6 +1,7 @@
 use super::*;
 use crate::server::http::tests::{
-    assert_status, assert_wire_parity, exchange_wire, json_body, json_request, request,
+    assert_sse_wire_parity, assert_status, assert_wire_parity, exchange_wire, json_body,
+    json_request, request,
 };
 use crate::tests::internal_events_contract::final_journal;
 use tokio::{
@@ -351,7 +352,7 @@ fn metadata_finishes_admitted_upstream_work_after_the_client_disconnects() {
 }
 
 #[test]
-fn calls_sse_still_uses_the_legacy_handler_on_the_candidate_listener() {
+fn calls_sse_matches_legacy_after_http_framing() {
     let (_directory, server) = test_server();
     with_candidate(server, async |server, candidate| {
         let old = server.local_addr();
@@ -362,7 +363,7 @@ fn calls_sse_still_uses_the_legacy_handler_on_the_candidate_listener() {
             &[&session_header(server), "Accept: text/event-stream"],
             b"",
         );
-        let reply = assert_wire_parity(old, candidate, &wire, false).await;
+        let reply = assert_sse_wire_parity(old, candidate, &wire).await;
         assert_status(&reply, 200);
         let reply = std::str::from_utf8(&reply).unwrap();
         assert!(reply.contains("Content-Type: text/event-stream\r\n"));

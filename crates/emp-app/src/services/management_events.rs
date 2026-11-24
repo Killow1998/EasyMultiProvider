@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex};
 use std::time::Duration;
+use tokio::{sync::watch, time::timeout};
 
 pub(crate) const SUBSCRIBER_LIMIT: usize = 4;
 
@@ -29,8 +29,7 @@ struct State {
 
 #[derive(Default)]
 pub(crate) struct ManagementEvents {
-    state: Mutex<State>,
-    wake: Condvar,
+    state: watch::Sender<State>,
     subscribers: AtomicUsize,
 }
 
@@ -42,8 +41,9 @@ pub(crate) struct Changes {
     pub(crate) quit: bool,
 }
 
-pub(crate) struct Subscription<'a> {
-    feed: &'a ManagementEvents,
+pub(crate) struct Subscription {
+    feed: std::sync::Arc<ManagementEvents>,
+    state: watch::Receiver<State>,
     observed: Option<Revisions>,
 }
 
@@ -51,9 +51,9 @@ impl ManagementEvents {
     /// Publish after committing the corresponding state. Multiple changes may
     /// coalesce; subscribers read current state rather than replaying mutations.
     pub(crate) fn publish(&self, change: Change) {
-        if let Ok(mut state) = self.state.lock() {
+        self.state.send_if_modified(|state| {
             if state.closed {
-                return;
+                return false;
             }
             let revision = match change {
                 Change::Quota => &mut state.revisions.quota,
@@ -63,42 +63,45 @@ impl ManagementEvents {
                 Change::Quit => &mut state.revisions.quit,
             };
             *revision = revision.wrapping_add(1);
-            self.wake.notify_all();
-        }
+            true
+        });
     }
 
-    pub(crate) fn subscribe(&self) -> Option<Subscription<'_>> {
+    pub(crate) fn subscribe(self: &std::sync::Arc<Self>) -> Option<Subscription> {
         self.subscribers
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < SUBSCRIBER_LIMIT).then_some(count + 1)
             })
             .ok()?;
         Some(Subscription {
-            feed: self,
+            feed: self.clone(),
+            state: self.state.subscribe(),
             observed: None,
         })
     }
 
     pub(crate) fn close(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            state.closed = true;
-            self.wake.notify_all();
-        }
+        self.state.send_modify(|state| state.closed = true);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subscriber_count(&self) -> usize {
+        self.subscribers.load(Ordering::Acquire)
     }
 }
 
-impl Subscription<'_> {
+impl Subscription {
     /// First call requests all snapshots; timeouts return no changes and closing drains a pending Quit.
-    /// Checks and waits use the publisher's lock, including changes that arrived before the call.
-    pub(crate) fn next(&mut self, timeout: Duration) -> Option<Changes> {
-        let state = self.feed.state.lock().ok()?;
-        let (state, _) = self
-            .feed
-            .wake
-            .wait_timeout_while(state, timeout, |state| {
-                !state.closed && self.observed == Some(state.revisions)
-            })
-            .ok()?;
+    /// Waits compare revisions, so changes published before the call are still observed.
+    pub(crate) async fn next(&mut self, interval: Duration) -> Option<Changes> {
+        let observed = self.observed;
+        let _ = timeout(
+            interval,
+            self.state
+                .wait_for(|state| state.closed || observed != Some(state.revisions)),
+        )
+        .await;
+        let state = self.state.borrow_and_update();
         let quit = self.observed.unwrap_or_default().quit != state.revisions.quit;
         if state.closed && !quit {
             return None;
@@ -120,7 +123,7 @@ impl Subscription<'_> {
     }
 }
 
-impl Drop for Subscription<'_> {
+impl Drop for Subscription {
     fn drop(&mut self) {
         self.feed.subscribers.fetch_sub(1, Ordering::AcqRel);
     }
@@ -131,31 +134,31 @@ mod tests {
     use super::*;
     use std::sync::{Arc, mpsc};
 
-    #[test]
-    fn subscriber_coalesces_changes_and_releases_capacity() {
-        let feed = ManagementEvents::default();
+    #[tokio::test]
+    async fn subscriber_coalesces_changes_and_releases_capacity() {
+        let feed = Arc::new(ManagementEvents::default());
         let mut subscriptions: Vec<_> = (0..SUBSCRIBER_LIMIT)
             .map(|_| feed.subscribe().unwrap())
             .collect();
         assert!(feed.subscribe().is_none());
         let mut subscription = subscriptions.pop().unwrap();
-        let first = subscription.next(Duration::ZERO).unwrap();
+        let first = subscription.next(Duration::ZERO).await.unwrap();
         assert!(first.quota && first.activity && first.usage && first.integration);
-        let unchanged = subscription.next(Duration::ZERO).unwrap();
+        let unchanged = subscription.next(Duration::ZERO).await.unwrap();
         assert!(
             !unchanged.quota && !unchanged.activity && !unchanged.usage && !unchanged.integration
         );
         feed.publish(Change::Quota);
         feed.publish(Change::Quota);
         feed.publish(Change::Usage);
-        let changed = subscription.next(Duration::ZERO).unwrap();
+        let changed = subscription.next(Duration::ZERO).await.unwrap();
         assert!(changed.quota && changed.usage && !changed.activity && !changed.integration);
         subscriptions.pop();
         assert!(feed.subscribe().is_some());
         feed.publish(Change::Quit);
         feed.close();
-        assert!(subscription.next(Duration::ZERO).unwrap().quit);
-        assert!(subscription.next(Duration::ZERO).is_none());
+        assert!(subscription.next(Duration::ZERO).await.unwrap().quit);
+        assert!(subscription.next(Duration::ZERO).await.is_none());
     }
 
     #[test]
@@ -165,12 +168,18 @@ mod tests {
         let (ready, began) = mpsc::channel();
         let (sent, received) = mpsc::channel();
         let worker = std::thread::spawn(move || {
-            let mut subscription = waiting.subscribe().unwrap();
-            subscription.next(Duration::ZERO).unwrap();
-            ready.send(()).unwrap();
-            let change = subscription.next(Duration::from_secs(5)).unwrap();
-            sent.send(change.activity).unwrap();
-            assert!(subscription.next(Duration::from_secs(5)).is_none());
+            tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let mut subscription = waiting.subscribe().unwrap();
+                    subscription.next(Duration::ZERO).await.unwrap();
+                    ready.send(()).unwrap();
+                    let change = subscription.next(Duration::from_secs(5)).await.unwrap();
+                    sent.send(change.activity).unwrap();
+                    assert!(subscription.next(Duration::from_secs(5)).await.is_none());
+                });
         });
         began.recv_timeout(Duration::from_secs(1)).unwrap();
         feed.publish(Change::Activity);

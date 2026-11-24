@@ -2,9 +2,7 @@ mod labels;
 pub(crate) mod lifetime;
 mod sessions;
 use crate::app::ServerState;
-use crate::http::auth::same_origin;
 use crate::http::request::{Request, query_values};
-use crate::http::response::{cross_origin_response, unauthorized_response};
 use crate::server::http::error::JsonReply;
 use crate::services::accounts::{
     account_catalog_headers, native_subscription_headers, quota_owner_key,
@@ -16,7 +14,6 @@ use emp_state::usage::{
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 
 pub(crate) fn read(
     request: Request<'_>,

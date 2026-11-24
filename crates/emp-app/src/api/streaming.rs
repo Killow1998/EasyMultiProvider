@@ -4,7 +4,7 @@ use crate::api::failure_response::stream_failure_value_for_route;
 use crate::app::ServerState;
 use crate::http::response::SECURITY_HEADERS;
 use crate::http::response::is_security_header;
-use crate::server::http::{error::HttpReply, inference::BodyOutput};
+use crate::server::http::{error::HttpReply, stream::BodyOutput};
 use crate::services::disconnect::DisconnectMonitor;
 use crate::services::disconnect::DisconnectRace;
 use crate::services::events::sse_frame;

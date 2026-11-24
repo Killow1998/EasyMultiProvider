@@ -131,6 +131,7 @@ mod inference;
 mod local_writes;
 #[cfg(unix)]
 mod login_writes;
+mod management_streams;
 #[cfg(unix)]
 mod migration_writes;
 #[cfg(unix)]
@@ -145,6 +146,19 @@ pub(crate) async fn assert_wire_parity(
     end_input: bool,
 ) -> Vec<u8> {
     assert_wire_parity_with([(old, request), (new, request)], end_input, |reply| reply).await
+}
+
+pub(crate) async fn assert_sse_wire_parity(
+    old: SocketAddr,
+    new: SocketAddr,
+    request: &[u8],
+) -> Vec<u8> {
+    assert_wire_parity_with(
+        [(old, request), (new, request)],
+        false,
+        management_streams::decode_report_wire,
+    )
+    .await
 }
 
 async fn assert_wire_parity_with(
@@ -1097,22 +1111,21 @@ fn support_report_without_timestamp(reply: &[u8]) -> String {
 }
 
 #[test]
-fn account_event_stream_still_uses_legacy_subscription() {
-    Fixture::new().run_candidate(async |fixture, address| {
+fn legacy_account_event_stream_has_unframed_wire_prefix() {
+    Fixture::new().run(async |fixture, _| {
         let wire = request(fixture.port(), "GET", "/api/accounts/events", &[&fixture.session(), "Accept: text/event-stream"], b"");
         let expected = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\n{}Connection: close\r\n\r\nevent: quota-updated\ndata: {{}}\n\n",
             str::from_utf8(crate::http::response::SECURITY_HEADERS).unwrap()
         );
-        for endpoint in [fixture.legacy.local_addr(), address] {
-            timeout(Duration::from_secs(15), async {
+        let endpoint = fixture.legacy.local_addr();
+        timeout(Duration::from_secs(15), async {
                 let mut stream = TcpStream::connect(endpoint).await.unwrap();
                 stream.write_all(&wire).await.unwrap();
                 let mut prefix = vec![0; expected.len()];
                 stream.read_exact(&mut prefix).await.unwrap();
                 assert_eq!(str::from_utf8(&prefix).unwrap(), expected);
             }).await.expect("account event stream prefix");
-        }
     });
 }
 
@@ -1314,7 +1327,7 @@ fn usage_and_settings_reads_match_legacy_wire_on_candidate_listener() {
 }
 
 #[test]
-fn report_event_streams_remain_on_the_legacy_listener() {
+fn report_stream_selection_matches_legacy() {
     Fixture::new().run_candidate(async |fixture, address| {
         let session = fixture.session();
         let accept = "Accept: text/event-stream";
@@ -1322,13 +1335,9 @@ fn report_event_streams_remain_on_the_legacy_listener() {
             "/api/calls?start=1&end=10",
             "/api/usage?lifetime=%74rue&owner=fixture",
         ] {
-            let reply = fixture
-                .parity(
-                    address,
-                    &request(fixture.port(), "GET", path, &[&session, accept], b""),
-                    200,
-                )
-                .await;
+            let wire = request(fixture.port(), "GET", path, &[&session, accept], b"");
+            let reply = assert_sse_wire_parity(fixture.legacy.local_addr(), address, &wire).await;
+            assert_status(&reply, 200);
             let reply = str::from_utf8(&reply).unwrap();
             assert!(reply.contains("\r\nContent-Type: text/event-stream\r\n"));
             assert!(reply.contains("event: progress\n"));
