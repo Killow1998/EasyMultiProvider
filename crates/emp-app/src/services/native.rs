@@ -36,42 +36,20 @@ pub(crate) fn open_stream_result<'a>(
     ids: &ProjectionIds,
     previous_usage: Option<RequestOutcome<'a>>,
 ) -> Result<(NativeStream, RequestOutcome<'a>), NativeHttpError> {
-    state
+    match state
         .backend
         .transport
         .runtime
-        .block_on(open_stream_result_async(
+        .block_on(open_stream_result_with_monitor(
             state,
             route,
             config,
             body,
             incoming,
             ids,
+            None,
             previous_usage,
-        ))
-}
-
-pub(crate) async fn open_stream_result_async<'a>(
-    state: &'a ServerState,
-    route: &ResolvedRoute,
-    config: &Value,
-    body: &Value,
-    incoming: &BTreeMap<String, String>,
-    ids: &ProjectionIds,
-    previous_usage: Option<RequestOutcome<'a>>,
-) -> Result<(NativeStream, RequestOutcome<'a>), NativeHttpError> {
-    match open_stream_result_with_monitor(
-        state,
-        route,
-        config,
-        body,
-        incoming,
-        ids,
-        None,
-        previous_usage,
-    )
-    .await?
-    {
+        ))? {
         CancellableNativeStreamOpen::Opened(stream) => Ok(*stream),
         CancellableNativeStreamOpen::Disconnected => {
             unreachable!("non-cancellable native open cannot observe a disconnect")
@@ -113,14 +91,14 @@ pub(crate) fn open_stream_cancellable<'a>(
     clippy::too_many_arguments,
     reason = "Native WS fallback must transfer its existing receipt alongside the stream inputs"
 )]
-async fn open_stream_result_with_monitor<'a>(
+pub(crate) async fn open_stream_result_with_monitor<'a>(
     state: &'a ServerState,
     route: &ResolvedRoute,
     config: &Value,
     body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
-    monitor: Option<&mut DisconnectMonitor>,
+    mut monitor: Option<&mut DisconnectMonitor>,
     previous_usage: Option<RequestOutcome<'a>>,
 ) -> Result<CancellableNativeStreamOpen<'a>, NativeHttpError> {
     let mut usage = previous_usage
@@ -149,13 +127,19 @@ async fn open_stream_result_with_monitor<'a>(
                 Ok(headers.headers)
             },
         );
-        crate::services::disconnect::race(monitor, open).await
+        crate::services::disconnect::race(monitor.as_deref_mut(), open).await
     };
     let result = match result {
         DisconnectRace::Ready(result) => result,
         DisconnectRace::Disconnected => {
-            crate::services::observation::request_cancelled(state, route, incoming);
-            usage.disconnected();
+            match monitor {
+                Some(monitor) if monitor.is_draining() => usage.drained(),
+                Some(monitor) if monitor.is_interrupted() => usage.interrupted(),
+                _ => {
+                    crate::services::observation::request_cancelled(state, route, incoming);
+                    usage.disconnected();
+                }
+            }
             return Ok(CancellableNativeStreamOpen::Disconnected);
         }
     };

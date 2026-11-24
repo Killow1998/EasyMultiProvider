@@ -44,6 +44,8 @@ use tokio::{
 use tower::ServiceExt;
 
 struct CandidateRequest {
+    #[cfg(all(test, unix))]
+    state: Arc<ServerState>,
     observation: HttpObservation,
     delegation: Option<CallerDelegation>,
     report_socket: Option<Arc<TcpStream>>,
@@ -57,13 +59,22 @@ struct CandidateRequest {
 }
 
 type UpgradeSession = Pin<Box<dyn Future<Output = ()> + Send>>;
+type RunUpgrade = Box<
+    dyn FnOnce(Option<TokioIo<Upgraded>>, Option<Arc<ConnectionPermit>>) -> UpgradeSession + Send,
+>;
+
+struct PendingUpgrade {
+    io: OnUpgrade,
+    reserved: Option<ConnectionPermit>,
+    run: RunUpgrade,
+}
 
 #[derive(Clone)]
 pub(crate) struct ConnectionContext(Arc<Connection>);
 
 struct Connection {
     control: Arc<ServerControl>,
-    upgrade: Mutex<Option<UpgradeSession>>,
+    upgrade: Mutex<Option<PendingUpgrade>>,
     request_permit: Mutex<Option<Arc<ConnectionPermit>>>,
     request_access: OnceLock<RequestAccess>,
     request_id: Option<String>,
@@ -123,19 +134,12 @@ impl ConnectionContext {
         + Send
         + 'static,
     ) {
-        let control = Arc::clone(&self.0.control);
         let shutdown = self.shutdown_signal();
-        let session = async move {
-            let io = upgrade.await.ok().map(TokioIo::new);
-            let permit = reserved
-                .or_else(|| {
-                    io.as_ref()
-                        .and_then(|_| control.admission.acquire_websocket())
-                })
-                .map(Arc::new);
-            session(io, permit.clone(), shutdown).await;
-        };
-        *self.0.upgrade.lock().expect("upgrade registration") = Some(Box::pin(session));
+        *self.0.upgrade.lock().expect("upgrade registration") = Some(PendingUpgrade {
+            io: upgrade,
+            reserved,
+            run: Box::new(move |io, permit| Box::pin(session(io, permit, shutdown))),
+        });
     }
 }
 
@@ -237,6 +241,8 @@ pub(super) async fn drive_candidate(
         (None, socket.map(Arc::new), None)
     };
     let candidate = CandidateRequest {
+        #[cfg(all(test, unix))]
+        state: state.clone(),
         observation,
         delegation,
         report_socket,
@@ -413,7 +419,6 @@ async fn drive_http(
         .keep_alive(websocket)
         .half_close(half_close)
         .title_case_headers(stream.is_some() || websocket)
-        .allow_multiple_spaces_in_request_line_delimiters(true)
         .max_buf_size(MAX_HEADER_BYTES + 4)
         .max_headers(MAX_HEADER_BYTES / 4)
         .timer(TokioTimer::new())
@@ -440,7 +445,14 @@ async fn drive_http(
         .lock()
         .expect("upgrade registration")
         .take();
-    if upgrade.is_some() {
+    if let Some(PendingUpgrade { io, reserved, run }) = upgrade {
+        let io = io.await.ok().map(TokioIo::new);
+        let websocket_permit = reserved
+            .or_else(|| {
+                io.as_ref()
+                    .and_then(|_| context.0.control.admission.acquire_websocket())
+            })
+            .map(Arc::new);
         drop(
             context
                 .0
@@ -449,6 +461,16 @@ async fn drive_http(
                 .expect("request admission")
                 .take(),
         );
+        #[cfg(all(test, unix))]
+        if let Some(request) = &candidate {
+            let gate = request.state.test_upgrade_handoff.lock().unwrap().take();
+            if let Some((reached, resume)) = gate {
+                let _ = reached.send(());
+                let _ = resume.await;
+            }
+        }
+        run(io, websocket_permit.clone()).await;
+        drop(websocket_permit);
     }
     if let Some(CandidateRequest {
         mut observation,
@@ -507,8 +529,5 @@ async fn drive_http(
             ShutdownReason::Requested => ShutdownReason::ResponseWriteFailed,
             reason => reason,
         });
-    }
-    if let Some(session) = upgrade {
-        session.await;
     }
 }

@@ -36,18 +36,38 @@ pub(super) async fn serve_native(
                 route,
             ))
     });
-    let (mut upstream, usage) = match native::open_stream_result_async(
+    let usage = previous_usage.unwrap_or_else(|| {
+        crate::services::request_outcome::RequestOutcome::new(
+            state,
+            route,
+            request_body,
+            request_headers,
+            None,
+            "responses",
+        )
+        .started_at(websocket.observation.execution_started())
+        .transport("websocket")
+    });
+    let (mut upstream, mut usage) = match native::open_stream_result_with_monitor(
         state,
         route,
         config,
         request_body,
         request_headers,
         ids,
-        previous_usage,
+        Some(monitor),
+        Some(usage),
     )
     .await
     {
-        Ok(stream) => stream,
+        Ok(native::CancellableNativeStreamOpen::Opened(stream)) => *stream,
+        Ok(native::CancellableNativeStreamOpen::Disconnected) => {
+            return if monitor.is_interrupted() {
+                TurnResult::Finished
+            } else {
+                TurnResult::Closed
+            };
+        }
         Err(error) => {
             let _=websocket.send_json(&serde_json::json!({"type":"error","status":error.status,"error":error.body["error"]})).await;
             return TurnResult::Finished;
@@ -67,9 +87,6 @@ pub(super) async fn serve_native(
     {
         return TurnResult::Closed;
     }
-    let mut usage = usage
-        .started_at(websocket.observation.execution_started())
-        .transport("websocket");
     loop {
         let polled = monitor.race(upstream.next_event()).await;
         match polled {
@@ -78,7 +95,11 @@ pub(super) async fn serve_native(
                     usage.interrupted();
                     return TurnResult::Finished;
                 }
-                usage.disconnected();
+                if monitor.is_draining() {
+                    usage.drained();
+                } else {
+                    usage.disconnected();
+                }
                 return TurnResult::Closed;
             }
             DisconnectRace::Ready(Ok(Some(event))) => {

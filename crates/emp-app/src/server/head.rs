@@ -1,6 +1,7 @@
 use super::ServerMode;
 use crate::http::request::{
-    REQUEST_READ_TIMEOUT, Request, parse_request, request_head_end, reserved_source_header,
+    REQUEST_READ_TIMEOUT, REQUEST_VERSION, Request, parse_request, request_head_end,
+    reserved_source_header,
 };
 use crate::server::http::{error::EntryError, stream::Delivery};
 use axum::body::Bytes;
@@ -118,16 +119,16 @@ impl GuardedHead {
         {
             self.raw.allow_body();
         }
-        let mut lines = self.raw.0.split_inclusive('\n');
-        let mut head = lines
-            .next()
-            .expect("validated request line")
-            .as_bytes()
-            .to_vec();
+        let mut head = format!(
+            "{} {} {REQUEST_VERSION}\r\n",
+            request.method.as_str(),
+            request.target
+        )
+        .into_bytes();
         if upgrade {
             head.extend_from_slice(b"Connection: Upgrade\r\nUpgrade: websocket\r\n");
         } else {
-            for line in lines {
+            for line in self.raw.0.split_inclusive('\n').skip(1) {
                 let Some((name, _)) = line.split_once(':') else {
                     if !line.trim().is_empty() {
                         head.extend_from_slice(line.as_bytes());

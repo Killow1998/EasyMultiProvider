@@ -1,6 +1,6 @@
 //! One content-free receipt around every HTTP handler, including early failures.
 use crate::app::ServerState;
-use crate::http::request::{Request, RequestMethod};
+use crate::http::request::Request;
 use crate::services::observation::diagnostics::Diagnostics;
 use serde_json::{Value, json};
 #[cfg(any(test, not(feature = "server-candidate")))]
@@ -56,12 +56,7 @@ impl HttpObservation {
                 .with_errors(self.errors.clone()),
             );
         }
-        self.fields["method"] = json!(match request.method {
-            RequestMethod::Get => "GET",
-            RequestMethod::Head => "HEAD",
-            RequestMethod::Post => "POST",
-            RequestMethod::Delete => "DELETE",
-        });
+        self.fields["method"] = json!(request.method.as_str());
         self.fields["path"] = json!(redacted_journal_path(request.raw_path()));
         self.fields["declared_bytes"] = json!(
             request

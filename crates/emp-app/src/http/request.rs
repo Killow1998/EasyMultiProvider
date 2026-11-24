@@ -11,6 +11,7 @@ pub(crate) const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const REQUEST_HEAD_DEADLINE: Duration = Duration::from_secs(30);
 const REQUEST_BODY_DEADLINE: Duration = Duration::from_secs(120);
 const REQUEST_BODY_GRACE_BYTES_PER_SECOND: usize = 1024 * 1024;
+pub(crate) const REQUEST_VERSION: &str = "HTTP/1.1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RequestMethod {
@@ -18,6 +19,17 @@ pub(crate) enum RequestMethod {
     Head,
     Post,
     Delete,
+}
+
+impl RequestMethod {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Head => "HEAD",
+            Self::Post => "POST",
+            Self::Delete => "DELETE",
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -237,7 +249,7 @@ fn request_line(request: &str) -> Option<(RequestMethod, &str)> {
         _ => return None,
     };
     let target = parts.next()?;
-    (parts.next()? == "HTTP/1.1" && parts.next().is_none()).then_some((method, target))
+    (parts.next()? == REQUEST_VERSION && parts.next().is_none()).then_some((method, target))
 }
 
 pub(crate) fn parse_request(request: &str) -> Option<Request<'_>> {

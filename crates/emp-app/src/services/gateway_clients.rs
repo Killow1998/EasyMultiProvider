@@ -39,11 +39,19 @@ type SaveGate = (
     tokio::sync::oneshot::Receiver<()>,
 );
 
+#[cfg(all(test, unix))]
+type IdentifyGate = (
+    tokio::sync::oneshot::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+
 pub(crate) struct GatewayClients {
     path: PathBuf,
     clients: Mutex<Vec<Client>>,
     #[cfg(all(test, unix))]
     save_gate: Mutex<Option<SaveGate>>,
+    #[cfg(all(test, unix))]
+    identify_gate: Mutex<Option<IdentifyGate>>,
 }
 
 impl GatewayClients {
@@ -53,6 +61,8 @@ impl GatewayClients {
             clients: Mutex::new(Vec::new()),
             #[cfg(all(test, unix))]
             save_gate: Mutex::default(),
+            #[cfg(all(test, unix))]
+            identify_gate: Mutex::default(),
         }
     }
 
@@ -79,10 +89,20 @@ impl GatewayClients {
             clients: Mutex::new(clients),
             #[cfg(all(test, unix))]
             save_gate: Mutex::default(),
+            #[cfg(all(test, unix))]
+            identify_gate: Mutex::default(),
         })
     }
 
     pub(crate) fn identify(&self, key: &str, modules: &Modules) -> Option<Caller> {
+        #[cfg(all(test, unix))]
+        {
+            let gate = self.identify_gate.lock().unwrap().take();
+            if let Some((reached, released)) = gate {
+                let _ = reached.send(());
+                let _ = released.recv();
+            }
+        }
         let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
         let clients = self.clients.lock().ok()?;
         let candidates = clients
@@ -202,6 +222,19 @@ impl GatewayClients {
             })
             .collect::<io::Result<_>>()?;
         self.save(vault, &mut clients, updated)
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn gate_next_identify_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        let (reached, ready) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        *self.identify_gate.lock().unwrap() = Some((reached, released));
+        (ready, release)
     }
 
     #[cfg(all(test, unix))]

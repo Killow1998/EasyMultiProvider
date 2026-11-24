@@ -15,6 +15,7 @@ use plan::json_bytes;
 
 pub(super) enum PrefillError {
     Disconnected,
+    Draining,
     Transport(std::io::Error),
     Rejected(Value),
     InvalidResponse,
@@ -67,6 +68,7 @@ impl Prefill<'_> {
                 let event = match message {
                     Message::Upstream(event) => event,
                     Message::DownstreamClosed => return Err(PrefillError::Disconnected),
+                    Message::ServerDraining => return Err(PrefillError::Draining),
                     Message::Downstream(text) => {
                         if serde_json::from_str::<Value>(&text)
                             .ok()

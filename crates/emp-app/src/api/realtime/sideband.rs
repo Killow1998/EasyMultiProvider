@@ -20,7 +20,7 @@ pub(crate) mod relay;
 pub(crate) use relay::SIDEBAND_EVENT_CAPACITY;
 
 pub(crate) const MAX_REALTIME_SIDEBAND_MESSAGE_BYTES: usize = DEFAULT_WEBSOCKET_MESSAGE_BYTES;
-const NATIVE_SIDEBAND_BASE: &str = "wss://api.openai.com/v1/live/";
+const NATIVE_SIDEBAND_ORIGIN: &str = "wss://api.openai.com";
 
 /// Created after handshake validation; its admission permit transfers to the relay.
 pub(crate) struct PreparedSideband {
@@ -64,7 +64,7 @@ pub(crate) fn prepare_sideband(
     let forwarded = safe_forwarded_headers(&incoming)?;
     headers.extend(forwarded);
     headers.insert("User-Agent".to_owned(), format!("EMP/{VERSION}"));
-    let url = format!("{NATIVE_SIDEBAND_BASE}{call_id}");
+    let url = format!("{NATIVE_SIDEBAND_ORIGIN}/v1/live/{call_id}");
     let proxy = state
         .backend
         .transport
@@ -78,8 +78,9 @@ pub(crate) fn prepare_sideband(
             )
         })?;
     #[cfg(all(test, unix))]
-    let (url, proxy) = if let Some(test_url) = state.test_sideband_url.get() {
-        (test_url.clone(), None)
+    let (url, proxy) = if let Some(address) = state.test_sideband_address.get() {
+        let path = url.strip_prefix(NATIVE_SIDEBAND_ORIGIN).unwrap();
+        (format!("ws://{address}{path}"), None)
     } else {
         (url, proxy)
     };

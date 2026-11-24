@@ -406,6 +406,12 @@ impl<'a> RequestOutcome<'a> {
         self.event["error_class"] = json!("client_disconnect");
         self.event["success"] = json!(false);
     }
+    pub(crate) fn drained(&mut self) {
+        self.event["error_origin"] = json!("emp");
+        self.event["status"] = Value::Null;
+        self.event["error_class"] = json!("server_draining");
+        self.event["success"] = json!(false);
+    }
     pub(crate) fn interrupted(&mut self) {
         self.event["error_origin"] = json!("client");
         self.event["status"] = json!(200);

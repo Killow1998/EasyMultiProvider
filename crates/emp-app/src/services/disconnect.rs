@@ -83,12 +83,19 @@ impl Drop for Probe {
 }
 
 pub(crate) struct DisconnectMonitor {
-    disconnected: tokio::sync::oneshot::Receiver<()>,
+    disconnected: tokio::sync::oneshot::Receiver<DisconnectReason>,
     cancelled: Arc<AtomicBool>,
-    pending: Option<(Probe, tokio::sync::oneshot::Sender<()>)>,
+    pending: Option<(Probe, tokio::sync::oneshot::Sender<DisconnectReason>)>,
     stop: Arc<AtomicBool>,
     worker: Option<(JoinHandle<()>, Arc<Poller>)>,
     interrupted: Option<Arc<AtomicBool>>,
+    reason: Option<DisconnectReason>,
+}
+
+pub(crate) enum DisconnectReason {
+    Client,
+    Draining,
+    Interrupted,
 }
 
 pub(crate) enum DisconnectRace<T> {
@@ -100,8 +107,8 @@ impl DisconnectMonitor {
     /// A WebSocket turn already owns its framed reader. Reuse the cancellation
     /// race without peeking or starting a competing socket reader.
     pub(crate) fn from_signal(
-        disconnected: tokio::sync::oneshot::Receiver<()>,
-        interrupted: Arc<AtomicBool>,
+        disconnected: tokio::sync::oneshot::Receiver<DisconnectReason>,
+        interrupted: Option<Arc<AtomicBool>>,
     ) -> Self {
         Self {
             disconnected,
@@ -109,9 +116,14 @@ impl DisconnectMonitor {
             pending: None,
             stop: Arc::new(AtomicBool::new(false)),
             worker: None,
-            interrupted: Some(interrupted),
+            interrupted,
+            reason: None,
         }
     }
+    pub(crate) fn is_draining(&self) -> bool {
+        matches!(self.reason, Some(DisconnectReason::Draining))
+    }
+
     pub(crate) fn is_interrupted(&self) -> bool {
         self.interrupted
             .as_ref()
@@ -128,6 +140,7 @@ impl DisconnectMonitor {
             stop,
             worker: None,
             interrupted: None,
+            reason: None,
         })
     }
 
@@ -141,7 +154,7 @@ impl DisconnectMonitor {
         let worker = thread::spawn(move || {
             if !matches!(probe.wait_for_disconnect(&worker_stop), Ok(false)) {
                 cancelled.store(true, Ordering::Release);
-                let _ = sender.send(());
+                let _ = sender.send(DisconnectReason::Client);
             }
         });
         self.worker = Some((worker, wake));
@@ -156,7 +169,10 @@ impl DisconnectMonitor {
         self.start_worker_for_io();
         tokio::select! {
             biased;
-            _ = &mut self.disconnected => DisconnectRace::Disconnected,
+            reason = &mut self.disconnected => {
+                self.reason = reason.ok();
+                DisconnectRace::Disconnected
+            }
             result = future => DisconnectRace::Ready(result),
         }
     }

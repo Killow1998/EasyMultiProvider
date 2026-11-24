@@ -17,7 +17,7 @@ use crate::{
 use axum::{
     Extension, Router,
     body::Body,
-    extract::{ConnectInfo, Request as AxumRequest, State},
+    extract::{ConnectInfo, FromRequest, FromRequestParts, Request as AxumRequest, State},
     http::StatusCode,
     response::Response,
     routing::{get, post},
@@ -113,10 +113,17 @@ async fn create_call(
     State(state): State<Arc<ServerState>>,
     Extension(context): Extension<ConnectionContext>,
     access: RequestAccess,
-    caller: ProxyCaller,
-    RealtimeBody(call): RealtimeBody,
+    request: AxumRequest,
 ) -> Result<HttpReply, HttpReply> {
     context.retain_request_access(access);
+    let (mut parts, body) = request.into_parts();
+    let caller = ProxyCaller::from_request_parts(&mut parts, &state)
+        .await
+        .map_err(EntryError::reply)?;
+    let RealtimeBody(call) =
+        RealtimeBody::from_request(AxumRequest::from_parts(parts, body), &state)
+            .await
+            .map_err(EntryError::reply)?;
     let prepare_state = Arc::clone(&state);
     let call = run_blocking(move || prepare_call(&prepare_state, caller.incoming, call))
         .await

@@ -3,7 +3,7 @@
 use super::socket::{Downstream, DownstreamEvent};
 use super::{ObservedWebSocket, TurnResult};
 use crate::app::ServerState;
-use crate::services::disconnect::DisconnectMonitor;
+use crate::services::disconnect::{DisconnectMonitor, DisconnectReason};
 use serde_json::{Value, json};
 use std::sync::{
     Arc,
@@ -58,7 +58,7 @@ impl Control {
     }
 }
 
-type PendingTurn = (Option<String>, Option<oneshot::Sender<()>>);
+type PendingTurn = (Option<String>, Option<oneshot::Sender<DisconnectReason>>);
 
 pub(super) struct TurnControl {
     stop: oneshot::Sender<()>,
@@ -80,7 +80,8 @@ impl TurnControl {
             .get("X-EMP-Request-ID")
             .cloned();
         let (sender, receiver) = oneshot::channel();
-        let monitor = DisconnectMonitor::from_signal(receiver, Arc::clone(&control.interrupted));
+        let monitor =
+            DisconnectMonitor::from_signal(receiver, Some(Arc::clone(&control.interrupted)));
         let reader = websocket.inner.reader_task();
         let diagnostics = Arc::clone(&state.backend.diagnostics);
         let task_control = Arc::clone(&control);
@@ -95,7 +96,7 @@ impl TurnControl {
                     _ = &mut stopped => break,
                     _ = super::wait_for_drain(&state) => {
                         reader.close(1001, "EMP connection is draining").await;
-                        let _ = sender.take().unwrap().send(());
+                        let _ = sender.take().unwrap().send(DisconnectReason::Draining);
                         break;
                     }
                     event = reader.read(), if pending.is_none() => event,
@@ -104,7 +105,7 @@ impl TurnControl {
                     DownstreamEvent::Text(text) => text,
                     DownstreamEvent::Control => continue,
                     DownstreamEvent::Closed => {
-                        let _ = sender.take().unwrap().send(());
+                        let _ = sender.take().unwrap().send(DisconnectReason::Client);
                         break;
                     }
                 };
@@ -153,7 +154,7 @@ impl TurnControl {
                     ))
                     .await;
                 } else if valid && !terminal {
-                    let _ = sender.take().unwrap().send(());
+                    let _ = sender.take().unwrap().send(DisconnectReason::Interrupted);
                     break;
                 }
             }

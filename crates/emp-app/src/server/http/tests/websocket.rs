@@ -1,9 +1,10 @@
 use super::*;
 use crate::api::realtime::MAX_REALTIME_REQUEST_BYTES;
-use crate::server::raw_tcp::{RawClient, head, read_websocket_frame, websocket_frame};
+use crate::server::raw_tcp::{DEADLINE, RawClient, head, read_websocket_frame, websocket_frame};
 use crate::tests::realtime_contract::{
     RealtimeUpstream, UpstreamResponse, app_server_for, multipart_offer,
 };
+use crate::tests::{live_journal, wait_for};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as AsyncListener, TcpStream as AsyncStream};
 use tokio::time::timeout;
@@ -42,6 +43,20 @@ fn close_payload(code: u16, reason: &str) -> Vec<u8> {
     [code.to_be_bytes().as_slice(), reason.as_bytes()].concat()
 }
 
+fn begin_restore(
+    fixture: &Fixture,
+    address: SocketAddr,
+    session: &str,
+) -> tokio::task::JoinHandle<Vec<u8>> {
+    let wire = json_request(
+        fixture.port(),
+        "/api/integration/restore",
+        &[session],
+        br#"{"confirm_reload":true}"#,
+    );
+    tokio::spawn(async move { exchange_wire(address, &wire, false).await })
+}
+
 #[test]
 fn websocket_handshake_errors_match_legacy_bytes() {
     let fixture = Fixture::new();
@@ -76,6 +91,54 @@ fn websocket_handshake_errors_match_legacy_bytes() {
                 .parity(new, &upgrade(port, path, &session, &[], &[]), 400)
                 .await;
         }
+    });
+}
+
+#[test]
+fn tab_separated_websocket_request_line_matches_legacy() {
+    Fixture::new().run_candidate(async |fixture, address| {
+        let session = fixture.session();
+        let mut wire = upgrade(
+            fixture.port(),
+            "/v1/responses",
+            &session,
+            &[],
+            &websocket_frame(0x89, MASK, b"ready"),
+        );
+        for byte in &mut wire[..b"GET /v1/responses HTTP/1.1".len()] {
+            if *byte == b' ' {
+                *byte = b'\t';
+            }
+        }
+        for peer in [fixture.legacy.local_addr(), address] {
+            let mut client = RawClient::request(peer, &wire).await;
+            assert_upgrade(&client);
+            assert_eq!(
+                read_websocket_frame(&mut client.io, false).await,
+                (0x8a, b"ready".to_vec())
+            );
+            client.io.shutdown().await.unwrap();
+            assert_eq!(client.rest().await, b"\x88\x00");
+        }
+    });
+}
+
+#[test]
+fn tab_separated_http_request_line_matches_legacy() {
+    Fixture::new().run_candidate(async |fixture, address| {
+        let mut wire = request(
+            fixture.port(),
+            "GET",
+            "/api/config",
+            &[&fixture.session()],
+            &[],
+        );
+        for byte in &mut wire[..b"GET /api/config HTTP/1.1".len()] {
+            if *byte == b' ' {
+                *byte = b'\t';
+            }
+        }
+        fixture.parity(address, &wire, 200).await;
     });
 }
 
@@ -212,6 +275,205 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
     });
 }
 
+#[test]
+fn responses_upgrade_cannot_start_after_restore_reopens_admission() {
+    Fixture::new().run_candidate(async |fixture, address| {
+        let state = &fixture.legacy.state;
+        let admission = &state.lifecycle.admission;
+        let (reached, handoff) = tokio::sync::oneshot::channel();
+        let (resume, paused) = tokio::sync::oneshot::channel();
+        *state.test_upgrade_handoff.lock().unwrap() = Some((reached, paused));
+        let session = fixture.session();
+        let wire = upgrade(
+            fixture.port(),
+            "/v1/responses",
+            &session,
+            &[],
+            &websocket_frame(0x89, MASK, b"session started"),
+        );
+        let mut client = RawClient::request(address, &wire).await;
+        assert_upgrade(&client);
+        timeout(Duration::from_secs(5), handoff)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut restore = begin_restore(fixture, address, &session);
+        let early_restore = if admission.active_websockets() == 0 {
+            let reply = (&mut restore).await.unwrap();
+            assert_status(&reply, 200);
+            assert!(!admission.is_quiescing());
+            Some(reply)
+        } else {
+            timeout(Duration::from_secs(5), admission.wait_for_websocket_drain())
+                .await
+                .unwrap();
+            None
+        };
+        resume.send(()).unwrap();
+        assert_eq!(
+            read_websocket_frame(&mut client.io, false).await,
+            (0x88, close_payload(1001, "EMP connection is draining"))
+        );
+        let reply = match early_restore {
+            Some(reply) => reply,
+            None => restore.await.unwrap(),
+        };
+        assert_status(&reply, 200);
+        assert!(!admission.is_quiescing());
+    });
+}
+
+#[test]
+fn slow_device_revalidation_leaves_other_websockets_responsive() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    Fixture::new().run_candidate(async |fixture, _| {
+        let state = &fixture.legacy.state;
+        let gateway = &state.backend.gateway_clients;
+        let issued = serde_json::to_value(
+            gateway
+                .issue(
+                    "slow device",
+                    None,
+                    &state.backend.configuration.vault,
+                    &state.backend.modules,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let key = format!(
+            "Authorization: Bearer {}",
+            issued["api_key"].as_str().unwrap()
+        );
+        let start = |header: String| {
+            let state = state.clone();
+            let (client, downstream) = tokio::io::duplex(4096);
+            let task = runtime.spawn(async move {
+                let wire = format!(
+                    "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{header}\r\n\r\n",
+                    state.port
+                );
+                let mut request = parse_request(&wire).unwrap();
+                let source = tokio::task::block_in_place(|| {
+                    crate::server::http::proxy::request_source(
+                        request,
+                        &state,
+                        system_now(),
+                        None,
+                        None,
+                    )
+                });
+                assert!(source.caller.is_some());
+                request.source = Some(&source);
+                let permit = Arc::new(state.lifecycle.admission.acquire_websocket().unwrap());
+                crate::api::websocket::run_responses(
+                    &state,
+                    request,
+                    None,
+                    downstream,
+                    &[],
+                    None,
+                    Some(permit),
+                )
+                .await;
+            });
+            (client, task)
+        };
+        let (mut device, device_task) = start(key);
+        let (mut other, other_task) = start(fixture.session());
+        for client in [&mut device, &mut other] {
+            client
+                .write_all(&websocket_frame(0x89, MASK, b"ready"))
+                .await
+                .unwrap();
+            assert_eq!(
+                read_websocket_frame(client, false).await,
+                (0x8a, b"ready".to_vec())
+            );
+        }
+        let (rechecking, release) = gateway.gate_next_identify_for_test();
+        device
+            .write_all(&websocket_frame(0x81, MASK, b"{}"))
+            .await
+            .unwrap();
+        timeout(DEADLINE, rechecking).await.unwrap().unwrap();
+        other
+            .write_all(&websocket_frame(0x89, MASK, b"responsive"))
+            .await
+            .unwrap();
+        assert_eq!(
+            read_websocket_frame(&mut other, false).await,
+            (0x8a, b"responsive".to_vec())
+        );
+        state.lifecycle.admission.close();
+        assert_eq!(
+            read_websocket_frame(&mut other, false).await,
+            (0x88, close_payload(1001, "EMP connection is draining")),
+        );
+        release.send(()).unwrap();
+        assert_eq!(
+            read_websocket_frame(&mut device, false).await,
+            (0x88, close_payload(1001, "EMP connection is draining")),
+        );
+        device_task.await.unwrap();
+        other_task.await.unwrap();
+    });
+}
+
+#[test]
+fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
+    Fixture::new().run_candidate(async |fixture, address| {
+        let wire = upgrade(
+            fixture.port(),
+            "/v1/responses",
+            &fixture.session(),
+            &[],
+            &websocket_frame(0x89, MASK, b"ready"),
+        );
+        let root = fixture.directory.path().to_owned();
+        let completed = move || {
+            live_journal(&root)
+                .into_iter()
+                .filter(|record| {
+                    record["event"] == "http_request_completed"
+                        && record["fields"]["transport"] == "websocket"
+                        && record["fields"]["path"] == "/v1/responses"
+                })
+                .collect::<Vec<_>>()
+        };
+        for (previous, address) in [fixture.legacy.local_addr(), address]
+            .into_iter()
+            .enumerate()
+        {
+            let mut client = RawClient::request(address, &wire).await;
+            assert_upgrade(&client);
+            assert_eq!(
+                read_websocket_frame(&mut client.io, false).await,
+                (0x8a, b"ready".to_vec())
+            );
+            let idle = Duration::from_millis(50);
+            assert!(timeout(idle, client.io.read_u8()).await.is_err());
+            assert_eq!(completed().len(), previous, "WebSocket is still open");
+            client.io.shutdown().await.unwrap();
+            assert_eq!(client.rest().await, b"\x88\x00");
+            let completed = completed.clone();
+            let records = tokio::task::spawn_blocking(move || {
+                wait_for(DEADLINE, || completed().len() == previous + 1);
+                completed()
+            })
+            .await
+            .unwrap();
+            assert!(
+                records[previous]["fields"]["duration_ms"].as_u64().unwrap()
+                    >= idle.as_millis() as u64
+            );
+        }
+    });
+}
+
 fn realtime_fixture(upstream: &RealtimeUpstream) -> (tempfile::TempDir, Fixture) {
     let native = tempfile::tempdir().unwrap();
     let auth = native.path().join("auth.json");
@@ -302,6 +564,58 @@ fn realtime_call_preserves_multipart_rejection_location_and_upstream_error() {
     }
 }
 
+#[test]
+fn realtime_rejections_retain_update_access_until_response_write() {
+    Fixture::new().run(async |fixture, _| {
+        let state = &fixture.legacy.state;
+        let updates = state.lifecycle.updates();
+        let session = fixture.session();
+        let boundary = "Content-Type: multipart/form-data; boundary=VoiceFixtureBoundary";
+        let big_length = format!("Content-Length: {}", MAX_REALTIME_REQUEST_BYTES + 1);
+        for (status, headers) in [
+            (401, vec!["Authorization: Bearer invalid"]),
+            (413, vec![session.as_str(), boundary, &big_length]),
+        ] {
+            let reached = Arc::new(tokio::sync::Notify::new());
+            let write = Arc::new(tokio::sync::Notify::new());
+            let router = crate::server::http::websocket::routes()
+                .with_state(state.clone())
+                .layer(axum::middleware::from_fn({
+                    let reached = reached.clone();
+                    let write = write.clone();
+                    move |request: Request, next: axum::middleware::Next| {
+                        let reached = reached.clone();
+                        let write = write.clone();
+                        async move {
+                            let response = next.run(request).await;
+                            reached.notify_one();
+                            write.notified().await;
+                            response
+                        }
+                    }
+                }));
+            let server = ServerHandle::bind(LOOPBACK, router, admission())
+                .await
+                .unwrap();
+            let mut client = AsyncStream::connect(server.local_addr()).await.unwrap();
+            client
+                .write_all(&request(fixture.port(), "POST", "/v1/live", &headers, &[]))
+                .await
+                .unwrap();
+            timeout(DEADLINE, reached.notified()).await.unwrap();
+            assert!(
+                !updates.drain_for_test(Duration::ZERO),
+                "update handoff may not pass before the {status} has been written"
+            );
+            write.notify_one();
+            let reply = timeout(DEADLINE, head(&mut client)).await.unwrap().unwrap();
+            assert_status(&reply, status);
+            server.shutdown().await.unwrap();
+            assert_eq!(updates.active_for_test(), 0);
+        }
+    });
+}
+
 async fn accept_upstream(listener: &AsyncListener, extensions: &str) -> (AsyncStream, String) {
     let (mut io, _) = timeout(Duration::from_secs(5), listener.accept())
         .await
@@ -327,16 +641,23 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
     let fixture = native_fixture(listener.local_addr().unwrap());
     fixture.run_candidate(async |fixture, new| {
         let listener = AsyncListener::from_std(listener).unwrap();
-        let target = format!("ws://{}/v1/live/rtc_relay", listener.local_addr().unwrap());
-        fixture.legacy.state.test_sideband_url.set(target).unwrap();
+        fixture
+            .legacy
+            .state
+            .test_sideband_address
+            .set(listener.local_addr().unwrap())
+            .unwrap();
         let session = fixture.session();
         let first = br#"{ "type": "client.first" }"#;
         let event = br#"{ "type": "server.event" }"#;
-        for address in [fixture.legacy.local_addr(), new] {
+        for (address, call_id) in [
+            (fixture.legacy.local_addr(), "rtc_relay"),
+            (new, "rtc_candidate"),
+        ] {
             let peer = async {
                 let (mut io, headers) = accept_upstream(&listener, "").await;
                 let request = parse_request(&headers).unwrap();
-                assert_eq!(request.raw_path(), "/v1/live/rtc_relay");
+                assert_eq!(request.raw_path(), format!("/v1/live/{call_id}"));
                 assert_eq!(
                     request.header("Authorization"),
                     Some("Bearer native-secret")
@@ -357,7 +678,7 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
             let client = async {
                 let wire = upgrade(
                     fixture.port(),
-                    "/v1/live/rtc_relay?fixture=1",
+                    &format!("/v1/live/{call_id}?fixture=1"),
                     &session,
                     &[
                         "Authorization: Bearer caller-secret",
@@ -421,6 +742,145 @@ fn native_fixture(address: SocketAddr) -> Fixture {
         legacy,
         upstream: Arc::default(),
     }
+}
+
+const NATIVE_CREATE: &[u8] =
+    br#"{"type":"response.create","model":"gpt-fixture","input":"drain fixture"}"#;
+
+#[test]
+fn native_http_fallback_drain_cancels_open_and_allows_restore() {
+    let listener = TcpListener::bind(LOOPBACK).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    native_fixture(listener.local_addr().unwrap()).run_candidate(async |fixture, address| {
+        let listener = AsyncListener::from_std(listener).unwrap();
+        let session = fixture.session();
+        let wire = upgrade(
+            fixture.port(),
+            "/v1/responses",
+            &session,
+            &["originator: codex_cli_rs"],
+            &[],
+        );
+        let mut client = RawClient::request(address, &wire).await;
+        assert_upgrade(&client);
+        client
+            .io
+            .write_all(&websocket_frame(0x81, MASK, NATIVE_CREATE))
+            .await
+            .unwrap();
+        receive_event(&mut client, "codex.response.metadata").await;
+        let mut upstream = timeout(DEADLINE, async {
+            let (mut ws, _) = listener.accept().await.unwrap();
+            let request = String::from_utf8(head(&mut ws).await.unwrap()).unwrap();
+            assert_eq!(
+                parse_request(&request).unwrap().header("Upgrade"),
+                Some("websocket")
+            );
+            ws.write_all(
+                b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+            drop(ws);
+            let (mut http, _) = listener.accept().await.unwrap();
+            let request = String::from_utf8(head(&mut http).await.unwrap()).unwrap();
+            let request = parse_request(&request).unwrap();
+            assert_eq!(request.method, crate::http::request::RequestMethod::Post);
+            let mut body = vec![0; request.header("Content-Length").unwrap().parse().unwrap()];
+            http.read_exact(&mut body).await.unwrap();
+            let body = emp_transport::decode_content(
+                body,
+                request.header("Content-Encoding").unwrap_or(""),
+                4 * 1024 * 1024,
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap()["model"],
+                "gpt-fixture"
+            );
+            http
+        })
+        .await
+        .unwrap();
+        let restore = begin_restore(fixture, address, &session);
+        assert_eq!(
+            read_websocket_frame(&mut client.io, false).await,
+            (0x88, close_payload(1001, "EMP connection is draining")),
+        );
+        assert_eq!(
+            timeout(DEADLINE, upstream.read(&mut [0]))
+                .await
+                .expect("drain must cancel the request waiting for HTTP response headers")
+                .unwrap(),
+            0,
+        );
+        let reply = timeout(DEADLINE, restore)
+            .await
+            .expect("restore must complete without waiting for the upstream")
+            .unwrap();
+        assert_status(&reply, 200);
+        assert_eq!(
+            fixture.legacy.state.lifecycle.admission.active_websockets(),
+            0
+        );
+    });
+}
+
+#[test]
+fn native_generation_records_server_drain_separately_from_client_disconnect() {
+    let listener = TcpListener::bind(LOOPBACK).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    native_fixture(listener.local_addr().unwrap()).run_candidate(async |fixture, candidate| {
+        let listener = AsyncListener::from_std(listener).unwrap();
+        let old = fixture.legacy.local_addr();
+        let session = fixture.session();
+        let mut outcomes = Vec::new();
+        for address in [old, candidate] {
+            for drain in [true, false] {
+                let label = format!("ws-{}-{}", address.port(), if drain {"drain"} else {"disconnect"});
+                let session_id = format!("Session-Id: {label}");
+                let wire = upgrade(fixture.port(), "/v1/responses", &session, &["originator: codex_cli_rs", &session_id], &[]);
+                let mut client = RawClient::request(address, &wire).await;
+                assert_upgrade(&client);
+                client.io.write_all(&websocket_frame(0x81, MASK, NATIVE_CREATE)).await.unwrap();
+                let (mut upstream, _) = accept_upstream(&listener, "").await;
+                let (flags, _) = read_websocket_frame(&mut upstream, true).await;
+                assert_eq!(flags, 0x81);
+                upstream.write_all(&websocket_frame(
+                    0x81,
+                    None,
+                    br#"{"type":"response.created","response":{"id":"resp_draining","status":"in_progress","model":"gpt-fixture"}}"#,
+                )).await.unwrap();
+                receive_event(&mut client, "response.created").await;
+                if drain {
+                    let restore = begin_restore(fixture, address, &session);
+                    assert_eq!(
+                        read_websocket_frame(&mut client.io, false).await,
+                        (0x88, close_payload(1001, "EMP connection is draining")),
+                    );
+                    assert_status(&timeout(DEADLINE, restore).await.unwrap().unwrap(), 200);
+                } else {
+                    client.io.shutdown().await.unwrap();
+                    assert_eq!(client.rest().await, b"\x88\x00");
+                }
+                assert_eq!(read_websocket_frame(&mut upstream, true).await, (0x88, 1000u16.to_be_bytes().to_vec()));
+                let calls = exchange_wire(old, &request(fixture.port(), "GET", "/api/calls?start=0&end=9999999999", &[&session], &[]), false).await;
+                let calls = json_body(&calls);
+                let record = calls["records"].as_array().unwrap().iter().find(|record| record["session_id"] == label).unwrap_or_else(|| panic!("missing call for {label} in {calls}"));
+                outcomes.push((address, drain, record["error_origin"].clone(), record["error_class"].clone()));
+            }
+        }
+        assert_eq!(
+            outcomes,
+            [
+                (old, true, json!("emp"), json!("server_draining")),
+                (old, false, json!("client"), json!("client_disconnect")),
+                (candidate, true, json!("emp"), json!("server_draining")),
+                (candidate, false, json!("client"), json!("client_disconnect")),
+            ],
+        );
+    });
 }
 
 async fn receive_event(client: &mut RawClient, kind: &str) -> Value {

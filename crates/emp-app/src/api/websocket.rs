@@ -315,8 +315,10 @@ async fn responses_turns(
             .source
             .and_then(|source| source.caller.as_ref())
             .is_some_and(|caller| !matches!(caller.id.as_str(), "local" | "shared"))
-            && crate::http::auth::proxy_identity(request, state, crate::util::system_now(), None)
-                .is_none()
+            && block_in_place(|| {
+                crate::http::auth::proxy_identity(request, state, crate::util::system_now(), None)
+                    .is_none()
+            })
         {
             websocket.close(1008, "device key was revoked").await;
             return;
@@ -616,12 +618,11 @@ async fn responses_turns(
         let destination_context = if let Some(socket) = monitor {
             let socket = Arc::clone(socket);
             let (sender, receiver) = tokio::sync::oneshot::channel();
-            let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let mut monitor =
-                crate::services::disconnect::DisconnectMonitor::from_signal(receiver, interrupted);
+                crate::services::disconnect::DisconnectMonitor::from_signal(receiver, None);
             let watcher = tokio::spawn(async move {
                 if socket.peek(&mut [0]).await.unwrap_or(0) == 0 {
-                    let _ = sender.send(());
+                    let _ = sender.send(crate::services::disconnect::DisconnectReason::Client);
                 } else {
                     std::future::pending::<()>().await;
                 }

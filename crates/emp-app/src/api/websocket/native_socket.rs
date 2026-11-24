@@ -160,6 +160,10 @@ impl NativeSession {
                         usage.disconnected();
                         return NativeTurnResult::Closed;
                     }
+                    Err(prefill::PrefillError::Draining) => {
+                        usage.drained();
+                        return NativeTurnResult::Closed;
+                    }
                     Err(error) => {
                         if matches!(&error, prefill::PrefillError::Transport(_)) {
                             native_connections.defer(route_key.clone());
@@ -235,6 +239,10 @@ impl NativeSession {
                     Message::Upstream(event) => event,
                     Message::DownstreamClosed => {
                         usage.disconnected();
+                        return NativeTurnResult::Closed;
+                    }
+                    Message::ServerDraining => {
+                        usage.drained();
                         return NativeTurnResult::Closed;
                     }
                     Message::Downstream(text) => {
@@ -421,6 +429,7 @@ enum Message {
     Upstream(Value),
     Downstream(String),
     DownstreamClosed,
+    ServerDraining,
 }
 
 async fn next_message(
@@ -435,7 +444,7 @@ async fn next_message(
             biased;
             _ = super::wait_for_drain(state) => {
                 downstream.close(1001, "EMP connection is draining").await;
-                return Ok(Some(Message::DownstreamClosed));
+                return Ok(Some(Message::ServerDraining));
             }
             _ = tokio::time::sleep_until(*idle_deadline) => return Err(io::ErrorKind::TimedOut.into()),
             event = downstream.read(), if read_downstream => {
