@@ -81,8 +81,18 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
                 assert!(reply.starts_with(b"HTTP/1.1 200 "),
                     "{path} blocked by 64 active callbacks (candidate={use_candidate})");
             }
+            let state_for_wait = state.clone();
+            tokio::task::spawn_blocking(move || {
+                wait_for(DEADLINE, || state_for_wait.lifecycle.admission.active_requests() == 1);
+            }).await.unwrap();
+            let admission = &state.lifecycle.admission;
+            let public_slots = std::iter::from_fn(|| admission.acquire_request()).collect::<Vec<_>>();
+            assert!(!public_slots.is_empty());
+            assert!(admission.acquire_request().is_none());
             let stream = RawClient::request(address, &wire).await;
             assert!(stream.head.starts_with("HTTP/1.1 200"), "{}", stream.head);
+            assert!(admission.acquire_request().is_none());
+            drop(public_slots);
             callbacks.push(stream);
             for (mut socket, mut callback) in sender.await.unwrap().into_iter().zip(callbacks) {
                 socket.write_all(LAST).await.unwrap();
@@ -90,6 +100,133 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
             }
         });
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
+    use crate::services::modules::aero::CallLease;
+
+    let (release, released) = mpsc::channel();
+    let upstream = OneShotUpstream::serve(2, move |socket| {
+        upstream_reply(
+            socket,
+            200,
+            "text/event-stream",
+            FIRST.len() + LAST.len(),
+            "",
+        );
+        socket.write_all(FIRST).unwrap();
+        released.recv_timeout(DEADLINE).unwrap();
+        socket.write_all(LAST).unwrap();
+    });
+    let mut heads = Vec::new();
+    for use_candidate in [false, true] {
+        fixture(&upstream.base_url()).run_candidate(async |fixture, candidate| {
+            let state = &fixture.legacy.state;
+            let admission = &state.lifecycle.admission;
+            let updates = state.lifecycle.updates();
+            let callers = &state.backend.aero_callers;
+            let parent = callers
+                .delegate(
+                    Caller {
+                        id: "local".into(),
+                        name: String::new(),
+                    },
+                    None,
+                    Some(CallLease {
+                        connection: Arc::new(admission.acquire_request().unwrap()),
+                        work: Arc::new(updates.enter().unwrap()),
+                    }),
+                )
+                .unwrap();
+            let header_slots = (0..64)
+                .map(|_| callers.acquire_header().unwrap())
+                .collect::<Vec<_>>();
+            assert!(callers.acquire_header().is_none());
+            let state_for_drain = state.clone();
+            let draining = tokio::task::spawn_blocking(move || {
+                state_for_drain
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(Duration::from_secs(15))
+            });
+            wait_for(DEADLINE, || updates.enter().is_none());
+
+            let address = if use_candidate {
+                candidate
+            } else {
+                fixture.legacy.local_addr()
+            };
+            let authorization = format!("Authorization: Bearer {}", parent.key);
+            let wire = json_request(
+                fixture.port(),
+                "/v1/responses",
+                &[&authorization],
+                STREAM_REQUEST,
+            );
+            let mut io = TcpStream::connect(address).await.unwrap();
+            let state_for_intake = state.clone();
+            tokio::task::spawn_blocking(move || {
+                wait_for(DEADLINE, || {
+                    state_for_intake.lifecycle.admission.active_requests() == 2
+                });
+            })
+            .await
+            .unwrap();
+            io.write_all(&wire).await.unwrap();
+            let head = timeout(DEADLINE, crate::server::raw_tcp::head(&mut io))
+                .await
+                .unwrap()
+                .unwrap();
+            let mut callback = RawClient {
+                io,
+                head: String::from_utf8(head).unwrap(),
+            };
+            if callback.head.starts_with("HTTP/1.1 200 ") {
+                assert_eq!(
+                    admission.active_requests(),
+                    1,
+                    "callback kept the temporary public slot"
+                );
+                assert_eq!(
+                    updates.active_for_test(),
+                    1,
+                    "callback used a separate work permit"
+                );
+                drop(parent);
+                assert_eq!(
+                    admission.active_requests(),
+                    1,
+                    "callback lost the parent's connection permit"
+                );
+                assert_eq!(
+                    updates.active_for_test(),
+                    1,
+                    "callback lost the parent's work permit"
+                );
+                assert!(
+                    !draining.is_finished(),
+                    "drain finished while the callback was open"
+                );
+                release.send(()).unwrap();
+                assert!(
+                    String::from_utf8_lossy(&callback.rest().await).contains("response.completed")
+                );
+            } else {
+                drop(parent);
+            }
+            assert!(draining.await.unwrap());
+            drop(header_slots);
+            heads.push(callback.head);
+        });
+    }
+    assert!(
+        heads.iter().all(|head| head.starts_with("HTTP/1.1 200 ")),
+        "callback during drain: legacy={:?}, candidate={:?}",
+        heads[0],
+        heads[1]
+    );
 }
 
 fn fixture(base: &str) -> Fixture {

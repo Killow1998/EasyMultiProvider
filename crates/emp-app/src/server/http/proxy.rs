@@ -87,35 +87,31 @@ impl ConnectionIntake {
         state: &ServerState,
         peer: Option<IpAddr>,
     ) -> Option<(Arc<ConnectionPermit>, Option<AdmittedCallback>)> {
+        let callback = request
+            .filter(|request| request.method == RequestMethod::Post)
+            .and_then(|request| aero_delegation_key(request, state, peer))
+            .and_then(|key| state.backend.aero_callers.identify_callback(key));
+        if let Some((identity, Some(lease))) = callback {
+            drop(self);
+            return Some((
+                lease.connection,
+                Some(AdmittedCallback {
+                    identity,
+                    work: Some(lease.work),
+                }),
+            ));
+        }
+
         match self {
             Self::Public(permit) => Some((permit, None)),
             Self::CallbackHead(header) => {
-                let callback = request
-                    .filter(|request| request.method == RequestMethod::Post)
-                    .and_then(|request| aero_delegation_key(request, state, peer))
-                    .and_then(|key| state.backend.aero_callers.identify_callback(key));
                 drop(header);
-                let identity = match callback {
-                    Some((identity, Some(lease))) => {
-                        return Some((
-                            lease.connection,
-                            Some(AdmittedCallback {
-                                identity,
-                                work: Some(lease.work),
-                            }),
-                        ));
-                    }
-                    Some((identity, None)) => Some(AdmittedCallback {
-                        identity,
-                        work: None,
-                    }),
-                    None => None,
-                };
-                state
-                    .lifecycle
-                    .admission
-                    .acquire_request()
-                    .map(|permit| (Arc::new(permit), identity))
+                let permit = state.lifecycle.admission.acquire_request()?;
+                let identity = callback.map(|(identity, _)| AdmittedCallback {
+                    identity,
+                    work: None,
+                });
+                Some((Arc::new(permit), identity))
             }
         }
     }

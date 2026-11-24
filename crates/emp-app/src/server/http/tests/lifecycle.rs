@@ -39,17 +39,88 @@ fn raw_management_paths_match_legacy_without_executing_writes() {
                 )
                 .await;
         }
-        for (headers, status) in [
-            (vec![], 401),
-            (vec![session.as_str(), "Origin: https://other.invalid"], 403),
+        for suffix in [
+            "x<y",
+            "x>y",
+            "x`y",
+            "x%20y",
+            "x\"y",
+            "x{y}",
+            "x\\y",
+            "x#y",
+            "x%23y",
+            "x%ZZ",
+            "x/y",
+            "x\x7fy",
+            "x?probe=\"y\"",
+            "é",
+        ] {
+            for route in ["/api/native/login/start", "/api/accounts/login/finish"] {
+                let path = format!("{route}#{suffix}");
+                let reply = fixture
+                    .parity(
+                        candidate,
+                        &json_request(port, &path, &[&session], b"{}"),
+                        409,
+                    )
+                    .await;
+                assert_eq!(
+                    json_body(&reply)["error"]["code"],
+                    "login_unknown_operation",
+                    "{path}"
+                );
+            }
+            for path in [
+                format!("/api/quit#{suffix}"),
+                format!("/api/integration/enable#{suffix}"),
+            ] {
+                fixture
+                    .parity(
+                        candidate,
+                        &json_request(port, &path, &[&session], b"{}"),
+                        404,
+                    )
+                    .await;
+            }
+            for (route, headers) in [
+                ("/healthz", &[][..]),
+                ("/assets/i18n.js", &[][..]),
+                ("/api/integration", &[session.as_str()][..]),
+                ("/api/config", &[session.as_str()][..]),
+            ] {
+                for query in [format!("?probe={suffix}"), format!("?probe=ok#{suffix}")] {
+                    let path = format!("{route}{query}");
+                    fixture
+                        .parity(candidate, &request(port, "GET", &path, headers, b""), 200)
+                        .await;
+                }
+            }
+        }
+        for path in [
+            "/api/native/login/start#x y",
+            "/api/native/login/start?probe=x y",
         ] {
             fixture
                 .parity(
                     candidate,
-                    &json_request(port, "/api/quit#x", &headers, b"{}"),
-                    status,
+                    &json_request(port, path, &[&session], b"{}"),
+                    400,
                 )
                 .await;
+        }
+        for (headers, status) in [
+            (vec![], 401),
+            (vec![session.as_str(), "Origin: https://other.invalid"], 403),
+        ] {
+            for path in ["/api/quit#x", "/api/native/login/start#x<y"] {
+                fixture
+                    .parity(
+                        candidate,
+                        &json_request(port, path, &headers, b"{}"),
+                        status,
+                    )
+                    .await;
+            }
         }
         fixture
             .parity(candidate, &request(port, "GET", "/healthz", &[], b""), 200)
@@ -324,6 +395,8 @@ fn lifecycle_and_unmatched_requests_match_legacy_wire() {
 fn integration_commands_match_legacy_wire_and_restore_native_files() {
     use super::account_writes::normalize_body;
 
+    const OBSERVED_AT: &str = "2026-01-02T03:04:05Z";
+
     fn fixture() -> Fixture {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -337,12 +410,66 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
             b"# native fixture\nopenai_base_url = \"native\"\n",
         )
         .unwrap();
+        let recovery = root.join("codex/easy-multi-provider/integration");
+        std::fs::create_dir_all(&recovery).unwrap();
+        std::fs::write(
+            recovery.join("runtime.json"),
+            json!({
+                "schema": "easy-multi-provider.runtime-recovery",
+                "version": 1,
+                "state": "native_loaded",
+                "target": "native",
+                "configuration_relation": "unleased",
+                "expected_models": [],
+                "verified": true,
+                "detail": "fixture observation",
+                "updated_at": OBSERVED_AT,
+            })
+            .to_string(),
+        )
+        .unwrap();
         Fixture::with_directory(directory)
+    }
+
+    fn normalize(fixture: &Fixture, reply: Vec<u8>) -> Vec<u8> {
+        normalize_body(reply, |body| {
+            body.replace(&fixture.directory.path().display().to_string(), "/fixture")
+                .replace(&format!("127.0.0.1:{}", fixture.port()), "127.0.0.1:PORT")
+        })
     }
 
     let old = fixture();
     fixture().run_candidate(async |new, candidate| {
         let old_addr = old.legacy.local_addr();
+        let old_status = request(
+            old.port(),
+            "GET",
+            "/api/integration",
+            &[&old.session()],
+            b"",
+        );
+        let new_status = request(
+            new.port(),
+            "GET",
+            "/api/integration",
+            &[&new.session()],
+            b"",
+        );
+        let (old_reply, new_reply) = tokio::join!(
+            exchange_wire(old_addr, &old_status, false),
+            exchange_wire(candidate, &new_status, false),
+        );
+        assert_status(&old_reply, 200);
+        assert_eq!(
+            json_body(&old_reply)["runtime"]["last_known"]["observed_at"],
+            OBSERVED_AT
+        );
+        assert_wire_response_parity(
+            &old_status,
+            &normalize(&old, old_reply),
+            &normalize(new, new_reply),
+        );
+
         for (operation, body, status, state) in [
             ("enable", b"{}".as_slice(), 409, "native"),
             ("restore", b"{}".as_slice(), 409, "native"),
@@ -369,28 +496,6 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
                 exchange_wire(old_addr, &old_request, false),
                 exchange_wire(candidate, &new_request, false),
             );
-            let normalize = |fixture: &Fixture, reply: Vec<u8>| {
-                let value = json_body(&reply);
-                normalize_body(reply, |body| {
-                    let mut body = body
-                        .replace(&fixture.directory.path().display().to_string(), "/fixture")
-                        .replace(&format!("127.0.0.1:{}", fixture.port()), "127.0.0.1:PORT");
-                    for runtime in [&value["runtime"], &value["runtime"]["last_known"]] {
-                        for field in ["checked_at", "observed_at", "updated_at"] {
-                            let time = &runtime[field];
-                            if time.is_number() {
-                                for delimiter in [',', '}'] {
-                                    body = body.replace(
-                                        &format!("\"{field}\":{time}{delimiter}"),
-                                        &format!("\"{field}\":0{delimiter}"),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    body
-                })
-            };
             assert_status(&old_reply, status);
             assert_eq!(json_body(&old_reply)["configuration"]["state"], state);
             assert_wire_response_parity(

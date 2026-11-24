@@ -95,6 +95,7 @@ impl GuardedHead {
     pub(super) fn replay<I>(
         self,
         io: I,
+        transport_target: &str,
         response: Arc<OnceLock<Option<Bytes>>>,
         mode: ServerMode,
         delivery: Option<Arc<Delivery>>,
@@ -120,9 +121,8 @@ impl GuardedHead {
             self.raw.allow_body();
         }
         let mut head = format!(
-            "{} {} {REQUEST_VERSION}\r\n",
-            request.method.as_str(),
-            request.target
+            "{} {transport_target} {REQUEST_VERSION}\r\n",
+            request.method.as_str()
         )
         .into_bytes();
         if upgrade {

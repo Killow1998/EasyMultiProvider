@@ -21,7 +21,11 @@ use crate::{
         observation::http::HttpObservation,
     },
 };
-use axum::{Router, extract::ConnectInfo, http::StatusCode};
+use axum::{
+    Router,
+    extract::ConnectInfo,
+    http::{StatusCode, Uri},
+};
 use hyper::{
     server::conn::http1,
     upgrade::{OnUpgrade, Upgraded},
@@ -31,6 +35,7 @@ use hyper_util::{
     service::TowerToHyperService,
 };
 use std::{
+    borrow::Cow,
     net::{SocketAddr, TcpStream},
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
@@ -351,13 +356,25 @@ async fn drive_http(
         shutdown_after_response: Mutex::default(),
     }));
     let wire_response = Arc::new(OnceLock::new());
-    let candidate_routes = candidate.is_some();
+    let raw_request = raw.request();
+    let path = raw_request.raw_path();
+    let routing_path =
+        (candidate.is_some() && path.starts_with('/')).then(|| super::http::routing_path(path));
+    let (transport_target, routing_uri) = match routing_path {
+        Some(Cow::Borrowed(path)) => (path, None),
+        Some(Cow::Owned(path)) => (
+            "/",
+            Some(Uri::try_from(path).expect("escaped routing path")),
+        ),
+        None => (raw_request.target, None),
+    };
     let service = tower::service_fn(|mut request: axum::http::Request<hyper::body::Incoming>| {
         let router = router.clone();
         let raw = raw.clone();
         let context = context.clone();
         let wire_response = &wire_response;
         let inference = inference.as_ref();
+        let routing_uri = routing_uri.as_ref();
         async move {
             request.extensions_mut().insert(ConnectInfo(peer));
             request.extensions_mut().insert(raw.clone());
@@ -386,15 +403,8 @@ async fn drive_http(
             if let Some(stream) = stream {
                 request.extensions_mut().insert(stream.clone());
             }
-            if candidate_routes {
-                let head = raw.request();
-                let path = head.raw_path();
-                if path.starts_with('/')
-                    && path != request.uri().path()
-                    && let Ok(uri) = super::http::routing_target(head.target).parse()
-                {
-                    *request.uri_mut() = uri;
-                }
+            if let Some(uri) = routing_uri {
+                *request.uri_mut() = uri.clone();
             }
             let mut response = router.oneshot(request).await?;
             if let Some(stream) = stream
@@ -424,7 +434,7 @@ async fn drive_http(
             Ok::<_, std::convert::Infallible>(response)
         }
     });
-    let websocket = websocket::is_upgrade_route(raw.request());
+    let websocket = websocket::is_upgrade_route(raw_request);
     let connection = http1::Builder::new()
         .keep_alive(websocket)
         .half_close(half_close)
@@ -435,7 +445,13 @@ async fn drive_http(
         .header_read_timeout(mode.head_timeout())
         .auto_date_header(false)
         .serve_connection(
-            TokioIo::new(head.replay(io, Arc::clone(&wire_response), mode, delivery.clone())),
+            TokioIo::new(head.replay(
+                io,
+                transport_target,
+                Arc::clone(&wire_response),
+                mode,
+                delivery.clone(),
+            )),
             TowerToHyperService::new(service),
         )
         .with_upgrades();

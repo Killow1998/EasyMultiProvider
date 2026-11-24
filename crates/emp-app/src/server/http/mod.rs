@@ -29,7 +29,7 @@ use axum::{
     middleware::{Next, from_fn_with_state},
     response::{IntoResponse, Response},
 };
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, fmt::Write as _, sync::Arc};
 
 pub(crate) fn with_entry_state<S>(
     router: Router<Arc<ServerState>>,
@@ -68,7 +68,6 @@ pub(super) async fn guard_route_method(
         Err(error) => return error.into_response(),
     };
     if path.starts_with('/')
-        && request.uri().path() == routing_target(path)
         && (request.method() != Method::HEAD || matches!(path, "/" | "/index.html" | "/healthz"))
     {
         return next.run(request).await;
@@ -83,12 +82,21 @@ pub(super) async fn guard_route_method(
     result.unwrap_or_else(|error| error).into_response()
 }
 
-pub(super) fn routing_target(target: &str) -> Cow<'_, str> {
-    if target.contains('#') {
-        Cow::Owned(target.replace('#', "%23"))
-    } else {
-        Cow::Borrowed(target)
+pub(super) fn routing_path(path: &str) -> Cow<'_, str> {
+    let needs_escape = |character| matches!(character, '\0'..=' ' | '#' | '<' | '>' | '`' | '\x7f');
+    let Some(first) = path.find(needs_escape) else {
+        return Cow::Borrowed(path);
+    };
+    let mut escaped = String::with_capacity(path.len());
+    escaped.push_str(&path[..first]);
+    for character in path[first..].chars() {
+        if needs_escape(character) {
+            write!(escaped, "%{:02X}", character as u8).expect("write to String");
+        } else {
+            escaped.push(character);
+        }
     }
+    Cow::Owned(escaped)
 }
 
 fn raw_head(extensions: &Extensions) -> Result<&RawRequestHead, error::EntryError> {
