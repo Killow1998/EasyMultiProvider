@@ -83,7 +83,8 @@ pub(super) async fn guard_route_method(
 }
 
 pub(super) fn routing_path(path: &str) -> Cow<'_, str> {
-    let needs_escape = |character| matches!(character, '\0'..=' ' | '#' | '<' | '>' | '`' | '\x7f');
+    let needs_escape =
+        |character| matches!(character, '\0'..=' ' | '"' | '#' | '<' | '>' | '`' | '\x7f');
     let Some(first) = path.find(needs_escape) else {
         return Cow::Borrowed(path);
     };
@@ -107,3 +108,18 @@ fn raw_head(extensions: &Extensions) -> Result<&RawRequestHead, error::EntryErro
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[test]
+fn routing_path_escapes_every_ascii_byte_rejected_by_http_uri() {
+    for byte in 0x00..=0x7f {
+        let character = char::from(byte);
+        for target in [format!("/a{character}b"), format!("/a?x={character}b")] {
+            let escaped = routing_path(&target);
+            assert!(
+                axum::http::Uri::try_from(escaped.as_ref()).is_ok(),
+                "{target:?} -> {escaped:?}"
+            );
+        }
+    }
+}

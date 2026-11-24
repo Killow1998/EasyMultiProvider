@@ -6,6 +6,7 @@
         THEN json_extract(facts,'$.speed_mode') ELSE 'unknown' END) AS facts,delivery,
     CASE
       WHEN json_extract(facts,'$.error_class')='client_cancelled' THEN 'interrupted'
+      -- error_class distinguishes client disconnection from EMP-initiated draining.
       WHEN json_extract(facts,'$.error_class') IN ('client_disconnect','server_draining') THEN 'cancelled'
       WHEN json_extract(facts,'$.error_code')='previous_response_not_found'
         OR (json_extract(facts,'$.success') IS NOT 1 AND json_extract(delivery,'$.error_code')='previous_response_not_found') THEN 'recovery_required'

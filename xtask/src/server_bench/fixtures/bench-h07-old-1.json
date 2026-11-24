@@ -1,0 +1,59 @@
+{
+  "label": "old-1",
+  "startup_ms": 32.206871,
+  "exit_ms": 19.176851000000003,
+  "idle": {
+    "rss_kib": 25036,
+    "threads": 17
+  },
+  "http": [
+    {
+      "concurrency": 1,
+      "requests": 2000,
+      "latency_ms": {
+        "p50": 4.235723,
+        "p99": 8.827601
+      },
+      "requests_per_second": 220.9191826096196
+    },
+    {
+      "concurrency": 4,
+      "requests": 2000,
+      "latency_ms": {
+        "p50": 8.719183000000001,
+        "p99": 16.348769
+      },
+      "requests_per_second": 440.87200937079103
+    },
+    {
+      "concurrency": 16,
+      "requests": 2000,
+      "latency_ms": {
+        "p50": 34.259463,
+        "p99": 83.206873
+      },
+      "requests_per_second": 440.48493534495384
+    }
+  ],
+  "sse_requests": 16,
+  "sse_first_byte_ms": {
+    "p50": 12.000573000000001,
+    "p99": 16.422800000000002
+  },
+  "ws": {
+    "sessions": 64,
+    "before": {
+      "rss_kib": 48592,
+      "threads": 17
+    },
+    "open": {
+      "rss_kib": 61020,
+      "threads": 81
+    },
+    "after": {
+      "rss_kib": 57500,
+      "threads": 17
+    }
+  },
+  "cancellation_within_1s": true
+}

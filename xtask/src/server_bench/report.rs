@@ -5,10 +5,22 @@ use std::io::{self, BufReader, Write};
 use std::path::Path;
 use std::time::Duration;
 
+const STARTUP_METRIC: &str = "Startup to /healthz 200 (ms)";
+
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum StartupMeasurement {
+    #[default]
+    HealthProbeAfterAnnouncement,
+    ConcurrentHealthProbe,
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Report {
     pub(super) label: String,
     pub(super) startup_ms: f64,
+    #[serde(default)]
+    pub(super) startup_measurement: StartupMeasurement,
     pub(super) exit_ms: Option<f64>,
     pub(super) idle: Option<ProcessUsage>,
     pub(super) http: Vec<HttpRun>,
@@ -142,10 +154,7 @@ impl Report {
     fn metrics(&self) -> Vec<(String, Metric)> {
         let number = Metric::Number;
         let mut rows = vec![
-            (
-                "Startup to /healthz 200 (ms)".into(),
-                number(self.startup_ms),
-            ),
+            (STARTUP_METRIC.into(), number(self.startup_ms)),
             (
                 "POST /api/quit to exit (ms)".into(),
                 self.exit_ms.map_or(Metric::Unavailable, number),
@@ -226,13 +235,18 @@ impl Report {
         {
             return Err("benchmark workloads differ".into());
         }
+        let same_startup_measurement = self.startup_measurement == candidate.startup_measurement;
         let baseline = table_label(&self.label);
         let candidate = table_label(&candidate.label);
         let mut table = format!(
             "| Metric | {baseline} | {candidate} | Delta | Change |\n|---|---:|---:|---:|---:|\n"
         );
         for ((name, old), (_, new)) in left.into_iter().zip(right) {
-            let (delta, change) = old.change(&new);
+            let (delta, change) = if name == STARTUP_METRIC && !same_startup_measurement {
+                ("incomparable".into(), "incomparable".into())
+            } else {
+                old.change(&new)
+            };
             table.push_str(&format!(
                 "| {name} | {} | {} | {delta} | {change} |\n",
                 old.text(),
@@ -266,6 +280,7 @@ mod tests {
         Report {
             label: label.into(),
             startup_ms,
+            startup_measurement: StartupMeasurement::ConcurrentHealthProbe,
             exit_ms: Some(0.0),
             idle: Some(ProcessUsage {
                 rss_kib: 17408,
@@ -333,6 +348,7 @@ mod tests {
         let original = report("default", 12.6, true);
         original.save(&path).unwrap();
         let value: serde_json::Value = serde_json::from_reader(File::open(&path).unwrap()).unwrap();
+        assert_eq!(value["startup_measurement"], "concurrent_health_probe");
         assert_eq!(value["ws"]["before"], serde_json::Value::Null);
         assert_eq!(value["http"][0]["latency_ms"]["p99"], 9.75);
         assert_eq!(Report::load(&path).unwrap(), original);
@@ -359,6 +375,38 @@ mod tests {
         );
         candidate.http[0].requests = 1999;
         assert!(baseline.compare(&candidate).is_err());
+    }
+
+    #[test]
+    fn compares_h07_report_without_mixing_startup_measurements() {
+        let old_json = include_str!("fixtures/bench-h07-old-1.json");
+        let baseline: Report = serde_json::from_str(old_json).unwrap();
+        let mut new_json: serde_json::Value = serde_json::from_str(old_json).unwrap();
+        new_json["label"] = "new".into();
+        new_json["startup_ms"] = 20.0.into();
+        new_json["startup_measurement"] = "concurrent_health_probe".into();
+        new_json["exit_ms"] = 20.0.into();
+        let candidate: Report = serde_json::from_value(new_json).unwrap();
+        let comparison = baseline.compare(&candidate).unwrap();
+        assert!(
+            comparison.contains(
+                "| Startup to /healthz 200 (ms) | 32.207 | 20.000 | incomparable | incomparable |"
+            ),
+            "{comparison}"
+        );
+        assert!(
+            comparison
+                .contains("| POST /api/quit to exit (ms) | 19.177 | 20.000 | +0.823 | +4.29% |")
+        );
+        assert!(candidate.compare(&baseline).unwrap().contains(
+            "| Startup to /healthz 200 (ms) | 20.000 | 32.207 | incomparable | incomparable |"
+        ));
+        assert!(
+            baseline
+                .compare(&baseline)
+                .unwrap()
+                .contains("| Startup to /healthz 200 (ms) | 32.207 | 32.207 | +0.000 | +0.00% |")
+        );
     }
 
     #[test]

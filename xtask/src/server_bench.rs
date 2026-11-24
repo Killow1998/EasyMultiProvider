@@ -3,7 +3,9 @@ mod upstream;
 mod wire;
 
 use crate::Result;
-use report::{HttpRun, ProcessUsage, Quantiles, Report, WebSockets, milliseconds};
+use report::{
+    HttpRun, ProcessUsage, Quantiles, Report, StartupMeasurement, WebSockets, milliseconds,
+};
 use serde_json::{Value, json};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read};
@@ -141,6 +143,7 @@ fn measure(
     let report = Report {
         label: label.into(),
         startup_ms: milliseconds(startup),
+        startup_measurement: StartupMeasurement::ConcurrentHealthProbe,
         exit_ms: exit.as_ref().ok().copied().map(milliseconds),
         idle,
         http,

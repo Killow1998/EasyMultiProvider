@@ -2146,6 +2146,65 @@ fn recovery_keeps_flat_errors_and_auth_precedes_empty_body_policy() {
 }
 
 #[test]
+fn rejected_routing_uri_matches_legacy_wire() {
+    Fixture::new().run_candidate(async |fixture, candidate| {
+        let target = "example.invalid[";
+        assert!(axum::http::Uri::try_from(target).is_err());
+        fixture
+            .parity(
+                candidate,
+                &request(fixture.port(), "GET", target, &[], b""),
+                404,
+            )
+            .await;
+    });
+}
+
+#[test]
+fn candidate_router_receives_original_query() {
+    let fixture = Fixture::new();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let state = &fixture.legacy.state;
+            let router = Router::new().fallback(|uri: axum::http::Uri| async move {
+                JsonReply::new(
+                    200,
+                    json!({"path": uri.path(), "query": uri.query()}).to_string(),
+                )
+            });
+            let candidate = tokio::spawn(crate::server::serve(
+                listener,
+                router,
+                state.lifecycle.clone(),
+                Some(state.clone()),
+            ));
+            for (target, path, query) in [
+                ("/healthz?k=a+b&k=%2f?", "/healthz", Some("k=a+b&k=%2f?")),
+                ("/healthz?", "/healthz", Some("")),
+                ("/healthz", "/healthz", None),
+                ("/path#x?<y>=a#b\"", "/path%23x", Some("%3Cy%3E=a%23b%22")),
+            ] {
+                let wire = request(fixture.port(), "GET", target, &[], b"");
+                let reply = exchange_wire(address, &wire, false).await;
+                assert_status(&reply, 200);
+                assert_eq!(
+                    json_body(&reply),
+                    json!({"path": path, "query": query}),
+                    "{target}"
+                );
+            }
+            state.request_shutdown();
+            candidate.await.unwrap().unwrap();
+        });
+    fixture.legacy.shutdown().unwrap();
+}
+
+#[test]
 fn hyper_parse_rejection_uses_emp_response_before_dispatch() {
     Fixture::new().run(async |fixture, new| {
         let legacy_accepts = request(

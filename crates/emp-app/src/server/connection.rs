@@ -357,16 +357,15 @@ async fn drive_http(
     }));
     let wire_response = Arc::new(OnceLock::new());
     let raw_request = raw.request();
-    let path = raw_request.raw_path();
-    let routing_path =
-        (candidate.is_some() && path.starts_with('/')).then(|| super::http::routing_path(path));
-    let (transport_target, routing_uri) = match routing_path {
-        Some(Cow::Borrowed(path)) => (path, None),
-        Some(Cow::Owned(path)) => (
-            "/",
-            Some(Uri::try_from(path).expect("escaped routing path")),
-        ),
-        None => (raw_request.target, None),
+    let (transport_target, routing_uri) = if candidate.is_some() {
+        let uri = match super::http::routing_path(raw_request.target) {
+            Cow::Borrowed(target) => Uri::try_from(target),
+            Cow::Owned(target) => Uri::try_from(target),
+        }
+        .unwrap_or_else(|_| Uri::from_static("*"));
+        ("/", Some(uri))
+    } else {
+        (raw_request.target, None)
     };
     let service = tower::service_fn(|mut request: axum::http::Request<hyper::body::Incoming>| {
         let router = router.clone();

@@ -393,25 +393,20 @@ fn lifecycle_and_unmatched_requests_match_legacy_wire() {
 }
 
 #[cfg(unix)]
-#[test]
-fn integration_commands_match_legacy_wire_and_restore_native_files() {
-    use super::account_writes::normalize_body;
-
-    const OBSERVED_AT: &str = "2026-01-02T03:04:05Z";
-
-    fn fixture() -> Fixture {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path();
-        std::fs::write(
-            root.join("config.json"),
-            br#"{"providers":[{"id":"external","base_url":"https://example.invalid/v1","protocol":"responses"}],"models":[{"id":"external/model-a","provider":"external","upstream_id":"model-a","enabled":true}]}"#,
-        ).unwrap();
-        std::fs::create_dir(root.join("codex")).unwrap();
-        std::fs::write(
-            root.join("codex/config.toml"),
-            b"# native fixture\nopenai_base_url = \"native\"\n",
-        )
-        .unwrap();
+fn integration_fixture(observed_at: Option<&str>) -> Fixture {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("config.json"),
+        br#"{"providers":[{"id":"external","base_url":"https://example.invalid/v1","protocol":"responses"}],"models":[{"id":"external/model-a","provider":"external","upstream_id":"model-a","enabled":true}]}"#,
+    ).unwrap();
+    std::fs::create_dir(root.join("codex")).unwrap();
+    std::fs::write(
+        root.join("codex/config.toml"),
+        b"# native fixture\nopenai_base_url = \"native\"\n",
+    )
+    .unwrap();
+    if let Some(observed_at) = observed_at {
         let recovery = root.join("codex/easy-multi-provider/integration");
         std::fs::create_dir_all(&recovery).unwrap();
         std::fs::write(
@@ -425,24 +420,30 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
                 "expected_models": [],
                 "verified": true,
                 "detail": "fixture observation",
-                "updated_at": OBSERVED_AT,
+                "updated_at": observed_at,
             })
             .to_string(),
         )
         .unwrap();
-        Fixture::with_directory(directory)
     }
+    Fixture::with_directory(directory)
+}
 
-    fn normalize(fixture: &Fixture, reply: Vec<u8>) -> Vec<u8> {
-        normalize_body(reply, |body| {
-            body.replace(&fixture.directory.path().display().to_string(), "/fixture")
-                .replace(&format!("127.0.0.1:{}", fixture.port()), "127.0.0.1:PORT")
-        })
-    }
+#[cfg(unix)]
+fn normalize_integration_reply(fixture: &Fixture, reply: Vec<u8>) -> Vec<u8> {
+    super::account_writes::normalize_body(reply, |body| {
+        body.replace(&fixture.directory.path().display().to_string(), "/fixture")
+            .replace(&format!("127.0.0.1:{}", fixture.port()), "127.0.0.1:PORT")
+    })
+}
 
-    let old = fixture();
-    fixture().run_candidate(async |new, candidate| {
-        let old_addr = old.legacy.local_addr();
+#[cfg(unix)]
+#[test]
+fn integration_recovery_record_matches_legacy_wire() {
+    const OBSERVED_AT: &str = "2026-01-02T03:04:05Z";
+
+    let old = integration_fixture(Some(OBSERVED_AT));
+    integration_fixture(Some(OBSERVED_AT)).run_candidate(async |new, candidate| {
         let old_status = request(
             old.port(),
             "GET",
@@ -458,7 +459,7 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
             b"",
         );
         let (old_reply, new_reply) = tokio::join!(
-            assert_wire(old_addr, &old_status, false, 200),
+            assert_wire(old.legacy.local_addr(), &old_status, false, 200),
             assert_wire(candidate, &new_status, false, 200),
         );
         for reply in [&old_reply, &new_reply] {
@@ -469,10 +470,19 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
         }
         assert_wire_response_parity(
             &old_status,
-            &normalize(&old, old_reply),
-            &normalize(new, new_reply),
+            &normalize_integration_reply(&old, old_reply),
+            &normalize_integration_reply(new, new_reply),
         );
+    });
+    old.legacy.shutdown().unwrap();
+}
 
+#[cfg(unix)]
+#[test]
+fn integration_commands_match_legacy_wire_and_restore_native_files() {
+    let old = integration_fixture(None);
+    integration_fixture(None).run_candidate(async |new, candidate| {
+        let old_addr = old.legacy.local_addr();
         for (operation, body, status, state) in [
             ("enable", b"{}".as_slice(), 409, "native"),
             ("restore", b"{}".as_slice(), 409, "native"),
@@ -500,12 +510,16 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
                 assert_wire(candidate, &new_request, false, status),
             );
             for reply in [&old_reply, &new_reply] {
-                assert_eq!(json_body(reply)["configuration"]["state"], state);
+                let body = json_body(reply);
+                assert_eq!(body["configuration"]["state"], state);
+                if status == 409 {
+                    assert_eq!(body["runtime"].get("last_known"), Some(&Value::Null));
+                }
             }
             assert_wire_response_parity(
                 &old_request,
-                &normalize(&old, old_reply),
-                &normalize(new, new_reply),
+                &normalize_integration_reply(&old, old_reply),
+                &normalize_integration_reply(new, new_reply),
             );
         }
         for fixture in [&old, new] {

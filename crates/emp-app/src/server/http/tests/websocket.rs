@@ -849,11 +849,12 @@ fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
             assert_upgrade(&client);
             client.io.write_all(&websocket_frame(0x81, MASK, NATIVE_CREATE)).await.unwrap();
 
-            let fallback_started = timeout(DEADLINE, async {
+            let upstream_delay = Duration::from_millis(400);
+            let (fallback_started, http_wait_ms) = timeout(DEADLINE, async {
                 let (mut ws, _) = listener.accept().await.unwrap();
                 let request = String::from_utf8(head(&mut ws).await.unwrap()).unwrap();
                 assert_eq!(parse_request(&request).unwrap().header("Upgrade"), Some("websocket"));
-                tokio::time::sleep(Duration::from_millis(400)).await;
+                tokio::time::sleep(upstream_delay).await;
                 let rejected_at = std::time::Instant::now();
                 ws.write_all(
                     b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -866,10 +867,13 @@ fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
                 assert_eq!(request.method, crate::http::request::RequestMethod::Post);
                 let mut body = vec![0; request.header("Content-Length").unwrap().parse().unwrap()];
                 http.read_exact(&mut body).await.unwrap();
+                let http_wait_started = std::time::Instant::now();
+                tokio::time::sleep(upstream_delay).await;
+                let http_wait_ms = http_wait_started.elapsed().as_millis() as u64;
                 http.write_all(
                     b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                 ).await.unwrap();
-                rejected_at
+                (rejected_at, http_wait_ms)
             }).await.unwrap();
             let error = receive_event(&mut client, "error").await;
             let fallback_elapsed_ms = fallback_started.elapsed().as_millis() as u64;
@@ -883,6 +887,10 @@ fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
             assert_eq!(record["error_origin"], "upstream");
             assert_eq!(record["state"], "failed");
             let duration_ms = record["duration_ms"].as_u64().unwrap();
+            assert!(
+                duration_ms >= http_wait_ms,
+                "call duration {duration_ms} ms is below the HTTP upstream wait of {http_wait_ms} ms"
+            );
             assert!(
                 duration_ms <= fallback_elapsed_ms,
                 "call duration {duration_ms} ms exceeds the HTTP fallback window of {fallback_elapsed_ms} ms"

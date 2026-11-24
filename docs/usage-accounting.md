@@ -167,11 +167,11 @@ classifies older records from stored delivery evidence without rewriting usage.
 | `completed` | Upstream success. Delivery to Codex remains a separate fact. |
 | `failed` | Explicit failure, status or failed/incomplete response or delivery. |
 | `interrupted` | Explicit client interruption or steering. |
-| `cancelled` | Client disconnection. |
+| `cancelled` | Client disconnection (`error_class=client_disconnect`) or EMP-initiated draining (`error_class=server_draining`). |
 | `recovery_required` | History resend requested through `previous_response_not_found`. |
 | `unknown` | No evidence establishing another outcome. |
 
-Request success is completed / (completed + failed); interruption, disconnect,
+Request success is completed / (completed + failed). Interruption, cancellation,
 history resend and unknown outcomes stay separate. It measures requests, not
 final conversation success. Native upstream wire errors remain unchanged and
 retain upstream receipt attribution even if their payload claims another source.
