@@ -55,17 +55,6 @@ pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input
     .await
 }
 
-#[cfg(unix)]
-async fn quit_response(address: SocketAddr, session: &str) -> Vec<u8> {
-    exchange_before(
-        address,
-        &json_request(address.port(), "/api/quit", &[session], b"{}"),
-        false,
-        &Deadline::after(test_timeout(crate::server::REQUEST_DRAIN_TIMEOUT)),
-    )
-    .await
-}
-
 async fn exchange_before(
     address: SocketAddr,
     request: &[u8],
@@ -141,6 +130,7 @@ async fn disconnect_submitted_write(
 mod account_writes;
 #[cfg(unix)]
 mod catalog_writes;
+mod drain;
 #[cfg(unix)]
 mod inference;
 mod lifecycle;
@@ -286,14 +276,37 @@ pub(crate) fn json_request(port: u16, path: &str, headers: &[&str], body: &[u8])
 fn shutdown_with_stalled_response(
     server: RunningServer,
     slow: crate::server::raw_tcp::RawClient,
+    clock: &crate::server::tests::TestDrainClock,
 ) -> Result<(), crate::error::AppError> {
+    let control = server.state.lifecycle.clone();
     let (complete, finished) = std::sync::mpsc::channel();
     let shutdown = std::thread::spawn(move || complete.send(server.shutdown()).unwrap());
-    let result = finished.recv_timeout(
-        crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::wire_timeout(),
-    );
+    let deadline = Deadline::after(crate::server::raw_tcp::wire_timeout());
+    let ready = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            timeout(deadline.remaining(), async {
+                control.signal().wait().await;
+                control.admission.wait_for_business_idle().await;
+            })
+            .await
+        });
+    let pending_at_cutoff = control.admission.active_requests() > 0
+        && matches!(
+            finished.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+    clock.expire();
+    let result = finished.recv_timeout(deadline.remaining());
     drop(slow);
     shutdown.join().unwrap();
+    ready.expect("shutdown reached the sending stage");
+    assert!(
+        pending_at_cutoff,
+        "the slow response must still be pending before cutoff"
+    );
     result.expect("shutdown completed with the slow client still connected")
 }
 
@@ -423,42 +436,18 @@ fn update_module_and_gateway_reads_keep_json_and_auth() {
         .unwrap();
     let device = serde_json::to_value(device).unwrap();
     let routes = [
-        ("/api/updates", "current_version", json!(crate::VERSION), 1),
-        (
-            "/api/modules",
-            "modules",
-            json!(backend.modules.status()),
-            2,
-        ),
-        ("/api/gateway", "api_key", json!(backend.gateway_key), 2),
-        (
-            "/api/gateway/clients",
-            "clients",
-            json!(backend.gateway_clients.list()),
-            2,
-        ),
-        (
-            "/api/gateway/usage?group=device&start=0&end=10",
-            "rows",
-            json!([{
-                "caller_id":device["id"], "caller_name":"Parity device", "calls":0,
-                "input_tokens":0, "output_tokens":0, "cost_nanos":0,
-                "reported_calls":0, "priced_calls":0, "models":[]
-            }]),
-            2,
-        ),
-        (
-            "/api/decisions/connection",
-            "api_key",
-            json!(backend.gateway_key),
-            2,
-        ),
+        ("/api/updates", 1),
+        ("/api/modules", 2),
+        ("/api/gateway", 2),
+        ("/api/gateway/clients", 2),
+        ("/api/gateway/usage?group=device&start=0&end=10", 2),
+        ("/api/decisions/connection", 2),
     ];
     let bearer = format!("Authorization: Bearer {}", backend.gateway_key);
     fixture.run_wire(async |fixture, address| {
         let session = fixture.session();
         let port = fixture.port();
-        for (path, field, expected, cache_headers) in routes {
+        for (path, cache_headers) in routes {
             let wire = request(
                 port,
                 "GET",
@@ -467,27 +456,49 @@ fn update_module_and_gateway_reads_keep_json_and_auth() {
                 b"",
             );
             let reply = exchange_wire(address, &wire, true).await;
-            let state = &fixture.server.state;
-            let reference = if path == "/api/updates" {
-                crate::api::updates::read(state)
-            } else if path == "/api/modules" {
-                crate::api::modules::read(state)
-            } else {
-                let raw =
-                    crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
-                crate::api::gateway::GatewayRead::for_path(raw.raw_path())
-                    .unwrap()
-                    .read(raw, state)
-            };
-            wire_contract::assert_reference_reply(path, &reply, &reference.encode());
-            assert_eq!(json_body(&reply)[field], expected);
-            assert_eq!(
-                str::from_utf8(&reply)
-                    .unwrap()
-                    .matches("\r\nCache-Control: no-store\r\n")
-                    .count(),
-                cache_headers,
-            );
+            let extra = (cache_headers == 2).then_some("Cache-Control: no-store");
+            let body = wire_contract::assert_json_read(path, &reply, extra);
+            match path {
+                "/api/updates" => {
+                    assert_eq!(body["current_version"], env!("CARGO_PKG_VERSION"));
+                    assert_eq!(body["state"], "idle");
+                    assert_eq!(body["latest_version"], Value::Null);
+                }
+                "/api/modules" => {
+                    let modules = body["modules"].as_array().unwrap();
+                    let ids = modules
+                        .iter()
+                        .map(|module| module["id"].as_str().unwrap())
+                        .collect::<Vec<_>>();
+                    assert_eq!(ids, ["decision", "gateway", "aggregate", "team", "aero"]);
+                    assert!(
+                        modules
+                            .iter()
+                            .all(|module| module["enabled"] == false && module["active"] == false)
+                    );
+                    assert_eq!(body["migration_allowed"], true);
+                }
+                "/api/gateway/clients" => {
+                    let clients = body["clients"].as_array().unwrap();
+                    assert_eq!(clients.len(), 1);
+                    assert_eq!(clients[0]["id"], device["id"]);
+                    assert_eq!(clients[0]["name"], "Parity device");
+                    assert_eq!(clients[0]["api_key"], device["api_key"]);
+                    assert!(clients[0]["created_at"].as_f64().unwrap() > 0.0);
+                }
+                "/api/gateway/usage?group=device&start=0&end=10" => assert_eq!(
+                    body["rows"],
+                    json!([{
+                        "caller_id":device["id"], "caller_name":"Parity device", "calls":0,
+                        "input_tokens":0, "output_tokens":0, "cost_nanos":0,
+                        "reported_calls":0, "priced_calls":0, "models":[]
+                    }])
+                ),
+                _ => assert_eq!(
+                    body,
+                    json!({"api_key": fixture.server.state.backend.gateway_key})
+                ),
+            }
             let missing = format!("{}/missing", path.split('?').next().unwrap());
             for (method, path, headers, status) in [
                 ("GET", path, [&*bearer].as_slice(), 401),
@@ -776,9 +787,8 @@ fn guides_and_assets_keep_wire_contracts() {
                 );
                 wire_contract::assert_reply(path, &reply, &head, body);
             } else {
-                let expected = crate::services::guide_assets::asset_reply(path).unwrap().encode();
-                wire_contract::assert_reference_reply(path, &reply, &expected);
-                let (_, received) = page_reply_parts(&reply, content_type, cache);
+                let (head, received) = page_reply_parts(&reply, content_type, cache);
+                assert_eq!(head, wire_contract::asset_head!("text/html; charset=utf-8", received.len()), "{path}");
                 let html = str::from_utf8(received).unwrap();
                 assert!(html.starts_with("<!doctype html><html lang=\"zh-CN\">"));
                 assert!(html.contains("href=\"/assets/guide.css\""));
@@ -1021,25 +1031,8 @@ fn team_reads_preserve_identity_and_auth() {
                 }
             };
             let reply = exchange_wire(address, &valid(path, &signed), !post).await;
-            let state = &fixture.server.state;
-            let expected = match path {
-                "/api/team/status" => crate::api::team::read(state),
-                "/api/team/notices" => crate::api::team::notices(state),
-                _ => JsonReply::new(200, "{}").with_header("Cache-Control", "no-store"),
-            };
-            wire_contract::assert_reference_reply(path, &reply, &expected.encode());
-            let head = str::from_utf8(&reply)
-                .unwrap()
-                .split_once("\r\n\r\n")
-                .unwrap()
-                .0;
-            assert_eq!(
-                head.lines()
-                    .filter(|line| *line == "Cache-Control: no-store")
-                    .count(),
-                cache_headers
-            );
-            let body = json_body(&reply);
+            let extra = (cache_headers == 2).then_some("Cache-Control: no-store");
+            let body = wire_contract::assert_json_read(path, &reply, extra);
             match path {
                 "/api/team/status" => {
                     assert_eq!(body["joined"], true);
@@ -1145,38 +1138,26 @@ fn inspection_reads_preserve_auth_and_hide_credentials() {
                 b"",
             );
             let reply = exchange_wire(address, &wire, true).await;
-            let state = &fixture.server.state;
-            let expected = match path {
-                "/api/diagnostics" => crate::api::diagnostics::read(state),
-                "/api/support-report" => crate::api::support_report::read(state),
-                "/api/capabilities" => crate::api::inspection::capabilities(state),
-                "/api/models/vision-test-image" => crate::api::inspection::vision_test_image(state),
-                "/api/models/audio-test-sound" => crate::api::inspection::audio_test_sound(state),
-                _ => crate::api::images::credit_status(state),
+            let extra = match path {
+                "/api/support-report" => {
+                    Some("Content-Disposition: attachment; filename=\"EMP-support-report.json\"")
+                }
+                _ if cache_headers == 2 => Some("Cache-Control: no-store"),
+                _ => None,
             };
-            if path == "/api/support-report" {
-                let actual = checked_support_report(&reply);
-                let expected = checked_support_report(&expected.encode());
-                wire_contract::assert_reference_reply(path, actual.as_bytes(), expected.as_bytes());
-            } else {
-                wire_contract::assert_reference_reply(path, &reply, &expected.encode());
-            }
-            assert_status(&reply, 200);
+            let body = wire_contract::assert_json_read(path, &reply, extra);
             let text = str::from_utf8(&reply).unwrap();
-            let head = text.split_once("\r\n\r\n").unwrap().0;
-            assert_eq!(
-                head.lines()
-                    .filter(|line| *line == "Cache-Control: no-store")
-                    .count(),
-                cache_headers
-            );
-            let body = json_body(&reply);
-            assert!(!body[field].is_null(), "{path} omitted {field}");
             match path {
                 "/api/support-report" => {
-                    assert!(head.contains(
-                        "\r\nContent-Disposition: attachment; filename=\"EMP-support-report.json\""
-                    ));
+                    assert_eq!(body["schema_version"], 1);
+                    assert_eq!(body["emp_version"], env!("CARGO_PKG_VERSION"));
+                    assert_eq!(body["accounts"]["imported_count"], 0);
+                    assert_eq!(body["accounts"]["native"]["credential_present"], true);
+                    time::OffsetDateTime::parse(
+                        body["generated_at"].as_str().unwrap(),
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .unwrap();
                     for private in [
                         "parity-private-token",
                         "parity-private-account",
@@ -1198,7 +1179,13 @@ fn inspection_reads_preserve_auth_and_hide_credentials() {
                     assert!(body[field].as_str().unwrap().starts_with("UklGR"));
                 }
                 "/api/image-credit" => assert_eq!(body[field], 2_000_000_000_i64),
-                _ => {}
+                "/api/diagnostics" => {
+                    assert_eq!(body["capacity"], 512);
+                    assert_eq!(body["sample_count"], 0);
+                    assert_eq!(body["records"], json!([]));
+                }
+                "/api/capabilities" => assert_eq!(body["capabilities"], json!([])),
+                _ => unreachable!("{path}"),
             }
             for (headers, status) in [
                 ([].as_slice(), 401),
@@ -1220,28 +1207,6 @@ fn inspection_reads_preserve_auth_and_hide_credentials() {
             assert_entry_error(address, &request(port, "HEAD", path, &[&session], b""), 404).await;
         }
     });
-}
-
-fn checked_support_report(reply: &[u8]) -> String {
-    let body = json_body(reply);
-    let timestamp = body["generated_at"].as_str().unwrap();
-    time::OffsetDateTime::parse(timestamp, &time::format_description::well_known::Rfc3339).unwrap();
-    let (head, body) = str::from_utf8(reply)
-        .unwrap()
-        .split_once("\r\n\r\n")
-        .unwrap();
-    let body_with_fixed_time = body.replacen(
-        &format!(r#""generated_at":"{timestamp}""#),
-        r#""generated_at":"2000-01-01T00:00:00Z""#,
-        1,
-    );
-    let length = format!("\r\nContent-Length: {}\r\n", body.len());
-    assert!(head.contains(&length));
-    let head = head.replace(
-        &length,
-        &format!("\r\nContent-Length: {}\r\n", body_with_fixed_time.len()),
-    );
-    format!("{head}\r\n\r\n{body_with_fixed_time}")
 }
 
 async fn proxy_probe(
@@ -1276,15 +1241,18 @@ fn account_reads_preserve_json_and_auth() {
             for end_input in [false, true] {
                 let wire = request(port, "GET", path, &[&session], b"");
                 let reply = exchange_wire(address, &wire, end_input).await;
-                let raw =
-                    crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
-                let expected = crate::api::accounts::AccountRead::for_path(raw.raw_path())
-                    .unwrap()
-                    .read(raw, &fixture.server.state, system_now())
-                    .map_err(|_| "expected account read")
-                    .unwrap();
-                wire_contract::assert_reference_reply(path, &reply, &expected.encode());
-                assert!(json_body(&reply)[field].is_array(), "{path}");
+                let body = wire_contract::assert_json_read(path, &reply, None);
+                assert!(body[field].is_array(), "{path}");
+                match field {
+                    "accounts" => {
+                        assert_eq!(body["accounts"], json!([]));
+                        assert_eq!(body["native_account"]["id"], "@native");
+                        assert_eq!(body["native_account"]["credential_set"], true);
+                        assert!(!str::from_utf8(&reply).unwrap().contains("fixture-token"));
+                    }
+                    "series" => assert_eq!(body["series"], json!([])),
+                    _ => {}
+                }
             }
             for (method, headers, status) in [
                 ("GET", [].as_slice(), 401),
@@ -1393,31 +1361,31 @@ fn usage_and_settings_reads_preserve_json_and_auth() {
                 !path.starts_with("/api/usage?") && !path.starts_with("/api/calls?"),
             )
             .await;
-            let raw = crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
-            let state = &fixture.server.state;
-            let expected = match raw.raw_path() {
-                "/api/usage" => crate::api::usage::read(raw, state, None),
-                "/api/calls" => crate::api::calls::read(raw, state, None),
-                path if path.starts_with("/api/providers/") => crate::api::provider_quota::history(
-                    raw,
-                    state,
-                    crate::api::provider_quota::history_id(path).unwrap(),
-                    system_now(),
-                ),
-                path => crate::server::http::settings::SettingsRead::for_path(path)
-                    .unwrap()
-                    .read(state),
+            let body = if matches!(path, "/api/config" | "/api/integration") {
+                wire_contract::assert_settings_read(path, &reply, fixture)
+            } else {
+                wire_contract::assert_json_read(path, &reply, None)
             };
-            wire_contract::assert_reference_reply(path, &reply, &expected.encode());
-            assert!(
-                !json_body(&reply)[field].is_null(),
-                "missing {field} for {path}"
-            );
-            assert!(
-                reply
-                    .windows(b"\r\nCache-Control: no-store\r\n".len())
-                    .any(|line| line == b"\r\nCache-Control: no-store\r\n")
-            );
+            match field {
+                "totals" => {
+                    assert_eq!(body["start"], json!(1.0));
+                    assert_eq!(body["end"], json!(10.0));
+                    assert_eq!(body["totals"]["requests"], 0);
+                    assert_eq!(body["groups"], json!([]));
+                }
+                "records" => assert_eq!(body["records"], json!([])),
+                "account_ids" => assert_eq!(body["account_ids"], json!([])),
+                "available" => {
+                    let guidance = if body["available"].as_bool().unwrap() {
+                        "Claude Code CLI is available to EMP."
+                    } else {
+                        "Claude Code CLI was not found as an available local installation. Install it or check that EMP can access it, then reopen this form."
+                    };
+                    assert_eq!(body["guidance"], guidance);
+                }
+                "baseline_bytes" => assert_eq!(body["baseline_bytes"], 67_108_864),
+                _ => {}
+            }
             for (method, path, headers, status) in [
                 ("GET", path, [].as_slice(), 401),
                 ("GET", path, [&*session, &*session].as_slice(), 401),
@@ -1527,15 +1495,12 @@ fn report_stream_selection_obeys_accept_header() {
         ] {
             let wire = request(fixture.port(), "GET", path, &[&session, accept], b"");
             let reply = exchange_wire(address, &wire, false).await;
-            let raw = crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
-            let state = &fixture.server.state;
-            let expected = if raw.raw_path() == "/api/usage" {
-                crate::api::usage::read(raw, state, None)
+            let body = wire_contract::assert_json_read(path, &reply, None);
+            if field == "totals" {
+                assert_eq!(body["totals"]["requests"], 0);
             } else {
-                crate::api::calls::read(raw, state, None)
-            };
-            wire_contract::assert_reference_reply(path, &reply, &expected.encode());
-            assert!(!json_body(&reply)[field].is_null());
+                assert_eq!(body[field], json!([]));
+            }
         }
     });
 }
@@ -1550,7 +1515,8 @@ fn closing_report_input_cancels_json_queries() {
     database.execute_batch(
         "WITH RECURSIVE records(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM records WHERE n<20000)
          INSERT INTO call_records(request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,state,facts)
-         SELECT n,'responses',2,3,'fixture','','model','','completed','{}' FROM records;
+         SELECT n,'responses',2,3,'fixture','','model','','completed',
+                json_object('request_id','fixture-' || n) FROM records;
          WITH RECURSIVE records(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM records WHERE n<20000)
          INSERT INTO usage_events(id,observed_at,category,owner,model,service_tier,operation,rates,origin,usage_turn,route_model,match_key)
          SELECT n,2,'external','fixture','model','','responses','{}','realtime','','model','' FROM records;",
@@ -1579,15 +1545,15 @@ fn closing_report_input_cancels_json_queries() {
                 &json!({"error":{"message":message,"origin":"emp"}}),
             );
             let reply = exchange_wire(address, &wire, false).await;
-            let raw = crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
-            let state = &fixture.server.state;
-            let expected = if field == "totals" {
-                crate::api::usage::read(raw, state, None)
+            let body = wire_contract::assert_json_read(path, &reply, None);
+            if field == "totals" {
+                assert_eq!(body["totals"]["requests"], 20_000);
             } else {
-                crate::api::calls::read(raw, state, None)
-            };
-            wire_contract::assert_reference_reply(path, &reply, &expected.encode());
-            assert!(!json_body(&reply)[field].is_null(), "{path}");
+                let records = body["records"].as_array().unwrap();
+                assert!(!records.is_empty());
+                assert_eq!(body["total"], 20_000);
+                assert_eq!(records[0]["request_id"], "fixture-9999");
+            }
         }
     });
 }
@@ -2394,7 +2360,12 @@ fn hyper_parse_rejection_uses_emp_response_before_dispatch() {
         );
 
         let reply = assert_wire(address, &wire, false, 400).await;
-        assert_eq!(reply, EntryError::InvalidHead.reply().encode());
+        wire_contract::assert_json_reply(
+            "invalid HTTP head",
+            &reply,
+            "400 Bad Request",
+            &json!({"error":{"message":"invalid HTTP request"}}),
+        );
         assert_eq!(fixture.upstream.load(Ordering::Relaxed), 0);
     });
 }

@@ -10,11 +10,12 @@ use tokio::sync::oneshot;
 const RESPONSE: &[u8] = br#"{ "id":"resp_fixture","object":"response","status":"completed","model":"upstream","output":[], "z":1.2300e+2, "a":null }"#;
 const COMPACT: &[u8] =
     br#"{ "type":"compaction", "encrypted_content":"opaque", "z":1.2300e+2, "a":null }"#;
-const RESULT: &[u8] = br#"{ "data":[{"opaque":true}], "z":1.2300e+2, "a":null }"#;
-const STREAM_REQUEST: &[u8] = br#"{"model":"demo/model","stream":true,"input":"fixture"}"#;
+pub(super) const RESULT: &[u8] = br#"{ "data":[{"opaque":true}], "z":1.2300e+2, "a":null }"#;
+pub(super) const STREAM_REQUEST: &[u8] =
+    br#"{"model":"demo/model","stream":true,"input":"fixture"}"#;
 const COMPLETE_REQUEST: &[u8] = br#"{"model":"demo/model","stream":false,"input":"fixture"}"#;
-const FIRST: &[u8] = b"data: {\"id\":\"chat_fixture\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":null}]}\n\n";
-const LAST: &[u8] = b"data: {\"id\":\"chat_fixture\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\ndata: [DONE]\n\n";
+pub(super) const FIRST: &[u8] = b"data: {\"id\":\"chat_fixture\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":null}]}\n\n";
+pub(super) const LAST: &[u8] = b"data: {\"id\":\"chat_fixture\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\ndata: [DONE]\n\n";
 const CHAT_COMPLETE: &[u8] = br#"{"id":"chat_fixture","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}"#;
 
 #[test]
@@ -231,7 +232,7 @@ pub(super) fn fixture(base: &str) -> Fixture {
     Fixture::with_directory(fixture_directory(base))
 }
 
-fn fixture_directory(base: &str) -> tempfile::TempDir {
+pub(super) fn fixture_directory(base: &str) -> tempfile::TempDir {
     let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path();
     let config = root.join("config.json");
@@ -308,7 +309,7 @@ async fn assert_buffered(address: SocketAddr, wire: &[u8], status: u16) -> Vec<u
     reply
 }
 
-fn upstream_reply(
+pub(super) fn upstream_reply(
     socket: &mut std::net::TcpStream,
     status: u16,
     content_type: &str,
@@ -331,6 +332,7 @@ fn stalled_buffered_inference(quit: bool) {
         stream.write_all(body.as_bytes()).unwrap();
     });
     let fixture = fixture(&upstream.base_url());
+    let clock = crate::server::tests::TestDrainClock::install(&fixture.server.state.lifecycle);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -379,7 +381,7 @@ fn stalled_buffered_inference(quit: bool) {
         }
         slow
     });
-    let result = shutdown_with_stalled_response(fixture.server, slow);
+    let result = shutdown_with_stalled_response(fixture.server, slow, &clock);
     result.expect("shutdown completed successfully");
     let id = &upstream.observed().1["x-emp-request-id"];
     let journal = live_journal(fixture.directory.path());
@@ -404,155 +406,6 @@ fn quit_completes_with_a_stalled_buffered_inference_response() {
 #[test]
 fn shutdown_records_write_failure_for_a_stalled_buffered_inference_response() {
     stalled_buffered_inference(false);
-}
-
-#[test]
-fn shutdown_reports_search_that_crossed_the_drain_deadline() {
-    use crate::{error::AppError, server::REQUEST_DRAIN_TIMEOUT};
-
-    let (release, released) = mpsc::channel();
-    let upstream = OneShotUpstream::serve(1, move |socket| {
-        upstream_reply(socket, 200, "application/json", RESULT.len(), "");
-        released
-            .recv_timeout(
-                test_timeout(REQUEST_DRAIN_TIMEOUT) + crate::server::raw_tcp::wire_timeout(),
-            )
-            .unwrap();
-        socket.write_all(RESULT).unwrap();
-    });
-    let Fixture {
-        directory, server, ..
-    } = fixture(&upstream.base_url());
-    let address = server.local_addr();
-    let wire = json_request(
-        address.port(),
-        "/v1/alpha/search",
-        &[
-            &format!("X-EMP-Session: {}", server.session_token()),
-            "Authorization: Bearer caller",
-        ],
-        br#"{"query":"fixture"}"#,
-    );
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let mut client = runtime.block_on(TcpStream::connect(address)).unwrap();
-    runtime.block_on(client.write_all(&wire)).unwrap();
-    assert_eq!(upstream.observed().0, "/v1/alpha/search");
-    assert!(
-        server
-            .state
-            .lifecycle
-            .admission
-            .quiesce_work(0, Duration::ZERO)
-            .is_none()
-    );
-    let closing = std::thread::spawn(move || server.shutdown());
-    let eof = runtime.block_on(async {
-        timeout(
-            test_timeout(REQUEST_DRAIN_TIMEOUT) + crate::server::raw_tcp::wire_timeout(),
-            client.read(&mut [0]),
-        )
-        .await
-    });
-    let _ = release.send(());
-    assert_eq!(
-        eof.unwrap().unwrap(),
-        0,
-        "the listener cancels the transport at the cutoff"
-    );
-    let outcome = closing.join().unwrap();
-    assert!(
-        matches!(outcome, Err(AppError::ServerStopped)),
-        "{outcome:?}"
-    );
-    let journal = live_journal(directory.path());
-    let records: Vec<_> = journal
-        .iter()
-        .filter(|entry| {
-            entry["event"] == "http_request_completed"
-                && entry["fields"]["path"] == "/v1/alpha/search"
-        })
-        .collect();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["fields"]["status"], 200);
-    assert_eq!(records[0]["fields"]["result"], "write_failed");
-}
-
-#[test]
-fn failed_aero_parent_keeps_the_running_callback_in_quit_precheck() {
-    use crate::server::REQUEST_DRAIN_TIMEOUT;
-
-    let (disconnect_parent, disconnected) = mpsc::channel();
-    let aero = OneShotUpstream::serve(1, move |_| {
-        disconnected.recv_timeout(wire_timeout()).unwrap();
-    });
-    let (finish_callback, finished) = mpsc::channel();
-    let callback = OneShotUpstream::serve(1, move |socket| {
-        upstream_reply(
-            socket,
-            200,
-            "text/event-stream",
-            FIRST.len() + LAST.len(),
-            "",
-        );
-        socket.write_all(FIRST).unwrap();
-        finished
-            .recv_timeout(test_timeout(REQUEST_DRAIN_TIMEOUT))
-            .unwrap();
-        socket.write_all(LAST).unwrap();
-    });
-    let directory = fixture_directory(&callback.base_url());
-    let config = directory.path().join("config.json");
-    let mut configuration: Value =
-        serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
-    configuration["aero_profiles"] = json!([{
-        "id":"aero/fixture","name":"fixture","planner":{"model":"demo/model"},"executor":{"model":"demo/model"}
-    }]);
-    std::fs::write(config, configuration.to_string()).unwrap();
-    let started = json!({"value":{"endpoint":aero.base_url()},"error":null});
-    install_worker_fixture(
-        directory.path(),
-        emp_modules::Module::Aero,
-        "{}",
-        &format!("while read -r line; do printf '%s\\n' '{started}'; done"),
-    );
-    Fixture::with_directory(directory).run_wire(async |fixture, address| {
-        let port = fixture.port();
-        let session = fixture.session();
-        let parent_wire = json_request(
-            port, "/v1/responses", &[&session, "session_id: fixture"],
-            br#"{"model":"aero/fixture","stream":false,"input":"fixture"}"#,
-        );
-        let parent = tokio::spawn(async move { exchange_wire(address, &parent_wire, false).await });
-        let (_aero, (_, headers, _)) = tokio::task::spawn_blocking(move || {
-            let observed = aero.observed();
-            (aero, observed)
-        }).await.unwrap();
-        let token = format!("Authorization: Bearer {}", headers["x-aero-caller-key"]);
-        let mut stream = RawClient::request(
-            address,
-            &json_request(port, "/v1/responses", &[&token], STREAM_REQUEST),
-        ).await;
-        assert_eq!(callback.observed().0, "/v1/chat/completions");
-        assert!(stream.head.starts_with("HTTP/1.1 200 "), "{}", stream.head);
-        disconnect_parent.send(()).unwrap();
-        let parent = parent.await.unwrap();
-        assert_status(&parent, 503);
-        assert_eq!(json_body(&parent)["error"]["code"], "aero_runtime_unavailable");
-        let reply = quit_response(address, &session).await;
-        wire_contract::assert_json_reply(
-            "quit while Aero callback is running", &reply, "409 Error",
-            &json!({"error":{"code":"active_conversations","message":"Finish active Codex requests and WebSockets, then retry shutdown","origin":"emp"}}),
-        );
-        finish_callback.send(()).unwrap();
-        assert!(String::from_utf8_lossy(&stream.rest(&Deadline::after(wire_timeout())).await).contains("response.completed"));
-        wire_contract::assert_json_reply(
-            "quit after Aero callback", &quit_response(address, &session).await,
-            "200 OK", &json!({"status":"stopping"}),
-        );
-    });
 }
 
 #[test]

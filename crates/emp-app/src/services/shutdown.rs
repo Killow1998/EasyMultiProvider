@@ -2,6 +2,8 @@ use crate::app::ServerState;
 use crate::services::observation::operation::observe;
 use std::time::Duration;
 
+pub(crate) const QUIT_PRECHECK_WAIT: Duration = Duration::from_secs(15);
+
 pub(crate) struct ShutdownError {
     pub(crate) code: Option<&'static str>,
     pub(crate) message: &'static str,
@@ -30,7 +32,7 @@ pub(crate) fn prepare_quit(
         let Some(restore_gate) = state
             .lifecycle
             .admission
-            .quiesce_work(management_connections, Duration::from_secs(15))
+            .quiesce_work(management_connections, QUIT_PRECHECK_WAIT)
         else {
             return Err(ShutdownError {
                 code: Some("active_conversations"),

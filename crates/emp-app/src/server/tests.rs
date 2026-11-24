@@ -28,6 +28,53 @@ use tokio::{
     time::{Duration, advance, timeout},
 };
 
+pub(super) struct TestDrainClock {
+    now: std::sync::Mutex<DrainInstant>,
+    pub(super) cutoff: tokio::sync::Notify,
+}
+
+impl TestDrainClock {
+    pub(super) fn install(control: &ServerControl) -> Arc<Self> {
+        let clock = Arc::new(Self {
+            now: std::sync::Mutex::new(DrainInstant::now()),
+            cutoff: tokio::sync::Notify::new(),
+        });
+        assert!(control.drain_clock.controlled.set(clock.clone()).is_ok());
+        let now = clock.clone();
+        control
+            .admission
+            .set_test_clock(Arc::new(move || now.now()));
+        clock
+    }
+
+    pub(super) fn now(&self) -> DrainInstant {
+        *self.now.lock().unwrap()
+    }
+
+    pub(super) fn pass_deadline(&self) {
+        *self.now.lock().unwrap() += REQUEST_DRAIN_TIMEOUT + Duration::from_millis(1);
+    }
+
+    pub(super) fn expire(&self) {
+        self.pass_deadline();
+        self.cutoff.notify_one();
+    }
+}
+
+pub(super) struct RequestProbe {
+    pub(super) path: &'static str,
+    pub(super) id: oneshot::Sender<String>,
+    pub(super) write: Option<WriteProbe>,
+}
+
+pub(super) struct WriteProbe {
+    pub(super) marker: &'static [u8],
+    pub(super) reached: Option<oneshot::Sender<()>>,
+    pub(super) release: oneshot::Receiver<()>,
+}
+
+pub(super) type HandlerProbe = (oneshot::Sender<()>, oneshot::Receiver<()>);
+
 pub(super) const LOOPBACK: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 const GET: &[u8] = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";

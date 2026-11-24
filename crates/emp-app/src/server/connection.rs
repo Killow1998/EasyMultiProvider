@@ -202,6 +202,20 @@ pub(super) async fn drive_http(
         inference || head.account_events || report.is_some_and(|report| report.is_stream(request));
     let watch_report = report.is_some();
     observation.received(request);
+    #[cfg(test)]
+    {
+        let mut armed = state.lifecycle.test_request.lock().unwrap();
+        if armed
+            .as_ref()
+            .is_some_and(|probe| probe.path == request.raw_path())
+        {
+            let probe = armed.take().unwrap();
+            if let Some(write) = probe.write {
+                io.probe_write(write);
+            }
+            let _ = probe.id.send(observation.request_id().unwrap().to_owned());
+        }
+    }
     crate::services::runtime::codex_contacted(request, &state);
     let socket = if watch_report || inference || responses_upgrade {
         match io.probe() {
@@ -351,6 +365,7 @@ async fn drive_connection(
     }));
     let business = Mutex::new(permit);
     let encoded_reply = Arc::new(OnceLock::new());
+    let unbuffered_status = OnceLock::new();
     let raw_request = raw.request();
     let (transport_target, routing_uri) = if http_context.is_some() {
         let uri = match super::http::routing_path(raw_request.target) {
@@ -367,6 +382,7 @@ async fn drive_connection(
         let raw = raw.clone();
         let context = context.clone();
         let encoded_reply = &encoded_reply;
+        let unbuffered_status = &unbuffered_status;
         let business = &business;
         let inference = inference.as_ref();
         let routing_uri = routing_uri.as_ref();
@@ -415,7 +431,11 @@ async fn drive_connection(
             if let Some(flushed) = flushed
                 && let Some(stream) = stream
             {
+                let _ = unbuffered_status.set(response.status().as_u16());
                 stream.delivery.await_flush(flushed);
+            }
+            if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+                let _ = unbuffered_status.set(response.status().as_u16());
             }
             let _ = encoded_reply.set(
                 response
@@ -551,6 +571,9 @@ async fn drive_connection(
                         && (inference.is_none() || !wire.is_empty())
                     {
                         observation.response_finished(wire, result);
+                    } else if let Some(status) = unbuffered_status.into_inner() {
+                        let bytes = delivery.as_ref().map(|delivery| delivery.bytes());
+                        observation.response_delivery(Some(status), bytes, result.is_ok());
                     }
                 }
             }

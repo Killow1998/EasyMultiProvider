@@ -95,8 +95,29 @@ impl HttpObservation {
         bytes: usize,
         result: std::io::Result<()>,
     ) {
+        self.response_delivery(status, Some(bytes), result.is_ok());
+        if let Some(model) = &mut self.model {
+            if self.fields["status"]
+                .as_u64()
+                .is_some_and(|status| status >= 400)
+                && let Some(body) = body
+            {
+                model.buffered_error(body, result.is_ok());
+            }
+            model.http_response(&self.fields["status"], result);
+        }
+    }
+
+    pub(crate) fn response_delivery(
+        &mut self,
+        status: Option<u16>,
+        bytes: Option<usize>,
+        written: bool,
+    ) {
         self.fields["status"] = json!(status);
-        self.fields["response_bytes"] = json!(bytes);
+        if let Some(bytes) = bytes {
+            self.fields["response_bytes"] = json!(bytes);
+        }
         self.fields["result"] = json!(match self.fields["status"].as_u64() {
             Some(400..=499) => "rejected",
             Some(500..=599) => "failed",
@@ -107,23 +128,17 @@ impl HttpObservation {
             Some("/v1/decisions" | "/v1/systemone")
         ) && let Some(id) = self.request_id()
         {
-            let _ = self.ledger.record_call_delivery(id,"decisions", &json!({
-                "delivery":if result.is_ok() {"delivered"} else {"failed"},
+            let _ = self.ledger.record_call_delivery(
+                id,
+                "decisions",
+                &json!({
+                "delivery":if written {"delivered"} else {"failed"},
                 "duration_ms":self.started.elapsed().as_millis() as u64,
-                "writes_completed":u64::from(result.is_ok()),"response_status":self.fields["status"]}));
+                "writes_completed":u64::from(written),"response_status":self.fields["status"]}),
+            );
         }
-        if result.is_err() {
+        if !written {
             self.failure("write_failed");
-        }
-        if let Some(model) = &mut self.model {
-            if self.fields["status"]
-                .as_u64()
-                .is_some_and(|status| status >= 400)
-                && let Some(body) = body
-            {
-                model.buffered_error(body, result.is_ok());
-            }
-            model.http_response(&self.fields["status"], result);
         }
     }
 

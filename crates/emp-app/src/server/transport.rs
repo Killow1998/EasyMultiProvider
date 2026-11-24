@@ -12,15 +12,23 @@ use tokio::{
 };
 
 #[derive(Clone)]
-pub(super) struct ConnectionIo(Arc<Mutex<TcpStream>>);
+pub(super) struct ConnectionIo {
+    stream: Arc<Mutex<TcpStream>>,
+    #[cfg(test)]
+    write_probe: Arc<Mutex<Option<super::tests::WriteProbe>>>,
+}
 
 impl ConnectionIo {
     pub(super) fn new(stream: TcpStream) -> Self {
-        Self(Arc::new(Mutex::new(stream)))
+        Self {
+            stream: Arc::new(Mutex::new(stream)),
+            #[cfg(test)]
+            write_probe: Arc::default(),
+        }
     }
 
     fn stream(&self) -> MutexGuard<'_, TcpStream> {
-        self.0.lock().expect("connection transport")
+        self.stream.lock().expect("connection transport")
     }
 
     pub(super) fn set_nodelay(&self) -> io::Result<()> {
@@ -33,6 +41,13 @@ impl ConnectionIo {
 
     pub(super) fn cancel(&self) {
         let _ = SockRef::from(&*self.stream()).shutdown(Shutdown::Both);
+        #[cfg(test)]
+        self.write_probe.lock().unwrap().take();
+    }
+
+    #[cfg(test)]
+    pub(super) fn probe_write(&self, probe: super::tests::WriteProbe) {
+        *self.write_probe.lock().unwrap() = Some(probe);
     }
 }
 
@@ -52,6 +67,22 @@ impl AsyncWrite for ConnectionIo {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        #[cfg(test)]
+        {
+            let mut armed = self.write_probe.lock().unwrap();
+            if let Some(probe) = armed.as_mut()
+                && (probe.reached.is_none()
+                    || buf
+                        .windows(probe.marker.len())
+                        .any(|bytes| bytes == probe.marker))
+            {
+                if let Some(reached) = probe.reached.take() {
+                    let _ = reached.send(());
+                }
+                std::task::ready!(Pin::new(&mut probe.release).poll(cx)).ok();
+                armed.take();
+            }
+        }
         Pin::new(&mut *self.stream()).poll_write(cx, buf)
     }
 

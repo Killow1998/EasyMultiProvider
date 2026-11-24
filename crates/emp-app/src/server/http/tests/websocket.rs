@@ -154,12 +154,7 @@ fn tab_separated_http_request_line_is_accepted() {
             }
         }
         let reply = assert_wire(address, &wire, true, 200).await;
-        assert!(json_body(&reply)["models"].is_array());
-        wire_contract::assert_reference_reply(
-            "tab-separated /api/config",
-            &reply,
-            &crate::api::catalog::read_configuration(&fixture.server.state).encode(),
-        );
+        wire_contract::assert_settings_read("/api/config", &reply, fixture);
     });
 }
 

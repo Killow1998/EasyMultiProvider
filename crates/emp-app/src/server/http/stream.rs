@@ -1,4 +1,7 @@
-use crate::{http::response::status_text, server::http::error::response_head};
+use crate::{
+    http::response::status_text, server::http::error::response_head,
+    services::connection_admission::ConnectionPermit,
+};
 use axum::{
     body::{Body, Bytes},
     http::response::Builder,
@@ -116,11 +119,24 @@ impl BodyOutput {
     }
 
     pub(crate) fn frame(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.send_frame(Bytes::copy_from_slice(bytes), None)
+    }
+
+    pub(super) fn terminal_frame(
+        &mut self,
+        bytes: Vec<u8>,
+        business: Option<ConnectionPermit>,
+    ) -> io::Result<()> {
+        self.send_frame(Bytes::from(bytes), business)
+    }
+
+    fn send_frame(&mut self, bytes: Bytes, business: Option<ConnectionPermit>) -> io::Result<()> {
         let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
         stream
             .send
-            .blocking_send(Bytes::copy_from_slice(bytes))
+            .blocking_send(bytes)
             .map_err(|_| io::ErrorKind::BrokenPipe)?;
+        drop(business);
         stream
             .confirmation
             .blocking_recv()

@@ -94,12 +94,11 @@ impl ReportQuery {
         self,
         state: &ServerState,
         cancelled: Arc<AtomicBool>,
-        write_frame: impl Fn(&[u8]) -> io::Result<()> + Clone + Send + 'static,
-    ) -> io::Result<()> {
+        write_frame: impl Fn(&[u8]) -> io::Result<()> + Send + 'static,
+    ) -> Result<Vec<u8>, serde_json::Error> {
         #[cfg(test)]
         let gate = state.backend.usage.report_gate.clone();
         let progress = {
-            let write_frame = write_frame.clone();
             #[cfg(test)]
             let cancelled = cancelled.clone();
             move |completed, total| {
@@ -133,11 +132,10 @@ impl ReportQuery {
                 "Usage history is unavailable",
             ),
         };
-        let frame = match report {
-            Ok(report) => sse_frame("result", &report)?,
-            Err(_) => sse_frame("error", &json!({"error":{"message":message}}))?,
-        };
-        write_frame(&frame)
+        match report {
+            Ok(report) => sse_frame("result", &report),
+            Err(_) => sse_frame("error", &json!({"error":{"message":message}})),
+        }
     }
 }
 
@@ -164,7 +162,7 @@ async fn read_report(
         let socket = socket.expect("report stream socket").0;
         let delivery = stream.delivery.clone();
         let (sender, response) = oneshot::channel();
-        let worker = crate::server::spawn_connection_work(move || {
+        let worker = crate::server::spawn_connection_work_with_permit(move |business| {
             let query = match report.prepare_stream(raw.request(), &state, system_now()) {
                 Ok(query) => query,
                 Err(reply) => {
@@ -182,9 +180,16 @@ async fn read_report(
                 .is_ok()
             {
                 let output = Arc::new(Mutex::new(output));
-                let _ = query.stream(&state, monitor.cancellation(), move |frame| {
-                    output.lock().expect("report output").frame(frame)
+                let progress_output = output.clone();
+                let terminal = query.stream(&state, monitor.cancellation(), move |frame| {
+                    progress_output.lock().expect("report output").frame(frame)
                 });
+                if let Ok(terminal) = terminal {
+                    let _ = output
+                        .lock()
+                        .expect("report output")
+                        .terminal_frame(terminal, business);
+                }
             }
         });
         *stream.worker.lock().expect("stream worker") = Some(worker);

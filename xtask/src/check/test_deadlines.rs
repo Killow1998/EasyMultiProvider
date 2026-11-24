@@ -216,7 +216,13 @@ fn bare_duration(expr: &Expr, constants: bool, emp_app: bool, arithmetic: bool) 
                     && call.args.iter().all(|arg| matches!(arg, Expr::Lit(_))))
         }
         Expr::Path(path) if constants => {
-            if emp_app && path_matches(path, &["crate", "server", "REQUEST_DRAIN_TIMEOUT"]) {
+            if emp_app
+                && (path_matches(path, &["crate", "server", "REQUEST_DRAIN_TIMEOUT"])
+                    || path_matches(
+                        path,
+                        &["crate", "services", "shutdown", "QUIT_PRECHECK_WAIT"],
+                    ))
+            {
                 return false;
             }
             let name = path
@@ -456,11 +462,13 @@ fn drain() {
     let budget = Deadline::after(test_timeout(Duration::from_secs(5)));
     rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::wire_timeout());
     rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + wire_timeout());
+    let budget = Deadline::after(crate::services::shutdown::QUIT_PRECHECK_WAIT + crate::server::raw_tcp::wire_timeout());
+    let budget = Deadline::after(crate::services::shutdown::QUIT_PRECHECK_WAIT + Duration::from_secs(5));
 }
 "#;
         assert_eq!(
             violations("crates/emp-app/tests/wire.rs", source).unwrap(),
-            [6, 7, 8, 10, 11, 14]
+            [6, 7, 8, 10, 11, 14, 16]
         );
     }
 

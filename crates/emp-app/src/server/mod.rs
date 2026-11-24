@@ -20,6 +20,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Instant as DrainInstant,
 };
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -45,14 +46,14 @@ pub(crate) enum ShutdownReason {
 }
 
 #[derive(Clone)]
-pub(crate) struct ShutdownSignal(watch::Receiver<Option<(ShutdownReason, Instant)>>);
+pub(crate) struct ShutdownSignal(watch::Receiver<Option<(ShutdownReason, DrainInstant)>>);
 
 impl ShutdownSignal {
     pub(crate) async fn wait(self) -> ShutdownReason {
         self.wait_for_stop().await.0
     }
 
-    async fn wait_for_stop(mut self) -> (ShutdownReason, Instant) {
+    async fn wait_for_stop(mut self) -> (ShutdownReason, DrainInstant) {
         *self
             .0
             .wait_for(Option::is_some)
@@ -60,6 +61,31 @@ impl ShutdownSignal {
             .expect("server still owns the shutdown signal")
             .as_ref()
             .expect("shutdown was signaled")
+    }
+}
+
+#[derive(Default)]
+struct DrainClock {
+    #[cfg(test)]
+    controlled: std::sync::OnceLock<Arc<tests::TestDrainClock>>,
+}
+
+impl DrainClock {
+    fn now(&self) -> DrainInstant {
+        #[cfg(test)]
+        if let Some(clock) = self.controlled.get() {
+            return clock.now();
+        }
+        DrainInstant::now()
+    }
+
+    async fn wait_until(&self, deadline: DrainInstant) {
+        #[cfg(test)]
+        if let Some(clock) = self.controlled.get() {
+            clock.cutoff.notified().await;
+            return;
+        }
+        sleep_until(deadline.into()).await;
     }
 }
 
@@ -73,7 +99,12 @@ pub(crate) struct ServerControl {
     mode: ServerMode,
     pub(crate) admission: Arc<ConnectionAdmission>,
     pub(crate) shutdown: Arc<AtomicBool>,
-    stopped: watch::Sender<Option<(ShutdownReason, Instant)>>,
+    stopped: watch::Sender<Option<(ShutdownReason, DrainInstant)>>,
+    drain_clock: DrainClock,
+    #[cfg(test)]
+    test_request: std::sync::Mutex<Option<tests::RequestProbe>>,
+    #[cfg(test)]
+    test_health_handler: std::sync::Mutex<Option<tests::HandlerProbe>>,
     updates: Option<UpdateState>,
     management_events: Option<Arc<ManagementEvents>>,
 }
@@ -85,6 +116,11 @@ impl ServerControl {
             mode: ServerMode::Http,
             shutdown: Arc::default(),
             stopped: watch::Sender::new(None),
+            drain_clock: DrainClock::default(),
+            #[cfg(test)]
+            test_request: std::sync::Mutex::default(),
+            #[cfg(test)]
+            test_health_handler: std::sync::Mutex::default(),
             updates: None,
             management_events: None,
         }
@@ -130,7 +166,7 @@ impl ServerControl {
             if let Some(events) = &self.management_events {
                 events.close();
             }
-            *state = Some((reason, Instant::now() + REQUEST_DRAIN_TIMEOUT));
+            *state = Some((reason, self.drain_clock.now() + REQUEST_DRAIN_TIMEOUT));
             true
         });
     }
@@ -336,6 +372,13 @@ async fn serve(
     };
     drop(listener);
     drop(pending_work);
+    let verdict = || {
+        if control.admission.business_crossed(deadline) {
+            Err(ServeError::AdmissionNotDrained)
+        } else {
+            Ok(())
+        }
+    };
     let cutoff_result = {
         let finish_connections = async {
             while let Some(completed) = connections.join_next().await {
@@ -348,12 +391,8 @@ async fn serve(
         tokio::pin!(finish_connections);
         tokio::select! {
             biased;
-            () = sleep_until(deadline) => {
-                let result = if control.admission.has_business_work() {
-                    Err(ServeError::AdmissionNotDrained)
-                } else {
-                    Ok(())
-                };
+            () = control.drain_clock.wait_until(deadline) => {
+                let result = verdict();
                 cancel_transport.send_replace(());
                 finish_connections.await;
                 result
@@ -361,7 +400,7 @@ async fn serve(
             () = async {
                 control.admission.wait_for_business_idle().await;
                 finish_connections.as_mut().await;
-            } => Ok(()),
+            } => verdict(),
         }
     };
     if let Some(error) = worker_failure {
@@ -413,6 +452,14 @@ tokio::task_local! {
 pub(crate) fn spawn_connection_work<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> JoinHandle<T> {
+    spawn_connection_work_with_permit(move |_business| work())
+}
+
+fn spawn_connection_work_with_permit<T: Send + 'static>(
+    work: impl FnOnce(Option<crate::services::connection_admission::ConnectionPermit>) -> T
+    + Send
+    + 'static,
+) -> JoinHandle<T> {
     let pending = BLOCKING_WORK.try_with(Clone::clone).ok();
     let business = BUSINESS_SLOT
         .try_with(|slot| slot.as_ref().map(ConnectionSlot::start_work))
@@ -420,8 +467,7 @@ pub(crate) fn spawn_connection_work<T: Send + 'static>(
         .flatten();
     tokio::task::spawn_blocking(move || {
         let _pending = pending;
-        let _business = business;
-        work()
+        work(business)
     })
 }
 

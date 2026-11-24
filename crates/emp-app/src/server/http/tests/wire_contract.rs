@@ -85,18 +85,40 @@ pub(crate) fn assert_json_reply(name: &str, reply: &[u8], status: &str, body: &V
     assert_reply(name, reply, &head, body.as_bytes());
 }
 
-pub(super) fn assert_reference_reply(name: &str, reply: &[u8], reference: &[u8]) {
-    let split = reference
+pub(super) fn assert_json_read(name: &str, reply: &[u8], extra: Option<&str>) -> Value {
+    let split = reply
         .windows(4)
         .position(|bytes| bytes == b"\r\n\r\n")
-        .unwrap()
+        .unwrap_or_else(|| panic!("{name}: missing complete response head"))
         + 4;
-    assert_reply(
-        name,
-        reply,
-        str::from_utf8(&reference[..split]).unwrap(),
-        &reference[split..],
-    );
+    let length = reply.len() - split;
+    let expected = match extra {
+        Some(extra) => format!(json_head!("200 OK", "{}", "{}"), length, extra),
+        None => format!(json_head!("200 OK", "{}"), length),
+    };
+    assert_head(name, str::from_utf8(&reply[..split]).unwrap(), &expected);
+    serde_json::from_slice(&reply[split..]).unwrap()
+}
+
+pub(super) fn assert_settings_read(route: &str, reply: &[u8], fixture: &Fixture) -> Value {
+    let body = assert_json_read(route, reply, None);
+    match route {
+        "/api/config" => {
+            let path = &fixture.server.state.backend.configuration.config_path;
+            assert_eq!(
+                body["native_catalog_path"],
+                json!(path.with_file_name("codex").join("models_cache.json"))
+            );
+            assert_eq!(body["models"], json!([]));
+            assert!(body["providers"].is_array());
+        }
+        "/api/integration" => {
+            assert_eq!(body["configuration"]["state"], "native");
+            assert_eq!(body["configuration"]["relation"], "unleased");
+        }
+        _ => unreachable!("{route}"),
+    }
+    body
 }
 
 pub(super) fn assert_presented_entry_error(name: &str, reply: &[u8], status: &str, body: &Value) {

@@ -291,7 +291,9 @@ fn account_stream_disconnect_releases_subscription_without_another_event() {
     });
 }
 
-fn report_gate(fixture: &Fixture) -> (oneshot::Receiver<Arc<AtomicBool>>, oneshot::Sender<()>) {
+pub(super) fn report_gate(
+    fixture: &Fixture,
+) -> (oneshot::Receiver<Arc<AtomicBool>>, oneshot::Sender<()>) {
     let (first_frame, received) = oneshot::channel();
     let (release, wait) = oneshot::channel();
     *fixture
@@ -308,7 +310,7 @@ fn report_gate(fixture: &Fixture) -> (oneshot::Receiver<Arc<AtomicBool>>, onesho
     (received, release)
 }
 
-fn seed_reports(fixture: &Fixture) {
+pub(super) fn seed_reports(fixture: &Fixture) {
     let ledger = &fixture.server.state.backend.usage.ledger;
     ledger.query(1.0, 10.0, "all", system_now(), None).unwrap();
     let database =
@@ -501,14 +503,12 @@ fn management_stream_access_and_selection_match_during_update_drain() {
             headers.push(&session);
             let wire = request(fixture.port(), "GET", path, &headers, b"");
             let reply = exchange_wire(address, &wire, false).await;
-            let raw = crate::http::request::parse_request(str::from_utf8(&wire).unwrap()).unwrap();
-            let state = &fixture.server.state;
-            let expected = if path == CALLS {
-                crate::api::calls::read(raw, state, None)
+            let body = wire_contract::assert_json_read(path, &reply, None);
+            if path == CALLS {
+                assert_eq!(body["records"], json!([]));
             } else {
-                crate::api::usage::read(raw, state, None)
-            };
-            wire_contract::assert_reference_reply(path, &reply, &expected.encode());
+                assert_eq!(body["groups"], json!([]));
+            }
         }
         let wire = request(
             fixture.port(),

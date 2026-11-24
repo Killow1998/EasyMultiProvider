@@ -5,6 +5,9 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
+#[cfg(test)]
+type TestClock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SlotLimits {
     pub(crate) initial: usize,
@@ -103,6 +106,20 @@ impl ConnectionAdmission {
         requests.working > 0 || websockets.working > 0
     }
 
+    pub(crate) fn business_crossed(&self, deadline: Instant) -> bool {
+        let requests = self.requests.state.lock().expect("request admission");
+        let websockets = self.websockets.state.lock().expect("WebSocket admission");
+        [&*requests, &*websockets]
+            .into_iter()
+            .any(|state| state.working > 0 || state.idle_at.is_some_and(|at| at > deadline))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_clock(&self, now: TestClock) {
+        assert!(self.requests.test_clock.set(now.clone()).is_ok());
+        assert!(self.websockets.test_clock.set(now).is_ok());
+    }
+
     pub(crate) async fn wait_for_business_idle(&self) {
         while self.has_business_work() {
             self.work_finished.notified().await;
@@ -178,6 +195,7 @@ impl ConnectionAdmission {
 struct SlotState {
     active: usize,
     working: usize,
+    idle_at: Option<Instant>,
     capacity: usize,
     maximum: usize,
     growth: usize,
@@ -190,6 +208,8 @@ struct AdaptiveSlotPool {
     drained: Condvar,
     closing: Notify,
     work_finished: Arc<Notify>,
+    #[cfg(test)]
+    test_clock: std::sync::OnceLock<TestClock>,
 }
 
 impl AdaptiveSlotPool {
@@ -205,6 +225,8 @@ impl AdaptiveSlotPool {
             drained: Condvar::new(),
             closing: Notify::new(),
             work_finished,
+            #[cfg(test)]
+            test_clock: std::sync::OnceLock::new(),
         }
     }
 
@@ -320,6 +342,17 @@ impl Drop for ConnectionPermit {
             && slot.holders.fetch_sub(1, Ordering::Relaxed) == 1
         {
             state.working -= 1;
+            if state.working == 0 {
+                #[cfg(test)]
+                let now = slot
+                    .pool
+                    .test_clock
+                    .get()
+                    .map_or_else(Instant::now, |now| now());
+                #[cfg(not(test))]
+                let now = Instant::now();
+                state.idle_at = Some(now);
+            }
             slot.pool.drained.notify_all();
             slot.pool.work_finished.notify_one();
         }

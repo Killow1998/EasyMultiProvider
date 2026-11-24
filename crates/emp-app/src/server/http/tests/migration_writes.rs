@@ -238,6 +238,7 @@ fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
     .unwrap();
     let fixture = Fixture::with_directory(directory);
     let state = Arc::clone(&fixture.server.state);
+    let clock = crate::server::tests::TestDrainClock::install(&state.lifecycle);
     state
         .backend
         .accounts
@@ -253,7 +254,7 @@ fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
         .enable_all()
         .build()
         .unwrap();
-    let (slow, quit_at) = runtime.block_on(async {
+    let slow = runtime.block_on(async {
         let address = fixture.server.local_addr();
         let body = json!({
             "confirmation":confirmation(&fixture).await, "password":PASSWORD, "groups":["external"],
@@ -272,7 +273,6 @@ fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
             .parse::<usize>()
             .unwrap();
         assert!(length >= EXPORT_PAYLOAD_BYTES, "export size: {length}");
-        let quit_at = std::time::Instant::now();
         let reply = assert_wire(
             address,
             &json_request(fixture.port(), "/api/quit", &[&fixture.session()], b"{}"),
@@ -294,10 +294,9 @@ fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
             state.lifecycle.admission.active_requests() > 0,
             "the stalled response still owns a connection slot"
         );
-        (slow, quit_at)
+        slow
     });
-    let result = shutdown_with_stalled_response(fixture.server, slow);
-    assert!(quit_at.elapsed() >= crate::server::REQUEST_DRAIN_TIMEOUT);
+    let result = shutdown_with_stalled_response(fixture.server, slow, &clock);
     let lock = emp_state::IntegrationFileLock::acquire(
         &root.join("state/service.lock"),
         Duration::ZERO,
