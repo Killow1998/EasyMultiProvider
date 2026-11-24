@@ -1,4 +1,3 @@
-use crate::http::response::status_text;
 use crate::server::http::error::JsonReply;
 use crate::services::error_origin;
 use crate::services::external::ExternalRequestError;
@@ -24,13 +23,13 @@ pub(crate) fn emp_websocket_error(status: u16, code: &str, message: &str) -> Val
         "error":{"code":code,"origin":"emp","message":error_origin::message("emp", message)}})
 }
 
-pub(crate) fn external_complete_error(error: ExternalRequestError) -> Vec<u8> {
+pub(crate) fn external_complete_error(error: ExternalRequestError) -> Option<JsonReply> {
     external_http_error(error, |error, route| {
         router_error_response_for_route(error, &route)
     })
 }
 
-pub(crate) fn external_open_error(error: ExternalRequestError) -> Vec<u8> {
+pub(crate) fn external_open_error(error: ExternalRequestError) -> Option<JsonReply> {
     external_http_error(error, |error, route| {
         pre_output_router_error_response_for_route(&error, &route)
     })
@@ -38,20 +37,18 @@ pub(crate) fn external_open_error(error: ExternalRequestError) -> Vec<u8> {
 
 fn external_http_error(
     error: ExternalRequestError,
-    router_response: impl FnOnce(RouterError, Box<ResolvedRoute>) -> Vec<u8>,
-) -> Vec<u8> {
-    match error {
+    router_response: impl FnOnce(RouterError, Box<ResolvedRoute>) -> JsonReply,
+) -> Option<JsonReply> {
+    Some(match error {
         ExternalRequestError::Router(error, route) => router_response(error, route),
         ExternalRequestError::Route(error) => route_resolution_response(error),
-        ExternalRequestError::Disconnected => Vec::new(),
-        ExternalRequestError::Unsupported => crate::http::response::json_error_response(
+        ExternalRequestError::Disconnected => return None,
+        ExternalRequestError::Unsupported => JsonReply::error(
             503,
-            status_text(503),
             "provider protocol is unsupported",
             Some("router_error"),
-            &[],
         ),
-    }
+    })
 }
 
 pub(crate) fn external_websocket_error(error: ExternalRequestError) -> Value {
@@ -72,13 +69,13 @@ pub(crate) fn external_websocket_error(error: ExternalRequestError) -> Value {
     }
 }
 
-pub(crate) fn route_resolution_response(error: RouteResolutionError) -> Vec<u8> {
+pub(crate) fn route_resolution_response(error: RouteResolutionError) -> JsonReply {
     let error_class = if error.status() >= 500 {
         "upstream_5xx"
     } else {
         "router_error"
     };
-    http_error(
+    http_error_reply(
         error.status(),
         serde_json::json!({
             "code":error_class, "type":error_class, "origin":"emp",
@@ -88,8 +85,8 @@ pub(crate) fn route_resolution_response(error: RouteResolutionError) -> Vec<u8> 
     )
 }
 
-pub(crate) fn request_router_error_response(status: u16, message: &str) -> Vec<u8> {
-    http_error(
+pub(crate) fn request_router_error_response(status: u16, message: &str) -> JsonReply {
+    http_error_reply(
         status,
         serde_json::json!({
             "code":"router_error", "type":"router_error", "origin":"emp",
@@ -111,10 +108,6 @@ fn routed_message(error: &RouterError, route: &ResolvedRoute, output_started: bo
     )
 }
 
-pub(crate) fn router_error_response(error: RouterError) -> Vec<u8> {
-    router_error_reply(error).wire_response()
-}
-
 pub(crate) fn router_error_reply(error: RouterError) -> JsonReply {
     router_error_response_with_route(error, None)
 }
@@ -122,8 +115,8 @@ pub(crate) fn router_error_reply(error: RouterError) -> JsonReply {
 pub(crate) fn router_error_response_for_route(
     error: RouterError,
     route: &ResolvedRoute,
-) -> Vec<u8> {
-    router_error_response_with_route(error, Some(route)).wire_response()
+) -> JsonReply {
+    router_error_response_with_route(error, Some(route))
 }
 
 fn router_error_response_with_route(
@@ -158,7 +151,10 @@ fn router_error_response_with_route(
     http_error_reply(error.status(), detail, error.retry_after_seconds())
 }
 
-pub(crate) fn pre_output_failure_response(event: &Value, route: &ResolvedRoute) -> Option<Vec<u8>> {
+pub(crate) fn pre_output_failure_response(
+    event: &Value,
+    route: &ResolvedRoute,
+) -> Option<JsonReply> {
     if event.get("type").and_then(Value::as_str) != Some("response.failed") {
         return None;
     }
@@ -202,20 +198,20 @@ pub(crate) fn pre_output_failure_response(event: &Value, route: &ResolvedRoute) 
         })
         .and_then(|(_, value)| emp_router::parse_retry_after(value.as_str()))
         .or_else(|| error.get("retry_after_seconds").and_then(Value::as_u64));
-    Some(http_error(status, detail, retry_after))
+    Some(http_error_reply(status, detail, retry_after))
 }
 
 pub(crate) fn pre_output_router_error_response_for_route(
     error: &RouterError,
     route: &ResolvedRoute,
-) -> Vec<u8> {
+) -> JsonReply {
     pre_output_router_error_response_with_route(error, Some(route))
 }
 
 fn pre_output_router_error_response_with_route(
     error: &RouterError,
     route: Option<&ResolvedRoute>,
-) -> Vec<u8> {
+) -> JsonReply {
     let error_class = error.error_class();
     let mut detail = serde_json::json!({
         "type": error_class.as_str(),
@@ -232,11 +228,7 @@ fn pre_output_router_error_response_with_route(
     {
         detail["failure_reason"] = Value::String(safe_failure_reason(reason));
     }
-    http_error(error.status(), detail, error.retry_after_seconds())
-}
-
-fn http_error(status: u16, detail: Value, retry_after: Option<u64>) -> Vec<u8> {
-    http_error_reply(status, detail, retry_after).wire_response()
+    http_error_reply(error.status(), detail, error.retry_after_seconds())
 }
 
 fn http_error_reply(status: u16, mut detail: Value, retry_after: Option<u64>) -> JsonReply {

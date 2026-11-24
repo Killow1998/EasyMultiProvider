@@ -2,7 +2,7 @@ use super::ServerMode;
 use crate::http::request::{
     REQUEST_READ_TIMEOUT, Request, parse_request, request_head_end, reserved_source_header,
 };
-use crate::server::http::error::EntryError;
+use crate::server::http::{error::EntryError, inference::Delivery};
 use axum::body::Bytes;
 use std::{
     io::{self, Cursor},
@@ -103,6 +103,7 @@ impl GuardedHead {
         io: I,
         response: Arc<OnceLock<Option<Bytes>>>,
         mode: ServerMode,
+        delivery: Option<Arc<Delivery>>,
     ) -> Prefixed<I> {
         let request = self.raw.request();
         let transport_length = if request.header_count("Content-Length") == 1
@@ -157,6 +158,7 @@ impl GuardedHead {
             response,
             mode,
             written: 0,
+            delivery,
         }
     }
 }
@@ -169,6 +171,15 @@ pub(super) struct Prefixed<I> {
     response: Arc<OnceLock<Option<Bytes>>>,
     mode: ServerMode,
     written: usize,
+    delivery: Option<Arc<Delivery>>,
+}
+
+impl<I> Drop for Prefixed<I> {
+    fn drop(&mut self) {
+        if let Some(delivery) = &self.delivery {
+            delivery.close();
+        }
+    }
 }
 
 impl<I: AsyncRead + Unpin> AsyncRead for Prefixed<I> {
@@ -230,11 +241,19 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Prefixed<I> {
             }
             return Poll::Ready(Ok(bytes.len()));
         }
-        Pin::new(&mut this.io).poll_write(cx, bytes)
+        let count = ready!(Pin::new(&mut this.io).poll_write(cx, bytes))?;
+        if let Some(delivery) = &this.delivery {
+            delivery.written(count);
+        }
+        Poll::Ready(Ok(count))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.io).poll_flush(cx)
+        ready!(Pin::new(&mut self.io).poll_flush(cx))?;
+        if let Some(delivery) = &self.delivery {
+            delivery.flushed();
+        }
+        Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

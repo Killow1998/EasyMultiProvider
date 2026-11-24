@@ -66,6 +66,8 @@ pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input
 mod account_writes;
 #[cfg(unix)]
 mod catalog_writes;
+#[cfg(unix)]
+mod inference;
 #[cfg(target_os = "linux")]
 mod local_writes;
 #[cfg(unix)]

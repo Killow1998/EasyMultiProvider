@@ -7,6 +7,16 @@ pub const HEALTH_JSON_BYTES: &[u8] = b"{\"status\":\"ok\"}";
 
 pub(crate) const SECURITY_HEADERS: &[u8] = b"X-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\nX-Content-Type-Options: nosniff\r\n";
 
+pub(crate) fn is_security_header(name: &str) -> bool {
+    [
+        "X-Frame-Options",
+        "Content-Security-Policy",
+        "X-Content-Type-Options",
+    ]
+    .iter()
+    .any(|header| name.eq_ignore_ascii_case(header))
+}
+
 pub(crate) fn response(
     status_line: &str,
     content_type: &str,
@@ -33,14 +43,7 @@ pub(crate) fn response_with_headers<'a>(
     }
     response.extend_from_slice(SECURITY_HEADERS);
     for (name, value) in headers {
-        if [
-            "X-Frame-Options",
-            "Content-Security-Policy",
-            "X-Content-Type-Options",
-        ]
-        .iter()
-        .any(|security_header| name.eq_ignore_ascii_case(security_header))
-        {
+        if is_security_header(name) {
             continue;
         }
         let _ = write!(response, "{name}: {value}\r\n");

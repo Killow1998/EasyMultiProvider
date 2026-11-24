@@ -2,48 +2,27 @@ use crate::VERSION;
 use crate::api::failure_response::request_router_error_response;
 use crate::app::ServerState;
 use crate::http::request::Request;
-use crate::http::request::read_json_body;
-use crate::http::response::body_error_response;
-use crate::http::response::json_error_response;
-use crate::http::response::response;
-use crate::http::response::status_text;
-use crate::server::http::proxy::require_proxy;
+use crate::server::http::error::HttpReply;
 use crate::services::accounts::native_subscription_headers;
 use crate::util::random_hex;
 use emp_codex::account_auth_headers;
 use emp_transport::HttpMethod;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::path::Path;
 
-pub(crate) fn native_search_request(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    body_prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-) -> Vec<u8> {
-    if let Err(error) = require_proxy(request, state, now) {
-        return error.wire_response();
-    }
-    let body = match read_json_body(stream, request, body_prefix, state) {
-        Ok(body) => body,
-        Err(error) => return body_error_response(error),
-    };
+pub(crate) fn execute(request: Request<'_>, body: Value, state: &ServerState) -> HttpReply {
     let config = match state.backend.configuration.read() {
         Ok(config) => config.clone(),
         Err(_) => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+            return HttpReply::error(500, "internal server error", None);
         }
     };
     if config["subscription_search"]["enabled"] != true {
-        return json_error_response(
+        return HttpReply::error(
             403,
-            status_text(403),
             "Subscription web search is disabled",
             Some("router_error"),
-            &[],
         );
     }
     let mut headers = BTreeMap::from([
@@ -87,19 +66,17 @@ pub(crate) fn native_search_request(
             None => team.check_native_budget(state),
         };
         if let Err(denial) = budget {
-            return super::native_response::error_response(denial.public_error(state));
+            return super::native_response::error_reply(denial.public_error(state));
         }
         headers.extend(credentials);
     } else if denied
         || emp_codex::configuration::local_auth::mode(&state.backend.accounts.native_auth_path)
             == "local_key"
     {
-        return json_error_response(
+        return HttpReply::error(
             503,
-            status_text(503),
             "Subscription web search requires a signed-in or imported Codex subscription",
             Some("subscription_required"),
-            &[],
         );
     } else {
         for name in ["authorization", "chatgpt-account-id"] {
@@ -139,12 +116,10 @@ pub(crate) fn native_search_request(
             )) {
             Ok(response) => response,
             Err(_) => {
-                return json_error_response(
+                return HttpReply::error(
                     503,
-                    status_text(503),
                     "Cannot connect to subscription web search",
                     Some("network_error"),
-                    &[],
                 );
             }
         };
@@ -161,19 +136,12 @@ pub(crate) fn native_search_request(
     {
         Ok(raw) => raw,
         Err(_) => {
-            return json_error_response(
+            return HttpReply::error(
                 502,
-                status_text(502),
                 "native search response is too large or incomplete",
                 Some("protocol_error"),
-                &[],
             );
         }
     };
-    response(
-        &format!("HTTP/1.1 {status} {}", status_text(status)),
-        &content_type,
-        &raw,
-        &[],
-    )
+    HttpReply::new(status, raw).with_content_type(content_type)
 }

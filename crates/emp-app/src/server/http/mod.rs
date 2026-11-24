@@ -3,6 +3,7 @@ pub(crate) mod body;
 pub(crate) mod catalog;
 pub(crate) mod error;
 pub(crate) mod gateway;
+pub(crate) mod inference;
 pub(crate) mod inspection;
 pub(crate) mod local_writes;
 pub(crate) mod login;

@@ -355,7 +355,7 @@ fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
     }
 }
 
-struct OneShotUpstream {
+pub(crate) struct OneShotUpstream {
     address: SocketAddr,
     observed: mpsc::Receiver<(String, BTreeMap<String, String>, Value)>,
     worker: Option<JoinHandle<()>>,
@@ -433,12 +433,39 @@ impl OneShotUpstream {
 
     /// Answers every connection identically; `connections` bounds the
     /// accept loop so callers can exercise the full retry budget.
-    fn start_repeated_wire(
+    pub(crate) fn start_repeated_wire(
         status: u16,
         content_type: &'static str,
         retry_after: Option<u64>,
         connections: usize,
         chunks: Vec<Vec<u8>>,
+    ) -> Self {
+        Self::serve(connections, move |stream| {
+            let content_length = chunks.iter().map(Vec::len).sum::<usize>();
+            let retry_after = retry_after
+                .map(|delay| format!("Retry-After: {delay}\r\n"))
+                .unwrap_or_default();
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {content_length}\r\n{retry_after}Connection: close\r\n\r\n",
+                        status_text(status)
+                    )
+                    .as_bytes(),
+                )
+                .expect("write upstream response head");
+            for chunk in chunks.clone() {
+                stream
+                    .write_all(&chunk)
+                    .expect("write upstream response body");
+                stream.flush().expect("flush upstream response body");
+            }
+        })
+    }
+
+    pub(crate) fn serve(
+        connections: usize,
+        mut reply: impl FnMut(&mut TcpStream) + Send + 'static,
     ) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream");
         let address = listener.local_addr().expect("upstream address");
@@ -450,25 +477,7 @@ impl OneShotUpstream {
                 };
                 let (path, headers, body) = receive_upstream_request(&mut stream);
                 let _ = sender.send((path, headers, body));
-                let content_length = chunks.iter().map(Vec::len).sum::<usize>();
-                let retry_after = retry_after
-                    .map(|delay| format!("Retry-After: {delay}\r\n"))
-                    .unwrap_or_default();
-                stream
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {content_length}\r\n{retry_after}Connection: close\r\n\r\n",
-                            status_text(status)
-                        )
-                        .as_bytes(),
-                    )
-                    .expect("write upstream response head");
-                for chunk in chunks.clone() {
-                    stream
-                        .write_all(&chunk)
-                        .expect("write upstream response body");
-                    stream.flush().expect("flush upstream response body");
-                }
+                reply(&mut stream);
             }
         });
         Self {
@@ -478,11 +487,11 @@ impl OneShotUpstream {
         }
     }
 
-    fn base_url(&self) -> String {
+    pub(crate) fn base_url(&self) -> String {
         format!("http://{}/v1", self.address)
     }
 
-    fn observed(&self) -> (String, BTreeMap<String, String>, Value) {
+    pub(crate) fn observed(&self) -> (String, BTreeMap<String, String>, Value) {
         self.observed
             .recv_timeout(Duration::from_secs(5))
             .expect("upstream observation")

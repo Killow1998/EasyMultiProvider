@@ -1,10 +1,6 @@
-use crate::server::http::proxy::require_proxy;
-
 use crate::app::ServerState;
-use crate::http::{
-    request::{Request, read_json_body},
-    response::{body_error_response, json_error_response, response, status_text},
-};
+use crate::http::request::Request;
+use crate::server::http::error::HttpReply;
 use crate::services::catalog::discovery::DiscoveryError;
 use emp_modules::decision::{
     self, ContextHeader, DiscoveryPlan, ModelChoice, ModelInput, PlanError, PlanReply, Protocol,
@@ -17,30 +13,24 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, net::TcpStream};
 use url::Url;
 
-pub(crate) fn request(
-    stream: &mut TcpStream,
-    request: Request<'_>,
-    prefix: Vec<u8>,
-    state: &ServerState,
-    now: f64,
-) -> Vec<u8> {
-    if let Err(error) = require_proxy(request, state, now) {
-        return error.wire_response();
-    }
-    let provider_override = request.header("X-EMP-Provider");
-    if request.header_count("X-EMP-Provider") > 1 || provider_override == Some("") {
-        return json_error_response(
+pub(crate) fn validate_headers(request: Request<'_>) -> Result<(), HttpReply> {
+    if request.header_count("X-EMP-Provider") > 1 || request.header("X-EMP-Provider") == Some("") {
+        return Err(HttpReply::error(
             400,
-            status_text(400),
             "X-EMP-Provider must name one configured API service",
             None,
-            &[],
-        );
+        ));
     }
-    let mut body = match read_json_body(stream, request, prefix, state) {
-        Ok(body) => body,
-        Err(error) => return body_error_response(error),
-    };
+    Ok(())
+}
+
+pub(crate) fn execute(
+    socket: &TcpStream,
+    request: Request<'_>,
+    mut body: Value,
+    state: &ServerState,
+) -> Option<HttpReply> {
+    let provider_override = request.header("X-EMP-Provider");
     let model_input = match body.get("model") {
         None => ModelInput::Omitted,
         Some(Value::String(model)) if !model.trim().is_empty() => ModelInput::Explicit,
@@ -52,13 +42,7 @@ pub(crate) fn request(
         .collect();
     let (endpoint, key, route, planned_headers) = {
         let Ok(config) = state.backend.configuration.read() else {
-            return json_error_response(
-                500,
-                status_text(500),
-                "configuration is unavailable",
-                None,
-                &[],
-            );
+            return Some(HttpReply::error(500, "configuration is unavailable", None));
         };
         let default = config["decision_provider"]
             .as_str()
@@ -81,11 +65,11 @@ pub(crate) fn request(
             },
         ) {
             Ok(Ok(plan)) => plan,
-            Ok(Err(error)) => return plan_error_response(error),
-            Err(error) => return endpoint_error_response(503, &error),
+            Ok(Err(error)) => return Some(plan_error_response(error)),
+            Err(error) => return Some(endpoint_error_response(503, &error)),
         };
         let Some(provider) = provider.filter(|provider| provider["id"] == plan.provider) else {
-            return endpoint_error_response(503, "invalid_module_reply");
+            return Some(endpoint_error_response(503, "invalid_module_reply"));
         };
         match (model_input, plan.model) {
             (ModelInput::Explicit, ModelChoice::Explicit) => {}
@@ -94,7 +78,7 @@ pub(crate) fn request(
             {
                 body["model"] = Value::String(model);
             }
-            _ => return endpoint_error_response(503, "invalid_module_reply"),
+            _ => return Some(endpoint_error_response(503, "invalid_module_reply")),
         }
         let base = provider["base_url"]
             .as_str()
@@ -103,17 +87,15 @@ pub(crate) fn request(
             .and_then(|url| url.join(plan.protocol.endpoint_path()))
         {
             Ok(endpoint) => endpoint,
-            Err(_) => return endpoint_error_response(400, "invalid_decision_url"),
+            Err(_) => return Some(endpoint_error_response(400, "invalid_decision_url")),
         };
         let key = emp_state::provider_api_key(provider, &state.backend.configuration.vault);
         if key.is_empty() {
-            return json_error_response(
+            return Some(HttpReply::error(
                 503,
-                status_text(503),
                 "Decision service API key is unavailable",
                 None,
-                &[],
-            );
+            ));
         }
         let model = body["model"].as_str().expect("validated model");
         let route = match emp_domain::resolved_route_from_parts(
@@ -125,13 +107,7 @@ pub(crate) fn request(
         ) {
             Ok(route) => route,
             Err(_) => {
-                return json_error_response(
-                    503,
-                    status_text(503),
-                    "Decision route is unavailable",
-                    None,
-                    &[],
-                );
+                return Some(HttpReply::error(503, "Decision route is unavailable", None));
             }
         };
         (endpoint, key, route, plan.headers)
@@ -162,7 +138,7 @@ pub(crate) fn request(
     }
     let transport = &state.backend.transport;
     use crate::services::disconnect::{DisconnectMonitor, DisconnectRace, raced};
-    let mut monitor = DisconnectMonitor::start(stream).ok();
+    let mut monitor = DisconnectMonitor::start(socket).ok();
     let upstream = match raced(
         &transport.runtime,
         monitor.as_mut(),
@@ -177,17 +153,15 @@ pub(crate) fn request(
         DisconnectRace::Ready(Ok(upstream)) => upstream,
         DisconnectRace::Disconnected => {
             outcome.disconnected();
-            return Vec::new();
+            return None;
         }
         DisconnectRace::Ready(Err(_)) => {
             outcome.status(503, "network_error");
-            return json_error_response(
+            return Some(HttpReply::error(
                 503,
-                status_text(503),
                 "Cannot connect to the decision service",
                 Some("network_error"),
-                &[],
-            );
+            ));
         }
     };
     let status = upstream.status();
@@ -197,10 +171,6 @@ pub(crate) fn request(
         .unwrap_or("application/json")
         .to_owned();
     let retry = upstream.header("retry-after").map(str::to_owned);
-    let headers = retry
-        .as_deref()
-        .map(|value| vec![("Retry-After", value)])
-        .unwrap_or_default();
     let raw = match raced(
         &transport.runtime,
         monitor.as_mut(),
@@ -209,17 +179,15 @@ pub(crate) fn request(
         DisconnectRace::Ready(Ok(raw)) => raw,
         DisconnectRace::Disconnected => {
             outcome.disconnected();
-            return Vec::new();
+            return None;
         }
         DisconnectRace::Ready(Err(_)) => {
             outcome.status(502, "protocol_error");
-            return json_error_response(
+            return Some(HttpReply::error(
                 502,
-                status_text(502),
                 "Decisions response is incomplete or too large",
                 Some("protocol_error"),
-                &[],
-            );
+            ));
         }
     };
     if let Ok(mut reported) = serde_json::from_slice::<Value>(&raw) {
@@ -239,12 +207,11 @@ pub(crate) fn request(
         outcome.http_status(status);
     }
     outcome.finish();
-    response(
-        &format!("HTTP/1.1 {status} {}", status_text(status)),
-        &content_type,
-        &raw,
-        &headers,
-    )
+    let mut reply = HttpReply::new(status, raw).with_content_type(content_type);
+    if let Some(retry) = retry {
+        reply = reply.with_header("Retry-After", retry);
+    }
+    Some(reply)
 }
 
 fn service_snapshot<'a>(
@@ -297,7 +264,7 @@ fn service_snapshot<'a>(
     )
 }
 
-fn plan_error_response(error: PlanError) -> Vec<u8> {
+fn plan_error_response(error: PlanError) -> HttpReply {
     let (status, message, code) = match error {
         PlanError::ProviderRequired => (
             400,
@@ -321,17 +288,11 @@ fn plan_error_response(error: PlanError) -> Vec<u8> {
             return endpoint_error_response(503, "invalid_decision_protocol");
         }
     };
-    json_error_response(status, status_text(status), message, code, &[])
+    HttpReply::error(status, message, code)
 }
 
-fn endpoint_error_response(status: u16, code: &str) -> Vec<u8> {
-    json_error_response(
-        status,
-        status_text(status),
-        "Decision endpoint is unavailable",
-        Some(code),
-        &[],
-    )
+fn endpoint_error_response(status: u16, code: &str) -> HttpReply {
+    HttpReply::error(status, "Decision endpoint is unavailable", Some(code))
 }
 
 pub(crate) struct DecisionDiscovery {

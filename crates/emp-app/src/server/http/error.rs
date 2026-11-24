@@ -2,7 +2,7 @@ use super::raw_head;
 use crate::api::realtime::RealtimeError;
 use crate::app::ServerState;
 use crate::http::response::{
-    SECURITY_HEADERS, json_error_body, response_with_headers, status_text,
+    SECURITY_HEADERS, is_security_header, json_error_body, response_with_headers, status_text,
 };
 use crate::server::http::body::BodyError;
 use crate::services::error_presentation::ErrorPresentation;
@@ -31,9 +31,9 @@ pub(crate) enum EntryError {
 pub(crate) struct HttpReply {
     status: u16,
     status_text: &'static str,
-    content_type: &'static str,
+    content_type: Cow<'static, str>,
     body: Bytes,
-    extra_headers: Vec<(&'static str, Cow<'static, str>)>,
+    extra_headers: Vec<(Cow<'static, str>, Cow<'static, str>)>,
 }
 
 pub(crate) type JsonReply = HttpReply;
@@ -79,7 +79,7 @@ impl HttpReply {
         Self {
             status,
             status_text: status_text(status),
-            content_type: "application/json",
+            content_type: "application/json".into(),
             body: body.into(),
             extra_headers: Vec::new(),
         }
@@ -91,60 +91,88 @@ impl HttpReply {
 
     pub(crate) fn with_header(
         mut self,
-        name: &'static str,
+        name: impl Into<Cow<'static, str>>,
         value: impl Into<Cow<'static, str>>,
     ) -> Self {
-        self.extra_headers.push((name, value.into()));
+        self.extra_headers.push((name.into(), value.into()));
         self
     }
 
-    pub(crate) fn with_content_type(mut self, content_type: &'static str) -> Self {
-        self.content_type = content_type;
+    pub(crate) fn with_content_type(mut self, content_type: impl Into<Cow<'static, str>>) -> Self {
+        self.content_type = content_type.into();
         self
     }
 
-    pub(super) fn with_status_text(mut self, status_text: &'static str) -> Self {
+    pub(crate) fn with_status_text(mut self, status_text: &'static str) -> Self {
         self.status_text = status_text;
         self
+    }
+
+    pub(crate) fn into_http_response(self) -> Response {
+        let mut builder = response_head(self.status, &self.content_type)
+            .header("content-length", self.body.len())
+            .extension(hyper::ext::ReasonPhrase::from_static(
+                self.status_text.as_bytes(),
+            ));
+        if self.content_type == "application/json" {
+            builder = builder.header("cache-control", "no-store");
+        }
+        for (name, value) in self.extra_headers {
+            if !is_security_header(&name) {
+                builder = builder.header(name.as_ref(), value.as_ref());
+            }
+        }
+        builder
+            .body(Body::from(self.body))
+            .expect("EMP HTTP response")
+    }
+
+    pub(crate) fn present(&mut self, errors: &ErrorPresentation) {
+        if let Some(body) = errors.http_body(self.status, &self.body) {
+            self.body = body.into();
+        }
+    }
+
+    pub(super) fn receipt(&self) -> super::inference::BufferedReceipt {
+        super::inference::BufferedReceipt::Response {
+            status: self.status,
+            body: self.body.clone(),
+        }
     }
 
     pub(crate) fn wire_response(&self) -> Vec<u8> {
         response_with_headers(
             &format!("HTTP/1.1 {} {}", self.status, self.status_text),
-            self.content_type,
+            &self.content_type,
             &self.body,
             self.extra_headers
                 .iter()
-                .map(|(name, value)| (*name, value.as_ref())),
+                .map(|(name, value)| (name.as_ref(), value.as_ref())),
         )
     }
+}
+
+pub(crate) fn response_head(status: u16, content_type: &str) -> axum::http::response::Builder {
+    let mut builder = Response::builder()
+        .status(StatusCode::from_u16(status).expect("EMP HTTP status"))
+        .header("content-type", content_type)
+        .header("connection", "close");
+    for line in std::str::from_utf8(SECURITY_HEADERS)
+        .expect("security headers")
+        .lines()
+    {
+        let (name, value) = line.split_once(": ").expect("security header");
+        builder = builder.header(name, value);
+    }
+    builder
 }
 
 impl IntoResponse for HttpReply {
     fn into_response(self) -> Response {
         let wire = EntryWire(Bytes::from(self.wire_response()));
-        let mut builder = Response::builder()
-            .status(StatusCode::from_u16(self.status).expect("EMP HTTP status"))
-            .header("content-type", self.content_type)
-            .header("content-length", self.body.len())
-            .header("connection", "close")
-            .extension(wire);
-        if self.content_type == "application/json" {
-            builder = builder.header("cache-control", "no-store");
-        }
-        for line in std::str::from_utf8(SECURITY_HEADERS)
-            .expect("security headers")
-            .lines()
-        {
-            let (name, value) = line.split_once(": ").expect("security header");
-            builder = builder.header(name, value);
-        }
-        for (name, value) in self.extra_headers {
-            builder = builder.header(name, value.as_ref());
-        }
-        builder
-            .body(Body::from(self.body))
-            .expect("EMP HTTP response")
+        let mut response = self.into_http_response();
+        response.extensions_mut().insert(wire);
+        response
     }
 }
 

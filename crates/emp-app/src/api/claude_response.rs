@@ -1,36 +1,40 @@
-use crate::http::response::{response, status_text};
+use crate::server::http::error::HttpReply;
 use crate::services::claude_cli::failure_stage;
 use crate::services::claude_cli::{ClaudeCliError, failure_details};
 use crate::services::failure_feedback;
 use emp_domain::ResolvedRoute;
 use serde_json::{Value, json};
 
-pub(crate) fn http_response(error: &ClaudeCliError) -> Vec<u8> {
+pub(crate) fn http_response(error: &ClaudeCliError) -> Option<HttpReply> {
     http_response_with_route(error, None)
 }
 
-pub(crate) fn http_response_for_route(error: &ClaudeCliError, route: &ResolvedRoute) -> Vec<u8> {
+pub(crate) fn http_response_for_route(
+    error: &ClaudeCliError,
+    route: &ResolvedRoute,
+) -> Option<HttpReply> {
     http_response_with_route(error, Some(route))
 }
 
-fn http_response_with_route(error: &ClaudeCliError, route: Option<&ResolvedRoute>) -> Vec<u8> {
+fn http_response_with_route(
+    error: &ClaudeCliError,
+    route: Option<&ResolvedRoute>,
+) -> Option<HttpReply> {
     match error {
-        ClaudeCliError::Disconnected => Vec::new(),
-        ClaudeCliError::Router(error) => route.map_or_else(
-            || crate::api::failure_response::router_error_response(error.clone()),
+        ClaudeCliError::Disconnected => None,
+        ClaudeCliError::Router(error) => Some(route.map_or_else(
+            || crate::api::failure_response::router_error_reply(error.clone()),
             |route| {
                 crate::api::failure_response::router_error_response_for_route(error.clone(), route)
             },
-        ),
+        )),
         ClaudeCliError::Failure(_) | ClaudeCliError::ShuttingDown => {
             let event = websocket_value_with_route(error, route);
             let status = event["status"].as_u64().expect("CLI error HTTP status") as u16;
-            response(
-                &format!("HTTP/1.1 {status} {}", status_text(status)),
-                "application/json",
-                &serde_json::to_vec(&json!({"error":event["error"]})).expect("CLI error JSON"),
-                &[],
-            )
+            Some(HttpReply::new(
+                status,
+                serde_json::to_vec(&json!({"error":event["error"]})).expect("CLI error JSON"),
+            ))
         }
     }
 }
@@ -131,8 +135,12 @@ mod tests {
             ),
         ] {
             let error = ClaudeCliError::Failure(reason);
-            let http = String::from_utf8(crate::api::claude_response::http_response(&error))
-                .expect("HTTP response UTF-8");
+            let http = String::from_utf8(
+                crate::api::claude_response::http_response(&error)
+                    .unwrap()
+                    .wire_response(),
+            )
+            .expect("HTTP response UTF-8");
             let (head, body) = http.split_once("\r\n\r\n").expect("HTTP response body");
             assert!(head.starts_with(&format!("HTTP/1.1 {expected_status} ")));
             let http_value: Value = serde_json::from_str(body).expect("HTTP error JSON");
@@ -200,7 +208,12 @@ mod tests {
             ),
         ] {
             let error = ClaudeCliError::Failure(reason);
-            let http = String::from_utf8(http_response_for_route(&error, &route)).unwrap();
+            let http = String::from_utf8(
+                http_response_for_route(&error, &route)
+                    .unwrap()
+                    .wire_response(),
+            )
+            .unwrap();
             let (head, body) = http.split_once("\r\n\r\n").unwrap();
             assert!(head.starts_with(&format!("HTTP/1.1 {status} ")));
             let http: Value = serde_json::from_str(body).unwrap();

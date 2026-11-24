@@ -1,5 +1,5 @@
-use crate::api::failure_response::{route_resolution_response, router_error_response};
-use crate::http::response::response;
+use crate::api::failure_response::{route_resolution_response, router_error_reply};
+use crate::server::http::error::HttpReply;
 use crate::services::compaction::{CompactionError, SummaryExecutionError};
 use crate::services::history::DestinationPrepareError;
 use crate::services::observation::request::RequestObservation;
@@ -22,7 +22,7 @@ fn history_error_detail(error: &HistoryError) -> Value {
 pub(crate) fn history_http_error(
     error: &HistoryError,
     observation: &mut RequestObservation,
-) -> Vec<u8> {
+) -> HttpReply {
     observation.history_failed(error);
     let mut detail = history_error_detail(error);
     detail["code"] = "history_reconstruction_failed".into();
@@ -31,7 +31,7 @@ pub(crate) fn history_http_error(
         "error": detail
     }))
     .expect("history error is serializable");
-    response("HTTP/1.1 409 Conflict", "application/json", &body, &[])
+    HttpReply::new(409, body).with_status_text("Conflict")
 }
 
 pub(crate) fn history_stream_error(
@@ -54,24 +54,18 @@ pub(crate) fn history_stream_error(
 pub(crate) fn destination_error_response(
     error: DestinationPrepareError,
     observation: &mut RequestObservation,
-) -> Vec<u8> {
-    match error {
+) -> Option<HttpReply> {
+    Some(match error {
         DestinationPrepareError::Collaboration {
             status,
             code,
             message,
-        } => crate::http::response::json_error_response(
-            status,
-            crate::http::response::status_text(status),
-            message,
-            Some(code),
-            &[],
-        ),
-        DestinationPrepareError::Router(error) => router_error_response(error),
+        } => HttpReply::error(status, message, Some(code)),
+        DestinationPrepareError::Router(error) => router_error_reply(error),
         DestinationPrepareError::ClaudeCli(error) => {
-            crate::api::claude_response::http_response(&error)
+            return crate::api::claude_response::http_response(&error);
         }
-        DestinationPrepareError::Disconnected => Vec::new(),
+        DestinationPrepareError::Disconnected => return None,
         DestinationPrepareError::History(reason) => {
             history_http_error(&HistoryError::new(reason), observation)
         }
@@ -86,17 +80,13 @@ pub(crate) fn destination_error_response(
                 "code":"context_length_exceeded", "type":"context_length_exceeded",
                 "origin":"emp", "message":format!("[EMP] context length exceeded: estimated input {estimate} tokens, safe input limit {limit}; provider {}, model {}; next action: reduce input or use native remote compaction", assessment.provider_id, assessment.model_id)
             }});
-            response(
-                "HTTP/1.1 413 Payload Too Large",
-                "application/json",
-                &serde_json::to_vec(&body).expect("context error JSON"),
-                &[],
-            )
+            HttpReply::new(413, serde_json::to_vec(&body).expect("context error JSON"))
+                .with_status_text("Payload Too Large")
         }
-    }
+    })
 }
 
-fn external_compaction_error(reason: &str) -> Vec<u8> {
+fn external_compaction_error(reason: &str) -> HttpReply {
     let message = format!("external_compaction_failed: reason={reason}");
     let body = serde_json::to_vec(&serde_json::json!({
         "error": {
@@ -107,21 +97,21 @@ fn external_compaction_error(reason: &str) -> Vec<u8> {
         }
     }))
     .expect("external compaction error is serializable");
-    response("HTTP/1.1 502 Bad Gateway", "application/json", &body, &[])
+    HttpReply::new(502, body)
 }
 
-pub(crate) fn compaction_error_response(error: CompactionError) -> Vec<u8> {
-    match error {
+pub(crate) fn compaction_error_response(error: CompactionError) -> Option<HttpReply> {
+    Some(match error {
         CompactionError::InvalidSummary(reason) => external_compaction_error(reason),
         CompactionError::Route(error) => route_resolution_response(error),
         CompactionError::Execution(SummaryExecutionError::Router(error)) => {
-            router_error_response(error)
+            router_error_reply(error)
         }
         CompactionError::Execution(SummaryExecutionError::ClaudeCli(error)) => {
-            crate::api::claude_response::http_response(&error)
+            return crate::api::claude_response::http_response(&error);
         }
-        CompactionError::Execution(SummaryExecutionError::Disconnected) => Vec::new(),
-    }
+        CompactionError::Execution(SummaryExecutionError::Disconnected) => return None,
+    })
 }
 
 #[cfg(test)]
@@ -154,7 +144,7 @@ mod tests {
                 &mut receipt,
             );
             drop(receipt);
-            let text = String::from_utf8(response).unwrap();
+            let text = String::from_utf8(response.unwrap().wire_response()).unwrap();
             assert!(text.starts_with("HTTP/1.1 409"));
             let body: Value = serde_json::from_str(text.split_once("\r\n\r\n").unwrap().1).unwrap();
             assert_eq!(body["error"]["category"], "destination_compaction");

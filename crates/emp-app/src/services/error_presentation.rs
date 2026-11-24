@@ -180,12 +180,7 @@ impl ErrorPresentation {
         let split = wire.windows(4).position(|part| part == b"\r\n\r\n")?;
         let header = std::str::from_utf8(&wire[..split]).ok()?;
         let status = header.split_whitespace().nth(1)?.parse::<u16>().ok()?;
-        if !(400..600).contains(&status) {
-            return None;
-        }
-        let mut body: Value = serde_json::from_slice(&wire[split + 4..]).ok()?;
-        self.detail(body.get_mut("error")?, status, false)?;
-        let body = serde_json::to_vec(&body).ok()?;
+        let body = self.http_body(status, &wire[split + 4..])?;
         let mut output = header
             .lines()
             .filter(|line| !line.to_ascii_lowercase().starts_with("content-length:"))
@@ -195,6 +190,14 @@ impl ErrorPresentation {
         output.extend_from_slice(format!("\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
         output.extend(body);
         Some(output)
+    }
+    pub(crate) fn http_body(&self, status: u16, body: &[u8]) -> Option<Vec<u8>> {
+        if !(400..600).contains(&status) {
+            return None;
+        }
+        let mut body: Value = serde_json::from_slice(body).ok()?;
+        self.detail(body.get_mut("error")?, status, false)?;
+        serde_json::to_vec(&body).ok()
     }
     pub(crate) fn frame(&self, frame: &[u8], upstream: bool) -> Option<Vec<u8>> {
         let text = std::str::from_utf8(frame).ok()?;

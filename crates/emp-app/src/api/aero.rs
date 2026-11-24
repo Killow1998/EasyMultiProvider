@@ -1,10 +1,8 @@
 use crate::{
-    api::responses::ResponsesRequestResult,
+    api::streaming::ReplySink,
     app::ServerState,
-    http::{
-        request::Request,
-        response::{SECURITY_HEADERS, json_error_response, status_text},
-    },
+    http::request::Request,
+    server::http::{error::HttpReply, inference::InferenceOutcome},
     services::{
         disconnect::{DisconnectMonitor, DisconnectRace},
         modules::aero::{Call, Relay},
@@ -13,7 +11,7 @@ use crate::{
 };
 use emp_transport::{HttpMethod, HttpResponse, SseJsonParser};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, io::Write, net::TcpStream};
+use std::collections::BTreeMap;
 
 pub(super) fn selected_config(state: &ServerState, body: &Value) -> Option<Value> {
     let model = body["model"]
@@ -61,15 +59,15 @@ pub(super) fn await_module<F: std::future::Future>(
 }
 
 pub(crate) fn relay(
-    stream: &mut TcpStream,
+    downstream: &mut ReplySink<'_>,
     state: &ServerState,
     config: &Value,
     body: &Value,
     (request, incoming): (Request<'_>, &BTreeMap<String, String>),
     observation: &mut RequestObservation,
     compact: bool,
-) -> ResponsesRequestResult {
-    let upstream = DisconnectMonitor::start(stream)
+) -> InferenceOutcome {
+    let upstream = DisconnectMonitor::start(downstream.socket())
         .map_err(|_| RelayError::unavailable())
         .and_then(|mut monitor| {
             open(
@@ -85,20 +83,15 @@ pub(crate) fn relay(
         });
     let (mut upstream, mut monitor) = match upstream {
         Ok(upstream) => upstream,
-        Err(RelayError::Disconnected) => return ResponsesRequestResult::Streamed,
+        Err(RelayError::Disconnected) => return InferenceOutcome::Streamed,
         Err(RelayError::History(error)) => {
-            return ResponsesRequestResult::Buffered(
-                crate::api::history_response::history_http_error(&error, observation),
-            );
+            return InferenceOutcome::Buffered(crate::api::history_response::history_http_error(
+                &error,
+                observation,
+            ));
         }
         Err(RelayError::Request(status, code, message)) => {
-            return ResponsesRequestResult::Buffered(json_error_response(
-                status,
-                status_text(status),
-                message,
-                Some(code),
-                &[],
-            ));
+            return InferenceOutcome::Buffered(HttpReply::error(status, message, Some(code)));
         }
     };
     let status = upstream.response.status();
@@ -107,28 +100,18 @@ pub(crate) fn relay(
         .header("content-type")
         .unwrap_or("application/json")
         .to_owned();
-    let head = format!(
-        "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nConnection: close\r\nCache-Control: no-cache\r\n",
-        status_text(status)
-    );
     if observation
-        .written(
-            stream
-                .write_all(head.as_bytes())
-                .and_then(|()| stream.write_all(SECURITY_HEADERS))
-                .and_then(|()| stream.write_all(b"\r\n")),
-            false,
-        )
+        .written(downstream.aero_head(status, &content_type), false)
         .is_err()
     {
-        return ResponsesRequestResult::Streamed;
+        return InferenceOutcome::Streamed;
     }
     let mut parser = SseJsonParser::new();
     loop {
         match await_module(state, &mut monitor, upstream.response.next_chunk()) {
             DisconnectRace::Ready(Ok(Some(chunk))) => {
                 if observation
-                    .written(stream.write_all(&chunk), false)
+                    .written(downstream.frame(&chunk), false)
                     .is_err()
                 {
                     break;
@@ -151,7 +134,7 @@ pub(crate) fn relay(
             _ => break,
         }
     }
-    ResponsesRequestResult::Streamed
+    InferenceOutcome::Streamed
 }
 
 pub(super) fn open<'a>(

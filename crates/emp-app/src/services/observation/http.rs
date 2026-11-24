@@ -97,13 +97,26 @@ impl HttpObservation {
             self.fields["result"] = json!("no_response");
             return;
         }
-        self.fields["status"] = json!(
-            bytes
-                .get(..12)
-                .and_then(|head| std::str::from_utf8(head).ok())
-                .and_then(|head| head.split_whitespace().nth(1)?.parse::<u16>().ok())
-        );
-        self.fields["response_bytes"] = json!(bytes.len());
+        let status = bytes
+            .get(..12)
+            .and_then(|head| std::str::from_utf8(head).ok())
+            .and_then(|head| head.split_whitespace().nth(1)?.parse::<u16>().ok());
+        let body = bytes
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| &bytes[index + 4..]);
+        self.buffered_finished(status, body, bytes.len(), result);
+    }
+
+    pub(crate) fn buffered_finished(
+        &mut self,
+        status: Option<u16>,
+        body: Option<&[u8]>,
+        bytes: usize,
+        result: std::io::Result<()>,
+    ) {
+        self.fields["status"] = json!(status);
+        self.fields["response_bytes"] = json!(bytes);
         self.fields["result"] = json!(match self.fields["status"].as_u64() {
             Some(400..=499) => "rejected",
             Some(500..=599) => "failed",
@@ -126,9 +139,9 @@ impl HttpObservation {
             if self.fields["status"]
                 .as_u64()
                 .is_some_and(|status| status >= 400)
-                && let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n")
+                && let Some(body) = body
             {
-                model.buffered_error(&bytes[index + 4..], result.is_ok());
+                model.buffered_error(body, result.is_ok());
             }
             model.http_response(&self.fields["status"], result);
         }

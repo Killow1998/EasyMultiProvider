@@ -4,18 +4,13 @@ use crate::api::history_response::destination_error_response;
 use crate::api::history_response::history_http_error;
 use crate::api::history_response::history_stream_error;
 use crate::api::streaming::ObservedSse;
+use crate::api::streaming::ReplySink;
 use crate::api::streaming::serve_external_stream;
 use crate::api::streaming::serve_generated_response;
 use crate::api::streaming::serve_native_stream;
 use crate::app::ServerState;
-use crate::http::auth::same_origin;
 use crate::http::request::Request;
-use crate::http::request::read_json_body;
-use crate::http::response::body_error_response;
-use crate::http::response::json_error_response;
-use crate::http::response::response;
-use crate::http::response::status_text;
-use crate::server::http::proxy::require_proxy;
+use crate::server::http::{error::HttpReply, inference::InferenceOutcome};
 use crate::services::compaction::external_compaction_response;
 use crate::services::compaction::has_trailing_compaction_trigger;
 use crate::services::events::sse_frame;
@@ -29,38 +24,14 @@ use crate::services::request_preparation::{PreparedRequest, RequestPreparationEr
 use crate::util::projection_ids;
 use emp_context::HistoryError;
 use emp_domain::json_truthy;
-use std::net::TcpStream;
 
-pub(crate) enum ResponsesRequestResult {
-    Buffered(Vec<u8>),
-    Streamed,
-}
-
-pub(crate) fn responses_request(
-    stream: &mut TcpStream,
+pub(crate) fn execute(
+    downstream: &mut ReplySink<'_>,
     request: Request<'_>,
-    body_prefix: Vec<u8>,
+    body: serde_json::Value,
     state: &ServerState,
-    now: f64,
     observation: &mut RequestObservation,
-) -> ResponsesRequestResult {
-    if let Err(error) = require_proxy(request, state, now) {
-        return ResponsesRequestResult::Buffered(error.wire_response());
-    }
-    if same_origin(request, state.port)
-        && state
-            .sessions
-            .contains(request.session_token().as_deref(), now)
-        && let Some(kind) = request.header("x-emp-probe")
-        && emp_domain::MODEL_TEST_OPERATIONS.contains(&kind)
-    {
-        observation.probe(kind);
-    }
-    observation.phase(Phase::ReadBody);
-    let body = match read_json_body(stream, request, body_prefix, state) {
-        Ok(body) => body,
-        Err(error) => return ResponsesRequestResult::Buffered(body_error_response(error)),
-    };
+) -> InferenceOutcome {
     observation.body(
         body.get("reasoning"),
         body.get("input"),
@@ -72,7 +43,7 @@ pub(crate) fn responses_request(
     observation.phase(Phase::ResolveRoute);
     if let Some(config) = crate::api::aero::selected_config(state, &body) {
         return crate::api::aero::relay(
-            stream,
+            downstream,
             state,
             &config,
             &body,
@@ -88,32 +59,30 @@ pub(crate) fn responses_request(
     } = match crate::services::memory_routing::prepare(state, body, &incoming) {
         Ok(prepared) => prepared,
         Err(RequestPreparationError::ModelRequired) => {
-            return ResponsesRequestResult::Buffered(request_router_error_response(
+            return InferenceOutcome::Buffered(request_router_error_response(
                 400,
                 "request.model is required",
             ));
         }
         Err(RequestPreparationError::Route(error)) => {
-            return ResponsesRequestResult::Buffered(route_resolution_response(error));
+            return InferenceOutcome::Buffered(route_resolution_response(error));
         }
         Err(RequestPreparationError::TeamAccess(error)) => {
-            return ResponsesRequestResult::Buffered(super::native_response::error_response(
+            return InferenceOutcome::Buffered(super::native_response::error_reply(
                 error.public_error(state),
             ));
         }
         Err(RequestPreparationError::MemoryUnavailable(reason)) => {
-            return ResponsesRequestResult::Buffered(request_router_error_response(
+            return InferenceOutcome::Buffered(request_router_error_response(
                 503,
                 crate::services::memory_routing::error_message(reason),
             ));
         }
         Err(_) => {
-            return ResponsesRequestResult::Buffered(json_error_response(
+            return InferenceOutcome::Buffered(HttpReply::error(
                 500,
-                status_text(500),
                 "internal server error",
                 None,
-                &[],
             ));
         }
     };
@@ -126,19 +95,15 @@ pub(crate) fn responses_request(
     if crate::services::claude_cli::selected(&route)
         && let Err(error) = crate::services::claude_cli::preflight_input(&body)
     {
-        return ResponsesRequestResult::Buffered(
-            crate::api::claude_response::http_response_for_route(&error, &route),
-        );
+        return crate::api::claude_response::http_response_for_route(&error, &route).into();
     }
     let ids = match projection_ids() {
         Ok(ids) => ids,
         Err(_) => {
-            return ResponsesRequestResult::Buffered(json_error_response(
+            return InferenceOutcome::Buffered(HttpReply::error(
                 500,
-                status_text(500),
                 "internal server error",
                 None,
-                &[],
             ));
         }
     };
@@ -151,27 +116,26 @@ pub(crate) fn responses_request(
             let frame = match sse_frame("response.failed", &failed) {
                 Ok(frame) => frame,
                 Err(_) => {
-                    return ResponsesRequestResult::Buffered(json_error_response(
+                    return InferenceOutcome::Buffered(HttpReply::error(
                         500,
-                        status_text(500),
                         "internal server error",
                         None,
-                        &[],
                     ));
                 }
             };
-            let mut downstream = ObservedSse::new(stream, observation, &incoming);
+            let mut downstream = ObservedSse::new(downstream, observation, &incoming);
             let _ = downstream.head();
             let _ = downstream.frames(&[frame], "response.failed");
-            return ResponsesRequestResult::Streamed;
+            return InferenceOutcome::Streamed;
         }
         Err(error) => {
-            return ResponsesRequestResult::Buffered(history_http_error(&error, observation));
+            return InferenceOutcome::Buffered(history_http_error(&error, observation));
         }
     };
     observation.phase(Phase::PrepareDestination);
     let destination_context = {
-        let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+        let mut monitor =
+            crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
         prepare_destination_context(state, &route, body, &incoming, monitor.as_mut())
     };
     body = match destination_context {
@@ -179,18 +143,15 @@ pub(crate) fn responses_request(
         Err(DestinationPrepareError::History(reason)) if stream_requested => {
             let failed = history_stream_error(&HistoryError::new(reason), observation);
             if let Ok(frame) = sse_frame("response.failed", &failed) {
-                let mut downstream = ObservedSse::new(stream, observation, &incoming);
+                let mut downstream = ObservedSse::new(downstream, observation, &incoming);
                 let _ = downstream.head();
                 let _ = downstream.frames(&[frame], "response.failed");
             }
-            return ResponsesRequestResult::Streamed;
+            return InferenceOutcome::Streamed;
         }
-        Err(DestinationPrepareError::Disconnected) => return ResponsesRequestResult::Streamed,
+        Err(DestinationPrepareError::Disconnected) => return InferenceOutcome::Streamed,
         Err(error) => {
-            return ResponsesRequestResult::Buffered(destination_error_response(
-                error,
-                observation,
-            ));
+            return destination_error_response(error, observation).into();
         }
     };
     observation.phase(Phase::Execute);
@@ -207,7 +168,8 @@ pub(crate) fn responses_request(
         .started_at(started);
         let (compacted, candidate) = if crate::services::claude_cli::selected(&route) {
             let summary_body = crate::services::compaction::compaction_summary_body(&body);
-            let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+            let mut monitor =
+                crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
             let _activity_guard = state.backend.activity.begin(
                 crate::services::activity::ActivityIdentity::from_route(&route),
             );
@@ -224,12 +186,10 @@ pub(crate) fn responses_request(
                     let Some(summary) = crate::services::compaction::response_output_text(
                         &completion.response.body,
                     ) else {
-                        return ResponsesRequestResult::Buffered(json_error_response(
+                        return InferenceOutcome::Buffered(HttpReply::error(
                             502,
-                            status_text(502),
                             "external compaction failed",
                             Some("external_compaction_failed"),
-                            &[],
                         ));
                     };
                     usage.http_status(completion.response.status);
@@ -239,16 +199,17 @@ pub(crate) fn responses_request(
                         ) {
                             Ok(compacted) => compacted,
                             Err(error) => {
-                                return ResponsesRequestResult::Buffered(
-                                    crate::api::history_response::compaction_error_response(error),
-                                );
+                                return crate::api::history_response::compaction_error_response(
+                                    error,
+                                )
+                                .into();
                             }
                         };
                     (compacted, completion.route)
                 }
                 Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
                     usage.disconnected();
-                    return ResponsesRequestResult::Streamed;
+                    return InferenceOutcome::Streamed;
                 }
                 Err(error) => {
                     if let crate::services::claude_cli::ClaudeCliError::Router(router_error) =
@@ -261,13 +222,13 @@ pub(crate) fn responses_request(
                     ) {
                         usage.http_status(503);
                     }
-                    return ResponsesRequestResult::Buffered(
-                        crate::api::claude_response::http_response_for_route(&error, &route),
-                    );
+                    return crate::api::claude_response::http_response_for_route(&error, &route)
+                        .into();
                 }
             }
         } else {
-            let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+            let mut monitor =
+                crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
             match external_compaction_response(
                 state,
                 &route,
@@ -279,9 +240,7 @@ pub(crate) fn responses_request(
             ) {
                 Ok(result) => result,
                 Err(error) => {
-                    return ResponsesRequestResult::Buffered(
-                        crate::api::history_response::compaction_error_response(error),
-                    );
+                    return crate::api::history_response::compaction_error_response(error).into();
                 }
             }
         };
@@ -289,34 +248,27 @@ pub(crate) fn responses_request(
         usage.finish();
         persist_protocol_observation(state, &candidate);
         if body.get("stream").is_some_and(json_truthy) {
-            let downstream = ObservedSse::new(stream, observation, &incoming);
-            return match serve_generated_response(downstream, compacted, &ids) {
-                Ok(()) => ResponsesRequestResult::Streamed,
-                Err(error) => ResponsesRequestResult::Buffered(error),
-            };
+            let downstream = ObservedSse::new(downstream, observation, &incoming);
+            return serve_generated_response(downstream, compacted, &ids)
+                .err()
+                .map_or(InferenceOutcome::Streamed, Into::into);
         }
         let compacted = match serde_json::to_vec(&compacted) {
             Ok(body) => body,
             Err(_) => {
-                return ResponsesRequestResult::Buffered(json_error_response(
+                return InferenceOutcome::Buffered(HttpReply::error(
                     500,
-                    status_text(500),
                     "internal server error",
                     None,
-                    &[],
                 ));
             }
         };
-        return ResponsesRequestResult::Buffered(response(
-            "HTTP/1.1 200 OK",
-            "application/json",
-            &compacted,
-            &[],
-        ));
+        return InferenceOutcome::Buffered(HttpReply::new(200, compacted));
     }
     if crate::services::claude_cli::selected(&route) {
         let started = std::time::Instant::now();
-        let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+        let mut monitor =
+            crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
         let _activity_guard =
             state
                 .backend
@@ -334,7 +286,7 @@ pub(crate) fn responses_request(
         )
         .started_at(started);
         let mut downstream =
-            stream_requested.then(|| ObservedSse::new(stream, observation, &incoming));
+            stream_requested.then(|| ObservedSse::new(downstream, observation, &incoming));
         let mut live =
             crate::api::claude_stream::LiveText::new(&ids, false, |event: &serde_json::Value| {
                 let Some(downstream) = downstream.as_mut() else {
@@ -367,18 +319,16 @@ pub(crate) fn responses_request(
         ) {
             Ok(completion) => completion,
             Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
-                return ResponsesRequestResult::Streamed;
+                return InferenceOutcome::Streamed;
             }
             Err(error) => {
                 if live.started() {
                     let _ = live.event(&crate::api::claude_response::websocket_value_for_route(
                         &error, &route,
                     ));
-                    return ResponsesRequestResult::Streamed;
+                    return InferenceOutcome::Streamed;
                 }
-                return ResponsesRequestResult::Buffered(
-                    crate::api::claude_response::http_response_for_route(&error, &route),
-                );
+                return crate::api::claude_response::http_response_for_route(&error, &route).into();
             }
         };
         let route = &completion.route;
@@ -397,93 +347,56 @@ pub(crate) fn responses_request(
         crate::services::providers::persist_protocol_observation(state, route);
         if stream_requested {
             let _ = live.finish(response_value);
-            return ResponsesRequestResult::Streamed;
+            return InferenceOutcome::Streamed;
         }
         let body = serde_json::to_vec(&response_value).expect("validated Claude response");
-        return ResponsesRequestResult::Buffered(response(
-            &format!(
-                "HTTP/1.1 {} {}",
-                completion.response.status,
-                status_text(completion.response.status)
-            ),
-            &completion.response.content_type,
-            &body,
-            &[],
-        ));
+        return InferenceOutcome::Buffered(
+            HttpReply::new(completion.response.status, body)
+                .with_content_type(completion.response.content_type),
+        );
     }
-    if route.dialect == emp_domain::Dialect::CodexNative {
-        if body.get("stream").is_some_and(json_truthy) {
-            let _activity_guard = state.backend.activity.begin(
-                crate::services::activity::ActivityIdentity::from_route(&route),
-            );
-            return match serve_native_stream(
-                ObservedSse::new(stream, observation, &incoming),
-                state,
+    let native = route.dialect == emp_domain::Dialect::CodexNative;
+    let streaming = body.get("stream").is_some_and(json_truthy);
+    let _activity = (native || streaming).then(|| {
+        state
+            .backend
+            .activity
+            .begin(crate::services::activity::ActivityIdentity::from_route(
                 &route,
-                &config,
-                &body,
-                &incoming,
-                &ids,
-            ) {
-                Ok(()) => ResponsesRequestResult::Streamed,
-                Err(response) => ResponsesRequestResult::Buffered(response),
-            };
-        }
-        let _activity_guard =
-            state
-                .backend
-                .activity
-                .begin(crate::services::activity::ActivityIdentity::from_route(
-                    &route,
-                ));
-        return ResponsesRequestResult::Buffered(crate::api::native_response::complete_response(
-            native::complete(state, &route, &config, &body, &incoming),
-        ));
-    }
-    if body.get("stream").is_some_and(json_truthy) {
-        let _activity_guard =
-            state
-                .backend
-                .activity
-                .begin(crate::services::activity::ActivityIdentity::from_route(
-                    &route,
-                ));
-        return match serve_external_stream(
-            ObservedSse::new(stream, observation, &incoming),
-            state,
-            &route,
-            &body,
-            &incoming,
-            &ids,
-        ) {
-            Ok(()) => ResponsesRequestResult::Streamed,
-            Err(response) => ResponsesRequestResult::Buffered(response),
+            ))
+    });
+    if streaming {
+        let downstream = ObservedSse::new(downstream, observation, &incoming);
+        let result = if native {
+            serve_native_stream(downstream, state, &route, &config, &body, &incoming, &ids)
+        } else {
+            serve_external_stream(downstream, state, &route, &body, &incoming, &ids)
         };
+        return result.err().map_or(InferenceOutcome::Streamed, Into::into);
+    }
+    if native {
+        return crate::api::native_response::complete_response(native::complete(
+            state, &route, &config, &body, &incoming,
+        ))
+        .into();
     }
     let result = match crate::services::external::complete(state, &route, &body, &incoming, &ids) {
         Ok(result) => result,
         Err(error) => {
-            return ResponsesRequestResult::Buffered(
-                crate::api::failure_response::external_complete_error(error),
-            );
+            return crate::api::failure_response::external_complete_error(error).into();
         }
     };
     let body = match serde_json::to_vec(&result.body) {
         Ok(body) => body,
         Err(_) => {
-            return ResponsesRequestResult::Buffered(json_error_response(
+            return InferenceOutcome::Buffered(HttpReply::error(
                 500,
-                status_text(500),
                 "internal server error",
                 None,
-                &[],
             ));
         }
     };
-    ResponsesRequestResult::Buffered(response(
-        &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
-        &result.content_type,
-        &body,
-        &[],
-    ))
+    HttpReply::new(result.status, body)
+        .with_content_type(result.content_type)
+        .into()
 }

@@ -37,7 +37,8 @@ pub(crate) fn serve_realtime_call(
         return super::native_subscription_unavailable().wire_response();
     };
     if let Err(denial) = state.backend.team.check_native_budget(state) {
-        return crate::api::native_response::error_response(denial.public_error(state));
+        return crate::api::native_response::error_reply(denial.public_error(state))
+            .wire_response();
     }
     let forwarded = match safe_forwarded_headers(&incoming) {
         Ok(headers) => headers,

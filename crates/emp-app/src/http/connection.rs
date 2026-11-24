@@ -1,13 +1,9 @@
 use crate::api::catalog;
-use crate::api::compact::compact_request;
 use crate::api::integration::management_integration_request;
 use crate::api::lifecycle::quit_request;
 use crate::api::quota::serve_quota_events;
 use crate::api::realtime::serve_realtime_call;
 use crate::api::realtime::sideband::serve_realtime_sideband;
-use crate::api::responses::ResponsesRequestResult;
-use crate::api::responses::responses_request;
-use crate::api::search::native_search_request;
 use crate::api::websocket::serve_responses_websocket;
 use crate::app::ServerState;
 use crate::http::request::REQUEST_READ_TIMEOUT;
@@ -20,6 +16,7 @@ use crate::http::response::bad_request_response;
 use crate::http::routes::route_request_at;
 use crate::server::http::accounts::AccountWriteRoute;
 use crate::server::http::catalog::CatalogWriteRoute;
+use crate::server::http::inference::InferenceRoute;
 use crate::server::http::local_writes::LocalWriteRoute;
 use crate::server::http::proxy::{RequestAccess, request_source};
 use crate::server::http::usage::Report;
@@ -104,6 +101,15 @@ pub(crate) fn handle_connection(
                 .unwrap_or_else(EntryError::reply)
                 .wire_response(),
         )
+    } else if let Some(route) = InferenceRoute::for_request(request) {
+        route.legacy(
+            &mut stream,
+            request,
+            raw.body_prefix,
+            state,
+            now,
+            observation.model.as_mut(),
+        )
     } else if let Some(route) = MigrationRoute::for_request(request) {
         Some(
             route
@@ -137,9 +143,6 @@ pub(crate) fn handle_connection(
                 });
                 Some(reply.unwrap_or_else(EntryError::reply).wire_response())
             }
-            (RequestMethod::Post, "/v1/decisions" | "/v1/systemone") => Some(
-                crate::api::decisions::request(&mut stream, request, raw.body_prefix, state, now),
-            ),
             (RequestMethod::Post, "/api/updates/check" | "/api/updates/install") => Some(
                 crate::api::updates::start(&mut stream, request, raw.body_prefix, state, now),
             ),
@@ -164,15 +167,6 @@ pub(crate) fn handle_connection(
                     observation.request_id(),
                 );
                 None
-            }
-            (RequestMethod::Post, "/v1/images/generations" | "/v1/images/edits") => {
-                Some(crate::api::images::image_request(
-                    &mut stream,
-                    request,
-                    raw.body_prefix,
-                    state,
-                    now,
-                ))
             }
             (RequestMethod::Post, "/v1/live") => Some(serve_realtime_call(
                 &mut stream,
@@ -206,13 +200,6 @@ pub(crate) fn handle_connection(
                 state,
                 now,
             )),
-            (RequestMethod::Post, "/v1/alpha/search") => Some(native_search_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                now,
-            )),
             (RequestMethod::Post, "/api/models/metadata") => Some(catalog::management_request(
                 &mut stream,
                 request,
@@ -220,30 +207,6 @@ pub(crate) fn handle_connection(
                 state,
                 now,
             )),
-            (RequestMethod::Post, "/v1/responses/compact") => match compact_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                now,
-                observation.model.as_mut().expect("model HTTP observation"),
-            ) {
-                ResponsesRequestResult::Buffered(response) => Some(response),
-                ResponsesRequestResult::Streamed => None,
-            },
-            (RequestMethod::Post, "/v1/responses") => {
-                match responses_request(
-                    &mut stream,
-                    request,
-                    raw.body_prefix,
-                    state,
-                    now,
-                    observation.model.as_mut().expect("model HTTP observation"),
-                ) {
-                    ResponsesRequestResult::Buffered(response) => Some(response),
-                    ResponsesRequestResult::Streamed => None,
-                }
-            }
             (RequestMethod::Get, "/api/calls") => {
                 Report::Calls.serve_legacy(&mut stream, request, state, now)
             }

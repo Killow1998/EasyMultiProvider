@@ -1,37 +1,26 @@
-use crate::http::response::{response, status_text};
+use crate::server::http::error::HttpReply;
 use emp_router::native_http::{NativeCompleteResponse, NativeHttpError};
 
 pub(crate) fn complete_response(
     result: Result<NativeCompleteResponse, NativeHttpError>,
-) -> Vec<u8> {
+) -> HttpReply {
     let result = match result {
         Ok(result) => result,
-        Err(error) => return error_response(error),
+        Err(error) => return error_reply(error),
     };
-    let headers = result
-        .headers
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()))
-        .collect::<Vec<_>>();
-    response(
-        &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
-        &result.content_type,
-        &result.body,
-        &headers,
+    result.headers.into_iter().fold(
+        HttpReply::new(result.status, result.body).with_content_type(result.content_type),
+        |reply, (name, value)| reply.with_header(name, value),
     )
 }
 
-pub(crate) fn error_response(mut error: NativeHttpError) -> Vec<u8> {
+pub(crate) fn error_reply(mut error: NativeHttpError) -> HttpReply {
     error.headers.remove("x-models-etag");
-    let headers = error
-        .headers
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()))
-        .collect::<Vec<_>>();
-    response(
-        &format!("HTTP/1.1 {} {}", error.status, status_text(error.status)),
-        "application/json",
-        &serde_json::to_vec(&error.body).expect("safe native error JSON"),
-        &headers,
+    error.headers.into_iter().fold(
+        HttpReply::new(
+            error.status,
+            serde_json::to_vec(&error.body).expect("safe native error JSON"),
+        ),
+        |reply, (name, value)| reply.with_header(name, value),
     )
 }

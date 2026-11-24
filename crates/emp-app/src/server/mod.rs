@@ -171,7 +171,8 @@ pub(crate) async fn serve_candidate(
             .merge(http::team::routes())
             .merge(http::migration::routes()),
         state.clone(),
-    );
+    )
+    .merge(http::inference::routes().with_state(state.clone()));
     let control = Arc::new(ServerControl {
         candidate: Some(state.clone()),
         ..ServerControl::new(state.connection_admission.clone())

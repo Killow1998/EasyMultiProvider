@@ -2,15 +2,10 @@ use crate::api::failure_response::request_router_error_response;
 use crate::api::failure_response::route_resolution_response;
 use crate::api::history_response::destination_error_response;
 use crate::api::history_response::history_http_error;
-use crate::api::responses::ResponsesRequestResult;
+use crate::api::streaming::ReplySink;
 use crate::app::ServerState;
 use crate::http::request::Request;
-use crate::http::request::read_json_body;
-use crate::http::response::body_error_response;
-use crate::http::response::json_error_response;
-use crate::http::response::response;
-use crate::http::response::status_text;
-use crate::server::http::proxy::require_proxy;
+use crate::server::http::{error::HttpReply, inference::InferenceOutcome};
 use crate::services::compaction::external_compaction_response;
 use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
@@ -21,24 +16,14 @@ use crate::services::request_preparation::{
     PreparedRequest, RequestOperation, RequestPreparationError,
 };
 use crate::util::projection_ids;
-use std::net::TcpStream;
 
-pub(crate) fn compact_request(
-    stream: &mut TcpStream,
+pub(crate) fn execute(
+    downstream: &mut ReplySink<'_>,
     request: Request<'_>,
-    body_prefix: Vec<u8>,
+    body: serde_json::Value,
     state: &ServerState,
-    now: f64,
     observation: &mut RequestObservation,
-) -> ResponsesRequestResult {
-    if let Err(error) = require_proxy(request, state, now) {
-        return ResponsesRequestResult::Buffered(error.wire_response());
-    }
-    observation.phase(Phase::ReadBody);
-    let body = match read_json_body(stream, request, body_prefix, state) {
-        Ok(body) => body,
-        Err(error) => return ResponsesRequestResult::Buffered(body_error_response(error)),
-    };
+) -> InferenceOutcome {
     observation.body(
         body.get("reasoning"),
         body.get("input"),
@@ -49,7 +34,7 @@ pub(crate) fn compact_request(
     let incoming = observation.headers(request.incoming());
     if let Some(config) = crate::api::aero::selected_config(state, &body) {
         return crate::api::aero::relay(
-            stream,
+            downstream,
             state,
             &config,
             &body,
@@ -58,22 +43,6 @@ pub(crate) fn compact_request(
             true,
         );
     }
-    ResponsesRequestResult::Buffered(execute_compact_request(
-        stream,
-        state,
-        body,
-        incoming,
-        observation,
-    ))
-}
-
-fn execute_compact_request(
-    stream: &mut TcpStream,
-    state: &ServerState,
-    body: serde_json::Value,
-    incoming: std::collections::BTreeMap<String, String>,
-    observation: &mut RequestObservation,
-) -> Vec<u8> {
     let PreparedRequest {
         config,
         route,
@@ -86,56 +55,71 @@ fn execute_compact_request(
     ) {
         Ok(prepared) => prepared,
         Err(RequestPreparationError::ModelRequired) => {
-            return request_router_error_response(400, "request.model is required");
+            return InferenceOutcome::Buffered(request_router_error_response(
+                400,
+                "request.model is required",
+            ));
         }
-        Err(RequestPreparationError::Route(error)) => return route_resolution_response(error),
+        Err(RequestPreparationError::Route(error)) => {
+            return InferenceOutcome::Buffered(route_resolution_response(error));
+        }
         Err(RequestPreparationError::TeamAccess(error)) => {
-            return super::native_response::error_response(error.public_error(state));
+            return InferenceOutcome::Buffered(super::native_response::error_reply(
+                error.public_error(state),
+            ));
         }
         Err(RequestPreparationError::ConfigurationUnavailable) => {
-            return json_error_response(
+            return InferenceOutcome::Buffered(HttpReply::error(
                 500,
-                status_text(500),
                 "configuration is unavailable",
                 None,
-                &[],
-            );
+            ));
         }
         Err(_) => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+            return InferenceOutcome::Buffered(HttpReply::error(
+                500,
+                "internal server error",
+                None,
+            ));
         }
     };
     observation.selected(&route);
     observation.phase(Phase::PrepareHistory);
     body = match prepare_history(state, &route, body, &incoming) {
         Ok(body) => body,
-        Err(error) => return history_http_error(&error, observation),
+        Err(error) => return InferenceOutcome::Buffered(history_http_error(&error, observation)),
     };
     observation.phase(Phase::PrepareDestination);
     let destination_context = {
-        let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+        let mut monitor =
+            crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
         prepare_destination_context(state, &route, body, &incoming, monitor.as_mut())
     };
     body = match destination_context {
         Ok(body) => body,
-        Err(error) => return destination_error_response(error, observation),
+        Err(error) => return destination_error_response(error, observation).into(),
     };
     observation.phase(Phase::Execute);
     if route.dialect == emp_domain::Dialect::CodexNative {
-        return crate::api::native_response::complete_response(native::compact(
-            state, &route, &config, &body, &incoming,
+        return InferenceOutcome::Buffered(crate::api::native_response::complete_response(
+            native::compact(state, &route, &config, &body, &incoming),
         ));
     }
     let ids = match projection_ids() {
         Ok(ids) => ids,
         Err(_) => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+            return InferenceOutcome::Buffered(HttpReply::error(
+                500,
+                "internal server error",
+                None,
+            ));
         }
     };
     let mut usage = crate::services::request_outcome::RequestOutcome::new(
         state, &route, &body, &incoming, None, "compact",
     );
-    let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+    let mut monitor =
+        crate::services::disconnect::DisconnectMonitor::start(downstream.socket()).ok();
     let (compacted, candidate) = match external_compaction_response(
         state,
         &route,
@@ -146,12 +130,13 @@ fn execute_compact_request(
         &mut usage,
     ) {
         Ok(result) => result,
-        Err(error) => return crate::api::history_response::compaction_error_response(error),
+        Err(error) => return crate::api::history_response::compaction_error_response(error).into(),
     };
     usage.observe(&compacted);
     persist_protocol_observation(state, &candidate);
     match serde_json::to_vec(&compacted) {
-        Ok(body) => response("HTTP/1.1 200 OK", "application/json", &body, &[]),
-        Err(_) => json_error_response(500, status_text(500), "internal server error", None, &[]),
+        Ok(body) => HttpReply::new(200, body),
+        Err(_) => HttpReply::error(500, "internal server error", None),
     }
+    .into()
 }

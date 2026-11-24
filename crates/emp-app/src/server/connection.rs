@@ -5,7 +5,9 @@ use super::{
         accounts::{self, AccountWriteRoute},
         catalog::{self, CatalogWriteRoute},
         error::EntryWire,
-        gateway, inspection,
+        gateway,
+        inference::{BufferedReceipt, Delivery, Flushed, InferenceConnection, InferenceRoute},
+        inspection,
         local_writes::LocalWriteRoute,
         login, management,
         migration::MigrationRoute,
@@ -49,6 +51,7 @@ pub(crate) struct ShutdownAfterResponse;
 struct CandidateRequest {
     observation: HttpObservation,
     report_socket: Option<Arc<TcpStream>>,
+    inference: Option<Arc<InferenceConnection>>,
     half_close: bool,
     account_write: Option<AccountWriteRoute>,
     catalog_write: Option<CatalogWriteRoute>,
@@ -139,9 +142,11 @@ pub(super) async fn drive_candidate(
     let catalog_write = CatalogWriteRoute::for_request(request)
         .filter(|route| !matches!(route, CatalogWriteRoute::Balance(None)));
     let local_write = LocalWriteRoute::for_request(request);
+    let inference = InferenceRoute::for_request(request).is_some();
     let (half_close, watch_report) = if usage::matches(request) {
         (true, usage::Report::for_path(request.raw_path()).is_some())
-    } else if account_write.is_some()
+    } else if inference
+        || account_write.is_some()
         || catalog_write.is_some()
         || local_write.is_some()
         || login::matches(request)
@@ -182,10 +187,18 @@ pub(super) async fn drive_candidate(
     };
     observation.received(request);
     crate::services::runtime::codex_contacted(request, state);
-    let (io, report_socket) = if watch_report {
+    let (io, socket) = if watch_report || inference {
         match io.into_std().and_then(|stream| {
-            let report_socket = stream.try_clone().ok().map(Arc::new);
-            Ok((tokio::net::TcpStream::from_std(stream)?, report_socket))
+            let socket = stream.try_clone();
+            let socket = if inference {
+                Some(socket?)
+            } else {
+                socket.ok()
+            };
+            Ok((
+                tokio::net::TcpStream::from_std(stream)?,
+                socket.map(Arc::new),
+            ))
         }) {
             Ok(connection) => connection,
             Err(_) => {
@@ -196,9 +209,24 @@ pub(super) async fn drive_candidate(
     } else {
         (io, None)
     };
+    let (inference, report_socket) = if inference {
+        (
+            Some(Arc::new(InferenceConnection {
+                socket: socket.expect("inference socket"),
+                model: Mutex::new(observation.model.take()),
+                worker: Mutex::default(),
+                delivery: Arc::new(Delivery::default()),
+                receipt: OnceLock::new(),
+            })),
+            None,
+        )
+    } else {
+        (None, socket)
+    };
     let candidate = CandidateRequest {
         observation,
         report_socket,
+        inference,
         half_close,
         account_write,
         catalog_write,
@@ -259,6 +287,12 @@ async fn drive_http(
     let report_socket = candidate
         .as_ref()
         .and_then(|request| request.report_socket.as_ref());
+    let inference = candidate
+        .as_ref()
+        .and_then(|request| request.inference.clone());
+    let delivery = inference
+        .as_ref()
+        .map(|inference| inference.delivery.clone());
     let permit = if head.release_request_permit {
         drop(permit);
         None
@@ -285,6 +319,7 @@ async fn drive_http(
         let context = context.clone();
         let stop_after_write = &stop_after_write;
         let wire_response = &wire_response;
+        let inference = inference.as_ref();
         async move {
             request.extensions_mut().insert(ConnectInfo(peer));
             request.extensions_mut().insert(raw.clone());
@@ -301,7 +336,15 @@ async fn drive_http(
             if let Some(socket) = report_socket {
                 request.extensions_mut().insert(Arc::clone(socket));
             }
-            let response = router.oneshot(request).await?;
+            if let Some(inference) = inference {
+                request.extensions_mut().insert(inference.clone());
+            }
+            let mut response = router.oneshot(request).await?;
+            if let Some(inference) = inference
+                && let Some(flushed) = response.extensions_mut().remove::<Flushed>()
+            {
+                inference.delivery.await_flush(flushed);
+            }
             let _ = wire_response.set(
                 response
                     .extensions()
@@ -334,6 +377,7 @@ async fn drive_http(
     let result = http1::Builder::new()
         .keep_alive(false)
         .half_close(half_close)
+        .title_case_headers(inference.is_some())
         .allow_multiple_spaces_in_request_line_delimiters(true)
         .max_buf_size(MAX_HEADER_BYTES + 4)
         .max_headers(MAX_HEADER_BYTES / 4)
@@ -341,7 +385,7 @@ async fn drive_http(
         .header_read_timeout(mode.head_timeout())
         .auto_date_header(false)
         .serve_connection(
-            TokioIo::new(head.replay(io, Arc::clone(&wire_response), mode)),
+            TokioIo::new(head.replay(io, Arc::clone(&wire_response), mode, delivery)),
             TowerToHyperService::new(service),
         )
         .with_upgrades()
@@ -351,9 +395,41 @@ async fn drive_http(
         mut observation, ..
     }) = candidate
     {
+        if let Some(inference) = &inference {
+            let worker = inference.worker.lock().expect("inference worker").take();
+            if let Some(worker) = worker {
+                let _ = worker.await;
+            }
+            observation.model = inference.model.lock().expect("model observation").take();
+        }
         let _ = run_blocking(move || {
-            if let Some(Some(wire)) = wire_response.get() {
-                observation.response_finished(wire, result.map_err(std::io::Error::other));
+            let result = result.map_err(std::io::Error::other);
+            match inference.as_ref().and_then(|request| request.receipt.get()) {
+                Some(BufferedReceipt::Response { status, body }) => {
+                    let result = if wire_response.get().is_none() {
+                        Err(std::io::ErrorKind::BrokenPipe.into())
+                    } else {
+                        result
+                    };
+                    observation.buffered_finished(
+                        Some(*status),
+                        Some(body),
+                        inference
+                            .as_ref()
+                            .expect("inference receipt")
+                            .delivery
+                            .bytes(),
+                        result,
+                    );
+                }
+                Some(BufferedReceipt::Closed) => observation.response_finished(&[], Ok(())),
+                None => {
+                    if let Some(Some(wire)) = wire_response.get()
+                        && (inference.is_none() || !wire.is_empty())
+                    {
+                        observation.response_finished(wire, result);
+                    }
+                }
             }
         })
         .await;
