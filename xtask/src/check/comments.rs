@@ -260,7 +260,7 @@ impl TestScopes {
     }
 }
 
-fn requires_test(meta: &syn::Meta) -> bool {
+pub(super) fn requires_test(meta: &syn::Meta) -> bool {
     if matches!(meta, syn::Meta::Path(path) if path.is_ident("test")) {
         return true;
     }

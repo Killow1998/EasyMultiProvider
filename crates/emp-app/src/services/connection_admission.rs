@@ -121,8 +121,14 @@ impl ConnectionAdmission {
     }
 
     pub(crate) async fn wait_for_business_idle(&self) {
-        while self.has_business_work() {
-            self.work_finished.notified().await;
+        loop {
+            let notified = self.work_finished.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self.has_business_work() {
+                return;
+            }
+            notified.await;
         }
     }
 
@@ -246,10 +252,10 @@ impl AdaptiveSlotPool {
         }
         state.active += 1;
         state.working += 1;
-        Some(ConnectionPermit(Arc::new(ConnectionSlot {
+        Some(ConnectionPermit(Some(Arc::new(ConnectionSlot {
             pool: Arc::clone(pool),
             holders: AtomicUsize::new(1),
-        })))
+        }))))
     }
 
     fn close(&self) -> bool {
@@ -327,35 +333,47 @@ impl Drop for AdmissionGateGuard<'_> {
     }
 }
 
-pub(crate) struct ConnectionPermit(Arc<ConnectionSlot>);
+pub(crate) struct ConnectionPermit(Option<Arc<ConnectionSlot>>);
 
 impl ConnectionPermit {
     pub(crate) fn slot(&self) -> &Arc<ConnectionSlot> {
-        &self.0
+        self.0.as_ref().expect("active business permit")
+    }
+
+    pub(crate) fn finish_with<T>(mut self, handoff: impl FnOnce() -> T) -> T {
+        self.release(handoff)
+    }
+
+    fn release<T>(&mut self, handoff: impl FnOnce() -> T) -> T {
+        let slot = self.0.take();
+        if let Some(slot) = &slot
+            && let Ok(mut state) = slot.pool.state.lock()
+        {
+            if slot.holders.fetch_sub(1, Ordering::Relaxed) == 1 {
+                state.working -= 1;
+                if state.working == 0 {
+                    #[cfg(test)]
+                    let now = slot
+                        .pool
+                        .test_clock
+                        .get()
+                        .map_or_else(Instant::now, |now| now());
+                    #[cfg(not(test))]
+                    let now = Instant::now();
+                    state.idle_at = Some(now);
+                    slot.pool.work_finished.notify_waiters();
+                }
+                slot.pool.drained.notify_all();
+            }
+            return handoff();
+        }
+        handoff()
     }
 }
 
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
-        let slot = &self.0;
-        if let Ok(mut state) = slot.pool.state.lock()
-            && slot.holders.fetch_sub(1, Ordering::Relaxed) == 1
-        {
-            state.working -= 1;
-            if state.working == 0 {
-                #[cfg(test)]
-                let now = slot
-                    .pool
-                    .test_clock
-                    .get()
-                    .map_or_else(Instant::now, |now| now());
-                #[cfg(not(test))]
-                let now = Instant::now();
-                state.idle_at = Some(now);
-            }
-            slot.pool.drained.notify_all();
-            slot.pool.work_finished.notify_one();
-        }
+        self.release(|| ());
     }
 }
 
@@ -370,7 +388,7 @@ impl ConnectionSlot {
         if self.holders.fetch_add(1, Ordering::Relaxed) == 0 {
             state.working += 1;
         }
-        ConnectionPermit(self.clone())
+        ConnectionPermit(Some(self.clone()))
     }
 }
 

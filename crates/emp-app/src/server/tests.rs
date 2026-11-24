@@ -61,20 +61,6 @@ impl TestDrainClock {
     }
 }
 
-pub(super) struct RequestProbe {
-    pub(super) path: &'static str,
-    pub(super) id: oneshot::Sender<String>,
-    pub(super) write: Option<WriteProbe>,
-}
-
-pub(super) struct WriteProbe {
-    pub(super) marker: &'static [u8],
-    pub(super) reached: Option<oneshot::Sender<()>>,
-    pub(super) release: oneshot::Receiver<()>,
-}
-
-pub(super) type HandlerProbe = (oneshot::Sender<()>, oneshot::Receiver<()>);
-
 pub(super) const LOOPBACK: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 const GET: &[u8] = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
@@ -93,6 +79,20 @@ pub(super) fn admission() -> Arc<ConnectionAdmission> {
 
 pub(super) async fn poll_once<T>(mut future: Pin<&mut impl Future<Output = T>>) -> Poll<T> {
     poll_fn(|cx| Poll::Ready(future.as_mut().poll(cx))).await
+}
+
+#[tokio::test]
+async fn drain_business_idle_wakes_both_registered_waiters() {
+    let admission = admission();
+    let business = admission.acquire_request().unwrap();
+    let mut listener = pin!(admission.wait_for_business_idle());
+    let mut observer = pin!(admission.wait_for_business_idle());
+    assert!(poll_once(listener.as_mut()).await.is_pending());
+    assert!(poll_once(observer.as_mut()).await.is_pending());
+
+    drop(business);
+    assert!(poll_once(listener.as_mut()).await.is_ready());
+    assert!(poll_once(observer.as_mut()).await.is_ready());
 }
 
 #[tokio::test(start_paused = true)]
@@ -179,12 +179,7 @@ async fn idle_and_trickling_heads_hold_permits_until_their_deadlines() {
         assert_eq!(admission.active_requests(), 0);
         let mut response = Vec::new();
         client.read_to_end(&mut response).await.unwrap();
-        assert_eq!(
-            response,
-            crate::server::http::error::EntryError::InvalidHead
-                .reply()
-                .encode()
-        );
+        crate::server::http::tests::wire_contract::assert_invalid_head(&response);
     }
 }
 

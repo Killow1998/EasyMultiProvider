@@ -4,7 +4,8 @@ use crate::{
     server::{
         ShutdownReason,
         raw_tcp::{RawClient, wire_timeout},
-        tests::{RequestProbe, TestDrainClock, WriteProbe},
+        test_hooks::{RequestProbe, WriteProbe},
+        tests::TestDrainClock,
     },
     tests::live_journal,
 };
@@ -16,6 +17,8 @@ enum Phase {
     BusyAtDeadline,
     Sending,
     FinishesAfterDeadline,
+    TerminalFrameAtDeadline,
+    RetriesQuit,
 }
 
 use Phase::*;
@@ -42,7 +45,14 @@ impl Probe {
                 }),
             )
         });
-        let mut armed = fixture.server.state.lifecycle.test_request.lock().unwrap();
+        let mut armed = fixture
+            .server
+            .state
+            .lifecycle
+            .test_hooks
+            .request
+            .lock()
+            .unwrap();
         assert!(
             armed
                 .replace(RequestProbe {
@@ -109,6 +119,17 @@ impl Work {
         );
         received
     }
+
+    async fn read_completed(&mut self, case: &str) {
+        let received = self.read_to_end(case).await;
+        assert!(
+            received
+                .windows(self.completed.len())
+                .any(|part| part == self.completed.as_bytes()),
+            "{case}: missing completed response, received {:?}",
+            String::from_utf8_lossy(&received),
+        );
+    }
 }
 
 async fn receive<T>(
@@ -157,27 +178,26 @@ async fn exercise(
     let clock = TestDrainClock::install(&control);
     let address = fixture.server.local_addr();
     let session = fixture.session();
+    let terminal = (phase == TerminalFrameAtDeadline).then(|| {
+        let (queued, observed) = oneshot::channel();
+        let clock = clock.clone();
+        *control.test_hooks.terminal_frame.lock().unwrap() = Some(Box::new(move || {
+            clock.expire();
+            let _ = queued.send(());
+        }));
+        observed
+    });
     let mut work = open(&fixture).await;
     if phase == Sending {
         work.finish_business();
         work.writing().await;
     }
 
-    let mut quit_id = None;
+    let mut quit_requests = Vec::new();
     if via_quit {
         let probe = Probe::arm(&fixture, "/api/quit", None);
-        let quit = tokio::spawn(async move {
-            exchange_before(
-                address,
-                &json_request(address.port(), "/api/quit", &[&session], b"{}"),
-                false,
-                &Deadline::after(
-                    crate::services::shutdown::QUIT_PRECHECK_WAIT
-                        + crate::server::raw_tcp::wire_timeout(),
-                ),
-            )
-            .await
-        });
+        let first_session = session.clone();
+        let quit = tokio::spawn(async move { quit_response(address, &first_session).await });
         if phase == Finishes {
             timeout(wire_timeout(), control.admission.wait_for_websocket_drain())
                 .await
@@ -185,8 +205,8 @@ async fn exercise(
             work.finish_business();
         }
         let reply = quit.await.expect(&case);
-        quit_id = Some(receive(probe.id, "quit request ID").await);
-        if phase == BusyAtDeadline {
+        let quit_id = receive(probe.id, "quit request ID").await;
+        if matches!(phase, BusyAtDeadline | RetriesQuit) {
             wire_contract::assert_json_reply(
                 &case,
                 &reply,
@@ -197,6 +217,7 @@ async fn exercise(
                 !control.shutdown.load(Ordering::Acquire),
                 "{case}: HTTP 409 stopped the listener"
             );
+            quit_requests.push((quit_id, 409, "rejected"));
         } else {
             wire_contract::assert_json_reply(
                 &case,
@@ -204,13 +225,29 @@ async fn exercise(
                 "200 OK",
                 &json!({"status":"stopping"}),
             );
+            quit_requests.push((quit_id, 200, "responded"));
         }
     }
+    if phase == RetriesQuit {
+        work.finish_business();
+        work.read_completed(&case).await;
+        let probe = Probe::arm(&fixture, "/api/quit", None);
+        let reply = quit_response(address, &session).await;
+        wire_contract::assert_json_reply(
+            "quit after Aero callback completed",
+            &reply,
+            "200 OK",
+            &json!({"status":"stopping"}),
+        );
+        quit_requests.push((
+            receive(probe.id, "retried quit request ID").await,
+            200,
+            "responded",
+        ));
+    }
 
-    let Fixture {
-        directory, server, ..
-    } = fixture;
-    if quit_id.is_some() && phase != BusyAtDeadline {
+    let response_stopped = via_quit && phase != BusyAtDeadline;
+    if response_stopped {
         assert_eq!(
             timeout(wire_timeout(), control.signal().wait())
                 .await
@@ -219,13 +256,16 @@ async fn exercise(
             "{case}"
         );
     }
+    let Fixture {
+        directory, server, ..
+    } = fixture;
     let shutdown = tokio::task::spawn_blocking(move || server.shutdown());
     let reason = timeout(wire_timeout(), control.signal().wait())
         .await
         .expect(&case);
     assert_eq!(
         reason,
-        if quit_id.is_some() && phase != BusyAtDeadline {
+        if response_stopped {
             ShutdownReason::ResponseWritten
         } else {
             ShutdownReason::Requested
@@ -233,8 +273,11 @@ async fn exercise(
         "{case}"
     );
 
-    if !via_quit && phase == Finishes {
+    if !via_quit && matches!(phase, Finishes | TerminalFrameAtDeadline) {
         work.finish_business();
+    }
+    if let Some(terminal) = terminal {
+        receive(terminal, "report terminal frame queued and cutoff fired").await;
     }
     if phase == FinishesAfterDeadline {
         clock.pass_deadline();
@@ -250,22 +293,17 @@ async fn exercise(
         work.writing().await;
     }
     match phase {
-        Finishes => {}
+        Finishes | TerminalFrameAtDeadline | RetriesQuit => {}
         FinishesAfterDeadline => clock.cutoff.notify_one(),
         BusyAtDeadline | Sending => clock.expire(),
     }
-    let received = work.read_to_end(&case).await;
-    if phase == BusyAtDeadline {
-        work.finish_business();
-    }
     if phase == Finishes {
-        assert!(
-            received
-                .windows(work.completed.len())
-                .any(|part| part == work.completed.as_bytes()),
-            "{case}: missing completed response, received {:?}",
-            String::from_utf8_lossy(&received),
-        );
+        work.read_completed(&case).await;
+    } else if phase != RetriesQuit {
+        work.read_to_end(&case).await;
+        if phase == BusyAtDeadline {
+            work.finish_business();
+        }
     }
     let outcome = timeout(wire_timeout(), shutdown)
         .await
@@ -281,20 +319,27 @@ async fn exercise(
     }
 
     let journal = live_journal(directory.path());
-    let result = if phase == Finishes || work.status == 101 {
+    let result = if matches!(phase, Finishes | RetriesQuit) || work.status == 101 {
         "responded"
     } else {
         "write_failed"
     };
     assert_settlement(&journal, &case, &work.id, json!(work.status), result);
-    if let Some(quit) = quit_id {
-        let (status, result) = if phase == BusyAtDeadline {
-            (409, "rejected")
-        } else {
-            (200, "responded")
-        };
+    for (quit, status, result) in quit_requests {
         assert_settlement(&journal, &case, &quit, json!(status), result);
     }
+}
+
+async fn quit_response(address: SocketAddr, session: &str) -> Vec<u8> {
+    exchange_before(
+        address,
+        &json_request(address.port(), "/api/quit", &[session], b"{}"),
+        false,
+        &Deadline::after(
+            crate::services::shutdown::QUIT_PRECHECK_WAIT + crate::server::raw_tcp::wire_timeout(),
+        ),
+    )
+    .await
 }
 
 fn assert_settlement(journal: &[Value], case: &str, id: &str, status: Value, result: &str) {
@@ -310,38 +355,42 @@ fn assert_settlement(journal: &[Value], case: &str, id: &str, status: Value, res
 
 #[test]
 fn drain_ordinary_handler() {
-    for &phase in ACTIVE {
-        for via_quit in [false, true] {
-            run_case(
-                Fixture::new(),
-                "/healthz",
-                phase,
-                via_quit,
-                async |fixture| {
-                    let (entered, ready) = oneshot::channel();
-                    let (release, wait) = oneshot::channel();
-                    *fixture
-                        .server
-                        .state
-                        .lifecycle
-                        .test_health_handler
-                        .lock()
-                        .unwrap() = Some((entered, wait));
-                    let probe = Probe::arm(
-                        fixture,
-                        "/healthz",
-                        (phase == Sending).then_some(b"HTTP/1.1".as_slice()),
-                    );
-                    let client = submit(
-                        fixture.server.local_addr(),
-                        &request(fixture.port(), "GET", "/healthz", &[], b""),
-                    )
-                    .await;
-                    receive(ready, "health handler entered").await;
-                    Work::new(probe, client, Some(release), 200, r#"{"status":"ok"}"#).await
-                },
-            );
-        }
+    for (phase, via_quit) in ACTIVE
+        .iter()
+        .flat_map(|&phase| [(phase, false), (phase, true)])
+        .chain([(FinishesAfterDeadline, false)])
+    {
+        run_case(
+            Fixture::new(),
+            "/healthz",
+            phase,
+            via_quit,
+            async |fixture| {
+                let (entered, ready) = oneshot::channel();
+                let (release, wait) = oneshot::channel();
+                *fixture
+                    .server
+                    .state
+                    .lifecycle
+                    .test_hooks
+                    .health_handler
+                    .lock()
+                    .unwrap() = Some((entered, wait));
+                let probe = Probe::arm(
+                    fixture,
+                    "/healthz",
+                    matches!(phase, Sending | FinishesAfterDeadline)
+                        .then_some(b"HTTP/1.1".as_slice()),
+                );
+                let client = submit(
+                    fixture.server.local_addr(),
+                    &request(fixture.port(), "GET", "/healthz", &[], b""),
+                )
+                .await;
+                receive(ready, "health handler entered").await;
+                Work::new(probe, client, Some(release), 200, r#"{"status":"ok"}"#).await
+            },
+        );
     }
 }
 
@@ -460,14 +509,17 @@ fn drain_submitted_search() {
     search_case(FinishesAfterDeadline, false);
 
     fn search_case(phase: Phase, via_quit: bool) {
-        let (release, wait) = oneshot::channel();
-        let mut wait = Some(wait);
-        let upstream = OneShotUpstream::serve(1, move |socket| {
-            upstream_reply(socket, 200, "application/json", RESULT.len(), "");
-            if wait.take().unwrap().blocking_recv().is_ok() {
-                socket.write_all(RESULT).unwrap();
-            }
-        });
+        let (upstream, release) = {
+            let (release, wait) = oneshot::channel();
+            let mut wait = Some(wait);
+            let upstream = OneShotUpstream::serve(1, move |socket| {
+                upstream_reply(socket, 200, "application/json", RESULT.len(), "");
+                if wait.take().unwrap().blocking_recv().is_ok() {
+                    socket.write_all(RESULT).unwrap();
+                }
+            });
+            (upstream, release)
+        };
         run_case(
             fixture(&upstream.base_url()),
             "submitted search",
@@ -523,6 +575,7 @@ fn drain_aero_callback() {
             inference_case(phase, via_quit, true);
         }
     }
+    inference_case(RetriesQuit, true, true);
 }
 
 #[cfg(unix)]
@@ -530,45 +583,48 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
     use super::inference::{FIRST, LAST, STREAM_REQUEST, fixture_directory, upstream_reply};
     use crate::tests::OneShotUpstream;
 
-    let (release, wait) = oneshot::channel();
-    let mut wait = Some(wait);
-    let upstream = OneShotUpstream::serve(1, move |socket| {
-        upstream_reply(
-            socket,
-            200,
-            "text/event-stream",
-            FIRST.len() + LAST.len(),
-            "",
-        );
-        socket.write_all(FIRST).unwrap();
-        if wait.take().unwrap().blocking_recv().is_ok() {
-            let result = socket.write_all(LAST);
-            if phase != BusyAtDeadline {
-                result.unwrap();
+    let (upstream, release) = {
+        let (release, wait) = oneshot::channel();
+        let mut wait = Some(wait);
+        let upstream = OneShotUpstream::serve(1, move |socket| {
+            upstream_reply(
+                socket,
+                200,
+                "text/event-stream",
+                FIRST.len() + LAST.len(),
+                "",
+            );
+            socket.write_all(FIRST).unwrap();
+            if wait.take().unwrap().blocking_recv().is_ok() {
+                let result = socket.write_all(LAST);
+                if phase != BusyAtDeadline {
+                    result.unwrap();
+                }
             }
-        }
-    });
+        });
+        (upstream, release)
+    };
     let directory = fixture_directory(&upstream.base_url());
     let parent = delegated.then(|| {
         let (disconnect, wait) = oneshot::channel();
         let mut wait = Some(wait);
-        let aero = OneShotUpstream::serve(1, move |_| {
+        let upstream = (disconnect, OneShotUpstream::serve(1, move |_| {
             let _ = wait.take().unwrap().blocking_recv();
-        });
+        }));
         let path = directory.path().join("config.json");
         let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         config["aero_profiles"] = json!([{
             "id":"aero/fixture","name":"fixture","planner":{"model":"demo/model"},"executor":{"model":"demo/model"}
         }]);
         std::fs::write(path, config.to_string()).unwrap();
-        let started = json!({"value":{"endpoint":aero.base_url()},"error":null});
+        let started = json!({"value":{"endpoint":upstream.1.base_url()},"error":null});
         install_worker_fixture(
             directory.path(),
             emp_modules::Module::Aero,
             "{}",
             &format!("while read -r line; do printf '%s\\n' '{started}'; done"),
         );
-        (disconnect, aero)
+        upstream
     });
     let name = if delegated {
         "Aero callback"
@@ -584,7 +640,7 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
             let address = fixture.server.local_addr();
             let path = "/v1/responses";
             let session = fixture.session();
-            let parent = if let Some((disconnect, aero)) = parent {
+            let parent = if let Some(upstream) = parent {
                 let wire = json_request(
                     fixture.port(),
                     path,
@@ -592,15 +648,14 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
                     br#"{"model":"aero/fixture","stream":false,"input":"fixture"}"#,
                 );
                 let task = tokio::spawn(async move { exchange_wire(address, &wire, false).await });
-                let (disconnect, aero, headers) = tokio::task::spawn_blocking(move || {
-                    let (_, headers, _) = aero.observed();
-                    (disconnect, aero, headers)
+                let (upstream, headers) = tokio::task::spawn_blocking(move || {
+                    let (_, headers, _) = upstream.1.observed();
+                    (upstream, headers)
                 })
                 .await
                 .unwrap();
                 Some((
-                    disconnect,
-                    aero,
+                    upstream,
                     task,
                     format!("Authorization: Bearer {}", headers["x-aero-caller-key"]),
                 ))
@@ -614,7 +669,7 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
             );
             let headers = parent.as_ref().map_or_else(
                 || vec![session.as_str()],
-                |(_, _, _, token)| vec![token.as_str()],
+                |(_, _, token)| vec![token.as_str()],
             );
             let client = RawClient::request(
                 address,
@@ -627,12 +682,10 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
                 client.head
             );
             assert_eq!(upstream.observed().0, "/v1/chat/completions");
-            if let Some((disconnect, _aero, task, _)) = parent {
-                assert_eq!(
-                    fixture.server.state.lifecycle.admission.active_requests(),
-                    1
-                );
-                disconnect.send(()).unwrap();
+            if let Some((upstream, task, _)) = parent {
+                let slots = fixture.server.state.lifecycle.admission.active_requests();
+                upstream.0.send(()).unwrap();
+                assert_eq!(slots, 1);
                 let reply = task.await.unwrap();
                 assert_status(&reply, 503);
                 assert_eq!(
@@ -645,7 +698,6 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn drain_calls_report() {
     for &phase in ACTIVE {
@@ -656,9 +708,15 @@ fn drain_calls_report() {
     for via_quit in [false, true] {
         report_case("/api/calls", "?start=1&end=10", Sending, via_quit, true);
     }
+    report_case(
+        "/api/calls",
+        "?start=1&end=10",
+        TerminalFrameAtDeadline,
+        false,
+        false,
+    );
 }
 
-#[cfg(unix)]
 #[test]
 fn drain_usage_report() {
     for &phase in ACTIVE {
@@ -672,11 +730,17 @@ fn drain_usage_report() {
             );
         }
     }
+    report_case(
+        "/api/usage",
+        "?lifetime=true&owner=fixture",
+        TerminalFrameAtDeadline,
+        false,
+        false,
+    );
 }
 
-#[cfg(unix)]
 fn report_case(path: &'static str, query: &str, phase: Phase, via_quit: bool, broken_facts: bool) {
-    use super::management_streams::{report_gate, seed_reports};
+    use super::report_fixture::{report_gate, seed_reports};
 
     let fixture = Fixture::new();
     seed_reports(&fixture);
@@ -693,7 +757,11 @@ fn report_case(path: &'static str, query: &str, phase: Phase, via_quit: bool, br
     };
     let name = format!("{path} {}", str::from_utf8(marker).unwrap());
     run_case(fixture, &name, phase, via_quit, async |fixture| {
-        let probe = Probe::arm(fixture, path, (phase == Sending).then_some(marker));
+        let probe = Probe::arm(
+            fixture,
+            path,
+            matches!(phase, Sending | TerminalFrameAtDeadline).then_some(marker),
+        );
         let progress = (!broken_facts).then(|| report_gate(fixture));
         let client = RawClient::request(
             fixture.server.local_addr(),

@@ -85,6 +85,15 @@ pub(crate) fn assert_json_reply(name: &str, reply: &[u8], status: &str, body: &V
     assert_reply(name, reply, &head, body.as_bytes());
 }
 
+pub(in crate::server) fn assert_invalid_head(reply: &[u8]) {
+    assert_json_reply(
+        "invalid HTTP head",
+        reply,
+        "400 Bad Request",
+        &json!({"error":{"message":"invalid HTTP request"}}),
+    );
+}
+
 pub(super) fn assert_json_read(name: &str, reply: &[u8], extra: Option<&str>) -> Value {
     let split = reply
         .windows(4)

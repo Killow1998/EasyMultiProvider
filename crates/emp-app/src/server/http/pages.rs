@@ -93,14 +93,11 @@ async fn read(
     page: PageRead,
     State(state): State<Arc<ServerState>>,
 ) -> Result<HttpReply, EntryError> {
-    #[cfg(test)]
-    if matches!(page, PageRead::Health) {
-        let probe = state.lifecycle.test_health_handler.lock().unwrap().take();
-        if let Some((entered, release)) = probe {
-            let _ = entered.send(());
-            let _ = release.await;
-        }
-    }
+    state
+        .lifecycle
+        .test_hooks
+        .health_handler(matches!(page, PageRead::Health))
+        .await;
     run_blocking(move || page.read(&state))
         .await
         .map_err(|_| EntryError::internal())?

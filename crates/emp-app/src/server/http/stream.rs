@@ -1,3 +1,4 @@
+use crate::server::{handoff_response, test_hooks::ServerHooks};
 use crate::{
     http::response::status_text, server::http::error::response_head,
     services::connection_admission::ConnectionPermit,
@@ -119,35 +120,44 @@ impl BodyOutput {
     }
 
     pub(crate) fn frame(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.send_frame(Bytes::copy_from_slice(bytes), None)
+        let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
+        stream
+            .send
+            .blocking_send(Bytes::copy_from_slice(bytes))
+            .map_err(|_| io::ErrorKind::BrokenPipe)?;
+        stream.wait_for_flush()
     }
 
     pub(super) fn terminal_frame(
         &mut self,
         bytes: Vec<u8>,
         business: Option<ConnectionPermit>,
+        hooks: &ServerHooks,
     ) -> io::Result<()> {
-        self.send_frame(Bytes::from(bytes), business)
-    }
-
-    fn send_frame(&mut self, bytes: Bytes, business: Option<ConnectionPermit>) -> io::Result<()> {
         let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
-        stream
-            .send
-            .blocking_send(bytes)
+        let permit = tokio::runtime::Handle::current()
+            .block_on(stream.send.reserve())
             .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        drop(business);
-        stream
-            .confirmation
-            .blocking_recv()
-            .ok_or(io::ErrorKind::BrokenPipe)?;
-        Ok(())
+        let bytes = Bytes::from(bytes);
+        handoff_response(business, || {
+            permit.send(bytes);
+            hooks.terminal_frame_queued();
+        });
+        stream.wait_for_flush()
     }
 
-    pub(super) fn finish(self, response: impl FnOnce() -> Response) {
-        if let Some(sender) = self.response {
-            let _ = sender.send(response());
-        }
+    pub(super) fn finish(
+        self,
+        business: Option<ConnectionPermit>,
+        response: impl FnOnce() -> Response,
+    ) {
+        let reply = self.response.map(|sender| (sender, response()));
+        handoff_response(business, || {
+            if let Some((sender, response)) = reply {
+                let _ = sender.send(response);
+            }
+            drop(self.stream);
+        });
     }
 }
 
@@ -157,6 +167,12 @@ pub(super) struct StreamFrames {
 }
 
 impl StreamFrames {
+    fn wait_for_flush(&mut self) -> io::Result<()> {
+        self.confirmation
+            .blocking_recv()
+            .ok_or(io::ErrorKind::BrokenPipe.into())
+    }
+
     pub(super) fn start(builder: Builder, delivery: Arc<Delivery>) -> (Response, Self) {
         let (send, frames) = mpsc::channel(1);
         let (flushed, confirmation) = mpsc::channel(1);

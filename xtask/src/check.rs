@@ -1,4 +1,5 @@
 mod arch;
+mod cfg_test;
 mod comments;
 mod module_paths;
 mod modules;
@@ -29,6 +30,7 @@ pub fn run(args: &[String]) -> Result {
     ];
     let paths = git_paths(&root, &list_files)?;
     comments::check(&root, &paths, &mut errors)?;
+    cfg_test::check(&root, &paths, &mut errors)?;
     test_deadlines::check(&root, &paths, &mut errors)?;
     test_fixture_root::check(&root, &paths, &mut errors)?;
     for path in paths {
@@ -49,7 +51,7 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, disguised-sleep, msvc-only, domain-purity, single-http-driver, test-deadlines, test-socket-timeouts, test-fixture-root passed"
+            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, cfg-test, disguised-sleep, msvc-only, domain-purity, single-http-driver, test-deadlines, test-socket-timeouts, test-fixture-root passed"
         );
         Ok(())
     } else {

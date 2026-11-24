@@ -221,17 +221,17 @@ async fn submit(
         .map_err(EntryError::reply)?;
     let (sender, response) = oneshot::channel();
     let delivery = inference.stream.delivery.clone();
-    let worker = crate::server::spawn_connection_work({
+    let worker = crate::server::spawn_connection_work_with_permit({
         let state = state.clone();
         let inference = inference.clone();
-        move || {
+        move |business| {
             let mut observation = inference.model.lock().expect("model observation").take();
             let mut request = raw.request();
             request.source = Some(&source);
             request.observation_id = context.request_id();
             let mut sink = BodyOutput::new(inference.socket.clone(), delivery, sender);
             let reply = route.execute(&mut sink, request, body, &state, observation.as_mut());
-            sink.finish(|| match reply {
+            sink.finish(business, || match reply {
                 InferenceOutcome::Buffered(reply) => {
                     buffered(reply, observation.as_ref(), &inference.receipt)
                 }

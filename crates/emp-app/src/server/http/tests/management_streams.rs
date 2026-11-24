@@ -1,18 +1,15 @@
-use super::*;
+use super::{
+    report_fixture::{report_gate, seed_reports},
+    *,
+};
 use crate::{
-    server::{
-        http::usage::ReportGate,
-        raw_tcp::{RawClient, wire_timeout},
-    },
+    server::raw_tcp::{RawClient, wire_timeout},
     services::management_events::Change,
     tests::wait_for,
 };
 use emp_test_support::Deadline;
-use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Instant};
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    sync::oneshot,
-};
+use std::{collections::BTreeMap, time::Instant};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 const ACCOUNT_EVENTS: &str = "/api/accounts/events";
 const CALLS: &str = "/api/calls?start=1&end=10";
@@ -289,38 +286,6 @@ fn account_stream_disconnect_releases_subscription_without_another_event() {
         .await
         .unwrap();
     });
-}
-
-pub(super) fn report_gate(
-    fixture: &Fixture,
-) -> (oneshot::Receiver<Arc<AtomicBool>>, oneshot::Sender<()>) {
-    let (first_frame, received) = oneshot::channel();
-    let (release, wait) = oneshot::channel();
-    *fixture
-        .server
-        .state
-        .backend
-        .usage
-        .report_gate
-        .lock()
-        .unwrap() = Some(ReportGate {
-        first_frame,
-        release: wait,
-    });
-    (received, release)
-}
-
-pub(super) fn seed_reports(fixture: &Fixture) {
-    let ledger = &fixture.server.state.backend.usage.ledger;
-    ledger.query(1.0, 10.0, "all", system_now(), None).unwrap();
-    let database =
-        rusqlite::Connection::open(fixture.directory.path().join("state/usage.sqlite3")).unwrap();
-    database.execute_batch(
-        "INSERT INTO call_records(request_id,operation,started_at,finished_at,provider_id,account_id,model_id,session_id,state,facts)
-         VALUES('call-fixture','responses',2,3,'fixture','','model','','completed','{\"request_id\":\"call-fixture\"}');
-         INSERT INTO usage_events(id,observed_at,category,owner,model,service_tier,operation,rates,origin,usage_turn,route_model,match_key)
-         VALUES('usage-fixture',2,'external','fixture','model','','responses','{}','realtime','','model','');",
-    ).unwrap();
 }
 
 #[test]

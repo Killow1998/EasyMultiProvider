@@ -202,20 +202,10 @@ pub(super) async fn drive_http(
         inference || head.account_events || report.is_some_and(|report| report.is_stream(request));
     let watch_report = report.is_some();
     observation.received(request);
-    #[cfg(test)]
-    {
-        let mut armed = state.lifecycle.test_request.lock().unwrap();
-        if armed
-            .as_ref()
-            .is_some_and(|probe| probe.path == request.raw_path())
-        {
-            let probe = armed.take().unwrap();
-            if let Some(write) = probe.write {
-                io.probe_write(write);
-            }
-            let _ = probe.id.send(observation.request_id().unwrap().to_owned());
-        }
-    }
+    state
+        .lifecycle
+        .test_hooks
+        .request(request.raw_path(), &observation, &io);
     crate::services::runtime::codex_contacted(request, &state);
     let socket = if watch_report || inference || responses_upgrade {
         match io.probe() {

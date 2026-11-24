@@ -144,6 +144,7 @@ mod management_streams;
 mod migration_writes;
 #[cfg(unix)]
 mod module_writes;
+mod report_fixture;
 #[cfg(unix)]
 #[path = "../../../tests/support/sse.rs"]
 mod sse;
@@ -462,7 +463,7 @@ fn update_module_and_gateway_reads_keep_json_and_auth() {
                 "/api/updates" => {
                     assert_eq!(body["current_version"], env!("CARGO_PKG_VERSION"));
                     assert_eq!(body["state"], "idle");
-                    assert_eq!(body["latest_version"], Value::Null);
+                    assert_eq!(body.get("latest_version"), Some(&Value::Null));
                 }
                 "/api/modules" => {
                     let modules = body["modules"].as_array().unwrap();
@@ -792,6 +793,7 @@ fn guides_and_assets_keep_wire_contracts() {
                 let html = str::from_utf8(received).unwrap();
                 assert!(html.starts_with("<!doctype html><html lang=\"zh-CN\">"));
                 assert!(html.contains("href=\"/assets/guide.css\""));
+                assert!(html.contains("命令行与配置恢复"));
             }
             let denied = assert_wire(
                 address,
@@ -1375,6 +1377,7 @@ fn usage_and_settings_reads_preserve_json_and_auth() {
                 }
                 "records" => assert_eq!(body["records"], json!([])),
                 "account_ids" => assert_eq!(body["account_ids"], json!([])),
+                "models" => assert_eq!(body["providers"][0]["id"], "fixture-cpa"),
                 "available" => {
                     let guidance = if body["available"].as_bool().unwrap() {
                         "Claude Code CLI is available to EMP."
@@ -2360,12 +2363,7 @@ fn hyper_parse_rejection_uses_emp_response_before_dispatch() {
         );
 
         let reply = assert_wire(address, &wire, false, 400).await;
-        wire_contract::assert_json_reply(
-            "invalid HTTP head",
-            &reply,
-            "400 Bad Request",
-            &json!({"error":{"message":"invalid HTTP request"}}),
-        );
+        wire_contract::assert_invalid_head(&reply);
         assert_eq!(fixture.upstream.load(Ordering::Relaxed), 0);
     });
 }

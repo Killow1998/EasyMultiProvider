@@ -2,11 +2,12 @@ mod accept;
 pub(crate) mod connection;
 pub(crate) mod head;
 pub(crate) mod http;
+mod test_hooks;
 mod transport;
 
 use crate::app::ServerState;
 use crate::services::{
-    connection_admission::{ConnectionAdmission, ConnectionSlot},
+    connection_admission::{ConnectionAdmission, ConnectionPermit, ConnectionSlot},
     management_events::ManagementEvents,
     updates::UpdateState,
 };
@@ -101,10 +102,7 @@ pub(crate) struct ServerControl {
     pub(crate) shutdown: Arc<AtomicBool>,
     stopped: watch::Sender<Option<(ShutdownReason, DrainInstant)>>,
     drain_clock: DrainClock,
-    #[cfg(test)]
-    test_request: std::sync::Mutex<Option<tests::RequestProbe>>,
-    #[cfg(test)]
-    test_health_handler: std::sync::Mutex<Option<tests::HandlerProbe>>,
+    test_hooks: test_hooks::ServerHooks,
     updates: Option<UpdateState>,
     management_events: Option<Arc<ManagementEvents>>,
 }
@@ -117,10 +115,7 @@ impl ServerControl {
             shutdown: Arc::default(),
             stopped: watch::Sender::new(None),
             drain_clock: DrainClock::default(),
-            #[cfg(test)]
-            test_request: std::sync::Mutex::default(),
-            #[cfg(test)]
-            test_health_handler: std::sync::Mutex::default(),
+            test_hooks: test_hooks::ServerHooks::default(),
             updates: None,
             management_events: None,
         }
@@ -456,9 +451,7 @@ pub(crate) fn spawn_connection_work<T: Send + 'static>(
 }
 
 fn spawn_connection_work_with_permit<T: Send + 'static>(
-    work: impl FnOnce(Option<crate::services::connection_admission::ConnectionPermit>) -> T
-    + Send
-    + 'static,
+    work: impl FnOnce(Option<ConnectionPermit>) -> T + Send + 'static,
 ) -> JoinHandle<T> {
     let pending = BLOCKING_WORK.try_with(Clone::clone).ok();
     let business = BUSINESS_SLOT
@@ -469,6 +462,13 @@ fn spawn_connection_work_with_permit<T: Send + 'static>(
         let _pending = pending;
         work(business)
     })
+}
+
+fn handoff_response<T>(business: Option<ConnectionPermit>, publish: impl FnOnce() -> T) -> T {
+    match business {
+        Some(business) => business.finish_with(publish),
+        None => publish(),
+    }
 }
 
 pub(crate) async fn run_blocking<T: Send + 'static>(

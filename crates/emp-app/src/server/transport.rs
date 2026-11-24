@@ -4,7 +4,7 @@ use std::{
     net::{Shutdown, TcpStream as StdStream},
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard},
-    task::{Context, Poll},
+    task::{Context, Poll, ready},
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
@@ -14,16 +14,14 @@ use tokio::{
 #[derive(Clone)]
 pub(super) struct ConnectionIo {
     stream: Arc<Mutex<TcpStream>>,
-    #[cfg(test)]
-    write_probe: Arc<Mutex<Option<super::tests::WriteProbe>>>,
+    pub(super) write_hook: WriteHook,
 }
 
 impl ConnectionIo {
     pub(super) fn new(stream: TcpStream) -> Self {
         Self {
             stream: Arc::new(Mutex::new(stream)),
-            #[cfg(test)]
-            write_probe: Arc::default(),
+            write_hook: WriteHook::default(),
         }
     }
 
@@ -41,13 +39,7 @@ impl ConnectionIo {
 
     pub(super) fn cancel(&self) {
         let _ = SockRef::from(&*self.stream()).shutdown(Shutdown::Both);
-        #[cfg(test)]
-        self.write_probe.lock().unwrap().take();
-    }
-
-    #[cfg(test)]
-    pub(super) fn probe_write(&self, probe: super::tests::WriteProbe) {
-        *self.write_probe.lock().unwrap() = Some(probe);
+        self.write_hook.cancel();
     }
 }
 
@@ -67,22 +59,7 @@ impl AsyncWrite for ConnectionIo {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        #[cfg(test)]
-        {
-            let mut armed = self.write_probe.lock().unwrap();
-            if let Some(probe) = armed.as_mut()
-                && (probe.reached.is_none()
-                    || buf
-                        .windows(probe.marker.len())
-                        .any(|bytes| bytes == probe.marker))
-            {
-                if let Some(reached) = probe.reached.take() {
-                    let _ = reached.send(());
-                }
-                std::task::ready!(Pin::new(&mut probe.release).poll(cx)).ok();
-                armed.take();
-            }
-        }
+        ready!(self.write_hook.poll(cx, buf));
         Pin::new(&mut *self.stream()).poll_write(cx, buf)
     }
 
@@ -94,3 +71,4 @@ impl AsyncWrite for ConnectionIo {
         Pin::new(&mut *self.stream()).poll_shutdown(cx)
     }
 }
+use super::test_hooks::WriteHook;

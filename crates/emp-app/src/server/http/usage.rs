@@ -163,18 +163,18 @@ async fn read_report(
         let delivery = stream.delivery.clone();
         let (sender, response) = oneshot::channel();
         let worker = crate::server::spawn_connection_work_with_permit(move |business| {
+            let mut output = BodyOutput::new(socket, delivery, sender);
             let query = match report.prepare_stream(raw.request(), &state, system_now()) {
                 Ok(query) => query,
                 Err(reply) => {
-                    let _ = sender.send(reply.into_response());
+                    output.finish(business, || reply.into_response());
                     return;
                 }
             };
-            let Ok(mut monitor) = DisconnectMonitor::start(&socket) else {
-                let _ = sender.send(no_response());
+            let Ok(mut monitor) = DisconnectMonitor::start(output.socket()) else {
+                output.finish(business, no_response);
                 return;
             };
-            let mut output = BodyOutput::new(socket, delivery, sender);
             if output
                 .head(200, "text/event-stream", std::iter::empty())
                 .is_ok()
@@ -185,10 +185,11 @@ async fn read_report(
                     progress_output.lock().expect("report output").frame(frame)
                 });
                 if let Ok(terminal) = terminal {
-                    let _ = output
-                        .lock()
-                        .expect("report output")
-                        .terminal_frame(terminal, business);
+                    let _ = output.lock().expect("report output").terminal_frame(
+                        terminal,
+                        business,
+                        &state.lifecycle.test_hooks,
+                    );
                 }
             }
         });
