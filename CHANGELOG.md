@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### 中文
+
+#### 问题修复
+
+- **订阅模型的上下文设置可以正常保存。** 在 Native 或 Other 订阅中打开「管理模型」，列表读取完成后即可编辑。手动刷新会保留已填的值，刷新失败后也可以继续编辑和保存。
+
+### English
+
+#### Fixes
+
+- **Keep context limits when editing subscription models.** In Manage models for a Native or Other subscription, editing starts after the model list loads. Refreshing the list keeps your changes, and you can still edit and save them if a refresh fails.
+
 ## 0.15.9 (2026-11-23)
 
 ### 中文

@@ -106,13 +106,20 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
     candidate.controller.abort();
     const controller=candidate.controller=new AbortController();
     const button=$('subscription_model_refresh');
+    const list=$('subscription_model_list');
+    const save=$('modal_submit');
+    const saveDisabled=save.disabled;
     button.disabled=true;
+    list.inert=true;
+    save.disabled=true;
     let result;
     try{
       result=await api('/api/accounts/'+encodeURIComponent(candidate.account.id)+'/models'+(refresh?'/refresh':''),{...(refresh?{method:'POST',body:'{}'}:{}),signal:controller.signal});
     }catch(error){if(current(candidate)&&!controller.signal.aborted)$('modal_status').textContent=error.message;}
     if(!current(candidate)||controller.signal.aborted)return;
     button.disabled=false;
+    list.inert=false;
+    save.disabled=saveDisabled;
     if(result){
       capture(candidate);
       candidate.models=result.models;
@@ -137,10 +144,13 @@ function createSubscriptionSettings({getState,cloneState,$,tr,esc,api,services,p
       }
       capture(candidate);const windows=Object.fromEntries(Object.entries(candidate.windows).map(([model,value])=>[model,Number(value)]));
       const config=applySubscriptionPreferences(cloneState(),{id,native:candidate.native,hidden:candidate.hidden,windows,syncModels:candidate.syncModels});
-      await persistState(tr("models.account_saved"),config);if(current(candidate))closeModal();
+      const refreshButton=$('subscription_model_refresh');
+      refreshButton.disabled=true;
+      try{await persistState(tr("models.account_saved"),config);}
+      finally{refreshButton.disabled=false;}
+      if(current(candidate))closeModal();
     },navigation);
     editor=candidate;
-    $('modal_submit').disabled=true;
     $('subscription_model_refresh').onclick=()=>load(candidate,true);
     void load(candidate);
   }
