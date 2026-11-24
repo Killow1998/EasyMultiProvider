@@ -19,7 +19,7 @@ struct UpstreamRequest {
 pub(crate) struct RealtimeUpstream {
     address: SocketAddr,
     request: mpsc::Receiver<UpstreamRequest>,
-    worker: Option<JoinHandle<()>>,
+    worker: Option<JoinHandle<std::io::Result<()>>>,
 }
 
 impl RealtimeUpstream {
@@ -28,12 +28,11 @@ impl RealtimeUpstream {
         let address = listener.local_addr().expect("Voice upstream address");
         let (sender, request) = mpsc::channel();
         let worker = thread::spawn(move || {
-            while let Ok((mut stream, _)) = listener.accept() {
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .expect("upstream read timeout");
-                if stream.peek(&mut [0]).expect("peek Voice request") == 0 {
-                    break;
+            loop {
+                let (mut stream, _) = listener.accept()?;
+                stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+                if stream.peek(&mut [0])? == 0 {
+                    return Ok(());
                 }
                 let observed = receive_request(&mut stream);
                 sender.send(observed).expect("record Voice call");
@@ -48,11 +47,8 @@ impl RealtimeUpstream {
                     response.reason,
                     response.content_type,
                     response.body.len()
-                )
-                .expect("write Voice response headers");
-                stream
-                    .write_all(response.body)
-                    .expect("write Voice response body");
+                )?;
+                stream.write_all(response.body)?;
             }
         });
         Self {
@@ -79,7 +75,7 @@ impl RealtimeUpstream {
     }
 
     pub(super) fn assert_no_more_requests(mut self) {
-        self.finish();
+        self.finish().expect("finish Voice fake upstream");
         assert!(
             matches!(
                 self.request.try_recv(),
@@ -93,18 +89,37 @@ impl RealtimeUpstream {
         matches!(self.request.try_recv(), Err(mpsc::TryRecvError::Empty))
     }
 
-    fn finish(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            drop(TcpStream::connect(self.address).expect("wake Voice fake upstream"));
-            worker.join().expect("join Voice fake upstream");
-        }
+    fn finish(&mut self) -> std::io::Result<()> {
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        let wake = TcpStream::connect(self.address).map(drop);
+        worker
+            .join()
+            .map_err(|_| std::io::Error::other("Voice fake upstream panicked"))??;
+        wake
     }
 }
 
 impl Drop for RealtimeUpstream {
     fn drop(&mut self) {
-        self.finish();
+        let _ = self.finish();
     }
+}
+
+#[test]
+fn dropping_the_realtime_fixture_does_not_propagate_upstream_panics() {
+    let upstream = RealtimeUpstream::start(UpstreamResponse {
+        status: 200,
+        reason: "OK",
+        content_type: "application/json",
+        location: None,
+        body: b"{}",
+    });
+    let mut client = TcpStream::connect(upstream.address).unwrap();
+    client.write_all(b"truncated request").unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    drop(upstream);
 }
 
 fn receive_request(stream: &mut TcpStream) -> UpstreamRequest {

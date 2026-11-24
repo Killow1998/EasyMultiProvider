@@ -9,6 +9,9 @@ description = "EMP 自身配置、账号配置、目录合并与 .emp 导入导�
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 emp-domain = { path = "../emp-domain" }
 emp-files = { path = "../emp-files" }

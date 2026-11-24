@@ -113,6 +113,7 @@ impl CatalogSources {
             &self.accounts,
             &self.duplicates,
             self.native_is_local_key,
+            self.registry,
         );
         public
             .as_object_mut()

@@ -294,7 +294,50 @@ pub fn atomic_write(
         .and_then(|()| file.sync_all())
         .map_err(|_| FilesystemError::ManagedFileUnavailable)?;
     file.commit()
-        .map_err(|_| FilesystemError::ManagedFileUnavailable)
+        .map_err(|_| FilesystemError::ManagedFileUnavailable)?;
+    #[cfg(feature = "test-support")]
+    test_commits::record(path);
+    Ok(())
+}
+
+#[cfg(feature = "test-support")]
+pub use test_commits::count_commits;
+
+#[cfg(feature = "test-support")]
+mod test_commits {
+    use std::{
+        collections::BTreeMap,
+        path::{Path, PathBuf},
+        sync::Mutex,
+    };
+
+    static COUNTERS: Mutex<BTreeMap<PathBuf, usize>> = Mutex::new(BTreeMap::new());
+
+    pub struct CommitCount(PathBuf);
+
+    impl CommitCount {
+        pub fn get(&self) -> usize {
+            COUNTERS.lock().unwrap()[&self.0]
+        }
+    }
+
+    impl Drop for CommitCount {
+        fn drop(&mut self) {
+            COUNTERS.lock().unwrap().remove(&self.0);
+        }
+    }
+
+    pub fn count_commits(path: &Path) -> CommitCount {
+        let previous = COUNTERS.lock().unwrap().insert(path.to_owned(), 0);
+        assert!(previous.is_none());
+        CommitCount(path.to_owned())
+    }
+
+    pub(super) fn record(path: &Path) {
+        if let Some(commits) = COUNTERS.lock().unwrap().get_mut(path) {
+            *commits += 1;
+        }
+    }
 }
 
 #[cfg(unix)]

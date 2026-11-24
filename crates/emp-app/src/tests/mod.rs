@@ -113,9 +113,11 @@ fn credential_root(directory: &TempDir) -> PathBuf {
     root
 }
 
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
+
 fn complete_response(stream: &mut TcpStream) -> String {
     stream
-        .set_read_timeout(Some(Duration::from_secs(20)))
+        .set_read_timeout(Some(RESPONSE_TIMEOUT))
         .expect("response timeout");
     let mut response = Vec::new();
     let mut buffer = [0_u8; 4096];
@@ -143,7 +145,7 @@ fn complete_response(stream: &mut TcpStream) -> String {
 
 fn response_until_close(stream: &mut TcpStream) -> String {
     stream
-        .set_read_timeout(Some(Duration::from_secs(20)))
+        .set_read_timeout(Some(RESPONSE_TIMEOUT))
         .expect("response timeout");
     let mut response = Vec::new();
     stream.read_to_end(&mut response).expect("read response");
@@ -220,13 +222,13 @@ fn delete(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
     complete_response(&mut stream)
 }
 
-struct ChunkedSse {
-    input: BufReader<TcpStream>,
+struct ChunkedSse<R = BufReader<TcpStream>> {
+    input: R,
     remaining: usize,
     ended: bool,
 }
 
-impl Read for ChunkedSse {
+impl<R: BufRead> Read for ChunkedSse<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         if self.ended || buffer.is_empty() {
             return Ok(0);
@@ -260,7 +262,7 @@ impl Read for ChunkedSse {
     }
 }
 
-fn read_sse_head(mut input: BufReader<TcpStream>) -> (String, BufReader<ChunkedSse>) {
+fn read_sse_head<R: BufRead>(mut input: R) -> (String, BufReader<ChunkedSse<R>>) {
     let mut head = String::new();
     loop {
         let mut line = String::new();

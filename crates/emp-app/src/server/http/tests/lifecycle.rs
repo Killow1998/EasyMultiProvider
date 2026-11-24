@@ -22,13 +22,7 @@ fn raw_management_paths_follow_route_matching_without_writes() {
             "/api/a/../quit",
             "/api/quit/",
         ] {
-            assert_wire(
-                endpoint,
-                &json_request(port, path, &[&session], b"{}"),
-                false,
-                404,
-            )
-            .await;
+            assert_entry_error(endpoint, &json_request(port, path, &[&session], b"{}"), 404).await;
         }
         for path in ["/api/native/login/start#x", "/api/accounts/login/finish#x"] {
             assert_wire(
@@ -74,10 +68,9 @@ fn raw_management_paths_follow_route_matching_without_writes() {
                 format!("/api/quit#{suffix}"),
                 format!("/api/integration/enable#{suffix}"),
             ] {
-                assert_wire(
+                assert_entry_error(
                     endpoint,
                     &json_request(port, &path, &[&session], b"{}"),
-                    false,
                     404,
                 )
                 .await;
@@ -117,13 +110,8 @@ fn raw_management_paths_follow_route_matching_without_writes() {
             (vec![session.as_str(), "Origin: https://other.invalid"], 403),
         ] {
             for path in ["/api/quit#x", "/api/native/login/start#x<y"] {
-                assert_wire(
-                    endpoint,
-                    &json_request(port, path, &headers, b"{}"),
-                    false,
-                    status,
-                )
-                .await;
+                assert_entry_error(endpoint, &json_request(port, path, &headers, b"{}"), status)
+                    .await;
             }
         }
         assert_wire(
@@ -189,17 +177,21 @@ fn wrong_methods_keep_status_before_and_during_update_drain() {
             ("DELETE", "/api/modules"),
             ("POST", "/api/gateway"),
             ("POST", "/api/diagnostics"),
-            ("GET", "/api/team/publish_source"),
             ("GET", "/api/migration/export"),
         ] {
-            assert_wire(
+            assert_entry_error(
                 endpoint,
                 &request(port, method, path, &[&session], b""),
-                false,
                 404,
             )
             .await;
         }
+        let team = request(port, "GET", "/api/team/publish_source", &[&session], b"");
+        let reply = exchange_wire(endpoint, &team, false).await;
+        wire_contract::assert_json_reply(
+            "/api/team/publish_source", &reply, "404 Not Found",
+            &json!({"error":{"code":"module_disabled","message":"This EMP module is not active","origin":"emp"}}),
+        );
         let state = fixture.server.state.clone();
         assert!(
             tokio::task::spawn_blocking(move || {
@@ -376,7 +368,7 @@ fn lifecycle_and_unmatched_requests_keep_method_and_auth_policy() {
             )
             .await;
             if path.starts_with("/api/") {
-                assert_wire(endpoint, &request(port, method, path, &[], b""), false, 401).await;
+                assert_entry_error(endpoint, &request(port, method, path, &[], b""), 401).await;
                 assert_wire(
                     endpoint,
                     &request(

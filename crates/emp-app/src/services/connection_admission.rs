@@ -1,4 +1,7 @@
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
+use std::sync::{
+    Arc, Condvar, Mutex, MutexGuard, TryLockError,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy)]
@@ -91,6 +94,25 @@ impl ConnectionAdmission {
         exempt_requests: usize,
         timeout: Duration,
     ) -> Option<AdmissionGateGuard<'_>> {
+        self.quiesce_with(exempt_requests, timeout, |slots| slots.active)
+    }
+
+    pub(crate) fn quiesce_work(
+        &self,
+        exempt_requests: usize,
+        timeout: Duration,
+    ) -> Option<AdmissionGateGuard<'_>> {
+        self.quiesce_with(exempt_requests, timeout, |slots| {
+            slots.active - slots.delivering
+        })
+    }
+
+    fn quiesce_with(
+        &self,
+        exempt_requests: usize,
+        timeout: Duration,
+        active_requests: impl Fn(&SlotState) -> usize,
+    ) -> Option<AdmissionGateGuard<'_>> {
         let owner = match self.gate.try_lock() {
             Ok(owner) => owner,
             Err(TryLockError::WouldBlock) => return None,
@@ -105,8 +127,12 @@ impl ConnectionAdmission {
             return None;
         }
         let deadline = Instant::now().checked_add(timeout)?;
-        if !guard.requests.wait_for_at_most(exempt_requests, deadline)
-            || !guard.websockets.wait_for_at_most(0, deadline)
+        if !guard
+            .requests
+            .wait_for_at_most(exempt_requests, deadline, active_requests)
+            || !guard
+                .websockets
+                .wait_for_at_most(0, deadline, |slots| slots.active)
         {
             return None;
         }
@@ -127,6 +153,7 @@ impl ConnectionAdmission {
 #[derive(Default)]
 struct SlotState {
     active: usize,
+    delivering: usize,
     capacity: usize,
     maximum: usize,
     growth: usize,
@@ -145,12 +172,10 @@ impl AdaptiveSlotPool {
         let capacity = limits.initial.max(1);
         Self {
             state: Mutex::new(SlotState {
-                active: 0,
                 capacity,
                 maximum: limits.maximum.max(capacity),
                 growth: limits.growth.max(1),
-                closed: false,
-                permanently_closed: false,
+                ..SlotState::default()
             }),
             drained: Condvar::new(),
             closing: tokio::sync::Notify::new(),
@@ -174,15 +199,19 @@ impl AdaptiveSlotPool {
         state.active += 1;
         Some(ConnectionPermit {
             pool: Arc::clone(pool),
+            delivering: AtomicBool::new(false),
         })
     }
 
-    fn release(&self) {
+    fn release(&self, delivering: bool) {
         if let Ok(mut state) = self.state.lock() {
             state.active = state
                 .active
                 .checked_sub(1)
                 .expect("connection admission permit released exactly once");
+            if delivering {
+                state.delivering -= 1;
+            }
             self.drained.notify_all();
         }
     }
@@ -210,11 +239,16 @@ impl AdaptiveSlotPool {
         self.closing.notify_waiters();
     }
 
-    fn wait_for_at_most(&self, maximum_active: usize, deadline: Instant) -> bool {
+    fn wait_for_at_most(
+        &self,
+        maximum_active: usize,
+        deadline: Instant,
+        active: impl Fn(&SlotState) -> usize,
+    ) -> bool {
         let Ok(mut state) = self.state.lock() else {
             return false;
         };
-        while state.active > maximum_active {
+        while active(&state) > maximum_active {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return false;
@@ -223,7 +257,7 @@ impl AdaptiveSlotPool {
                 return false;
             };
             state = next;
-            if timeout.timed_out() && state.active > maximum_active {
+            if timeout.timed_out() && active(&state) > maximum_active {
                 return false;
             }
         }
@@ -259,11 +293,22 @@ impl Drop for AdmissionGateGuard<'_> {
 
 pub(crate) struct ConnectionPermit {
     pool: Arc<AdaptiveSlotPool>,
+    delivering: AtomicBool,
+}
+
+impl ConnectionPermit {
+    pub(crate) fn begin_buffered_delivery(&self) {
+        let mut state = self.pool.state.lock().expect("connection admission");
+        if !self.delivering.swap(true, Ordering::Relaxed) {
+            state.delivering += 1;
+            self.pool.drained.notify_all();
+        }
+    }
 }
 
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
-        self.pool.release();
+        self.pool.release(self.delivering.load(Ordering::Relaxed));
     }
 }
 

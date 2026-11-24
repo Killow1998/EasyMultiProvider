@@ -79,6 +79,12 @@ pub(crate) fn assert_reply(name: &str, reply: &[u8], expected_head: &str, expect
     );
 }
 
+pub(super) fn assert_json_reply(name: &str, reply: &[u8], status: &str, body: &Value) {
+    let body = body.to_string();
+    let head = format!(json_head!("{}", "{}"), status, body.len());
+    assert_reply(name, reply, &head, body.as_bytes());
+}
+
 #[test]
 fn fixture_defaults_stay_under_config_root() {
     const UNUSED_HOME: &str = "EMP_FIXTURE_UNUSED_HOME";
@@ -88,9 +94,23 @@ fn fixture_defaults_stay_under_config_root() {
     if let Some(unused_home) = std::env::var_os(UNUSED_HOME) {
         {
             let directory = tempfile::tempdir().unwrap();
+            let upstream = std::net::TcpListener::bind(LOOPBACK).unwrap();
+            upstream.set_nonblocking(true).unwrap();
+            let base_url = format!("http://{}/v1", upstream.local_addr().unwrap());
+            let registry_path = std::env::var_os("EMP_OFFICIAL_MODELS_PATH").unwrap();
+            let mut registry: Value =
+                serde_json::from_slice(&std::fs::read(&registry_path).unwrap()).unwrap();
+            registry["providers"][0]["api_base_urls"] = json!([OVERRIDE_URL, base_url]);
+            std::fs::write(registry_path, registry.to_string()).unwrap();
             let config = json!({
-                "providers": [{"id": "external", "base_url": OVERRIDE_URL}],
-                "models": [{"id": OVERRIDE_MODEL, "provider": "external"}],
+                "providers": [
+                    {"id": "external", "base_url": base_url, "api_key": "fixture-key", "protocol": "chat_completions"},
+                    {"id": "local", "base_url": "", "protocol": "anthropic_messages", "auth_mode": "claude_login", "execution_backend": "claude_cli"},
+                ],
+                "models": [
+                    {"id": OVERRIDE_MODEL, "provider": "external"},
+                    {"id": "local/fixture", "provider": "local", "upstream_id": "fixture-claude", "supports_reasoning": true, "reasoning_levels": ["low", "high"]},
+                ],
             });
             std::fs::write(directory.path().join("config.json"), config.to_string()).unwrap();
             assert_eq!(
@@ -133,31 +153,60 @@ fn fixture_defaults_stay_under_config_root() {
                     .unwrap(),
                     root.join("state/accounts/fixture/auth.json.enc")
                 );
+                let registry = emp_state::official_registry::snapshot();
+                assert_eq!(registry.claude_cli_default_effort("fixture-claude").as_deref(), Some("high"));
+                let reads = || emp_state::official_registry::ENVIRONMENT_SNAPSHOTS.load(Ordering::Relaxed);
+                let upstream = tokio::net::TcpListener::from_std(upstream).unwrap();
+                let session = fixture.session();
+                let discover = json_request(
+                    address.port(), "/api/providers/discover", &[&session], br#"{"provider":"external"}"#,
+                );
+                let (reply, ()) = tokio::join!(
+                    assert_wire(address, &discover, false, 200),
+                    async {
+                        timeout(crate::server::raw_tcp::DEADLINE, async {
+                            let (mut io, _) = upstream.accept().await.unwrap();
+                            let head = crate::server::raw_tcp::head(&mut io).await.unwrap();
+                            assert!(head.starts_with(b"GET /v1/models HTTP/1.1\r\n"));
+                            let body = json!({"data":[{"id":OVERRIDE_MODEL}]}).to_string();
+                            let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                            io.write_all(reply.as_bytes()).await.unwrap();
+                        }).await.unwrap();
+                    }
+                );
+                assert_eq!(json_body(&reply)["models"][0]["upstream_id"], OVERRIDE_MODEL);
+
+                let before_selection = reads();
+                let selection = json!({"provider":"external", "cached":true, "selected":[OVERRIDE_MODEL]});
                 let reply = assert_wire(
                     address,
-                    &request(
-                        address.port(),
-                        "GET",
-                        "/api/config",
-                        &[&fixture.session()],
-                        b"",
-                    ),
+                    &json_request(address.port(), "/api/providers/discover", &[&session], selection.to_string().as_bytes()),
                     false,
                     200,
-                )
-                .await;
+                ).await;
+                assert_eq!(json_body(&reply)["added"], 1);
+                let saved: Value = serde_json::from_slice(&std::fs::read(&config.config_path).unwrap()).unwrap();
+                let selected_id = format!("external/{OVERRIDE_MODEL}");
+                let saved_model = saved["models"].as_array().unwrap().iter().find(|model| model["id"] == selected_id).unwrap();
+                let before_read = reads();
+                let reply = assert_wire(
+                    address,
+                    &request(address.port(), "GET", "/api/config", &[&session], b""),
+                    true,
+                    200,
+                ).await;
                 let body = json_body(&reply);
-                assert_eq!(
-                    body["native_catalog_path"],
-                    json!(root.join("codex/models_cache.json"))
-                );
-                let model = &body["models"][0];
-                assert_eq!(model["id"], OVERRIDE_MODEL);
-                assert_eq!(
-                    model["capability_sources"]["input_modalities"]["source"],
-                    "unknown"
-                );
-                assert_eq!(model["input_modalities"], json!(["text"]));
+                let snapshot_reads = (before_read - before_selection, reads() - before_read);
+                assert_eq!(snapshot_reads, (0, 0), "environment registry reads during selection and management view");
+                assert_eq!(saved_model["input_modalities"], json!(["text"]));
+                assert_eq!(body["native_catalog_path"], json!(root.join("codex/models_cache.json")));
+                for id in [OVERRIDE_MODEL, selected_id.as_str()] {
+                    let model = body["models"].as_array().unwrap().iter().find(|model| model["id"] == id).unwrap();
+                    assert_eq!(model["capability_sources"]["input_modalities"]["source"], "unknown");
+                    assert_eq!(model["input_modalities"], json!(["text"]));
+                }
+                let claude = body["catalog_models"].as_array().unwrap().iter().find(|model| model["id"] == "local/fixture").unwrap();
+                assert_eq!(claude["reasoning_levels"], json!(["low", "high"]));
             });
         }
         let unused_home = std::path::Path::new(&unused_home);
@@ -186,12 +235,14 @@ fn fixture_defaults_stay_under_config_root() {
         json!({
             "schema_version": 1,
             "reviewed_at": "2026-01-02",
-            "providers": [{"key": OVERRIDE_PROVIDER, "api_base_urls": [OVERRIDE_URL]}],
-            "models": [{
-                "model_id": OVERRIDE_MODEL,
-                "provider_key": OVERRIDE_PROVIDER,
-                "input_modalities": ["text", "image"],
-            }],
+            "providers": [
+                {"key": OVERRIDE_PROVIDER, "api_base_urls": [OVERRIDE_URL]},
+                {"key": "anthropic", "api_base_urls": ["https://api.anthropic.com"]},
+            ],
+            "models": [
+                {"model_id": OVERRIDE_MODEL, "provider_key": OVERRIDE_PROVIDER, "input_modalities": ["text", "image"]},
+                {"model_id": "fixture-claude", "provider_key": "anthropic", "claude_cli_default_effort": "high"},
+            ],
         })
         .to_string(),
     )
@@ -559,5 +610,6 @@ fn realtime_upstream_method_not_allowed() {
             let reply = exchange_wire(address, &wire, false).await;
             assert_reply("realtime upstream 405", &reply, json_head!("405 Method Not Allowed", "121"), br#"{"error":{"code":"native_realtime_unsupported","message":"The native subscription backend does not support Codex Voice"}}"#);
         });
+        upstream.assert_only_call();
     }
 }

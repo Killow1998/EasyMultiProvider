@@ -2,6 +2,7 @@
 use super::ServerHandle;
 use crate::app::ServerState;
 use crate::error::AppError;
+use crate::server::REQUEST_DRAIN_TIMEOUT;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -82,7 +83,7 @@ impl ServerHandle {
             .state
             .lifecycle
             .admission
-            .quiesce(0, Duration::from_secs(30))
+            .quiesce(0, REQUEST_DRAIN_TIMEOUT)
         {
             gate.keep_closed();
             true

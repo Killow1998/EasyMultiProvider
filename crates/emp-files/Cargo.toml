@@ -9,6 +9,9 @@ description = "Private files, atomic writes, file transactions, cross-process lo
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 atomic-write-file = "0.3.1"
 serde_json = { workspace = true }

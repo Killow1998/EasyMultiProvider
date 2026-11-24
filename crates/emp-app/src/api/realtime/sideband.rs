@@ -71,7 +71,7 @@ pub(crate) fn prepare_sideband(
                 "Native realtime sideband connection failed",
             )
         })?;
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     let (url, proxy) = if let Some(address) = state.test_sideband_address.get() {
         let path = url.strip_prefix(NATIVE_SIDEBAND_ORIGIN).unwrap();
         (format!("ws://{address}{path}"), None)

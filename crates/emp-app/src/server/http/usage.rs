@@ -164,7 +164,7 @@ async fn read_report(
         let socket = socket.expect("report stream socket").0;
         let delivery = stream.delivery.clone();
         let (sender, response) = oneshot::channel();
-        let worker = tokio::task::spawn_blocking(move || {
+        let worker = crate::server::spawn_connection_work(move || {
             let query = match report.prepare_stream(raw.request(), &state, system_now()) {
                 Ok(query) => query,
                 Err(reply) => {

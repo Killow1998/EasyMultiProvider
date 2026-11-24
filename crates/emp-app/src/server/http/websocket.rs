@@ -84,25 +84,19 @@ async fn responses(
         None,
         move |io, admitted, _| async move {
             if let Some(io) = io {
-                let runtime = state.backend.transport.runtime.handle().clone();
-                runtime
-                    .spawn(async move {
-                        let mut head = raw.request();
-                        head.source = Some(&source);
-                        head.observation_id = connection_id.as_deref();
-                        run_responses(
-                            &state,
-                            head,
-                            connection_id.as_deref(),
-                            io,
-                            &[],
-                            probe,
-                            admitted,
-                        )
-                        .await;
-                    })
-                    .await
-                    .expect("Responses WebSocket session");
+                let mut head = raw.request();
+                head.source = Some(&source);
+                head.observation_id = connection_id.as_deref();
+                run_responses(
+                    &state,
+                    head,
+                    connection_id.as_deref(),
+                    io,
+                    &[],
+                    probe,
+                    admitted,
+                )
+                .await;
             }
         },
     );

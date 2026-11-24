@@ -38,6 +38,7 @@ pub(crate) fn select_models(
         discovered,
         &selected.map_err(ChangeError::invalid)?,
         &emp_state::observed_at_now(),
+        state.backend.configuration.official_models,
     )
     .map_err(ChangeError::invalid)?;
     let catalog_path = generated_catalog_path(state);

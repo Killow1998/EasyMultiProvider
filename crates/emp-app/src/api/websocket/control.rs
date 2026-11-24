@@ -9,7 +9,10 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::{Mutex, oneshot};
+use tokio::{
+    sync::{Mutex, oneshot},
+    task::JoinSet,
+};
 
 #[derive(Default)]
 struct Response {
@@ -62,7 +65,7 @@ type PendingTurn = (Option<String>, Option<oneshot::Sender<DisconnectReason>>);
 
 pub(super) struct TurnControl {
     stop: oneshot::Sender<()>,
-    worker: tokio::task::JoinHandle<PendingTurn>,
+    worker: JoinSet<PendingTurn>,
 }
 
 impl TurnControl {
@@ -87,7 +90,8 @@ impl TurnControl {
         let task_control = Arc::clone(&control);
         let state = Arc::clone(state);
         let (stop, mut stopped) = oneshot::channel::<()>();
-        let worker = tokio::spawn(async move {
+        let mut worker = JoinSet::new();
+        worker.spawn(async move {
             let mut sender = Some(sender);
             let mut pending = None;
             loop {
@@ -165,13 +169,18 @@ impl TurnControl {
     }
 
     pub(super) async fn finish(
-        self,
+        mut self,
         websocket: &mut ObservedWebSocket<'_>,
         pending_request: &mut Option<String>,
         result: TurnResult,
     ) -> TurnResult {
         drop(self.stop);
-        let (pending, _sender) = self.worker.await.expect("websocket control reader");
+        let (pending, _sender) = self
+            .worker
+            .join_next()
+            .await
+            .expect("websocket control reader")
+            .expect("websocket control reader");
         *pending_request = pending;
         let control = websocket.control.as_ref().expect("websocket turn control");
         let result = if let Some(event) = control.incomplete().await {

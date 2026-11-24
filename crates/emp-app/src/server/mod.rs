@@ -7,6 +7,8 @@ use crate::app::ServerState;
 use crate::services::{connection_admission::ConnectionAdmission, updates::UpdateState};
 use accept::{ACCEPT_RETRY, AcceptLog, request_rejected};
 use axum::{Router, middleware::from_fn_with_state};
+#[cfg(test)]
+use std::net::SocketAddr;
 use std::{
     io,
     sync::{
@@ -17,17 +19,17 @@ use std::{
 use tokio::{
     net::TcpListener,
     sync::watch,
-    task::{JoinError, JoinSet},
-    time::{Instant, sleep},
+    task::{JoinError, JoinHandle, JoinSet},
+    time::{Duration, Instant, sleep, sleep_until},
 };
-#[cfg(test)]
-use {std::net::SocketAddr, tokio::task::JoinHandle};
 
 #[cfg(test)]
 #[path = "../../tests/support/raw_tcp.rs"]
 pub(crate) mod raw_tcp;
 #[cfg(test)]
 mod tests;
+
+pub(crate) const REQUEST_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShutdownReason {
@@ -38,10 +40,14 @@ pub(crate) enum ShutdownReason {
 }
 
 #[derive(Clone)]
-pub(crate) struct ShutdownSignal(watch::Receiver<Option<ShutdownReason>>);
+pub(crate) struct ShutdownSignal(watch::Receiver<Option<(ShutdownReason, Instant)>>);
 
 impl ShutdownSignal {
-    pub(crate) async fn wait(mut self) -> ShutdownReason {
+    pub(crate) async fn wait(self) -> ShutdownReason {
+        self.wait_for_stop().await.0
+    }
+
+    async fn wait_for_stop(mut self) -> (ShutdownReason, Instant) {
         *self
             .0
             .wait_for(Option::is_some)
@@ -62,7 +68,7 @@ pub(crate) struct ServerControl {
     mode: ServerMode,
     pub(crate) admission: Arc<ConnectionAdmission>,
     pub(crate) shutdown: Arc<AtomicBool>,
-    stopped: watch::Sender<Option<ShutdownReason>>,
+    stopped: watch::Sender<Option<(ShutdownReason, Instant)>>,
     updates: Option<UpdateState>,
 }
 
@@ -109,7 +115,7 @@ impl ServerControl {
                 updates.close();
             }
             self.shutdown.store(true, Ordering::Release);
-            *state = Some(reason);
+            *state = Some((reason, Instant::now() + REQUEST_DRAIN_TIMEOUT));
             true
         });
     }
@@ -238,6 +244,7 @@ async fn serve(
     http_state: Option<Arc<ServerState>>,
 ) -> Result<(), ServeError> {
     let mut connections = JoinSet::new();
+    let (blocking_work, pending_work) = watch::channel(());
     let mut worker_failure = None;
     let shutdown = control.signal();
     let mut accept_log = AcceptLog::default();
@@ -250,7 +257,7 @@ async fn serve(
         }
         listener.accept().await
     };
-    'accepting: loop {
+    let deadline = 'accepting: loop {
         let accept = async {
             if matches!(control.mode, ServerMode::Recovery) {
                 return accept()
@@ -270,7 +277,7 @@ async fn serve(
                 matches!(control.mode, ServerMode::Recovery) && !connections.is_empty();
             tokio::select! {
                 biased;
-                _ = shutdown.clone().wait() => break 'accepting,
+                (_, deadline) = shutdown.clone().wait_for_stop() => break 'accepting deadline,
                 completed = connections.join_next(), if !connections.is_empty() => {
                     if let Some(Err(error)) = completed {
                         worker_failure.get_or_insert(error);
@@ -280,8 +287,11 @@ async fn serve(
                     let ((stream, peer), accepted) = result.map_err(ServeError::Accept)?;
                     if let Some(state) = &http_state {
                         if let Some(intake) = http::proxy::ConnectionIntake::accept(state, peer.ip()) {
-                            connections.spawn(connection::drive_http(
-                                stream, peer, accepted, router.clone(), Arc::clone(state), intake,
+                            connections.spawn(BLOCKING_WORK.scope(
+                                pending_work.clone(),
+                                connection::drive_http(
+                                    stream, peer, accepted, router.clone(), Arc::clone(state), intake,
+                                ),
                             ));
                         } else {
                             request_rejected(state, "connection_capacity");
@@ -289,21 +299,39 @@ async fn serve(
                     } else if let Some(permit) = control.admission.acquire_request()
                         && stream.set_nodelay(true).is_ok()
                     {
-                        connections.spawn(connection::drive(
-                            stream, peer, accepted, router.clone(), Arc::clone(&control), permit,
+                        connections.spawn(BLOCKING_WORK.scope(
+                            pending_work.clone(),
+                            connection::drive(
+                                stream, peer, accepted, router.clone(), Arc::clone(&control), permit,
+                            ),
                         ));
                     }
                     break;
                 }
             }
         }
-    }
+    };
     drop(listener);
-    while let Some(completed) = connections.join_next().await {
-        if let Err(error) = completed {
-            worker_failure.get_or_insert(error);
+    drop(pending_work);
+    let cutoff = sleep_until(deadline);
+    tokio::pin!(cutoff);
+    let mut aborted = false;
+    while !connections.is_empty() {
+        tokio::select! {
+            () = &mut cutoff, if !aborted => {
+                connections.abort_all();
+                aborted = true;
+            }
+            completed = connections.join_next() => {
+                if let Some(Err(error)) = completed
+                    && !error.is_cancelled()
+                {
+                    worker_failure.get_or_insert(error);
+                }
+            }
         }
     }
+    blocking_work.closed().await;
     worker_failure.map_or(Ok(()), |error| Err(ServeError::Worker(error)))
 }
 
@@ -324,8 +352,22 @@ async fn accept_with_retry<T, F: Future<Output = io::Result<T>>>(
     }
 }
 
+tokio::task_local! {
+    static BLOCKING_WORK: watch::Receiver<()>;
+}
+
+pub(crate) fn spawn_connection_work<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> JoinHandle<T> {
+    let pending = BLOCKING_WORK.try_with(Clone::clone).ok();
+    tokio::task::spawn_blocking(move || {
+        let _pending = pending;
+        work()
+    })
+}
+
 pub(crate) async fn run_blocking<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, JoinError> {
-    tokio::task::spawn_blocking(work).await
+    spawn_connection_work(work).await
 }

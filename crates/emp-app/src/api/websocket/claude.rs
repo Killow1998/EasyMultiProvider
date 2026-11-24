@@ -29,7 +29,7 @@ pub(super) async fn serve(
     let state = Arc::clone(state);
     let started = websocket.observation.execution_started();
     let (events, mut incoming) = mpsc::channel::<(Value, oneshot::Sender<io::Result<()>>)>(1);
-    let worker = tokio::task::spawn_blocking(move || {
+    let worker = crate::server::spawn_connection_work(move || {
         let Turn {
             route,
             body,

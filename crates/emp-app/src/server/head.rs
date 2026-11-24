@@ -1,6 +1,6 @@
 use super::ServerMode;
 use crate::http::request::{
-    REQUEST_READ_TIMEOUT, REQUEST_VERSION, Request, parse_request, request_head_end,
+    REQUEST_READ_TIMEOUT, REQUEST_VERSION, Request, RequestMethod, parse_request, request_head_end,
     reserved_source_header,
 };
 use crate::server::http::{error::EntryError, stream::Delivery};
@@ -46,7 +46,7 @@ enum BodyRead {
 
 pub(super) struct GuardedHead {
     pub(super) raw: RawRequestHead,
-    pub(super) release_request_permit: bool,
+    pub(super) account_events: bool,
     body_prefix: Vec<u8>,
 }
 
@@ -86,7 +86,8 @@ impl GuardedHead {
                     body_prefix.len(),
                     Arc::new(Mutex::new(BodyRead::Waiting(None))),
                 ),
-                release_request_permit: request.releases_request_permit(),
+                account_events: request.method == RequestMethod::Get
+                    && request.raw_path() == "/api/accounts/events",
                 body_prefix,
             });
         }

@@ -60,18 +60,25 @@ fn begin_restore(
 }
 
 #[test]
-fn websocket_handshake_errors_preserve_status() {
+fn websocket_handshake_errors_preserve_responses() {
     let fixture = Fixture::new();
     fixture.run_wire(async |fixture, address| {
         let port = fixture.port();
         let session = fixture.session();
         for path in ["/v1/responses", "/v1/live/rtc_valid"] {
-            for (headers, status) in [
-                (vec!["Authorization: Bearer invalid"], 401),
-                (vec!["Origin: https://other.example"], 403),
-                (vec![session.as_str(), "Sec-WebSocket-Version: 12"], 400),
-                (vec![session.as_str(), "Connection: keep-alive"], 400),
-                (vec![session.as_str(), "Sec-WebSocket-Key: invalid"], 400),
+            let caller_error = if path == "/v1/responses" {
+                json!({"error":{"message":"proxy caller authentication is required","origin":"emp"}})
+            } else {
+                json!({"error":{"code":"realtime_caller_unauthorized","message":"Caller authentication is required for Codex Voice","origin":"emp"}})
+            };
+            let upgrade_error = json!({"error":{"message":"invalid websocket upgrade","origin":"emp"}});
+            let key_error = json!({"error":{"message":"invalid Sec-WebSocket-Key","origin":"emp"}});
+            for (headers, status, error) in [
+                (vec!["Authorization: Bearer invalid"], "401 Unauthorized", &caller_error),
+                (vec!["Origin: https://other.example"], "403 Forbidden", &caller_error),
+                (vec![session.as_str(), "Sec-WebSocket-Version: 12"], "400 Bad Request", &upgrade_error),
+                (vec![session.as_str(), "Connection: keep-alive"], "400 Bad Request", &upgrade_error),
+                (vec![session.as_str(), "Sec-WebSocket-Key: invalid"], "400 Bad Request", &key_error),
             ] {
                 let mut all = headers.clone();
                 for header in UPGRADE {
@@ -83,23 +90,14 @@ fn websocket_handshake_errors_preserve_status() {
                         all.push(header);
                     }
                 }
-                assert_wire(
-                    address,
-                    &request(port, "GET", path, &all, &[]),
-                    false,
-                    status,
-                )
-                .await;
+                let reply = exchange_wire(address, &request(port, "GET", path, &all, &[]), false).await;
+                wire_contract::assert_json_reply(path, &reply, status, error);
             }
         }
         for path in ["/v1/live/", "/v1/live/rtc_bad%2Fid", "/v1/live/rtc_bad/id"] {
-            assert_wire(
-                address,
-                &upgrade(port, path, &session, &[], &[]),
-                false,
-                400,
-            )
-            .await;
+            let reply = exchange_wire(address, &upgrade(port, path, &session, &[], &[]), false).await;
+            wire_contract::assert_json_reply(path, &reply, "400 Bad Request",
+                &json!({"error":{"code":"realtime_invalid_call_id","message":"Realtime sideband call ID is invalid","origin":"emp"}}));
         }
     });
 }
@@ -149,7 +147,8 @@ fn tab_separated_http_request_line_is_accepted() {
                 *byte = b'\t';
             }
         }
-        assert_wire(address, &wire, false, 200).await;
+        let reply = assert_wire(address, &wire, true, 200).await;
+        assert!(json_body(&reply)["models"].is_array());
     });
 }
 

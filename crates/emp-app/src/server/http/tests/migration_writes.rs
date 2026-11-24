@@ -209,6 +209,125 @@ fn verify_payload(bundle: &[u8]) {
 }
 
 #[test]
+fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
+    const EXPORT_PAYLOAD_BYTES: usize = 12 * 1024 * 1024;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = emp_state::config::resolve_user_path(directory.path());
+    let auth_path = root.join("state/accounts/kept/auth.json.enc");
+    let config_path = root.join("config.json");
+    let vault = emp_state::VaultStore::from_sources(None, &root.join("state/master.key")).unwrap();
+    vault
+        .write_encrypted_json(&auth_path, &json!({"tokens":{"access_token":"stale"}}))
+        .unwrap();
+    fs::write(
+        &config_path,
+        json!({
+            "providers": [provider("source")],
+            "models": [{
+                "id": "source/model",
+                "upstream_id": "model",
+                "description": "x".repeat(EXPORT_PAYLOAD_BYTES),
+                "provider": "source",
+            }],
+            "accounts": [{"id":"kept","name":"kept","prefix":"kept","auth_file":auth_path,"credential_source":"emp_login"}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let fixture = Fixture::with_directory(directory);
+    let state = Arc::clone(&fixture.server.state);
+    state
+        .backend
+        .accounts
+        .pending_rotations
+        .lock()
+        .unwrap()
+        .insert(
+            auth_path.to_str().unwrap().to_owned(),
+            json!({"tokens":{"access_token":"rotated"}}),
+        );
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (slow, quit_at) = runtime.block_on(async {
+        let address = fixture.server.local_addr();
+        let body = json!({
+            "confirmation":confirmation(&fixture).await, "password":PASSWORD, "groups":["external"],
+        });
+        let slow = crate::server::raw_tcp::RawClient::request(
+            address,
+            &wire(&fixture, "export", true, body.to_string().as_bytes()),
+        )
+        .await;
+        assert!(slow.head.starts_with("HTTP/1.1 200 "), "{}", slow.head);
+        let length = slow
+            .head
+            .lines()
+            .find_map(|line| line.strip_prefix("Content-Length: "))
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        assert!(length >= EXPORT_PAYLOAD_BYTES, "export size: {length}");
+        let quit_at = std::time::Instant::now();
+        let reply = assert_wire(
+            address,
+            &json_request(fixture.port(), "/api/quit", &[&fixture.session()], b"{}"),
+            false,
+            200,
+        )
+        .await;
+        assert_eq!(json_body(&reply), json!({"status":"stopping"}));
+        assert_eq!(
+            timeout(
+                crate::server::raw_tcp::DEADLINE,
+                state.lifecycle.signal().wait()
+            )
+            .await
+            .unwrap(),
+            crate::server::ShutdownReason::ResponseWritten,
+        );
+        assert!(
+            state.lifecycle.admission.active_requests() > 0,
+            "the stalled response still owns a connection slot"
+        );
+        (slow, quit_at)
+    });
+    let (complete, finished) = std::sync::mpsc::channel();
+    let server = fixture.server;
+    let shutdown = std::thread::spawn(move || complete.send(server.shutdown()));
+    let result = finished
+        .recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::DEADLINE);
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            drop(slow);
+            shutdown.join().unwrap().unwrap();
+            panic!("shutdown did not complete with the export client connected: {error}");
+        }
+    };
+    shutdown.join().unwrap().unwrap();
+    assert!(matches!(
+        result,
+        Ok(()) | Err(crate::error::AppError::ServerStopped)
+    ));
+    assert!(quit_at.elapsed() >= crate::server::REQUEST_DRAIN_TIMEOUT);
+    let lock = emp_state::IntegrationFileLock::acquire(
+        &root.join("state/service.lock"),
+        Duration::ZERO,
+        Duration::ZERO,
+    );
+    assert!(lock.is_ok(), "shutdown released service ownership");
+    assert_eq!(
+        vault.read_encrypted_json(&auth_path).unwrap()["tokens"]["access_token"],
+        "rotated"
+    );
+    drop(slow);
+}
+
+#[test]
 fn migration_exports_match_wire_and_consume_confirmation_once() {
     with_fixture(source, async |fixture| {
         let body = json!({

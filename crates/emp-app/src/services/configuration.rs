@@ -21,7 +21,7 @@ pub(crate) fn load_server_configuration(
     #[cfg(test)]
     let config = {
         let mut config = config;
-        let defaults = emp_state::normalize_configuration(None)?;
+        let defaults = emp_state::config::normalize_configuration_with_registry(None, registry)?;
         if config["native_catalog_path"] == defaults["native_catalog_path"]
             || config["native_catalog_path"] == ""
         {

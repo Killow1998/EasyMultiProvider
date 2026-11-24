@@ -221,7 +221,7 @@ async fn submit(
         .map_err(EntryError::reply)?;
     let (sender, response) = oneshot::channel();
     let delivery = inference.stream.delivery.clone();
-    let worker = tokio::task::spawn_blocking({
+    let worker = crate::server::spawn_connection_work({
         let state = state.clone();
         let inference = inference.clone();
         move || {

@@ -119,6 +119,7 @@ fn dependencies(
     let mut edges = BTreeSet::new();
     for package in &packages {
         let from = package["name"].as_str().ok_or("[arch] package 缺少 name")?;
+        test_support_features(package, errors);
         for dependency in package["dependencies"]
             .as_array()
             .ok_or("[arch] package 缺少 dependencies")?
@@ -133,9 +134,11 @@ fn dependencies(
                 continue;
             }
             let dev = dependency["kind"].as_str() == Some("dev");
-            if edges.insert((from, to, dev))
-                && !(if dev { DEV } else { NORMAL_BUILD }).contains(&(from, to))
-            {
+            if !dev && enables_test_support(&dependency["features"]) {
+                errors.push(format!("[arch] {} [dependencies]: {from} → {to} 在正常依赖里打开了 test-support；测试钩子只能由 [dev-dependencies] 或本 crate 的 test-support 特性打开", package["manifest_path"].as_str().unwrap_or("Cargo.toml")));
+            }
+            let allowed = NORMAL_BUILD.contains(&(from, to)) || dev && DEV.contains(&(from, to));
+            if edges.insert((from, to, dev)) && !allowed {
                 let kind = if dev { "dev" } else { "normal/build" };
                 errors.push(format!("[arch] {} [dependencies, {kind}]: 新的 crate 依赖 {from} → {to} 不在允许清单里；如果确实需要，先更新 PLAN §3.2 和 xtask 清单", package["manifest_path"].as_str().unwrap_or("Cargo.toml")));
             }
@@ -143,6 +146,27 @@ fn dependencies(
     }
     forbidden(&edges, transitional, errors);
     Ok(())
+}
+
+fn enables_test_support(features: &Value) -> bool {
+    features.as_array().into_iter().flatten().any(|feature| {
+        feature
+            .as_str()
+            .is_some_and(|feature| feature.rsplit('/').next() == Some(TEST_SUPPORT))
+    })
+}
+
+const TEST_SUPPORT: &str = "test-support";
+
+fn test_support_features(package: &Value, errors: &mut Vec<String>) {
+    let Some(features) = package["features"].as_object() else {
+        return;
+    };
+    for (name, enabled) in features {
+        if name != TEST_SUPPORT && enables_test_support(enabled) {
+            errors.push(format!("[arch] {} [features] {name}: 只有 test-support 特性能打开依赖的 test-support，否则测试钩子会进入生产构建", package["manifest_path"].as_str().unwrap_or("Cargo.toml")));
+        }
+    }
 }
 
 fn matches(pattern: &str, name: &str) -> bool {
@@ -212,13 +236,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn arch_checks_dependency_kinds_against_snapshot() {
+    fn arch_accepts_snapshot_edges_and_dev_edges_parallel_to_normal_ones() {
         for (from, to, kind, valid) in [
             ("emp-app", "emp-domain", Value::Null, true),
             ("emp-app", "emp-domain", json!("build"), true),
             ("emp-app", "emp-mod-decision", json!("dev"), true),
             ("emp-domain", "emp-app", Value::Null, false),
             ("emp-app", "emp-mod-decision", Value::Null, false),
+            ("emp-app", "emp-state", json!("dev"), true),
+            ("emp-domain", "emp-app", json!("dev"), false),
         ] {
             let metadata = json!({"workspace_members": [from, to], "packages": [
                 {"id": from, "name": from, "manifest_path": format!("/workspace/{from}/Cargo.toml"),
@@ -233,6 +259,30 @@ mod tests {
                 assert!(errors[0].contains("PLAN §3.2"));
             }
         }
+    }
+
+    #[test]
+    fn test_support_is_reachable_only_from_dev_dependencies_and_its_own_feature() {
+        let check = |kind: Value, features: Value| {
+            let metadata = json!({"workspace_members": ["emp-app", "emp-state"], "packages": [
+                {"id": "emp-app", "name": "emp-app", "manifest_path": "/workspace/emp-app/Cargo.toml",
+                 "dependencies": [{"name": "emp-state", "path": "/workspace/emp-state", "kind": kind,
+                                   "features": ["test-support"]}]},
+                {"id": "emp-state", "name": "emp-state", "manifest_path": "/workspace/emp-state/Cargo.toml",
+                 "dependencies": [], "features": features}
+            ]});
+            let mut errors = Vec::new();
+            dependencies(&metadata, &[], &mut errors).unwrap();
+            errors
+        };
+        let own = json!({"test-support": ["emp-files/test-support"]});
+        assert!(check(json!("dev"), own.clone()).is_empty());
+        let errors = check(Value::Null, own);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("emp-app → emp-state 在正常依赖里打开了 test-support"));
+        let errors = check(json!("dev"), json!({"default": ["emp-files/test-support"]}));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("[features] default"));
     }
 
     #[test]

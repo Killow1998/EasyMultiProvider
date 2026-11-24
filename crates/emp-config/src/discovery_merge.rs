@@ -1,4 +1,8 @@
-use crate::{ConfigError, normalize_configuration};
+use crate::{
+    ConfigError,
+    config::normalize_configuration_with_registry,
+    official_registry::{self, RegistrySource},
+};
 use emp_domain::{
     input_modalities_metadata_source, json_truthy, normalize_input_modalities,
     normalize_output_modalities, normalize_supported_protocols, output_modalities_metadata_source,
@@ -61,6 +65,7 @@ pub fn merge_selected_models(
         discovered,
         &SelectedModels::parse(selected)?,
         observed_at,
+        official_registry::snapshot,
     )
 }
 
@@ -87,6 +92,7 @@ pub fn merge_model_selection(
     discovered: &[Value],
     selected: &SelectedModels,
     observed_at: &str,
+    registry: RegistrySource,
 ) -> Result<DiscoveryMerge, ConfigError> {
     let selected = &selected.0;
     let available = discovered
@@ -142,7 +148,7 @@ pub fn merge_model_selection(
     let mut updated = config.clone();
     updated["models"] = Value::Array(models);
     Ok(DiscoveryMerge {
-        config: normalize_configuration(Some(&updated))?,
+        config: normalize_configuration_with_registry(Some(&updated), registry)?,
         available: discovered.len(),
         added,
         hidden,

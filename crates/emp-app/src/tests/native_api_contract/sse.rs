@@ -40,6 +40,49 @@ impl Drop for NativeErrorSseUpstream {
     }
 }
 
+fn read_native_sse(input: impl BufRead) -> (String, Vec<String>) {
+    let (head, mut stream) = read_sse_head(input);
+    assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
+    let mut frames = Vec::new();
+    while !stream.fill_buf().unwrap().is_empty() {
+        frames.push(read_sse_frame(&mut stream));
+    }
+    (head, frames)
+}
+
+fn post_native_sse(server: &ServerHandle, body: &[u8], headers: &[&str]) -> (String, Vec<String>) {
+    let stream = open_post_stream(server, "/v1/responses", body, headers);
+    stream.set_read_timeout(Some(RESPONSE_TIMEOUT)).unwrap();
+    read_native_sse(BufReader::new(stream))
+}
+
+fn incomplete_sse_event(frames: &[String]) -> Value {
+    frames
+        .iter()
+        .flat_map(|frame| frame.lines().filter_map(|line| line.strip_prefix("data:")))
+        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .find(|event| event["type"] == "response.incomplete")
+        .expect("incomplete terminal")
+}
+
+#[test]
+fn native_sse_finds_terminal_json_split_across_http_chunks() {
+    let terminal =
+        br#"data: {"type":"response.incomplete","response":{"usage":{"input_tokens":17}}}"#;
+    let mut wire = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+    let mut event = terminal.to_vec();
+    event.extend_from_slice(b"\n\n");
+    for chunk in event.chunks(13) {
+        write!(&mut wire, "{:x}\r\n", chunk.len()).unwrap();
+        wire.extend_from_slice(chunk);
+        wire.extend_from_slice(b"\r\n");
+    }
+    wire.extend_from_slice(b"0\r\n\r\n");
+    let (_, frames) = read_native_sse(std::io::Cursor::new(wire));
+    let decoded = incomplete_sse_event(&frames);
+    assert_eq!(decoded["response"]["usage"]["input_tokens"], 17);
+}
+
 #[test]
 fn native_sse_incomplete_preserves_usage_and_deduplicates_response_id() {
     for usage in [
@@ -59,24 +102,10 @@ fn native_sse_incomplete_preserves_usage_and_deduplicates_response_id() {
         let body =
             serde_json::to_vec(&json!({"model":"native/alias","input":"fixture","stream":true}))
                 .unwrap();
-        let responses = (0..2)
-            .map(|_| {
-                post_stream(
-                    &server,
-                    "/v1/responses",
-                    &body,
-                    &[&cookie, "Authorization: Bearer caller"],
-                )
-            })
-            .collect::<Vec<_>>();
-        for response in responses {
-            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-            let event: Value = response
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .find(|event| event["type"] == "response.incomplete")
-                .expect("incomplete terminal");
+        for _ in 0..2 {
+            let (_, frames) =
+                post_native_sse(&server, &body, &[&cookie, "Authorization: Bearer caller"]);
+            let event = incomplete_sse_event(&frames);
             assert_eq!(event["response"]["id"], terminal["response"]["id"]);
             assert_eq!(event["response"]["usage"], usage);
             assert_eq!(
@@ -115,9 +144,8 @@ fn native_sse_and_ordinary_json_cross_the_real_endpoint() {
         let body =
             serde_json::to_vec(&json!({"model":"native/alias","input":"hello","stream":true}))
                 .unwrap();
-        let wire = post_stream(
+        let (head, frames) = post_native_sse(
             &server,
-            "/v1/responses",
             &body,
             &[
                 &cookie,
@@ -126,32 +154,31 @@ fn native_sse_and_ordinary_json_cross_the_real_endpoint() {
                 "x-openai-subagent: stream-subagent",
             ],
         );
-        assert!(wire.starts_with("HTTP/1.1 200 OK\r\n"), "{wire}");
-        let (head, events) = wire.split_once("\r\n\r\n").unwrap();
+        let has_event = |value| frames.iter().any(|frame| frame.contains(value));
         assert_eq!(
-            response_header(head, "openai-model"),
+            response_header(&head, "openai-model"),
             Some("native/alias"),
             "{head}"
         );
         if !ordinary {
             assert_eq!(
-                response_header(head, "x-codex-turn-state"),
+                response_header(&head, "x-codex-turn-state"),
                 Some("stream-turn"),
                 "{head}"
             );
             assert!(!head.contains("stale-stream-etag"));
-            assert!(events.contains("response.created"));
-            assert!(events.contains("response.output_text.delta"));
-            assert!(events.contains("response.completed"));
-            assert!(!events.contains("not-json"));
-            assert!(events.contains("\"openai-model\":\"native/alias\""));
-            assert!(events.contains("\"x-openai-model\":\"native/alias\""));
-            assert!(events.contains("\"model\":\"upstream\""));
-            assert!(events.contains("\"future\":{\"opaque\":true}"));
+            assert!(has_event("response.created"));
+            assert!(has_event("response.output_text.delta"));
+            assert!(has_event("response.completed"));
+            assert!(!has_event("not-json"));
+            assert!(has_event("\"openai-model\":\"native/alias\""));
+            assert!(has_event("\"x-openai-model\":\"native/alias\""));
+            assert!(has_event("\"model\":\"upstream\""));
+            assert!(has_event("\"future\":{\"opaque\":true}"));
         } else {
-            assert!(events.contains("response.created"));
-            assert!(events.contains("response.completed"));
-            assert!(events.contains("\"future\":\"kept\""));
+            assert!(has_event("response.created"));
+            assert!(has_event("response.completed"));
+            assert!(has_event("\"future\":\"kept\""));
         }
         let observed = upstream.observed();
         assert_eq!(observed.headers["content-encoding"], "zstd");
@@ -188,9 +215,15 @@ fn native_sse_context_and_incomplete_boundaries_match_codex_http_behavior() {
         let status: u16 = response.split_whitespace().nth(1).unwrap().parse().unwrap();
         assert_eq!(status, expected, "{name}: {response}");
         if streamed {
-            assert!(response.contains("response.output_text.delta"));
-            assert!(response.contains("response.failed"));
-            assert!(response.contains("stream_incomplete"));
+            let (_, frames) = read_native_sse(response.as_bytes());
+            assert!(
+                frames
+                    .iter()
+                    .any(|frame| frame.contains("response.output_text.delta"))
+            );
+            assert!(frames.iter().any(|frame| {
+                frame.contains("response.failed") && frame.contains("stream_incomplete")
+            }));
         }
         if name == "failed" {
             assert_eq!(
@@ -348,9 +381,8 @@ fn responses_sse_filters_codex_extensions_only_for_generic_clients() {
         ].iter().map(|v| format!("data: {v}\n\n")).collect::<String>();
         let upstream = NativeErrorSseUpstream::start(wire.into_bytes());
         let (_directory, server) = native_alias_server(&upstream.base_url());
-        let result = post_stream(
+        let (_, frames) = post_native_sse(
             &server,
-            "/v1/responses",
             br#"{"model":"native/alias","input":"hello","stream":true}"#,
             &[
                 &session_header(&server),
@@ -362,18 +394,19 @@ fn responses_sse_filters_codex_extensions_only_for_generic_clients() {
                 },
             ],
         );
-        assert!(result.contains("response.output_text.delta"), "{result}");
-        assert!(result.contains("response.completed"), "{result}");
+        let has_event = |value| frames.iter().any(|frame| frame.contains(value));
+        assert!(has_event("response.output_text.delta"), "{frames:?}");
+        assert!(has_event("response.completed"), "{frames:?}");
         for extension in [
             "codex.rate_limits",
             "codex.response.metadata",
             "response.metadata",
             "\"type\":\"keepalive\"",
         ] {
-            assert_eq!(result.contains(extension), codex, "{result}");
+            assert_eq!(has_event(extension), codex, "{frames:?}");
         }
         if !codex {
-            assert!(result.contains(": keepalive\n\n"));
+            assert!(frames.iter().any(|frame| frame == ": keepalive\n"));
         }
         server.shutdown().unwrap();
     }

@@ -28,10 +28,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::time::timeout;
 
-pub(in crate::server) fn matches(request: Request<'_>) -> bool {
-    request.method == RequestMethod::Get && AccountRead::for_path(request.raw_path()).is_some()
-}
-
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/api/accounts", get(read))

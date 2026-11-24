@@ -316,7 +316,7 @@ fn terminal(value: &Value) -> Value {
 async fn each_protocol_reaches_its_own_endpoint_with_its_own_credentials() {
     let server = UpstreamServer::start();
     let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
-    let router = ExternalRouter::new(&client, emp_config::official_registry::snapshot);
+    let router = ExternalRouter::new(&client, emp_config::official_registry::bundled_snapshot);
     let incoming = BTreeMap::from([("X-EMP-Request-ID".to_owned(), "0123456789abcdef".to_owned())]);
 
     let chat = router
@@ -392,7 +392,7 @@ async fn each_protocol_reaches_its_own_endpoint_with_its_own_credentials() {
 async fn upstream_failures_map_to_stable_public_error_classes() {
     let server = UpstreamServer::start();
     let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
-    let router = ExternalRouter::new(&client, emp_config::official_registry::snapshot);
+    let router = ExternalRouter::new(&client, emp_config::official_registry::bundled_snapshot);
     let incoming = BTreeMap::new();
 
     let failure = router
@@ -427,7 +427,7 @@ async fn upstream_failures_map_to_stable_public_error_classes() {
 async fn a_dropped_connection_is_surfaced_as_a_network_failure() {
     let server = UpstreamServer::start();
     let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
-    let router = ExternalRouter::new(&client, emp_config::official_registry::snapshot);
+    let router = ExternalRouter::new(&client, emp_config::official_registry::bundled_snapshot);
     let error = router
         .execute_complete(
             &route(&server.base_url(), Protocol::Responses, "retry"),

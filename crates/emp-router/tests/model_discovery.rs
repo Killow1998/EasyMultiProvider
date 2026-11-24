@@ -350,7 +350,7 @@ async fn discovery_requests_carry_auth_headers_and_follow_pagination() {
     let models = discover_gemini_models(
         &client,
         gemini_provider.as_object().expect("Gemini provider"),
-        &emp_config::official_registry::snapshot(),
+        &emp_config::official_registry::bundled_snapshot(),
     )
     .await
     .expect("Gemini discovery");
@@ -368,7 +368,7 @@ async fn discovery_requests_carry_auth_headers_and_follow_pagination() {
         &client,
         anthropic_provider.as_object().expect("Anthropic provider"),
         &[],
-        &emp_config::official_registry::snapshot(),
+        &emp_config::official_registry::bundled_snapshot(),
     )
     .await
     .expect("Anthropic discovery");
@@ -421,7 +421,7 @@ async fn generic_discovery_uses_bounded_native_transport() {
     let models = discover_generic_models(
         &client,
         provider.as_object().expect("provider object"),
-        &emp_config::official_registry::snapshot(),
+        &emp_config::official_registry::bundled_snapshot(),
     )
     .await
     .expect("generic discovery");
@@ -439,7 +439,7 @@ async fn discovery_without_usable_credentials_fails_before_any_network_call() {
     let error = discover_generic_models(
         &client,
         provider.as_object().expect("provider object"),
-        &emp_config::official_registry::snapshot(),
+        &emp_config::official_registry::bundled_snapshot(),
     )
     .await
     .expect_err("missing key must fail");
@@ -452,7 +452,7 @@ async fn discovery_without_usable_credentials_fails_before_any_network_call() {
     let error = discover_generic_models(
         &client,
         provider.as_object().expect("provider object"),
-        &emp_config::official_registry::snapshot(),
+        &emp_config::official_registry::bundled_snapshot(),
     )
     .await
     .expect_err("incompatible auth mode must fail");

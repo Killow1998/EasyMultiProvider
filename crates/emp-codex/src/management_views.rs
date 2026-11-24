@@ -1,5 +1,8 @@
 //! Credential-free model and family controls for the management UI.
-use crate::merged_catalog::{build_catalog, family_identity, strip_context_prefix, usable_context};
+use crate::merged_catalog::{
+    build_catalog_with_registry, family_identity, strip_context_prefix, usable_context,
+};
+use emp_state::official_registry::RegistrySource;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -40,8 +43,10 @@ pub fn model_views(
     account_catalogs: &BTreeMap<String, Value>,
     duplicates: &BTreeMap<String, String>,
     native_is_local_key: bool,
+    registry: RegistrySource,
 ) -> Value {
-    let mut catalog = build_catalog(config, native, account_catalogs, duplicates);
+    let mut catalog =
+        build_catalog_with_registry(config, native, account_catalogs, duplicates, registry);
     if native_is_local_key {
         crate::merged_catalog::hide_native_models(&mut catalog, native);
     }
@@ -49,7 +54,13 @@ pub fn model_views(
     baseline_config["catalog_presentations"] = json!({});
     baseline_config["catalog_family_presentations"] = json!({});
     baseline_config["ultra_reasoning_efforts"] = json!({});
-    let baseline = build_catalog(&baseline_config, native, account_catalogs, duplicates);
+    let baseline = build_catalog_with_registry(
+        &baseline_config,
+        native,
+        account_catalogs,
+        duplicates,
+        registry,
+    );
     let models = catalog_models(config, native, &catalog, &baseline);
     let families = catalog_families(config, &models);
     json!({

@@ -1,6 +1,7 @@
 use super::account_writes::{expect_upstream_get, normalize_body};
 use super::*;
 use crate::tests::{fixture_tls, live_journal, wait_for};
+use emp_state::filesystem::count_commits;
 use emp_storage::quota_history::SAMPLE_INTERVAL_SECONDS;
 use emp_transport::{HttpClient, HttpClientConfig, HttpClientPolicy};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -407,6 +408,10 @@ fn catalog_writes_persist_models_and_provider_observations() {
                 .await["error"]["message"],
             "selected model is not in the discovered list"
         );
+        let config_commits = count_commits(&fixture.server.state.backend.configuration.config_path);
+        let catalog_commits = count_commits(&crate::services::catalog::generated_catalog_path(
+            &fixture.server.state,
+        ));
         let selected = fixture
             .request_checked(
                 |port, session| json_request(port, DISCOVER, &[session], SELECT),
@@ -415,6 +420,8 @@ fn catalog_writes_persist_models_and_provider_observations() {
             )
             .await;
         assert_eq!(selected["added"], 1);
+        assert_eq!(config_commits.get(), 1, "selection configuration commits");
+        assert_eq!(catalog_commits.get(), 1, "selection catalog commits");
         {
             assert_selected(fixture);
         }
@@ -427,6 +434,11 @@ fn catalog_writes_persist_models_and_provider_observations() {
             )
             .await;
         assert_eq!(refresh["status"], "ok");
+        assert_eq!(
+            catalog_commits.get(),
+            1,
+            "unchanged catalog is not rewritten"
+        );
 
         let preference = fixture
             .post(PREFERENCE, br#"{"catalog_show_context":false}"#, 200)
@@ -563,6 +575,7 @@ async fn wait_for_write(fixture: &Fixture) {
 async fn refresh_after_disconnect(fixture: &Fixture) {
     let state = &fixture.server.state;
     let catalog = crate::services::catalog::generated_catalog_path(state);
+    let commits = count_commits(&catalog);
     std::fs::remove_file(&catalog).unwrap();
     let body = b"{}";
     let wire = json_request(fixture.port(), REFRESH, &[&fixture.session()], body);
@@ -609,6 +622,7 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
     hold_config.await.unwrap();
     wait_for_write(fixture).await;
     assert_selected(fixture);
+    assert_eq!(commits.get(), 1, "catalog refresh commits");
 
     let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut pending = {
@@ -646,6 +660,8 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
         let balance = AsyncListener::from_std(balance).unwrap();
         { let (fixture, address) = (fixture, endpoint);
             let state = &fixture.server.state;
+            let config_commits = count_commits(&state.backend.configuration.config_path);
+            let catalog_commits = count_commits(&crate::services::catalog::generated_catalog_path(state));
             let (client, task) = submit(fixture, DISCOVER, br#"{"provider":"fixture","selected":["gpt-6-luna"]}"#).await;
             let peer = expect_upstream_get(&upstream, "/v1/models", "fixture-key").await;
             assert!(!state.lifecycle.updates().drain_for_test(Duration::ZERO));
@@ -654,6 +670,9 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
             wait_for_write(fixture).await;
             assert_selected(fixture);
             assert_eq!(get(fixture, address, "/api/providers/fixture/models").await["models"][0]["upstream_id"], "gpt-6-luna");
+            assert_eq!(config_commits.get(), 1, "selection configuration commits");
+            assert_eq!(catalog_commits.get(), 1, "selection catalog commits");
+            drop(catalog_commits);
             refresh_after_disconnect(fixture).await;
 
             let start = system_now() as i64 - SAMPLE_INTERVAL_SECONDS;

@@ -9,6 +9,9 @@ description = "State cryptography and filesystem vault compatibility for EMP."
 [lints]
 workspace = true
 
+[features]
+test-support = ["emp-files/test-support", "emp-config/test-support"]
+
 [dependencies]
 emp-config = { path = "../emp-config" }
 emp-files = { path = "../emp-files" }

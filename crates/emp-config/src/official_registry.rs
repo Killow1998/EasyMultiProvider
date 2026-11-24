@@ -47,7 +47,13 @@ pub fn bundled_snapshot() -> OfficialModels {
     OfficialModels::new(Arc::clone(bundled_registry()))
 }
 
+#[cfg(feature = "test-support")]
+pub static ENVIRONMENT_SNAPSHOTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 pub fn snapshot() -> OfficialModels {
+    #[cfg(feature = "test-support")]
+    ENVIRONMENT_SNAPSHOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::var_os("EMP_OFFICIAL_MODELS_PATH").map(std::path::PathBuf::from);
     OfficialModels::new(registry_from_path(path.as_deref()))
 }

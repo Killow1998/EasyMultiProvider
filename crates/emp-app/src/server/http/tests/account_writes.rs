@@ -1,4 +1,5 @@
 use super::*;
+use emp_state::filesystem::count_commits;
 use std::{io::ErrorKind, os::unix::fs::PermissionsExt, path::Path};
 use tokio::{io::AsyncBufReadExt, net::TcpListener as AsyncListener};
 
@@ -268,6 +269,10 @@ fn account_writes_persist_configuration_and_credentials() {
             let auth = fixture.server.state.backend.configuration.vault.read_encrypted_json(&path).unwrap();
             assert_eq!(auth["tokens"]["access_token"], "fixture-token");
         }
+        let commits = count_commits(
+            &fixture.server.state.backend.configuration.config_path
+                .with_file_name("accounts/demo/models_cache.json"),
+        );
         let (models, ()) = tokio::join!(
             fixture.post(MODELS, br#"{"other":7}"#, 200),
             async {
@@ -276,6 +281,7 @@ fn account_writes_persist_configuration_and_credentials() {
         );
         assert!(timeout(Duration::ZERO, upstream.accept()).await.is_err());
         assert_eq!(models, fixture.read(ACCOUNT_READ).await);
+        assert_eq!(commits.get(), 1, "account catalog commits");
         assert_eq!(
             crate::tests::live_journal(fixture.directory.path()).iter().filter(|record| {
                 record["event"] == "operation_finished"
@@ -348,6 +354,15 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
         let port = fixture.port();
         let import = json_request(port, IMPORT, &[session], IMPORT_BODY);
         assert_status(&exchange_wire(endpoint, &import, true).await, 200);
+        let commits = count_commits(
+            &fixture
+                .server
+                .state
+                .backend
+                .configuration
+                .config_path
+                .with_file_name("accounts/demo/models_cache.json"),
+        );
         let refresh = json_request(port, MODELS, &[session], b"{}");
         let (mut client, task) = connect_submitted_write(fixture).await;
         client.write_all(&refresh).await.unwrap();
@@ -380,6 +395,7 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
         let reply = exchange_wire(endpoint, &read, false).await;
         assert_status(&reply, 200);
         assert_eq!(json_body(&reply)["models"][0]["id"], "after-disconnect");
+        assert_eq!(commits.get(), 1, "account catalog commits");
         assert!(timeout(Duration::ZERO, upstream.accept()).await.is_err());
     });
 }

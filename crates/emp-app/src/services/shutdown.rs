@@ -30,7 +30,7 @@ pub(crate) fn prepare_quit(
         let Some(restore_gate) = state
             .lifecycle
             .admission
-            .quiesce(management_connections, Duration::from_secs(15))
+            .quiesce_work(management_connections, Duration::from_secs(15))
         else {
             return Err(ShutdownError {
                 code: Some("active_conversations"),

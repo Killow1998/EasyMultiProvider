@@ -387,27 +387,39 @@ fn management_stream_access_and_selection_match_during_update_drain() {
                 (vec![ACCEPT, &session, &session], 401),
                 (vec![ACCEPT, &session, "Origin: https://other.invalid"], 403),
             ] {
-                assert_wire(
+                assert_entry_error(
                     address,
                     &request(fixture.port(), "GET", path, &headers, b""),
-                    false,
                     status,
                 )
                 .await;
             }
         }
-        for (path, status) in [
-            ("/api/calls?start=x", 400),
-            ("/api/usage?lifetime=true", 400),
-            ("/api/usage?lifetime=true&account_id=unknown", 404),
+        for (path, status, message) in [
+            (
+                "/api/calls?start=x",
+                "400 Bad Request",
+                "Invalid call filter",
+            ),
+            (
+                "/api/usage?lifetime=true",
+                "400 Bad Request",
+                "Invalid usage period or category",
+            ),
+            (
+                "/api/usage?lifetime=true&account_id=unknown",
+                "404 Not Found",
+                "Account usage is unavailable",
+            ),
         ] {
-            assert_wire(
-                address,
-                &request(fixture.port(), "GET", path, &[&session, ACCEPT], b""),
-                false,
+            let wire = request(fixture.port(), "GET", path, &[&session, ACCEPT], b"");
+            let reply = exchange_wire(address, &wire, false).await;
+            wire_contract::assert_json_reply(
+                path,
+                &reply,
                 status,
-            )
-            .await;
+                &json!({"error":{"message":message,"origin":"emp"}}),
+            );
         }
         for (path, headers) in [
             (CALLS, vec!["Accept: application/json", ACCEPT]),

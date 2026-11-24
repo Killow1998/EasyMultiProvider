@@ -106,10 +106,6 @@ impl<'a> Request<'a> {
             && matches!(self.raw_path(), "/v1/responses" | "/v1/responses/compact")
     }
 
-    pub(crate) fn releases_request_permit(&self) -> bool {
-        self.method == RequestMethod::Get && self.raw_path() == "/api/accounts/events"
-    }
-
     pub(crate) fn validate_body_framing(&self) -> Result<(), BodyError> {
         if self.header_count("Content-Length") > 1 || self.header_count("Transfer-Encoding") > 0 {
             return Err(BodyError::Invalid(

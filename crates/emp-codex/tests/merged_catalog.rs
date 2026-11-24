@@ -71,6 +71,7 @@ fn aggregate_default_name_matches_the_selected_external_model_family() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         false,
+        emp_state::official_registry::bundled_snapshot,
     );
     let family = views["catalog_families"]
         .as_array()
@@ -190,6 +191,7 @@ fn ultra_override_preserves_the_harness_and_tracks_supported_subscription_effort
         &accounts,
         &BTreeMap::new(),
         false,
+        emp_state::official_registry::bundled_snapshot,
     );
     for entry in views["catalog_models"].as_array().unwrap() {
         assert_eq!(

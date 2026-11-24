@@ -2,7 +2,7 @@ use super::{
     ServerControl, ServerMode, ShutdownReason, ShutdownSignal,
     head::GuardedHead,
     http::{
-        accounts::{self, AccountWriteRoute},
+        accounts::AccountWriteRoute,
         catalog::CatalogWriteRoute,
         error::EntryWire,
         inference::{BufferedReceipt, InferenceConnection, InferenceRoute},
@@ -56,7 +56,6 @@ struct HttpRequestContext {
     websocket_probe: Option<Arc<tokio::net::TcpStream>>,
     inference: Option<Arc<InferenceConnection>>,
     stream: Option<Arc<StreamConnection>>,
-    half_close: bool,
     account_write: Option<AccountWriteRoute>,
     catalog_write: Option<CatalogWriteRoute>,
     local_write: Option<LocalWriteRoute>,
@@ -195,11 +194,9 @@ pub(super) async fn drive_http(
     let report = (request.method == RequestMethod::Get)
         .then(|| usage::Report::for_path(request.raw_path()))
         .flatten();
-    let account_events = request.releases_request_permit();
     let streaming =
-        inference || account_events || report.is_some_and(|report| report.is_stream(request));
+        inference || head.account_events || report.is_some_and(|report| report.is_stream(request));
     let watch_report = report.is_some();
-    let half_close = !(accounts::matches(request) || account_events);
     observation.received(request);
     crate::services::runtime::codex_contacted(request, &state);
     let (io, socket) = if watch_report || inference || responses_upgrade {
@@ -250,7 +247,6 @@ pub(super) async fn drive_http(
         websocket_probe,
         inference,
         stream,
-        half_close,
         account_write,
         catalog_write,
         local_write,
@@ -308,10 +304,8 @@ async fn drive_connection(
     http_context: Option<HttpRequestContext>,
 ) {
     let mode = control.mode;
-    let half_close = matches!(mode, ServerMode::Recovery)
-        || http_context
-            .as_ref()
-            .is_some_and(|request| request.half_close);
+    let half_close =
+        matches!(mode, ServerMode::Recovery) || (http_context.is_some() && !head.account_events);
     let account_write = http_context
         .as_ref()
         .and_then(|request| request.account_write.as_ref());
@@ -337,7 +331,7 @@ async fn drive_connection(
         .as_ref()
         .and_then(|request| request.delegation.as_ref());
     let delivery = stream.map(|stream| stream.delivery.clone());
-    let permit = if head.release_request_permit {
+    let permit = if head.account_events {
         drop(permit);
         None
     } else {
@@ -412,12 +406,20 @@ async fn drive_connection(
             {
                 stream.delivery.await_flush(flushed);
             }
-            let _ = encoded_reply.set(
-                response
-                    .extensions()
-                    .get::<EntryWire>()
-                    .map(|wire| wire.0.clone()),
-            );
+            let wire = response.extensions().get::<EntryWire>();
+            if wire.is_some()
+                && stream.is_none()
+                && delegation.is_none_or(|callback| callback.work.is_none())
+                && let Some(permit) = context
+                    .0
+                    .request_permit
+                    .lock()
+                    .expect("request admission")
+                    .as_ref()
+            {
+                permit.begin_buffered_delivery();
+            }
+            let _ = encoded_reply.set(wire.map(|wire| wire.0.clone()));
             if response.status().is_success()
                 || response.status() == StatusCode::SWITCHING_PROTOCOLS
             {
