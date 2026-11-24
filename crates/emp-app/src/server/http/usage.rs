@@ -172,8 +172,9 @@ async fn read_report(
                     )
                     .into_response();
                 handoff_response(Some(business), || {
-                    let _ = sender.send(response);
-                    hooks.output_queued();
+                    hooks.publish_output(None, || {
+                        let _ = sender.send(response);
+                    });
                 });
                 return;
             };
@@ -207,7 +208,7 @@ async fn read_report(
                     let _ = output
                         .lock()
                         .expect("report output")
-                        .finish_frame(Bytes::from(terminal), || ());
+                        .finish_frame(Bytes::from(terminal), None);
                 }
             }
         }

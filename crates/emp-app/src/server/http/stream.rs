@@ -1,10 +1,14 @@
-use crate::server::{handoff_response, test_hooks::ServerHooks};
+use crate::server::{
+    handoff_response,
+    test_hooks::{ServerHooks, WriteHook},
+};
 use crate::{
     http::response::status_text,
     server::http::error::response_head,
     services::{
         connection_admission::BusinessToken,
-        events::{sse_frame, terminal_event_type},
+        events::{sse_frame, terminal_sse_event},
+        modules::aero::Call,
     },
 };
 use axum::{
@@ -30,17 +34,30 @@ use tokio::{
     task::JoinHandle,
 };
 
-#[derive(Default)]
 pub(in crate::server) struct StreamConnection {
     pub(in crate::server) delivery: Arc<Delivery>,
     pub(in crate::server) write_timed_out: Notify,
     pub(in crate::server) worker: Mutex<Option<JoinHandle<()>>>,
 }
 
+impl StreamConnection {
+    pub(in crate::server) fn new(write_hook: WriteHook) -> Self {
+        Self {
+            delivery: Arc::new(Delivery {
+                write_hook,
+                ..Delivery::default()
+            }),
+            write_timed_out: Notify::new(),
+            worker: Mutex::default(),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(in crate::server) struct Delivery {
     pending: Mutex<Option<Flushed>>,
     bytes: AtomicUsize,
+    write_hook: WriteHook,
 }
 
 #[derive(Clone)]
@@ -136,8 +153,8 @@ impl BodyOutput {
                 self.write_frame(Bytes::copy_from_slice(frame))?;
             }
             let bytes = Bytes::copy_from_slice(last);
-            if terminal_event_type(kind) {
-                self.finish_frame(bytes, || ())?;
+            if terminal_sse_event(Some(kind.as_bytes()), None) {
+                self.finish_frame(bytes, None)?;
             } else {
                 self.write_frame(bytes)?;
             }
@@ -162,17 +179,22 @@ impl BodyOutput {
     pub(crate) fn finish_frame(
         &mut self,
         bytes: Bytes,
-        before_handoff: impl FnOnce(),
+        caller: Option<&mut Call<'_>>,
     ) -> io::Result<()> {
         let stream = self.stream.as_mut().ok_or(io::ErrorKind::BrokenPipe)?;
         let permit = tokio::runtime::Handle::current()
             .block_on(stream.send.reserve())
             .map_err(|_| io::ErrorKind::BrokenPipe)?;
-        before_handoff();
-        handoff_response(self.business.take(), || {
-            permit.send(bytes);
-            self.hooks.output_queued();
-        });
+        let publish = || {
+            self.hooks
+                .publish_output(Some(&self.delivery.write_hook), || {
+                    permit.send(bytes);
+                })
+        };
+        match (self.business.take(), caller) {
+            (Some(business), Some(caller)) => caller.finish_with(business, publish),
+            (business, _) => handoff_response(business, publish),
+        }
         stream.wait_for_flush()
     }
 
@@ -180,8 +202,10 @@ impl BodyOutput {
         let reply = self.response.map(|sender| (sender, response()));
         handoff_response(self.business, || {
             if let Some((sender, response)) = reply {
-                let _ = sender.send(response);
-                self.hooks.output_queued();
+                self.hooks
+                    .publish_output(Some(&self.delivery.write_hook), || {
+                        let _ = sender.send(response);
+                    });
             }
             drop(self.stream);
         });

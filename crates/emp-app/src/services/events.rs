@@ -1,4 +1,5 @@
-use serde_json::Value;
+use emp_transport::SseJsonParser;
+use serde_json::{Map, Value};
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn sse_frame(event: &str, body: &Value) -> Result<Vec<u8>, serde_json::Error> {
@@ -70,14 +71,84 @@ pub(crate) fn stream_event_activity(event: &Value) -> (bool, bool) {
 }
 
 pub(crate) fn terminal_stream_event(event: &Value) -> bool {
-    event["type"].as_str().is_some_and(terminal_event_type)
+    terminal_sse_event(None, event["type"].as_str())
 }
 
-pub(crate) fn terminal_event_type(event_type: &str) -> bool {
+pub(crate) fn terminal_sse_event(name: Option<&[u8]>, data_type: Option<&str>) -> bool {
     matches!(
-        event_type,
-        "response.completed" | "response.incomplete" | "response.failed" | "error"
+        name.or_else(|| data_type.map(str::as_bytes)),
+        Some(b"response.completed" | b"response.incomplete" | b"response.failed" | b"error")
     )
+}
+
+pub(crate) struct SseEvents {
+    line: Vec<u8>,
+    name: Vec<u8>,
+    has_name: bool,
+    json: Option<SseJsonParser>,
+}
+
+impl Default for SseEvents {
+    fn default() -> Self {
+        Self {
+            line: Vec::new(),
+            name: Vec::new(),
+            has_name: false,
+            json: Some(SseJsonParser::new()),
+        }
+    }
+}
+
+impl SseEvents {
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> (bool, Vec<Map<String, Value>>) {
+        const LINE_PREFIX_LIMIT: usize = b"event: response.incomplete\r".len() + 1;
+        let mut terminal = false;
+        let mut events = Vec::new();
+        let mut start = 0;
+        let mut end = 0;
+        for segment in chunk.split_inclusive(|&byte| byte == b'\n') {
+            end += segment.len();
+            let line = segment.strip_suffix(b"\n").unwrap_or(segment);
+            let available = LINE_PREFIX_LIMIT - self.line.len();
+            self.line
+                .extend_from_slice(&line[..line.len().min(available)]);
+            if line.len() == segment.len() {
+                continue;
+            }
+            let line = self.line.strip_suffix(b"\r").unwrap_or(&self.line);
+            if line.is_empty() {
+                let event = self.push_json(&chunk[start..end]).pop();
+                terminal |= terminal_sse_event(
+                    self.has_name.then_some(self.name.as_slice()),
+                    event.as_ref().and_then(|event| event.get("type")?.as_str()),
+                );
+                events.extend(event);
+                self.has_name = false;
+                self.json.get_or_insert_with(SseJsonParser::new);
+                start = end;
+            } else if let Some(name) = line.strip_prefix(b"event:") {
+                self.has_name = true;
+                self.name.clear();
+                self.name
+                    .extend_from_slice(name.strip_prefix(b" ").unwrap_or(name));
+            }
+            self.line.clear();
+        }
+        if start < end {
+            self.push_json(&chunk[start..]);
+        }
+        (terminal, events)
+    }
+
+    fn push_json(&mut self, chunk: &[u8]) -> Vec<Map<String, Value>> {
+        if let Some(parser) = self.json.as_mut() {
+            match parser.push(chunk) {
+                Ok(events) => return events,
+                Err(_) => self.json = None,
+            }
+        }
+        Vec::new()
+    }
 }
 
 /// Codex extensions are not part of the public Responses event protocol.

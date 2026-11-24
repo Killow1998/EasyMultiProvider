@@ -3,6 +3,7 @@ pub(crate) mod connection;
 pub(crate) mod head;
 pub(crate) mod http;
 mod test_hooks;
+pub(crate) use test_hooks::ServerHooks;
 mod transport;
 
 use crate::app::ServerState;

@@ -5,6 +5,7 @@ pub(crate) use catalog::{augment_catalog, augment_public, validate_update};
 use super::{ActiveWorker, Modules};
 use crate::{
     app::ServerState,
+    server::ServerHooks,
     services::{
         connection_admission::{BusinessToken, ConnectionSlot},
         gateway_clients::Caller,
@@ -57,7 +58,7 @@ pub(crate) struct CallerDelegation {
 }
 
 pub(crate) struct Call<'a> {
-    callers: &'a Callers,
+    callers: Option<&'a Callers>,
     pub(crate) key: String,
 }
 
@@ -79,7 +80,10 @@ impl Callers {
                 lease,
             ),
         );
-        Some(Call { callers: self, key })
+        Some(Call {
+            callers: Some(self),
+            key,
+        })
     }
 
     pub(crate) fn classifies_callbacks(&self) -> bool {
@@ -101,8 +105,9 @@ impl Callers {
     pub(crate) fn identify_callback(
         &self,
         key: &str,
+        hooks: &ServerHooks,
     ) -> Option<(CallerDelegation, Option<CallbackLease>)> {
-        let calls = self.active.lock().ok()?;
+        let calls = hooks.lock_callback_delegations(&self.active).ok()?;
         let (identity, lease) = calls.get(key)?;
         Some((
             identity.clone(),
@@ -114,9 +119,28 @@ impl Callers {
     }
 }
 
+impl Call<'_> {
+    /// Callback admission and handoff lock delegations before the admission pool.
+    pub(crate) fn finish_with(&mut self, business: BusinessToken, publish: impl FnOnce()) {
+        let mut calls = self
+            .callers
+            .take()
+            .and_then(|callers| callers.active.lock().ok());
+        let revoked = business.finish_with(|| {
+            let revoked = calls.as_mut().and_then(|calls| calls.remove(&self.key));
+            publish();
+            revoked
+        });
+        drop(calls);
+        drop(revoked);
+    }
+}
+
 impl Drop for Call<'_> {
     fn drop(&mut self) {
-        if let Ok(mut calls) = self.callers.active.lock() {
+        if let Some(callers) = self.callers
+            && let Ok(mut calls) = callers.active.lock()
+        {
             calls.remove(&self.key);
         }
     }

@@ -12,6 +12,7 @@ use super::{
         usage, websocket,
     },
     run_blocking, take_business,
+    test_hooks::WriteHook,
     transport::ConnectionIo,
 };
 use crate::{
@@ -50,6 +51,7 @@ struct HttpRequestContext {
     #[cfg(all(test, unix))]
     state: Arc<ServerState>,
     observation: HttpObservation,
+    write_hook: WriteHook,
     delegation: Option<AdmittedCallback>,
     report_socket: Option<Arc<TcpStream>>,
     websocket_probe: Option<Arc<tokio::net::TcpStream>>,
@@ -218,7 +220,7 @@ pub(super) async fn drive_http(
     } else {
         None
     };
-    let stream = streaming.then(|| Arc::new(StreamConnection::default()));
+    let stream = streaming.then(|| Arc::new(StreamConnection::new(io.write_hook.clone())));
     let (inference, report_socket, websocket_probe) = if inference {
         (
             Some(Arc::new(InferenceConnection {
@@ -242,6 +244,7 @@ pub(super) async fn drive_http(
         #[cfg(all(test, unix))]
         state: state.clone(),
         observation,
+        write_hook: io.write_hook.clone(),
         delegation,
         report_socket,
         websocket_probe,
@@ -340,6 +343,7 @@ async fn drive_connection(
         Some(permit)
     };
     let raw = head.raw.clone();
+    let write_hook = http_context.as_ref().map(|request| &request.write_hook);
     let request_id = http_context
         .as_ref()
         .and_then(|request| request.observation.request_id())
@@ -440,7 +444,13 @@ async fn drive_connection(
                 raw.allow_body();
             }
             if response.extensions().get::<BufferedResponse>().is_some() {
-                Ok::<_, std::convert::Infallible>(handoff_response(token, || response))
+                Ok::<_, std::convert::Infallible>(handoff_response(token, || {
+                    context
+                        .0
+                        .control
+                        .test_hooks
+                        .publish_output(write_hook, || response)
+                }))
             } else {
                 *business.lock().expect("request work") = token;
                 Ok(response)

@@ -5,13 +5,13 @@ use crate::{
     server::http::{error::HttpReply, inference::InferenceOutcome},
     services::{
         disconnect::{DisconnectMonitor, DisconnectRace},
-        events::terminal_event_type,
+        events::SseEvents,
         modules::aero::{Call, Relay},
         observation::request::{Phase, RequestObservation},
     },
 };
 use axum::body::Bytes;
-use emp_transport::{HttpMethod, HttpResponse, SseJsonParser};
+use emp_transport::{HttpMethod, HttpResponse};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -42,38 +42,8 @@ impl RelayError {
 
 pub(super) struct Upstream<'a> {
     pub(super) response: HttpResponse,
-    caller: Option<Call<'a>>,
+    caller: Call<'a>,
     _relay: Relay,
-}
-
-#[derive(Default)]
-struct SseTerminal {
-    line: Vec<u8>,
-    terminal_event: bool,
-}
-
-impl SseTerminal {
-    fn push(&mut self, chunk: &[u8]) -> bool {
-        const LINE_PREFIX_LIMIT: usize = b"event: response.incomplete\r".len() + 1;
-        let mut terminal = false;
-        for segment in chunk.split_inclusive(|&byte| byte == b'\n') {
-            let line = segment.strip_suffix(b"\n").unwrap_or(segment);
-            let available = LINE_PREFIX_LIMIT - self.line.len();
-            self.line
-                .extend_from_slice(&line[..line.len().min(available)]);
-            if line.len() != segment.len() {
-                let line = self.line.strip_suffix(b"\r").unwrap_or(&self.line);
-                if line.is_empty() {
-                    terminal |= std::mem::take(&mut self.terminal_event);
-                } else if let Some(name) = line.strip_prefix(b"event:") {
-                    let name = name.strip_prefix(b" ").unwrap_or(name);
-                    self.terminal_event = str::from_utf8(name).is_ok_and(terminal_event_type);
-                }
-                self.line.clear();
-            }
-        }
-        terminal
-    }
 }
 
 pub(super) async fn await_module<F: std::future::Future>(
@@ -151,8 +121,7 @@ pub(crate) fn relay(
     {
         return InferenceOutcome::Streamed;
     }
-    let mut parser = sse.then(SseJsonParser::new);
-    let mut sse_terminal = sse.then(SseTerminal::default);
+    let mut parser = sse.then(SseEvents::default);
     let mut received = 0_u64;
     loop {
         match state.backend.transport.runtime.block_on(await_module(
@@ -162,15 +131,13 @@ pub(crate) fn relay(
         )) {
             DisconnectRace::Ready(Ok(Some(chunk))) => {
                 received += chunk.len() as u64;
-                let terminal = content_length == Some(received)
-                    || sse_terminal.as_mut().is_some_and(|sse| sse.push(&chunk));
-                let events = parser
+                let (terminal, events) = parser
                     .as_mut()
-                    .and_then(|parser| parser.push(&chunk).ok())
+                    .map(|parser| parser.push(&chunk))
                     .unwrap_or_default();
                 let chunk = Bytes::from(chunk);
-                let written = if terminal {
-                    downstream.finish_frame(chunk, || drop(upstream.caller.take()))
+                let written = if terminal || content_length == Some(received) {
+                    downstream.finish_frame(chunk, Some(&mut upstream.caller))
                 } else {
                     downstream.write_frame(chunk)
                 };
@@ -321,7 +288,7 @@ pub(super) async fn open<'a>(
     }
     Ok(Upstream {
         response,
-        caller: Some(call),
+        caller: call,
         _relay: endpoint,
     })
 }

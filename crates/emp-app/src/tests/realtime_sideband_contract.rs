@@ -261,7 +261,10 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
             );
         }
     }
-    let SidebandObservation::FirstClient(first) = command.wait().unwrap() else {
+    let SidebandObservation::FirstClient(first) = command
+        .wait_for(test_timeout(Duration::from_millis(250)))
+        .unwrap()
+    else {
         panic!("expected first sideband client message");
     };
     assert_eq!(first, br#"{"type":"client.first"}"#);

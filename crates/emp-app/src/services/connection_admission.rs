@@ -336,6 +336,7 @@ impl BusinessToken {
         self.0.as_ref().expect("active business permit")
     }
 
+    /// Aero callers acquire the delegation table before entering the admission pool.
     pub(crate) fn finish_with<T>(mut self, handoff: impl FnOnce() -> T) -> T {
         self.release(handoff)
     }

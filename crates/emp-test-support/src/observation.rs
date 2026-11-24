@@ -3,6 +3,7 @@ use std::{
     io,
     sync::mpsc::{self, Receiver, Sender},
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 /// Owns a probe's trigger channel and its worker. Call `begin` with the
@@ -115,6 +116,11 @@ impl<T> ObservationResult<T> {
                 };
                 io::Error::new(kind, format!("{}: {error}", self.context))
             })?
+    }
+
+    pub fn wait_for(mut self, timeout: Duration) -> io::Result<T> {
+        self.deadline = self.deadline.capped(timeout);
+        self.wait()
     }
 }
 

@@ -4,7 +4,7 @@ use crate::{
     server::{
         ShutdownReason,
         raw_tcp::{RawClient, wire_timeout},
-        test_hooks::{RequestProbe, WriteProbe},
+        test_hooks::{RequestProbe, WriteProbe, WriteTrigger},
         tests::TestDrainClock,
     },
     tests::live_journal,
@@ -31,15 +31,15 @@ struct Probe {
 }
 
 impl Probe {
-    fn arm(fixture: &Fixture, path: &'static str, marker: Option<&'static [u8]>) -> Self {
+    fn arm(fixture: &Fixture, path: &'static str, trigger: Option<WriteTrigger>) -> Self {
         let (id, received) = oneshot::channel();
-        let (write, probe) = marker.map_or((None, None), |marker| {
+        let (write, probe) = trigger.map_or((None, None), |trigger| {
             let (reached, writing) = oneshot::channel();
             let (resume, release) = oneshot::channel();
             (
                 Some((writing, resume)),
                 Some(WriteProbe {
-                    marker,
+                    trigger,
                     reached: Some(reached),
                     release,
                 }),
@@ -380,7 +380,7 @@ fn drain_ordinary_handler() {
                     fixture,
                     "/healthz",
                     matches!(phase, Sending | FinishesAfterDeadline)
-                        .then_some(b"HTTP/1.1".as_slice()),
+                        .then_some(WriteTrigger::Output),
                 );
                 let client = submit(
                     fixture.server.local_addr(),
@@ -408,7 +408,7 @@ fn drain_websocket_session() {
                         fixture,
                         "/v1/responses",
                         (phase == BusyAtDeadline)
-                            .then_some(b"EMP connection is draining".as_slice()),
+                            .then_some(WriteTrigger::Bytes(b"EMP connection is draining")),
                     );
                     let mut client = RawClient::request(
                         fixture.server.local_addr(),
@@ -465,7 +465,7 @@ fn drain_management_subscription() {
                     let probe = Probe::arm(
                         fixture,
                         path,
-                        (phase == Sending).then_some(b"event: quota-updated".as_slice()),
+                        (phase == Sending).then_some(WriteTrigger::Bytes(b"event: quota-updated")),
                     );
                     let client = RawClient::request(
                         fixture.server.local_addr(),
@@ -531,7 +531,7 @@ fn drain_submitted_search() {
                     fixture,
                     path,
                     matches!(phase, Sending | FinishesAfterDeadline)
-                        .then_some(b"HTTP/1.1".as_slice()),
+                        .then_some(WriteTrigger::Output),
                 );
                 let client = submit(
                     fixture.server.local_addr(),
@@ -683,7 +683,7 @@ fn drain_inference_history_failure_at_terminal_write() {
         false,
         async |fixture| {
             let path = "/v1/responses";
-            let probe = Probe::arm(fixture, path, Some(b"event: response.failed"));
+            let probe = Probe::arm(fixture, path, Some(WriteTrigger::Output));
             let client = RawClient::request(
                 fixture.server.local_addr(),
                 &json_request(
@@ -761,6 +761,16 @@ fn drain_aero_json_at_content_length_before_write_finishes() {
 
 #[cfg(unix)]
 #[test]
+fn drain_aero_data_only_sse_at_event_boundary_before_write_finishes() {
+    aero_terminal_case(
+        "text/event-stream",
+        b"event: response.output_text.delta\ndata: {\"type\":\"response.completed\"}\n\ndata: {\"type\":\"response.completed\",\"fixture\":\"".to_vec(),
+        b"aero-terminal\"}\n\n",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn drain_aero_oversized_sse_at_event_boundary_before_write_finishes() {
     let mut prefix = b"event: response.completed\r\ndata: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"".to_vec();
     prefix.extend(std::iter::repeat_n(b'x', 1024 * 1024));
@@ -775,13 +785,21 @@ fn aero_terminal_case(content_type: &'static str, prefix: Vec<u8>, last: &'stati
     let (release, wait) = oneshot::channel();
     let mut wait = Some(wait);
     let prefix_len = prefix.len();
+    let (close, keep_open) = oneshot::channel::<()>();
+    let mut keep_open = Some(keep_open);
     let upstream = OneShotUpstream::serve(1, move |socket| {
-        upstream_reply(socket, 200, content_type, prefix_len + last.len(), "");
+        if content_type == "text/event-stream" {
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
+        } else {
+            upstream_reply(socket, 200, content_type, prefix_len + last.len(), "");
+        }
         socket.write_all(&prefix).unwrap();
         if wait.take().unwrap().blocking_recv().is_ok() {
             socket.write_all(last).unwrap();
+            let _ = keep_open.take().unwrap().blocking_recv();
         }
     });
+    let _close = close;
     let directory = fixture_directory("http://127.0.0.1:1/v1");
     install_aero_fixture(directory.path(), &upstream.base_url());
     run_case(
@@ -791,7 +809,7 @@ fn aero_terminal_case(content_type: &'static str, prefix: Vec<u8>, last: &'stati
         false,
         async |fixture| {
             let address = fixture.server.local_addr();
-            let probe = Probe::arm(fixture, "/v1/responses", Some(b"aero-terminal"));
+            let probe = Probe::arm(fixture, "/v1/responses", Some(WriteTrigger::Output));
             let mut client = RawClient::request(
                 address,
                 &aero_request(fixture, content_type == "text/event-stream"),
@@ -815,13 +833,19 @@ fn aero_terminal_case(content_type: &'static str, prefix: Vec<u8>, last: &'stati
 #[test]
 fn drain_aero_revokes_delegation_at_terminal_handoff() {
     use super::inference::{STREAM_REQUEST, fixture_directory, upstream_reply};
-    use crate::tests::OneShotUpstream;
+    use crate::{
+        http::request::parse_request, server::http::proxy::ConnectionIntake, tests::OneShotUpstream,
+    };
     use std::io::ErrorKind;
 
     let terminal = b"event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n";
-    let aero = OneShotUpstream::serve(1, |socket| {
+    let (terminal_ready, wait_for_terminal) = oneshot::channel();
+    let mut wait_for_terminal = Some(wait_for_terminal);
+    let aero = OneShotUpstream::serve(1, move |socket| {
         upstream_reply(socket, 200, "text/event-stream", terminal.len(), "");
-        socket.write_all(terminal).unwrap();
+        if wait_for_terminal.take().unwrap().blocking_recv().is_ok() {
+            socket.write_all(terminal).unwrap();
+        }
     });
     let inference_calls = Arc::new(AtomicUsize::new(0));
     let upstream = OneShotUpstream::serve(1, {
@@ -833,22 +857,54 @@ fn drain_aero_revokes_delegation_at_terminal_handoff() {
     let directory = fixture_directory(&upstream.base_url());
     install_aero_fixture(directory.path(), &aero.base_url());
     Fixture::with_directory(directory).run_wire(async |fixture, address| {
-        let control = &fixture.server.state.lifecycle;
-        let parent = Probe::arm(fixture, "/v1/responses", Some(b"event: response.completed"));
+        let state = &fixture.server.state;
+        let control = &state.lifecycle;
+        let parent = Probe::arm(fixture, "/v1/responses", Some(WriteTrigger::Output));
         let _parent_client = RawClient::request(address, &aero_request(fixture, true)).await;
         let (paused, resume_parent) = parent.write.unwrap();
-        receive(paused, "Aero terminal write paused after queueing").await;
-        assert!(!control.admission.has_business_work());
-        let authorization = format!(
-            "Authorization: Bearer {}",
-            aero.observed().1["x-aero-caller-key"]
-        );
+        let (_, headers, _) = aero.observed();
+        let key = &headers["x-aero-caller-key"];
+        let authorization = format!("Authorization: Bearer {key}");
         let callback = json_request(
             fixture.port(),
             "/v1/responses",
             &[&authorization],
             STREAM_REQUEST,
         );
+        assert!(state.backend.aero_callers.identify(key).is_some());
+        assert!(control.admission.has_business_work());
+        let header = state.backend.aero_callers.acquire_header().unwrap();
+        let (revoked, before_publish) = oneshot::channel();
+        let (publish, wait_for_publish) = oneshot::channel::<()>();
+        *control.test_hooks.before_output_publish.lock().unwrap() = Some(Box::new(move || {
+            let _ = revoked.send(());
+            let _ = wait_for_publish.blocking_recv();
+        }));
+        terminal_ready.send(()).unwrap();
+        receive(
+            before_publish,
+            "Aero key revoked before terminal publication",
+        )
+        .await;
+
+        let (observed, contended) = oneshot::channel();
+        *control.test_hooks.callback_lock_contended.lock().unwrap() = Some(observed);
+        let racing_callback = tokio::task::spawn_blocking({
+            let state = state.clone();
+            let callback = callback.clone();
+            move || {
+                let request = parse_request(str::from_utf8(&callback).unwrap()).unwrap();
+                let (_, delegation) = ConnectionIntake::CallbackHead(header)
+                    .admit(Some(request), &state, Some(address.ip()))
+                    .unwrap();
+                assert!(delegation.is_none());
+            }
+        });
+        assert!(receive(contended, "callback reached the locked delegation table").await);
+        publish.send(()).unwrap();
+        receive(paused, "Aero terminal queued with write paused").await;
+        racing_callback.await.unwrap();
+        assert!(!control.admission.has_business_work());
         let reply = exchange_wire(address, &callback, false).await;
         assert_status(&reply, 401);
         assert!(
@@ -858,7 +914,7 @@ fn drain_aero_revokes_delegation_at_terminal_handoff() {
                 .ends_with("proxy caller authentication is required")
         );
 
-        let quit = Probe::arm(fixture, "/api/quit", Some(b"200 OK"));
+        let quit = Probe::arm(fixture, "/api/quit", Some(WriteTrigger::Output));
         let wire = json_request(fixture.port(), "/api/quit", &[&fixture.session()], b"{}");
         let quit_client = submit(address, &wire).await;
         let mut quit = Work::new(quit, quit_client, None, 200, "stopping").await;
@@ -968,7 +1024,7 @@ fn inference_case(phase: Phase, via_quit: bool, delegated: bool) {
             let probe = Probe::arm(
                 fixture,
                 path,
-                (phase == Sending).then_some(b"event: response.completed".as_slice()),
+                (phase == Sending).then_some(WriteTrigger::Output),
             );
             let headers = parent.as_ref().map_or_else(
                 || vec![session.as_str()],
@@ -1063,7 +1119,7 @@ fn report_case(path: &'static str, query: &str, phase: Phase, via_quit: bool, br
         let probe = Probe::arm(
             fixture,
             path,
-            matches!(phase, Sending | TerminalFrameAtDeadline).then_some(marker),
+            matches!(phase, Sending | TerminalFrameAtDeadline).then_some(WriteTrigger::Output),
         );
         let progress = (!broken_facts).then(|| report_gate(fixture));
         let client = RawClient::request(
