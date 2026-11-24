@@ -70,14 +70,22 @@ async fn provider_read(
     let raw = raw_head(request.extensions())?.clone();
     run_blocking(move || {
         let request = raw.request();
-        if let Some(id) = provider_quota::history_id(request.raw_path()) {
-            provider_quota::history(request, &state, id, crate::util::system_now())
+        let path = request.raw_path();
+        if let Some(id) = provider_quota::history_id(path) {
+            Ok(provider_quota::history(
+                request,
+                &state,
+                id,
+                crate::util::system_now(),
+            ))
+        } else if catalog::provider_models_path(path) {
+            Ok(catalog::provider_models_request(path, &state))
         } else {
-            catalog::provider_models_request(request.raw_path(), &state)
+            Err(EntryError::NotFound)
         }
     })
     .await
-    .map_err(|_| EntryError::internal())
+    .map_err(|_| EntryError::internal())?
 }
 
 async fn missing_balance(

@@ -116,7 +116,13 @@ impl ServerControl {
 pub(crate) struct ServerHandle {
     address: SocketAddr,
     control: Arc<ServerControl>,
-    listener: JoinHandle<Result<(), JoinError>>,
+    listener: JoinHandle<Result<(), ServeError>>,
+}
+
+#[derive(Debug)]
+pub(crate) enum ServeError {
+    Accept(io::Error),
+    Worker(JoinError),
 }
 
 impl ServerHandle {
@@ -164,13 +170,13 @@ impl ServerHandle {
         self.control.signal()
     }
 
-    pub(crate) async fn shutdown(self) -> Result<(), JoinError> {
+    pub(crate) async fn shutdown(self) -> Result<(), ServeError> {
         self.control.stop(ShutdownReason::Requested);
         self.join().await
     }
 
-    pub(crate) async fn join(mut self) -> Result<(), JoinError> {
-        (&mut self.listener).await?
+    pub(crate) async fn join(mut self) -> Result<(), ServeError> {
+        (&mut self.listener).await.map_err(ServeError::Worker)?
     }
 }
 
@@ -183,7 +189,7 @@ impl Drop for ServerHandle {
 pub(crate) async fn serve_candidate(
     listener: TcpListener,
     state: Arc<ServerState>,
-) -> Result<(), JoinError> {
+) -> Result<(), ServeError> {
     let router = candidate_router(state.clone());
     serve(listener, router, state.lifecycle.clone(), Some(state)).await
 }
@@ -192,7 +198,7 @@ pub(crate) async fn serve_recovery(
     listener: TcpListener,
     router: Router,
     control: Arc<ServerControl>,
-) -> Result<(), JoinError> {
+) -> Result<(), ServeError> {
     serve(listener, router, control, None).await
 }
 
@@ -218,12 +224,13 @@ fn candidate_router(state: Arc<ServerState>) -> Router {
             .merge(http::migration::routes())
             .merge(http::websocket::routes())
             .merge(declared_module_routes(&[]))
-            .fallback(http::unmatched)
-            .method_not_allowed_fallback(http::unmatched),
+            .fallback(http::unmatched),
         state.clone(),
     )
-    .merge(http::inference::routes().with_state(state.clone()))
-    .layer(from_fn_with_state(state, http::guard_route_method))
+    .merge(http::inference::routes())
+    .method_not_allowed_fallback(http::unmatched)
+    .layer(from_fn_with_state(state.clone(), http::guard_route_method))
+    .with_state(state)
 }
 
 enum ModuleRoute {}
@@ -233,25 +240,45 @@ fn declared_module_routes(_declarations: &[ModuleRoute]) -> Router<Arc<ServerSta
     Router::new()
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RECOVERY_ACCEPT_FAILURE: std::cell::Cell<Option<io::ErrorKind>> =
+        const { std::cell::Cell::new(None) };
+}
+
 async fn serve(
     listener: TcpListener,
     router: Router,
     control: Arc<ServerControl>,
     candidate: Option<Arc<ServerState>>,
-) -> Result<(), JoinError> {
+) -> Result<(), ServeError> {
     let mut connections = JoinSet::new();
     let mut worker_failure = None;
     let shutdown = control.signal();
     let mut accept_log = AcceptLog::default();
+    let accept = || async {
+        #[cfg(test)]
+        if matches!(control.mode, ServerMode::Recovery)
+            && let Some(error) = RECOVERY_ACCEPT_FAILURE.get()
+        {
+            return Err(error.into());
+        }
+        listener.accept().await
+    };
     'accepting: loop {
-        let accept = accept_with_retry(
-            || listener.accept(),
-            |accepted| {
+        let accept = async {
+            if matches!(control.mode, ServerMode::Recovery) {
+                return accept()
+                    .await
+                    .map(|connection| (connection, Instant::now()));
+            }
+            Ok(accept_with_retry(accept, |accepted| {
                 if let Some(state) = &candidate {
                     accept_log.record(state, accepted);
                 }
-            },
-        );
+            })
+            .await)
+        };
         tokio::pin!(accept);
         loop {
             let recovery_busy =
@@ -264,7 +291,8 @@ async fn serve(
                         worker_failure.get_or_insert(error);
                     }
                 }
-                ((stream, peer), accepted) = &mut accept, if !recovery_busy => {
+                result = &mut accept, if !recovery_busy => {
+                    let ((stream, peer), accepted) = result.map_err(ServeError::Accept)?;
                     if let Some(state) = &candidate {
                         if let Some(intake) = http::proxy::ConnectionIntake::accept(state, peer.ip()) {
                             connections.spawn(connection::drive_candidate(
@@ -291,7 +319,7 @@ async fn serve(
             worker_failure.get_or_insert(error);
         }
     }
-    worker_failure.map_or(Ok(()), Err)
+    worker_failure.map_or(Ok(()), |error| Err(ServeError::Worker(error)))
 }
 
 async fn accept_with_retry<T, F: Future<Output = io::Result<T>>>(

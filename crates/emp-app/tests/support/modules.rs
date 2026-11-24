@@ -56,10 +56,22 @@ impl BuiltModule {
                 binary.display()
             )
         });
-        let output = Command::new(binary)
-            .stdin(Stdio::null())
-            .output()
-            .unwrap_or_else(|error| panic!("{}: {error}", binary.display()));
+        // A launcher written by this test can be briefly held open for writing by a sibling
+        // test's fork (before its exec closes the fd), which makes exec fail with ETXTBSY.
+        let mut attempts = 0;
+        let output = loop {
+            match Command::new(binary).stdin(Stdio::null()).output() {
+                Err(error) if error.raw_os_error() == Some(26) && attempts < 50 => {
+                    attempts += 1;
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "fixed back-off while a sibling fork releases the inherited write fd"
+                    )]
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                result => break result.unwrap_or_else(|error| panic!("{}: {error}", binary.display())),
+            }
+        };
         assert!(
             output.status.success(),
             "{}: {:?}",

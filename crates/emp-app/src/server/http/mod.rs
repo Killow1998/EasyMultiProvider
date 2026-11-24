@@ -29,12 +29,12 @@ use axum::{
     middleware::{Next, from_fn_with_state},
     response::{IntoResponse, Response},
 };
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
-pub(crate) fn with_entry_state(
+pub(crate) fn with_entry_state<S>(
     router: Router<Arc<ServerState>>,
     state: Arc<ServerState>,
-) -> Router {
+) -> Router<S> {
     router
         .layer(from_fn_with_state(
             state.clone(),
@@ -68,6 +68,7 @@ pub(super) async fn guard_route_method(
         Err(error) => return error.into_response(),
     };
     if path.starts_with('/')
+        && request.uri().path() == routing_target(path)
         && (request.method() != Method::HEAD || matches!(path, "/" | "/index.html" | "/healthz"))
     {
         return next.run(request).await;
@@ -80,6 +81,14 @@ pub(super) async fn guard_route_method(
     }
     .await;
     result.unwrap_or_else(|error| error).into_response()
+}
+
+pub(super) fn routing_target(target: &str) -> Cow<'_, str> {
+    if target.contains('#') {
+        Cow::Owned(target.replace('#', "%23"))
+    } else {
+        Cow::Borrowed(target)
+    }
 }
 
 fn raw_head(extensions: &Extensions) -> Result<&RawRequestHead, error::EntryError> {

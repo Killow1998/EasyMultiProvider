@@ -135,7 +135,6 @@ pub(crate) fn read_configuration(state: &ServerState) -> JsonReply {
     catalog_json(&public)
 }
 
-#[cfg(any(test, not(feature = "server-candidate")))]
 pub(crate) fn provider_models_path(path: &str) -> bool {
     path.starts_with("/api/providers/") && path.ends_with("/models")
 }

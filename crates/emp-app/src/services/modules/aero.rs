@@ -24,7 +24,7 @@ pub(super) struct Endpoint {
 }
 
 pub(crate) struct Callers {
-    active: Mutex<BTreeMap<String, CallerDelegation>>,
+    active: Mutex<BTreeMap<String, (CallerDelegation, Option<CallLease>)>>,
     pending_headers: Arc<tokio::sync::Semaphore>,
 }
 
@@ -47,8 +47,6 @@ pub(crate) struct CallLease {
 pub(crate) struct CallerDelegation {
     pub(crate) caller: Caller,
     pub(crate) authorization: Option<String>,
-    pub(crate) lease: Option<CallLease>,
-    pub(crate) admitted_header: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
 }
 
 pub(crate) struct Call<'a> {
@@ -66,12 +64,13 @@ impl Callers {
         let key = crate::util::random_hex(32).ok()?;
         self.active.lock().ok()?.insert(
             key.clone(),
-            CallerDelegation {
-                caller,
-                authorization,
+            (
+                CallerDelegation {
+                    caller,
+                    authorization,
+                },
                 lease,
-                admitted_header: None,
-            },
+            ),
         );
         Some(Call { callers: self, key })
     }
@@ -79,7 +78,7 @@ impl Callers {
     pub(crate) fn classifies_callbacks(&self) -> bool {
         self.active
             .lock()
-            .is_ok_and(|calls| calls.values().any(|call| call.lease.is_some()))
+            .is_ok_and(|calls| calls.values().any(|(_, lease)| lease.is_some()))
     }
 
     pub(crate) fn acquire_header(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
@@ -87,6 +86,15 @@ impl Callers {
     }
 
     pub(crate) fn identify(&self, key: &str) -> Option<CallerDelegation> {
+        let calls = self.active.lock().ok()?;
+        let (identity, _) = calls.get(key)?;
+        Some(identity.clone())
+    }
+
+    pub(crate) fn identify_callback(
+        &self,
+        key: &str,
+    ) -> Option<(CallerDelegation, Option<CallLease>)> {
         self.active.lock().ok()?.get(key).cloned()
     }
 }

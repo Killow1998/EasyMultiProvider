@@ -224,7 +224,13 @@ pub(super) fn serve_candidate(
         let stopped = control.signal();
         crate::server::serve_recovery(listener, router, control)
             .await
-            .map_err(|_| AppError::ServerStopped)?;
+            .map_err(|error| match error {
+                crate::server::ServeError::Accept(error) => AppError::Io(error),
+                crate::server::ServeError::Worker(error) => {
+                    drop(error);
+                    AppError::ServerStopped
+                }
+            })?;
         Ok(stopped.wait().await == ShutdownReason::RecoveryReset)
     })
 }

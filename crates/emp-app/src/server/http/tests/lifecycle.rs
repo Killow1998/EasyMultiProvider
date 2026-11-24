@@ -1,6 +1,212 @@
 use super::*;
 
 #[test]
+fn raw_management_paths_match_legacy_without_executing_writes() {
+    Fixture::new().run_candidate(async |fixture, candidate| {
+        let port = fixture.port();
+        let session = fixture.session();
+        for path in [
+            "/api/quit#x",
+            "/api/integration/enable#x",
+            "/api/updates/check#x",
+            "/api/language#x",
+            "/api/session#x",
+            "/api/config#x",
+            "/api/catalog/refresh#x",
+            "/api/modules#x",
+            "/api/gateway/clients#x",
+            "/api/migration/export#x",
+            "/api%2Fquit",
+            "/api//quit",
+            "/api/./quit",
+            "/api/a/../quit",
+            "/api/quit/",
+        ] {
+            fixture
+                .parity(
+                    candidate,
+                    &json_request(port, path, &[&session], b"{}"),
+                    404,
+                )
+                .await;
+        }
+        for path in ["/api/native/login/start#x", "/api/accounts/login/finish#x"] {
+            fixture
+                .parity(
+                    candidate,
+                    &json_request(port, path, &[&session], b"{}"),
+                    409,
+                )
+                .await;
+        }
+        for (headers, status) in [
+            (vec![], 401),
+            (vec![session.as_str(), "Origin: https://other.invalid"], 403),
+        ] {
+            fixture
+                .parity(
+                    candidate,
+                    &json_request(port, "/api/quit#x", &headers, b"{}"),
+                    status,
+                )
+                .await;
+        }
+        fixture
+            .parity(candidate, &request(port, "GET", "/healthz", &[], b""), 200)
+            .await;
+    });
+}
+
+#[test]
+fn unknown_provider_read_matches_legacy_not_found() {
+    Fixture::new().run_candidate(async |fixture, candidate| {
+        fixture
+            .parity(
+                candidate,
+                &request(
+                    fixture.port(),
+                    "GET",
+                    "/api/providers/example/unknown",
+                    &[&fixture.session()],
+                    b"",
+                ),
+                404,
+            )
+            .await;
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn migrated_wrong_methods_match_legacy_before_and_during_update_drain() {
+    Fixture::new().run_candidate(async |fixture, candidate| {
+        let port = fixture.port();
+        let session = fixture.session();
+        for (method, path) in [
+            ("GET", "/v1/responses/compact"),
+            ("GET", "/v1/responses"),
+            ("GET", "/v1/images/generations"),
+            ("GET", "/v1/images/edits"),
+            ("GET", "/v1/alpha/search"),
+            ("GET", "/v1/decisions"),
+            ("GET", "/v1/systemone"),
+            ("GET", "/v1/live"),
+            ("POST", "/v1/live/call-fixture"),
+            ("POST", "/v1/models"),
+            ("POST", "/assets/i18n.js"),
+            ("POST", "/guide/index.html"),
+            ("POST", "/api/integration"),
+            ("GET", "/api/integration/enable"),
+            ("GET", "/api/quit"),
+            ("GET", "/api/session"),
+            ("POST", "/api/accounts"),
+            ("GET", "/api/native/login/start"),
+            ("GET", "/api/language"),
+            ("POST", "/api/usage"),
+            ("POST", "/api/request-limits"),
+            ("GET", "/api/catalog/refresh"),
+            ("DELETE", "/api/providers/example/models"),
+            ("POST", "/api/updates"),
+            ("DELETE", "/api/modules"),
+            ("POST", "/api/gateway"),
+            ("POST", "/api/diagnostics"),
+            ("GET", "/api/team/publish_source"),
+            ("GET", "/api/migration/export"),
+        ] {
+            fixture
+                .parity(
+                    candidate,
+                    &request(port, method, path, &[&session], b""),
+                    404,
+                )
+                .await;
+        }
+        let state = fixture.legacy.state.clone();
+        assert!(
+            tokio::task::spawn_blocking(move || {
+                state
+                    .lifecycle
+                    .updates()
+                    .drain_for_test(Duration::from_secs(5))
+            })
+            .await
+            .unwrap()
+        );
+        for path in [
+            "/v1/responses/compact",
+            "/v1/responses",
+            "/v1/alpha/search",
+            "/api/quit",
+        ] {
+            let reply = fixture
+                .parity(
+                    candidate,
+                    &request(port, "DELETE", path, &[&session], b""),
+                    503,
+                )
+                .await;
+            assert!(String::from_utf8_lossy(&reply).contains("\r\nRetry-After: "));
+        }
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn idle_delegated_websocket_does_not_hold_parent_update_lease() {
+    use crate::{server::raw_tcp::RawClient, services::modules::aero::CallLease};
+
+    for use_candidate in [false, true] {
+        Fixture::new().run_candidate(async |fixture, candidate| {
+            let state = &fixture.legacy.state;
+            let calls = &state.backend.aero_callers;
+            let delegation = calls
+                .delegate(
+                    Caller {
+                        id: "local".into(),
+                        name: String::new(),
+                    },
+                    None,
+                    Some(CallLease {
+                        connection: Arc::new(state.lifecycle.admission.acquire_request().unwrap()),
+                        work: Arc::new(state.lifecycle.updates().enter().unwrap()),
+                    }),
+                )
+                .unwrap();
+            let address = if use_candidate {
+                candidate
+            } else {
+                fixture.legacy.local_addr()
+            };
+            let auth = format!("Authorization: Bearer {}", delegation.key);
+            let mut ws = RawClient::request(
+                address,
+                &request(
+                    fixture.port(),
+                    "GET",
+                    "/v1/responses",
+                    &[
+                        &auth,
+                        "Upgrade: websocket",
+                        "Connection: Upgrade",
+                        "Sec-WebSocket-Version: 13",
+                        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                    ],
+                    b"",
+                ),
+            )
+            .await;
+            assert!(ws.head.starts_with("HTTP/1.1 101"), "{}", ws.head);
+            drop(delegation);
+            assert!(
+                state.lifecycle.updates().drain_for_test(Duration::ZERO),
+                "idle WebSocket kept the parent work active (candidate={use_candidate})"
+            );
+            ws.io.shutdown().await.unwrap();
+        });
+    }
+}
+
+#[test]
 fn lifecycle_and_unmatched_requests_match_legacy_wire() {
     Fixture::new().run_candidate(async |fixture, candidate| {
         let port = fixture.port();
@@ -163,23 +369,26 @@ fn integration_commands_match_legacy_wire_and_restore_native_files() {
                 exchange_wire(old_addr, &old_request, false),
                 exchange_wire(candidate, &new_request, false),
             );
-            let normalize = |fixture: &Fixture, reply| {
+            let normalize = |fixture: &Fixture, reply: Vec<u8>| {
+                let value = json_body(&reply);
                 normalize_body(reply, |body| {
-                    let mut value: Value = serde_json::from_str(
-                        &body
-                            .replace(&fixture.directory.path().display().to_string(), "/fixture")
-                            .replace(&format!("127.0.0.1:{}", fixture.port()), "127.0.0.1:PORT"),
-                    )
-                    .unwrap();
-                    for runtime in ["checked_at", "observed_at", "updated_at"] {
-                        if !value["runtime"][runtime].is_null() {
-                            value["runtime"][runtime] = json!(0);
-                        }
-                        if !value["runtime"]["last_known"][runtime].is_null() {
-                            value["runtime"]["last_known"][runtime] = json!(0);
+                    let mut body = body
+                        .replace(&fixture.directory.path().display().to_string(), "/fixture")
+                        .replace(&format!("127.0.0.1:{}", fixture.port()), "127.0.0.1:PORT");
+                    for runtime in [&value["runtime"], &value["runtime"]["last_known"]] {
+                        for field in ["checked_at", "observed_at", "updated_at"] {
+                            let time = &runtime[field];
+                            if time.is_number() {
+                                for delimiter in [',', '}'] {
+                                    body = body.replace(
+                                        &format!("\"{field}\":{time}{delimiter}"),
+                                        &format!("\"{field}\":0{delimiter}"),
+                                    );
+                                }
+                            }
                         }
                     }
-                    value.to_string()
+                    body
                 })
             };
             assert_status(&old_reply, status);

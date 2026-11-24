@@ -317,7 +317,8 @@ impl FromRequest<Arc<ServerState>> for JsonBody<MigrationRequest> {
         state: &Arc<ServerState>,
     ) -> Result<Self, HttpReply> {
         let raw = raw_head(request.extensions()).map_err(EntryError::reply)?;
-        let access = RequestAccess::require(raw.request(), state).map_err(EntryError::reply)?;
+        let access =
+            RequestAccess::require(raw.request(), state, None).map_err(EntryError::reply)?;
         let now = system_now();
         let ManagementSession(session) =
             ManagementSession::require(raw.request(), state, now).map_err(EntryError::reply)?;

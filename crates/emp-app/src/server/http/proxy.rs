@@ -30,11 +30,11 @@ fn proxy_allowed(request: Request<'_>, state: &ServerState, now: f64) -> bool {
     )
 }
 
-fn aero_delegation(
-    request: Request<'_>,
+fn aero_delegation_key<'a>(
+    request: Request<'a>,
     state: &ServerState,
     peer: Option<std::net::IpAddr>,
-) -> Option<CallerDelegation> {
+) -> Option<&'a str> {
     if !peer.is_some_and(|address| address.is_loopback())
         || request.header("Origin").is_some()
         || !same_origin(request, state.port)
@@ -51,8 +51,13 @@ fn aero_delegation(
     {
         return None;
     }
-    let key = request.header("Authorization")?.strip_prefix("Bearer ")?;
-    state.backend.aero_callers.identify(key)
+    request.header("Authorization")?.strip_prefix("Bearer ")
+}
+
+#[derive(Clone)]
+pub(crate) struct AdmittedCallback {
+    pub(crate) identity: CallerDelegation,
+    pub(crate) work: Option<Arc<RequestPermit>>,
 }
 
 pub(crate) enum ConnectionIntake {
@@ -63,8 +68,11 @@ pub(crate) enum ConnectionIntake {
 impl ConnectionIntake {
     pub(crate) fn accept(state: &ServerState, peer: IpAddr) -> Option<Self> {
         let callers = &state.backend.aero_callers;
-        if peer.is_loopback() && callers.classifies_callbacks() {
-            return callers.acquire_header().map(Self::CallbackHead);
+        if peer.is_loopback()
+            && callers.classifies_callbacks()
+            && let Some(header) = callers.acquire_header()
+        {
+            return Some(Self::CallbackHead(header));
         }
         state
             .lifecycle
@@ -78,24 +86,36 @@ impl ConnectionIntake {
         request: Option<Request<'_>>,
         state: &ServerState,
         peer: Option<IpAddr>,
-    ) -> Option<(Arc<ConnectionPermit>, Option<CallerDelegation>)> {
+    ) -> Option<(Arc<ConnectionPermit>, Option<AdmittedCallback>)> {
         match self {
             Self::Public(permit) => Some((permit, None)),
             Self::CallbackHead(header) => {
-                let mut delegation = request
+                let callback = request
                     .filter(|request| request.method == RequestMethod::Post)
-                    .and_then(|request| aero_delegation(request, state, peer));
-                if let Some(call) = &mut delegation
-                    && let Some(lease) = &call.lease
-                {
-                    call.admitted_header = Some(Arc::new(header));
-                    return Some((lease.connection.clone(), delegation));
-                }
+                    .and_then(|request| aero_delegation_key(request, state, peer))
+                    .and_then(|key| state.backend.aero_callers.identify_callback(key));
+                drop(header);
+                let identity = match callback {
+                    Some((identity, Some(lease))) => {
+                        return Some((
+                            lease.connection,
+                            Some(AdmittedCallback {
+                                identity,
+                                work: Some(lease.work),
+                            }),
+                        ));
+                    }
+                    Some((identity, None)) => Some(AdmittedCallback {
+                        identity,
+                        work: None,
+                    }),
+                    None => None,
+                };
                 state
                     .lifecycle
                     .admission
                     .acquire_request()
-                    .map(|permit| (Arc::new(permit), delegation))
+                    .map(|permit| (Arc::new(permit), identity))
             }
         }
     }
@@ -173,7 +193,10 @@ pub(crate) fn request_source(
     peer: Option<IpAddr>,
     admitted: Option<CallerDelegation>,
 ) -> RequestSource {
-    let delegation = admitted.or_else(|| aero_delegation(request, state, peer));
+    let delegation = admitted.or_else(|| {
+        let key = aero_delegation_key(request, state, peer)?;
+        state.backend.aero_callers.identify(key)
+    });
     let caller = delegation
         .as_ref()
         .map(|delegate| delegate.caller.clone())
@@ -254,21 +277,19 @@ fn required_module(path: &str) -> Option<Module> {
 }
 
 impl RequestAccess {
-    pub(crate) fn require(request: Request<'_>, state: &ServerState) -> Result<Self, EntryError> {
-        let delegation = request.source.and_then(|source| source.delegation.as_ref());
-        Self::require_with_module(
-            request,
-            state,
-            required_module(request.raw_path()),
-            delegation,
-        )
+    pub(crate) fn require(
+        request: Request<'_>,
+        state: &ServerState,
+        work: Option<&Arc<RequestPermit>>,
+    ) -> Result<Self, EntryError> {
+        Self::require_with_module(request, state, required_module(request.raw_path()), work)
     }
 
     fn require_with_module(
         request: Request<'_>,
         state: &ServerState,
         module: Option<Module>,
-        delegation: Option<&CallerDelegation>,
+        work: Option<&Arc<RequestPermit>>,
     ) -> Result<Self, EntryError> {
         let path = request.raw_path();
         if let Some(module) = module
@@ -283,9 +304,9 @@ impl RequestAccess {
         if (request.method == RequestMethod::Post && !path.starts_with("/api/updates/"))
             || request.method == RequestMethod::Delete
         {
-            if let Some(lease) = delegation.and_then(|call| call.lease.as_ref()) {
+            if let Some(work) = work {
                 return Ok(Self {
-                    permit: Some(lease.work.clone()),
+                    permit: Some(work.clone()),
                 });
             }
             return state
@@ -310,9 +331,12 @@ impl FromRequestParts<Arc<ServerState>> for RequestAccess {
     ) -> Result<Self, EntryError> {
         let raw = raw_head(&parts.extensions)?;
         let request = raw.request();
-        let delegation = parts.extensions.get::<CallerDelegation>();
+        let work = parts
+            .extensions
+            .get::<AdmittedCallback>()
+            .and_then(|call| call.work.as_ref());
         let Some(module) = required_module(request.raw_path()) else {
-            return Self::require_with_module(request, state, None, delegation);
+            return Self::require_with_module(request, state, None, work);
         };
         let raw = raw.clone();
         let state = state.clone();
@@ -343,7 +367,10 @@ impl FromRequestParts<Arc<ServerState>> for ProxyCaller {
     ) -> Result<Self, EntryError> {
         let raw = raw_head(&parts.extensions)?.clone();
         let peer = peer(parts);
-        let delegation = parts.extensions.get::<CallerDelegation>().cloned();
+        let delegation = parts
+            .extensions
+            .get::<AdmittedCallback>()
+            .map(|call| call.identity.clone());
         let state = state.clone();
         run_blocking(move || {
             let mut request = raw.request();
@@ -371,12 +398,11 @@ impl FromRequestParts<Arc<ServerState>> for ModelCatalog {
     ) -> Result<Self, EntryError> {
         let raw = raw_head(&parts.extensions)?.clone();
         let peer = peer(parts);
-        let delegation = parts.extensions.get::<CallerDelegation>().cloned();
         let state = state.clone();
         run_blocking(move || {
             let mut request = raw.request();
             let now = system_now();
-            let source = request_source(request, &state, now, peer, delegation);
+            let source = request_source(request, &state, now, peer, None);
             request.source = Some(&source);
             require_model_catalog(request, &state, now)?;
             Ok(Self)

@@ -7,7 +7,7 @@ use super::{
         error::EntryWire,
         inference::{BufferedReceipt, InferenceConnection, InferenceRoute},
         local_writes::LocalWriteRoute,
-        proxy::{ConnectionIntake, RequestAccess},
+        proxy::{AdmittedCallback, ConnectionIntake, RequestAccess},
         stream::{Flushed, StreamConnection},
         usage, websocket,
     },
@@ -17,8 +17,7 @@ use crate::{
     app::ServerState,
     http::request::{MAX_HEADER_BYTES, REQUEST_HEAD_DEADLINE, RequestMethod},
     services::{
-        connection_admission::ConnectionPermit,
-        modules::aero::{CallLease, CallerDelegation},
+        connection_admission::ConnectionPermit, modules::aero::CallLease,
         observation::http::HttpObservation,
     },
 };
@@ -47,7 +46,7 @@ struct CandidateRequest {
     #[cfg(all(test, unix))]
     state: Arc<ServerState>,
     observation: HttpObservation,
-    delegation: Option<CallerDelegation>,
+    delegation: Option<AdmittedCallback>,
     report_socket: Option<Arc<TcpStream>>,
     websocket_probe: Option<Arc<tokio::net::TcpStream>>,
     inference: Option<Arc<InferenceConnection>>,
@@ -352,6 +351,7 @@ async fn drive_http(
         shutdown_after_response: Mutex::default(),
     }));
     let wire_response = Arc::new(OnceLock::new());
+    let candidate_routes = candidate.is_some();
     let service = tower::service_fn(|mut request: axum::http::Request<hyper::body::Incoming>| {
         let router = router.clone();
         let raw = raw.clone();
@@ -385,6 +385,16 @@ async fn drive_http(
             }
             if let Some(stream) = stream {
                 request.extensions_mut().insert(stream.clone());
+            }
+            if candidate_routes {
+                let head = raw.request();
+                let path = head.raw_path();
+                if path.starts_with('/')
+                    && path != request.uri().path()
+                    && let Ok(uri) = super::http::routing_target(head.target).parse()
+                {
+                    *request.uri_mut() = uri;
+                }
             }
             let mut response = router.oneshot(request).await?;
             if let Some(stream) = stream

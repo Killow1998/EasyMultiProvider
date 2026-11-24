@@ -388,3 +388,34 @@ fn recovery_routes_match_legacy_bytes_before_reset_or_exit() {
         }
     }
 }
+
+#[cfg(feature = "server-candidate")]
+#[test]
+fn recovery_accept_failure_returns_from_startup_and_releases_service_lock() {
+    use std::{io, sync::mpsc, time::Duration};
+
+    let (directory, config, _) = fixture();
+    let path = directory.path().join("state/service.lock");
+    let owner =
+        emp_state::IntegrationFileLock::acquire(&path, Duration::ZERO, Duration::ZERO).unwrap();
+    assert!(matches!(
+        run(&config, &AppError::CredentialKeyMissing, false),
+        Err(AppError::ServiceOwned)
+    ));
+    drop(owner);
+
+    let (send, receive) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        crate::server::RECOVERY_ACCEPT_FAILURE.set(Some(io::ErrorKind::PermissionDenied));
+        let result = run(&config, &AppError::CredentialKeyMissing, false);
+        send.send(result).unwrap();
+    });
+    let result = receive
+        .recv_timeout(Duration::from_secs(3))
+        .expect("recovery surfaced the accept error");
+    assert!(
+        matches!(result, Err(AppError::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied)
+    );
+    worker.join().unwrap();
+    assert!(emp_state::IntegrationFileLock::acquire(&path, Duration::ZERO, Duration::ZERO).is_ok());
+}

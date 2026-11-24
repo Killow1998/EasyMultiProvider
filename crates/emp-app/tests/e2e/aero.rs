@@ -305,11 +305,13 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
 #[cfg(target_os = "linux")]
 #[test]
 fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
+    use crate::support::{Response, SseClient};
     use std::{
         io::{Read, Write},
         net::TcpStream,
         os::unix::fs::PermissionsExt,
         thread,
+        time::Instant,
     };
 
     let workspace = Workspace::new();
@@ -331,6 +333,24 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
     let module = BuiltModule::from_binary(&launcher, "aero");
     let upstream = Upstream::start();
+    let public_upstream = Upstream::start();
+    let public_completed = response(
+        "resp-public-slot",
+        message("msg-public-slot", "Holding a public slot"),
+        1,
+        1,
+    );
+    let public_gate = public_upstream.gate_stream(
+        format!(
+            "data: {}\n\n",
+            json!({"type":"response.output_text.delta", "item_id":"msg-public-slot",
+                   "output_index":0, "content_index":0, "delta":"Holding a public slot"})
+        ),
+        Some(format!(
+            "data: {}\n\n",
+            json!({"type":"response.completed", "response":public_completed})
+        )),
+    );
     let completed = response(
         "resp-aero-saturation",
         message("msg-saturation", "AERO_CALLBACK_COMPLETED"),
@@ -346,8 +366,14 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     );
     workspace.write_config(json!({
         "auto_enable_on_start": false,
-        "providers": [{"id":"fixture","base_url":upstream.base_url(),"protocol":"responses","auth_mode":"api_key","api_key":"fixture-provider-key"}],
-        "models": [{"id":"fixture/model","provider":"fixture","upstream_id":"callback-upstream","enabled":true}],
+        "providers": [
+            {"id":"fixture","base_url":upstream.base_url(),"protocol":"responses","auth_mode":"api_key","api_key":"fixture-provider-key"},
+            {"id":"public","base_url":public_upstream.base_url(),"protocol":"responses","auth_mode":"api_key","api_key":"fixture-provider-key"}
+        ],
+        "models": [
+            {"id":"fixture/model","provider":"fixture","upstream_id":"callback-upstream","enabled":true},
+            {"id":"public/model","provider":"public","upstream_id":"public-upstream","enabled":true}
+        ],
         "aero_profiles": [{"id":"aero/saturation","name":"Saturation","planner":{"model":"fixture/model"},"executor":{"model":"fixture/model"}}]
     }));
     let release = ModuleRelease::start(std::slice::from_ref(&module));
@@ -363,9 +389,65 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     assert!(String::from_utf8_lossy(&command).contains("modules/aero/worker.py"));
     let port = emp.port;
     let address = ("127.0.0.1", port);
+    let public_body = json!({"model":"public/model","input":"Hold a public slot","stream":true});
     let held = (0..255)
-        .map(|_| TcpStream::connect(address).unwrap())
+        .map(|_| {
+            let stream = SseClient::responses(port, &public_body);
+            assert_eq!(
+                public_upstream.next_forwarded().body.unwrap()["model"],
+                "public-upstream"
+            );
+            stream
+        })
         .collect::<Vec<_>>();
+    let aero_body =
+        br#"{"model":"aero/Saturation","input":"Check callback admission","stream":true}"#;
+    let mut parent = TcpStream::connect(address).unwrap();
+    write!(
+        parent,
+        "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {NATIVE_TOKEN}\r\nContent-Type: application/json\r\nsession-id: saturation-fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        aero_body.len()
+    ).unwrap();
+    let assert_public_pool_full = || {
+        let mut ordinary = TcpStream::connect(address).unwrap();
+        ordinary
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let _ = write!(
+            ordinary,
+            "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"
+        );
+        let rejected = ordinary.read(&mut [0]);
+        assert!(
+            matches!(rejected, Ok(0))
+                || rejected.is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset)
+        );
+    };
+    assert_public_pool_full();
+    parent.write_all(aero_body).unwrap();
+    let callback = upstream.next_forwarded();
+    assert_eq!(callback.path, "/v1/responses");
+    assert_eq!(callback.body.unwrap()["model"], "callback-upstream");
+    assert_public_pool_full();
+    gate.finish();
+    let reply = Response::read_from(parent);
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert!(reply.sse_events().iter().any(|event| {
+        event["type"] == "response.completed"
+            && event["response"]["output"][0]["content"][0]["text"] == "AERO_CALLBACK_COMPLETED"
+    }));
+    for _ in &held {
+        public_gate.finish();
+    }
+    for mut stream in held {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut completed = false;
+        while let Some(event) = stream.next_event(deadline).unwrap() {
+            completed |= event["type"] == "response.completed";
+        }
+        assert!(completed, "public stream ended without completion");
+    }
+
     let start_call = |session: &'static str| {
         thread::spawn(move || {
             http(
@@ -377,35 +459,10 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
                     ("Content-Type", "application/json"),
                     ("session-id", session),
                 ],
-                br#"{"model":"aero/Saturation","input":"Check callback admission","stream":true}"#,
+                aero_body,
             )
         })
     };
-    let result = start_call("saturation-fixture");
-    let callback = upstream.next_forwarded();
-    assert_eq!(callback.path, "/v1/responses");
-    assert_eq!(callback.body.unwrap()["model"], "callback-upstream");
-    let mut ordinary = TcpStream::connect(address).unwrap();
-    ordinary
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    let _ = write!(
-        ordinary,
-        "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"
-    );
-    let rejected = ordinary.read(&mut [0]);
-    assert!(
-        matches!(rejected, Ok(0))
-            || rejected.is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset)
-    );
-    gate.finish();
-    let reply = result.join().unwrap();
-    assert_eq!(reply.status, 200, "{}", reply.text());
-    assert!(reply.sse_events().iter().any(|event| {
-        event["type"] == "response.completed"
-            && event["response"]["output"][0]["content"][0]["text"] == "AERO_CALLBACK_COMPLETED"
-    }));
-    drop(held);
     let mut idle = crate::support::WebSocket::connect(port);
     let plan = response(
         "resp-aero-drain-plan",

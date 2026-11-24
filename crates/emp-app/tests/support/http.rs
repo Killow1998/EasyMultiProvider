@@ -14,6 +14,21 @@ pub struct Response {
 }
 
 impl Response {
+    pub fn read_from(mut stream: TcpStream) -> Self {
+        stream.set_read_timeout(Some(IO_TIMEOUT)).expect("timeout");
+        let (status_line, headers, body) = read_message(&mut stream, true);
+        let status = status_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .unwrap_or_else(|| panic!("status line: {status_line:?}"));
+        Self {
+            status,
+            headers,
+            body,
+        }
+    }
+
     pub fn json(&self) -> Value {
         serde_json::from_slice(&self.body)
             .unwrap_or_else(|error| panic!("JSON body ({error}): {}", self.text()))
@@ -155,7 +170,6 @@ pub fn http(
     body: &[u8],
 ) -> Response {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to EMP");
-    stream.set_read_timeout(Some(IO_TIMEOUT)).expect("timeout");
     let mut request = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
     for (name, value) in headers {
         request.push_str(&format!("{name}: {value}\r\n"));
@@ -166,17 +180,7 @@ pub fn http(
     ));
     stream.write_all(request.as_bytes()).expect("write request");
     stream.write_all(body).expect("write body");
-    let (status_line, headers, body) = read_message(&mut stream, true);
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|code| code.parse().ok())
-        .unwrap_or_else(|| panic!("status line: {status_line:?}"));
-    Response {
-        status,
-        headers,
-        body,
-    }
+    Response::read_from(stream)
 }
 
 pub struct SseClient {

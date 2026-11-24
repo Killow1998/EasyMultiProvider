@@ -1,7 +1,7 @@
 use super::{
     body::JsonBody,
     error::{EntryError, HttpReply, no_response},
-    proxy::{RequestAccess, request_source, require_proxy},
+    proxy::{AdmittedCallback, RequestAccess, request_source, require_proxy},
     raw_head,
     stream::{BodyOutput, StreamConnection},
 };
@@ -13,10 +13,7 @@ use crate::{
         request::{Request, RequestMethod, read_json_body},
     },
     server::{connection::ConnectionContext, run_blocking},
-    services::{
-        modules::aero::CallerDelegation,
-        observation::request::{Phase, RequestObservation},
-    },
+    services::observation::request::{Phase, RequestObservation},
     util::system_now,
 };
 use axum::{
@@ -221,7 +218,10 @@ async fn submit(
     let raw = raw_head(request.extensions())
         .map_err(EntryError::reply)?
         .clone();
-    let delegation = request.extensions().get::<CallerDelegation>().cloned();
+    let delegation = request
+        .extensions()
+        .get::<AdmittedCallback>()
+        .map(|call| call.identity.clone());
     let lease = context.aero_call_lease();
     let source = run_blocking({
         let state = state.clone();

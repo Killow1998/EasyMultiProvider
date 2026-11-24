@@ -54,7 +54,7 @@ pub(crate) fn handle_connection(
         .unwrap_or_default();
     let request = parse_request(&head);
     let peer = stream.peer_addr().ok().map(|peer| peer.ip());
-    let Some((permit, delegation)) = intake.admit(request, state, peer) else {
+    let Some((permit, callback)) = intake.admit(request, state, peer) else {
         crate::lifecycle::connections::request_rejected(state, "connection_capacity");
         return;
     };
@@ -66,18 +66,15 @@ pub(crate) fn handle_connection(
     let mut stop_after_write = false;
     let observation_id = observation.request_id().map(str::to_owned);
     request.observation_id = observation_id.as_deref();
+    let (delegation, callback_work) = callback
+        .map(|callback| (Some(callback.identity), callback.work))
+        .unwrap_or_default();
     let mut source = request_source(request, state, system_now(), peer, delegation);
     observation.received(request);
     let path = request.raw_path();
     request_permit = (!request.releases_request_permit()).then_some(permit);
     crate::services::runtime::codex_contacted(request, state);
-    let access = match RequestAccess::require(
-        crate::http::request::Request {
-            source: Some(&source),
-            ..request
-        },
-        state,
-    ) {
+    let access = match RequestAccess::require(request, state, callback_work.as_ref()) {
         Ok(access) => access,
         Err(error) => {
             observation.write_response(&mut stream, &error.wire_response());

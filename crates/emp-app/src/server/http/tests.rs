@@ -265,7 +265,7 @@ pub(crate) fn spawn_candidate(
     legacy: &LegacyServer,
 ) -> (
     SocketAddr,
-    tokio::task::JoinHandle<Result<(), tokio::task::JoinError>>,
+    tokio::task::JoinHandle<Result<(), crate::server::ServeError>>,
 ) {
     let state = &legacy.state;
     let runtime = &state.backend.transport.runtime;

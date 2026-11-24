@@ -16,6 +16,82 @@ const FIRST: &[u8] = b"data: {\"id\":\"chat_fixture\",\"choices\":[{\"index\":0,
 const LAST: &[u8] = b"data: {\"id\":\"chat_fixture\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\ndata: [DONE]\n\n";
 const CHAT_COMPLETE: &[u8] = br#"{"id":"chat_fixture","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}"#;
 
+#[test]
+fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests() {
+    use crate::services::modules::aero::CallLease;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    for use_candidate in [false, true] {
+        let upstream = TcpListener::bind(LOOPBACK).unwrap();
+        upstream.set_nonblocking(true).unwrap();
+        let base = format!("http://{}/v1", upstream.local_addr().unwrap());
+        fixture(&base).run_candidate(async move |fixture, candidate| {
+            let upstream = tokio::net::TcpListener::from_std(upstream).unwrap();
+            let sender = tokio::spawn(async move {
+                let mut held = Vec::new();
+                for _ in 0..65 {
+                    let (socket, _) = upstream.accept().await.unwrap();
+                    let mut socket = BufReader::new(socket);
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        assert_ne!(socket.read_line(&mut line).await.unwrap(), 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some((name, value)) = line.split_once(':')
+                            && name.eq_ignore_ascii_case("Content-Length")
+                        {
+                            length = value.trim().parse().unwrap();
+                        }
+                    }
+                    assert!(length > 0);
+                    socket.read_exact(&mut vec![0; length]).await.unwrap();
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        FIRST.len() + LAST.len()
+                    );
+                    socket.write_all(head.as_bytes()).await.unwrap();
+                    socket.write_all(FIRST).await.unwrap();
+                    held.push(socket);
+                }
+                held
+            });
+            let state = &fixture.legacy.state;
+            let delegation = state.backend.aero_callers.delegate(
+                Caller { id: "local".into(), name: String::new() },
+                None,
+                Some(CallLease {
+                    connection: Arc::new(state.lifecycle.admission.acquire_request().unwrap()),
+                    work: Arc::new(state.lifecycle.updates().enter().unwrap()),
+                }),
+            ).unwrap();
+            let address = if use_candidate { candidate } else { fixture.legacy.local_addr() };
+            let port = fixture.port();
+            let auth = format!("Authorization: Bearer {}", delegation.key);
+            let wire = json_request(port, "/v1/responses", &[&auth], STREAM_REQUEST);
+            let mut callbacks = Vec::new();
+            for _ in 0..64 {
+                let stream = RawClient::request(address, &wire).await;
+                assert!(stream.head.starts_with("HTTP/1.1 200"), "{}", stream.head);
+                callbacks.push(stream);
+            }
+            for path in ["/healthz", "/"] {
+                let reply = exchange_wire(address, &request(port, "GET", path, &[], b""), false).await;
+                assert!(reply.starts_with(b"HTTP/1.1 200 "),
+                    "{path} blocked by 64 active callbacks (candidate={use_candidate})");
+            }
+            let stream = RawClient::request(address, &wire).await;
+            assert!(stream.head.starts_with("HTTP/1.1 200"), "{}", stream.head);
+            callbacks.push(stream);
+            for (mut socket, mut callback) in sender.await.unwrap().into_iter().zip(callbacks) {
+                socket.write_all(LAST).await.unwrap();
+                assert!(String::from_utf8_lossy(&callback.rest().await).contains("response.completed"));
+            }
+        });
+    }
+}
+
 fn fixture(base: &str) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
