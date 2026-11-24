@@ -12,6 +12,7 @@ use emp_router::native_http::{NativeCompleteResponse, NativeHttpError};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
+use std::time::Instant;
 mod auth;
 use auth::resolve_headers;
 pub(crate) mod images;
@@ -34,27 +35,24 @@ pub(crate) fn open_stream_result<'a>(
     body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
-    previous_usage: Option<RequestOutcome<'a>>,
 ) -> Result<(NativeStream, RequestOutcome<'a>), NativeHttpError> {
     match state
         .backend
         .transport
         .runtime
         .block_on(open_stream_result_with_monitor(
-            state,
-            route,
-            config,
-            body,
-            incoming,
-            ids,
-            None,
-            previous_usage,
+            state, route, config, body, incoming, ids, None, None,
         ))? {
         CancellableNativeStreamOpen::Opened(stream) => Ok(*stream),
         CancellableNativeStreamOpen::Disconnected => {
             unreachable!("non-cancellable native open cannot observe a disconnect")
         }
     }
+}
+
+pub(crate) struct NativeWebSocketFallback<'a> {
+    pub(crate) execution_started: Instant,
+    pub(crate) previous_usage: Option<RequestOutcome<'a>>,
 }
 
 pub(crate) enum CancellableNativeStreamOpen<'a> {
@@ -99,9 +97,11 @@ pub(crate) async fn open_stream_result_with_monitor<'a>(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     mut monitor: Option<&mut DisconnectMonitor>,
-    previous_usage: Option<RequestOutcome<'a>>,
+    fallback: Option<NativeWebSocketFallback<'a>>,
 ) -> Result<CancellableNativeStreamOpen<'a>, NativeHttpError> {
-    let mut usage = previous_usage
+    let websocket_started = fallback.as_ref().map(|fallback| fallback.execution_started);
+    let mut usage = fallback
+        .and_then(|fallback| fallback.previous_usage)
         .unwrap_or_else(|| RequestOutcome::new(state, route, body, incoming, None, "responses"));
     let result = {
         let receipt = Mutex::new(&mut usage);
@@ -132,6 +132,9 @@ pub(crate) async fn open_stream_result_with_monitor<'a>(
     let result = match result {
         DisconnectRace::Ready(result) => result,
         DisconnectRace::Disconnected => {
+            if let Some(started) = websocket_started {
+                usage = usage.started_at(started).transport("websocket");
+            }
             match monitor {
                 Some(monitor) if monitor.is_draining() => usage.drained(),
                 Some(monitor) if monitor.is_interrupted() => usage.interrupted(),

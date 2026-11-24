@@ -29,7 +29,7 @@ use tokio::runtime::Runtime;
 
 #[cfg(all(test, unix))]
 type UpgradeHandoffGate = (
-    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Sender<(usize, usize)>,
     tokio::sync::oneshot::Receiver<()>,
 );
 

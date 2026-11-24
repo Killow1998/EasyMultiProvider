@@ -62,49 +62,51 @@ pub(crate) fn run(args: &[String]) -> Result {
     let root = crate::physical(directory.path())?;
     let upstream =
         Upstream::start().map_err(|error| format!("start loopback upstream: {error}"))?;
-    let report = measure(&binary, label, &root, &upstream).map_err(|error| {
+    let with_stderr = |error: io::Error| {
         let stderr = fs::read_to_string(root.join("stderr.log")).unwrap_or_default();
         if stderr.trim().is_empty() {
             error.to_string()
         } else {
             format!("{error}\nEMP stderr: {}", stderr.trim())
         }
-    })?;
+    };
+    let (report, exit) = measure(&binary, label, &root, &upstream).map_err(with_stderr)?;
     if let Some(out) = out {
         report.save(Path::new(out))?;
     }
     print!("{}", report.table());
+    exit.map_err(with_stderr)?;
     Ok(())
 }
 
-fn measure(binary: &Path, label: &str, root: &Path, upstream: &Upstream) -> io::Result<Report> {
+fn measure(
+    binary: &Path,
+    label: &str,
+    root: &Path,
+    upstream: &Upstream,
+) -> io::Result<(Report, io::Result<Duration>)> {
     let listener = wire::bind_high_port()?;
     let port = listener.local_addr()?.port();
     let mut command = emp_command(binary, root, port, upstream.port)?;
     drop(listener);
     let started = Instant::now();
     let mut process = Emp(command.spawn()?);
-    let bootstrap = process.bootstrap(port)?;
-    let health = wire::http_request(port, "GET", "/healthz", "", "");
-    let probe_timeout = Duration::from_millis(100);
-    let startup = loop {
-        if wire::request(port, &health, probe_timeout)
-            .is_ok_and(|(head, _)| head.status() == Some(200))
-        {
-            break started.elapsed();
-        }
-        if let Some(status) = process.0.try_wait()? {
-            return Err(io::Error::other(format!(
-                "EMP exited before /healthz: {status}"
-            )));
-        }
-        if started.elapsed() >= IO_TIMEOUT {
-            return Err(io::Error::other("EMP /healthz did not return 200"));
-        }
-        poll_interval();
-    };
+    let (startup, bootstrap) = process.ready(port, started)?;
+    let exchange = wire::http_request(
+        port,
+        "POST",
+        "/api/session",
+        &format!("X-EMP-Bootstrap: {bootstrap}\r\n"),
+        "",
+    );
+    let (head, socket) = wire::request(port, &exchange, IO_TIMEOUT)?;
+    head.expect_status(200)?;
+    let session: Value = serde_json::from_reader(head.body(socket)?).map_err(io::Error::other)?;
+    let token = session["session"]
+        .as_str()
+        .ok_or(io::Error::other("missing management session"))?;
 
-    settle();
+    settle(SETTLE);
     let idle = ProcessUsage::read(process.0.id())?;
     let json = inference_request(port, "bench/model", false);
     measure_json(port, &json)?;
@@ -127,19 +129,6 @@ fn measure(binary: &Path, label: &str, root: &Path, upstream: &Upstream) -> io::
     let ws = measure_ws(port, process.0.id())?;
     let cancellation = measure_cancel(port, upstream)?;
 
-    let exchange = wire::http_request(
-        port,
-        "POST",
-        "/api/session",
-        &format!("X-EMP-Bootstrap: {bootstrap}\r\n"),
-        "",
-    );
-    let (head, socket) = wire::request(port, &exchange, IO_TIMEOUT)?;
-    head.expect_status(200)?;
-    let session: Value = serde_json::from_reader(head.body(socket)?).map_err(io::Error::other)?;
-    let token = session["session"]
-        .as_str()
-        .ok_or(io::Error::other("missing management session"))?;
     let quit = wire::http_request(
         port,
         "POST",
@@ -147,19 +136,20 @@ fn measure(binary: &Path, label: &str, root: &Path, upstream: &Upstream) -> io::
         &format!("X-EMP-Session: {token}\r\nContent-Type: application/json\r\n"),
         "{}",
     );
-    let exit = process.quit(port, &quit)?;
+    let exit = process.quit(port, &quit);
 
-    Ok(Report {
+    let report = Report {
         label: label.into(),
         startup_ms: milliseconds(startup),
-        exit_ms: milliseconds(exit),
+        exit_ms: exit.as_ref().ok().copied().map(milliseconds),
         idle,
         http,
         sse_requests: SSE_CLIENTS,
         sse_first_byte_ms: Quantiles::from_samples(first_bytes),
         ws,
         cancellation_within_1s: cancellation,
-    })
+    };
+    Ok((report, exit))
 }
 
 fn emp_command(binary: &Path, root: &Path, port: u16, upstream: u16) -> io::Result<Command> {
@@ -231,7 +221,7 @@ fn emp_command(binary: &Path, root: &Path, port: u16, upstream: u16) -> io::Resu
 struct Emp(Child);
 
 impl Emp {
-    fn bootstrap(&mut self, port: u16) -> io::Result<String> {
+    fn ready(&mut self, port: u16, started: Instant) -> io::Result<(Duration, String)> {
         let stdout = self
             .0
             .stdout
@@ -251,11 +241,41 @@ impl Emp {
                 }
             }
         });
-        receive.recv_timeout(IO_TIMEOUT).map_err(|error| {
-            io::Error::other(format!(
-                "EMP did not announce its benchmark listener on port {port}: {error}"
-            ))
-        })?
+        let health = wire::http_request(port, "GET", "/healthz", "", "");
+        let probe_timeout = Duration::from_millis(100);
+        let mut bootstrap = None;
+        let startup = loop {
+            if bootstrap.is_none()
+                && let Ok(announcement) = receive.try_recv()
+            {
+                bootstrap = Some(announcement?);
+            }
+            if wire::request(port, &health, probe_timeout)
+                .is_ok_and(|(head, _)| head.status() == Some(200))
+            {
+                break started.elapsed();
+            }
+            if let Some(status) = self.0.try_wait()? {
+                return Err(io::Error::other(format!(
+                    "EMP exited before /healthz: {status}"
+                )));
+            }
+            if started.elapsed() >= IO_TIMEOUT {
+                return Err(io::Error::other("EMP /healthz did not return 200"));
+            }
+            poll_interval();
+        };
+        let bootstrap = match bootstrap {
+            Some(token) => token,
+            None => receive
+                .recv_timeout(IO_TIMEOUT.saturating_sub(started.elapsed()))
+                .map_err(|error| {
+                    io::Error::other(format!(
+                        "EMP did not announce its benchmark listener on port {port}: {error}"
+                    ))
+                })??,
+        };
+        Ok((startup, bootstrap))
     }
 
     fn quit(&mut self, port: u16, quit: &str) -> io::Result<Duration> {
@@ -298,8 +318,8 @@ fn poll_interval() {
     clippy::disallowed_methods,
     reason = "resource snapshots use a fixed settling interval"
 )]
-fn settle() {
-    thread::sleep(SETTLE);
+fn settle(duration: Duration) {
+    thread::sleep(duration);
 }
 
 fn inference_request(port: u16, model: &str, stream: bool) -> String {
@@ -412,7 +432,7 @@ fn measure_cancel(port: u16, upstream: &Upstream) -> io::Result<bool> {
 }
 
 fn measure_ws(port: u16, pid: u32) -> io::Result<WebSockets> {
-    settle();
+    settle(SETTLE);
     let before = ProcessUsage::read(pid)?;
     let mut sessions = Vec::with_capacity(WS_SESSIONS);
     for index in 0..WS_SESSIONS {
@@ -444,13 +464,17 @@ fn measure_ws(port: u16, pid: u32) -> io::Result<WebSockets> {
             ));
         }
     }
-    settle();
+    let closed = Instant::now();
+    settle(SETTLE);
     let after = ProcessUsage::read(pid)?;
+    settle(Duration::from_secs(15).saturating_sub(closed.elapsed()));
+    let after_15s = ProcessUsage::read(pid)?;
     Ok(WebSockets {
         sessions: WS_SESSIONS,
         before,
         open,
         after,
+        after_15s,
     })
 }
 

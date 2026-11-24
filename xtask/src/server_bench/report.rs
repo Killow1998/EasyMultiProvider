@@ -9,7 +9,7 @@ use std::time::Duration;
 pub(super) struct Report {
     pub(super) label: String,
     pub(super) startup_ms: f64,
-    pub(super) exit_ms: f64,
+    pub(super) exit_ms: Option<f64>,
     pub(super) idle: Option<ProcessUsage>,
     pub(super) http: Vec<HttpRun>,
     pub(super) sse_requests: usize,
@@ -54,6 +54,7 @@ pub(super) struct WebSockets {
     pub(super) before: Option<ProcessUsage>,
     pub(super) open: Option<ProcessUsage>,
     pub(super) after: Option<ProcessUsage>,
+    pub(super) after_15s: Option<ProcessUsage>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -63,6 +64,10 @@ pub(super) struct ProcessUsage {
 }
 
 impl ProcessUsage {
+    fn values(&self) -> (f64, f64) {
+        (f64::from(self.rss_kib) / 1024.0, f64::from(self.threads))
+    }
+
     #[cfg(target_os = "linux")]
     pub(super) fn read(pid: u32) -> io::Result<Option<Self>> {
         let status = std::fs::read_to_string(format!("/proc/{pid}/status"))?;
@@ -141,9 +146,15 @@ impl Report {
                 "Startup to /healthz 200 (ms)".into(),
                 number(self.startup_ms),
             ),
-            ("POST /api/quit to exit (ms)".into(), number(self.exit_ms)),
+            (
+                "POST /api/quit to exit (ms)".into(),
+                self.exit_ms.map_or(Metric::Unavailable, number),
+            ),
         ];
-        rows.extend(memory_metrics("Idle", self.idle.as_ref()));
+        rows.extend(memory_metrics(
+            "Idle",
+            self.idle.as_ref().map(ProcessUsage::values),
+        ));
         for run in &self.http {
             let description = format!("JSON c={} n={}", run.concurrency, run.requests);
             rows.extend([
@@ -172,30 +183,27 @@ impl Report {
             ),
         ]);
         let ws = format!("Responses WS n={}", self.ws.sessions);
-        rows.extend(memory_metrics(
-            &format!("{ws} before"),
-            self.ws.before.as_ref(),
+        let before = self.ws.before.as_ref().map(ProcessUsage::values);
+        rows.extend(memory_metrics(&format!("{ws} before"), before));
+        for (phase, usage) in [
+            ("open", &self.ws.open),
+            ("closed +1 s", &self.ws.after),
+            ("closed +15 s", &self.ws.after_15s),
+        ] {
+            let label = format!("{ws} {phase}");
+            let values = usage.as_ref().map(ProcessUsage::values);
+            rows.extend(memory_metrics(&label, values));
+            let delta = values
+                .zip(before)
+                .map(|((rss, threads), (base_rss, base_threads))| {
+                    (rss - base_rss, threads - base_threads)
+                });
+            rows.extend(memory_metrics(&format!("{label} vs before"), delta));
+        }
+        rows.push((
+            "SSE upstream closed within 1 s of disconnect".into(),
+            Metric::Check(self.cancellation_within_1s),
         ));
-        rows.extend(memory_metrics(&format!("{ws} open"), self.ws.open.as_ref()));
-        rows.extend(memory_metrics(
-            &format!("{ws} closed +1 s"),
-            self.ws.after.as_ref(),
-        ));
-        let (rss, threads) = match (self.ws.open.as_ref(), self.ws.after.as_ref()) {
-            (Some(open), Some(after)) => (
-                Metric::Check(after.rss_kib < open.rss_kib),
-                Metric::Check(after.threads < open.threads),
-            ),
-            _ => (Metric::Unavailable, Metric::Unavailable),
-        };
-        rows.extend([
-            (format!("{ws} RSS fell after close"), rss),
-            (format!("{ws} thread count fell after close"), threads),
-            (
-                "SSE upstream closed within 1 s of disconnect".into(),
-                Metric::Check(self.cancellation_within_1s),
-            ),
-        ]);
         rows
     }
 
@@ -235,13 +243,11 @@ impl Report {
     }
 }
 
-fn memory_metrics(label: &str, usage: Option<&ProcessUsage>) -> [(String, Metric); 2] {
-    let (rss, threads) = usage.map_or((Metric::Unavailable, Metric::Unavailable), |usage| {
-        (
-            Metric::Number(f64::from(usage.rss_kib) / 1024.0),
-            Metric::Number(f64::from(usage.threads)),
-        )
-    });
+fn memory_metrics(label: &str, usage: Option<(f64, f64)>) -> [(String, Metric); 2] {
+    let (rss, threads) = usage.map_or(
+        (Metric::Unavailable, Metric::Unavailable),
+        |(rss, threads)| (Metric::Number(rss), Metric::Number(threads)),
+    );
     [
         (format!("{label} RSS (MiB)"), rss),
         (format!("{label} threads"), threads),
@@ -260,7 +266,7 @@ mod tests {
         Report {
             label: label.into(),
             startup_ms,
-            exit_ms: 0.0,
+            exit_ms: Some(0.0),
             idle: Some(ProcessUsage {
                 rss_kib: 17408,
                 threads: 4,
@@ -290,6 +296,7 @@ mod tests {
                     rss_kib: 20480,
                     threads: 7,
                 }),
+                after_15s: None,
             },
             cancellation_within_1s: cancellation,
         }
@@ -335,7 +342,7 @@ mod tests {
     fn compares_candidate_minus_baseline_and_skips_undefined_changes() {
         let baseline = report("default", 20.0, false);
         let mut candidate = report("candidate|run", 15.0, true);
-        candidate.exit_ms = 1.0;
+        candidate.exit_ms = Some(1.0);
         let comparison = baseline.compare(&candidate).unwrap();
         assert!(comparison.starts_with("| Metric | default | candidate\\|run | Delta | Change |"));
         assert!(
@@ -352,5 +359,34 @@ mod tests {
         );
         candidate.http[0].requests = 1999;
         assert!(baseline.compare(&candidate).is_err());
+    }
+
+    #[test]
+    fn compares_ws_resource_changes_against_each_runs_pre_open_baseline() {
+        let mut baseline = report("old", 20.0, true);
+        baseline.ws.before = Some(ProcessUsage {
+            rss_kib: 20480,
+            threads: 4,
+        });
+        let mut candidate = report("candidate", 15.0, true);
+        candidate.ws.before = Some(ProcessUsage {
+            rss_kib: 23040,
+            threads: 70,
+        });
+        candidate.ws.after_15s = Some(ProcessUsage {
+            rss_kib: 22528,
+            threads: 4,
+        });
+        candidate.exit_ms = None;
+        let comparison = baseline.compare(&candidate).unwrap();
+        for row in [
+            "| POST /api/quit to exit (ms) | 0.000 | n/a | — | — |",
+            "| Responses WS n=64 open vs before threads | 66.000 | 0.000 | -66.000 | -100.00% |",
+            "| Responses WS n=64 closed +1 s vs before threads | 3.000 | -63.000 | -66.000 | -2200.00% |",
+            "| Responses WS n=64 closed +15 s vs before threads | n/a | -66.000 | — | — |",
+            "| Responses WS n=64 closed +15 s vs before RSS (MiB) | n/a | -0.500 | — | — |",
+        ] {
+            assert!(comparison.contains(row), "{comparison}");
+        }
     }
 }

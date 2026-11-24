@@ -3,7 +3,10 @@ use serde_json::Value;
 pub fn call_state(event: &Value) -> &'static str {
     if event["error_class"] == "client_cancelled" {
         "interrupted"
-    } else if event["error_class"] == "client_disconnect" {
+    } else if matches!(
+        event["error_class"].as_str(),
+        Some("client_disconnect" | "server_draining")
+    ) {
         "cancelled"
     } else if event["error_code"] == "previous_response_not_found" {
         "recovery_required"

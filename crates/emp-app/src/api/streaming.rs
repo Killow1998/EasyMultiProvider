@@ -256,7 +256,7 @@ pub(crate) fn serve_native_stream(
             native::CancellableNativeStreamOpen::Disconnected => return Ok(()),
         },
         None => (
-            native::open_stream_result(state, route, config, body, incoming, ids, None)
+            native::open_stream_result(state, route, config, body, incoming, ids)
                 .map_err(crate::api::native_response::error_reply)?,
             None,
         ),

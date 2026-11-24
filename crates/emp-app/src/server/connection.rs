@@ -457,28 +457,33 @@ async fn drive_http(
         .take();
     if let Some(PendingUpgrade { io, reserved, run }) = upgrade {
         let io = io.await.ok().map(TokioIo::new);
+        let release_http_permit = async {
+            drop(
+                context
+                    .0
+                    .request_permit
+                    .lock()
+                    .expect("request admission")
+                    .take(),
+            );
+            #[cfg(all(test, unix))]
+            if let Some(request) = &candidate {
+                let gate = request.state.test_upgrade_handoff.lock().unwrap().take();
+                if let Some((reached, resume)) = gate {
+                    let admission = &context.0.control.admission;
+                    let _ =
+                        reached.send((admission.active_requests(), admission.active_websockets()));
+                    let _ = resume.await;
+                }
+            }
+        };
         let websocket_permit = reserved
             .or_else(|| {
                 io.as_ref()
                     .and_then(|_| context.0.control.admission.acquire_websocket())
             })
             .map(Arc::new);
-        drop(
-            context
-                .0
-                .request_permit
-                .lock()
-                .expect("request admission")
-                .take(),
-        );
-        #[cfg(all(test, unix))]
-        if let Some(request) = &candidate {
-            let gate = request.state.test_upgrade_handoff.lock().unwrap().take();
-            if let Some((reached, resume)) = gate {
-                let _ = reached.send(());
-                let _ = resume.await;
-            }
-        }
+        release_http_permit.await;
         run(io, websocket_permit.clone()).await;
         drop(websocket_permit);
     }

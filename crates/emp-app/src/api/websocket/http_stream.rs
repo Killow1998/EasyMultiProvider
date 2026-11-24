@@ -36,19 +36,8 @@ pub(super) async fn serve_native(
                 route,
             ))
     });
-    let usage = previous_usage.unwrap_or_else(|| {
-        crate::services::request_outcome::RequestOutcome::new(
-            state,
-            route,
-            request_body,
-            request_headers,
-            None,
-            "responses",
-        )
-        .started_at(websocket.observation.execution_started())
-        .transport("websocket")
-    });
-    let (mut upstream, mut usage) = match native::open_stream_result_with_monitor(
+    let execution_started = websocket.observation.execution_started();
+    let (mut upstream, usage) = match native::open_stream_result_with_monitor(
         state,
         route,
         config,
@@ -56,7 +45,10 @@ pub(super) async fn serve_native(
         request_headers,
         ids,
         Some(monitor),
-        Some(usage),
+        Some(native::NativeWebSocketFallback {
+            execution_started,
+            previous_usage,
+        }),
     )
     .await
     {
@@ -73,6 +65,7 @@ pub(super) async fn serve_native(
             return TurnResult::Finished;
         }
     };
+    let mut usage = usage.started_at(execution_started).transport("websocket");
     let state_headers = upstream
         .headers
         .iter()

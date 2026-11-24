@@ -177,18 +177,19 @@ pub(super) fn summarize(records: &[Value], now: OffsetDateTime) -> Value {
         .copied()
         .filter(|event| event["recovery_mode"] != "native_http_fallback")
         .collect::<Vec<_>>();
+    let is_cancelled = |event: &Value| {
+        matches!(
+            text(event, "error_class"),
+            "client_disconnect" | "client_cancelled" | "client_websocket_close" | "server_draining"
+        )
+    };
     let health = relevant
         .iter()
         .copied()
         .filter(|event| {
             event["status"].as_u64().is_some()
                 && event["error_code"] != "previous_response_not_found"
-                && ![
-                    "client_disconnect",
-                    "client_cancelled",
-                    "client_websocket_close",
-                ]
-                .contains(&text(event, "error_class"))
+                && !is_cancelled(event)
         })
         .collect::<Vec<_>>();
     let total = health.len();
@@ -207,22 +208,10 @@ pub(super) fn summarize(records: &[Value], now: OffsetDateTime) -> Value {
     let recovery_requests = relevant
         .iter()
         .filter(|event| {
-            event["error_code"] == "previous_response_not_found"
-                && !matches!(
-                    text(event, "error_class"),
-                    "client_disconnect" | "client_cancelled" | "client_websocket_close"
-                )
+            event["error_code"] == "previous_response_not_found" && !is_cancelled(event)
         })
         .count();
-    let cancelled = relevant
-        .iter()
-        .filter(|event| {
-            matches!(
-                text(event, "error_class"),
-                "client_disconnect" | "client_cancelled" | "client_websocket_close"
-            )
-        })
-        .count();
+    let cancelled = relevant.iter().filter(|event| is_cancelled(event)).count();
     let mut summary = json!({"sample_count":total,"success_count":successes,"failure_count":total-successes,"success_rate":rate(successes,total),"cancelled_count":cancelled,"recovery_request_count":recovery_requests,"unknown_count":relevant.len()-total-recovery_requests-cancelled,"fallback_attempt_count":attempts.len()-relevant.len(),"failure_classes":failures.into_iter().take(6).map(|(kind,count)|json!({"error_class":kind,"count":count,"rate":rate(count,total)})).collect::<Vec<_>>()});
     for status in [429, 502, 503, 504] {
         let count = health

@@ -293,31 +293,24 @@ fn responses_upgrade_cannot_start_after_restore_reopens_admission() {
         );
         let mut client = RawClient::request(address, &wire).await;
         assert_upgrade(&client);
-        timeout(Duration::from_secs(5), handoff)
-            .await
-            .unwrap()
-            .unwrap();
-        let mut restore = begin_restore(fixture, address, &session);
-        let early_restore = if admission.active_websockets() == 0 {
-            let reply = (&mut restore).await.unwrap();
-            assert_status(&reply, 200);
-            assert!(!admission.is_quiescing());
-            Some(reply)
-        } else {
-            timeout(Duration::from_secs(5), admission.wait_for_websocket_drain())
+        assert_eq!(
+            timeout(Duration::from_secs(5), handoff)
                 .await
-                .unwrap();
-            None
-        };
+                .unwrap()
+                .unwrap(),
+            (0, 1),
+            "the WebSocket permit must already be held when the HTTP permit is released"
+        );
+        let restore = begin_restore(fixture, address, &session);
+        timeout(Duration::from_secs(5), admission.wait_for_websocket_drain())
+            .await
+            .unwrap();
         resume.send(()).unwrap();
         assert_eq!(
             read_websocket_frame(&mut client.io, false).await,
             (0x88, close_payload(1001, "EMP connection is draining"))
         );
-        let reply = match early_restore {
-            Some(reply) => reply,
-            None => restore.await.unwrap(),
-        };
+        let reply = restore.await.unwrap();
         assert_status(&reply, 200);
         assert!(!admission.is_quiescing());
     });
@@ -828,6 +821,69 @@ fn native_http_fallback_drain_cancels_open_and_allows_restore() {
 }
 
 #[test]
+fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
+    for candidate in [false, true] {
+        let listener = TcpListener::bind(LOOPBACK).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        native_fixture(listener.local_addr().unwrap()).run_candidate(async |fixture, address| {
+            let address = if candidate { address } else { fixture.legacy.local_addr() };
+            let listener = AsyncListener::from_std(listener).unwrap();
+            let session = fixture.session();
+            let wire = upgrade(
+                fixture.port(),
+                "/v1/responses",
+                &session,
+                &["originator: codex_cli_rs", "Session-Id: fallback-open-error"],
+                &[],
+            );
+            let mut client = RawClient::request(address, &wire).await;
+            assert_upgrade(&client);
+            client.io.write_all(&websocket_frame(0x81, MASK, NATIVE_CREATE)).await.unwrap();
+
+            let fallback_started = timeout(DEADLINE, async {
+                let (mut ws, _) = listener.accept().await.unwrap();
+                let request = String::from_utf8(head(&mut ws).await.unwrap()).unwrap();
+                assert_eq!(parse_request(&request).unwrap().header("Upgrade"), Some("websocket"));
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                let rejected_at = std::time::Instant::now();
+                ws.write_all(
+                    b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                ).await.unwrap();
+                drop(ws);
+
+                let (mut http, _) = listener.accept().await.unwrap();
+                let request = String::from_utf8(head(&mut http).await.unwrap()).unwrap();
+                let request = parse_request(&request).unwrap();
+                assert_eq!(request.method, crate::http::request::RequestMethod::Post);
+                let mut body = vec![0; request.header("Content-Length").unwrap().parse().unwrap()];
+                http.read_exact(&mut body).await.unwrap();
+                http.write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                ).await.unwrap();
+                rejected_at
+            }).await.unwrap();
+            let error = receive_event(&mut client, "error").await;
+            let fallback_elapsed_ms = fallback_started.elapsed().as_millis() as u64;
+            assert_eq!(error["status"], 403);
+
+            let calls = exchange_wire(address, &request(fixture.port(), "GET", "/api/calls?start=0&end=9999999999", &[&session], &[]), false).await;
+            let calls = json_body(&calls);
+            let record = calls["records"].as_array().unwrap().iter()
+                .find(|record| record["session_id"] == "fallback-open-error").unwrap();
+            assert_eq!(record["status"], 403);
+            assert_eq!(record["error_origin"], "upstream");
+            assert_eq!(record["state"], "failed");
+            let duration_ms = record["duration_ms"].as_u64().unwrap();
+            assert!(
+                duration_ms <= fallback_elapsed_ms,
+                "call duration {duration_ms} ms exceeds the HTTP fallback window of {fallback_elapsed_ms} ms"
+            );
+            assert_eq!(record["transport"], "sse");
+        });
+    }
+}
+
+#[test]
 fn native_generation_records_server_drain_separately_from_client_disconnect() {
     let listener = TcpListener::bind(LOOPBACK).unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -836,6 +892,7 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
         let old = fixture.legacy.local_addr();
         let session = fixture.session();
         let mut outcomes = Vec::new();
+        let mut drain_ids = Vec::new();
         for address in [old, candidate] {
             for drain in [true, false] {
                 let label = format!("ws-{}-{}", address.port(), if drain {"drain"} else {"disconnect"});
@@ -869,6 +926,13 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
                 let calls = json_body(&calls);
                 let record = calls["records"].as_array().unwrap().iter().find(|record| record["session_id"] == label).unwrap_or_else(|| panic!("missing call for {label} in {calls}"));
                 outcomes.push((address, drain, record["error_origin"].clone(), record["error_class"].clone()));
+                if drain {
+                    drain_ids.push(record["request_id"].clone());
+                }
+                assert_eq!(record["state"], "cancelled", "{label}");
+                assert_eq!(calls["summary"]["cancelled"], outcomes.len());
+                assert_eq!(calls["summary"]["failed"], 0);
+                assert_eq!(calls["summary"]["success_samples"], 0);
             }
         }
         assert_eq!(
@@ -880,6 +944,26 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
                 (candidate, false, json!("client"), json!("client_disconnect")),
             ],
         );
+        let diagnostics = exchange_wire(candidate, &request(fixture.port(), "GET", "/api/diagnostics", &[&session], &[]), false).await;
+        let diagnostics = json_body(&diagnostics);
+        assert_eq!(diagnostics["health"]["cancelled_count"], 4);
+        assert_eq!(diagnostics["health"]["failure_count"], 0);
+        assert_eq!(diagnostics["health"]["sample_count"], 0);
+        let root = fixture.directory.path().to_owned();
+        let journal = tokio::task::spawn_blocking(move || {
+            let observations = || live_journal(&root).into_iter()
+                .filter(|row| row["event"] == "route_observation")
+                .map(|row| row["fields"].clone()).collect::<Vec<_>>();
+            wait_for(DEADLINE, || observations().len() >= 4);
+            observations()
+        }).await.unwrap();
+        for id in drain_ids {
+            for records in [diagnostics["records"].as_array().unwrap(), &journal] {
+                let observation = records.iter().find(|record| record["request_id"] == id).unwrap();
+                assert_eq!(observation["error_origin"], "emp");
+                assert_eq!(observation["error_class"], "server_draining");
+            }
+        }
     });
 }
 

@@ -223,6 +223,7 @@ pub(crate) fn route_record(event: &Value, journal: &Journal) -> Value {
             "client_disconnect",
             "client_cancelled",
             "client_websocket_close",
+            "server_draining",
             "upstream_close_pre_output",
             "upstream_close_after_output",
             "upstream_close_after_tool",
