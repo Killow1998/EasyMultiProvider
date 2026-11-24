@@ -1,4 +1,4 @@
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -226,9 +226,17 @@ impl Upstream {
     }
 
     pub fn next_request(&self) -> UpstreamRequest {
-        self.requests
-            .recv_timeout(io_timeout())
-            .expect("EMP forwarded a request upstream")
+        self.next_request_before(&Deadline::after(io_timeout()))
+    }
+
+    fn next_request_before(&self, deadline: &Deadline) -> UpstreamRequest {
+        let request = self
+            .requests
+            .recv_timeout(deadline.remaining())
+            .expect("EMP forwarded a request upstream");
+        deadline
+            .accept(request, "forwarded upstream request")
+            .unwrap()
     }
 
     /// Next request other than EMP's background native catalog refresh.
@@ -237,8 +245,9 @@ impl Upstream {
         reason = "Only forwarding and native journey targets filter catalog refreshes"
     )]
     pub fn next_forwarded(&self) -> UpstreamRequest {
+        let deadline = Deadline::after(io_timeout());
         loop {
-            let request = self.next_request();
+            let request = self.next_request_before(&deadline);
             if !request.is_catalog_refresh() {
                 return request;
             }
@@ -286,10 +295,8 @@ fn serve_upstream(
     sender: &Sender<UpstreamRequest>,
     script: &Mutex<VecDeque<Reply>>,
 ) {
-    stream
-        .set_read_timeout(Some(io_timeout()))
-        .expect("timeout");
-    let request = read_request(&mut stream);
+    let deadline = Deadline::after(io_timeout());
+    let request = read_request(&mut deadline.io(&stream));
     let scripted = if request.is_catalog_refresh() {
         None
     } else {

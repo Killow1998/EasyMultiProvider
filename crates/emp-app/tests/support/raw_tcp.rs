@@ -1,4 +1,4 @@
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::{io, net::SocketAddr};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -26,23 +26,25 @@ pub struct RawClient {
 
 impl RawClient {
     pub async fn request(address: SocketAddr, request: &[u8]) -> Self {
-        timeout(wire_timeout(), async {
+        let deadline = Deadline::after(wire_timeout());
+        let client = timeout(deadline.remaining(), async {
             let mut io = TcpStream::connect(address).await.unwrap();
             io.write_all(request).await.unwrap();
             let head = String::from_utf8(head(&mut io).await.unwrap()).unwrap();
             Self { io, head }
         })
         .await
-        .expect("HTTP response headers before deadline")
+        .expect("HTTP response headers before deadline");
+        deadline.accept(client, "HTTP response headers").unwrap()
     }
 
-    pub async fn rest(&mut self) -> Vec<u8> {
+    pub async fn rest(&mut self, deadline: &Deadline) -> Vec<u8> {
         let mut bytes = Vec::new();
-        timeout(wire_timeout(), self.io.read_to_end(&mut bytes))
+        timeout(deadline.remaining(), self.io.read_to_end(&mut bytes))
             .await
             .expect("HTTP response ends before deadline")
             .unwrap();
-        bytes
+        deadline.accept(bytes, "HTTP response EOF").unwrap()
     }
 }
 
@@ -79,8 +81,9 @@ pub fn websocket_frame(first: u8, mask: Option<[u8; 4]>, payload: &[u8]) -> Vec<
 pub async fn read_websocket_frame(
     io: &mut (impl AsyncRead + Unpin),
     masked: bool,
+    deadline: &Deadline,
 ) -> (u8, Vec<u8>) {
-    timeout(wire_timeout(), async {
+    let frame = timeout(deadline.remaining(), async {
         let first = io.read_u8().await.unwrap();
         let header = io.read_u8().await.unwrap();
         assert_eq!(header & 0x80 != 0, masked);
@@ -104,5 +107,6 @@ pub async fn read_websocket_frame(
         (first, payload)
     })
     .await
-    .expect("WebSocket frame before deadline")
+    .expect("WebSocket frame before deadline");
+    deadline.accept(frame, "WebSocket frame").unwrap()
 }

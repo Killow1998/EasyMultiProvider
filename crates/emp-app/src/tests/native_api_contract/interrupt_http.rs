@@ -1,17 +1,23 @@
 //! Steering cancels HTTP streams while preserving the downstream WS connection.
 use super::support::*;
 use super::*;
+use emp_test_support::{Deadline, test_timeout};
 use emp_transport::{ClientWebSocket, WebSocketPoll};
 
 fn event(client: &mut ClientWebSocket, kind: &str) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     loop {
-        assert!(Instant::now() < deadline, "waiting for {kind}");
+        assert!(!deadline.is_expired(), "waiting for {kind}");
+        client.set_read_timeout(
+            deadline
+                .remaining()
+                .min(test_timeout(Duration::from_millis(20))),
+        );
         match client.poll_receive_text().unwrap() {
             WebSocketPoll::Text(text) => {
                 let value: Value = serde_json::from_str(&text).unwrap();
                 if value["type"] == kind {
-                    return value;
+                    return deadline.accept(value, kind).unwrap();
                 }
                 assert_ne!(value["type"], "error", "{value}");
                 assert_ne!(value["type"], "response.failed", "{value}");
@@ -31,15 +37,15 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
         let (closed_sender, closed) = mpsc::sync_channel(1);
         let worker = thread::spawn(move || {
             let accept = || {
-                let deadline = Instant::now() + Duration::from_secs(5);
+                let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
                 loop {
-                    assert!(Instant::now() < deadline, "upstream request did not arrive");
+                    assert!(!deadline.is_expired(), "upstream request did not arrive");
                     match listener.accept() {
                         Ok((socket, _)) => {
                             socket
                                 .set_read_timeout(Some(Duration::from_secs(5)))
                                 .unwrap();
-                            return socket;
+                            return deadline.accept(socket, "upstream accept").unwrap();
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             #[expect(
@@ -117,7 +123,6 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
             Duration::from_secs(5),
         )
         .unwrap();
-        client.set_read_timeout(Duration::from_millis(20));
         client
             .send_json(&json!({"type":"response.create","model":model,"input":"first"}))
             .unwrap();

@@ -1,7 +1,7 @@
 //! Cache persistence and HTTP validators through the real updater client.
 use super::*;
 use crate::release::MAX_RELEASE_BYTES;
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 
 fn release(base: &str, notes: &str) -> String {
     let name = crate::release::current_asset_name().unwrap();
@@ -54,13 +54,15 @@ fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
     ];
     let server = thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + test_timeout(Duration::from_secs(12));
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(12)));
         for (status, etag, body, expected) in responses {
-            let mut stream = loop {
+            let stream = loop {
                 match listener.accept() {
-                    Ok((stream, _)) => break stream,
+                    Ok((stream, _)) => {
+                        break deadline.accept(stream, "release check arrived").unwrap();
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "missing release check");
+                        assert!(!deadline.is_expired(), "missing release check");
                         #[expect(
                             clippy::disallowed_methods,
                             reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
@@ -70,9 +72,9 @@ fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
                     Err(error) => panic!("fixture: {error}"),
                 }
             };
-            stream
-                .set_read_timeout(Some(test_timeout(Duration::from_secs(3))))
-                .unwrap();
+            let mut stream = deadline
+                .capped(test_timeout(Duration::from_secs(3)))
+                .io(stream);
             let mut request = Vec::new();
             let mut buffer = [0; 1024];
             while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {

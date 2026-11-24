@@ -1,6 +1,7 @@
 //! Codex's create -> interrupt -> incomplete -> incremental continuation contract.
 use super::support::*;
 use super::*;
+use emp_test_support::{Deadline, test_timeout};
 use emp_transport::ClientWebSocket;
 
 fn accept_upstream(listener: TcpListener) -> TcpStream {
@@ -17,7 +18,7 @@ fn accept_upstream(listener: TcpListener) -> TcpStream {
 }
 
 fn connect(server: &ServerHandle) -> ClientWebSocket {
-    let mut client = ClientWebSocket::connect(
+    ClientWebSocket::connect(
         &format!("ws://{}/v1/responses", server.local_addr()),
         &BTreeMap::from([
             ("originator".into(), "codex_cli_rs".into()),
@@ -27,21 +28,20 @@ fn connect(server: &ServerHandle) -> ClientWebSocket {
         ]),
         Duration::from_secs(5),
     )
-    .unwrap();
-    client.set_read_timeout(Duration::from_secs(5));
-    client
+    .unwrap()
 }
 
 fn event(client: &mut ClientWebSocket, kind: &str) -> Value {
     // Bound even broken implementations whose receive_json retries socket timeouts.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     loop {
-        assert!(Instant::now() < deadline, "waiting for {kind}");
+        assert!(!deadline.is_expired(), "waiting for {kind}");
+        client.set_read_timeout(deadline.remaining());
         match client.poll_receive_text().unwrap() {
             emp_transport::WebSocketPoll::Text(text) => {
                 let value: Value = serde_json::from_str(&text).unwrap();
                 if value["type"] == kind {
-                    return value;
+                    return deadline.accept(value, kind).unwrap();
                 }
                 assert_ne!(value["type"], "error", "{value}");
                 assert_ne!(value["type"], "response.failed", "{value}");
@@ -52,16 +52,23 @@ fn event(client: &mut ClientWebSocket, kind: &str) -> Value {
     }
 }
 
-fn request(ws: &mut WebSocketConnection<'_, TcpStream>) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(5);
+fn request(ws: &mut WebSocketConnection<'_, &TcpStream>, stream: &TcpStream) -> Value {
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     loop {
-        assert!(
-            Instant::now() < deadline,
-            "upstream did not receive a request"
-        );
+        assert!(!deadline.is_expired(), "upstream did not receive a request");
+        stream
+            .set_read_timeout(Some(
+                deadline
+                    .accept(deadline.remaining(), "upstream WebSocket read")
+                    .unwrap(),
+            ))
+            .unwrap();
         match ws.poll_text().unwrap() {
             emp_transport::WebSocketPoll::Text(text) => {
-                return serde_json::from_str(&text).unwrap();
+                let value = serde_json::from_str(&text).unwrap();
+                return deadline
+                    .accept(value, "upstream WebSocket request")
+                    .unwrap();
             }
             emp_transport::WebSocketPoll::Pending => {}
             other => panic!("unexpected upstream frame: {other:?}"),
@@ -89,9 +96,10 @@ fn native_websocket_busy_and_size_errors_preserve_progress_without_replay() {
             let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
             let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
             let worker = thread::spawn(move || {
-                let mut stream = accept_upstream(listener);
-                let mut ws = WebSocketConnection::new(&mut stream);
-                request(&mut ws);
+                let stream = accept_upstream(listener);
+                let mut io = &stream;
+                let mut ws = WebSocketConnection::new(&mut io);
+                request(&mut ws, &stream);
                 if phase == "text" {
                     ws.send_json(&json!({"type":"response.output_text.delta","delta":"partial"}))
                         .unwrap();
@@ -144,9 +152,10 @@ fn local_and_upstream_websocket_errors_have_distinct_receipts_and_preserve_upstr
     }});
     let expected = upstream_error.clone();
     let worker = thread::spawn(move || {
-        let mut stream = accept_upstream(listener);
-        let mut ws = WebSocketConnection::new(&mut stream);
-        request(&mut ws);
+        let stream = accept_upstream(listener);
+        let mut io = &stream;
+        let mut ws = WebSocketConnection::new(&mut io);
+        request(&mut ws, &stream);
         ws.send_json(&upstream_error).unwrap();
     });
     let (root, server) = native_alias_server(&base_url);
@@ -252,9 +261,10 @@ fn interrupt_is_forwarded_during_generation_and_its_response_can_be_continued() 
         "mode":"discard_partial_items","future_control":{"keep":true}});
     let expected = interrupt.clone();
     let worker = thread::spawn(move || {
-        let mut stream = accept_upstream(listener);
-        let mut ws = WebSocketConnection::new(&mut stream);
-        let create = request(&mut ws);
+        let stream = accept_upstream(listener);
+        let mut io = &stream;
+        let mut ws = WebSocketConnection::new(&mut io);
+        let create = request(&mut ws, &stream);
         assert_eq!(create["model"], "upstream");
         ws.send_json(&json!({"type":"response.created","response":{"id":"resp_interrupted"}}))
             .unwrap();
@@ -264,7 +274,7 @@ fn interrupt_is_forwarded_during_generation_and_its_response_can_be_continued() 
         )
         .unwrap();
         // A later read must be the interrupt, not a repeated inference request.
-        let control = request(&mut ws);
+        let control = request(&mut ws, &stream);
         assert_eq!(control, expected);
         ws.send_json(
             &json!({"type":"response.incomplete","response":{"id":"resp_interrupted",
@@ -272,7 +282,7 @@ fn interrupt_is_forwarded_during_generation_and_its_response_can_be_continued() 
             "usage":{"input_tokens":7,"output_tokens":2},"future_response":{"keep":true}}}),
         )
         .unwrap();
-        let next = request(&mut ws);
+        let next = request(&mut ws, &stream);
         assert_eq!(next["type"], "response.create");
         assert_eq!(next["previous_response_id"], "resp_interrupted");
         assert_eq!(next["model"], "upstream");
@@ -322,9 +332,10 @@ fn disconnect_cancels_a_native_websocket_while_its_upstream_is_silent() {
     let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
     let (closed_tx, closed) = mpsc::channel();
     let worker = thread::spawn(move || {
-        let mut stream = accept_upstream(listener);
-        let mut ws = WebSocketConnection::new(&mut stream);
-        request(&mut ws);
+        let stream = accept_upstream(listener);
+        let mut io = &stream;
+        let mut ws = WebSocketConnection::new(&mut io);
+        request(&mut ws, &stream);
         ws.send_json(&json!({"type":"response.created","response":{"id":"resp_waiting"}}))
             .unwrap();
         closed_tx
@@ -355,14 +366,15 @@ fn next_create_queued_during_a_native_turn_is_dispatched_after_its_terminal() {
     let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
     let (release, wait) = mpsc::channel();
     let worker = thread::spawn(move || {
-        let mut stream = accept_upstream(listener);
-        let mut ws = WebSocketConnection::new(&mut stream);
-        request(&mut ws);
+        let stream = accept_upstream(listener);
+        let mut io = &stream;
+        let mut ws = WebSocketConnection::new(&mut io);
+        request(&mut ws, &stream);
         ws.send_json(&json!({"type":"response.created","response":{"id":"resp_first"}}))
             .unwrap();
         wait.recv_timeout(Duration::from_secs(5)).unwrap();
         ws.send_json(&json!({"type":"response.completed","response":{"id":"resp_first","status":"completed","output":[]}})).unwrap();
-        let next = request(&mut ws);
+        let next = request(&mut ws, &stream);
         assert_eq!(next["input"], "second");
         ws.send_json(&json!({"type":"response.completed","response":{"id":"resp_second","status":"completed","output":[]}})).unwrap();
     });
@@ -394,15 +406,16 @@ fn incremental_disconnect_after_output_does_not_request_a_full_replay() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
     let worker = thread::spawn(move || {
-        let mut stream = accept_upstream(listener);
-        let mut ws = WebSocketConnection::new(&mut stream);
-        request(&mut ws);
+        let stream = accept_upstream(listener);
+        let mut io = &stream;
+        let mut ws = WebSocketConnection::new(&mut io);
+        request(&mut ws, &stream);
         ws.send_json(
             &json!({"type":"response.completed","response":{"id":"resp_base",
             "status":"completed","output":[]}}),
         )
         .unwrap();
-        let next = request(&mut ws);
+        let next = request(&mut ws, &stream);
         assert_eq!(next["previous_response_id"], "resp_base");
         ws.send_json(&json!({"type":"response.created","response":{"id":"resp_partial"}}))
             .unwrap();

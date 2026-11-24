@@ -4,7 +4,7 @@ use crate::{
     tests::{live_journal, wait_for},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::{
     fs, os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicBool,
 };
@@ -360,7 +360,10 @@ fn submitted_app_icon_write_finishes_once_after_disconnect() {
                 client.write_all(&wire).await.unwrap();
                 let saved = fixture.directory.path().join("state/appearance.json");
                 tokio::task::spawn_blocking(move || {
-                    wait_for(test_timeout(Duration::from_secs(5)), || saved.is_file())
+                    wait_for(
+                        &Deadline::after(test_timeout(Duration::from_secs(5))),
+                        || saved.is_file(),
+                    )
                 })
                 .await
                 .unwrap();

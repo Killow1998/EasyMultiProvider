@@ -21,8 +21,9 @@ fn client_failure(
         .unwrap();
         body["type"] = json!("response.create");
         socket.send_json(body).unwrap();
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(300)));
         loop {
-            let event = socket.receive_json().unwrap().expect("WebSocket event");
+            let event = websocket_event_before(&mut socket, &deadline);
             let terminal = matches!(event["type"].as_str(), Some("error" | "response.failed"));
             events.push(event);
             assert!(events.len() <= 20, "missing terminal failure");

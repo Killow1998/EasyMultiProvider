@@ -1,6 +1,7 @@
 //! Real Codex app-server steers against isolated EMP and synthetic upstreams.
 use super::support::*;
 use super::*;
+use emp_test_support::{Deadline, test_timeout};
 use std::process::{Child, ChildStdin, Command, Stdio};
 
 pub(super) struct Codex {
@@ -73,12 +74,19 @@ impl Codex {
     }
 
     pub(super) fn wait(&self, predicate: impl Fn(&Value) -> bool) -> Value {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        self.wait_before(
+            &Deadline::after(test_timeout(Duration::from_secs(15))),
+            predicate,
+        )
+    }
+
+    fn wait_before(&self, deadline: &Deadline, predicate: impl Fn(&Value) -> bool) -> Value {
         loop {
             let value = self
                 .output
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .recv_timeout(deadline.remaining())
                 .expect("Codex event deadline");
+            let value = deadline.accept(value, "Codex event").unwrap();
             if predicate(&value) {
                 return value;
             }
@@ -86,8 +94,23 @@ impl Codex {
     }
 
     pub(super) fn rpc(&mut self, id: u64, method: &str, params: Value) -> Value {
+        self.rpc_before(
+            id,
+            method,
+            params,
+            &Deadline::after(test_timeout(Duration::from_secs(15))),
+        )
+    }
+
+    pub(super) fn rpc_before(
+        &mut self,
+        id: u64,
+        method: &str,
+        params: Value,
+        deadline: &Deadline,
+    ) -> Value {
         self.send(json!({"id":id,"method":method,"params":params}));
-        let value = self.wait(|value| value["id"] == id);
+        let value = self.wait_before(deadline, |value| value["id"] == id);
         assert!(value.get("error").is_none(), "Codex RPC error: {value}");
         value["result"].clone()
     }
@@ -318,15 +341,15 @@ fn stream_control(native: bool, cancel: bool) {
 }
 
 fn accept(listener: &TcpListener) -> TcpStream {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
     loop {
-        assert!(Instant::now() < deadline, "upstream accept deadline");
+        assert!(!deadline.is_expired(), "upstream accept deadline");
         match listener.accept() {
             Ok((socket, _)) => {
                 socket
                     .set_read_timeout(Some(Duration::from_secs(15)))
                     .unwrap();
-                return socket;
+                return deadline.accept(socket, "upstream accept").unwrap();
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 #[expect(
@@ -403,18 +426,19 @@ fn native_upstream(listener: TcpListener, first: mpsc::Sender<()>, cancel: bool)
     let accept = websocket_accept(request.header("Sec-WebSocket-Key").unwrap()).unwrap();
     write!(socket, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
     socket.flush().unwrap();
-    let mut ws = WebSocketConnection::new(&mut socket);
-    let warmup = frame(&mut ws);
+    let mut io = &socket;
+    let mut ws = WebSocketConnection::new(&mut io);
+    let warmup = frame(&mut ws, &socket);
     assert_eq!(warmup["generate"], false);
     ws.send_json(&json!({"type":"response.completed","response":{"id":"resp_codex_warmup","status":"completed","output":[]}})).unwrap();
-    let initial = frame(&mut ws);
+    let initial = frame(&mut ws, &socket);
     assert_eq!(initial["previous_response_id"], "resp_codex_warmup");
     ws.send_json(&json!({"type":"response.created","response":{"id":"resp_codex_first","status":"in_progress","output":[]}})).unwrap();
     for event in partial() {
         ws.send_json(&event).unwrap();
     }
     first.send(()).unwrap();
-    let control = frame(&mut ws);
+    let control = frame(&mut ws, &socket);
     assert_eq!(
         control,
         json!({"type":"response.interrupt","response_id":"resp_codex_first","mode":"discard_partial_items"})
@@ -429,20 +453,28 @@ fn native_upstream(listener: TcpListener, first: mpsc::Sender<()>, cancel: bool)
     if cancel {
         return vec![initial];
     }
-    let next = frame(&mut ws);
+    let next = frame(&mut ws, &socket);
     for event in complete() {
         ws.send_json(&event).unwrap();
     }
     vec![initial, next]
 }
 
-fn frame(ws: &mut WebSocketConnection<'_, TcpStream>) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(15);
+fn frame(ws: &mut WebSocketConnection<'_, &TcpStream>, socket: &TcpStream) -> Value {
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
     loop {
-        assert!(Instant::now() < deadline, "Codex upstream frame deadline");
+        assert!(!deadline.is_expired(), "Codex upstream frame deadline");
+        socket
+            .set_read_timeout(Some(
+                deadline
+                    .accept(deadline.remaining(), "Codex upstream frame")
+                    .unwrap(),
+            ))
+            .unwrap();
         match ws.poll_text().unwrap() {
             emp_transport::WebSocketPoll::Text(text) => {
-                return serde_json::from_str(&text).unwrap();
+                let value = serde_json::from_str(&text).unwrap();
+                return deadline.accept(value, "Codex upstream frame").unwrap();
             }
             emp_transport::WebSocketPoll::Pending => {}
             other => panic!("unexpected upstream frame: {other:?}"),

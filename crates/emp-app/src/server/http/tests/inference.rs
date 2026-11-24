@@ -3,7 +3,7 @@ use crate::{
     server::raw_tcp::{RawClient, wire_timeout},
     tests::{OneShotUpstream, live_journal, wait_for},
 };
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::{collections::BTreeMap, io::Read, sync::mpsc};
 use tokio::sync::oneshot;
 
@@ -84,7 +84,7 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
             }
             let state_for_wait = state.clone();
             tokio::task::spawn_blocking(move || {
-                wait_for(wire_timeout(), || state_for_wait.lifecycle.admission.active_requests() == 1);
+                wait_for(&Deadline::after(wire_timeout()), || state_for_wait.lifecycle.admission.active_requests() == 1);
             }).await.unwrap();
             let admission = &state.lifecycle.admission;
             let public_slots = std::iter::from_fn(|| admission.acquire_request()).collect::<Vec<_>>();
@@ -97,7 +97,7 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
             callbacks.push(stream);
             for (mut socket, mut callback) in sender.await.unwrap().into_iter().zip(callbacks) {
                 socket.write_all(LAST).await.unwrap();
-                assert!(String::from_utf8_lossy(&callback.rest().await).contains("response.completed"));
+                assert!(String::from_utf8_lossy(&callback.rest(&Deadline::after(wire_timeout())).await).contains("response.completed"));
             }
         });
     }
@@ -151,7 +151,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
                     .updates()
                     .drain_for_test(test_timeout(Duration::from_secs(15)))
             });
-            wait_for(wire_timeout(), || updates.enter().is_none());
+            wait_for(&Deadline::after(wire_timeout()), || updates.enter().is_none());
 
             let authorization = format!("Authorization: Bearer {}", parent.key);
             let wire = json_request(
@@ -163,7 +163,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
             let mut io = TcpStream::connect(address).await.unwrap();
             let state_for_intake = state.clone();
             tokio::task::spawn_blocking(move || {
-                wait_for(wire_timeout(), || {
+                wait_for(&Deadline::after(wire_timeout()), || {
                     state_for_intake.lifecycle.admission.active_requests() == 2
                 });
             })
@@ -414,7 +414,9 @@ fn shutdown_reports_search_that_crossed_the_drain_deadline() {
     let upstream = OneShotUpstream::serve(1, move |socket| {
         upstream_reply(socket, 200, "application/json", RESULT.len(), "");
         released
-            .recv_timeout(test_timeout(REQUEST_DRAIN_TIMEOUT) + wire_timeout())
+            .recv_timeout(
+                test_timeout(REQUEST_DRAIN_TIMEOUT) + crate::server::raw_tcp::wire_timeout(),
+            )
             .unwrap();
         socket.write_all(RESULT).unwrap();
     });
@@ -449,7 +451,7 @@ fn shutdown_reports_search_that_crossed_the_drain_deadline() {
     let closing = std::thread::spawn(move || server.shutdown());
     let eof = runtime.block_on(async {
         timeout(
-            test_timeout(REQUEST_DRAIN_TIMEOUT) + wire_timeout(),
+            test_timeout(REQUEST_DRAIN_TIMEOUT) + crate::server::raw_tcp::wire_timeout(),
             client.read(&mut [0]),
         )
         .await
@@ -545,7 +547,7 @@ fn failed_aero_parent_keeps_the_running_callback_in_quit_precheck() {
             &json!({"error":{"code":"active_conversations","message":"Finish active Codex requests and WebSockets, then retry shutdown","origin":"emp"}}),
         );
         finish_callback.send(()).unwrap();
-        assert!(String::from_utf8_lossy(&stream.rest().await).contains("response.completed"));
+        assert!(String::from_utf8_lossy(&stream.rest(&Deadline::after(wire_timeout())).await).contains("response.completed"));
         wire_contract::assert_json_reply(
             "quit after Aero callback", &quit_response(address, &session).await,
             "200 OK", &json!({"status":"stopping"}),
@@ -722,7 +724,7 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
 
         let state = fixture.server.state.clone();
         tokio::task::spawn_blocking(move || {
-            wait_for(wire_timeout(), || {
+            wait_for(&Deadline::after(wire_timeout()), || {
                 state.lifecycle.updates().active_for_test() == 0
             });
             assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));

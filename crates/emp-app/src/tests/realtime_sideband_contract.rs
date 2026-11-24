@@ -300,14 +300,17 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     assert_eq!(observed.path, "/v1/live/rtc_relay_contract");
     assert_eq!(observed.headers["authorization"], "Bearer native-secret");
     assert_eq!(observed.headers["session-id"], "session-voice");
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while server.state.lifecycle.admission.active_websockets() != 0 && Instant::now() < deadline {
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(1)));
+    while server.state.lifecycle.admission.active_websockets() != 0 && !deadline.is_expired() {
         #[expect(
             clippy::disallowed_methods,
             reason = "WebSocket 准入释放没有通知接口，以固定间隔轮询"
         )]
         thread::sleep(Duration::from_millis(5));
     }
+    deadline
+        .accept((), "sideband websocket slot release")
+        .unwrap();
     assert_eq!(server.state.lifecycle.admission.active_websockets(), 0);
     server.shutdown().expect("shutdown server");
     idle_upstream.assert_no_more_requests();

@@ -2,12 +2,12 @@
 use super::probe_candidate_version;
 use super::{UpdateManager, nonce_with};
 use crate::release::UpdateEndpoints;
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Barrier};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 mod catalog;
 mod retry;
@@ -108,7 +108,7 @@ fn candidate_version_probe_times_out_and_reaps_the_child() {
     .unwrap();
     manager.stage("verify_version");
     let mut spawned_pid = None;
-    let started = Instant::now();
+    let started = std::time::Instant::now();
     let error = probe_candidate_version(
         &binary,
         "0.12.0",
@@ -180,12 +180,13 @@ fn concurrent_checks_start_only_one_release_job() {
             .unwrap();
         drop(stream);
         listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + test_timeout(Duration::from_millis(300));
+        let deadline = Deadline::after(test_timeout(Duration::from_millis(300)));
         let mut requests = 1;
-        while Instant::now() < deadline {
+        while !deadline.is_expired() {
             match listener.accept() {
-                Ok((mut extra, _)) => {
+                Ok((extra, _)) => {
                     requests += 1;
+                    let mut extra = deadline.io(extra);
                     let mut sink = [0_u8; 512];
                     let _ = extra.read(&mut sink);
                     let _ = extra.write_all(
@@ -235,15 +236,18 @@ fn concurrent_checks_start_only_one_release_job() {
     first.join().unwrap();
     second.join().unwrap();
     assert_eq!(server.join().unwrap(), 1, "only one check request is sent");
-    let deadline = Instant::now() + test_timeout(Duration::from_secs(3));
-    while manager.snapshot().state == "checking" && Instant::now() < deadline {
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
+    while manager.snapshot().state == "checking" && !deadline.is_expired() {
         #[expect(
             clippy::disallowed_methods,
             reason = "并发发布检查通过状态快照观察，以固定间隔轮询"
         )]
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(manager.snapshot().state, "no_release");
+    let snapshot = deadline
+        .accept(manager.snapshot(), "concurrent release check finished")
+        .unwrap();
+    assert_eq!(snapshot.state, "no_release");
 }
 
 #[test]
@@ -307,15 +311,17 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
     });
     manager.start("install").unwrap();
     assert_eq!(server.join().unwrap(), 4);
-    let deadline = Instant::now() + test_timeout(Duration::from_secs(12));
-    while manager.snapshot().state != "error" && Instant::now() < deadline {
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(12)));
+    while manager.snapshot().state != "error" && !deadline.is_expired() {
         #[expect(
             clippy::disallowed_methods,
             reason = "更新阶段通过状态快照观察，以固定间隔轮询"
         )]
         thread::sleep(Duration::from_millis(5));
     }
-    let snapshot = manager.snapshot();
+    let snapshot = deadline
+        .accept(manager.snapshot(), "failed download snapshot")
+        .unwrap();
     assert_eq!(snapshot.error, "update_failed");
     let receipt = snapshot.failure.unwrap();
     assert_eq!(receipt.stage, "download_package");
@@ -475,7 +481,7 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
     )
     .unwrap();
     manager.start("check").unwrap();
-    let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     loop {
         if events
             .lock()
@@ -483,9 +489,10 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
             .iter()
             .any(|(name, _)| name == "update_finished")
         {
+            deadline.accept((), "update finished event").unwrap();
             break;
         }
-        assert!(Instant::now() < deadline, "update never completed");
+        assert!(!deadline.is_expired(), "update never completed");
         #[expect(
             clippy::disallowed_methods,
             reason = "更新完成通过观测回调报告，以固定间隔轮询已收集事件"

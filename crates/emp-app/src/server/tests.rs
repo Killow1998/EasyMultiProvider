@@ -12,6 +12,7 @@ use axum::{
     http::{Response, StatusCode},
     routing::get,
 };
+use emp_test_support::Deadline;
 use hyper::body::{Body as HttpBody, Frame};
 use std::{
     convert::Infallible,
@@ -226,7 +227,7 @@ async fn response_body_holds_admission_until_completion_or_client_disconnect() {
         assert_eq!(admission.active_requests(), usize::from(!exempt));
         if exempt {
             let mut next = RawClient::request(server.local_addr(), GET).await;
-            assert_eq!(next.rest().await, b"ready");
+            assert_eq!(next.rest(&Deadline::after(wire_timeout())).await, b"ready");
             assert!(!release.is_closed());
         } else {
             let mut refused = TcpStream::connect(server.local_addr()).await.unwrap();
@@ -245,11 +246,14 @@ async fn response_body_holds_admission_until_completion_or_client_disconnect() {
             timeout(wire_timeout(), release.closed()).await.unwrap();
         } else {
             release.send(()).unwrap();
-            assert_eq!(client.rest().await, b"0\r\n\r\n");
+            assert_eq!(
+                client.rest(&Deadline::after(wire_timeout())).await,
+                b"0\r\n\r\n"
+            );
         }
         assert_eq!(admission.active_requests(), 0);
         let mut next = RawClient::request(server.local_addr(), GET).await;
-        assert_eq!(next.rest().await, b"ready");
+        assert_eq!(next.rest(&Deadline::after(wire_timeout())).await, b"ready");
         server.shutdown().await.unwrap();
     }
 }
@@ -324,7 +328,12 @@ async fn upgrade_releases_request_permit_and_graceful_shutdown_waits_for_session
         assert_eq!(admission.active_requests(), 0);
         assert_eq!(admission.active_websockets(), 1);
         client.io.write_all(b"y").await.unwrap();
-        assert!(client.rest().await.is_empty());
+        assert!(
+            client
+                .rest(&Deadline::after(wire_timeout()))
+                .await
+                .is_empty()
+        );
         timeout(wire_timeout(), stopping).await.unwrap().unwrap();
         assert!(TcpStream::connect(address).await.is_err());
         assert_eq!(admission.active_requests(), 0);
@@ -440,7 +449,7 @@ async fn wire_guard_returns_emp_400_status_and_body() {
     ] {
         let mut client = RawClient::request(server.local_addr(), request).await;
         assert!(client.head.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{}", client.head);
-        assert_eq!(client.rest().await, expected_body);
+        assert_eq!(client.rest(&Deadline::after(wire_timeout())).await, expected_body);
     }
     server.shutdown().await.unwrap();
 }
@@ -472,7 +481,10 @@ async fn exact_header_boundary_allows_over_100_fields_and_only_one_response() {
     pipeline.push_str("\r\n\r\nGET /again HTTP/1.1\r\nHost: localhost\r\n\r\n");
     let mut client = RawClient::request(server.local_addr(), pipeline.as_bytes()).await;
     assert!(client.head.starts_with("HTTP/1.1 200"));
-    assert_eq!(client.rest().await, b"ready");
+    assert_eq!(
+        client.rest(&Deadline::after(wire_timeout())).await,
+        b"ready"
+    );
     server.shutdown().await.unwrap();
 }
 

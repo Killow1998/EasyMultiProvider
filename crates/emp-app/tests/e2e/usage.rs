@@ -1,4 +1,5 @@
 use crate::support::{Emp, Upstream, Workspace, import_account, write_file};
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 
 fn report(emp: &Emp, path: &str) -> Value {
@@ -13,22 +14,25 @@ fn scan_report(emp: &Emp, path: &str) -> Value {
     let command = response.json()["command_id"]
         .as_u64()
         .expect("scan command");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = Deadline::after(test_timeout(std::time::Duration::from_secs(10)));
     loop {
-        let payload = report(emp, path);
+        let response = emp.get_before(path, &deadline);
+        assert_eq!(response.status, 200, "{path}: {}", response.text());
+        let payload = response.json();
         if payload["history"]["completed"].as_u64().unwrap_or(0) >= command {
             assert_eq!(payload["history"]["errors"], 0, "{payload}");
-            return payload;
+            return deadline.accept(payload, "usage scan result").unwrap();
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "scan {command}: {payload}"
-        );
+        assert!(!deadline.is_expired(), "scan {command}: {payload}");
         #[expect(
             clippy::disallowed_methods,
             reason = "用量扫描结果通过 CLI 状态提供，以固定间隔轮询"
         )]
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::thread::sleep(
+            deadline
+                .remaining()
+                .min(std::time::Duration::from_millis(20)),
+        );
     }
 }
 
@@ -98,20 +102,24 @@ fn usage_scan_prices_codex_history_by_upstream_route() {
 
     let scan = emp.post("/api/usage/scan", &json!({}));
     assert_eq!(scan.status, 202, "{}", scan.text());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = Deadline::after(test_timeout(std::time::Duration::from_secs(5)));
     let payload = loop {
-        let response = emp.get("/api/usage?start=1788825600&end=1788912000");
+        let response = emp.get_before("/api/usage?start=1788825600&end=1788912000", &deadline);
         assert_eq!(response.status, 200, "{}", response.text());
         let payload = response.json();
         if payload["totals"]["requests"] == 2 && payload["history"]["running"] == false {
-            break payload;
+            break deadline.accept(payload, "usage pricing result").unwrap();
         }
-        assert!(std::time::Instant::now() < deadline, "{payload}");
+        assert!(!deadline.is_expired(), "{payload}");
         #[expect(
             clippy::disallowed_methods,
             reason = "计价结果通过管理接口提供，以固定间隔轮询"
         )]
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::thread::sleep(
+            deadline
+                .remaining()
+                .min(std::time::Duration::from_millis(20)),
+        );
     };
     assert_eq!(payload["totals"]["priced_requests"], 2);
     assert_eq!(payload["totals"]["cost_nanos"], 576_000);

@@ -3,8 +3,9 @@ use super::request_observation_contract::finished;
 use super::*;
 
 fn next_response(socket: &mut emp_transport::ClientWebSocket) -> Value {
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(300)));
     loop {
-        let event = socket.receive_json().unwrap().unwrap();
+        let event = websocket_event_before(socket, &deadline);
         if event["type"] != "codex.response.metadata" {
             return event;
         }

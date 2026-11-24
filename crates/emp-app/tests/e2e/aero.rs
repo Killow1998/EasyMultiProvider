@@ -1,6 +1,6 @@
 use crate::support::modules::{BuiltModule, ModuleRelease, eventually};
 use crate::support::{Emp, NATIVE_TOKEN, Upstream, Workspace, http};
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -179,16 +179,15 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
         "internal handoff leaked"
     );
 
-    let calls = eventually(
-        test_timeout(Duration::from_secs(5)),
-        "three completed role calls",
-        || {
-            let calls = report(&emp, "/api/calls?start=0&end=4102444800");
-            let records = calls["records"].as_array().expect("call ledger records");
-            (records.len() >= 3 && records.iter().all(|row| row["state"] == "completed"))
-                .then_some(calls)
-        },
-    );
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    let calls = eventually(&deadline, "three completed role calls", || {
+        let response = emp.get_before("/api/calls?start=0&end=4102444800", &deadline);
+        assert_eq!(response.status, 200, "{}", response.text());
+        let calls = response.json();
+        let records = calls["records"].as_array().expect("call ledger records");
+        (records.len() >= 3 && records.iter().all(|row| row["state"] == "completed"))
+            .then_some(calls)
+    });
     let records = calls["records"].as_array().expect("call ledger records");
     assert_eq!(records.len(), 3, "{calls}");
     for (upstream, provider, model, role, count, input, output) in [
@@ -316,7 +315,6 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
         io::{Read, Write},
         net::TcpStream,
         thread,
-        time::Instant,
     };
 
     let workspace = Workspace::new();
@@ -438,22 +436,27 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
         event["type"] == "response.completed"
             && event["response"]["output"][0]["content"][0]["text"] == "AERO_CALLBACK_COMPLETED"
     }));
-    for (_, release) in &held {
-        release.send(()).expect("release this public upstream tail");
-    }
-    for (index, (mut stream, _)) in held.into_iter().enumerate() {
-        let deadline = Instant::now() + test_timeout(Duration::from_secs(15));
-        let mut completed = false;
-        while let Some(event) = stream.next_event(deadline).unwrap_or_else(|error| {
-            panic!("released public SSE stream {index}, completion received: {completed}: {error}")
-        }) {
-            completed |= event["type"] == "response.completed";
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
+    thread::scope(|scope| {
+        for (_, release) in &held {
+            release.send(()).expect("release this public upstream tail");
         }
-        assert!(completed, "public stream {index} ended without completion");
-        stream
-            .expect_eof(deadline)
-            .expect("public SSE body reached EOF");
-    }
+        for (index, (mut stream, _)) in held.into_iter().enumerate() {
+            let deadline = &deadline;
+            scope.spawn(move || {
+                let mut completed = false;
+                while let Some(event) = stream.next_event(deadline).unwrap_or_else(|error| {
+                    panic!("released public SSE stream {index}, completion received: {completed}: {error}")
+                }) {
+                    completed |= event["type"] == "response.completed";
+                }
+                assert!(completed, "public stream {index} ended without completion");
+                stream
+                    .expect_eof(deadline)
+                    .unwrap_or_else(|error| panic!("public SSE stream {index} EOF: {error}"));
+            });
+        }
+    });
 
     let start_call = |session: &'static str| {
         thread::spawn(move || {
@@ -517,7 +520,8 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
         )
     });
     assert_eq!(
-        idle.next_json().unwrap(),
+        idle.next_json(&Deadline::after(test_timeout(Duration::from_secs(5))))
+            .unwrap(),
         None,
         "quit drains the idle WebSocket"
     );
@@ -543,7 +547,7 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     }
     assert_eq!(quit.join().unwrap().json(), json!({"status":"stopping"}));
     eventually(
-        test_timeout(Duration::from_secs(5)),
+        &Deadline::after(test_timeout(Duration::from_secs(5))),
         "Aero process survived shutdown",
         || (!std::path::Path::new(&format!("/proc/{pid}")).exists()).then_some(()),
     );

@@ -1,8 +1,8 @@
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, DeadlineIo, test_timeout};
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -15,21 +15,28 @@ pub struct Response {
 }
 
 impl Response {
-    pub fn read_from(mut stream: TcpStream) -> Self {
-        stream
-            .set_read_timeout(Some(io_timeout()))
-            .expect("timeout");
-        let (status_line, headers, body) = read_message(&mut stream, true);
+    #[cfg(target_os = "linux")]
+    pub fn read_from(stream: TcpStream) -> Self {
+        Self::read_before(stream, &Deadline::after(io_timeout()))
+    }
+
+    fn read_before(stream: TcpStream, deadline: &Deadline) -> Self {
+        let (status_line, headers, body) = read_message(&mut deadline.io(stream), true);
         let status = status_line
             .split_whitespace()
             .nth(1)
             .and_then(|code| code.parse().ok())
             .unwrap_or_else(|| panic!("status line: {status_line:?}"));
-        Self {
-            status,
-            headers,
-            body,
-        }
+        deadline
+            .accept(
+                Self {
+                    status,
+                    headers,
+                    body,
+                },
+                "HTTP response",
+            )
+            .unwrap()
     }
 
     pub fn json(&self) -> Value {
@@ -84,7 +91,14 @@ fn dechunk(mut raw: &[u8]) -> Option<Vec<u8>> {
             usize::from_str_radix(size_text.split(';').next()?.trim(), 16).expect("hex chunk size");
         let start = line_end + 2;
         if size == 0 {
-            return raw[start..].starts_with(b"\r\n").then_some(body);
+            let mut trailers = &raw[start..];
+            loop {
+                let end = find(trailers, b"\r\n")?;
+                if end == 0 {
+                    return Some(body);
+                }
+                trailers = &trailers[end + 2..];
+            }
         }
         if raw.len() < start + size + 2 {
             return None;
@@ -172,7 +186,28 @@ pub fn http(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> Response {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to EMP");
+    http_before(
+        port,
+        method,
+        path,
+        headers,
+        body,
+        &Deadline::after(io_timeout()),
+    )
+}
+
+pub(super) fn http_before(
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+    deadline: &Deadline,
+) -> Response {
+    let stream = deadline
+        .connect(([127, 0, 0, 1], port).into())
+        .expect("connect to EMP");
+    let mut io = deadline.io(&stream);
     let mut request = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
     for (name, value) in headers {
         request.push_str(&format!("{name}: {value}\r\n"));
@@ -181,13 +216,13 @@ pub fn http(
         "Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     ));
-    stream.write_all(request.as_bytes()).expect("write request");
-    stream.write_all(body).expect("write body");
-    Response::read_from(stream)
+    io.write_all(request.as_bytes()).expect("write request");
+    io.write_all(body).expect("write body");
+    Response::read_before(stream, deadline)
 }
 
 pub struct SseClient {
-    input: BufReader<TcpStream>,
+    input: BufReader<DeadlineIo<TcpStream>>,
     chunk_remaining: Option<usize>,
     ended: bool,
 }
@@ -195,21 +230,25 @@ pub struct SseClient {
 impl SseClient {
     pub fn responses(port: u16, body: &Value) -> Self {
         let body = body.to_string();
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect SSE");
-        stream
-            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .expect("SSE timeout");
-        stream
-            .set_write_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .expect("SSE write timeout");
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let stream = deadline
+            .connect(([127, 0, 0, 1], port).into())
+            .expect("connect SSE");
         write!(
-            stream,
+            deadline.io(&stream),
             "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             super::NATIVE_TOKEN,
             body.len()
         )
         .expect("write SSE request");
-        let mut input = BufReader::new(stream);
+        Self::read_head(
+            stream,
+            &Deadline::after(test_timeout(Duration::from_secs(5))),
+        )
+    }
+
+    fn read_head(stream: TcpStream, deadline: &Deadline) -> Self {
+        let mut input = BufReader::new(deadline.io(stream));
         let mut head = String::new();
         loop {
             let mut line = String::new();
@@ -228,30 +267,44 @@ impl SseClient {
         let chunked = headers
             .get("transfer-encoding")
             .is_some_and(|value| value.eq_ignore_ascii_case("chunked"));
-        Self {
-            input,
-            chunk_remaining: chunked.then_some(0),
-            ended: false,
-        }
+        deadline
+            .accept(
+                Self {
+                    input,
+                    chunk_remaining: chunked.then_some(0),
+                    ended: false,
+                },
+                "SSE response head",
+            )
+            .unwrap()
     }
 
-    fn byte(&mut self, deadline: Instant) -> io::Result<Option<u8>> {
+    fn read_chunk_line(&mut self, line: &mut Vec<u8>) -> io::Result<()> {
+        line.clear();
+        if self.input.read_until(b'\n', line)? == 0 || !line.ends_with(b"\r\n") {
+            return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+        }
+        Ok(())
+    }
+
+    fn byte(&mut self) -> io::Result<Option<u8>> {
         if self.ended {
             return Ok(None);
         }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "SSE deadline"));
-        }
-        self.input.get_ref().set_read_timeout(Some(remaining))?;
         if self.chunk_remaining == Some(0) {
-            let mut line = String::new();
-            if self.input.read_line(&mut line)? == 0 {
-                return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
-            }
-            let length = usize::from_str_radix(line.split(';').next().unwrap().trim(), 16)
+            let mut line = Vec::new();
+            self.read_chunk_line(&mut line)?;
+            let size = std::str::from_utf8(line.split(|&byte| byte == b';').next().unwrap())
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            let length = usize::from_str_radix(size.trim(), 16)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             if length == 0 {
+                loop {
+                    self.read_chunk_line(&mut line)?;
+                    if line == b"\r\n" {
+                        break;
+                    }
+                }
                 self.ended = true;
                 return Ok(None);
             }
@@ -279,26 +332,29 @@ impl SseClient {
         Ok(Some(byte[0]))
     }
 
-    #[cfg(target_os = "linux")]
-    pub fn expect_eof(&mut self, deadline: Instant) -> io::Result<()> {
-        if self.byte(deadline)?.is_some() {
+    pub fn expect_eof(&mut self, deadline: &Deadline) -> io::Result<()> {
+        self.input.get_mut().set_deadline(deadline);
+        if self.byte()?.is_some() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "data after SSE end",
             ));
         }
-        Ok(())
+        deadline.accept((), "SSE body EOF")
     }
 
-    pub fn next_event(&mut self, deadline: Instant) -> io::Result<Option<Value>> {
+    pub fn next_event(&mut self, deadline: &Deadline) -> io::Result<Option<Value>> {
+        self.input.get_mut().set_deadline(deadline);
         let mut frame = String::new();
         loop {
             let mut line = Vec::new();
             loop {
-                match self.byte(deadline)? {
+                match self.byte()? {
                     Some(b'\n') => break,
                     Some(byte) => line.push(byte),
-                    None if line.is_empty() && frame.is_empty() => return Ok(None),
+                    None if line.is_empty() && frame.is_empty() => {
+                        return deadline.accept(None, "SSE body EOF");
+                    }
                     None => return Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
                 }
             }
@@ -307,17 +363,65 @@ impl SseClient {
             if line.trim_end_matches('\r').is_empty() {
                 if let Some(data) = sse::data(&frame).filter(|data| !data.is_empty()) {
                     if data.trim() == "[DONE]" {
-                        return Ok(None);
+                        return deadline.accept(None, "SSE done marker");
                     }
-                    return serde_json::from_str(&data)
-                        .map(Some)
-                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+                    let event = serde_json::from_str(&data)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                    return deadline.accept(Some(event), "SSE event");
                 }
                 frame.clear();
             } else {
                 frame.push_str(&line);
                 frame.push('\n');
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn chunked_sse_requires_the_final_empty_line_even_after_completion() {
+        for complete in [true, false] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (mut server, _) = listener.accept().unwrap();
+            let event = b"data: {\"type\":\"response.completed\"}\n\n";
+            write!(
+                server,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n",
+                event.len()
+            )
+            .unwrap();
+            server.write_all(event).unwrap();
+            server
+                .write_all(b"\r\n0\r\nX-Fixture: trailer\r\n")
+                .unwrap();
+            if complete {
+                server.write_all(b"\r\n").unwrap();
+            }
+
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+            let mut client = SseClient::read_head(client, &deadline);
+            assert_eq!(
+                client.next_event(&deadline).unwrap().unwrap()["type"],
+                "response.completed"
+            );
+            let deadline = if complete {
+                deadline
+            } else {
+                Deadline::after(test_timeout(Duration::from_millis(100)))
+            };
+            let eof = client.expect_eof(&deadline);
+            if complete {
+                eof.unwrap();
+            } else {
+                assert_eq!(eof.unwrap_err().kind(), io::ErrorKind::TimedOut);
+            }
+            drop(server);
         }
     }
 }

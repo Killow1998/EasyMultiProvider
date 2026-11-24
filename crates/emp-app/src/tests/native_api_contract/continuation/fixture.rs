@@ -1,5 +1,6 @@
 //! Large-context continuation through both real credential-selection paths.
 use super::super::*;
+use emp_test_support::{Deadline, test_timeout};
 use emp_transport::{ClientWebSocket, WebSocketPoll};
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
@@ -364,9 +365,10 @@ pub(super) fn connect(server: &ServerHandle, thread_id: &str) -> ClientWebSocket
 pub(super) fn turn(client: &mut ClientWebSocket, body: &Value) -> Value {
     client.send_json(body).unwrap();
     let started = Instant::now();
-    let deadline = started + Duration::from_secs(30);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(30)));
     loop {
-        assert!(Instant::now() < deadline, "fixture turn did not terminate");
+        assert!(!deadline.is_expired(), "fixture turn did not terminate");
+        client.set_read_timeout(deadline.remaining());
         let event: Value = match client.poll_receive_text().unwrap() {
             WebSocketPoll::Text(text) => serde_json::from_str(&text).unwrap(),
             WebSocketPoll::Pending => continue,
@@ -382,7 +384,7 @@ pub(super) fn turn(client: &mut ClientWebSocket, body: &Value) -> Value {
                     started.elapsed()
                 );
             }
-            return event;
+            return deadline.accept(event, "fixture turn completion").unwrap();
         }
     }
 }

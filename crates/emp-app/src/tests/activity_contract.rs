@@ -137,32 +137,31 @@ impl CancelableUpstream {
             if canceled.recv().is_err() {
                 return;
             }
-            stream
-                .set_read_timeout(Some(Duration::from_millis(50)))
-                .expect("set cancellation probe timeout");
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
             let closed_by_client = loop {
+                let Ok(remaining) = deadline.accept(deadline.remaining(), "client cancellation")
+                else {
+                    break false;
+                };
+                stream
+                    .set_read_timeout(Some(remaining.min(test_timeout(Duration::from_millis(50)))))
+                    .expect("set cancellation probe timeout");
                 let mut byte = [0_u8; 1];
                 match stream.peek(&mut byte) {
-                    Ok(0) => break true,
+                    Ok(0) => break !deadline.is_expired(),
                     Ok(_) => continue,
                     Err(error)
                         if matches!(
                             error.kind(),
                             std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                        ) =>
-                    {
-                        if Instant::now() >= deadline {
-                            break false;
-                        }
-                    }
+                        ) => {}
                     Err(error)
                         if matches!(
                             error.kind(),
                             std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
                         ) =>
                     {
-                        break true;
+                        break !deadline.is_expired();
                     }
                     Err(_) => break false,
                 }
@@ -415,7 +414,7 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
             .expect("upstream observes client cancellation"),
         "downstream cancellation did not close the pending upstream request"
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     let finished = loop {
         let snapshot = server
             .state
@@ -424,9 +423,9 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
             .snapshot(crate::util::system_now() as u64);
         let route = only_route(&snapshot);
         if route["in_flight"] == 0 && route["last_finished"].as_u64().is_some() {
-            break snapshot;
+            break deadline.accept(snapshot, "activity guard release").unwrap();
         }
-        assert!(Instant::now() < deadline, "activity guard was not released");
+        assert!(!deadline.is_expired(), "activity guard was not released");
         #[expect(
             clippy::disallowed_methods,
             reason = "活动请求完成通过状态快照观察，以固定间隔轮询"

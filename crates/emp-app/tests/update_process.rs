@@ -1,7 +1,7 @@
 #![cfg(target_os = "linux")]
 
 use emp_state::VaultStore;
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 static EMP_STARTUP_FIXTURE: Mutex<()> = Mutex::new(());
 
@@ -60,7 +60,26 @@ fn try_request(
     session: Option<&str>,
     body: Option<&[u8]>,
 ) -> std::io::Result<Vec<u8>> {
-    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+    try_request_before(
+        port,
+        method,
+        path,
+        session,
+        body,
+        &Deadline::after(test_timeout(Duration::from_secs(10))),
+    )
+}
+
+fn try_request_before(
+    port: u16,
+    method: &str,
+    path: &str,
+    session: Option<&str>,
+    body: Option<&[u8]>,
+    deadline: &Deadline,
+) -> std::io::Result<Vec<u8>> {
+    let stream = deadline.connect(([127, 0, 0, 1], port).into())?;
+    let mut stream = deadline.io(stream);
     let payload = body.unwrap_or_default();
     write!(
         stream,
@@ -78,10 +97,9 @@ fn try_request(
     }
     stream.write_all(b"Connection: close\r\n\r\n")?;
     stream.write_all(payload)?;
-    stream.set_read_timeout(Some(test_timeout(Duration::from_secs(10))))?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
-    Ok(response)
+    deadline.accept(response, path)
 }
 
 /// Exchange the one-use bootstrap token for a management session header.
@@ -231,7 +249,7 @@ fn release_server_with_mode(
         if started.recv().is_err() {
             return;
         }
-        let deadline = Instant::now() + test_timeout(Duration::from_secs(20));
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
         let mut handled = 0;
         let expected_requests = match mode {
             FakeReleaseMode::InvalidJson => 2,
@@ -240,8 +258,8 @@ fn release_server_with_mode(
             FakeReleaseMode::PackageError => 10,
             FakeReleaseMode::TemporaryPackageError => 6,
         };
-        while handled < expected_requests && Instant::now() < deadline {
-            let (mut stream, _) = match listener.accept() {
+        while handled < expected_requests && !deadline.is_expired() {
+            let (stream, _) = match listener.accept() {
                 Ok(connection) => connection,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     #[expect(
@@ -253,12 +271,7 @@ fn release_server_with_mode(
                 }
                 Err(error) => panic!("fake release accept failed: {error}"),
             };
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            assert!(
-                !remaining.is_zero(),
-                "fake release request exceeded its deadline"
-            );
-            stream.set_read_timeout(Some(remaining)).unwrap();
+            let mut stream = deadline.io(stream);
             let mut request = Vec::new();
             let mut buffer = [0_u8; 1024];
             loop {
@@ -327,8 +340,8 @@ fn release_server_with_mode(
             "release API, redirect and artifact requests"
         );
         listener.set_nonblocking(true).unwrap();
-        let extra_deadline = Instant::now() + test_timeout(Duration::from_millis(300));
-        while Instant::now() < extra_deadline {
+        let extra_deadline = Deadline::after(test_timeout(Duration::from_millis(300)));
+        while !extra_deadline.is_expired() {
             match listener.accept() {
                 Ok(_) => panic!("duplicate release or package request observed"),
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -479,26 +492,29 @@ fn wait_for_state(
     port: u16,
     session: &str,
     expected: &str,
-    timeout: Duration,
+    deadline: &Deadline,
 ) -> serde_json::Value {
-    let deadline = Instant::now() + timeout;
     loop {
-        let response = request(port, "GET", "/api/updates", Some(session), None);
+        let response =
+            try_request_before(port, "GET", "/api/updates", Some(session), None, deadline)
+                .unwrap_or_else(|error| panic!("waiting for update {expected}: {error}"));
         assert_eq!(status(&response), 200, "update snapshot request");
         let snapshot = body_json(&response);
         if snapshot["state"] == expected {
-            return snapshot;
+            return deadline
+                .accept(snapshot, format_args!("update {expected}"))
+                .expect("update result arrived after deadline");
         }
         assert_ne!(snapshot["state"], "error", "update failed: {snapshot}");
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "timed out waiting for {expected}: {snapshot}"
         );
         #[expect(
             clippy::disallowed_methods,
             reason = "管理接口没有状态推送，此 helper 按固定间隔轮询更新状态"
         )]
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(deadline.remaining().min(Duration::from_millis(25)));
     }
 }
 
@@ -506,26 +522,29 @@ fn wait_for_error(
     port: u16,
     session: &str,
     expected: &str,
-    timeout: Duration,
+    deadline: &Deadline,
 ) -> serde_json::Value {
-    let deadline = Instant::now() + timeout;
     loop {
-        let response = request(port, "GET", "/api/updates", Some(session), None);
+        let response =
+            try_request_before(port, "GET", "/api/updates", Some(session), None, deadline)
+                .unwrap_or_else(|error| panic!("waiting for update {expected}: {error}"));
         assert_eq!(status(&response), 200, "update snapshot request");
         let snapshot = body_json(&response);
         if snapshot["state"] == "error" {
             assert_eq!(snapshot["error"], expected, "update error snapshot");
-            return snapshot;
+            return deadline
+                .accept(snapshot, format_args!("update {expected}"))
+                .expect("update result arrived after deadline");
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "timed out waiting for error {expected}: {snapshot}"
         );
         #[expect(
             clippy::disallowed_methods,
             reason = "管理接口没有状态推送，此 helper 按固定间隔轮询更新错误"
         )]
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(deadline.remaining().min(Duration::from_millis(10)));
     }
 }
 
@@ -564,7 +583,7 @@ fn check_for_available(emp: &RunningEmp) {
         emp.port,
         &emp.session,
         "available",
-        test_timeout(Duration::from_secs(10)),
+        &Deadline::after(test_timeout(Duration::from_secs(10))),
     );
     assert_eq!(available["latest_version"], candidate_version());
 }
@@ -579,15 +598,16 @@ fn stop_emp(emp: &mut RunningEmp) {
             Some(b"{}"),
         );
         assert_eq!(status(&quit), 200, "idle EMP quits cleanly");
-        let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
         while emp.process.0.try_wait().unwrap().is_none() {
-            assert!(Instant::now() < deadline, "EMP did not stop after quit");
+            assert!(!deadline.is_expired(), "EMP did not stop after quit");
             #[expect(
                 clippy::disallowed_methods,
                 reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
             )]
             thread::sleep(Duration::from_millis(10));
         }
+        deadline.accept((), "EMP process exit").unwrap();
     }
 }
 
@@ -732,42 +752,50 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         assert_update_accepted_wire(&install.join().unwrap());
     }
 
-    let gate_deadline = Instant::now() + test_timeout(Duration::from_secs(10));
+    let gate_deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
     let mut observed_closed_gate = false;
     let mut delete_during_update = None;
     let mut config_during_update = None;
     let mut auth_during_update = None;
     let mut observed_retry = false;
-    while Instant::now() < gate_deadline && emp.process.0.try_wait().unwrap().is_none() {
-        let snapshot = body_json(&request(
-            emp.port,
-            "GET",
-            "/api/updates",
-            Some(&emp.session),
-            None,
-        ));
+    while !gate_deadline.is_expired() && emp.process.0.try_wait().unwrap().is_none() {
+        let snapshot = body_json(
+            &try_request_before(
+                emp.port,
+                "GET",
+                "/api/updates",
+                Some(&emp.session),
+                None,
+                &gate_deadline,
+            )
+            .expect("request while observing update gate"),
+        );
         if snapshot["state"] == "downloading" && snapshot["retry_count"] == 1 {
             assert_eq!(snapshot["retry_limit"], 3);
             observed_retry = true;
         }
         if matches!(snapshot["state"].as_str(), Some("waiting" | "installing")) {
-            let quit = request(
+            let quit = try_request_before(
                 emp.port,
                 "POST",
                 "/api/quit",
                 Some(&emp.session),
                 Some(b"{}"),
-            );
+                &gate_deadline,
+            )
+            .expect("request while observing update gate");
             match status(&quit) {
                 503 => {
                     observed_closed_gate = true;
-                    let update_request = request(
+                    let update_request = try_request_before(
                         emp.port,
                         "POST",
                         "/api/updates/check",
                         Some(&emp.session),
                         Some(b"{}"),
-                    );
+                        &gate_deadline,
+                    )
+                    .expect("request while observing update gate");
                     assert_eq!(
                         status(&update_request),
                         202,
@@ -777,15 +805,20 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
                         body_json(&update_request)["state"].as_str(),
                         Some("waiting" | "installing")
                     ));
-                    delete_during_update = Some(request(
-                        emp.port,
-                        "DELETE",
-                        "/api/accounts/update-fixture",
-                        Some(&emp.session),
-                        None,
-                    ));
+                    delete_during_update = Some(
+                        try_request_before(
+                            emp.port,
+                            "DELETE",
+                            "/api/accounts/update-fixture",
+                            Some(&emp.session),
+                            None,
+                            &gate_deadline,
+                        )
+                        .expect("request while observing update gate"),
+                    );
                     config_during_update = Some(std::fs::read(&emp.config).unwrap());
                     auth_during_update = Some(std::fs::read(&emp.account_auth).unwrap());
+                    gate_deadline.accept((), "closed update gate").unwrap();
                     break;
                 }
                 409 => {}
@@ -796,7 +829,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
             clippy::disallowed_methods,
             reason = "按既有间隔采样更新重试和管理请求排空状态"
         )]
-        thread::sleep(Duration::from_millis(2));
+        thread::sleep(gate_deadline.remaining().min(Duration::from_millis(2)));
     }
     assert!(
         observed_closed_gate,
@@ -813,13 +846,14 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         "health remains available during update"
     );
 
-    let deadline = Instant::now() + test_timeout(Duration::from_secs(20));
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
     loop {
         if emp.process.0.try_wait().unwrap().is_some() {
+            deadline.accept((), "old EMP exit").unwrap();
             break;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "old EMP process did not shut down after handoff"
         );
         #[expect(
@@ -832,16 +866,16 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         if let Ok(pid) = std::fs::read_to_string(temp.path().join("candidate.pid"))
             && let Ok(pid) = pid.trim().parse::<u32>()
         {
-            break pid;
+            break deadline.accept(pid, "candidate startup").unwrap();
         }
-        assert!(Instant::now() < deadline, "candidate did not start");
+        assert!(!deadline.is_expired(), "candidate did not start");
         #[expect(
             clippy::disallowed_methods,
             reason = "候选进程通过 PID 文件报告启动，以固定间隔轮询"
         )]
         thread::sleep(Duration::from_millis(25));
     };
-    let success_deadline = Instant::now() + test_timeout(Duration::from_secs(20));
+    let success_deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
     loop {
         let installation = emp.executable.parent().expect("installation directory");
         let success_marker_exists = std::fs::read_dir(installation)
@@ -855,10 +889,11 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
                     && entry.path().join("success").is_file()
             });
         if success_marker_exists {
+            success_deadline.accept((), "candidate readiness").unwrap();
             break;
         }
         assert!(
-            Instant::now() < success_deadline,
+            !success_deadline.is_expired(),
             "update worker did not accept candidate readiness before timeout"
         );
         #[expect(
@@ -874,10 +909,10 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
             .expect("terminate candidate process")
             .success()
     );
-    let candidate_exit_deadline = Instant::now() + test_timeout(Duration::from_secs(5));
+    let candidate_exit_deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     while Path::new(&format!("/proc/{candidate_pid}")).exists() {
         assert!(
-            Instant::now() < candidate_exit_deadline,
+            !candidate_exit_deadline.is_expired(),
             "candidate process remained alive"
         );
         #[expect(
@@ -886,6 +921,9 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         )]
         thread::sleep(Duration::from_millis(25));
     }
+    candidate_exit_deadline
+        .accept((), "candidate exit")
+        .unwrap();
     release_server
         .join()
         .expect("fake release server completed");
@@ -1001,7 +1039,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
             emp.port,
             &emp.session,
             expected,
-            test_timeout(Duration::from_secs(10)),
+            &Deadline::after(test_timeout(Duration::from_secs(10))),
         );
         server.join().expect("fake release error server completed");
         stop_emp(&mut emp);
@@ -1027,7 +1065,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         emp.port,
         &emp.session,
         "update_failed",
-        test_timeout(Duration::from_secs(10)),
+        &Deadline::after(test_timeout(Duration::from_secs(10))),
     );
     stop_emp(&mut emp);
 
@@ -1069,7 +1107,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         emp.port,
         &emp.session,
         "update_failed",
-        test_timeout(Duration::from_secs(10)),
+        &Deadline::after(test_timeout(Duration::from_secs(10))),
     );
     partial_server.join().unwrap();
     stop_emp(&mut emp);
@@ -1115,7 +1153,7 @@ fn package_http_and_checksum_failures_preserve_the_running_installation() {
             emp.port,
             &emp.session,
             expected,
-            test_timeout(Duration::from_secs(10)),
+            &Deadline::after(test_timeout(Duration::from_secs(10))),
         );
         server.join().expect("fake package error server completed");
         assert_eq!(
@@ -1147,7 +1185,7 @@ fn malicious_symlink_package_is_rejected_before_replacement() {
         emp.port,
         &emp.session,
         "invalid_package",
-        test_timeout(Duration::from_secs(10)),
+        &Deadline::after(test_timeout(Duration::from_secs(10))),
     );
     assert_eq!(
         std::fs::read(&emp.executable).unwrap(),
@@ -1177,7 +1215,7 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
         emp.port,
         &emp.session,
         "worker_failed",
-        test_timeout(Duration::from_secs(10)),
+        &Deadline::after(test_timeout(Duration::from_secs(10))),
     );
     let delete = request(
         emp.port,
@@ -1209,15 +1247,16 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
         200,
         "ordinary POST resumes after worker failure"
     );
-    let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     while emp.process.0.try_wait().unwrap().is_none() {
-        assert!(Instant::now() < deadline, "EMP did not stop after quit");
+        assert!(!deadline.is_expired(), "EMP did not stop after quit");
         #[expect(
             clippy::disallowed_methods,
             reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
         )]
         thread::sleep(Duration::from_millis(10));
     }
+    deadline.accept((), "EMP process exit").unwrap();
     server.join().expect("fake release server completed");
 }
 
@@ -1237,28 +1276,35 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
         Some(b"{}"),
     );
     assert_eq!(status(&install), 202);
-    let old_exit_deadline = Instant::now() + test_timeout(Duration::from_secs(15));
+    let old_exit_deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
     while emp.process.0.try_wait().unwrap().is_none() {
-        assert!(
-            Instant::now() < old_exit_deadline,
-            "old EMP did not hand off"
-        );
+        assert!(!old_exit_deadline.is_expired(), "old EMP did not hand off");
         #[expect(
             clippy::disallowed_methods,
             reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
         )]
         thread::sleep(Duration::from_millis(10));
     }
+    old_exit_deadline.accept((), "EMP process exit").unwrap();
 
-    let restart_deadline = Instant::now() + test_timeout(Duration::from_secs(15));
+    let restart_deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
     loop {
-        if let Ok(response) = try_request(emp.port, "GET", "/healthz", None, None)
-            && status(&response) == 200
+        if let Ok(response) = try_request_before(
+            emp.port,
+            "GET",
+            "/healthz",
+            None,
+            None,
+            &restart_deadline.capped(test_timeout(Duration::from_secs(10))),
+        ) && status(&response) == 200
         {
+            restart_deadline
+                .accept((), "rollback health check")
+                .unwrap();
             break;
         }
         assert!(
-            Instant::now() < restart_deadline,
+            !restart_deadline.is_expired(),
             "old EMP did not return after rollback"
         );
         #[expect(clippy::disallowed_methods, reason = "回滚服务以固定间隔轮询健康状态")]
@@ -1281,13 +1327,18 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
         Some(b"{}"),
     );
     assert_eq!(status(&quit), 200);
-    let shutdown_deadline = Instant::now() + test_timeout(Duration::from_secs(5));
+    let shutdown_deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     loop {
-        if try_request(emp.port, "GET", "/healthz", None, None).is_err() {
+        if let Err(error) =
+            try_request_before(emp.port, "GET", "/healthz", None, None, &shutdown_deadline)
+        {
+            shutdown_deadline
+                .accept((), format_args!("rolled-back EMP exit: {error}"))
+                .unwrap();
             break;
         }
         assert!(
-            Instant::now() < shutdown_deadline,
+            !shutdown_deadline.is_expired(),
             "rolled-back EMP stayed alive"
         );
         #[expect(

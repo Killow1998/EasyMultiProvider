@@ -1,5 +1,6 @@
 //! The native image fixture models HTTP, WebSocket prefill and image replies.
 use super::*;
+use emp_test_support::{Deadline, test_timeout};
 
 pub(super) fn spawn(
     listener: TcpListener,
@@ -10,14 +11,18 @@ pub(super) fn spawn(
     thread::spawn(move || {
         let mut image_turn = String::new();
         for stage in 0..3 {
-            let deadline = Instant::now() + Duration::from_secs(20);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
             let mut socket = loop {
                 assert!(
-                    Instant::now() < deadline,
+                    !deadline.is_expired(),
                     "image fixture upstream deadline at stage {stage}"
                 );
                 match listener.accept() {
-                    Ok((socket, _)) => break socket,
+                    Ok((socket, _)) => {
+                        break deadline
+                            .accept(socket, "fixture accepted upstream connection")
+                            .unwrap();
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         #[expect(
                             clippy::disallowed_methods,

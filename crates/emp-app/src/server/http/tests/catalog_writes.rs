@@ -3,7 +3,7 @@ use super::*;
 use crate::tests::{fixture_tls, live_journal, wait_for};
 use emp_state::filesystem::count_commits;
 use emp_storage::quota_history::SAMPLE_INTERVAL_SECONDS;
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use emp_transport::{HttpClient, HttpClientConfig, HttpClientPolicy};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use std::{io::BufRead, path::Path};
@@ -588,9 +588,10 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
         .unwrap();
     let admitted = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
-        wait_for(test_timeout(Duration::from_secs(5)), || {
-            admitted.lifecycle.updates().active_for_test() == 1
-        });
+        wait_for(
+            &Deadline::after(test_timeout(Duration::from_secs(5))),
+            || admitted.lifecycle.updates().active_for_test() == 1,
+        );
     })
     .await
     .unwrap();
@@ -607,13 +608,16 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
     client.write_all(body).await.unwrap();
     let root = fixture.directory.path().to_owned();
     tokio::task::spawn_blocking(move || {
-        wait_for(test_timeout(Duration::from_secs(5)), || {
-            live_journal(&root).iter().any(|record| {
-                record["event"] == "operation_stage_started"
-                    && record["fields"]["operation"] == "catalog_refresh"
-                    && record["fields"]["last_stage"] == "publish_catalog"
-            })
-        });
+        wait_for(
+            &Deadline::after(test_timeout(Duration::from_secs(5))),
+            || {
+                live_journal(&root).iter().any(|record| {
+                    record["event"] == "operation_stage_started"
+                        && record["fields"]["operation"] == "catalog_refresh"
+                        && record["fields"]["last_stage"] == "publish_catalog"
+                })
+            },
+        );
     })
     .await
     .unwrap();

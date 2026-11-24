@@ -3,7 +3,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD},
 };
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::{fs, path::Path};
 
 const PASSWORD: &str = "fixture-migration-password";
@@ -637,9 +637,10 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
                 .unwrap();
             let admitted = state.clone();
             tokio::task::spawn_blocking(move || {
-                wait_for(test_timeout(Duration::from_secs(5)), || {
-                    admitted.lifecycle.updates().active_for_test() == 1
-                });
+                wait_for(
+                    &Deadline::after(test_timeout(Duration::from_secs(5))),
+                    || admitted.lifecycle.updates().active_for_test() == 1,
+                );
             })
             .await
             .unwrap();
@@ -661,9 +662,10 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
             };
             let gated_root = root.clone();
             tokio::task::spawn_blocking(move || {
-                wait_for(test_timeout(Duration::from_secs(10)), || {
-                    live_journal(&gated_root).iter().any(commit_started)
-                });
+                wait_for(
+                    &Deadline::after(test_timeout(Duration::from_secs(10))),
+                    || live_journal(&gated_root).iter().any(commit_started),
+                );
             })
             .await
             .unwrap();

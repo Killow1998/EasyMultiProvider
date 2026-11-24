@@ -1,3 +1,4 @@
+use emp_test_support::{Deadline, test_timeout};
 use emp_transport::{
     HttpClient, HttpClientConfig, HttpClientPolicy, HttpMethod, HttpTransportErrorKind,
     ProxyPolicy, TimeoutPolicy,
@@ -487,7 +488,7 @@ async fn complete_responses_reuse_connections_without_sharing_authorization() {
         } else {
             server.url("/complete")
         };
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
         let mut sent = 0usize;
         loop {
             let authorization = if sent.is_multiple_of(2) {
@@ -495,12 +496,16 @@ async fn complete_responses_reuse_connections_without_sharing_authorization() {
             } else {
                 "Bearer second"
             };
-            let response = client
-                .open(HttpMethod::Get, &url, headers(authorization), None, false)
-                .await
-                .expect("complete response");
-            assert_eq!(response.status(), 200);
-            assert_eq!(response.read_all().await.expect("complete body"), b"OK");
+            tokio::time::timeout(deadline.remaining(), async {
+                let response = client
+                    .open(HttpMethod::Get, &url, headers(authorization), None, false)
+                    .await
+                    .expect("complete response");
+                assert_eq!(response.status(), 200);
+                assert_eq!(response.read_all().await.expect("complete body"), b"OK");
+            })
+            .await
+            .expect("complete response before connection reuse deadline");
             sent += 1;
             let requests = server.requests();
             assert_eq!(requests.len(), sent, "a completed GET must not be replayed");
@@ -518,10 +523,11 @@ async fn complete_responses_reuse_connections_without_sharing_authorization() {
                 pair[0].connection == pair[1].connection
                     && pair[0].client_port == pair[1].client_port
             }) {
+                deadline.accept((), "reusable HTTP connection").unwrap();
                 break;
             }
             assert!(
-                std::time::Instant::now() < deadline,
+                !deadline.is_expired(),
                 "completed responses never returned a reusable connection (proxy={through_proxy})"
             );
             // Returning a fully read body to the pool is asynchronous. Observe

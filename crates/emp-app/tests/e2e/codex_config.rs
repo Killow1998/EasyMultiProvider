@@ -1,4 +1,5 @@
 use crate::support::{ORIGINAL_CODEX_CONFIG, Upstream, Workspace, write_file};
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 
 #[test]
@@ -66,7 +67,9 @@ fn codex_integration_enable_and_restore_preserve_user_toml() {
     // Only the separate Quit action restores and ends this process.
     assert_eq!(emp.post("/api/quit", &json!({})).status, 200);
     assert_eq!(
-        emp.wait_exit_with_timeout(std::time::Duration::from_secs(10)),
+        emp.wait_exit_before(&Deadline::after(test_timeout(
+            std::time::Duration::from_secs(10)
+        ))),
         Some(0)
     );
     assert_eq!(workspace.read_codex_config(), original);
@@ -200,7 +203,9 @@ fn quit_from_the_page_stops_the_process() {
     assert_eq!(response.status, 200, "{}", response.text());
     assert_eq!(response.json(), json!({"status": "stopping"}));
     assert_eq!(
-        emp.wait_exit_with_timeout(std::time::Duration::from_secs(30)),
+        emp.wait_exit_before(&Deadline::after(test_timeout(
+            std::time::Duration::from_secs(30)
+        ))),
         Some(0)
     );
     let restored = workspace.read_codex_config();
@@ -223,7 +228,9 @@ fn quit_from_the_page_stops_the_process() {
     assert_eq!(workspace.read_codex_config(), restored);
     assert_eq!(restarted.post("/api/quit", &json!({})).status, 200);
     assert_eq!(
-        restarted.wait_exit_with_timeout(std::time::Duration::from_secs(30)),
+        restarted.wait_exit_before(&Deadline::after(test_timeout(
+            std::time::Duration::from_secs(30)
+        ))),
         Some(0)
     );
     upstream.assert_idle();

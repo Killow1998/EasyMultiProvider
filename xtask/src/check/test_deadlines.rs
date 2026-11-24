@@ -9,10 +9,10 @@ use syn::{
 };
 
 const ALLOWED: &[(&str, usize)] = &[
-    ("emp-app", 197),
-    ("emp-codex", 8),
+    ("emp-app", 117),
+    ("emp-codex", 3),
     ("emp-router", 3),
-    ("emp-transport", 16),
+    ("emp-transport", 14),
 ];
 
 pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
@@ -67,7 +67,7 @@ fn group(path: &str) -> Option<&str> {
 }
 
 fn violations(path: &str, contents: &str) -> Result<Vec<usize>> {
-    let test_file = comments::test_file(path);
+    let test_file = path.starts_with("crates/emp-test-support/src/") || comments::test_file(path);
     if !(test_file || (contents.contains("test") && contents.contains("#["))) {
         return Ok(Vec::new());
     }
@@ -78,6 +78,7 @@ fn violations(path: &str, contents: &str) -> Result<Vec<usize>> {
     }
     let mut visitor = Deadlines {
         test_file,
+        emp_app: group(path) == Some("emp-app"),
         scopes,
         lines: Vec::new(),
     };
@@ -88,6 +89,7 @@ fn violations(path: &str, contents: &str) -> Result<Vec<usize>> {
 
 struct Deadlines {
     test_file: bool,
+    emp_app: bool,
     scopes: comments::TestScopes,
     lines: Vec<usize>,
 }
@@ -95,7 +97,9 @@ struct Deadlines {
 impl Deadlines {
     fn inspect(&mut self, expr: &Expr, constants: bool) {
         let line = expr.span().start().line;
-        if (self.test_file || self.scopes.contains(line)) && bare_duration(expr, constants) {
+        if (self.test_file || self.scopes.contains(line))
+            && bare_duration(expr, constants, self.emp_app, false)
+        {
             self.lines.push(line);
         }
     }
@@ -104,6 +108,7 @@ impl Deadlines {
         let argument = match name {
             "set_read_timeout"
             | "set_write_timeout"
+            | "capped"
             | "read_timeout"
             | "write_timeout"
             | "timeout"
@@ -129,17 +134,20 @@ impl Deadlines {
     }
 }
 
-fn bare_duration(expr: &Expr, constants: bool) -> bool {
+fn bare_duration(expr: &Expr, constants: bool, emp_app: bool, arithmetic: bool) -> bool {
     match expr {
-        Expr::Paren(paren) => bare_duration(&paren.expr, constants),
-        Expr::Binary(binary) if matches!(binary.op, syn::BinOp::Add(_)) => {
-            let constants =
-                constants && !is_test_timeout(&binary.left) && !is_test_timeout(&binary.right);
-            bare_duration(&binary.left, constants) || bare_duration(&binary.right, constants)
+        Expr::Paren(paren) => bare_duration(&paren.expr, constants, emp_app, arithmetic),
+        Expr::Group(group) => bare_duration(&group.expr, constants, emp_app, arithmetic),
+        Expr::Binary(binary) if matches!(binary.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_)) => {
+            if instant_now(&binary.left) {
+                return false;
+            }
+            bare_duration(&binary.left, true, emp_app, true)
+                || bare_duration(&binary.right, true, emp_app, true)
         }
         Expr::Call(call) => {
             let Expr::Path(path) = call.func.as_ref() else {
-                return false;
+                return arithmetic;
             };
             let mut parts = path.path.segments.iter().rev();
             let Some(name) = parts.next() else {
@@ -149,25 +157,27 @@ fn bare_duration(expr: &Expr, constants: bool) -> bool {
                 return call
                     .args
                     .first()
-                    .is_some_and(|expr| bare_duration(expr, constants));
+                    .is_some_and(|expr| bare_duration(expr, constants, emp_app, arithmetic));
             }
-            matches!(
-                name.ident.to_string().as_str(),
-                "from_secs"
-                    | "from_millis"
-                    | "from_secs_f64"
-                    | "from_micros"
-                    | "from_nanos"
-                    | "new"
-            ) && parts.next().is_some_and(|part| part.ident == "Duration")
-                && call.args.iter().all(|arg| matches!(arg, Expr::Lit(_)))
+            if name.ident == "test_timeout"
+                || (emp_app && path_matches(path, &["crate", "server", "raw_tcp", "wire_timeout"]))
+            {
+                return false;
+            }
+            arithmetic
+                || (matches!(
+                    name.ident.to_string().as_str(),
+                    "from_secs"
+                        | "from_millis"
+                        | "from_secs_f64"
+                        | "from_micros"
+                        | "from_nanos"
+                        | "new"
+                ) && parts.next().is_some_and(|part| part.ident == "Duration")
+                    && call.args.iter().all(|arg| matches!(arg, Expr::Lit(_))))
         }
         Expr::Path(path) if constants => {
-            if path.path.segments.iter().map(|part| &part.ident).eq([
-                "crate",
-                "server",
-                "REQUEST_DRAIN_TIMEOUT",
-            ]) {
+            if emp_app && path_matches(path, &["crate", "server", "REQUEST_DRAIN_TIMEOUT"]) {
                 return false;
             }
             let name = path
@@ -177,23 +187,32 @@ fn bare_duration(expr: &Expr, constants: bool) -> bool {
                 .expect("expression path")
                 .ident
                 .to_string();
-            !matches!(name.as_str(), "ZERO" | "MAX")
-                && name.bytes().any(|byte| byte.is_ascii_uppercase())
-                && !name.bytes().any(|byte| byte.is_ascii_lowercase())
+            arithmetic
+                || (!path.path.segments.iter().rev().nth(1).is_some_and(|part| {
+                    part.ident == "Duration" && matches!(name.as_str(), "ZERO" | "MAX")
+                }) && name.bytes().any(|byte| byte.is_ascii_uppercase())
+                    && !name.bytes().any(|byte| byte.is_ascii_lowercase()))
         }
-        _ => false,
+        Expr::Lit(literal) => matches!(literal.lit, syn::Lit::Int(_) | syn::Lit::Float(_)),
+        _ => arithmetic,
     }
 }
 
-fn is_test_timeout(expr: &Expr) -> bool {
-    match expr {
-        Expr::Paren(paren) => is_test_timeout(&paren.expr),
-        Expr::Call(call) => matches!(
-            call.func.as_ref(),
-            Expr::Path(path) if path.path.segments.last().is_some_and(|part| part.ident == "test_timeout")
-        ),
-        _ => false,
-    }
+fn path_matches(path: &syn::ExprPath, expected: &[&str]) -> bool {
+    path.path
+        .segments
+        .iter()
+        .map(|part| &part.ident)
+        .eq(expected.iter().copied())
+}
+
+fn instant_now(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Call(call)
+            if matches!(call.func.as_ref(), Expr::Path(path) if path
+                .path.segments.iter().rev().take(2).map(|part| &part.ident).eq(["now", "Instant"]))
+    )
 }
 
 fn deadline_name(name: &syn::Ident) -> bool {
@@ -228,7 +247,21 @@ impl<'ast> Visit<'ast> for Deadlines {
         if let Expr::Path(path) = call.func.as_ref()
             && let Some(name) = path.path.segments.last()
         {
-            self.arguments(&name.ident.to_string(), &call.args);
+            if name.ident == "after"
+                && path
+                    .path
+                    .segments
+                    .iter()
+                    .rev()
+                    .nth(1)
+                    .is_some_and(|part| part.ident == "Deadline")
+            {
+                if let Some(argument) = call.args.first() {
+                    self.inspect(argument, true);
+                }
+            } else {
+                self.arguments(&name.ident.to_string(), &call.args);
+            }
         }
         visit::visit_expr_call(self, call);
     }
@@ -246,18 +279,7 @@ impl<'ast> Visit<'ast> for Deadlines {
     }
 
     fn visit_expr_binary(&mut self, expr: &'ast syn::ExprBinary) {
-        if matches!(expr.op, syn::BinOp::Add(_))
-            && let Expr::Call(call) = expr.left.as_ref()
-            && let Expr::Path(path) = call.func.as_ref()
-            && path
-                .path
-                .segments
-                .iter()
-                .rev()
-                .take(2)
-                .map(|part| &part.ident)
-                .eq(["now", "Instant"])
-        {
+        if matches!(expr.op, syn::BinOp::Add(_) | syn::BinOp::Sub(_)) && instant_now(&expr.left) {
             self.inspect(&expr.right, true);
         }
         visit::visit_expr_binary(self, expr);
@@ -368,11 +390,36 @@ fn account_import() {
 #[test]
 fn drain() {
     timeout(crate::server::REQUEST_DRAIN_TIMEOUT, future);
-    rx.recv_timeout(PRODUCTION_LIMIT + test_timeout(Duration::from_secs(5)));
-    rx.recv_timeout(PRODUCTION_LIMIT + Duration::from_secs(5));
+    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + test_timeout(Duration::from_secs(5)));
+    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + Duration::from_secs(5));
+    rx.recv_timeout(FIXTURE_WAIT + test_timeout(Duration::from_secs(5)));
+    rx.recv_timeout(test_timeout(Duration::from_secs(5)) - FIXTURE_WAIT);
+    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT - test_timeout(Duration::from_secs(5)));
+    rx.recv_timeout(test_timeout(Duration::from_secs(5)) + (FIXTURE_WAIT - test_timeout(Duration::from_secs(1))));
+    let budget = Deadline::after(Duration::from_secs(5));
+    let budget = Deadline::after(test_timeout(Duration::from_secs(5)));
+    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::wire_timeout());
+    rx.recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + wire_timeout());
 }
 "#;
-        assert_eq!(violations("crates/app/tests/wire.rs", source).unwrap(), [6]);
+        assert_eq!(
+            violations("crates/emp-app/tests/wire.rs", source).unwrap(),
+            [6, 7, 8, 10, 11, 14]
+        );
+    }
+
+    #[test]
+    fn checks_ordinary_test_support_functions() {
+        let source = "pub fn receive() { rx.recv_timeout(Duration::from_secs(5)); }";
+        assert_eq!(
+            violations("crates/emp-test-support/src/fixture/wire.rs", source).unwrap(),
+            [1]
+        );
+        assert!(
+            violations("crates/emp-app/src/wire.rs", source)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

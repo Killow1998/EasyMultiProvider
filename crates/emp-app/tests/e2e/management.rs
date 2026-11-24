@@ -1,6 +1,7 @@
 use crate::support::{
     self, Emp, NATIVE_TOKEN, PROVIDER_KEY, Upstream, Workspace, emp_command, write_file,
 };
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 
 #[test]
@@ -275,18 +276,20 @@ fn desktop_launch_opens_the_bootstrap_url_on_the_configured_port() {
         emp.startup_output
     );
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = Deadline::after(test_timeout(std::time::Duration::from_secs(5)));
     while !opened.exists() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "browser was not launched"
-        );
+        assert!(!deadline.is_expired(), "browser was not launched");
         #[expect(
             clippy::disallowed_methods,
             reason = "浏览器替身通过文件报告启动，以固定间隔轮询"
         )]
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(
+            deadline
+                .remaining()
+                .min(std::time::Duration::from_millis(10)),
+        );
     }
+    deadline.accept((), "browser launched").unwrap();
     let url = std::fs::read_to_string(&opened).expect("opened URL");
     assert!(
         url.starts_with(&format!("http://127.0.0.1:{port}/?bootstrap=")),

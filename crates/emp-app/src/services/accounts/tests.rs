@@ -1,14 +1,14 @@
 #![cfg(unix)]
 
 use crate::lifecycle::ServerHandle;
-use emp_test_support::{test_timeout, write_executable};
+use emp_test_support::{Deadline, test_timeout, write_executable};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::{delete_account_state, import_account_state, quota_owner_key};
 
@@ -44,9 +44,12 @@ fn http_request(
 }
 
 fn wait_for_file(path: &Path) {
-    let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
-    while Instant::now() < deadline {
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+    while !deadline.is_expired() {
         if path.is_file() {
+            deadline
+                .accept((), "fake app-server entered quota operation")
+                .unwrap();
             return;
         }
         #[expect(
@@ -903,14 +906,15 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
         });
         // Wait until the reimport holds the configuration (it is then
         // settling, blocked on the history database).
-        let deadline = Instant::now() + test_timeout(Duration::from_secs(2));
-        while configuration.try_lock().is_ok() && Instant::now() < deadline {
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
+        while configuration.try_lock().is_ok() && !deadline.is_expired() {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "配置锁占用没有通知接口，以固定间隔轮询"
             )]
             thread::sleep(Duration::from_millis(5));
         }
+        let ready = deadline.accept((), "reimport acquired configuration lock");
         let rival = scope.spawn(|| {
             import_account_state(
                 None,
@@ -926,6 +930,7 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
         blocker
             .execute_batch("COMMIT")
             .expect("resume history writes");
+        ready.unwrap();
         (reimport.join().unwrap(), rival.join().unwrap())
     });
     reimport.expect("the settled reimport commits");

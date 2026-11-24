@@ -66,7 +66,7 @@ impl NativeTooLargeFallbackUpstream {
 }
 
 fn accept_fixture_connection(listener: &TcpListener) -> Option<TcpStream> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -76,11 +76,12 @@ fn accept_fixture_connection(listener: &TcpListener) -> Option<TcpStream> {
                 stream
                     .set_nonblocking(false)
                     .expect("blocking accepted native stream");
-                return Some(stream);
+                return deadline
+                    .accept(stream, "accept oversized fixture connection")
+                    .ok();
             }
             Err(error)
-                if error.kind() == std::io::ErrorKind::WouldBlock
-                    && std::time::Instant::now() < deadline =>
+                if error.kind() == std::io::ErrorKind::WouldBlock && !deadline.is_expired() =>
             {
                 #[expect(
                     clippy::disallowed_methods,

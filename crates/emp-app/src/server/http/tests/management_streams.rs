@@ -7,6 +7,7 @@ use crate::{
     services::management_events::Change,
     tests::wait_for,
 };
+use emp_test_support::Deadline;
 use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Instant};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -252,7 +253,7 @@ fn account_stream_disconnect_releases_subscription_without_another_event() {
         drop(streams.pop().unwrap());
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
-            wait_for(wire_timeout(), || {
+            wait_for(&Deadline::after(wire_timeout()), || {
                 state.backend.management_events.subscriber_count() == count - 1
             });
         })
@@ -274,7 +275,7 @@ fn account_stream_disconnect_releases_subscription_without_another_event() {
         drop(streams);
         let state = fixture.server.state.clone();
         tokio::task::spawn_blocking(move || {
-            wait_for(wire_timeout(), || {
+            wait_for(&Deadline::after(wire_timeout()), || {
                 state.backend.management_events.subscriber_count() == 0
             });
             assert!(
@@ -365,7 +366,7 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                 }
                 let state = state.clone();
                 tokio::task::spawn_blocking(move || {
-                    wait_for(wire_timeout(), || {
+                    wait_for(&Deadline::after(wire_timeout()), || {
                         state.lifecycle.admission.active_requests() == 0
                     })
                 })
@@ -407,14 +408,16 @@ fn report_disconnect_cancels_query_and_releases_admission() {
 
                 let during_query = cancelled.clone();
                 tokio::task::spawn_blocking(move || {
-                    wait_for(wire_timeout(), || during_query.load(Ordering::Acquire))
+                    wait_for(&Deadline::after(wire_timeout()), || {
+                        during_query.load(Ordering::Acquire)
+                    })
                 })
                 .await
                 .unwrap();
                 release.send(()).unwrap();
                 let state = fixture.server.state.clone();
                 tokio::task::spawn_blocking(move || {
-                    wait_for(wire_timeout(), || {
+                    wait_for(&Deadline::after(wire_timeout()), || {
                         Arc::strong_count(&cancelled) == 1
                             && state.lifecycle.admission.active_requests() == 0
                     });

@@ -4,11 +4,12 @@
     reason = "This target uses only recovery-related shared fixtures"
 )]
 mod support;
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Stdio};
 use std::sync::mpsc::{Receiver, channel};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use support::{Workspace, http};
 
 struct Recovery {
@@ -60,11 +61,13 @@ impl Recovery {
     }
 
     fn wait_line(&self, prefix: &str) -> String {
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
         loop {
             let line = self
                 .lines
-                .recv_timeout(Duration::from_secs(15))
+                .recv_timeout(deadline.remaining())
                 .expect("process did not reach expected state");
+            let line = deadline.accept(line, prefix).unwrap();
             if let Some(value) = line.strip_prefix(prefix) {
                 return value.into();
             }
@@ -86,13 +89,16 @@ impl Recovery {
     }
 
     fn wait_exit(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
         loop {
             if let Some(status) = self.child.try_wait().unwrap() {
+                deadline
+                    .accept(status, "EMP recovery process exit")
+                    .unwrap();
                 assert!(status.success());
                 return;
             }
-            assert!(Instant::now() < deadline, "EMP did not exit");
+            assert!(!deadline.is_expired(), "EMP did not exit");
             #[expect(
                 clippy::disallowed_methods,
                 reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"

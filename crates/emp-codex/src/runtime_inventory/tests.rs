@@ -2,6 +2,7 @@ use super::{
     RuntimeInventory,
     trust::tests::{private_dir, script},
 };
+use emp_test_support::{Deadline, test_timeout};
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -132,21 +133,22 @@ fn cached_version_does_not_wait_for_or_repeat_a_delayed_refresh() {
     let inventory = &inventory;
     let read = std::thread::scope(|scope| {
         let refreshing = scope.spawn(|| inventory.snapshot(true));
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while !entered.exists() && Instant::now() < deadline {
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(1)));
+        while !entered.exists() && !deadline.is_expired() {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "探测替身通过文件报告进入状态，以固定间隔轮询"
             )]
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(entered.exists(), "delayed probe did not start");
+        let entered_in_time = deadline.accept(entered.exists(), "delayed probe started");
         let requested = Instant::now();
         let queued = scope.spawn(move || inventory.snapshot_requested(true, requested));
         let (sender, receiver) = mpsc::channel();
         scope.spawn(move || sender.send(inventory.selected_trusted_version()).unwrap());
         let read = receiver.recv_timeout(Duration::from_millis(500));
         std::fs::write(&release, b"").unwrap();
+        assert!(entered_in_time.unwrap(), "delayed probe did not start");
         assert_eq!(refreshing.join().unwrap()["installed"], "0.158.0");
         assert_eq!(queued.join().unwrap().value["installed"], "0.158.0");
         read

@@ -1,5 +1,5 @@
 use super::{Emp, Workspace, http::read_message, io_timeout};
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub const IDS: [&str; 3] = ["decision", "gateway", "aggregate"];
 
@@ -169,12 +169,10 @@ impl ModuleRelease {
                 }
                 let mut stream = stream.expect("accept release request");
                 stream
-                    .set_read_timeout(Some(io_timeout()))
-                    .expect("release read timeout");
-                stream
                     .set_write_timeout(Some(io_timeout()))
                     .expect("release write timeout");
-                let (line, _, _) = read_message(&mut stream, false);
+                let deadline = Deadline::after(io_timeout());
+                let (line, _, _) = read_message(&mut deadline.io(&stream), false);
                 let path = line.split_whitespace().nth(1).expect("release path");
                 let base = format!("http://127.0.0.1:{port}");
                 let mut state = shared.lock().expect("release state");
@@ -395,7 +393,7 @@ impl ModuleEmp {
 
     pub fn assert_gone(&self, pid: i32) {
         eventually(
-            test_timeout(Duration::from_secs(5)),
+            &Deadline::after(test_timeout(Duration::from_secs(5))),
             "module PID was not reaped",
             || (!processes().iter().any(|(found, _)| *found == pid)).then_some(()),
         );
@@ -405,7 +403,7 @@ impl ModuleEmp {
         self.emp.take().expect("running EMP").stop();
         let directory = self.root.to_string_lossy();
         eventually(
-            test_timeout(Duration::from_secs(5)),
+            &Deadline::after(test_timeout(Duration::from_secs(5))),
             "orphan module processes",
             || {
                 let observed = self.observed.lock().expect("observed workers");
@@ -418,19 +416,21 @@ impl ModuleEmp {
     }
 }
 
-/// Polls `probe` every 20 ms until it yields a value, panicking with `what` after `timeout`.
-pub fn eventually<T>(timeout: Duration, what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + timeout;
+pub fn eventually<T>(deadline: &Deadline, what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
     loop {
+        deadline
+            .accept((), what)
+            .unwrap_or_else(|error| panic!("{error}"));
         if let Some(value) = probe() {
-            return value;
+            return deadline
+                .accept(value, what)
+                .unwrap_or_else(|error| panic!("{error}"));
         }
-        assert!(Instant::now() < deadline, "{what} within {timeout:?}");
         #[expect(
             clippy::disallowed_methods,
             reason = "被观察的进程表和管理接口没有变更通知，只能固定间隔轮询"
         )]
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(deadline.remaining().min(Duration::from_millis(20)));
     }
 }
 

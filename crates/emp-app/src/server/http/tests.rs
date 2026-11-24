@@ -23,7 +23,7 @@ use axum::{
     extract::{Request, State},
     routing::{any, get, post},
 };
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use emp_transport::{MemoryStatus, RequestLimits, RequestLimitsConfig};
 use flate2::{Compression, GzBuilder};
 use serde::Deserialize;
@@ -50,7 +50,7 @@ pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input
         address,
         request,
         end_input,
-        test_timeout(Duration::from_secs(15)),
+        &Deadline::after(test_timeout(Duration::from_secs(15))),
     )
     .await
 }
@@ -61,7 +61,7 @@ async fn quit_response(address: SocketAddr, session: &str) -> Vec<u8> {
         address,
         &json_request(address.port(), "/api/quit", &[session], b"{}"),
         false,
-        test_timeout(crate::server::REQUEST_DRAIN_TIMEOUT),
+        &Deadline::after(test_timeout(crate::server::REQUEST_DRAIN_TIMEOUT)),
     )
     .await
 }
@@ -70,9 +70,9 @@ async fn exchange_before(
     address: SocketAddr,
     request: &[u8],
     end_input: bool,
-    deadline: Duration,
+    deadline: &Deadline,
 ) -> Vec<u8> {
-    timeout(deadline, async {
+    let reply = timeout(deadline.remaining(), async {
         let mut stream = TcpStream::connect(address).await.unwrap();
         stream.write_all(request).await.unwrap();
         if end_input {
@@ -83,7 +83,8 @@ async fn exchange_before(
         reply
     })
     .await
-    .expect("complete HTTP response")
+    .expect("complete HTTP response");
+    deadline.accept(reply, "complete HTTP response").unwrap()
 }
 
 #[cfg(unix)]

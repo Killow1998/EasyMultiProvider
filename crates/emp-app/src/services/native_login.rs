@@ -251,6 +251,7 @@ fn native_login_changed(state: &ServerState) {
 mod tests {
     use super::*;
     use crate::lifecycle::ServerHandle;
+    use emp_test_support::{Deadline, test_timeout};
     use std::net::{IpAddr, Ipv4Addr};
     use std::os::unix::fs::PermissionsExt;
 
@@ -326,7 +327,7 @@ mod tests {
             LoginOperation::parse("start", &json!({"name":"EMP login"}), importing),
         )
         .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
         loop {
             let status = execute(
                 &server.state,
@@ -334,14 +335,12 @@ mod tests {
             )
             .unwrap();
             if status["status"] == "completed" {
+                deadline.accept((), "device login completion").unwrap();
                 assert_eq!(status["restart_required"], !importing);
                 break;
             }
             assert_ne!(status["status"], "failed", "{status}");
-            assert!(
-                Instant::now() < deadline,
-                "device login timed out: {status}"
-            );
+            assert!(!deadline.is_expired(), "device login timed out: {status}");
             #[expect(
                 clippy::disallowed_methods,
                 reason = "设备登录完成通过状态接口报告，以固定间隔轮询"

@@ -3,6 +3,7 @@ use super::installed_codex::Codex;
 use super::installed_tool_search::response_events;
 use super::support::receive_native_request;
 use super::*;
+use emp_test_support::{Deadline, test_timeout};
 
 #[test]
 #[ignore = "requires an explicitly selected Codex 0.164+ and isolated loopback access"]
@@ -36,11 +37,15 @@ fn switch_and_resume(protocol: &'static str) {
             .into_iter()
             .enumerate()
         {
-            let deadline = Instant::now() + Duration::from_secs(20);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
             let mut socket = loop {
-                assert!(Instant::now() < deadline, "revision request deadline");
+                assert!(!deadline.is_expired(), "revision request deadline");
                 match listener.accept() {
-                    Ok((socket, _)) => break socket,
+                    Ok((socket, _)) => {
+                        break deadline
+                            .accept(socket, "fixture accepted upstream connection")
+                            .unwrap();
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         #[expect(
                             clippy::disallowed_methods,

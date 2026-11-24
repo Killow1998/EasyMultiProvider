@@ -2,14 +2,14 @@
 #![cfg(unix)]
 
 use crate::lifecycle::ServerHandle;
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const CHILD_FLAG: &str = "EMP_TEST_ACCEPT_EMFILE_CHILD";
 const TEST_NAME: &str = "server::accept::tests::listener_survives_real_descriptor_exhaustion";
@@ -137,13 +137,13 @@ fn listener_survives_real_descriptor_exhaustion() {
         }
     });
     let next_marker = || {
-        let deadline = Instant::now() + test_timeout(Duration::from_secs(20));
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(20)));
         loop {
             let line = receive
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .recv_timeout(deadline.remaining())
                 .expect("child marker before timeout");
             if let Some((_, marker)) = line.split_once("EMP_FD_") {
-                break marker.to_owned();
+                break deadline.accept(marker.to_owned(), "child marker").unwrap();
             }
         }
     };
@@ -177,13 +177,14 @@ fn listener_survives_real_descriptor_exhaustion() {
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     drop(health);
     command(&mut input, "stop");
-    let deadline = Instant::now() + test_timeout(Duration::from_secs(10));
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
     loop {
         if let Some(status) = child.0.try_wait().unwrap() {
+            deadline.accept(status, "child exit").unwrap();
             assert!(status.success(), "child regression failed: {status}");
             break;
         }
-        assert!(Instant::now() < deadline, "child did not exit");
+        assert!(!deadline.is_expired(), "child did not exit");
         #[expect(
             clippy::disallowed_methods,
             reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"

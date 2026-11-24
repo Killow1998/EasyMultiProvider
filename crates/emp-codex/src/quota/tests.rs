@@ -1,5 +1,6 @@
 use super::projection::safe_reset_credits;
 use super::*;
+use emp_test_support::{Deadline, test_timeout};
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
@@ -79,17 +80,18 @@ for line in sys.stdin:
                 },
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !marker.exists() && Instant::now() < deadline {
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        while !marker.exists() && !deadline.is_expired() {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "配额辅助进程通过文件报告就绪，以固定间隔轮询"
             )]
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(marker.exists());
+        let ready = deadline.accept(marker.exists(), "quota process ready");
         let started = Instant::now();
         cancelled.store(true, Ordering::Release);
+        assert!(ready.unwrap(), "quota process did not become ready");
         assert_eq!(
             worker.join().unwrap().unwrap_err().code(),
             "quota_cancelled"

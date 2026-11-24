@@ -2,6 +2,7 @@
 use super::installed_codex::Codex;
 use super::support::receive_native_request;
 use super::*;
+use emp_test_support::{Deadline, test_timeout};
 
 #[test]
 #[ignore = "requires an explicitly selected Codex CLI and isolated loopback access; run explicitly"]
@@ -44,11 +45,15 @@ fn tool_search(protocol: &'static str, native: bool, websocket: bool) {
     let upstream = thread::spawn(move || {
         let mut calls = Vec::new();
         for stage in 0..5 {
-            let deadline = Instant::now() + Duration::from_secs(15);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
             let mut socket = loop {
-                assert!(Instant::now() < deadline, "Tool Search upstream deadline");
+                assert!(!deadline.is_expired(), "Tool Search upstream deadline");
                 match listener.accept() {
-                    Ok((socket, _)) => break socket,
+                    Ok((socket, _)) => {
+                        break deadline
+                            .accept(socket, "fixture accepted upstream connection")
+                            .unwrap();
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         #[expect(
                             clippy::disallowed_methods,

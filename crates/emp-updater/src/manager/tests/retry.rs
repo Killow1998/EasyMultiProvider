@@ -1,19 +1,21 @@
 //! Real HTTP failures exercise the same retry path as the packaged updater.
 use super::*;
 use crate::{UpdateError, download::download_package, release::Asset};
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use sha2::{Digest, Sha256};
 
 pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) -> usize {
     listener.set_nonblocking(true).unwrap();
     let mut requests = 0;
     for response in responses {
-        let deadline = Instant::now() + test_timeout(Duration::from_secs(12));
-        let mut stream = loop {
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(12)));
+        let stream = loop {
             match listener.accept() {
-                Ok((stream, _)) => break stream,
+                Ok((stream, _)) => {
+                    break deadline.accept(stream, "updater request arrived").unwrap();
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(Instant::now() < deadline, "missing updater request");
+                    assert!(!deadline.is_expired(), "missing updater request");
                     #[expect(
                         clippy::disallowed_methods,
                         reason = "假上游以固定间隔重试非阻塞 accept，避免空转"
@@ -23,9 +25,9 @@ pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) ->
                 Err(error) => panic!("fake release server: {error}"),
             }
         };
-        stream
-            .set_read_timeout(Some(test_timeout(Duration::from_secs(3))))
-            .unwrap();
+        let mut stream = deadline
+            .capped(test_timeout(Duration::from_secs(3)))
+            .io(stream);
         let mut request = Vec::new();
         let mut buffer = [0_u8; 512];
         while !request.windows(4).any(|chunk| chunk == b"\r\n\r\n") {

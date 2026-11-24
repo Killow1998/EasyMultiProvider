@@ -1,4 +1,4 @@
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,25 +19,18 @@ pub struct WebSocket {
 
 impl WebSocket {
     pub fn connect(port: u16) -> Self {
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect Responses WS");
-        stream
-            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .expect("WS handshake timeout");
-        stream
-            .set_write_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .expect("WS write timeout");
-        write!(stream,
+        let stream = TcpStream::connect(("127.0.0.1", port)).expect("connect Responses WS");
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let mut io = deadline.io(&stream);
+        write!(io,
             "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: Bearer {NATIVE_TOKEN}\r\noriginator: codex_cli_rs\r\nthread-id: fixture-ws-thread\r\n\r\n"
         ).expect("WS handshake request");
-        let (status, headers, _) = read_message(&mut stream, false);
+        let (status, headers, _) = read_message(&mut io, false);
         assert!(status.starts_with("HTTP/1.1 101 "), "{status}: {headers:?}");
         assert_eq!(
             headers["sec-websocket-accept"],
             "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
         );
-        stream
-            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .expect("WS read timeout");
         Self {
             stream,
             masked: true,
@@ -45,10 +38,8 @@ impl WebSocket {
     }
 
     fn accept(mut stream: TcpStream) -> (Self, UpstreamRequest) {
-        stream
-            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .expect("upstream WS handshake timeout");
-        let request = read_request(&mut stream);
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        let request = read_request(&mut deadline.io(&stream));
         assert_eq!(request.method, "GET");
         assert_eq!(request.headers["upgrade"].to_ascii_lowercase(), "websocket");
         assert_eq!(request.headers["sec-websocket-version"], "13");
@@ -61,12 +52,6 @@ impl WebSocket {
         write!(stream,
             "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
         ).expect("upstream WS handshake");
-        stream
-            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .expect("upstream WS timeout");
-        stream
-            .set_write_timeout(Some(test_timeout(Duration::from_secs(5))))
-            .expect("upstream WS write timeout");
         (
             Self {
                 stream,
@@ -76,7 +61,13 @@ impl WebSocket {
         )
     }
 
-    fn send_frame(&mut self, opcode: u8, finished: bool, payload: &[u8]) -> io::Result<()> {
+    fn send_frame(
+        &self,
+        opcode: u8,
+        finished: bool,
+        payload: &[u8],
+        deadline: &Deadline,
+    ) -> io::Result<()> {
         let mut frame = vec![opcode | if finished { 0x80 } else { 0 }];
         let mask_bit = if self.masked { 0x80 } else { 0 };
         match payload.len() {
@@ -102,24 +93,27 @@ impl WebSocket {
         } else {
             frame.extend_from_slice(payload);
         }
-        self.stream.write_all(&frame)?;
-        self.stream.flush()
+        let mut stream = deadline.io(&self.stream);
+        stream.write_all(&frame)?;
+        stream.flush()
     }
 
     pub fn send_json(&mut self, value: &Value) {
         let payload = value.to_string();
         let middle = payload.len() / 2;
-        self.send_frame(1, false, &payload.as_bytes()[..middle])
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        self.send_frame(1, false, &payload.as_bytes()[..middle], &deadline)
             .expect("WS text fragment");
-        self.send_frame(0, true, &payload.as_bytes()[middle..])
+        self.send_frame(0, true, &payload.as_bytes()[middle..], &deadline)
             .expect("WS continuation fragment");
     }
 
-    pub fn next_json(&mut self) -> io::Result<Option<Value>> {
+    pub fn next_json(&mut self, deadline: &Deadline) -> io::Result<Option<Value>> {
+        let mut stream = deadline.io(&self.stream);
         let mut message = Vec::new();
         loop {
             let mut head = [0_u8; 2];
-            match self.stream.read_exact(&mut head) {
+            match stream.read_exact(&mut head) {
                 Ok(()) => {}
                 Err(error)
                     if matches!(
@@ -129,7 +123,7 @@ impl WebSocket {
                             | io::ErrorKind::BrokenPipe
                     ) =>
                 {
-                    return Ok(None);
+                    return deadline.accept(None, "WebSocket EOF");
                 }
                 Err(error) => return Err(error),
             }
@@ -139,19 +133,19 @@ impl WebSocket {
             let mut length = u64::from(head[1] & 0x7f);
             if length == 126 {
                 let mut bytes = [0_u8; 2];
-                self.stream.read_exact(&mut bytes)?;
+                stream.read_exact(&mut bytes)?;
                 length = u64::from(u16::from_be_bytes(bytes));
             } else if length == 127 {
                 let mut bytes = [0_u8; 8];
-                self.stream.read_exact(&mut bytes)?;
+                stream.read_exact(&mut bytes)?;
                 length = u64::from_be_bytes(bytes);
             }
             let mut mask = [0_u8; 4];
             if masked {
-                self.stream.read_exact(&mut mask)?;
+                stream.read_exact(&mut mask)?;
             }
             let mut payload = vec![0_u8; usize::try_from(length).expect("WS frame length")];
-            self.stream.read_exact(&mut payload)?;
+            stream.read_exact(&mut payload)?;
             if masked {
                 for (index, byte) in payload.iter_mut().enumerate() {
                     *byte ^= mask[index % 4];
@@ -161,16 +155,16 @@ impl WebSocket {
                 0 | 1 => {
                     message.extend_from_slice(&payload);
                     if head[0] & 0x80 != 0 {
-                        return serde_json::from_slice(&message)
-                            .map(Some)
-                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+                        let value = serde_json::from_slice(&message)
+                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                        return deadline.accept(Some(value), "WebSocket message");
                     }
                 }
                 8 => {
-                    let _ = self.send_frame(8, true, &payload);
-                    return Ok(None);
+                    let _ = self.send_frame(8, true, &payload, deadline);
+                    return deadline.accept(None, "WebSocket close");
                 }
-                9 => self.send_frame(10, true, &payload)?,
+                9 => self.send_frame(10, true, &payload, deadline)?,
                 10 => {}
                 opcode => panic!("unexpected WS opcode: {opcode}"),
             }
@@ -178,8 +172,13 @@ impl WebSocket {
     }
 
     pub fn close(&mut self) {
-        self.send_frame(8, true, &1000_u16.to_be_bytes())
-            .expect("client WS close");
+        self.send_frame(
+            8,
+            true,
+            &1000_u16.to_be_bytes(),
+            &Deadline::after(test_timeout(Duration::from_secs(5))),
+        )
+        .expect("client WS close");
     }
 }
 
@@ -230,7 +229,7 @@ impl WebSocketUpstream {
                 .expect("record upstream handshake");
             for events in replies {
                 let turn = websocket
-                    .next_json()
+                    .next_json(&Deadline::after(test_timeout(Duration::from_secs(5))))
                     .expect("upstream WS request")
                     .expect("upstream closed before turn");
                 turn_sender.send(turn).expect("record upstream turn");
@@ -240,7 +239,7 @@ impl WebSocketUpstream {
             }
             assert!(
                 websocket
-                    .next_json()
+                    .next_json(&Deadline::after(test_timeout(Duration::from_secs(5))))
                     .expect("wait for upstream WS close")
                     .is_none(),
                 "unexpected extra WS turn"

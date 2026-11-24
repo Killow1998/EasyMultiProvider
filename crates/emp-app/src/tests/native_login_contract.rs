@@ -75,14 +75,21 @@ fn browser_login_classifies_engine_failures_and_leaves_http_and_auth_intact() {
             );
         } else {
             assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
             loop {
-                let response = post(&server, "/api/native/login/status", b"{}", &[&header]);
+                let response = post_before(
+                    &server,
+                    "/api/native/login/status",
+                    b"{}",
+                    &[&header],
+                    &deadline,
+                );
                 if response.contains("\"status\":\"failed\"") {
+                    deadline.accept((), "native login failure").unwrap();
                     assert!(response.contains(code), "{response}");
                     break;
                 }
-                assert!(Instant::now() < deadline, "{code}: {response}");
+                assert!(!deadline.is_expired(), "{code}: {response}");
                 #[expect(
                     clippy::disallowed_methods,
                     reason = "假上游以固定间隔重试非阻塞 accept，避免空转"

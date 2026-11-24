@@ -1,4 +1,5 @@
 use super::*;
+use emp_test_support::{Deadline, test_timeout};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -191,11 +192,12 @@ fn exit_serializes_an_admitted_enable_and_rejects_later_activation() {
         .store(false, Ordering::Release);
     let exit_state = Arc::clone(&state);
     let exit = std::thread::spawn(move || prepare_exit(&exit_state, false));
-    let deadline = Instant::now() + Duration::from_secs(1);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(1)));
     while !state.lifecycle.shutdown.load(Ordering::Acquire) {
-        assert!(Instant::now() < deadline);
+        assert!(!deadline.is_expired());
         std::thread::yield_now();
     }
+    deadline.accept((), "exit closed admission").unwrap();
     // Finish an enable that owned the operation lock before the exit event.
     state
         .backend

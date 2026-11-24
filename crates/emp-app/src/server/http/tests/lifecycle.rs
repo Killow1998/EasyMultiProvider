@@ -1,4 +1,5 @@
 use super::*;
+use emp_test_support::Deadline;
 
 #[cfg(unix)]
 #[test]
@@ -170,14 +171,14 @@ fn drain_owner_matrix() {
                         None
                     };
                     if !slow_transport {
-                        assert_eq!(payload.rest().await, b"x", "{case}");
+                        assert_eq!(payload.rest(&Deadline::after(wire_timeout())).await, b"x", "{case}");
                     }
                     if via_quit {
                         let reply = exchange_before(
                             address,
                             &json_request(fixture.port(), "/api/quit", &[&session], b"{}"),
                             false,
-                            test_timeout(REQUEST_DRAIN_TIMEOUT),
+                            &Deadline::after(test_timeout(REQUEST_DRAIN_TIMEOUT)),
                         )
                         .await;
                         if phase == Working {
@@ -248,7 +249,7 @@ fn drain_owner_matrix() {
                     drop(work);
                     tokio::time::resume();
                     if slow_transport {
-                        assert!(payload.rest().await.len() < LARGE_PAYLOAD, "{case}");
+                        assert!(payload.rest(&Deadline::after(wire_timeout())).await.len() < LARGE_PAYLOAD, "{case}");
                     }
                     if let Some(mut subscription) = subscription {
                         if via_quit {
@@ -811,7 +812,7 @@ fn integration_commands_restore_native_files() {
 fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
     use super::wire_contract::{assert_reply, json_head};
     use crate::server::ShutdownReason;
-    use crate::server::raw_tcp::{RawClient, read_websocket_frame};
+    use crate::server::raw_tcp::{RawClient, read_websocket_frame, wire_timeout};
 
     {
         Fixture::new().run_wire(async |fixture, addr| {
@@ -854,13 +855,19 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
                 .await
                 .unwrap();
             let state = &fixture.server.state;
-            crate::tests::wait_for(test_timeout(Duration::from_secs(5)), || {
-                state.lifecycle.updates().active_for_test() == 1
-            });
+            crate::tests::wait_for(
+                &Deadline::after(test_timeout(Duration::from_secs(5))),
+                || state.lifecycle.updates().active_for_test() == 1,
+            );
             let quit = json_request(port, "/api/quit", &[&session], b"{}");
             let mut stopping = TcpStream::connect(addr).await.unwrap();
             stopping.write_all(&quit).await.unwrap();
-            assert_eq!(read_websocket_frame(&mut ws.io, false).await.0, 0x88);
+            assert_eq!(
+                read_websocket_frame(&mut ws.io, false, &Deadline::after(wire_timeout()))
+                    .await
+                    .0,
+                0x88
+            );
             let mut denied = TcpStream::connect(addr).await.unwrap();
             let _ = denied
                 .write_all(&request(port, "GET", "/healthz", &[], b""))
@@ -886,14 +893,15 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
                 json_head!("200 OK", "21"),
                 br#"{"status":"stopping"}"#,
             );
-            let sse_end = sse.rest().await;
+            let sse_end = sse.rest(&Deadline::after(wire_timeout())).await;
             assert!(String::from_utf8_lossy(&sse_end).contains("event: emp-exiting"));
             let signal = state.lifecycle.signal().wait().await;
             assert_eq!(signal, ShutdownReason::ResponseWritten);
             assert!(state.lifecycle.admission.acquire_request().is_none());
-            crate::tests::wait_for(crate::server::raw_tcp::wire_timeout(), || {
-                fixture.server.listener_finished()
-            });
+            crate::tests::wait_for(
+                &Deadline::after(crate::server::raw_tcp::wire_timeout()),
+                || fixture.server.listener_finished(),
+            );
             assert!(std::net::TcpStream::connect(addr).is_err());
         });
     }

@@ -183,8 +183,12 @@ fn m03_offline_completion_retries_unacknowledged_usage_without_double_billing() 
         next_event(&mut client, "response.completed")["response"]["id"],
         "resp_m03_offline"
     );
-    let local = poll("offline completion in local ledger", || {
-        let usage = report(&fixture.devices[1], "/api/usage?start=0&end=4102444800");
+    let local = poll("offline completion in local ledger", |deadline| {
+        let usage = crate::support::team::report_before(
+            &fixture.devices[1],
+            "/api/usage?start=0&end=4102444800",
+            deadline,
+        );
         (usage["totals"]["requests"] == 1).then_some(usage)
     });
     assert_eq!(local["totals"]["requests"], 1);

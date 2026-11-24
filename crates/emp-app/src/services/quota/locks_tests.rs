@@ -1,12 +1,13 @@
 use crate::lifecycle::ServerHandle;
 use crate::services::accounts::{quota_refresh_lock, replacing_account_credentials};
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[test]
 fn replacement_quota_refresh_waits_in_migration_lock_order() {
@@ -96,15 +97,16 @@ fn replacement_quota_refresh_waits_in_migration_lock_order() {
             }
             done_tx.send(()).unwrap();
         });
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Arc::strong_count(&shared_lock) == shared_count && Instant::now() < deadline {
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
+        while Arc::strong_count(&shared_lock) == shared_count && !deadline.is_expired() {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "配置锁占用没有通知接口，以固定间隔轮询"
             )]
             std::thread::sleep(Duration::from_millis(5));
         }
-        let queued_for_shared = Arc::strong_count(&shared_lock) > shared_count;
+        let queued_for_shared =
+            !deadline.is_expired() && Arc::strong_count(&shared_lock) > shared_count;
         let personal_is_free = personal_lock.try_lock().is_ok();
         drop(shared_guard);
         done_rx.recv_timeout(Duration::from_secs(15)).unwrap();

@@ -1,6 +1,6 @@
 use super::{account_writes::normalize_body, *};
 use emp_codex::configuration::local_auth;
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
@@ -43,9 +43,10 @@ fn session_exchange_uses_admission_time_while_blocking_worker_is_queued() {
             let (release, unlocked) = tokio::sync::oneshot::channel();
             let gated = state.clone();
             let hold_worker = tokio::task::spawn_blocking(move || {
-                crate::tests::wait_for(test_timeout(Duration::from_secs(5)), || {
-                    gated.lifecycle.updates().active_for_test() == 1
-                });
+                crate::tests::wait_for(
+                    &Deadline::after(test_timeout(Duration::from_secs(5))),
+                    || gated.lifecycle.updates().active_for_test() == 1,
+                );
                 admitted.send(()).unwrap();
                 unlocked.blocking_recv().unwrap();
             });
@@ -558,8 +559,9 @@ fn login_writes_switch_native_credentials() {
 async fn wait_for_login(address: SocketAddr, wire: Vec<u8>, expected: &'static str) {
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        crate::tests::wait_for(test_timeout(Duration::from_secs(10)), || {
-            let reply = runtime.block_on(exchange_wire(address, &wire, false));
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
+        crate::tests::wait_for(&deadline, || {
+            let reply = runtime.block_on(exchange_before(address, &wire, false, &deadline));
             assert_status(&reply, 200);
             let status = json_body(&reply);
             assert_ne!(status["status"], "failed", "{status}");

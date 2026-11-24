@@ -695,17 +695,22 @@ fn installed_codex_roundtrips_a_vertex_tool_with_real_emp() {
             .spawn()
             .unwrap(),
     );
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
     let url = loop {
         let text = std::fs::read_to_string(&log).unwrap();
         if let Some((_, rest)) = text.split_once("ws://127.0.0.1:") {
             let port: String = rest.chars().take_while(char::is_ascii_digit).collect();
             if !port.is_empty() {
-                break format!("ws://127.0.0.1:{port}");
+                break deadline
+                    .accept(
+                        format!("ws://127.0.0.1:{port}"),
+                        "Codex exec-server started",
+                    )
+                    .unwrap();
             }
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "Codex exec-server did not start: {text}"
         );
         #[expect(

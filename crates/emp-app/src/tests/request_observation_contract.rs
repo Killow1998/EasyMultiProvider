@@ -91,7 +91,7 @@ fn generated_compaction_sse_records_its_actual_terminal_event() {
 
 #[track_caller]
 pub(super) fn finished(root: &Path, count: usize) -> Vec<Value> {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(10)));
     loop {
         let records = live_journal(root);
         let actual = records
@@ -99,14 +99,16 @@ pub(super) fn finished(root: &Path, count: usize) -> Vec<Value> {
             .filter(|r| r["event"] == "request_finished")
             .count();
         if actual == count {
-            return records;
+            return deadline
+                .accept(records, "request journal completion")
+                .unwrap();
         }
         assert!(
             actual < count,
             "extra request receipts: expected {count}, found {actual}"
         );
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "missing request receipts: expected {count}, found {actual}; recent events: {:?}",
             records
                 .iter()
@@ -399,8 +401,9 @@ fn websocket_rejection_and_success_have_separate_turn_ids_on_the_same_connection
         .unwrap();
     assert_eq!(socket.receive_json().unwrap().unwrap()["type"], "error");
     socket.send_json(&json!({"type":"response.create","model":"demo/model","input":"private-question","reasoning":{"effort":"low"}})).unwrap();
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(300)));
     loop {
-        let event = socket.receive_json().unwrap().unwrap();
+        let event = websocket_event_before(&mut socket, &deadline);
         assert!(
             !matches!(
                 event["type"].as_str(),

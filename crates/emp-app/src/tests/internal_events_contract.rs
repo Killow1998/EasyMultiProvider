@@ -78,7 +78,7 @@ fn http_journal_pairs_receipts_and_omits_query_identity_and_content() {
     malformed.write_all(b"malformed\r\n\r\n").unwrap();
     assert!(complete_response(&mut malformed).starts_with("HTTP/1.1 400"));
     server.shutdown().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
     let records = loop {
         let records = final_journal(directory.path());
         if records
@@ -87,9 +87,9 @@ fn http_journal_pairs_receipts_and_omits_query_identity_and_content() {
             .count()
             == 3
         {
-            break records;
+            break deadline.accept(records, "completed HTTP receipts").unwrap();
         }
-        assert!(Instant::now() < deadline, "missing completed HTTP receipts");
+        assert!(!deadline.is_expired(), "missing completed HTTP receipts");
         #[expect(
             clippy::disallowed_methods,
             reason = "HTTP 完成回执异步写入诊断日志，以固定间隔轮询"

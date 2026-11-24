@@ -9,7 +9,8 @@ mod support;
 #[path = "exit_process/windows.rs"]
 mod windows;
 
-use std::time::{Duration, Instant};
+use emp_test_support::{Deadline, test_timeout};
+use std::time::Duration;
 use support::{Emp, ORIGINAL_CODEX_CONFIG, Upstream, Workspace};
 
 fn assert_native(workspace: &Workspace) {
@@ -31,17 +32,18 @@ fn assert_native(workspace: &Workspace) {
 }
 
 fn await_native(workspace: &Workspace) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
     loop {
         let lease: serde_json::Value = serde_json::from_slice(
             &std::fs::read(workspace.integration_dir().join("lease.json")).unwrap(),
         )
         .unwrap();
         if lease["status"] == "restored" {
+            deadline.accept((), "native routing restored").unwrap();
             break;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "native routing was not restored before the exit deadline"
         );
         #[expect(
@@ -115,13 +117,15 @@ fn exit_restores_while_runtime_observation_is_stalled() {
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
     write!(observation, "POST /api/integration/verify HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-EMP-Session: {}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}", emp.port, emp.session).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
     let mut socket = loop {
         if let Ok((socket, _)) = listener.accept() {
-            break socket;
+            break deadline
+                .accept(socket, "runtime observation started")
+                .unwrap();
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "EMP never started the runtime observation"
         );
         #[expect(

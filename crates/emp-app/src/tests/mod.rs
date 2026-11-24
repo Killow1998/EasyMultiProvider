@@ -3,7 +3,7 @@
 mod hotpath_profile;
 use crate::api::quota::QUOTA_EVENT_SLOT_LIMIT;
 use base64::engine::general_purpose::STANDARD;
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 
 use crate::cli::Cli;
 use crate::cli::parse_cli;
@@ -118,9 +118,11 @@ fn response_timeout() -> Duration {
 }
 
 fn complete_response(stream: &mut TcpStream) -> String {
-    stream
-        .set_read_timeout(Some(response_timeout()))
-        .expect("response timeout");
+    let deadline = Deadline::after(response_timeout());
+    complete_response_from(&mut deadline.io(&*stream))
+}
+
+fn complete_response_from(stream: &mut impl Read) -> String {
     let mut response = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
@@ -146,16 +148,30 @@ fn complete_response(stream: &mut TcpStream) -> String {
 }
 
 fn response_until_close(stream: &mut TcpStream) -> String {
-    stream
-        .set_read_timeout(Some(response_timeout()))
-        .expect("response timeout");
+    let deadline = Deadline::after(response_timeout());
+    let mut stream = deadline.io(&*stream);
     let mut response = Vec::new();
     stream.read_to_end(&mut response).expect("read response");
     String::from_utf8(response).expect("UTF-8 response")
 }
 
 fn request(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
-    let mut stream = TcpStream::connect(server.local_addr()).expect("connect");
+    request_before(
+        server,
+        target,
+        headers,
+        &Deadline::after(response_timeout()),
+    )
+}
+
+fn request_before(
+    server: &ServerHandle,
+    target: &str,
+    headers: &[&str],
+    deadline: &Deadline,
+) -> String {
+    let stream = deadline.connect(server.local_addr()).expect("connect");
+    let mut stream = deadline.io(stream);
     let host = if headers.iter().any(|header| {
         header
             .split_once(':')
@@ -172,11 +188,28 @@ fn request(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
                 .as_bytes(),
         )
         .expect("write request");
-    complete_response(&mut stream)
+    complete_response_from(&mut stream)
 }
 
 fn post(server: &ServerHandle, target: &str, body: &[u8], headers: &[&str]) -> String {
-    let mut stream = TcpStream::connect(server.local_addr()).expect("connect");
+    post_before(
+        server,
+        target,
+        body,
+        headers,
+        &Deadline::after(response_timeout()),
+    )
+}
+
+fn post_before(
+    server: &ServerHandle,
+    target: &str,
+    body: &[u8],
+    headers: &[&str],
+    deadline: &Deadline,
+) -> String {
+    let stream = deadline.connect(server.local_addr()).expect("connect");
+    let mut stream = deadline.io(stream);
     let host = if headers.iter().any(|header| {
         header
             .split_once(':')
@@ -206,7 +239,7 @@ fn post(server: &ServerHandle, target: &str, body: &[u8], headers: &[&str]) -> S
             )
             .expect("write request head");
     stream.write_all(body).expect("write request body");
-    complete_response(&mut stream)
+    complete_response_from(&mut stream)
 }
 
 fn delete(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
@@ -398,20 +431,20 @@ fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
         .unwrap()
         .block_on(async {
             events.next(Duration::ZERO).await.unwrap();
-            let deadline = tokio::time::Instant::now() + test_timeout(Duration::from_secs(5));
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
             loop {
-                let wire = request(server, "/api/calls", &[session]);
+                let wire = request_before(server, "/api/calls", &[session], &deadline);
                 let report: Value =
                     serde_json::from_str(wire.split("\r\n\r\n").nth(1).unwrap()).unwrap();
                 if !report["records"].as_array().unwrap().is_empty() {
-                    return report;
+                    return deadline.accept(report, "call receipt persisted").unwrap();
                 }
                 assert!(
-                    tokio::time::Instant::now() < deadline,
+                    !deadline.is_expired(),
                     "call receipt not persisted: {report}"
                 );
                 loop {
-                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    let remaining = deadline.remaining();
                     if remaining.is_zero()
                         || events
                             .next(remaining)
@@ -424,6 +457,28 @@ fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
                 }
             }
         })
+}
+
+fn websocket_event_before(
+    socket: &mut emp_transport::ClientWebSocket,
+    deadline: &Deadline,
+) -> Value {
+    loop {
+        let remaining = deadline
+            .accept(deadline.remaining(), "WebSocket response event")
+            .unwrap();
+        socket.set_read_timeout(remaining);
+        match socket.poll_receive_text().unwrap() {
+            emp_transport::WebSocketPoll::Text(text) => {
+                if let Ok(value @ Value::Object(_)) = serde_json::from_str(&text) {
+                    return deadline.accept(value, "WebSocket response event").unwrap();
+                }
+            }
+            emp_transport::WebSocketPoll::Ping(payload) => socket.send_pong(&payload).unwrap(),
+            emp_transport::WebSocketPoll::Pending => {}
+            other => panic!("WebSocket ended before response event: {other:?}"),
+        }
+    }
 }
 
 fn finish_upstream<T>(

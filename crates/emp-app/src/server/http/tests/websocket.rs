@@ -8,10 +8,10 @@ use crate::tests::realtime_contract::{
     RealtimeUpstream, UpstreamResponse, app_server_for, multipart_offer,
 };
 use crate::tests::{live_journal, wait_for};
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as AsyncListener, TcpStream as AsyncStream};
-use tokio::time::{Instant, timeout, timeout_at};
+use tokio::time::timeout;
 
 const UPGRADE: &[&str] = &[
     "Upgrade: websocket",
@@ -126,11 +126,14 @@ fn tab_separated_websocket_request_line_is_accepted() {
             let mut client = RawClient::request(peer, &wire).await;
             assert_upgrade(&client);
             assert_eq!(
-                read_websocket_frame(&mut client.io, false).await,
+                read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
                 (0x8a, b"ready".to_vec())
             );
             client.io.shutdown().await.unwrap();
-            assert_eq!(client.rest().await, b"\x88\x00");
+            assert_eq!(
+                client.rest(&Deadline::after(wire_timeout())).await,
+                b"\x88\x00"
+            );
         }
     });
 }
@@ -182,10 +185,10 @@ fn websocket_upgrade_carries_prefix_and_keeps_capacity_rejections() {
             let mut client = RawClient::request(address, &responses).await;
             assert_upgrade(&client);
             assert_eq!(
-                read_websocket_frame(&mut client.io, false).await,
+                read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
                 (0x88, close_payload(1013, "too many websocket connections"))
             );
-            assert!(client.rest().await.is_empty());
+            assert!(client.rest(&Deadline::after(wire_timeout())).await.is_empty());
         }
         drop(slots);
         let wire = upgrade(
@@ -203,7 +206,7 @@ fn websocket_upgrade_carries_prefix_and_keeps_capacity_rejections() {
             let mut client = RawClient::request(address, &wire).await;
             assert_upgrade(&client);
             assert_eq!(
-                read_websocket_frame(&mut client.io, false).await,
+                read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
                 (0x8a, b"coalesced".to_vec())
             );
             assert_eq!(state.lifecycle.admission.active_websockets(), 1);
@@ -214,10 +217,10 @@ fn websocket_upgrade_carries_prefix_and_keeps_capacity_rejections() {
                 .await
                 .unwrap();
             assert_eq!(
-                read_websocket_frame(&mut client.io, false).await,
+                read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
                 (0x88, 1000u16.to_be_bytes().to_vec())
             );
-            assert!(client.rest().await.is_empty());
+            assert!(client.rest(&Deadline::after(wire_timeout())).await.is_empty());
         }
         assert_eq!(state.lifecycle.admission.active_websockets(), 0);
     });
@@ -239,7 +242,7 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
             );
             let mut client = RawClient::request(address, &wire).await;
             assert_eq!(
-                read_websocket_frame(&mut client.io, false).await,
+                read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
                 (0x8a, b"ready".to_vec())
             );
             let state = fixture.server.state.clone();
@@ -256,10 +259,15 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
                 drop(guard);
             });
             assert_eq!(
-                read_websocket_frame(&mut client.io, false).await,
+                read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
                 (0x88, close_payload(1001, "EMP connection is draining"))
             );
-            assert!(client.rest().await.is_empty());
+            assert!(
+                client
+                    .rest(&Deadline::after(wire_timeout()))
+                    .await
+                    .is_empty()
+            );
             drained.await.unwrap();
             let mut denied = AsyncStream::connect(address).await.unwrap();
             let _ = denied.write_all(&wire).await;
@@ -276,11 +284,15 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
             let mut reopened = RawClient::request(address, &wire).await;
             assert_upgrade(&reopened);
             assert_eq!(
-                read_websocket_frame(&mut reopened.io, false).await,
+                read_websocket_frame(&mut reopened.io, false, &Deadline::after(wire_timeout()))
+                    .await,
                 (0x8a, b"ready".to_vec())
             );
             reopened.io.shutdown().await.unwrap();
-            assert_eq!(reopened.rest().await, b"\x88\x00");
+            assert_eq!(
+                reopened.rest(&Deadline::after(wire_timeout())).await,
+                b"\x88\x00"
+            );
         }
     });
 }
@@ -320,7 +332,7 @@ fn responses_upgrade_cannot_start_after_restore_reopens_admission() {
         .unwrap();
         resume.send(()).unwrap();
         assert_eq!(
-            read_websocket_frame(&mut client.io, false).await,
+            read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
             (0x88, close_payload(1001, "EMP connection is draining"))
         );
         let reply = restore.await.unwrap();
@@ -396,7 +408,7 @@ fn slow_device_revalidation_leaves_other_websockets_responsive() {
                 .await
                 .unwrap();
             assert_eq!(
-                read_websocket_frame(client, false).await,
+                read_websocket_frame(client, false, &Deadline::after(wire_timeout())).await,
                 (0x8a, b"ready".to_vec())
             );
         }
@@ -411,17 +423,17 @@ fn slow_device_revalidation_leaves_other_websockets_responsive() {
             .await
             .unwrap();
         assert_eq!(
-            read_websocket_frame(&mut other, false).await,
+            read_websocket_frame(&mut other, false, &Deadline::after(wire_timeout())).await,
             (0x8a, b"responsive".to_vec())
         );
         state.lifecycle.admission.close();
         assert_eq!(
-            read_websocket_frame(&mut other, false).await,
+            read_websocket_frame(&mut other, false, &Deadline::after(wire_timeout())).await,
             (0x88, close_payload(1001, "EMP connection is draining")),
         );
         release.send(()).unwrap();
         assert_eq!(
-            read_websocket_frame(&mut device, false).await,
+            read_websocket_frame(&mut device, false, &Deadline::after(wire_timeout())).await,
             (0x88, close_payload(1001, "EMP connection is draining")),
         );
         device_task.await.unwrap();
@@ -455,17 +467,22 @@ fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
             let mut client = RawClient::request(address, &wire).await;
             assert_upgrade(&client);
             assert_eq!(
-                read_websocket_frame(&mut client.io, false).await,
+                read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
                 (0x8a, b"ready".to_vec())
             );
             let idle = Duration::from_millis(50);
             assert!(timeout(idle, client.io.read_u8()).await.is_err());
             assert_eq!(completed().len(), previous, "WebSocket is still open");
             client.io.shutdown().await.unwrap();
-            assert_eq!(client.rest().await, b"\x88\x00");
+            assert_eq!(
+                client.rest(&Deadline::after(wire_timeout())).await,
+                b"\x88\x00"
+            );
             let completed = completed.clone();
             let records = tokio::task::spawn_blocking(move || {
-                wait_for(wire_timeout(), || completed().len() == previous + 1);
+                wait_for(&Deadline::after(wire_timeout()), || {
+                    completed().len() == previous + 1
+                });
                 completed()
             })
             .await
@@ -660,14 +677,14 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
                 );
                 assert_eq!(request.header("Session-Id"), Some("voice-fixture"));
                 assert_eq!(
-                    read_websocket_frame(&mut io, true).await,
+                    read_websocket_frame(&mut io, true, &Deadline::after(wire_timeout())).await,
                     (0x81, first.to_vec())
                 );
                 io.write_all(&websocket_frame(0x81, None, event))
                     .await
                     .unwrap();
                 assert_eq!(
-                    read_websocket_frame(&mut io, true).await,
+                    read_websocket_frame(&mut io, true, &Deadline::after(wire_timeout())).await,
                     (0x88, 1000u16.to_be_bytes().to_vec())
                 );
             };
@@ -685,7 +702,8 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
                 let mut client = RawClient::request(address, &wire).await;
                 assert_upgrade(&client);
                 assert_eq!(
-                    read_websocket_frame(&mut client.io, false).await,
+                    read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout()))
+                        .await,
                     (0x81, event.to_vec())
                 );
                 assert_eq!(
@@ -693,7 +711,10 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
                     1
                 );
                 client.io.shutdown().await.unwrap();
-                assert_eq!(client.rest().await, b"\x88\x00");
+                assert_eq!(
+                    client.rest(&Deadline::after(wire_timeout())).await,
+                    b"\x88\x00"
+                );
             };
             tokio::join!(peer, client);
         }
@@ -781,11 +802,17 @@ fn native_http_fallback_drain_cancels_open_and_allows_restore() {
             .await
             .unwrap();
         receive_event(&mut client, "codex.response.metadata").await;
-        let deadline = Instant::now() + wire_timeout();
-        let (_rejected, _) = timeout_at(deadline, reject_native_upgrade(&listener, Duration::ZERO))
-            .await
-            .expect("native upstream WebSocket upgrade request");
-        let mut upstream = timeout_at(deadline, async {
+        let deadline = Deadline::after(wire_timeout());
+        let (_rejected, _) = timeout(
+            deadline.remaining(),
+            reject_native_upgrade(&listener, Duration::ZERO),
+        )
+        .await
+        .expect("native upstream WebSocket upgrade request");
+        deadline
+            .accept((), "rejected native WebSocket upgrade")
+            .unwrap();
+        let mut upstream = timeout(deadline.remaining(), async {
             let (mut http, _) = listener.accept().await.unwrap();
             let request = String::from_utf8(head(&mut http).await.unwrap()).unwrap();
             let request = parse_request(&request).unwrap();
@@ -807,9 +834,10 @@ fn native_http_fallback_drain_cancels_open_and_allows_restore() {
         })
         .await
         .expect("native HTTP fallback POST after 426");
+        deadline.accept((), "native HTTP fallback POST").unwrap();
         let restore = begin_restore(fixture, address, &session);
         assert_eq!(
-            read_websocket_frame(&mut client.io, false).await,
+            read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
             (0x88, close_payload(1001, "EMP connection is draining")),
         );
         assert_eq!(
@@ -851,10 +879,11 @@ fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
             client.io.write_all(&websocket_frame(0x81, MASK, NATIVE_CREATE)).await.unwrap();
 
             let ws_handshake_delay = Duration::from_millis(400);
-            let deadline = Instant::now() + wire_timeout();
-            let (_rejected, fallback_started) = timeout_at(deadline, reject_native_upgrade(&listener, ws_handshake_delay))
+            let deadline = Deadline::after(wire_timeout());
+            let (_rejected, fallback_started) = timeout(deadline.remaining(), reject_native_upgrade(&listener, ws_handshake_delay))
                 .await.expect("native upstream WebSocket upgrade request");
-            let http_wait_ms = timeout_at(deadline, async {
+        deadline.accept((), "rejected native WebSocket upgrade").unwrap();
+            let http_wait_ms = timeout(deadline.remaining(), async {
                 let (mut http, _) = listener.accept().await.unwrap();
                 let request = String::from_utf8(head(&mut http).await.unwrap()).unwrap();
                 let request = parse_request(&request).unwrap();
@@ -870,6 +899,7 @@ fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
                 http.shutdown().await.unwrap();
                 http_wait_ms
             }).await.expect("native HTTP fallback POST after 426");
+        deadline.accept((), "native HTTP fallback POST").unwrap();
             let error = receive_event(&mut client, "error").await;
             let fallback_elapsed_ms = fallback_started.elapsed().as_millis() as u64;
             assert_eq!(error["status"], 403);
@@ -913,7 +943,7 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
                 assert_upgrade(&client);
                 client.io.write_all(&websocket_frame(0x81, MASK, NATIVE_CREATE)).await.unwrap();
                 let (mut upstream, _) = accept_upstream(&listener, "").await;
-                let (flags, _) = read_websocket_frame(&mut upstream, true).await;
+                let (flags, _) = read_websocket_frame(&mut upstream, true, &Deadline::after(wire_timeout())).await;
                 assert_eq!(flags, 0x81);
                 upstream.write_all(&websocket_frame(
                     0x81,
@@ -924,15 +954,15 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
                 if drain {
                     let restore = begin_restore(fixture, address, &session);
                     assert_eq!(
-                        read_websocket_frame(&mut client.io, false).await,
+                        read_websocket_frame(&mut client.io, false, &Deadline::after(wire_timeout())).await,
                         (0x88, close_payload(1001, "EMP connection is draining")),
                     );
                     assert_status(&timeout(wire_timeout(), restore).await.unwrap().unwrap(), 200);
                 } else {
                     client.io.shutdown().await.unwrap();
-                    assert_eq!(client.rest().await, b"\x88\x00");
+                    assert_eq!(client.rest(&Deadline::after(wire_timeout())).await, b"\x88\x00");
                 }
-                assert_eq!(read_websocket_frame(&mut upstream, true).await, (0x88, 1000u16.to_be_bytes().to_vec()));
+                assert_eq!(read_websocket_frame(&mut upstream, true, &Deadline::after(wire_timeout())).await, (0x88, 1000u16.to_be_bytes().to_vec()));
                 let calls = exchange_wire(endpoint, &request(fixture.port(), "GET", "/api/calls?start=0&end=9999999999", &[&session], &[]), false).await;
                 let calls = json_body(&calls);
                 let record = calls["records"].as_array().unwrap().iter().find(|record| record["session_id"] == label).unwrap_or_else(|| panic!("missing call for {label} in {calls}"));
@@ -962,7 +992,7 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
             let observations = || live_journal(&root).into_iter()
                 .filter(|row| row["event"] == "route_observation")
                 .map(|row| row["fields"].clone()).collect::<Vec<_>>();
-            wait_for(wire_timeout(), || observations().len() >= requests);
+            wait_for(&Deadline::after(wire_timeout()), || observations().len() >= requests);
             observations()
         }).await.unwrap();
         for id in drain_ids {
@@ -976,12 +1006,13 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
 }
 
 async fn receive_event(client: &mut RawClient, kind: &str) -> Value {
+    let deadline = Deadline::after(wire_timeout());
     loop {
-        let (flags, payload) = read_websocket_frame(&mut client.io, false).await;
+        let (flags, payload) = read_websocket_frame(&mut client.io, false, &deadline).await;
         assert_eq!(flags, 0x81);
         let value: Value = serde_json::from_slice(&payload).unwrap();
         if value["type"] == kind {
-            return value;
+            return deadline.accept(value, kind).unwrap();
         }
         assert!(
             !matches!(
@@ -1035,7 +1066,7 @@ fn responses_native_prefetch_and_deflate_context_survive_turns_and_disconnect() 
                 let mut deflate = flate2::Compress::new_with_window_bits(Compression::fast(), false, 12);
                 let mut wait_for_next = Some(wait_for_next);
                 for turn in 0..3 {
-                    let (flags, mut compressed) = read_websocket_frame(&mut io, true).await;
+                    let (flags, mut compressed) = read_websocket_frame(&mut io, true, &Deadline::after(wire_timeout())).await;
                     assert_eq!(flags, 0xc1);
                     if turn > 0 {
                         assert!(compressed.len() < 256, "the upstream client reused its dictionary");
@@ -1050,11 +1081,11 @@ fn responses_native_prefetch_and_deflate_context_survive_turns_and_disconnect() 
                     let id = if turn == 0 { "resp_first" } else { "resp_later" };
                     send_compressed(&mut io, &mut deflate, &json!({"type":"response.created","response":{"id":id,"status":"in_progress"}})).await;
                     if turn == 2 {
-                        assert_eq!(read_websocket_frame(&mut io, true).await, (0x88, 1000u16.to_be_bytes().to_vec()));
+                        assert_eq!(read_websocket_frame(&mut io, true, &Deadline::after(wire_timeout())).await, (0x88, 1000u16.to_be_bytes().to_vec()));
                         return;
                     }
                     if turn == 0 {
-                        let (flags, mut compressed) = read_websocket_frame(&mut io, true).await;
+                        let (flags, mut compressed) = read_websocket_frame(&mut io, true, &Deadline::after(wire_timeout())).await;
                         assert_eq!(flags, 0xc1);
                         compressed.extend_from_slice(&[0, 0, 255, 255]);
                         let mut decoded = Vec::with_capacity(1024);
@@ -1105,7 +1136,7 @@ fn responses_native_prefetch_and_deflate_context_survive_turns_and_disconnect() 
                 client.io.write_all(&websocket_frame(0x81, MASK, &serde_json::to_vec(&first).unwrap())).await.unwrap();
                 assert_eq!(receive_event(&mut client, "response.created").await["response"]["id"], "resp_later");
                 client.io.shutdown().await.unwrap();
-                assert_eq!(client.rest().await, b"\x88\x00");
+                assert_eq!(client.rest(&Deadline::after(wire_timeout())).await, b"\x88\x00");
             };
             tokio::join!(peer, downstream);
         }

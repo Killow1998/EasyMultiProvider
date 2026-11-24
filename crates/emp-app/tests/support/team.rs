@@ -1,7 +1,7 @@
 use super::modules::{BuiltModule, ModuleEmp, ModuleRelease, eventually};
 use super::{Emp, Response, SseClient, Upstream, Workspace, http, io_timeout, write_file};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Write};
@@ -11,15 +11,16 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
 pub const PASSWORD: &str = "team-e2e-password";
 pub const SHARED_MODEL: &str = "team-shared-fixture-model";
 const PERSONAL_MODEL: &str = "team-personal-fixture-model";
 
-pub fn poll<T>(description: &str, observe: impl FnMut() -> Option<T>) -> T {
-    eventually(test_timeout(Duration::from_secs(30)), description, observe)
+pub fn poll<T>(description: &str, mut observe: impl FnMut(&Deadline) -> Option<T>) -> T {
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(30)));
+    eventually(&deadline, description, || observe(&deadline))
 }
 
 fn listener() -> TcpListener {
@@ -32,7 +33,7 @@ fn listener() -> TcpListener {
 }
 
 fn assert_reaped(pid: u32) {
-    poll("Team process reaped", || {
+    poll("Team process reaped", |_| {
         let output = Command::new("ps")
             .args(["-A", "-o", "pid="])
             .output()
@@ -187,12 +188,10 @@ impl TeamRelay {
                 let accepted = accepted.clone();
                 requests.push(thread::spawn(move || {
                     stream
-                        .set_read_timeout(Some(io_timeout()))
-                        .expect("relay timeout");
-                    stream
                         .set_write_timeout(Some(io_timeout()))
                         .expect("relay timeout");
-                    let (line, headers, body) = super::http::read_message(&mut stream, false);
+                    let deadline = Deadline::after(io_timeout());
+                    let (line, headers, body) = super::http::read_message(&mut deadline.io(&stream), false);
                     let method = line.split_whitespace().next().expect("Team HTTP method");
                     let path = line.split_whitespace().nth(1).expect("Team HTTP path");
                     if method == "GET" && path.split('?').next() == Some("/v1/models") {
@@ -247,7 +246,8 @@ impl TeamRelay {
                         let _ = std::io::copy(&mut backend, &mut stream);
                         return;
                     }
-                    let (status, headers, reply) = super::http::read_message(&mut backend, true);
+                    let deadline = Deadline::after(io_timeout());
+                    let (status, headers, reply) = super::http::read_message(&mut deadline.io(&backend), true);
                     if path == "/workspace/v1/report"
                         && status.split_whitespace().nth(1) == Some("200")
                     {
@@ -350,13 +350,32 @@ impl Drop for TeamRelay {
 }
 
 pub fn team(emp: &Emp, action: &str, body: Value, expected: u16) -> Value {
-    let response = emp.post(&format!("/api/team/{action}"), &body);
+    team_before(
+        emp,
+        action,
+        body,
+        expected,
+        &Deadline::after(super::io_timeout()),
+    )
+}
+
+fn team_before(emp: &Emp, action: &str, body: Value, expected: u16, deadline: &Deadline) -> Value {
+    let response = emp.api_before(
+        "POST",
+        &format!("/api/team/{action}"),
+        Some(&body),
+        deadline,
+    );
     assert_eq!(response.status, expected, "{action}: {}", response.text());
     response.json()
 }
 
 pub fn report(emp: &Emp, path: &str) -> Value {
-    let response = emp.get(path);
+    report_before(emp, path, &Deadline::after(super::io_timeout()))
+}
+
+pub fn report_before(emp: &Emp, path: &str, deadline: &Deadline) -> Value {
+    let response = emp.get_before(path, deadline);
     assert_eq!(response.status, 200, "{path}: {}", response.text());
     response.json()
 }
@@ -648,8 +667,14 @@ impl Team {
     }
 
     pub fn usage(&self, member: &str, requests: u64) -> Value {
-        poll("Team ledger count", || {
-            let usage = team(&self.devices[0], "usage", json!({"period":"lifetime"}), 200);
+        poll("Team ledger count", |deadline| {
+            let usage = team_before(
+                &self.devices[0],
+                "usage",
+                json!({"period":"lifetime"}),
+                200,
+                deadline,
+            );
             let row = usage["rows"]
                 .as_array()
                 .expect("Team usage")
@@ -663,8 +688,12 @@ impl Team {
     }
 
     pub fn local_call(&self, device: usize, request: &str) -> Value {
-        poll("local call ledger", || {
-            let calls = report(&self.devices[device], "/api/calls?start=0&end=4102444800");
+        poll("local call ledger", |deadline| {
+            let calls = report_before(
+                &self.devices[device],
+                "/api/calls?start=0&end=4102444800",
+                deadline,
+            );
             calls["records"]
                 .as_array()
                 .expect("calls")
@@ -683,10 +712,10 @@ impl Team {
 }
 
 pub fn next_event(client: &mut SseClient, kind: &str) -> Value {
-    let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(5)));
     loop {
         let event = client
-            .next_event(deadline)
+            .next_event(&deadline)
             .expect("Team SSE event")
             .expect("Team SSE ended");
         if event["type"] == kind {

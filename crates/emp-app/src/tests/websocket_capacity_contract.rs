@@ -1,9 +1,8 @@
 use super::*;
 use crate::services::connection_admission::{ConnectionAdmissionConfig, SlotLimits};
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::time::Instant;
 
 fn server_with_admission(admission: ConnectionAdmissionConfig) -> (TempDir, ServerHandle) {
     let directory = emp_test_support::fixture_dir().expect("temporary root");
@@ -18,19 +17,21 @@ fn server_with_admission(admission: ConnectionAdmissionConfig) -> (TempDir, Serv
     (directory, server)
 }
 
-pub(crate) fn wait_for(timeout: Duration, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
+pub(crate) fn wait_for(deadline: &Deadline, mut ready: impl FnMut() -> bool) {
+    while !deadline.is_expired() {
         if ready() {
+            deadline
+                .accept((), "condition did not become ready before deadline")
+                .unwrap();
             return;
         }
         #[expect(
             clippy::disallowed_methods,
             reason = "此等待 helper 按固定间隔检查条件，保留既有截止时间"
         )]
-        thread::sleep(Duration::from_millis(5));
+        thread::sleep(deadline.remaining().min(Duration::from_millis(5)));
     }
-    assert!(ready(), "condition did not become ready before deadline");
+    panic!("condition did not become ready before deadline");
 }
 
 fn websocket(server: &ServerHandle) -> TcpStream {
@@ -214,13 +215,15 @@ fn tiny_admission(requests: usize, websockets: usize) -> ConnectionAdmissionConf
 fn websocket_admission_closes_overflow_and_reuses_a_released_slot() {
     let (_directory, server) = server_with_admission(tiny_admission(8, 2));
     let first = websocket(&server);
-    wait_for(test_timeout(Duration::from_secs(2)), || {
-        server.state.lifecycle.admission.active_websockets() == 1
-    });
+    wait_for(
+        &Deadline::after(test_timeout(Duration::from_secs(2))),
+        || server.state.lifecycle.admission.active_websockets() == 1,
+    );
     let second = websocket(&server);
-    wait_for(test_timeout(Duration::from_secs(2)), || {
-        server.state.lifecycle.admission.active_websockets() == 2
-    });
+    wait_for(
+        &Deadline::after(test_timeout(Duration::from_secs(2))),
+        || server.state.lifecycle.admission.active_websockets() == 2,
+    );
     let health_while_websockets_full = health_status(&server);
 
     let mut overflow = websocket(&server);
@@ -265,24 +268,28 @@ fn websocket_admission_closes_overflow_and_reuses_a_released_slot() {
 fn request_admission_rejects_overflow_and_releases_after_disconnect() {
     let (_directory, server) = server_with_admission(tiny_admission(2, 2));
     let first = stall_request(&server);
-    wait_for(test_timeout(Duration::from_secs(2)), || {
-        server.state.lifecycle.admission.active_requests() == 1
-    });
+    wait_for(
+        &Deadline::after(test_timeout(Duration::from_secs(2))),
+        || server.state.lifecycle.admission.active_requests() == 1,
+    );
     let second = stall_request(&server);
-    wait_for(test_timeout(Duration::from_secs(2)), || {
-        server.state.lifecycle.admission.active_requests() == 2
-    });
+    wait_for(
+        &Deadline::after(test_timeout(Duration::from_secs(2))),
+        || server.state.lifecycle.admission.active_requests() == 2,
+    );
 
     let overflow_health = health_status(&server);
     drop(first);
-    wait_for(test_timeout(Duration::from_secs(2)), || {
-        server.state.lifecycle.admission.active_requests() == 1
-    });
+    wait_for(
+        &Deadline::after(test_timeout(Duration::from_secs(2))),
+        || server.state.lifecycle.admission.active_requests() == 1,
+    );
     let available_health = health_status(&server);
     drop(second);
-    wait_for(test_timeout(Duration::from_secs(2)), || {
-        server.state.lifecycle.admission.active_requests() == 0
-    });
+    wait_for(
+        &Deadline::after(test_timeout(Duration::from_secs(2))),
+        || server.state.lifecycle.admission.active_requests() == 0,
+    );
     server.shutdown().expect("shutdown test server");
 
     assert_eq!(
@@ -316,11 +323,12 @@ fn responses_half_close_replies_and_releases_its_websocket_permit() {
         assert_eq!(&pong, b"\x8a\x01p");
         assert_eq!(server.state.lifecycle.admission.active_websockets(), 1);
         client.io.shutdown().await.unwrap();
-        assert_eq!(client.rest().await, b"\x88\x00");
+        assert_eq!(client.rest(&Deadline::after(wire_timeout())).await, b"\x88\x00");
     });
-    wait_for(test_timeout(Duration::from_secs(2)), || {
-        server.state.lifecycle.admission.active_websockets() == 0
-    });
+    wait_for(
+        &Deadline::after(test_timeout(Duration::from_secs(2))),
+        || server.state.lifecycle.admission.active_websockets() == 0,
+    );
     server.shutdown().unwrap();
 }
 
@@ -328,9 +336,10 @@ fn responses_half_close_replies_and_releases_its_websocket_permit() {
 fn responses_drain_flushes_close_before_returning_permit_and_reopens() {
     let (_directory, server) = server_with_admission(tiny_admission(8, 1));
     let mut client = websocket(&server);
-    wait_for(test_timeout(Duration::from_secs(2)), || {
-        server.state.lifecycle.admission.active_websockets() == 1
-    });
+    wait_for(
+        &Deadline::after(test_timeout(Duration::from_secs(2))),
+        || server.state.lifecycle.admission.active_websockets() == 1,
+    );
     thread::scope(|scope| {
         let drain = scope.spawn(|| {
             let guard = server

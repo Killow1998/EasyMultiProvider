@@ -7,7 +7,8 @@
 )]
 mod support;
 
-use std::time::{Duration, Instant};
+use emp_test_support::{Deadline, test_timeout};
+use std::time::Duration;
 use support::{Emp, Upstream, Workspace};
 
 #[test]
@@ -30,7 +31,7 @@ fn desktop_startup_keeps_the_native_tray_alive_through_enable_and_restore() {
             format!("\"{}\" --version", env!("CARGO_BIN_EXE_EMP")),
         );
     let mut emp = Emp::spawn(command);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(15)));
     loop {
         let journal: String = std::fs::read_dir(workspace.root.join("state/logs"))
             .unwrap()
@@ -41,9 +42,10 @@ fn desktop_startup_keeps_the_native_tray_alive_through_enable_and_restore() {
             serde_json::from_str::<serde_json::Value>(line)
                 .is_ok_and(|record| record["event"] == "desktop_tray_started")
         }) {
+            deadline.accept((), "desktop tray startup").unwrap();
             break;
         }
-        assert!(Instant::now() < deadline, "native tray did not start");
+        assert!(!deadline.is_expired(), "native tray did not start");
         #[expect(
             clippy::disallowed_methods,
             reason = "原生托盘就绪通过诊断日志报告，以固定间隔轮询"

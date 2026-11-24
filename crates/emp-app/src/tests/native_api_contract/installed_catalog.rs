@@ -1,6 +1,7 @@
 //! Online catalog discovery using a real Codex with synthetic subscription credentials.
 use super::installed_codex::Codex;
 use super::*;
+use emp_test_support::{Deadline, test_timeout};
 
 #[test]
 #[ignore = "requires an explicitly selected Codex and isolated loopback access"]
@@ -179,11 +180,17 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool, s
         server.shutdown().unwrap();
         return;
     }
-    let deadline = std::time::Instant::now() + Duration::from_secs(300);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(300)));
     let mut rpc_id = 5;
     loop {
         let models = if originator == "online_catalog_fixture" {
-            codex.rpc(rpc_id, "model/list", json!({"includeHidden":true}))["data"].clone()
+            codex.rpc_before(
+                rpc_id,
+                "model/list",
+                json!({"includeHidden":true}),
+                &deadline.capped(test_timeout(Duration::from_secs(15))),
+            )["data"]
+                .clone()
         } else {
             let cached = std::fs::read(home.join(format!("models_cache.{originator}.json")))
                 .ok()
@@ -208,10 +215,13 @@ fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool, s
                 })
             })
         }) {
+            deadline
+                .accept((), format_args!("refreshed catalog {originator}"))
+                .unwrap();
             break;
         }
         assert!(
-            std::time::Instant::now() < deadline,
+            !deadline.is_expired(),
             "running engine did not refresh catalog {originator}; model IDs: {:?}; stderr: {}",
             models
                 .as_array()

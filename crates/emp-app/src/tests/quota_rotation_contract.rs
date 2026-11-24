@@ -2,6 +2,7 @@
 
 use super::{credential_root, post, session_header};
 use crate::lifecycle::ServerHandle;
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::{Value, json};
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::fs::PermissionsExt;
@@ -421,15 +422,16 @@ for line in sys.stdin:
         .as_bytes(),
     )
     .expect("send quota check");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = Deadline::after(test_timeout(std::time::Duration::from_secs(30)));
     while !executable.with_extension("rotated").exists() {
-        assert!(std::time::Instant::now() < deadline, "Codex never rotated");
+        assert!(!deadline.is_expired(), "Codex never rotated");
         #[expect(
             clippy::disallowed_methods,
             reason = "配额轮换替身通过文件报告状态，以固定间隔轮询"
         )]
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    deadline.accept((), "Codex refreshed credentials").unwrap();
     let release = executable.with_extension("release");
     let releaser = std::thread::spawn(move || {
         #[expect(

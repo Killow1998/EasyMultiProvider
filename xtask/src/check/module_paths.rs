@@ -70,8 +70,17 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
             path_attributes(&attr.meta, &mut explicit);
         }
         for path in explicit {
-            let target = self.directory.join(path.value());
-            if !resolve(&target).starts_with(&self.sources.crate_dir) {
+            let value = path.value();
+            let portable = value.replace('\\', "/");
+            let rooted = portable.starts_with('/')
+                || matches!(portable.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic());
+            let mut targets = BTreeSet::from([self.directory.join(&value)]);
+            targets.insert(self.directory.join(&portable));
+            if rooted
+                || targets
+                    .iter()
+                    .any(|target| !resolve(target).starts_with(&self.sources.crate_dir))
+            {
                 let file = self
                     .file
                     .strip_prefix(self.sources.root)
@@ -80,12 +89,16 @@ impl<'ast> Visit<'ast> for ModulePaths<'_, '_> {
                     "[module-paths] {}:{}: #[path = {:?}] 指向本 crate 目录之外",
                     file.display(),
                     path.span().start().line,
-                    path.value()
+                    value
                 ));
-            } else if let Some((_, items)) = &item.content {
-                self.visit_inline(&target, items);
             } else {
-                self.sources.visit_file(&target, None);
+                for target in targets {
+                    if let Some((_, items)) = &item.content {
+                        self.visit_inline(&target, items);
+                    } else {
+                        self.sources.visit_file(&target, None);
+                    }
+                }
             }
         }
 
@@ -209,5 +222,45 @@ mod nested {
         assert!(errors[0].contains("lib.rs:3"));
         assert!(errors[1].contains("lib.rs:4"));
         assert!(errors[2].contains("local.rs:4"));
+    }
+
+    #[test]
+    fn checks_windows_module_paths_on_every_host() {
+        let root = emp_test_support::fixture_dir().unwrap();
+        let crate_dir = root.path().join("emp-updater");
+        let src = crate_dir.join("src");
+        let entry = src.join("lib.rs");
+        fs::create_dir_all(src.join("nested")).unwrap();
+        fs::write(
+            &entry,
+            r#"
+#[cfg(windows)] #[path = r"..\..\emp-test-support\src\lib.rs"] mod outside;
+#[cfg(windows)] #[path = r"..\../emp-test-support\src/lib.rs"] mod mixed;
+#[path = r"nested\inside.rs"] mod inside;
+#[path = r"C:\src\outside.rs"] mod drive;
+#[path = r"C:outside.rs"] mod drive_relative;
+#[path = r"\\server\share\outside.rs"] mod unc;
+#[path = r"\src\outside.rs"] mod rooted;
+#[path = "//server/share/outside.rs"] mod slash_unc;
+"#,
+        )
+        .unwrap();
+        let support = root.path().join("emp-test-support/src");
+        fs::create_dir_all(&support).unwrap();
+        fs::write(support.join("lib.rs"), "").unwrap();
+        fs::write(src.join("nested/inside.rs"), "").unwrap();
+
+        let mut errors = Vec::new();
+        check(
+            root.path(),
+            &crate_dir,
+            std::iter::once(entry.as_path()),
+            &mut errors,
+        )
+        .unwrap();
+        assert_eq!(errors.len(), 7, "{errors:?}");
+        for (error, line) in errors.iter().zip([2, 3, 5, 6, 7, 8, 9]) {
+            assert!(error.contains(&format!("lib.rs:{line}:")), "{error}");
+        }
     }
 }

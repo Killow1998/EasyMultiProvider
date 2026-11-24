@@ -1,4 +1,4 @@
-use emp_test_support::test_timeout;
+use emp_test_support::{Deadline, test_timeout};
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -210,8 +210,13 @@ impl Emp {
             collected.lock().expect("stderr").push_str(&text);
         });
         let mut startup_output = Vec::new();
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(30)));
         let opened = loop {
-            match received.recv_timeout(test_timeout(Duration::from_secs(30))) {
+            match received
+                .recv_timeout(deadline.remaining())
+                .map_err(std::io::Error::other)
+                .and_then(|line| deadline.accept(line, "EMP startup stdout"))
+            {
                 Ok(line) => {
                     let opened = line.strip_prefix("Open in browser: ").map(str::to_owned);
                     startup_output.push(line);
@@ -280,16 +285,37 @@ impl Emp {
 
     /// Management request carrying the browser session.
     pub fn api(&self, method: &str, path: &str, body: Option<&Value>) -> Response {
+        self.api_before(method, path, body, &Deadline::after(super::io_timeout()))
+    }
+
+    pub fn api_before(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        deadline: &Deadline,
+    ) -> Response {
         let payload = body.map(Value::to_string).unwrap_or_default();
         let mut headers = vec![("X-EMP-Session", self.session.as_str())];
         if body.is_some() {
             headers.push(("Content-Type", "application/json"));
         }
-        http(self.port, method, path, &headers, payload.as_bytes())
+        super::http::http_before(
+            self.port,
+            method,
+            path,
+            &headers,
+            payload.as_bytes(),
+            &deadline.capped(super::io_timeout()),
+        )
     }
 
     pub fn get(&self, path: &str) -> Response {
-        self.api("GET", path, None)
+        self.get_before(path, &Deadline::after(super::io_timeout()))
+    }
+
+    pub fn get_before(&self, path: &str, deadline: &Deadline) -> Response {
+        self.api_before("GET", path, None, deadline)
     }
 
     pub fn post(&self, path: &str, body: &Value) -> Response {
@@ -325,22 +351,23 @@ impl Emp {
 
     /// Wait for the process to exit and return its exit code.
     pub fn wait_exit(&mut self) -> Option<i32> {
-        self.wait_exit_with_timeout(test_timeout(Duration::from_secs(8)))
+        self.wait_exit_before(&Deadline::after(test_timeout(Duration::from_secs(8))))
     }
 
-    pub fn wait_exit_with_timeout(&mut self, timeout: Duration) -> Option<i32> {
-        let deadline = std::time::Instant::now() + timeout;
-        while std::time::Instant::now() < deadline {
+    pub fn wait_exit_before(&mut self, deadline: &Deadline) -> Option<i32> {
+        while !deadline.is_expired() {
             if let Some(status) = self.child.try_wait().expect("poll EMP") {
-                return status.code();
+                return deadline
+                    .accept(status.code(), "EMP exit")
+                    .expect("EMP did not exit before deadline");
             }
             #[expect(
                 clippy::disallowed_methods,
                 reason = "子进程退出需保留取消或超时检查，按既有固定间隔轮询"
             )]
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(deadline.remaining().min(Duration::from_millis(10)));
         }
-        panic!("EMP did not exit within {timeout:?}");
+        panic!("EMP did not exit before deadline");
     }
 
     /// Graceful stop (SIGTERM), as a user closing the service would do.

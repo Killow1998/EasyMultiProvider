@@ -1,6 +1,7 @@
 #![cfg(unix)]
 
 use emp_codex::quota::{QuotaControl, run_quota_query_persisting};
+use emp_test_support::{Deadline, test_timeout};
 use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -47,8 +48,8 @@ fn check_launcher(mode: &str, cancel: bool) {
             let ready = root.path().join("ready");
             let flag = &cancelled;
             scope.spawn(move || {
-                let deadline = Instant::now() + Duration::from_secs(3);
-                while !ready.exists() && Instant::now() < deadline {
+                let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
+                while !ready.exists() && !deadline.is_expired() {
                     #[expect(
                         clippy::disallowed_methods,
                         reason = "辅助进程通过文件报告就绪，以固定间隔轮询后触发取消"

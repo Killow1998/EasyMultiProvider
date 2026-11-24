@@ -1,6 +1,6 @@
 use super::*;
 use crate::lifecycle::ServerHandle;
-use std::time::Instant;
+use emp_test_support::{Deadline, test_timeout};
 
 #[test]
 fn tray_restore_and_quit_wait_for_every_admitted_request() {
@@ -43,8 +43,12 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
         let (updates, observed) = mpsc::sync_channel(8);
         let worker = std::thread::spawn(move || run(waiting, receive, updates));
         actions.send(action).unwrap();
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
         let busy = loop {
-            let snapshot = observed.recv_timeout(Duration::from_secs(2)).unwrap();
+            let snapshot = observed.recv_timeout(deadline.remaining()).unwrap();
+            let snapshot = deadline
+                .accept(snapshot, "tray entered busy state")
+                .unwrap();
             if snapshot.busy == Some(action) {
                 break snapshot;
             }
@@ -63,15 +67,16 @@ fn tray_restore_and_quit_wait_for_every_admitted_request() {
             }
         );
         assert!(busy.tooltip().contains("历史"));
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Deadline::after(test_timeout(Duration::from_secs(2)));
         while state.lifecycle.admission.acquire_request().is_some() {
-            assert!(Instant::now() < deadline);
+            assert!(!deadline.is_expired());
             #[expect(
                 clippy::disallowed_methods,
                 reason = "请求准入关闭没有通知接口，以固定间隔轮询"
             )]
             std::thread::sleep(Duration::from_millis(10));
         }
+        deadline.accept((), "tray closed admission").unwrap();
         #[expect(
             clippy::disallowed_methods,
             reason = "保持请求未排空的观察窗口，验证托盘动作继续等待"

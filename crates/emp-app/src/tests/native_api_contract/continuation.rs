@@ -1,5 +1,6 @@
 //! Observable continuation, isolation, cancellation and upload contracts.
 use super::*;
+use emp_test_support::{Deadline, test_timeout};
 use sha2::{Digest, Sha256};
 mod collaboration;
 mod fixture;
@@ -25,11 +26,16 @@ fn native_websocket_accepts_a_full_128_mib_message_without_http_replay() {
         .send_text(std::str::from_utf8(&wire).unwrap())
         .unwrap();
     drop(wire);
-    let deadline = Instant::now() + Duration::from_secs(90);
+    let deadline = Deadline::after(test_timeout(Duration::from_secs(90)));
     let previous = loop {
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "large WebSocket turn did not complete"
+        );
+        client.set_read_timeout(
+            deadline
+                .remaining()
+                .min(test_timeout(Duration::from_secs(30))),
         );
         let text = match client.poll_receive_text().unwrap() {
             emp_transport::WebSocketPoll::Text(text) => text,
@@ -39,7 +45,8 @@ fn native_websocket_accepts_a_full_128_mib_message_without_http_replay() {
         let event: Value = serde_json::from_str(&text).unwrap();
         assert_ne!(event["type"], "error", "{event}");
         if event["type"] == "response.completed" {
-            break event["response"]["id"].as_str().unwrap().to_owned();
+            let id = event["response"]["id"].as_str().unwrap().to_owned();
+            break deadline.accept(id, "large WebSocket turn").unwrap();
         }
     };
     completed(turn(
@@ -388,15 +395,16 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
         if fault == Fault::SilentPrefill {
             client.send_json(&request).unwrap();
             let started = Instant::now();
-            let deadline = started + Duration::from_secs(30);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(30)));
             while upstream.traffic.lock().unwrap().warmups == 0 {
-                assert!(Instant::now() < deadline);
+                assert!(!deadline.is_expired());
                 #[expect(
                     clippy::disallowed_methods,
                     reason = "续接替身通过共享状态报告进展，以固定间隔轮询"
                 )]
                 thread::sleep(Duration::from_millis(10));
             }
+            deadline.accept((), "prefill upstream request").unwrap();
             if started.elapsed() > Duration::from_secs(10) {
                 eprintln!(
                     "large-context fixture prefill arrived after {:?}",
@@ -404,18 +412,18 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
                 );
             }
             client.close();
-            let deadline = Instant::now() + Duration::from_secs(3);
+            let deadline = Deadline::after(test_timeout(Duration::from_secs(3)));
             while upstream.traffic.lock().unwrap().cancelled_prefills == 0 {
-                assert!(
-                    Instant::now() < deadline,
-                    "prefill upstream was not cancelled"
-                );
+                assert!(!deadline.is_expired(), "prefill upstream was not cancelled");
                 #[expect(
                     clippy::disallowed_methods,
                     reason = "续接替身通过共享状态报告进展，以固定间隔轮询"
                 )]
                 thread::sleep(Duration::from_millis(10));
             }
+            deadline
+                .accept((), "prefill upstream cancellation")
+                .unwrap();
         } else {
             let result = turn(&mut client, &request);
             if fault == Fault::RejectPrefill {
@@ -452,7 +460,7 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
 #[cfg(unix)]
 #[test]
 fn prefill_disconnect_waits_for_the_client_to_retry() {
-    use crate::server::raw_tcp::{RawClient, read_websocket_frame, websocket_frame};
+    use crate::server::raw_tcp::{RawClient, read_websocket_frame, websocket_frame, wire_timeout};
     use tokio::io::AsyncWriteExt;
 
     {
@@ -483,16 +491,24 @@ fn prefill_disconnect_waits_for_the_client_to_retry() {
             client
         };
         let mut client = runtime.block_on(send_request());
-        crate::tests::wait_for(Duration::from_secs(30), || {
-            upstream.traffic.lock().unwrap().warmups == 1
-        });
+        crate::tests::wait_for(
+            &Deadline::after(test_timeout(Duration::from_secs(30))),
+            || upstream.traffic.lock().unwrap().warmups == 1,
+        );
         runtime.block_on(client.io.shutdown()).unwrap();
         runtime.block_on(async {
-            assert_eq!(client.rest().await.last_chunk::<2>(), Some(&[0x88, 0]));
+            assert_eq!(
+                client
+                    .rest(&Deadline::after(wire_timeout()))
+                    .await
+                    .last_chunk::<2>(),
+                Some(&[0x88, 0])
+            );
         });
-        crate::tests::wait_for(Duration::from_secs(5), || {
-            upstream.traffic.lock().unwrap().cancelled_prefills == 1
-        });
+        crate::tests::wait_for(
+            &Deadline::after(test_timeout(Duration::from_secs(5))),
+            || upstream.traffic.lock().unwrap().cancelled_prefills == 1,
+        );
         {
             let stats = upstream.traffic.lock().unwrap();
             assert_eq!(stats.ws_connections, 1);
@@ -501,18 +517,25 @@ fn prefill_disconnect_waits_for_the_client_to_retry() {
         }
         runtime.block_on(async {
             let mut retry = send_request().await;
+            let deadline = Deadline::after(wire_timeout());
             loop {
-                let (flags, payload) = read_websocket_frame(&mut retry.io, false).await;
+                let (flags, payload) = read_websocket_frame(&mut retry.io, false, &deadline).await;
                 assert_eq!(flags, 0x81);
                 let event: Value = serde_json::from_slice(&payload).unwrap();
                 match event["type"].as_str() {
-                    Some("response.completed") => break,
+                    Some("response.completed") => {
+                        deadline.accept((), "retried prefill turn").unwrap();
+                        break;
+                    }
                     Some("response.failed" | "response.incomplete" | "error") => panic!("{event}"),
                     _ => {}
                 }
             }
             retry.io.shutdown().await.unwrap();
-            assert_eq!(retry.rest().await, b"\x88\x00");
+            assert_eq!(
+                retry.rest(&Deadline::after(wire_timeout())).await,
+                b"\x88\x00"
+            );
         });
         server.shutdown().unwrap();
         let stats = upstream.traffic.lock().unwrap();
