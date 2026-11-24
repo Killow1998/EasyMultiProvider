@@ -260,6 +260,9 @@ pub fn normalize_account(raw: &Value) -> AccountResult<Value> {
     if raw.get("workspace_shared") == Some(&Value::Bool(true)) {
         account["workspace_shared"] = Value::Bool(true);
     }
+    if let Some(identity) = raw.get("retained_identity").and_then(Value::as_str) {
+        account["retained_identity"] = Value::String(identity.to_owned());
+    }
     if let Some(names) = raw.get("route_names") {
         let names = names
             .as_array()

@@ -57,6 +57,8 @@ struct Imported {
     expires_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     account_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    local_account: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize, Default)]
@@ -153,6 +155,7 @@ impl TeamState {
             store.recovery_required = true;
         }
         if let Some(store) = &mut store {
+            store.recovery_required |= configured_shares.iter().any(|id| store.grant(id).is_none());
             for account in config["accounts"].as_array().expect("normalized accounts") {
                 if account["workspace_shared"] == true
                     && let Some(id) = account["id"].as_str()
@@ -300,11 +303,12 @@ impl TeamState {
         let session = store.session.as_mut().ok_or_else(Failure::signed_out)?;
         let (identity, plan) = remote_identity(state, session)?;
         if session.identity != identity {
-            let membership_changed = session.identity["workspace"] != identity["workspace"]
-                || session.identity["member"] != identity["member"];
+            let access_changed = session.identity["workspace"] != identity["workspace"]
+                || session.identity["member"] != identity["member"]
+                || session.identity["native_usage"] != identity["native_usage"];
             session.identity = identity;
-            self.save_store(state, store)?;
-            if membership_changed {
+            self.apply_permissions(state, store)?;
+            if access_changed {
                 super::catalog::refresh_catalog(state).map_err(|_| Failure::unavailable())?;
             }
         }

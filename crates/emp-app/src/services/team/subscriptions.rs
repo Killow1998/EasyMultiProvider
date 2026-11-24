@@ -49,29 +49,20 @@ pub(super) fn stored_identity(vault: &VaultStore, account: &Value) -> Option<Str
     Some(emp_state::accounts::account_auth_identity(&document))
 }
 
-pub(super) fn mark_expired_private(
+pub(super) fn matching_local(
+    config: &Value,
     vault: &VaultStore,
-    config: &mut Value,
-    shared_identities: &std::collections::BTreeSet<&str>,
-) {
-    if shared_identities.is_empty() {
-        return;
-    }
-    let now = crate::util::system_now() as i64;
-    for account in config["accounts"]
-        .as_array_mut()
-        .expect("normalized accounts")
-    {
-        if account["workspace_shared"] != true
-            && account["credential_status"] != "invalid"
-            && let Some(auth) = stored_auth(vault, account)
-            && subscription(&auth).is_some_and(|subscription| subscription.expires_at <= now)
-            && shared_identities
-                .contains(emp_state::accounts::account_auth_identity(&auth).as_str())
-        {
-            account["credential_status"] = json!("invalid");
-        }
-    }
+    document: &Value,
+    identity: &str,
+) -> Option<String> {
+    config["accounts"].as_array()?.iter().find(|row| {
+        row["retained_identity"] == identity
+            || (row["workspace_shared"] != true
+                && stored_auth(vault, row)
+                    .is_some_and(|old| emp_state::same_account_auth(&old, document)))
+    })?["id"]
+        .as_str()
+        .map(str::to_owned)
 }
 
 pub(super) fn owns_credential(account: &Value, path: &std::path::Path) -> bool {
@@ -85,7 +76,7 @@ pub(super) fn stage(
     state: &ServerState,
     updated: &mut Value,
     session: &Session,
-    local_id: &str,
+    retained_id: Option<&str>,
     existing: Option<&Imported>,
     share: &SharedService,
     credentials: &mut Vec<(PathBuf, Value)>,
@@ -101,6 +92,8 @@ pub(super) fn stage(
     {
         return Err(Failure(502, "invalid_workspace_share".into()));
     }
+    let generated = format!("team-{}", share.id);
+    let local_id = retained_id.unwrap_or(&generated);
     let path =
         emp_state::account_auth_path(updated, local_id, &state.backend.configuration.config_path)
             .map_err(|_| Failure::unavailable())?;
@@ -113,7 +106,8 @@ pub(super) fn stage(
         .expect("normalized providers")
         .iter()
         .any(|provider| provider["id"] == local_id)
-        || index.is_some_and(|index| !owns_credential(&accounts[index], &path))
+        || index
+            .is_some_and(|index| retained_id.is_none() && !owns_credential(&accounts[index], &path))
         || (index.is_none() && existing.is_none() && path.exists())
     {
         return Err(Failure(409, "workspace_share_collision".into()));
@@ -129,14 +123,15 @@ pub(super) fn stage(
     .chars()
     .take(54)
     .collect::<String>();
-    let renamed = index.is_none_or(|index| {
-        let name = accounts[index]["name"].as_str().expect("normalized name");
-        name == old_default
-            || name
-                .strip_prefix(&old_default)
-                .and_then(|suffix| suffix.strip_prefix(' '))
-                .is_some_and(|suffix| suffix.parse::<u32>().is_ok())
-    });
+    let renamed = retained_id.is_none()
+        && index.is_none_or(|index| {
+            let name = accounts[index]["name"].as_str().expect("normalized name");
+            name == old_default
+                || name
+                    .strip_prefix(&old_default)
+                    .and_then(|suffix| suffix.strip_prefix(' '))
+                    .is_some_and(|suffix| suffix.parse::<u32>().is_ok())
+        });
     let new_name = renamed.then(|| {
         let preferred = label.replace(['/', '\\'], " ");
         let preferred = preferred.trim();
@@ -168,6 +163,21 @@ pub(super) fn stage(
             }
             return Ok(false);
         }
+    }
+    if let Some(index) = index.filter(|_| retained_id.is_some()) {
+        let row = &mut updated["accounts"][index];
+        if row["workspace_shared"] != true
+            && row["credential_status"] != "invalid"
+            && stored_auth(&state.backend.configuration.vault, row)
+                .and_then(|old| subscription(&old))
+                .is_some_and(|old| old.expires_at >= auth.expires_at)
+        {
+            return Ok(false);
+        }
+        row["retained_identity"] = json!(emp_state::accounts::account_auth_identity(&document));
+        row.as_object_mut()
+            .expect("account")
+            .remove("credential_source");
     }
     let accounts = updated["accounts"]
         .as_array_mut()

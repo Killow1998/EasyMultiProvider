@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.15.11 (2026-11-23)
+
+### 中文
+
+- 团队同步遇到与本机 Other 身份相同的订阅时，会复用原有账号，并清除旧版重复生成的团队账号和凭据。本机名称、模型设置、历史用量和历史路由名均会保留。同一账号多次同步也只保留一份凭据。
+- 如果团队登录有效且更新，同步会替换本地登录。个人登录仍有效且到期时间相同或更晚时，继续使用个人登录。收到共享撤销或退出时，仅清除团队所给的登录，原有个人账号条目保留，可重新导入个人登录。
+
+在出现重复账号的每台电脑上更新桌面 EMP Core，然后到「团队空间」点一次「同步」即可。
+
+### English
+
+- When team sync finds a subscription that matches a local Other identity, it now reuses the existing account and removes duplicate team accounts and credentials created by earlier versions. Your local name, model settings, usage history and historical route names are kept. Syncing the same account multiple times keeps only one credential.
+- A newer valid team login can replace an existing login. A valid personal login that remains valid at least as long is kept. When a share is revoked or you exit it, only the team-provided login is removed. Your existing personal account entry stays, and you can re-import your personal login.
+
+On each computer showing duplicates, update desktop EMP Core, open Team Workspace and click Sync once.
+
 ## 0.15.10 (2026-11-24)
 
 ### 中文

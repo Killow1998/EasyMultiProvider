@@ -57,7 +57,7 @@ function createMigrationView(getState) {
   function services(config, importing = false, credentials = {}) {
     const state = getState();
     let accounts = importing ? config.accounts || [] : [state.native_account, ...(state.accounts || [])]
-      .filter(account=>account && account.auth_mode!=='local_key');
+      .filter(account => account && account.auth_mode !== 'local_key' && !account.team_shared);
     if(importing&&config._shadow_merge_preview){
       accounts=[...(config.native_account?[config.native_account]:[]),...accounts];
       accounts=accounts.filter(account=>!account.duplicate||!accounts.some(owner=>account.duplicate_of==='当前 Codex 登录'?owner.native:owner.id===account.duplicate_of));

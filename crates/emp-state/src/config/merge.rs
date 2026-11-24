@@ -391,6 +391,10 @@ fn merge_web_update_at_time(
                 .and_then(|id| old_accounts.get(id));
             account.remove("workspace_shared");
             account.remove("credential_source");
+            account.remove("retained_identity");
+            if let Some(identity) = old.and_then(|record| record.get("retained_identity")) {
+                account.insert("retained_identity".into(), identity.clone());
+            }
             if old.and_then(|value| value.get("workspace_shared")) == Some(&Value::Bool(true)) {
                 account.insert("workspace_shared".to_owned(), Value::Bool(true));
             }

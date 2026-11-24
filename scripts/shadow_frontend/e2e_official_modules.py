@@ -595,11 +595,13 @@ def verify_local_key_upload(stack, emppy, root, vps, workspace, release, mock, c
     assert member.team('sync')['synced'] == 1
     shared_id = 'team-'+published['id']
     records = {row['id']:row for row in member.api('/api/accounts')['accounts']}
-    assert records[shared_id]['team_shared'] and records[shared_id]['duplicate_of']=='existing-owner'
-    assert records['existing-owner']['name']=='owner' and not records['existing-owner']['duplicate']
+    assert list(records) == ['existing-owner'] and records['existing-owner']['name'] == 'owner'
+    assert not records['existing-owner'].get('team_shared'), 'An equally fresh personal login stays personal'
 
     owner.auth.write_text(json.dumps({'auth_mode':'apikey','OPENAI_API_KEY':LOCAL_KEY}))
     assert owner.team('sync')['synced'] == 1
+    old_shared_path = Path(next(row['auth_file'] for row in json.loads(owner.config.read_text())['accounts']
+                               if row['id'] == shared_id))
     local_id = 'remembered-subscription'
     metadata = {'id':local_id,'prefix':local_id,'name':'Kept subscription',
         'hidden_models':['model-to-hide'], 'model_context_windows':{'gpt-6.1-sol':192000}}
@@ -637,7 +639,8 @@ def verify_local_key_upload(stack, emppy, root, vps, workspace, release, mock, c
 
     assert owner.team('sync')['synced'] == 1
     owner.api('/api/accounts/'+local_id+'/models/refresh',{})
-    owner.api('/api/accounts/team-'+published['id']+'/models/refresh',{})
+    assert not old_shared_path.exists(), 'Removed legacy row left a second credential on disk'
+    assert [row['id'] for row in json.loads(owner.config.read_text())['accounts']] == [local_id]
     def picker():
         return owner.api('/v1/models?client_version=0.169.0')['models']
     model = 'Kept subscription/gpt-6.1-sol'
@@ -652,11 +655,15 @@ def verify_local_key_upload(stack, emppy, root, vps, workspace, release, mock, c
     for private, expected in [(original, newer), (latest, latest)]:
         owner.api('/api/accounts/import', {**metadata,'auth_json':private})
         before = private_path.read_bytes()
+        owner.team('sync')
+        current = private_path.read_bytes()
         for _ in range(10):
             assert owner.team('sync') == {'synced':0,'unchanged':1,'skipped_native':0}
+        assert (current == before) == (private == expected)
+        assert private_path.read_bytes() == current and not old_shared_path.exists()
         accounts = owner.api('/api/accounts')['accounts']
         assert [(row['id'], row['name']) for row in accounts if not row['duplicate']] == [(local_id, metadata['name'])]
-        assert len(accounts) == 2 and private_path.read_bytes() == before
+        assert len(accounts) == 1 and len(json.loads(owner.config.read_text())['accounts']) == 1
         assert wait_for(own_model)['context_window']==192000
         websocket_request(owner.base, auth_header, {'model':model,'input':'Use the freshest authorized login '*6})
         headers = {key.lower():value for key,value in upstream.requests[-1]['headers'].items()}
@@ -666,7 +673,7 @@ def verify_local_key_upload(stack, emppy, root, vps, workspace, release, mock, c
     expired_private = private_path.read_bytes()
     assert owner.team('publish', expected=409)['error']['code']=='workspace_subscription_sign_in_required'
     owner.team('sync')
-    assert private_path.read_bytes() == expired_private
+    assert private_path.read_bytes() != expired_private
     assert owner.auth.read_bytes() == local_key
     assert wait_for(own_model)['context_window']==192000
     websocket_request(owner.base, auth_header,
@@ -707,9 +714,33 @@ def verify_local_key_upload(stack, emppy, root, vps, workspace, release, mock, c
     assert owner.team('publish_source')=={}
     assert owner.team('publish',{'account_id':local_id},409)['error']['code']=='workspace_subscription_sign_in_required'
     assert owner.team('shared_services')['services'][0]['version']==2
+    member_file = Path(json.loads(member.config.read_text())['accounts'][0]['auth_file'])
+    assert member_file.is_file()
+    member.team('logout')
+    rows = json.loads(member.config.read_text())['accounts']
+    assert [(r['id'],r['name'],r['auth_file']) for r in rows] == [('existing-owner','owner','')]
+    assert not member_file.exists()
+    member.api('/api/accounts/import', {'name':'owner','auth_json':original})
+    assert member_file.is_file() and len(json.loads(member.config.read_text())['accounts']) == 1
+    assert any(row['owner_local_id']=='existing-owner' for row in
+               member.api('/api/usage?lifetime=true&account=existing-owner')['groups'])
     owner.auth.write_text(json.dumps(login_auth('different',expiry)))
     changed = owner.team('publish')
     assert changed == {'id':published['id'],'version':3,'review_required':True}, changed
+
+    owner.team('review_service', {'id':changed['id'],'version':3,'shared':True})
+    vps.auth.write_text(json.dumps(login_auth('different', expiry+900)))
+    other_share = vps.team('publish')
+    vps.team('review_service', {'id':other_share['id'],'version':other_share['version'],'shared':True})
+    reader = Emp(stack, emppy, root/'multi-publisher-reader', {'codex_base_url':mock}, release_url, ca)
+    reader.install('team')
+    reader.login(workspace, 'reader')
+    assert reader.team('sync')['synced'] == 1
+    assert reader.team('sync')['synced'] == 0
+    rows = json.loads(reader.config.read_text())['accounts']
+    assert [r['id'] for r in rows] == ['team-'+other_share['id']]
+    sole_file = Path(rows[0]['auth_file'])
+    assert list(sole_file.parent.parent.glob('*/'+sole_file.name)) == [sole_file]
 
 
 def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, upstream, output, browser_enabled):
@@ -822,7 +853,8 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
     member.api('/api/config',member.api('/api/config'))
     persisted = next(row for row in json.loads(member.config.read_text())['accounts']
                      if row['id'] == account['id'])
-    assert persisted['credential_status'] == 'invalid'
+    assert persisted['credential_status'] != 'invalid' and persisted['workspace_shared']
+    assert len(json.loads(member.config.read_text())['accounts']) == 1
     shared_auth = auth(expiry+180)
     admin.auth.write_text(json.dumps(shared_auth))
     published = admin.team('publish')
@@ -924,7 +956,7 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
     assert upstream.requests[-1]['body']['model'] == 'gpt-6.2-sol'
     headers = {key.lower(): value for key, value in upstream.requests[-1]['headers'].items()}
     assert headers['authorization'] == 'Bearer ' + shared_auth['tokens']['access_token']
-    assert Path(saved).read_bytes() == private_auth
+    assert Path(saved).read_bytes() != private_auth
     def usage():
         row = member.team('usage', {'period':'lifetime'})['rows'][0]
         return row if row['requests'] else None
@@ -1084,7 +1116,9 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
     admin.team('review_service', {**review,'shared':False})
     member.team('sync')
     calls = len(upstream.requests)
-    assert request(member.base+'/v1/responses', body, local)[0] == 403
+    status, error = request(member.base+'/v1/responses', body, local)
+    assert (status,error.get('error',{}).get('code')) == (403,'workspace_permission_required'), (status,error)
+    assert not Path(saved).exists()
     assert len(upstream.requests) == calls
     removal = {'id':published['id'],'version':published['version']}
     member.team('remove_service', removal, 403)
@@ -1113,7 +1147,8 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
     assert not member.team('subscriptions')['subscriptions']
     assert usage()['requests'] == request_count
     member.team('sync')
-    assert request(member.base+'/v1/responses', body, local)[0] == 403
+    status, error = request(member.base+'/v1/responses', body, local)
+    assert (status,error.get('error',{}).get('code')) == (403,'workspace_permission_required'), (status,error)
     renewed = admin.team('publish')
     assert renewed['review_required'] and renewed['version'] == published['version']+2
     member.team('remove_member', {'id':identity['id']}, 403)
@@ -1143,7 +1178,11 @@ def verify_team_usage(stack, emppy, root, vps, workspace, release, mock, ca, ups
         browser.navigate(member.url)
         wait_for(lambda: browser.execute('return document.querySelector("#emp_logo circle.on") && document.querySelector("#emp_logo").closest("h1").ariaLabel === "EMP";'))
         (output/'emp-wordmark.png').write_bytes(base64.b64decode(request(browser.base+'/screenshot')[1]['value']))
-    assert Path(saved).read_bytes() == private_auth
+    assert not Path(saved).exists()
+    member.api('/api/accounts/import', {'name':'Personal copy','auth_json':auth(expiry+400)})
+    restored = json.loads(member.config.read_text())['accounts']
+    assert len(restored)==1 and restored[0]['id']==account['id'] and restored[0]['auth_file']==saved
+    assert restored[0]['model_context_windows']=={'gpt-6.2-sol':192000}
     websocket_request(member.base, local, body)
     assert len(upstream.requests) == calls+1
 

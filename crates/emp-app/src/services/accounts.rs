@@ -159,6 +159,14 @@ pub(super) fn replacing_account_credentials<T>(
     state: &ServerState,
     replace: impl FnOnce(&mut super::configuration::ConfigurationEdit<'_>) -> T,
 ) -> Option<T> {
+    edit_account_credentials(state, replace, |_| true)
+}
+
+pub(super) fn edit_account_credentials<T>(
+    state: &ServerState,
+    replace: impl FnOnce(&mut super::configuration::ConfigurationEdit<'_>) -> T,
+    changed: impl FnOnce(&T) -> bool,
+) -> Option<T> {
     let configured_ids = |config: &Value| {
         let mut ids = config
             .get("accounts")
@@ -209,6 +217,9 @@ pub(super) fn replacing_account_credentials<T>(
             .collect::<Vec<_>>();
         let previous_ids = configured_ids(&config);
         let result = replace(&mut config);
+        if !changed(&result) {
+            return Some(result);
+        }
         let current_ids = configured_ids(&config);
         if let Ok(mut cancellations) = state.backend.accounts.quota_refresh_cancellations.lock() {
             for id in current_ids.iter().filter(|id| !previous_ids.contains(id)) {
