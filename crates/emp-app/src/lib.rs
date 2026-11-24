@@ -18,5 +18,11 @@ pub fn run() -> Result<std::process::ExitCode, String> {
     cli::run()
 }
 
+#[cfg(all(test, unix))]
+#[path = "../tests/support/executable.rs"]
+mod test_executable;
+#[cfg(test)]
+#[path = "../tests/support/time.rs"]
+mod test_time;
 #[cfg(test)]
 mod tests;

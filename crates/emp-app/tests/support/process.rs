@@ -1,3 +1,4 @@
+use super::test_timeout;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -211,7 +212,7 @@ impl Emp {
         });
         let mut startup_output = Vec::new();
         let opened = loop {
-            match received.recv_timeout(Duration::from_secs(30)) {
+            match received.recv_timeout(test_timeout(Duration::from_secs(30))) {
                 Ok(line) => {
                     let opened = line.strip_prefix("Open in browser: ").map(str::to_owned);
                     startup_output.push(line);
@@ -325,7 +326,7 @@ impl Emp {
 
     /// Wait for the process to exit and return its exit code.
     pub fn wait_exit(&mut self) -> Option<i32> {
-        self.wait_exit_with_timeout(Duration::from_secs(8))
+        self.wait_exit_with_timeout(test_timeout(Duration::from_secs(8)))
     }
 
     pub fn wait_exit_with_timeout(&mut self, timeout: Duration) -> Option<i32> {

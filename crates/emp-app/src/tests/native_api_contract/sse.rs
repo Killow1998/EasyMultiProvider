@@ -15,7 +15,7 @@ impl NativeErrorSseUpstream {
         let worker = thread::spawn(move || {
             for _ in 0..requests {
                 let (mut stream, _) = listener.accept()?;
-                stream.set_read_timeout(Some(crate::server::raw_tcp::DEADLINE))?;
+                stream.set_read_timeout(Some(crate::server::raw_tcp::wire_timeout()))?;
                 if stream.peek(&mut [0])? == 0 {
                     return Ok(());
                 }
@@ -59,7 +59,7 @@ fn read_native_sse(input: impl BufRead) -> (String, Vec<String>) {
 
 fn post_native_sse(server: &ServerHandle, body: &[u8], headers: &[&str]) -> (String, Vec<String>) {
     let stream = open_post_stream(server, "/v1/responses", body, headers);
-    stream.set_read_timeout(Some(RESPONSE_TIMEOUT)).unwrap();
+    stream.set_read_timeout(Some(response_timeout())).unwrap();
     read_native_sse(BufReader::new(stream))
 }
 

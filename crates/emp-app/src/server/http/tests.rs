@@ -9,6 +9,7 @@ use super::{
     proxy::{ModelCatalog, ProxyCaller, RequestAccess},
     with_entry_state,
 };
+use crate::test_time::test_timeout;
 use crate::{
     lifecycle::ServerHandle as RunningServer,
     server::{
@@ -45,7 +46,7 @@ use tokio::{
 };
 
 pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input: bool) -> Vec<u8> {
-    timeout(Duration::from_secs(15), async {
+    timeout(test_timeout(Duration::from_secs(15)), async {
         let mut stream = TcpStream::connect(address).await.unwrap();
         stream.write_all(request).await.unwrap();
         if end_input {
@@ -260,8 +261,9 @@ fn shutdown_with_stalled_response(
 ) -> Result<(), crate::error::AppError> {
     let (complete, finished) = std::sync::mpsc::channel();
     let shutdown = std::thread::spawn(move || complete.send(server.shutdown()).unwrap());
-    let result = finished
-        .recv_timeout(crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::DEADLINE);
+    let result = finished.recv_timeout(
+        crate::server::REQUEST_DRAIN_TIMEOUT + crate::server::raw_tcp::wire_timeout(),
+    );
     drop(slow);
     shutdown.join().unwrap();
     result.expect("shutdown completed with the slow client still connected")
@@ -1526,7 +1528,7 @@ fn identity_rejections_stop_before_fake_upstream_and_body() {
             let slow = ["Content-Type: application/json", length];
             let wire = request(port, "POST", "/api/language", &slow, b"{");
             timeout(
-                Duration::from_secs(2),
+                test_timeout(Duration::from_secs(2)),
                 assert_entry_error(address, &wire, 401),
             )
             .await

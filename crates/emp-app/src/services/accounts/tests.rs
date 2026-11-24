@@ -1,10 +1,10 @@
 #![cfg(unix)]
 
 use crate::lifecycle::ServerHandle;
+use crate::{test_executable::write_executable, test_time::test_timeout};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
@@ -22,7 +22,7 @@ fn http_request(
 ) -> String {
     let mut stream = TcpStream::connect(address).expect("connect management endpoint");
     stream
-        .set_read_timeout(Some(Duration::from_secs(15)))
+        .set_read_timeout(Some(test_timeout(Duration::from_secs(15))))
         .expect("set endpoint timeout");
     write!(
         stream,
@@ -44,7 +44,7 @@ fn http_request(
 }
 
 fn wait_for_file(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
     while Instant::now() < deadline {
         if path.is_file() {
             return;
@@ -96,9 +96,9 @@ fn delete_cancels_inflight_quota_read_without_recreating_credentials() {
         .tempdir_in(env!("CARGO_MANIFEST_DIR"))
         .expect("crate-local fake app-server directory");
     let executable = fake_root.path().join("fake-codex");
-    std::fs::write(
+    write_executable(
         &executable,
-        r#"#!/usr/bin/env python3
+        &r#"#!/usr/bin/env python3
 import json, os, pathlib, sys, time
 control = pathlib.Path(sys.argv[0]).parent
 for line in sys.stdin:
@@ -112,7 +112,7 @@ for line in sys.stdin:
         auth["tokens"]["access_token"] = "quota-race-rotated"
         auth_path.write_text(json.dumps(auth))
         (control / (auth["tokens"]["account_id"] + "-started")).touch()
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + QUOTA_FIXTURE_TIMEOUT
         while not (control / "quota-release").exists() and time.monotonic() < deadline:
             time.sleep(0.005)
         assert (control / "quota-release").exists(), "quota fixture was never released"
@@ -122,11 +122,12 @@ for line in sys.stdin:
         auth = json.loads(auth_path.read_text())
         assert auth["tokens"]["access_token"] == "quota-race-rotated"
         print(json.dumps({"id":request["id"],"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":17,"windowDurationMins":300}}}}), flush=True)
-"#,
-    )
-    .expect("write fake app-server");
-    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
-        .expect("make fake app-server executable");
+"#
+        .replace(
+            "QUOTA_FIXTURE_TIMEOUT",
+            &test_timeout(Duration::from_secs(10)).as_secs_f64().to_string(),
+        ),
+    );
 
     let native_auth_path = root.join("codex/auth.json");
     let server = ServerHandle::start_with_config_options(
@@ -202,9 +203,11 @@ for line in sys.stdin:
         delete_done.send(response).expect("send DELETE response");
     });
     delete_sent_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(test_timeout(Duration::from_secs(1)))
         .expect("DELETE request reached the server");
-    let early_delete = delete_done_rx.recv_timeout(Duration::from_secs(3)).ok();
+    let early_delete = delete_done_rx
+        .recv_timeout(test_timeout(Duration::from_secs(3)))
+        .ok();
     let delete_completed_early = early_delete.is_some();
 
     std::fs::write(fake_root.path().join("quota-release"), b"release")
@@ -214,7 +217,7 @@ for line in sys.stdin:
     let delete_response = match early_delete {
         Some(response) => response,
         None => delete_done_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(test_timeout(Duration::from_secs(5)))
             .expect("DELETE completes after quota refresh"),
     };
     delete.join().expect("join DELETE endpoint worker");
@@ -625,12 +628,14 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
             done_tx.send(()).unwrap();
         });
         assert!(
-            done_rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            done_rx
+                .recv_timeout(test_timeout(Duration::from_millis(300)))
+                .is_err(),
             "import replaced credentials while a refresh held the account lock"
         );
         drop(guard);
         done_rx
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(test_timeout(Duration::from_secs(10)))
             .expect("import finishes once the lock is free");
     });
 
@@ -758,7 +763,7 @@ fn credential_replacement_also_locks_accounts_added_while_it_waited() {
         import_account_state(None, &server.state, &body("b")).expect("import b");
         drop(guard_a);
         let (accounts, held) = locked_rx
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(test_timeout(Duration::from_secs(10)))
             .expect("replacement finishes");
         assert_eq!(accounts, 2);
         assert_eq!(held, [true, true], "every snapshot account is locked");
@@ -898,7 +903,7 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
         });
         // Wait until the reimport holds the configuration (it is then
         // settling, blocked on the history database).
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + test_timeout(Duration::from_secs(2));
         while configuration.try_lock().is_ok() && Instant::now() < deadline {
             #[expect(
                 clippy::disallowed_methods,

@@ -190,7 +190,7 @@ fn wrong_methods_keep_status_before_and_during_update_drain() {
                 state
                     .lifecycle
                     .updates()
-                    .drain_for_test(Duration::from_secs(5))
+                    .drain_for_test(test_timeout(Duration::from_secs(5)))
             })
             .await
             .unwrap()
@@ -538,7 +538,7 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
                 .await
                 .unwrap();
             let state = &fixture.server.state;
-            crate::tests::wait_for(Duration::from_secs(5), || {
+            crate::tests::wait_for(test_timeout(Duration::from_secs(5)), || {
                 state.lifecycle.updates().active_for_test() == 1
             });
             let quit = json_request(port, "/api/quit", &[&session], b"{}");
@@ -550,9 +550,12 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
                 .write_all(&request(port, "GET", "/healthz", &[], b""))
                 .await;
             let mut rejected = [0];
-            let rejected = timeout(Duration::from_secs(3), denied.read(&mut rejected))
-                .await
-                .unwrap();
+            let rejected = timeout(
+                test_timeout(Duration::from_secs(3)),
+                denied.read(&mut rejected),
+            )
+            .await
+            .unwrap();
             assert!(matches!(rejected, Ok(0) | Err(_)));
             assert!(!state.lifecycle.shutdown.load(Ordering::Acquire));
             admitted.write_all(b"{}").await.unwrap();
@@ -572,7 +575,7 @@ fn quit_acknowledges_after_admitted_requests_and_closes_without_reopening() {
             let signal = state.lifecycle.signal().wait().await;
             assert_eq!(signal, ShutdownReason::ResponseWritten);
             assert!(state.lifecycle.admission.acquire_request().is_none());
-            crate::tests::wait_for(crate::server::raw_tcp::DEADLINE, || {
+            crate::tests::wait_for(crate::server::raw_tcp::wire_timeout(), || {
                 fixture.server.listener_finished()
             });
             assert!(std::net::TcpStream::connect(addr).is_err());

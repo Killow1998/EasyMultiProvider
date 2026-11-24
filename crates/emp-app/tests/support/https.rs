@@ -1,3 +1,4 @@
+use super::test_timeout;
 use std::io::{self, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -93,10 +94,10 @@ impl HttpsProxy {
                 let connected = connected.clone();
                 thread::spawn(move || {
                     stream
-                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
                         .expect("proxy read timeout");
                     stream
-                        .set_write_timeout(Some(Duration::from_secs(5)))
+                        .set_write_timeout(Some(test_timeout(Duration::from_secs(5))))
                         .expect("proxy write timeout");
                     let (connect, _, _) = read_message(&mut stream, false);
                     let authority = connect
@@ -160,7 +161,7 @@ impl HttpsProxy {
 
     pub fn next_connect(&self) -> String {
         self.connects
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(test_timeout(Duration::from_secs(5)))
             .expect("Google request used the loopback proxy")
     }
 }

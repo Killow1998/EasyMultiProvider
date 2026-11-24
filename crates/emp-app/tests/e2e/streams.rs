@@ -1,3 +1,4 @@
+use crate::support::test_timeout;
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -67,7 +68,7 @@ fn stream_parts(model: &str) -> (String, String, &'static str) {
 }
 
 fn next_kind(client: &mut SseClient, kind: &str) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
     loop {
         let event = client
             .next_event(deadline)
@@ -192,7 +193,7 @@ fn truncated_sse_never_fabricates_a_successful_completion() {
             "First visible answer"
         );
         gate.finish();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
         loop {
             match client.next_event(deadline) {
                 Ok(Some(event)) => {
@@ -273,7 +274,7 @@ fn responses_websocket_reuses_upstream_across_turns_and_closes_it_on_client_clos
             previous.map(|id| json!(id)).as_ref()
         );
         assert!(turn["input"].to_string().contains(text), "{turn}");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
         let mut answer = String::new();
         loop {
             assert!(Instant::now() < deadline, "WS turn deadline");

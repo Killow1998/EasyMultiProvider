@@ -1,5 +1,6 @@
 //! Real HTTP failures exercise the same retry path as the packaged updater.
 use super::*;
+use crate::test_time::test_timeout;
 use crate::{UpdateError, download::download_package, release::Asset};
 use sha2::{Digest, Sha256};
 
@@ -7,7 +8,7 @@ pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) ->
     listener.set_nonblocking(true).unwrap();
     let mut requests = 0;
     for response in responses {
-        let deadline = Instant::now() + Duration::from_secs(12);
+        let deadline = Instant::now() + test_timeout(Duration::from_secs(12));
         let mut stream = loop {
             match listener.accept() {
                 Ok((stream, _)) => break stream,
@@ -23,7 +24,7 @@ pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) ->
             }
         };
         stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
+            .set_read_timeout(Some(test_timeout(Duration::from_secs(3))))
             .unwrap();
         let mut request = Vec::new();
         let mut buffer = [0_u8; 512];

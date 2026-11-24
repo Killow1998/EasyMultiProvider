@@ -60,6 +60,8 @@ cargo +1.93.1 check --locked -p emp-app
 cargo +1.93.1 test --locked -p emp-codex --test history_contract
 ```
 
+`test_timeout` 管理的等待期限默认使用系数 `1`，设置 `EMP_TEST_TIME_SCALE=0.5` 可减半，设为 `2` 可加倍，经 `ajmy-cargo.sh` 运行时用 `--config 'env.EMP_TEST_TIME_SCALE="0.5"'` 将系数传给远程测试进程。
+
 模组真实进程验收固定入口为 `cargo xtask module-e2e`（Unix）：先设置
 `EMP_AERO_PYTHON` 指向装有 PyInstaller 的 Python。命令依次构建当前 EMP 和
 四个 Rust 模组，在临时 HEAD worktree 中将四个模组的 patch 版本升一并同步

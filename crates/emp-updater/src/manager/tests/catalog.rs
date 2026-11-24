@@ -1,6 +1,7 @@
 //! Cache persistence and HTTP validators through the real updater client.
 use super::*;
 use crate::release::MAX_RELEASE_BYTES;
+use crate::test_time::test_timeout;
 
 fn release(base: &str, notes: &str) -> String {
     let name = crate::release::current_asset_name().unwrap();
@@ -53,7 +54,7 @@ fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
     ];
     let server = thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(12);
+        let deadline = Instant::now() + test_timeout(Duration::from_secs(12));
         for (status, etag, body, expected) in responses {
             let mut stream = loop {
                 match listener.accept() {
@@ -70,7 +71,7 @@ fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
                 }
             };
             stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
+                .set_read_timeout(Some(test_timeout(Duration::from_secs(3))))
                 .unwrap();
             let mut request = Vec::new();
             let mut buffer = [0; 1024];

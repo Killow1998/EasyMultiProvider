@@ -1,5 +1,9 @@
 #![cfg(target_os = "linux")]
 
+#[path = "support/time.rs"]
+mod test_time;
+use test_time::test_timeout;
+
 use emp_state::VaultStore;
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -7,7 +11,7 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -78,7 +82,7 @@ fn try_request(
     }
     stream.write_all(b"Connection: close\r\n\r\n")?;
     stream.write_all(payload)?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_read_timeout(Some(test_timeout(Duration::from_secs(10))))?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
     Ok(response)
@@ -94,7 +98,7 @@ fn bootstrap_session(port: u16, bootstrap: &str) -> String {
     )
     .unwrap();
     stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(test_timeout(Duration::from_secs(10))))
         .unwrap();
     let mut response = Vec::new();
     stream.read_to_end(&mut response).unwrap();
@@ -175,9 +179,24 @@ fn create_symlink_package(root: &Path) -> Vec<u8> {
     std::fs::read(archive).unwrap()
 }
 
-fn release_server(package: Vec<u8>) -> (String, thread::JoinHandle<()>) {
+fn release_server(package: Vec<u8>) -> (String, FakeReleaseServer) {
     let digest = format!("{:x}", Sha256::digest(&package));
     release_server_with_mode(package, digest, FakeReleaseMode::Valid)
+}
+
+struct FakeReleaseServer {
+    ready: mpsc::Sender<()>,
+    worker: thread::JoinHandle<()>,
+}
+
+impl FakeReleaseServer {
+    fn start(&self) {
+        self.ready.send(()).expect("start serving the fake release");
+    }
+
+    fn join(self) -> thread::Result<()> {
+        self.worker.join()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -193,7 +212,7 @@ fn release_server_with_mode(
     package: Vec<u8>,
     digest: String,
     mode: FakeReleaseMode,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, FakeReleaseServer) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
@@ -211,8 +230,12 @@ fn release_server_with_mode(
     }).to_string().into_bytes();
     let api_redirect = format!("{base}/api/latest");
     let artifact_redirect = format!("{base}/assets/{name}");
-    let thread = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(20);
+    let (ready, started) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        if started.recv().is_err() {
+            return;
+        }
+        let deadline = Instant::now() + test_timeout(Duration::from_secs(20));
         let mut handled = 0;
         let expected_requests = match mode {
             FakeReleaseMode::InvalidJson => 2,
@@ -234,6 +257,12 @@ fn release_server_with_mode(
                 }
                 Err(error) => panic!("fake release accept failed: {error}"),
             };
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "fake release request exceeded its deadline"
+            );
+            stream.set_read_timeout(Some(remaining)).unwrap();
             let mut request = Vec::new();
             let mut buffer = [0_u8; 1024];
             loop {
@@ -302,7 +331,7 @@ fn release_server_with_mode(
             "release API, redirect and artifact requests"
         );
         listener.set_nonblocking(true).unwrap();
-        let extra_deadline = Instant::now() + Duration::from_millis(300);
+        let extra_deadline = Instant::now() + test_timeout(Duration::from_millis(300));
         while Instant::now() < extra_deadline {
             match listener.accept() {
                 Ok(_) => panic!("duplicate release or package request observed"),
@@ -317,27 +346,7 @@ fn release_server_with_mode(
             }
         }
     });
-    (base, thread)
-}
-
-fn spawn_staged_executable(command: &mut Command) -> std::io::Result<Child> {
-    // A freshly staged Linux executable can briefly reject exec with ETXTBSY.
-    // Retry only that handoff error; a persistent writer still fails the test.
-    let deadline = Instant::now() + Duration::from_secs(1);
-    loop {
-        match command.spawn() {
-            Err(error)
-                if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < deadline =>
-            {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "可执行文件写入者关闭后按固定间隔重试 ETXTBSY"
-                )]
-                thread::sleep(Duration::from_millis(10));
-            }
-            result => return result,
-        }
-    }
+    (base, FakeReleaseServer { ready, worker })
 }
 
 fn start_emp(
@@ -356,7 +365,9 @@ fn start_emp(
     // Do not let parallel process fixtures probe the developer's Codex/nvm
     // installations through runtime discovery.
     let fixture_home = config.parent().unwrap().join("fixture-home");
-    std::fs::create_dir_all(&fixture_home).unwrap();
+    let dpkg = fixture_home.join("dpkg");
+    std::fs::create_dir_all(dpkg.join("info")).unwrap();
+    std::fs::write(dpkg.join("status"), []).unwrap();
     let fixture_bin = fixture_home.join("bin");
     std::fs::create_dir_all(&fixture_bin).unwrap();
     for utility in ["sed", "sleep"] {
@@ -384,6 +395,7 @@ fn start_emp(
         .env("EMP_UPDATE_TEST_REPOSITORY_URL", repository)
         .env("EMP_UPDATE_TEST_API_URL", api)
         .env("EMP_UPDATE_TEST_PID", pid_file)
+        .env("DPKG_ADMINDIR", &dpkg)
         .env("HOME", &fixture_home)
         .env("CODEX_HOME", fixture_home.join(".codex"))
         .env("XDG_CONFIG_HOME", fixture_home.join(".config"))
@@ -405,7 +417,7 @@ fn start_emp(
     } else {
         command.env_remove("EMP_UPDATE_TEST_WORKER_FAIL_READY");
     }
-    let mut process = spawn_staged_executable(&mut command).unwrap_or_else(|error| {
+    let mut process = command.spawn().unwrap_or_else(|error| {
         panic!(
             "start EMP process for test {} at {}: {error}",
             std::thread::current().name().unwrap_or("unnamed"),
@@ -451,37 +463,6 @@ fn start_emp(
         .1
         .to_owned();
     (port, token, child, stdout)
-}
-
-#[test]
-fn staged_executable_waits_for_writer_to_close() {
-    let temp = TempDir::new().unwrap();
-    let executable = temp.path().join("EMP-test");
-    std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let writer = std::fs::OpenOptions::new()
-        .write(true)
-        .open(&executable)
-        .unwrap();
-    assert_eq!(
-        Command::new(&executable)
-            .spawn()
-            .unwrap_err()
-            .raw_os_error(),
-        Some(libc::ETXTBSY)
-    );
-    let release = thread::spawn(move || {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "延迟关闭可执行文件写入者，模拟暂时的 ETXTBSY"
-        )]
-        thread::sleep(Duration::from_millis(50));
-        drop(writer);
-    });
-    let mut command = Command::new(&executable);
-    let mut child = spawn_staged_executable(&mut command).unwrap();
-    assert!(child.wait().unwrap().success());
-    release.join().unwrap();
 }
 
 fn body_json(response: &[u8]) -> serde_json::Value {
@@ -583,7 +564,12 @@ fn check_for_available(emp: &RunningEmp) {
         Some(b"{}"),
     );
     assert_update_accepted_wire(&check);
-    let available = wait_for_state(emp.port, &emp.session, "available", Duration::from_secs(10));
+    let available = wait_for_state(
+        emp.port,
+        &emp.session,
+        "available",
+        test_timeout(Duration::from_secs(10)),
+    );
     assert_eq!(available["latest_version"], candidate_version());
 }
 
@@ -597,7 +583,7 @@ fn stop_emp(emp: &mut RunningEmp) {
             Some(b"{}"),
         );
         assert_eq!(status(&quit), 200, "idle EMP quits cleanly");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
         while emp.process.0.try_wait().unwrap().is_none() {
             assert!(Instant::now() < deadline, "EMP did not stop after quit");
             #[expect(
@@ -644,16 +630,12 @@ fn start_authenticated_emp_with_api(
     std::fs::create_dir(&installation).unwrap();
     let executable = installation.join("EMP");
     let original_executable = std::fs::read(env!("CARGO_BIN_EXE_EMP")).unwrap();
-    let staged_executable = installation.join("EMP.staged");
-    std::fs::write(&staged_executable, &original_executable).unwrap();
-    std::fs::set_permissions(&staged_executable, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::OpenOptions::new()
-        .read(true)
-        .open(&staged_executable)
-        .unwrap()
-        .sync_all()
-        .unwrap();
-    std::fs::rename(&staged_executable, &executable).unwrap();
+    let copy = Command::new("cp")
+        .args(["-p", env!("CARGO_BIN_EXE_EMP")])
+        .arg(&executable)
+        .status()
+        .expect("copy EMP installation");
+    assert!(copy.success(), "copy EMP installation: {copy}");
     let config = root.join("config.json");
     let account_store = root.join("state/accounts");
     let account_auth = account_store.join("update-fixture/auth.json.enc");
@@ -679,6 +661,16 @@ fn start_authenticated_emp_with_api(
         .write_encrypted_json(
             &account_auth,
             &serde_json::json!({"tokens":{"access_token":"update-fixture-token"}}),
+        )
+        .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    emp_state::usage::pricing::PriceCatalog::new(root.join("state/api_prices.json"), now)
+        .save_litellm_snapshot(
+            &serde_json::json!({"update-fixture":{"input_cost_per_token":0,"output_cost_per_token":0}}),
+            now,
         )
         .unwrap();
     let original_account_auth = std::fs::read(&account_auth).unwrap();
@@ -719,6 +711,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
     assert_eq!(status(&idle), 200);
     assert_eq!(body_json(&idle)["state"], "idle");
 
+    release_server.start();
     check_for_available(&emp);
 
     let install_gate = Arc::new(Barrier::new(3));
@@ -743,7 +736,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         assert_update_accepted_wire(&install.join().unwrap());
     }
 
-    let gate_deadline = Instant::now() + Duration::from_secs(10);
+    let gate_deadline = Instant::now() + test_timeout(Duration::from_secs(10));
     let mut observed_closed_gate = false;
     let mut delete_during_update = None;
     let mut config_during_update = None;
@@ -824,7 +817,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         "health remains available during update"
     );
 
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + test_timeout(Duration::from_secs(20));
     loop {
         if emp.process.0.try_wait().unwrap().is_some() {
             break;
@@ -852,7 +845,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         )]
         thread::sleep(Duration::from_millis(25));
     };
-    let success_deadline = Instant::now() + Duration::from_secs(20);
+    let success_deadline = Instant::now() + test_timeout(Duration::from_secs(20));
     loop {
         let installation = emp.executable.parent().expect("installation directory");
         let success_marker_exists = std::fs::read_dir(installation)
@@ -885,7 +878,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
             .expect("terminate candidate process")
             .success()
     );
-    let candidate_exit_deadline = Instant::now() + Duration::from_secs(5);
+    let candidate_exit_deadline = Instant::now() + test_timeout(Duration::from_secs(5));
     while Path::new(&format!("/proc/{candidate_pid}")).exists() {
         assert!(
             Instant::now() < candidate_exit_deadline,
@@ -994,6 +987,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         let (repository, server) =
             release_server_with_mode(b"unused".to_vec(), "0".repeat(64), mode);
         let mut emp = start_authenticated_emp(&case, &repository, false);
+        server.start();
         let check = request(
             emp.port,
             "POST",
@@ -1007,9 +1001,14 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
             "check request: {}",
             String::from_utf8_lossy(&check)
         );
-        wait_for_error(emp.port, &emp.session, expected, Duration::from_secs(10));
-        stop_emp(&mut emp);
         server.join().expect("fake release error server completed");
+        wait_for_error(
+            emp.port,
+            &emp.session,
+            expected,
+            test_timeout(Duration::from_secs(10)),
+        );
+        stop_emp(&mut emp);
     }
 
     let root = TempDir::new().unwrap();
@@ -1032,7 +1031,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         emp.port,
         &emp.session,
         "update_failed",
-        Duration::from_secs(10),
+        test_timeout(Duration::from_secs(10)),
     );
     stop_emp(&mut emp);
 
@@ -1074,7 +1073,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         emp.port,
         &emp.session,
         "update_failed",
-        Duration::from_secs(10),
+        test_timeout(Duration::from_secs(10)),
     );
     partial_server.join().unwrap();
     stop_emp(&mut emp);
@@ -1106,6 +1105,7 @@ fn package_http_and_checksum_failures_preserve_the_running_installation() {
         };
         let (repository, server) = release_server_with_mode(package, digest, mode);
         let mut emp = start_authenticated_emp(&case, &repository, false);
+        server.start();
         check_for_available(&emp);
         let install = request(
             emp.port,
@@ -1115,14 +1115,19 @@ fn package_http_and_checksum_failures_preserve_the_running_installation() {
             Some(b"{}"),
         );
         assert_eq!(status(&install), 202);
-        wait_for_error(emp.port, &emp.session, expected, Duration::from_secs(10));
+        server.join().expect("fake package error server completed");
+        wait_for_error(
+            emp.port,
+            &emp.session,
+            expected,
+            test_timeout(Duration::from_secs(10)),
+        );
         assert_eq!(
             std::fs::read(&emp.executable).unwrap(),
             emp.original_executable
         );
         assert_eq!(std::fs::read(&emp.config).unwrap(), emp.original_config);
         stop_emp(&mut emp);
-        server.join().expect("fake package error server completed");
     }
 }
 
@@ -1132,6 +1137,7 @@ fn malicious_symlink_package_is_rejected_before_replacement() {
     let package = create_symlink_package(temp.path());
     let (repository, server) = release_server(package);
     let mut emp = start_authenticated_emp(temp.path(), &repository, false);
+    server.start();
     check_for_available(&emp);
     let install = request(
         emp.port,
@@ -1145,7 +1151,7 @@ fn malicious_symlink_package_is_rejected_before_replacement() {
         emp.port,
         &emp.session,
         "invalid_package",
-        Duration::from_secs(10),
+        test_timeout(Duration::from_secs(10)),
     );
     assert_eq!(
         std::fs::read(&emp.executable).unwrap(),
@@ -1161,6 +1167,7 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
     let package = create_package(temp.path());
     let (repository, server) = release_server(package);
     let mut emp = start_authenticated_emp(temp.path(), &repository, true);
+    server.start();
     check_for_available(&emp);
     let install = request(
         emp.port,
@@ -1174,7 +1181,7 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
         emp.port,
         &emp.session,
         "worker_failed",
-        Duration::from_secs(10),
+        test_timeout(Duration::from_secs(10)),
     );
     let delete = request(
         emp.port,
@@ -1206,7 +1213,7 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
         200,
         "ordinary POST resumes after worker failure"
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
     while emp.process.0.try_wait().unwrap().is_none() {
         assert!(Instant::now() < deadline, "EMP did not stop after quit");
         #[expect(
@@ -1224,6 +1231,7 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
     let package = create_failing_package(temp.path());
     let (repository, server) = release_server(package);
     let mut emp = start_authenticated_emp(temp.path(), &repository, false);
+    server.start();
     check_for_available(&emp);
     let install = request(
         emp.port,
@@ -1233,7 +1241,7 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
         Some(b"{}"),
     );
     assert_eq!(status(&install), 202);
-    let old_exit_deadline = Instant::now() + Duration::from_secs(15);
+    let old_exit_deadline = Instant::now() + test_timeout(Duration::from_secs(15));
     while emp.process.0.try_wait().unwrap().is_none() {
         assert!(
             Instant::now() < old_exit_deadline,
@@ -1246,7 +1254,7 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
         thread::sleep(Duration::from_millis(10));
     }
 
-    let restart_deadline = Instant::now() + Duration::from_secs(15);
+    let restart_deadline = Instant::now() + test_timeout(Duration::from_secs(15));
     loop {
         if let Ok(response) = try_request(emp.port, "GET", "/healthz", None, None)
             && status(&response) == 200
@@ -1277,7 +1285,7 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
         Some(b"{}"),
     );
     assert_eq!(status(&quit), 200);
-    let shutdown_deadline = Instant::now() + Duration::from_secs(5);
+    let shutdown_deadline = Instant::now() + test_timeout(Duration::from_secs(5));
     loop {
         if try_request(emp.port, "GET", "/healthz", None, None).is_err() {
             break;

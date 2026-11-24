@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_time::test_timeout;
 use emp_state::filesystem::count_commits;
 use std::{io::ErrorKind, os::unix::fs::PermissionsExt, path::Path};
 use tokio::{io::AsyncBufReadExt, net::TcpListener as AsyncListener};
@@ -143,7 +144,7 @@ pub(super) async fn expect_upstream_get(
 ) -> TcpStream {
     let expected_request = format!("GET {path} HTTP/1.1\r\n");
     let authorization = format!("Authorization: Bearer {token}\r\n");
-    timeout(Duration::from_secs(5), async {
+    timeout(test_timeout(Duration::from_secs(5)), async {
         let (stream, _) = upstream.accept().await.unwrap();
         let mut stream = tokio::io::BufReader::new(stream);
         let mut line = String::new();

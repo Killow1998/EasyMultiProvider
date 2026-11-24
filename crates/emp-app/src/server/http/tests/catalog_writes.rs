@@ -1,5 +1,6 @@
 use super::account_writes::{expect_upstream_get, normalize_body};
 use super::*;
+use crate::test_time::test_timeout;
 use crate::tests::{fixture_tls, live_journal, wait_for};
 use emp_state::filesystem::count_commits;
 use emp_storage::quota_history::SAMPLE_INTERVAL_SECONDS;
@@ -134,7 +135,7 @@ async fn wait_for_balance(
     listener: &AsyncListener,
     tls: &Arc<ServerConfig>,
 ) -> StreamOwned<ServerConnection, std::net::TcpStream> {
-    let (peer, _) = timeout(Duration::from_secs(5), listener.accept())
+    let (peer, _) = timeout(test_timeout(Duration::from_secs(5)), listener.accept())
         .await
         .unwrap()
         .unwrap();
@@ -142,8 +143,9 @@ async fn wait_for_balance(
     let tls = Arc::clone(tls);
     tokio::task::spawn_blocking(move || {
         peer.set_nonblocking(false).unwrap();
-        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        peer.set_write_timeout(Some(Duration::from_secs(5)))
+        peer.set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
+            .unwrap();
+        peer.set_write_timeout(Some(test_timeout(Duration::from_secs(5))))
             .unwrap();
         let mut peer =
             std::io::BufReader::new(StreamOwned::new(ServerConnection::new(tls).unwrap(), peer));
@@ -586,7 +588,7 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
         .unwrap();
     let admitted = Arc::clone(state);
     tokio::task::spawn_blocking(move || {
-        wait_for(Duration::from_secs(5), || {
+        wait_for(test_timeout(Duration::from_secs(5)), || {
             admitted.lifecycle.updates().active_for_test() == 1
         });
     })
@@ -605,7 +607,7 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
     client.write_all(body).await.unwrap();
     let root = fixture.directory.path().to_owned();
     tokio::task::spawn_blocking(move || {
-        wait_for(Duration::from_secs(5), || {
+        wait_for(test_timeout(Duration::from_secs(5)), || {
             live_journal(&root).iter().any(|record| {
                 record["event"] == "operation_stage_started"
                     && record["fields"]["operation"] == "catalog_refresh"
@@ -634,7 +636,7 @@ async fn refresh_after_disconnect(fixture: &Fixture) {
                 .wait_for_work(|| stopped.load(Ordering::Acquire))
         })
     };
-    let found = timeout(Duration::from_secs(5), &mut pending).await;
+    let found = timeout(test_timeout(Duration::from_secs(5)), &mut pending).await;
     if found.is_err() {
         stopped.store(true, Ordering::Release);
         state.catalog_refresh.stop();

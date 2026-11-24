@@ -1,4 +1,5 @@
 use super::{account_writes::normalize_body, *};
+use crate::test_time::test_timeout;
 use emp_codex::configuration::local_auth;
 use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
@@ -42,7 +43,7 @@ fn session_exchange_uses_admission_time_while_blocking_worker_is_queued() {
             let (release, unlocked) = tokio::sync::oneshot::channel();
             let gated = state.clone();
             let hold_worker = tokio::task::spawn_blocking(move || {
-                crate::tests::wait_for(Duration::from_secs(5), || {
+                crate::tests::wait_for(test_timeout(Duration::from_secs(5)), || {
                     gated.lifecycle.updates().active_for_test() == 1
                 });
                 admitted.send(()).unwrap();
@@ -64,10 +65,13 @@ fn session_exchange_uses_admission_time_while_blocking_worker_is_queued() {
             release.send(()).unwrap();
             hold_worker.await.unwrap();
             let mut reply = Vec::new();
-            timeout(Duration::from_secs(5), client.read_to_end(&mut reply))
-                .await
-                .unwrap()
-                .unwrap();
+            timeout(
+                test_timeout(Duration::from_secs(5)),
+                client.read_to_end(&mut reply),
+            )
+            .await
+            .unwrap()
+            .unwrap();
             assert_status(&reply, 200);
             let token = json_body(&reply)["session"].as_str().unwrap().to_owned();
             assert_eq!(fixture.server.session_token(), token);
@@ -168,7 +172,7 @@ async fn drain_updates(fixture: &Fixture) {
         tokio::task::spawn_blocking(move || state
             .lifecycle
             .updates()
-            .drain_for_test(Duration::from_secs(5)))
+            .drain_for_test(test_timeout(Duration::from_secs(5))))
         .await
         .unwrap()
     );
@@ -554,7 +558,7 @@ fn login_writes_switch_native_credentials() {
 async fn wait_for_login(address: SocketAddr, wire: Vec<u8>, expected: &'static str) {
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        crate::tests::wait_for(Duration::from_secs(10), || {
+        crate::tests::wait_for(test_timeout(Duration::from_secs(10)), || {
             let reply = runtime.block_on(exchange_wire(address, &wire, false));
             assert_status(&reply, 200);
             let status = json_body(&reply);

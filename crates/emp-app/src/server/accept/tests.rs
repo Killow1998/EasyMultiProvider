@@ -2,6 +2,7 @@
 #![cfg(unix)]
 
 use crate::lifecycle::ServerHandle;
+use crate::test_time::test_timeout;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
@@ -71,9 +72,10 @@ fn child_fixture() {
     marker("RELEASED");
     expect_command(&mut input, "stop");
     let address = server.local_addr();
-    let mut websocket = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+    let mut websocket =
+        TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2))).unwrap();
     websocket
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
         .unwrap();
     write!(websocket, "GET /v1/responses HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nX-EMP-Session: {}\r\n\r\n", server.session_token()).unwrap();
     let mut reader = BufReader::new(websocket);
@@ -135,7 +137,7 @@ fn listener_survives_real_descriptor_exhaustion() {
         }
     });
     let next_marker = || {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + test_timeout(Duration::from_secs(20));
         loop {
             let line = receive
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
@@ -150,7 +152,8 @@ fn listener_survives_real_descriptor_exhaustion() {
     command(&mut input, "exhaust");
     assert_eq!(next_marker(), "EXHAUSTED");
     // A new connection makes accept() report real EMFILE in the child.
-    let queued = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+    let queued =
+        TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2))).unwrap();
     #[expect(
         clippy::disallowed_methods,
         reason = "维持文件描述符耗尽窗口，观察真实 EMFILE 下的 accept 退避"
@@ -159,9 +162,10 @@ fn listener_survives_real_descriptor_exhaustion() {
     command(&mut input, "release");
     assert_eq!(next_marker(), "RELEASED");
     drop(queued);
-    let mut health = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+    let mut health =
+        TcpStream::connect_timeout(&address, test_timeout(Duration::from_secs(2))).unwrap();
     health
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
         .unwrap();
     write!(
         health,
@@ -173,7 +177,7 @@ fn listener_survives_real_descriptor_exhaustion() {
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     drop(health);
     command(&mut input, "stop");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + test_timeout(Duration::from_secs(10));
     loop {
         if let Some(status) = child.0.try_wait().unwrap() {
             assert!(status.success(), "child regression failed: {status}");

@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_time::test_timeout;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use emp_modules::{
     Module,
@@ -141,7 +142,7 @@ struct UpstreamRequest {
 
 impl UpstreamRequest {
     async fn accept(listener: &AsyncListener, path: &str) -> Self {
-        timeout(Duration::from_secs(5), async {
+        timeout(test_timeout(Duration::from_secs(5)), async {
             let (stream, _) = listener.accept().await.unwrap();
             let mut stream = BufReader::new(stream);
             let mut head = String::new();
@@ -764,7 +765,7 @@ fn submitted_team_login_survives_disconnect_once_and_holds_drain() {
                     state
                         .lifecycle
                         .updates()
-                        .drain_for_test(Duration::from_secs(5))
+                        .drain_for_test(test_timeout(Duration::from_secs(5)))
                 );
                 assert!(
                     state

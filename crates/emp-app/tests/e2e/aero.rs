@@ -1,4 +1,5 @@
 use crate::support::modules::{BuiltModule, ModuleRelease, eventually};
+use crate::support::test_timeout;
 use crate::support::{Emp, NATIVE_TOKEN, Upstream, Workspace, http};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -178,12 +179,16 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
         "internal handoff leaked"
     );
 
-    let calls = eventually(Duration::from_secs(5), "three completed role calls", || {
-        let calls = report(&emp, "/api/calls?start=0&end=4102444800");
-        let records = calls["records"].as_array().expect("call ledger records");
-        (records.len() >= 3 && records.iter().all(|row| row["state"] == "completed"))
-            .then_some(calls)
-    });
+    let calls = eventually(
+        test_timeout(Duration::from_secs(5)),
+        "three completed role calls",
+        || {
+            let calls = report(&emp, "/api/calls?start=0&end=4102444800");
+            let records = calls["records"].as_array().expect("call ledger records");
+            (records.len() >= 3 && records.iter().all(|row| row["state"] == "completed"))
+                .then_some(calls)
+        },
+    );
     let records = calls["records"].as_array().expect("call ledger records");
     assert_eq!(records.len(), 3, "{calls}");
     for (upstream, provider, model, role, count, input, output) in [
@@ -305,11 +310,10 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
 #[cfg(target_os = "linux")]
 #[test]
 fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
-    use crate::support::{Response, SseClient};
+    use crate::support::{Response, SseClient, executable::write_executable};
     use std::{
         io::{Read, Write},
         net::TcpStream,
-        os::unix::fs::PermissionsExt,
         thread,
         time::Instant,
     };
@@ -322,15 +326,13 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     let launcher = workspace.root.join("aero-worker");
     let pid_file = workspace.root.join("aero-pid");
     let source = source.to_str().unwrap().replace('\'', "'\\''");
-    std::fs::write(
+    write_executable(
         &launcher,
-        format!(
+        &format!(
             "#!/bin/sh\nprintf '%s\\n' \"$$\" > '{}'\nexec python3 -B '{source}'\n",
             pid_file.display()
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    );
     let module = BuiltModule::from_binary(&launcher, "aero");
     let upstream = Upstream::start();
     let public_upstream = Upstream::start();
@@ -340,16 +342,14 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
         1,
         1,
     );
-    let public_gate = public_upstream.gate_stream(
-        format!(
-            "data: {}\n\n",
-            json!({"type":"response.output_text.delta", "item_id":"msg-public-slot",
-                   "output_index":0, "content_index":0, "delta":"Holding a public slot"})
-        ),
-        Some(format!(
-            "data: {}\n\n",
-            json!({"type":"response.completed", "response":public_completed})
-        )),
+    let public_first = format!(
+        "data: {}\n\n",
+        json!({"type":"response.output_text.delta", "item_id":"msg-public-slot",
+               "output_index":0, "content_index":0, "delta":"Holding a public slot"})
+    );
+    let public_tail = format!(
+        "data: {}\n\n",
+        json!({"type":"response.completed", "response":public_completed})
     );
     let completed = response(
         "resp-aero-saturation",
@@ -392,12 +392,13 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     let public_body = json!({"model":"public/model","input":"Hold a public slot","stream":true});
     let held = (0..255)
         .map(|_| {
+            let release = public_upstream.hold_stream(public_first.clone(), public_tail.clone());
             let stream = SseClient::responses(port, &public_body);
             assert_eq!(
                 public_upstream.next_forwarded().body.unwrap()["model"],
                 "public-upstream"
             );
-            stream
+            (stream, release)
         })
         .collect::<Vec<_>>();
     let aero_body =
@@ -411,7 +412,7 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     let assert_public_pool_full = || {
         let mut ordinary = TcpStream::connect(address).unwrap();
         ordinary
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(test_timeout(Duration::from_secs(2))))
             .unwrap();
         let _ = write!(
             ordinary,
@@ -436,13 +437,14 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
         event["type"] == "response.completed"
             && event["response"]["output"][0]["content"][0]["text"] == "AERO_CALLBACK_COMPLETED"
     }));
-    for _ in &held {
-        public_gate.finish();
-    }
-    for mut stream in held {
-        let deadline = Instant::now() + Duration::from_secs(15);
+    for (mut stream, release) in held {
+        release.send(()).expect("release this public upstream tail");
+        let deadline = Instant::now() + test_timeout(Duration::from_secs(15));
         let mut completed = false;
-        while let Some(event) = stream.next_event(deadline).unwrap() {
+        while let Some(event) = stream
+            .next_event(deadline)
+            .expect("released public SSE stream")
+        {
             completed |= event["type"] == "response.completed";
         }
         assert!(completed, "public stream ended without completion");
@@ -536,7 +538,7 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
     }
     assert_eq!(quit.join().unwrap().json(), json!({"status":"stopping"}));
     eventually(
-        Duration::from_secs(5),
+        test_timeout(Duration::from_secs(5)),
         "Aero process survived shutdown",
         || (!std::path::Path::new(&format!("/proc/{pid}")).exists()).then_some(()),
     );

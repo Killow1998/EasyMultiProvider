@@ -156,6 +156,12 @@ impl ConnectionAdmission {
     pub(crate) fn active_websockets(&self) -> usize {
         self.websockets.active()
     }
+
+    #[cfg(test)]
+    pub(crate) fn wait_for_websocket_release(&self, remaining: usize, timeout: Duration) -> bool {
+        self.websockets
+            .wait_for_at_most(remaining, Instant::now() + timeout, |slots| slots.active)
+    }
 }
 
 #[derive(Default)]

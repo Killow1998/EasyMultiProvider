@@ -1,4 +1,5 @@
 use super::{account_writes::normalize_body, *};
+use crate::test_time::test_timeout;
 use emp_modules::Module;
 use std::{fs, path::PathBuf};
 
@@ -405,7 +406,7 @@ fn submitted_gateway_issue_saves_once_after_disconnect_and_holds_drain() {
                 br#"{"name":"Disconnected device"}"#,
             );
             client.write_all(&wire).await.unwrap();
-            timeout(Duration::from_secs(5), ready)
+            timeout(test_timeout(Duration::from_secs(5)), ready)
                 .await
                 .expect("write reached the vault gate")
                 .unwrap();
@@ -420,7 +421,7 @@ fn submitted_gateway_issue_saves_once_after_disconnect_and_holds_drain() {
                     state
                         .lifecycle
                         .updates()
-                        .drain_for_test(Duration::from_secs(5))
+                        .drain_for_test(test_timeout(Duration::from_secs(5)))
                 );
                 assert!(
                     state

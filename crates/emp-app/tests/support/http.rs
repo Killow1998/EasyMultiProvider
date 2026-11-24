@@ -1,3 +1,4 @@
+use super::test_timeout;
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -5,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::{IO_TIMEOUT, sse};
+use super::{io_timeout, sse};
 
 pub struct Response {
     pub status: u16,
@@ -15,7 +16,9 @@ pub struct Response {
 
 impl Response {
     pub fn read_from(mut stream: TcpStream) -> Self {
-        stream.set_read_timeout(Some(IO_TIMEOUT)).expect("timeout");
+        stream
+            .set_read_timeout(Some(io_timeout()))
+            .expect("timeout");
         let (status_line, headers, body) = read_message(&mut stream, true);
         let status = status_line
             .split_whitespace()
@@ -194,10 +197,10 @@ impl SseClient {
         let body = body.to_string();
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect SSE");
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
             .expect("SSE timeout");
         stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
+            .set_write_timeout(Some(test_timeout(Duration::from_secs(5))))
             .expect("SSE write timeout");
         write!(
             stream,

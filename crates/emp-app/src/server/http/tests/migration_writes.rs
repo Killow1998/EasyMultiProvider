@@ -1,4 +1,5 @@
 use super::{team_writes, *};
+use crate::test_time::test_timeout;
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD},
@@ -282,7 +283,7 @@ fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
         assert_eq!(json_body(&reply), json!({"status":"stopping"}));
         assert_eq!(
             timeout(
-                crate::server::raw_tcp::DEADLINE,
+                crate::server::raw_tcp::wire_timeout(),
                 state.lifecycle.signal().wait()
             )
             .await
@@ -577,10 +578,13 @@ fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
         client.write_all(&wire[..wire.len() - 1]).await.unwrap();
         team_writes::respond(upstream, "status", None, 200, &downgraded).await;
         let mut reply = Vec::new();
-        timeout(Duration::from_secs(5), client.read_to_end(&mut reply))
-            .await
-            .unwrap()
-            .unwrap();
+        timeout(
+            test_timeout(Duration::from_secs(5)),
+            client.read_to_end(&mut reply),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_status(&reply, 403);
         assert_eq!(
             json_body(&reply)["error"]["code"],
@@ -603,7 +607,7 @@ fn migration_writes_match_wire_and_check_drain_session_and_team_before_body() {
                     state
                         .lifecycle
                         .updates()
-                        .drain_for_test(Duration::from_secs(5))
+                        .drain_for_test(test_timeout(Duration::from_secs(5)))
                 );
             })
             .await
@@ -633,7 +637,7 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
                 .unwrap();
             let admitted = state.clone();
             tokio::task::spawn_blocking(move || {
-                wait_for(Duration::from_secs(5), || {
+                wait_for(test_timeout(Duration::from_secs(5)), || {
                     admitted.lifecycle.updates().active_for_test() == 1
                 });
             })
@@ -657,7 +661,7 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
             };
             let gated_root = root.clone();
             tokio::task::spawn_blocking(move || {
-                wait_for(Duration::from_secs(10), || {
+                wait_for(test_timeout(Duration::from_secs(10)), || {
                     live_journal(&gated_root).iter().any(commit_started)
                 });
             })
@@ -673,7 +677,7 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
                     state
                         .lifecycle
                         .updates()
-                        .drain_for_test(Duration::from_secs(5))
+                        .drain_for_test(test_timeout(Duration::from_secs(5)))
                 );
                 assert!(
                     state

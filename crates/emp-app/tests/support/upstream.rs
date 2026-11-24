@@ -1,3 +1,4 @@
+use super::test_timeout;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -8,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::{IO_TIMEOUT, http::read_message};
+use super::{http::read_message, io_timeout};
 
 #[derive(Debug)]
 pub struct UpstreamRequest {
@@ -30,7 +31,45 @@ struct Reply {
 struct GatedReply {
     tail: Option<Vec<u8>>,
     released: Mutex<Receiver<()>>,
-    closed: Sender<()>,
+    closed: Option<Sender<()>>,
+}
+
+impl GatedReply {
+    fn wait_for_tail(&self, stream: &mut TcpStream) -> bool {
+        let released = self.released.lock().expect("stream gate");
+        let Some(closed) = &self.closed else {
+            return released.recv().is_ok();
+        };
+        stream
+            .set_read_timeout(Some(test_timeout(Duration::from_millis(25))))
+            .expect("upstream disconnect polling");
+        loop {
+            match released.try_recv() {
+                Ok(()) => return true,
+                Err(mpsc::TryRecvError::Disconnected) => return false,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            match stream.read(&mut [0]) {
+                Ok(0) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+                    ) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    continue;
+                }
+                result => panic!("unexpected bytes/error on gated upstream: {result:?}"),
+            }
+            let _ = closed.send(());
+            return false;
+        }
+    }
 }
 
 pub struct StreamGate {
@@ -45,7 +84,7 @@ impl StreamGate {
 
     pub fn assert_closed(&self) {
         self.closed
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(test_timeout(Duration::from_secs(5)))
             .expect("EMP must close the upstream while its tail is still gated");
     }
 }
@@ -129,15 +168,30 @@ impl Upstream {
     }
 
     pub fn gate_stream(&self, first: String, tail: Option<String>) -> StreamGate {
+        let (closed_sender, closed) = mpsc::channel();
+        let release = self.configure_gated_stream(first, tail, Some(closed_sender));
+        StreamGate { release, closed }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn hold_stream(&self, first: String, tail: String) -> Sender<()> {
+        self.configure_gated_stream(first, Some(tail), None)
+    }
+
+    fn configure_gated_stream(
+        &self,
+        first: String,
+        tail: Option<String>,
+        closed: Option<Sender<()>>,
+    ) -> Sender<()> {
         self.configure(200, "text/event-stream", first);
         let (release, released) = mpsc::channel();
-        let (closed_sender, closed) = mpsc::channel();
         self.reply.lock().expect("reply").gate = Some(Arc::new(GatedReply {
             tail: tail.map(String::into_bytes),
             released: Mutex::new(released),
-            closed: closed_sender,
+            closed,
         }));
-        StreamGate { release, closed }
+        release
     }
 
     pub fn reply_json(&self, value: &Value) {
@@ -173,7 +227,7 @@ impl Upstream {
 
     pub fn next_request(&self) -> UpstreamRequest {
         self.requests
-            .recv_timeout(IO_TIMEOUT)
+            .recv_timeout(io_timeout())
             .expect("EMP forwarded a request upstream")
     }
 
@@ -193,7 +247,10 @@ impl Upstream {
 
     /// No further upstream request arrived (e.g. no silent retry after a failure).
     pub fn assert_idle(&self) {
-        match self.requests.recv_timeout(Duration::from_millis(100)) {
+        match self
+            .requests
+            .recv_timeout(test_timeout(Duration::from_millis(100)))
+        {
             Err(RecvTimeoutError::Timeout) => {}
             Ok(request) => panic!("unexpected upstream request: {request:?}"),
             Err(RecvTimeoutError::Disconnected) => panic!("upstream stopped"),
@@ -229,7 +286,9 @@ fn serve_upstream(
     sender: &Sender<UpstreamRequest>,
     script: &Mutex<VecDeque<Reply>>,
 ) {
-    stream.set_read_timeout(Some(IO_TIMEOUT)).expect("timeout");
+    stream
+        .set_read_timeout(Some(io_timeout()))
+        .expect("timeout");
     let request = read_request(&mut stream);
     let scripted = if request.is_catalog_refresh() {
         None
@@ -264,44 +323,10 @@ fn serve_upstream(
             return;
         }
     }
-    if let Some(gate) = &reply.gate {
-        stream
-            .set_read_timeout(Some(Duration::from_millis(25)))
-            .expect("upstream disconnect polling");
-        let released = gate.released.lock().expect("stream gate");
-        loop {
-            match released.try_recv() {
-                Ok(()) => {
-                    if let Some(tail) = &gate.tail {
-                        let _ = stream.write_all(tail).and_then(|()| stream.flush());
-                    }
-                    return;
-                }
-                Err(mpsc::TryRecvError::Disconnected) => return,
-                Err(mpsc::TryRecvError::Empty) => {}
-            }
-            let mut byte = [0_u8; 1];
-            match stream.read(&mut byte) {
-                Ok(0) => {
-                    let _ = gate.closed.send(());
-                    return;
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
-                    ) =>
-                {
-                    let _ = gate.closed.send(());
-                    return;
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) => {}
-                result => panic!("unexpected bytes/error on gated upstream: {result:?}"),
-            }
-        }
+    if let Some(gate) = &reply.gate
+        && gate.wait_for_tail(&mut stream)
+        && let Some(tail) = &gate.tail
+    {
+        let _ = stream.write_all(tail).and_then(|()| stream.flush());
     }
 }

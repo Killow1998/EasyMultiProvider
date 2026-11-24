@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_time::test_timeout;
 use crate::{
     services::app_icon::{AppIcon, DEFAULT_PNG},
     tests::{live_journal, wait_for},
@@ -173,7 +174,7 @@ async fn assert_catalog_refresh_queued(fixture: &Fixture) {
                 .wait_for_work(|| stop.load(Ordering::Acquire))
         }
     });
-    let result = timeout(Duration::from_secs(5), &mut pending).await;
+    let result = timeout(test_timeout(Duration::from_secs(5)), &mut pending).await;
     if result.is_err() {
         stop.store(true, Ordering::Release);
         state.catalog_refresh.stop();
@@ -359,7 +360,7 @@ fn submitted_app_icon_write_finishes_once_after_disconnect() {
                 client.write_all(&wire).await.unwrap();
                 let saved = fixture.directory.path().join("state/appearance.json");
                 tokio::task::spawn_blocking(move || {
-                    wait_for(Duration::from_secs(5), || saved.is_file())
+                    wait_for(test_timeout(Duration::from_secs(5)), || saved.is_file())
                 })
                 .await
                 .unwrap();

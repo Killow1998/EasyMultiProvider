@@ -2,6 +2,7 @@
 #[cfg(feature = "hotpath")]
 mod hotpath_profile;
 use crate::api::quota::QUOTA_EVENT_SLOT_LIMIT;
+use crate::test_time::test_timeout;
 use base64::engine::general_purpose::STANDARD;
 
 use crate::cli::Cli;
@@ -113,11 +114,13 @@ fn credential_root(directory: &TempDir) -> PathBuf {
     root
 }
 
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
+fn response_timeout() -> Duration {
+    test_timeout(Duration::from_secs(20))
+}
 
 fn complete_response(stream: &mut TcpStream) -> String {
     stream
-        .set_read_timeout(Some(RESPONSE_TIMEOUT))
+        .set_read_timeout(Some(response_timeout()))
         .expect("response timeout");
     let mut response = Vec::new();
     let mut buffer = [0_u8; 4096];
@@ -145,7 +148,7 @@ fn complete_response(stream: &mut TcpStream) -> String {
 
 fn response_until_close(stream: &mut TcpStream) -> String {
     stream
-        .set_read_timeout(Some(RESPONSE_TIMEOUT))
+        .set_read_timeout(Some(response_timeout()))
         .expect("response timeout");
     let mut response = Vec::new();
     stream.read_to_end(&mut response).expect("read response");
@@ -300,7 +303,7 @@ fn read_sse_frame(reader: &mut impl BufRead) -> String {
 fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<ChunkedSse> {
     let mut stream = TcpStream::connect(server.local_addr()).expect("connect SSE");
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
         .expect("SSE response timeout");
     stream
             .write_all(
@@ -389,23 +392,39 @@ fn post_stream(server: &ServerHandle, target: &str, body: &[u8], headers: &[&str
 }
 
 fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let wire = request(server, "/api/calls", &[session]);
-        let report: Value = serde_json::from_str(wire.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-        if !report["records"].as_array().unwrap().is_empty() {
-            return report;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "call receipt not persisted: {report}"
-        );
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "调用回执通过管理接口提供，此 helper 按固定间隔轮询"
-        )]
-        thread::sleep(Duration::from_millis(5));
-    }
+    let mut events = server.state.backend.management_events.subscribe().unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            events.next(Duration::ZERO).await.unwrap();
+            let deadline = tokio::time::Instant::now() + test_timeout(Duration::from_secs(5));
+            loop {
+                let wire = request(server, "/api/calls", &[session]);
+                let report: Value =
+                    serde_json::from_str(wire.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+                if !report["records"].as_array().unwrap().is_empty() {
+                    return report;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "call receipt not persisted: {report}"
+                );
+                loop {
+                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    if remaining.is_zero()
+                        || events
+                            .next(remaining)
+                            .await
+                            .expect("usage subscription closed")
+                            .usage
+                    {
+                        break;
+                    }
+                }
+            }
+        })
 }
 
 fn finish_upstream(
@@ -429,7 +448,7 @@ pub(crate) struct OneShotUpstream {
 
 fn receive_upstream_request(stream: &mut TcpStream) -> (String, BTreeMap<String, String>, Value) {
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
         .expect("upstream timeout");
     let raw = read_request_head(stream).expect("upstream request head");
     receive_upstream_request_from_head(stream, raw)
@@ -559,7 +578,7 @@ impl OneShotUpstream {
 
     pub(crate) fn observed(&self) -> (String, BTreeMap<String, String>, Value) {
         self.observed
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(test_timeout(Duration::from_secs(5)))
             .expect("upstream observation")
     }
 }

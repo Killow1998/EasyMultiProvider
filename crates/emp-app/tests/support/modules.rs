@@ -1,4 +1,5 @@
-use super::{Emp, IO_TIMEOUT, Workspace, http::read_message};
+use super::test_timeout;
+use super::{Emp, Workspace, http::read_message, io_timeout};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,24 +57,10 @@ impl BuiltModule {
                 binary.display()
             )
         });
-        // A launcher written by this test can be briefly held open for writing by a sibling
-        // test's fork (before its exec closes the fd), which makes exec fail with ETXTBSY.
-        let mut attempts = 0;
-        let output = loop {
-            match Command::new(binary).stdin(Stdio::null()).output() {
-                Err(error) if error.raw_os_error() == Some(26) && attempts < 50 => {
-                    attempts += 1;
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "fixed back-off while a sibling fork releases the inherited write fd"
-                    )]
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                result => {
-                    break result.unwrap_or_else(|error| panic!("{}: {error}", binary.display()));
-                }
-            }
-        };
+        let output = Command::new(binary)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap_or_else(|error| panic!("{}: {error}", binary.display()));
         assert!(
             output.status.success(),
             "{}: {:?}",
@@ -182,10 +169,10 @@ impl ModuleRelease {
                 }
                 let mut stream = stream.expect("accept release request");
                 stream
-                    .set_read_timeout(Some(IO_TIMEOUT))
+                    .set_read_timeout(Some(io_timeout()))
                     .expect("release read timeout");
                 stream
-                    .set_write_timeout(Some(IO_TIMEOUT))
+                    .set_write_timeout(Some(io_timeout()))
                     .expect("release write timeout");
                 let (line, _, _) = read_message(&mut stream, false);
                 let path = line.split_whitespace().nth(1).expect("release path");
@@ -407,21 +394,27 @@ impl ModuleEmp {
     }
 
     pub fn assert_gone(&self, pid: i32) {
-        eventually(Duration::from_secs(5), "module PID was not reaped", || {
-            (!processes().iter().any(|(found, _)| *found == pid)).then_some(())
-        });
+        eventually(
+            test_timeout(Duration::from_secs(5)),
+            "module PID was not reaped",
+            || (!processes().iter().any(|(found, _)| *found == pid)).then_some(()),
+        );
     }
 
     pub fn stop(mut self) {
         self.emp.take().expect("running EMP").stop();
         let directory = self.root.to_string_lossy();
-        eventually(Duration::from_secs(5), "orphan module processes", || {
-            let observed = self.observed.lock().expect("observed workers");
-            let remaining = processes()
-                .into_iter()
-                .any(|(pid, args)| observed.contains(&pid) || args.starts_with(directory.as_ref()));
-            (!remaining).then_some(())
-        });
+        eventually(
+            test_timeout(Duration::from_secs(5)),
+            "orphan module processes",
+            || {
+                let observed = self.observed.lock().expect("observed workers");
+                let remaining = processes().into_iter().any(|(pid, args)| {
+                    observed.contains(&pid) || args.starts_with(directory.as_ref())
+                });
+                (!remaining).then_some(())
+            },
+        );
     }
 }
 

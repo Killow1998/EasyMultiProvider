@@ -2,6 +2,7 @@ mod arch;
 mod comments;
 mod modules;
 mod prose;
+mod test_deadlines;
 mod workflows;
 
 use crate::{Result, project_root};
@@ -26,6 +27,7 @@ pub fn run(args: &[String]) -> Result {
     ];
     let paths = git_paths(&root, &list_files)?;
     comments::check(&root, &paths, &mut errors)?;
+    test_deadlines::check(&root, &paths, &mut errors)?;
     for path in paths {
         if !root.join(&path).is_file() {
             continue;
@@ -44,7 +46,7 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-version, test-boundary, docs-prose, no-python-on-main, comments, disguised-sleep, msvc-only, domain-purity, single-http-driver passed"
+            "check: arch, module-version, test-boundary, docs-prose, no-python-on-main, comments, disguised-sleep, msvc-only, domain-purity, single-http-driver, test-deadlines passed"
         );
         Ok(())
     } else {

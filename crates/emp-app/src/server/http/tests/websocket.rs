@@ -1,14 +1,17 @@
 use super::*;
 use crate::api::realtime::MAX_REALTIME_REQUEST_BYTES;
 use crate::http::request::parse_request;
-use crate::server::raw_tcp::{DEADLINE, RawClient, head, read_websocket_frame, websocket_frame};
+use crate::server::raw_tcp::{
+    RawClient, head, read_websocket_frame, websocket_frame, wire_timeout,
+};
+use crate::test_time::test_timeout;
 use crate::tests::realtime_contract::{
     RealtimeUpstream, UpstreamResponse, app_server_for, multipart_offer,
 };
 use crate::tests::{live_journal, wait_for};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as AsyncListener, TcpStream as AsyncStream};
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout, timeout_at};
 
 const UPGRADE: &[&str] = &[
     "Upgrade: websocket",
@@ -244,7 +247,7 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
                 let guard = state
                     .lifecycle
                     .admission
-                    .quiesce(0, Duration::from_secs(5))
+                    .quiesce(0, test_timeout(Duration::from_secs(5)))
                     .unwrap();
                 ready.send(()).unwrap();
                 wait.blocking_recv().unwrap();
@@ -258,7 +261,7 @@ fn responses_drain_closes_sessions_and_rejects_new_tcp_handshakes() {
             drained.await.unwrap();
             let mut denied = AsyncStream::connect(address).await.unwrap();
             let _ = denied.write_all(&wire).await;
-            let result = timeout(Duration::from_secs(5), denied.read_u8())
+            let result = timeout(test_timeout(Duration::from_secs(5)), denied.read_u8())
                 .await
                 .unwrap();
             assert!(result.is_err(), "drain must not send an HTTP response");
@@ -299,7 +302,7 @@ fn responses_upgrade_cannot_start_after_restore_reopens_admission() {
         let mut client = RawClient::request(address, &wire).await;
         assert_upgrade(&client);
         assert_eq!(
-            timeout(Duration::from_secs(5), handoff)
+            timeout(test_timeout(Duration::from_secs(5)), handoff)
                 .await
                 .unwrap()
                 .unwrap(),
@@ -307,9 +310,12 @@ fn responses_upgrade_cannot_start_after_restore_reopens_admission() {
             "the WebSocket permit must already be held when the HTTP permit is released"
         );
         let restore = begin_restore(fixture, address, &session);
-        timeout(Duration::from_secs(5), admission.wait_for_websocket_drain())
-            .await
-            .unwrap();
+        timeout(
+            test_timeout(Duration::from_secs(5)),
+            admission.wait_for_websocket_drain(),
+        )
+        .await
+        .unwrap();
         resume.send(()).unwrap();
         assert_eq!(
             read_websocket_frame(&mut client.io, false).await,
@@ -397,7 +403,7 @@ fn slow_device_revalidation_leaves_other_websockets_responsive() {
             .write_all(&websocket_frame(0x81, MASK, b"{}"))
             .await
             .unwrap();
-        timeout(DEADLINE, rechecking).await.unwrap().unwrap();
+        timeout(wire_timeout(), rechecking).await.unwrap().unwrap();
         other
             .write_all(&websocket_frame(0x89, MASK, b"responsive"))
             .await
@@ -457,7 +463,7 @@ fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
             assert_eq!(client.rest().await, b"\x88\x00");
             let completed = completed.clone();
             let records = tokio::task::spawn_blocking(move || {
-                wait_for(DEADLINE, || completed().len() == previous + 1);
+                wait_for(wire_timeout(), || completed().len() == previous + 1);
                 completed()
             })
             .await
@@ -586,13 +592,16 @@ fn realtime_rejections_retain_update_access_until_response_write() {
                 .write_all(&request(fixture.port(), "POST", "/v1/live", &headers, &[]))
                 .await
                 .unwrap();
-            timeout(DEADLINE, reached.notified()).await.unwrap();
+            timeout(wire_timeout(), reached.notified()).await.unwrap();
             assert!(
                 !updates.drain_for_test(Duration::ZERO),
                 "update handoff may not pass before the {status} has been written"
             );
             write.notify_one();
-            let reply = timeout(DEADLINE, head(&mut client)).await.unwrap().unwrap();
+            let reply = timeout(wire_timeout(), head(&mut client))
+                .await
+                .unwrap()
+                .unwrap();
             assert_status(&reply, status);
             server.shutdown().await.unwrap();
             assert_eq!(updates.active_for_test(), 0);
@@ -604,7 +613,7 @@ pub(super) async fn accept_upstream(
     listener: &AsyncListener,
     extensions: &str,
 ) -> (AsyncStream, String) {
-    let (mut io, _) = timeout(Duration::from_secs(5), listener.accept())
+    let (mut io, _) = timeout(test_timeout(Duration::from_secs(5)), listener.accept())
         .await
         .unwrap()
         .unwrap();
@@ -725,6 +734,29 @@ pub(super) fn native_fixture(address: SocketAddr) -> Fixture {
 const NATIVE_CREATE: &[u8] =
     br#"{"type":"response.create","model":"gpt-fixture","input":"drain fixture"}"#;
 
+async fn reject_native_upgrade(
+    listener: &AsyncListener,
+    delay: Duration,
+) -> (AsyncStream, std::time::Instant) {
+    let (mut ws, _) = listener.accept().await.unwrap();
+    let request = String::from_utf8(head(&mut ws).await.unwrap()).unwrap();
+    assert_eq!(
+        parse_request(&request).unwrap().header("Upgrade"),
+        Some("websocket")
+    );
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+    }
+    let rejected_at = std::time::Instant::now();
+    ws.write_all(
+        b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    ws.shutdown().await.unwrap();
+    (ws, rejected_at)
+}
+
 #[test]
 fn native_http_fallback_drain_cancels_open_and_allows_restore() {
     let listener = TcpListener::bind(LOOPBACK).unwrap();
@@ -747,19 +779,11 @@ fn native_http_fallback_drain_cancels_open_and_allows_restore() {
             .await
             .unwrap();
         receive_event(&mut client, "codex.response.metadata").await;
-        let mut upstream = timeout(DEADLINE, async {
-            let (mut ws, _) = listener.accept().await.unwrap();
-            let request = String::from_utf8(head(&mut ws).await.unwrap()).unwrap();
-            assert_eq!(
-                parse_request(&request).unwrap().header("Upgrade"),
-                Some("websocket")
-            );
-            ws.write_all(
-                b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            )
+        let deadline = Instant::now() + wire_timeout();
+        let (_rejected, _) = timeout_at(deadline, reject_native_upgrade(&listener, Duration::ZERO))
             .await
-            .unwrap();
-            drop(ws);
+            .expect("native upstream WebSocket upgrade request");
+        let mut upstream = timeout_at(deadline, async {
             let (mut http, _) = listener.accept().await.unwrap();
             let request = String::from_utf8(head(&mut http).await.unwrap()).unwrap();
             let request = parse_request(&request).unwrap();
@@ -780,20 +804,20 @@ fn native_http_fallback_drain_cancels_open_and_allows_restore() {
             http
         })
         .await
-        .unwrap();
+        .expect("native HTTP fallback POST after 426");
         let restore = begin_restore(fixture, address, &session);
         assert_eq!(
             read_websocket_frame(&mut client.io, false).await,
             (0x88, close_payload(1001, "EMP connection is draining")),
         );
         assert_eq!(
-            timeout(DEADLINE, upstream.read(&mut [0]))
+            timeout(wire_timeout(), upstream.read(&mut [0]))
                 .await
                 .expect("drain must cancel the request waiting for HTTP response headers")
                 .unwrap(),
             0,
         );
-        let reply = timeout(DEADLINE, restore)
+        let reply = timeout(wire_timeout(), restore)
             .await
             .expect("restore must complete without waiting for the upstream")
             .unwrap();
@@ -825,17 +849,10 @@ fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
             client.io.write_all(&websocket_frame(0x81, MASK, NATIVE_CREATE)).await.unwrap();
 
             let ws_handshake_delay = Duration::from_millis(400);
-            let (fallback_started, http_wait_ms) = timeout(DEADLINE, async {
-                let (mut ws, _) = listener.accept().await.unwrap();
-                let request = String::from_utf8(head(&mut ws).await.unwrap()).unwrap();
-                assert_eq!(parse_request(&request).unwrap().header("Upgrade"), Some("websocket"));
-                tokio::time::sleep(ws_handshake_delay).await;
-                let rejected_at = std::time::Instant::now();
-                ws.write_all(
-                    b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                ).await.unwrap();
-                drop(ws);
-
+            let deadline = Instant::now() + wire_timeout();
+            let (_rejected, fallback_started) = timeout_at(deadline, reject_native_upgrade(&listener, ws_handshake_delay))
+                .await.expect("native upstream WebSocket upgrade request");
+            let http_wait_ms = timeout_at(deadline, async {
                 let (mut http, _) = listener.accept().await.unwrap();
                 let request = String::from_utf8(head(&mut http).await.unwrap()).unwrap();
                 let request = parse_request(&request).unwrap();
@@ -848,8 +865,9 @@ fn native_http_fallback_open_error_uses_sse_transport_and_fallback_clock() {
                 http.write_all(
                     b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                 ).await.unwrap();
-                (rejected_at, http_wait_ms)
-            }).await.unwrap();
+                http.shutdown().await.unwrap();
+                http_wait_ms
+            }).await.expect("native HTTP fallback POST after 426");
             let error = receive_event(&mut client, "error").await;
             let fallback_elapsed_ms = fallback_started.elapsed().as_millis() as u64;
             assert_eq!(error["status"], 403);
@@ -907,7 +925,7 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
                         read_websocket_frame(&mut client.io, false).await,
                         (0x88, close_payload(1001, "EMP connection is draining")),
                     );
-                    assert_status(&timeout(DEADLINE, restore).await.unwrap().unwrap(), 200);
+                    assert_status(&timeout(wire_timeout(), restore).await.unwrap().unwrap(), 200);
                 } else {
                     client.io.shutdown().await.unwrap();
                     assert_eq!(client.rest().await, b"\x88\x00");
@@ -942,7 +960,7 @@ fn native_generation_records_server_drain_separately_from_client_disconnect() {
             let observations = || live_journal(&root).into_iter()
                 .filter(|row| row["event"] == "route_observation")
                 .map(|row| row["fields"].clone()).collect::<Vec<_>>();
-            wait_for(DEADLINE, || observations().len() >= requests);
+            wait_for(wire_timeout(), || observations().len() >= requests);
             observations()
         }).await.unwrap();
         for id in drain_ids {

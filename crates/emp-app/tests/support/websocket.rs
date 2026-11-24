@@ -1,3 +1,4 @@
+use super::test_timeout;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,10 +21,10 @@ impl WebSocket {
     pub fn connect(port: u16) -> Self {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect Responses WS");
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
             .expect("WS handshake timeout");
         stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
+            .set_write_timeout(Some(test_timeout(Duration::from_secs(5))))
             .expect("WS write timeout");
         write!(stream,
             "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: Bearer {NATIVE_TOKEN}\r\noriginator: codex_cli_rs\r\nthread-id: fixture-ws-thread\r\n\r\n"
@@ -35,7 +36,7 @@ impl WebSocket {
             "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
         );
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
             .expect("WS read timeout");
         Self {
             stream,
@@ -45,7 +46,7 @@ impl WebSocket {
 
     fn accept(mut stream: TcpStream) -> (Self, UpstreamRequest) {
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
             .expect("upstream WS handshake timeout");
         let request = read_request(&mut stream);
         assert_eq!(request.method, "GET");
@@ -61,10 +62,10 @@ impl WebSocket {
             "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
         ).expect("upstream WS handshake");
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
             .expect("upstream WS timeout");
         stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
+            .set_write_timeout(Some(test_timeout(Duration::from_secs(5))))
             .expect("upstream WS write timeout");
         (
             Self {
@@ -263,19 +264,19 @@ impl WebSocketUpstream {
 
     pub fn handshake(&self) -> UpstreamRequest {
         self.handshakes
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(test_timeout(Duration::from_secs(5)))
             .expect("upstream WS handshake")
     }
 
     pub fn next_turn(&self) -> Value {
         self.turns
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(test_timeout(Duration::from_secs(5)))
             .expect("upstream WS turn")
     }
 
     pub fn assert_closed(&self) {
         self.closed
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(test_timeout(Duration::from_secs(5)))
             .expect("downstream close must close upstream WS");
     }
 }

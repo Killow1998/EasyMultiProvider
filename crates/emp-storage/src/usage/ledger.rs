@@ -322,6 +322,11 @@ impl UsageLedger {
     fn price_pending_inner(&self, stop: &AtomicBool) -> Result<()> {
         while !stop.load(Ordering::Acquire) {
             let _guard = self.lock.lock().map_err(|_| UsageError)?;
+            if let Err(error) = self.path.symlink_metadata()
+                && error.kind() == std::io::ErrorKind::NotFound
+            {
+                return Ok(());
+            }
             let mut connection = self.connect()?;
             let pending = rows(
                 &connection,

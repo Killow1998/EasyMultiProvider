@@ -1,3 +1,4 @@
+use crate::test_time::test_timeout;
 use std::{io, net::SocketAddr};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -5,7 +6,9 @@ use tokio::{
     time::{Duration, timeout},
 };
 
-pub const DEADLINE: Duration = Duration::from_secs(5);
+pub fn wire_timeout() -> Duration {
+    test_timeout(Duration::from_secs(5))
+}
 
 pub async fn head(io: &mut (impl AsyncRead + Unpin)) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -23,7 +26,7 @@ pub struct RawClient {
 
 impl RawClient {
     pub async fn request(address: SocketAddr, request: &[u8]) -> Self {
-        timeout(DEADLINE, async {
+        timeout(wire_timeout(), async {
             let mut io = TcpStream::connect(address).await.unwrap();
             io.write_all(request).await.unwrap();
             let head = String::from_utf8(head(&mut io).await.unwrap()).unwrap();
@@ -35,7 +38,7 @@ impl RawClient {
 
     pub async fn rest(&mut self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        timeout(DEADLINE, self.io.read_to_end(&mut bytes))
+        timeout(wire_timeout(), self.io.read_to_end(&mut bytes))
             .await
             .expect("HTTP response ends before deadline")
             .unwrap();
@@ -77,7 +80,7 @@ pub async fn read_websocket_frame(
     io: &mut (impl AsyncRead + Unpin),
     masked: bool,
 ) -> (u8, Vec<u8>) {
-    timeout(DEADLINE, async {
+    timeout(wire_timeout(), async {
         let first = io.read_u8().await.unwrap();
         let header = io.read_u8().await.unwrap();
         assert_eq!(header & 0x80 != 0, masked);

@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     server::{
         http::usage::ReportGate,
-        raw_tcp::{DEADLINE, RawClient},
+        raw_tcp::{RawClient, wire_timeout},
     },
     services::management_events::Change,
     tests::wait_for,
@@ -104,10 +104,10 @@ fn event(frame: &str) -> (&str, Value) {
 
 async fn account_snapshot(stream: &mut Stream) -> String {
     assert_eq!(stream.headers["x-accel-buffering"], "no");
-    let quota = stream.next(DEADLINE).await.unwrap();
-    let integration = stream.next(DEADLINE).await.unwrap();
-    let activity = stream.next(DEADLINE).await.unwrap();
-    let usage = stream.next(DEADLINE).await.unwrap();
+    let quota = stream.next(wire_timeout()).await.unwrap();
+    let integration = stream.next(wire_timeout()).await.unwrap();
+    let activity = stream.next(wire_timeout()).await.unwrap();
+    let usage = stream.next(wire_timeout()).await.unwrap();
     assert_eq!(quota, "event: quota-updated\ndata: {}\n\n");
     assert_eq!(integration, "event: integration-updated\ndata: {}\n\n");
     assert_eq!(usage, "event: usage-updated\ndata: {}\n\n");
@@ -135,7 +135,7 @@ fn account_stream_snapshot_heartbeat_and_quit_match_while_updates_drain() {
         assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
         state.backend.management_events.publish(Change::Integration);
         assert_eq!(
-            stream.next(DEADLINE).await.as_deref(),
+            stream.next(wire_timeout()).await.as_deref(),
             Some("event: integration-updated\ndata: {}\n\n")
         );
 
@@ -149,10 +149,10 @@ fn account_stream_snapshot_heartbeat_and_quit_match_while_updates_drain() {
         state.backend.management_events.publish(Change::Quit);
         state.backend.management_events.close();
         assert_eq!(
-            stream.next(DEADLINE).await.as_deref(),
+            stream.next(wire_timeout()).await.as_deref(),
             Some("event: emp-exiting\ndata: {}\n\n")
         );
-        assert!(stream.next(DEADLINE).await.is_none());
+        assert!(stream.next(wire_timeout()).await.is_none());
         let admission = state.lifecycle.admission.quiesce(0, Duration::ZERO);
         assert!(admission.is_some());
     });
@@ -188,7 +188,7 @@ fn account_stream_disconnect_releases_subscription_without_another_event() {
         drop(streams.pop().unwrap());
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
-            wait_for(DEADLINE, || {
+            wait_for(wire_timeout(), || {
                 state.backend.management_events.subscriber_count() == count - 1
             });
         })
@@ -210,7 +210,7 @@ fn account_stream_disconnect_releases_subscription_without_another_event() {
         drop(streams);
         let state = fixture.server.state.clone();
         tokio::task::spawn_blocking(move || {
-            wait_for(DEADLINE, || {
+            wait_for(wire_timeout(), || {
                 state.backend.management_events.subscriber_count() == 0
             });
             assert!(
@@ -274,7 +274,7 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                 let endpoint = address;
                 let (reached, release) = report_gate(fixture);
                 let mut stream = Stream::open(endpoint, &wire, "no-cache").await;
-                let first = stream.next(DEADLINE).await.unwrap();
+                let first = stream.next(wire_timeout()).await.unwrap();
                 assert_eq!(
                     event(&first),
                     (
@@ -282,13 +282,13 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                         json!({"completed":0, "total":if path == CALLS { 4 } else { 1 }})
                     )
                 );
-                let cancelled = timeout(DEADLINE, reached).await.unwrap().unwrap();
+                let cancelled = timeout(wire_timeout(), reached).await.unwrap().unwrap();
                 assert!(!cancelled.load(Ordering::Acquire));
                 assert_eq!(state.lifecycle.admission.active_requests(), 1);
                 assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
                 release.send(()).unwrap();
                 let mut frames = vec![first];
-                while let Some(frame) = stream.next(DEADLINE).await {
+                while let Some(frame) = stream.next(wire_timeout()).await {
                     frames.push(frame);
                 }
                 let (name, payload) = event(frames.last().unwrap());
@@ -301,7 +301,7 @@ fn report_first_progress_precedes_later_events_and_matches_during_update_drain()
                 }
                 let state = state.clone();
                 tokio::task::spawn_blocking(move || {
-                    wait_for(DEADLINE, || {
+                    wait_for(wire_timeout(), || {
                         state.lifecycle.admission.active_requests() == 0
                     })
                 })
@@ -327,12 +327,12 @@ fn report_disconnect_cancels_query_and_releases_admission() {
                 let endpoint = address;
                 let (reached, release) = report_gate(fixture);
                 let mut stream = Stream::open(endpoint, &wire, "no-cache").await;
-                let first = stream.next(DEADLINE).await.unwrap();
+                let first = stream.next(wire_timeout()).await.unwrap();
                 assert_eq!(
                     event(&first),
                     ("progress", json!({"completed":0,"total":0}))
                 );
-                let cancelled = timeout(DEADLINE, reached).await.unwrap().unwrap();
+                let cancelled = timeout(wire_timeout(), reached).await.unwrap().unwrap();
                 assert!(!cancelled.load(Ordering::Acquire));
                 assert_eq!(
                     fixture.server.state.lifecycle.admission.active_requests(),
@@ -343,14 +343,14 @@ fn report_disconnect_cancels_query_and_releases_admission() {
 
                 let during_query = cancelled.clone();
                 tokio::task::spawn_blocking(move || {
-                    wait_for(DEADLINE, || during_query.load(Ordering::Acquire))
+                    wait_for(wire_timeout(), || during_query.load(Ordering::Acquire))
                 })
                 .await
                 .unwrap();
                 release.send(()).unwrap();
                 let state = fixture.server.state.clone();
                 tokio::task::spawn_blocking(move || {
-                    wait_for(DEADLINE, || {
+                    wait_for(wire_timeout(), || {
                         Arc::strong_count(&cancelled) == 1
                             && state.lifecycle.admission.active_requests() == 0
                     });
@@ -461,7 +461,7 @@ fn management_stream_access_and_selection_match_during_update_drain() {
         let state = &fixture.server.state;
         state.sessions.rotate(system_now()).unwrap();
         state.backend.management_events.publish(Change::Quota);
-        assert!(stream.next(DEADLINE).await.is_none());
+        assert!(stream.next(wire_timeout()).await.is_none());
     });
 }
 
@@ -487,12 +487,12 @@ fn report_query_failures_send_error_terminator() {
             {
                 let endpoint = address;
                 let mut stream = Stream::open(endpoint, &wire, "no-cache").await;
-                let error = stream.next(DEADLINE).await.unwrap();
+                let error = stream.next(wire_timeout()).await.unwrap();
                 assert_eq!(
                     event(&error),
                     ("error", json!({"error":{"message":message}}))
                 );
-                assert!(stream.next(DEADLINE).await.is_none());
+                assert!(stream.next(wire_timeout()).await.is_none());
             }
         }
     });

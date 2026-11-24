@@ -115,16 +115,13 @@ fn query_output(
 #[cfg(test)]
 mod tests {
     use super::{package_version, system_install_manual};
-    use crate::UpdateError;
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use crate::{UpdateError, test_executable::write_executable};
     use std::path::Path;
 
     fn fake_query(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         let query = directory.path().join("dpkg-query");
-        fs::write(&query, script).unwrap();
-        fs::set_permissions(&query, fs::Permissions::from_mode(0o700)).unwrap();
+        write_executable(&query, script);
         (directory, query)
     }
 

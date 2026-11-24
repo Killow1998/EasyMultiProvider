@@ -326,7 +326,7 @@ mod windows_tests {
 mod tests {
     use super::run;
     use crate::process::created;
-    use std::os::unix::fs::PermissionsExt;
+    use crate::test_executable::write_executable;
     use tempfile::TempDir;
 
     #[test]
@@ -337,13 +337,11 @@ mod tests {
         let job = root.path().join(".emp-update-pid-reuse-test");
         std::fs::create_dir(&job).unwrap();
         let candidate = job.join("candidate");
-        std::fs::write(
+        write_executable(
             &candidate,
             "#!/bin/sh\nprintf '{\"version\":\"0.12.0\",\"nonce\":\"test-nonce\"}\\n' > \"$EMP_UPDATE_READY\"\n",
-        )
-        .unwrap();
+        );
         let candidate_bytes = std::fs::read(&candidate).unwrap();
-        std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o755)).unwrap();
         let actual_birth = created(std::process::id()).expect("test process birth time");
         let plan = serde_json::json!({
             "target": target,

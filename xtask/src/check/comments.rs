@@ -71,7 +71,7 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
     Ok(())
 }
 
-fn test_file(path: &str) -> bool {
+pub(super) fn test_file(path: &str) -> bool {
     let mut parts = path.rsplit('/');
     let name = parts.next().expect("source path");
     name == "tests.rs" || name.ends_with("_tests.rs") || parts.any(|part| part == "tests")
@@ -231,10 +231,10 @@ impl<'ast> Visit<'ast> for DomainPurity<'_> {
 }
 
 #[derive(Default)]
-struct TestScopes(Vec<std::ops::RangeInclusive<usize>>);
+pub(super) struct TestScopes(Vec<std::ops::RangeInclusive<usize>>);
 
 impl TestScopes {
-    fn contains(&self, line: usize) -> bool {
+    pub(super) fn contains(&self, line: usize) -> bool {
         self.0.iter().any(|range| range.contains(&line))
     }
 

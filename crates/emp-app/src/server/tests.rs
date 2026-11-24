@@ -1,7 +1,7 @@
 use super::{
     connection::{ConnectionContext, drive},
     head::RawRequestHead,
-    raw_tcp::{DEADLINE, RawClient},
+    raw_tcp::{RawClient, wire_timeout},
     *,
 };
 use crate::services::connection_admission::{ConnectionAdmissionConfig, SlotLimits};
@@ -84,7 +84,7 @@ async fn listener_bind_failure_returns_immediately() {
     let listening = TcpListener::bind(LOOPBACK).await.unwrap();
     let address = listening.local_addr().unwrap();
     let result = timeout(
-        DEADLINE,
+        wire_timeout(),
         ServerHandle::bind(address, Router::new(), admission()),
     )
     .await
@@ -153,7 +153,7 @@ async fn idle_tcp_connections_already_count_against_admission() {
     let mut first = TcpStream::connect(server.local_addr()).await.unwrap();
     let mut second = TcpStream::connect(server.local_addr()).await.unwrap();
     let (mut a, mut b) = ([0], [0]);
-    let survivor = timeout(DEADLINE, async {
+    let survivor = timeout(wire_timeout(), async {
         tokio::select! {
             closed = first.read(&mut a) => { assert_eq!(closed.unwrap(), 0); second }
             closed = second.read(&mut b) => { assert_eq!(closed.unwrap(), 0); first }
@@ -218,7 +218,7 @@ async fn response_body_holds_admission_until_completion_or_client_disconnect() {
         .await;
         assert!(client.head.starts_with("HTTP/1.1 200"));
         let mut first = [0; 10];
-        timeout(DEADLINE, client.io.read_exact(&mut first))
+        timeout(wire_timeout(), client.io.read_exact(&mut first))
             .await
             .unwrap()
             .unwrap();
@@ -231,7 +231,7 @@ async fn response_body_holds_admission_until_completion_or_client_disconnect() {
         } else {
             let mut refused = TcpStream::connect(server.local_addr()).await.unwrap();
             assert_eq!(
-                timeout(DEADLINE, refused.read_u8())
+                timeout(wire_timeout(), refused.read_u8())
                     .await
                     .unwrap()
                     .unwrap_err()
@@ -242,7 +242,7 @@ async fn response_body_holds_admission_until_completion_or_client_disconnect() {
 
         if disconnect {
             drop(client);
-            timeout(DEADLINE, release.closed()).await.unwrap();
+            timeout(wire_timeout(), release.closed()).await.unwrap();
         } else {
             release.send(()).unwrap();
             assert_eq!(client.rest().await, b"0\r\n\r\n");
@@ -299,7 +299,7 @@ async fn upgrade_releases_request_permit_and_graceful_shutdown_waits_for_session
             b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\nx").await;
         assert!(client.head.starts_with("HTTP/1.1 101"));
         let mut session_ready = [0; 5];
-        timeout(DEADLINE, client.io.read_exact(&mut session_ready))
+        timeout(wire_timeout(), client.io.read_exact(&mut session_ready))
             .await
             .unwrap()
             .unwrap();
@@ -314,7 +314,7 @@ async fn upgrade_releases_request_permit_and_graceful_shutdown_waits_for_session
         let mut stopping = pin!(server.shutdown());
         assert!(poll_once(stopping.as_mut()).await.is_pending());
         let mut session_stopping = [0; 8];
-        timeout(DEADLINE, client.io.read_exact(&mut session_stopping))
+        timeout(wire_timeout(), client.io.read_exact(&mut session_stopping))
             .await
             .unwrap()
             .unwrap();
@@ -325,7 +325,7 @@ async fn upgrade_releases_request_permit_and_graceful_shutdown_waits_for_session
         assert_eq!(admission.active_websockets(), 1);
         client.io.write_all(b"y").await.unwrap();
         assert!(client.rest().await.is_empty());
-        timeout(DEADLINE, stopping).await.unwrap().unwrap();
+        timeout(wire_timeout(), stopping).await.unwrap().unwrap();
         assert!(TcpStream::connect(address).await.is_err());
         assert_eq!(admission.active_requests(), 0);
         assert_eq!(admission.active_websockets(), 0);
@@ -373,7 +373,10 @@ async fn exit_signals_after_socket_write_and_distinguishes_failed_write() {
             permit,
         ));
 
-        timeout(DEADLINE, attempting_write).await.unwrap().unwrap();
+        timeout(wire_timeout(), attempting_write)
+            .await
+            .unwrap()
+            .unwrap();
         let mut shutdown = pin!(control.signal().wait());
         assert!(poll_once(shutdown.as_mut()).await.is_pending());
         assert_eq!(control.admission.active_requests(), 1);
@@ -396,7 +399,7 @@ async fn exit_signals_after_socket_write_and_distinguishes_failed_write() {
         } else {
             drop(release);
         }
-        assert_eq!(timeout(DEADLINE, shutdown).await.unwrap(), expected);
+        assert_eq!(timeout(wire_timeout(), shutdown).await.unwrap(), expected);
         driver.await.unwrap();
         let mut bytes = Vec::new();
         peer.read_to_end(&mut bytes).await.unwrap();
@@ -480,15 +483,22 @@ async fn synchronous_service_work_runs_off_the_runtime_worker() {
     let (resume, resumed) = std::sync::mpsc::channel();
     let work = tokio::spawn(run_blocking(move || {
         entered.send(std::thread::current().id()).unwrap();
-        resumed.recv_timeout(DEADLINE).unwrap();
+        resumed.recv_timeout(wire_timeout()).unwrap();
         42
     }));
     assert_ne!(
-        timeout(DEADLINE, waiting).await.unwrap().unwrap(),
+        timeout(wire_timeout(), waiting).await.unwrap().unwrap(),
         runtime_worker
     );
     resume.send(()).unwrap();
-    assert_eq!(timeout(DEADLINE, work).await.unwrap().unwrap().unwrap(), 42);
+    assert_eq!(
+        timeout(wire_timeout(), work)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+        42
+    );
 }
 
 struct WriteLatch {

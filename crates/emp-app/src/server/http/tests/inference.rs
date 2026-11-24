@@ -1,6 +1,7 @@
 use super::*;
+use crate::test_time::test_timeout;
 use crate::{
-    server::raw_tcp::{DEADLINE, RawClient},
+    server::raw_tcp::{RawClient, wire_timeout},
     tests::{OneShotUpstream, live_journal, wait_for},
 };
 use std::{collections::BTreeMap, io::Read, sync::mpsc};
@@ -82,7 +83,7 @@ fn running_aero_callbacks_leave_head_capacity_for_public_and_callback_requests()
             }
             let state_for_wait = state.clone();
             tokio::task::spawn_blocking(move || {
-                wait_for(DEADLINE, || state_for_wait.lifecycle.admission.active_requests() == 1);
+                wait_for(wire_timeout(), || state_for_wait.lifecycle.admission.active_requests() == 1);
             }).await.unwrap();
             let admission = &state.lifecycle.admission;
             let public_slots = std::iter::from_fn(|| admission.acquire_request()).collect::<Vec<_>>();
@@ -116,7 +117,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
             "",
         );
         socket.write_all(FIRST).unwrap();
-        released.recv_timeout(DEADLINE).unwrap();
+        released.recv_timeout(wire_timeout()).unwrap();
         socket.write_all(LAST).unwrap();
     });
     fixture(&upstream.base_url()).run_wire(async |fixture, address| {
@@ -146,9 +147,9 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
                 state_for_drain
                     .lifecycle
                     .updates()
-                    .drain_for_test(Duration::from_secs(15))
+                    .drain_for_test(test_timeout(Duration::from_secs(15)))
             });
-            wait_for(DEADLINE, || updates.enter().is_none());
+            wait_for(wire_timeout(), || updates.enter().is_none());
 
             let authorization = format!("Authorization: Bearer {}", parent.key);
             let wire = json_request(
@@ -160,14 +161,14 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
             let mut io = TcpStream::connect(address).await.unwrap();
             let state_for_intake = state.clone();
             tokio::task::spawn_blocking(move || {
-                wait_for(DEADLINE, || {
+                wait_for(wire_timeout(), || {
                     state_for_intake.lifecycle.admission.active_requests() == 2
                 });
             })
             .await
             .unwrap();
             io.write_all(&wire).await.unwrap();
-            let head = timeout(DEADLINE, crate::server::raw_tcp::head(&mut io))
+            let head = timeout(wire_timeout(), crate::server::raw_tcp::head(&mut io))
                 .await
                 .unwrap()
                 .unwrap();
@@ -209,7 +210,7 @@ fn aero_callback_in_public_intake_inherits_parent_leases_during_update_drain() {
             assert!(
                 {
                     let mut received = Vec::new();
-                    let outcome = timeout(DEADLINE, callback.io.read_to_end(&mut received)).await;
+                    let outcome = timeout(wire_timeout(), callback.io.read_to_end(&mut received)).await;
                     assert!(
                         matches!(outcome, Ok(Ok(_))),
                         "Aero callback drain: waiting for downstream EOF after releasing the upstream, received {} bytes: {outcome:?}",
@@ -342,7 +343,7 @@ fn stalled_buffered_inference(quit: bool) {
         assert_eq!(head.status, "HTTP/1.1 200 OK");
         assert!(head.headers["content-length"][0].parse::<usize>().unwrap() >= BODY_BYTES);
         if quit {
-            let reply = timeout(crate::server::REQUEST_DRAIN_TIMEOUT, async {
+            let reply = timeout(test_timeout(crate::server::REQUEST_DRAIN_TIMEOUT), async {
                 let mut socket = TcpStream::connect(address).await.unwrap();
                 socket
                     .write_all(&json_request(
@@ -363,7 +364,9 @@ fn stalled_buffered_inference(quit: bool) {
             assert_eq!(json_body(&reply), json!({"status":"stopping"}));
             let signal = fixture.server.state.lifecycle.signal();
             assert_eq!(
-                timeout(DEADLINE, signal.wait()).await.unwrap(),
+                timeout(crate::server::raw_tcp::wire_timeout(), signal.wait())
+                    .await
+                    .unwrap(),
                 crate::server::ShutdownReason::ResponseWritten,
             );
             assert!(fixture.server.state.lifecycle.admission.active_requests() > 0);
@@ -568,7 +571,7 @@ fn inference_gate_and_body_errors_match_before_upstream_dispatch() {
 
         let state = fixture.server.state.clone();
         tokio::task::spawn_blocking(move || {
-            wait_for(DEADLINE, || {
+            wait_for(wire_timeout(), || {
                 state.lifecycle.updates().active_for_test() == 0
             });
             assert!(state.lifecycle.updates().drain_for_test(Duration::ZERO));
@@ -714,7 +717,7 @@ impl SseClient {
     }
 
     async fn first_output(&mut self) -> Vec<Value> {
-        timeout(DEADLINE, async {
+        timeout(wire_timeout(), async {
             let mut events = Vec::new();
             loop {
                 let event = self.next().await.expect("first visible SSE event");
@@ -754,7 +757,7 @@ async fn assert_settled(
         let _drained = state
             .lifecycle
             .admission
-            .quiesce(0, DEADLINE)
+            .quiesce(0, wire_timeout())
             .expect("inference connection settled");
         let records = live_journal(&root);
         let mut finished = records
@@ -796,7 +799,7 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
             );
             socket.write_all(FIRST).unwrap();
             released
-                .recv_timeout(DEADLINE)
+                .recv_timeout(wire_timeout())
                 .expect("client received visible output before release");
             socket.write_all(LAST).unwrap();
         });
@@ -819,7 +822,7 @@ fn inference_sse_first_output_precedes_upstream_release_and_settles_once() {
                 "SSE released the update permit before its body ended"
             );
             release.send(()).unwrap();
-            timeout(DEADLINE, async {
+            timeout(wire_timeout(), async {
                 while let Some(event) = downstream.next().await {
                     events.push(event);
                 }
@@ -900,7 +903,7 @@ fn inference_stream_disconnect_closes_upstream_and_settles_once() {
             downstream.first_output().await;
             downstream.io.get_ref().set_zero_linger().unwrap();
             drop(downstream);
-            timeout(DEADLINE, closure)
+            timeout(wire_timeout(), closure)
                 .await
                 .expect("upstream was closed")
                 .unwrap();
@@ -951,7 +954,7 @@ fn inference_buffered_disconnect_preserves_cancel_and_finish_policies() {
                     assert_upstream_cancelled(socket);
                 } else {
                     released
-                        .recv_timeout(DEADLINE)
+                        .recv_timeout(wire_timeout())
                         .expect("downstream is closed");
                     upstream_reply(socket, 200, "application/json", CHAT_COMPLETE.len(), "");
                     socket.write_all(CHAT_COMPLETE).unwrap();
@@ -967,7 +970,7 @@ fn inference_buffered_disconnect_preserves_cancel_and_finish_policies() {
                 );
                 let mut downstream = TcpStream::connect(address).await.unwrap();
                 downstream.write_all(&wire).await.unwrap();
-                let (release, closure) = timeout(DEADLINE, dispatch)
+                let (release, closure) = timeout(wire_timeout(), dispatch)
                     .await
                     .expect("EMP dispatched upstream")
                     .unwrap();
@@ -976,7 +979,7 @@ fn inference_buffered_disconnect_preserves_cancel_and_finish_policies() {
                 if !cancel {
                     release.send(()).unwrap();
                 }
-                timeout(DEADLINE, closure)
+                timeout(wire_timeout(), closure)
                     .await
                     .expect("upstream finished")
                     .unwrap();

@@ -1,5 +1,5 @@
 use super::*;
-use crate::server::raw_tcp::{DEADLINE, head};
+use crate::server::raw_tcp::{head, wire_timeout};
 use emp_transport::websocket_accept;
 use std::{net::Ipv4Addr, time::Duration};
 use tokio::{
@@ -12,7 +12,7 @@ async fn upstream_pair() -> (AsyncClientWebSocket, TcpStream) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let url = format!("ws://{}/sideband", listener.local_addr().unwrap());
     let empty = Default::default();
-    let connect = AsyncClientWebSocket::connect_with_proxy(&url, &empty, DEADLINE, None);
+    let connect = AsyncClientWebSocket::connect_with_proxy(&url, &empty, wire_timeout(), None);
     let upgrade = async {
         let (mut peer, _) = listener.accept().await.unwrap();
         let request = String::from_utf8(head(&mut peer).await.unwrap()).unwrap();
@@ -44,7 +44,7 @@ async fn read_masked_control(peer: &mut TcpStream) -> (u8, Vec<u8>) {
 
 #[tokio::test]
 async fn close_flushes_once_and_exits_with_a_saturated_event_queue() {
-    timeout(DEADLINE, async {
+    timeout(wire_timeout(), async {
         let (client, mut peer) = upstream_pair().await;
         let (commands, command_rx) = mpsc::channel(SIDEBAND_COMMAND_CAPACITY);
         let (events, event_rx) = mpsc::channel(1);
@@ -90,7 +90,7 @@ async fn close_flushes_once_and_exits_with_a_saturated_event_queue() {
 async fn command_queue_backpressures_and_reports_reset_for_only_the_active_write() {
     use std::sync::{Arc, Mutex};
 
-    timeout(DEADLINE, async {
+    timeout(wire_timeout(), async {
         let (mut client, mut peer) = upstream_pair().await;
         client.set_max_message_bytes(16 * 1024 * 1024).unwrap();
         let (commands, command_rx) = mpsc::channel(SIDEBAND_COMMAND_CAPACITY);

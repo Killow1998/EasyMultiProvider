@@ -141,7 +141,7 @@ fn streaming_flushes_before_upstream_eof() {
         stream.flush().expect("flush first SSE event");
         first_sent.send(()).expect("announce first SSE event");
         released
-            .recv_timeout(Duration::from_secs(3))
+            .recv_timeout(test_timeout(Duration::from_secs(3)))
             .expect("release terminal SSE event");
         stream.write_all(&last).expect("write terminal SSE event");
     });
@@ -154,10 +154,10 @@ fn streaming_flushes_before_upstream_eof() {
     let mut downstream =
         open_post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
     first_ready
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(test_timeout(Duration::from_secs(2)))
         .expect("upstream first event");
     downstream
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(test_timeout(Duration::from_secs(2))))
         .expect("downstream timeout");
     let mut response = Vec::new();
     while !response
@@ -196,7 +196,7 @@ fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
         stream.flush().expect("flush upstream response head");
         head_sent.send(()).expect("announce upstream head");
         stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
+            .set_read_timeout(Some(test_timeout(Duration::from_secs(3))))
             .expect("upstream close timeout");
         let mut byte = [0_u8; 1];
         let closed_by_emp = match stream.read(&mut byte) {
@@ -219,12 +219,12 @@ fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
     .expect("request JSON");
     let downstream = open_post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
     head_ready
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(test_timeout(Duration::from_secs(2)))
         .expect("upstream response head");
     drop(downstream);
     assert!(
         closed
-            .recv_timeout(Duration::from_secs(3))
+            .recv_timeout(test_timeout(Duration::from_secs(3)))
             .expect("upstream cancellation result"),
         "EMP kept the upstream stream open after its downstream disconnected"
     );
@@ -350,8 +350,12 @@ fn auto_protocol_falls_back_only_after_explicit_endpoint_rejection() {
     assert!(response.contains("\"text\":\"answer\""));
     assert_eq!(
         [
-            paths.recv_timeout(Duration::from_secs(2)).unwrap(),
-            paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+            paths
+                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .unwrap(),
+            paths
+                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .unwrap(),
         ],
         ["/v1/chat/completions", "/v1/responses"]
     );
@@ -399,8 +403,12 @@ fn auto_protocol_falls_back_only_after_explicit_endpoint_rejection() {
     assert!(response.contains("event: response.completed\n"));
     assert_eq!(
         [
-            paths.recv_timeout(Duration::from_secs(2)).unwrap(),
-            paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+            paths
+                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .unwrap(),
+            paths
+                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .unwrap(),
         ],
         ["/v1/chat/completions", "/v1/responses"]
     );
@@ -445,8 +453,12 @@ fn external_pre_output_retry_is_single_and_route_local() {
     assert!(response.contains("\"text\":\"answer\""));
     assert_eq!(
         [
-            paths.recv_timeout(Duration::from_secs(2)).unwrap(),
-            paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+            paths
+                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .unwrap(),
+            paths
+                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .unwrap(),
         ],
         ["/v1/chat/completions", "/v1/chat/completions"]
     );
@@ -485,8 +497,12 @@ fn external_pre_output_retry_is_single_and_route_local() {
     assert!(response.contains("event: response.completed\n"));
     assert_eq!(
         [
-            paths.recv_timeout(Duration::from_secs(2)).unwrap(),
-            paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+            paths
+                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .unwrap(),
+            paths
+                .recv_timeout(test_timeout(Duration::from_secs(2)))
+                .unwrap(),
         ],
         ["/v1/chat/completions", "/v1/chat/completions"]
     );

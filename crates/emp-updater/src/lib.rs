@@ -6,6 +6,12 @@ mod linux;
 pub mod manager;
 mod process;
 pub mod release;
+#[cfg(all(test, unix))]
+#[path = "../../emp-app/tests/support/executable.rs"]
+mod test_executable;
+#[cfg(test)]
+#[path = "../../emp-app/tests/support/time.rs"]
+mod test_time;
 pub mod worker;
 pub use process::{OwnedChild, created, spawn};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -2,6 +2,7 @@
 use super::probe_candidate_version;
 use super::{UpdateManager, nonce_with};
 use crate::release::UpdateEndpoints;
+use crate::test_time::test_timeout;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Barrier};
@@ -13,11 +14,8 @@ mod retry;
 
 #[cfg(unix)]
 fn candidate_script(root: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let binary = root.join(name);
-    std::fs::write(&binary, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_executable::write_executable(&binary, &format!("#!/bin/sh\n{body}\n"));
     binary
 }
 
@@ -26,17 +24,33 @@ fn candidate_script(root: &std::path::Path, name: &str, body: &str) -> std::path
 fn candidate_version_probe_accepts_only_successful_exact_output() {
     let root = tempfile::TempDir::new().unwrap();
     let valid = candidate_script(root.path(), "valid", "printf 'EMP 0.12.0\\n'");
-    probe_candidate_version(&valid, "0.12.0", root.path(), Duration::from_secs(1))
-        .expect("valid candidate version probe should succeed");
+    probe_candidate_version(
+        &valid,
+        "0.12.0",
+        root.path(),
+        test_timeout(Duration::from_secs(1)),
+    )
+    .expect("valid candidate version probe should succeed");
 
     let nonzero = candidate_script(root.path(), "nonzero", "printf 'EMP 0.12.0\\n'; exit 7");
     assert_eq!(
-        probe_candidate_version(&nonzero, "0.12.0", root.path(), Duration::from_secs(1))
-            .unwrap_err(),
+        probe_candidate_version(
+            &nonzero,
+            "0.12.0",
+            root.path(),
+            test_timeout(Duration::from_secs(1))
+        )
+        .unwrap_err(),
         crate::UpdateError("version_mismatch")
     );
     assert_eq!(
-        probe_candidate_version(&valid, "0.12.1", root.path(), Duration::from_secs(1)).unwrap_err(),
+        probe_candidate_version(
+            &valid,
+            "0.12.1",
+            root.path(),
+            test_timeout(Duration::from_secs(1))
+        )
+        .unwrap_err(),
         crate::UpdateError("version_mismatch")
     );
 }
@@ -50,7 +64,7 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
             &root.path().join("missing"),
             "0.12.0",
             root.path(),
-            Duration::from_secs(1)
+            test_timeout(Duration::from_secs(1))
         )
         .unwrap_err(),
         crate::UpdateError("update_failed")
@@ -58,8 +72,13 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
     let denied = candidate_script(root.path(), "denied", "exit 0");
     std::fs::set_permissions(&denied, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
     assert_eq!(
-        probe_candidate_version(&denied, "0.12.0", root.path(), Duration::from_secs(1))
-            .unwrap_err(),
+        probe_candidate_version(
+            &denied,
+            "0.12.0",
+            root.path(),
+            test_timeout(Duration::from_secs(1))
+        )
+        .unwrap_err(),
         crate::UpdateError("directory_not_writable")
     );
 }
@@ -67,24 +86,23 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
 #[cfg(unix)]
 #[test]
 fn candidate_version_probe_times_out_and_reaps_the_child() {
-    let root = tempfile::TempDir::new().unwrap();
-    let hanging = candidate_script(
-        root.path(),
-        "hanging",
-        "printf '%s\\n' \"$$\"; exec sleep 5",
-    );
+    let child = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    let pid = child.id() as i32;
     let started = Instant::now();
     assert_eq!(
-        probe_candidate_version(&hanging, "0.12.0", root.path(), Duration::from_millis(100))
-            .unwrap_err(),
+        super::wait_for_candidate_version(
+            child,
+            test_timeout(Duration::from_millis(100)),
+            None,
+            crate::UpdateError::from,
+        )
+        .unwrap_err(),
         crate::UpdateError("update_failed")
     );
-    assert!(started.elapsed() < Duration::from_secs(2));
-    let pid: i32 = std::fs::read_to_string(root.path().join("candidate-version.stdout"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    assert!(started.elapsed() < test_timeout(Duration::from_secs(2)));
     // SAFETY: signal zero only probes the fixture PID and kill takes no pointers.
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     assert_eq!(
@@ -104,8 +122,13 @@ fn candidate_version_probe_restores_error_mode_after_bad_image() {
     // SAFETY: GetThreadErrorMode takes no arguments and reads only this thread.
     let previous = unsafe { GetThreadErrorMode() };
     assert_eq!(
-        probe_candidate_version(&binary, "0.12.0", root.path(), Duration::from_secs(1))
-            .unwrap_err(),
+        probe_candidate_version(
+            &binary,
+            "0.12.0",
+            root.path(),
+            test_timeout(Duration::from_secs(1))
+        )
+        .unwrap_err(),
         crate::UpdateError("update_failed")
     );
     // SAFETY: GetThreadErrorMode takes no arguments and reads only this thread.
@@ -133,7 +156,7 @@ fn concurrent_checks_start_only_one_release_job() {
             .unwrap();
         drop(stream);
         listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_millis(300);
+        let deadline = Instant::now() + test_timeout(Duration::from_millis(300));
         let mut requests = 1;
         while Instant::now() < deadline {
             match listener.accept() {
@@ -188,7 +211,7 @@ fn concurrent_checks_start_only_one_release_job() {
     first.join().unwrap();
     second.join().unwrap();
     assert_eq!(server.join().unwrap(), 1, "only one check request is sent");
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + test_timeout(Duration::from_secs(3));
     while manager.snapshot().state == "checking" && Instant::now() < deadline {
         #[expect(
             clippy::disallowed_methods,
@@ -260,7 +283,7 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
     });
     manager.start("install").unwrap();
     assert_eq!(server.join().unwrap(), 4);
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = Instant::now() + test_timeout(Duration::from_secs(12));
     while manager.snapshot().state != "error" && Instant::now() < deadline {
         #[expect(
             clippy::disallowed_methods,
@@ -311,7 +334,7 @@ fn failed_candidate_launch_preserves_the_original_system_error_code() {
         &root.path().join("absent"),
         "0.12.6",
         root.path(),
-        Duration::from_secs(1),
+        test_timeout(Duration::from_secs(1)),
         Some(&manager),
     )
     .unwrap_err();
@@ -324,18 +347,14 @@ fn failed_candidate_launch_preserves_the_original_system_error_code() {
 #[cfg(target_os = "linux")]
 #[test]
 fn dpkg_owned_install_requires_manual_migration_before_any_download() {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     let directory = tempfile::tempdir().unwrap();
-    let query = directory.path().join("dpkg-query");
-    fs::write(
-        &query,
-        "#!/bin/sh\nif [ \"$1\" = --search ]; then printf 'easy-multi-provider: /usr/bin/EMP\\n'; else printf 'install ok installed\\t0.11.2'; fi\n",
-    )
-    .unwrap();
-    fs::set_permissions(&query, fs::Permissions::from_mode(0o700)).unwrap();
+    let query = candidate_script(
+        directory.path(),
+        "dpkg-query",
+        "if [ \"$1\" = --search ]; then printf 'easy-multi-provider: /usr/bin/EMP\\n'; else printf 'install ok installed\\t0.11.2'; fi",
+    );
 
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -398,7 +417,7 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
         for status in ["503 Service Unavailable", "404 Not Found"] {
             let (mut stream, _) = listener.accept().unwrap();
             stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
+                .set_read_timeout(Some(test_timeout(Duration::from_secs(3))))
                 .unwrap();
             let mut request = Vec::new();
             let mut buffer = [0; 512];
@@ -431,7 +450,7 @@ fn update_journal_keeps_retry_stage_timings_after_success() {
     )
     .unwrap();
     manager.start("check").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + test_timeout(Duration::from_secs(5));
     loop {
         if events
             .lock()

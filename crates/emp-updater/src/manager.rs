@@ -357,20 +357,41 @@ fn probe_candidate_version_observed(
         command.creation_flags(CREATE_NO_WINDOW);
     }
     #[cfg(windows)]
-    let mut child =
-        super::process::spawn_quiet_reporting(&mut command, report).map_err(|error| {
-            if error == UpdateError("worker_failed") {
-                UpdateError("update_failed")
-            } else {
-                error
-            }
-        })?;
+    let child = super::process::spawn_quiet_reporting(&mut command, report).map_err(|error| {
+        if error == UpdateError("worker_failed") {
+            UpdateError("update_failed")
+        } else {
+            error
+        }
+    })?;
     #[cfg(not(windows))]
-    let mut child = command.spawn().map_err(report)?;
+    let child = command.spawn().map_err(report)?;
+    let status = wait_for_candidate_version(child, timeout, manager, report)?;
+    if !status.success() {
+        if let Some(manager) = manager
+            && let Ok(mut diagnostic) = manager.0.diagnostic.lock()
+        {
+            diagnostic.exit_code = status.code();
+        }
+        return Err(UpdateError("version_mismatch"));
+    }
+    let stdout = fs::read(output).map_err(report)?;
+    if String::from_utf8_lossy(&stdout).trim() != format!("EMP {version}") {
+        return Err(UpdateError("version_mismatch"));
+    }
+    Ok(())
+}
+
+fn wait_for_candidate_version(
+    mut child: std::process::Child,
+    timeout: Duration,
+    manager: Option<&UpdateManager>,
+    report: impl Fn(std::io::Error) -> UpdateError,
+) -> Result<std::process::ExitStatus> {
     let deadline = Instant::now() + timeout;
-    let status = loop {
+    loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
+            Ok(Some(status)) => return Ok(status),
             Ok(None) if Instant::now() < deadline => {
                 #[expect(
                     clippy::disallowed_methods,
@@ -394,20 +415,7 @@ fn probe_candidate_version_observed(
                 return Err(report(error));
             }
         }
-    };
-    if !status.success() {
-        if let Some(manager) = manager
-            && let Ok(mut diagnostic) = manager.0.diagnostic.lock()
-        {
-            diagnostic.exit_code = status.code();
-        }
-        return Err(UpdateError("version_mismatch"));
     }
-    let stdout = fs::read(output).map_err(report)?;
-    if String::from_utf8_lossy(&stdout).trim() != format!("EMP {version}") {
-        return Err(UpdateError("version_mismatch"));
-    }
-    Ok(())
 }
 
 fn nonce() -> Result<String> {
