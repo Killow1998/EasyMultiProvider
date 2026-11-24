@@ -6,7 +6,7 @@ use std::net::TcpStream;
 use std::time::Instant;
 
 fn server_with_admission(admission: ConnectionAdmissionConfig) -> (TempDir, ServerHandle) {
-    let directory = tempfile::tempdir().expect("temporary root");
+    let directory = emp_test_support::fixture_dir().expect("temporary root");
     let config = canonical_root(&directory).join("config.json");
     let server = ServerHandle::start_with_connection_admission_for_test(
         IpAddr::V4(Ipv4Addr::LOCALHOST),

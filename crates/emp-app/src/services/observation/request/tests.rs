@@ -15,7 +15,7 @@ fn records(root: &std::path::Path) -> Vec<Value> {
 
 #[test]
 fn error_receipts_record_the_boundary_without_trusting_upstream_claims_or_logging_content() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let diagnostics = Arc::new(Diagnostics::new(&root.path().canonicalize().unwrap()));
     let event = json!({"type":"error","error":{"code":"quota_exhausted","origin":"emp","message":"private-provider-detail"}});
     let mut receipt = RequestObservation::new(
@@ -67,7 +67,7 @@ fn error_receipts_record_the_boundary_without_trusting_upstream_claims_or_loggin
 
 #[test]
 fn a_failed_terminal_write_is_not_completion_and_does_not_change_the_error() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let diagnostics = Arc::new(Diagnostics::new(&root.path().canonicalize().unwrap()));
     let mut receipt = RequestObservation::new(
         diagnostics,
@@ -101,7 +101,7 @@ fn a_failed_terminal_write_is_not_completion_and_does_not_change_the_error() {
 #[test]
 fn partial_and_successful_delivery_remain_distinct_even_when_dropped() {
     for terminal in [false, true] {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let diagnostics = Arc::new(Diagnostics::new(&root.path().canonicalize().unwrap()));
         let mut receipt =
             RequestObservation::new(diagnostics, None, None, "websocket", "responses");
@@ -143,7 +143,7 @@ fn history_reason_survives_a_failed_write_and_unknown_text_is_not_logged() {
             "history_reason_unknown",
         ),
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let diagnostics = Arc::new(Diagnostics::new(&root.path().canonicalize().unwrap()));
         let mut receipt = RequestObservation::new(
             diagnostics,

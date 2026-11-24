@@ -46,9 +46,17 @@ const DEV: &[(&str, &str)] = &[
     ("emp-app", "emp-mod-decision"),
     ("emp-app", "emp-mod-gateway"),
     ("emp-app", "emp-test-support"),
+    ("emp-codex", "emp-test-support"),
+    ("emp-config", "emp-test-support"),
+    ("emp-files", "emp-test-support"),
     ("emp-router", "emp-config"),
     ("emp-router", "emp-storage"),
+    ("emp-router", "emp-test-support"),
+    ("emp-state", "emp-test-support"),
+    ("emp-storage", "emp-test-support"),
+    ("emp-transport", "emp-test-support"),
     ("emp-updater", "emp-test-support"),
+    ("xtask", "emp-test-support"),
 ];
 
 const FORBIDDEN: &[(&str, &str, &str)] = &[

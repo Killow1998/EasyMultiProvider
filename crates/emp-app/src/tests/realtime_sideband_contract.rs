@@ -6,7 +6,7 @@ use emp_transport::websocket_accept;
 use std::net::TcpListener;
 
 fn server_fixture(with_native_auth: bool) -> (TempDir, TempDir, RealtimeUpstream, ServerHandle) {
-    let fixture = tempfile::tempdir().expect("fixture directory");
+    let fixture = emp_test_support::fixture_dir().expect("fixture directory");
     let native_auth = canonical_root(&fixture).join("codex/auth.json");
     std::fs::create_dir_all(native_auth.parent().unwrap()).expect("native auth directory");
     if with_native_auth {

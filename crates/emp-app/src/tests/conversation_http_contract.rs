@@ -212,7 +212,7 @@ fn native_checkpoint_switch_to_external_rebuilds_visible_codex_history() {
         "object": "chat.completion",
         "choices": [{"index":0,"message":{"role":"assistant","content":"continued"},"finish_reason":"stop"}]
     }));
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let root = canonical_root(&directory);
     let config = root.join("config.json");
     std::fs::write(
@@ -327,7 +327,7 @@ fn long_to_short_external_switch_compacts_before_the_destination_request() {
             }
         }
     });
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("config.json");
     std::fs::write(&config, serde_json::to_vec_pretty(&json!({

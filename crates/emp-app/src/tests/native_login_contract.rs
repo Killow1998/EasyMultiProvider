@@ -40,7 +40,7 @@ fn browser_login_classifies_engine_failures_and_leaves_http_and_auth_intact() {
             false,
         ),
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let config = root.path().join("config.json");
         std::fs::write(&config, b"{}").unwrap();
         let home = root.path().join("codex");

@@ -27,7 +27,7 @@ fn installed_codex_external_tool_roundtrips_do_not_request_history_replays() {
 }
 
 fn tool_search(protocol: &'static str, native: bool, websocket: bool) {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("codex");
     std::fs::create_dir(&home).unwrap();

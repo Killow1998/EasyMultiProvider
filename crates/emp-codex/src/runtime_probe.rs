@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn missing_control_socket_does_not_imply_the_app_is_stopped() {
-        let home = tempfile::tempdir().unwrap();
+        let home = emp_test_support::fixture_dir().unwrap();
         for target in ["emp", "native"] {
             let result = observe(home.path(), &["emp/model-a".to_owned()], target, None);
             assert_eq!(result.state, "catalog_unverified");

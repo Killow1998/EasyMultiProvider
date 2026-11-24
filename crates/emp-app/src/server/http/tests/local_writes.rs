@@ -34,7 +34,7 @@ fn with_temporary_home(test_name: &str, test: impl FnOnce(&Path)) {
         test(home);
         return;
     }
-    let home = tempfile::tempdir().unwrap();
+    let home = emp_test_support::fixture_dir().unwrap();
     let (_, module) = module_path!().split_once("::").unwrap();
     let result = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", &format!("{module}::{test_name}")])

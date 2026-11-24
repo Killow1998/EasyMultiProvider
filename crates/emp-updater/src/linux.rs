@@ -120,7 +120,7 @@ mod tests {
     use std::path::Path;
 
     fn fake_query(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let query = directory.path().join("dpkg-query");
         write_executable(&query, script);
         (directory, query)

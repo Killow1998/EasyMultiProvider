@@ -18,7 +18,7 @@ fn external_to_native_http_switch_preserves_visible_tool_history_and_headers() {
         "id":"switch-native","object":"response","status":"completed",
         "model":"native-upstream","output":[]
     }));
-    let directory = tempfile::tempdir().expect("native switch tempdir");
+    let directory = emp_test_support::fixture_dir().expect("native switch tempdir");
     let root = canonical_root(&directory);
     let config_path = root.join("config.json");
     let native_auth_path = root.join("codex/auth.json");
@@ -139,7 +139,7 @@ fn short_to_long_native_history_fork_uses_exact_checkpoint_and_never_reads_later
 
 fn assert_sidechat_replay(protocol: &str, model: &str, expected_path: &str, reply: Value) {
     let upstream = OneShotUpstream::start(reply);
-    let directory = tempfile::tempdir().expect("history switch tempdir");
+    let directory = emp_test_support::fixture_dir().expect("history switch tempdir");
     let root = canonical_root(&directory);
     let codex_home = root.join("codex");
     std::fs::create_dir_all(&codex_home).expect("create Codex home");

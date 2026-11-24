@@ -147,7 +147,7 @@ impl Drop for NativeUpstream {
 }
 
 pub(super) fn forward_server(base_url: &str) -> (TempDir, ServerHandle) {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("config.json");
     let native = root.join("codex/auth.json");
@@ -165,7 +165,7 @@ pub(super) fn forward_server(base_url: &str) -> (TempDir, ServerHandle) {
 }
 
 pub(super) fn native_alias_server(base_url: &str) -> (TempDir, ServerHandle) {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("config.json");
     let native = root.join("codex/auth.json");
@@ -223,23 +223,32 @@ pub(super) fn send_masked_websocket_text(stream: &mut TcpStream, value: &Value) 
     stream.flush().unwrap();
 }
 
+#[track_caller]
 pub(super) fn receive_websocket_json(stream: &mut TcpStream) -> Value {
     let mut header = [0u8; 2];
-    stream.read_exact(&mut header).unwrap();
+    stream
+        .read_exact(&mut header)
+        .expect("read downstream WebSocket frame header");
     assert_eq!(header[0] & 0x0f, 1);
     assert_eq!(header[1] & 0x80, 0);
     let mut length = usize::from(header[1] & 0x7f);
     if length == 126 {
         let mut raw = [0u8; 2];
-        stream.read_exact(&mut raw).unwrap();
+        stream
+            .read_exact(&mut raw)
+            .expect("read downstream WebSocket frame length");
         length = usize::from(u16::from_be_bytes(raw));
     } else if length == 127 {
         let mut raw = [0u8; 8];
-        stream.read_exact(&mut raw).unwrap();
+        stream
+            .read_exact(&mut raw)
+            .expect("read downstream WebSocket frame length");
         length = usize::try_from(u64::from_be_bytes(raw)).unwrap();
     }
     let mut payload = vec![0u8; length];
-    stream.read_exact(&mut payload).unwrap();
+    stream
+        .read_exact(&mut payload)
+        .expect("read downstream WebSocket frame payload");
     serde_json::from_slice(&payload).unwrap()
 }
 

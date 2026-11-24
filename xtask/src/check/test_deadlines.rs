@@ -9,7 +9,7 @@ use syn::{
 };
 
 const ALLOWED: &[(&str, usize)] = &[
-    ("emp-app", 200),
+    ("emp-app", 197),
     ("emp-codex", 8),
     ("emp-router", 3),
     ("emp-transport", 16),

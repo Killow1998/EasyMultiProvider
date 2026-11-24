@@ -48,7 +48,7 @@ fn targets() -> [TargetCase; 4] {
 fn fixture_root() -> TempDir {
     let root = tempfile::Builder::new()
         .prefix("emp-claude-discovery-")
-        .tempdir()
+        .tempdir_in(emp_test_support::fixture_root())
         .expect("create discovery fixture root");
     #[cfg(unix)]
     {

@@ -6,5 +6,8 @@ edition.workspace = true
 license.workspace = true
 description = "Shared fixtures and deadlines for EMP tests."
 
+[dependencies]
+tempfile = "3.27"
+
 [lints]
 workspace = true

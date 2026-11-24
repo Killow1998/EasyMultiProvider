@@ -57,10 +57,9 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new() -> Self {
-        // Short /tmp paths keep nested AF_UNIX control sockets within limits.
         let directory = tempfile::Builder::new()
             .prefix("emp-j-")
-            .tempdir_in(std::env::temp_dir())
+            .tempdir_in(emp_test_support::fixture_root())
             .expect("temporary root");
         let root = directory.path().canonicalize().expect("canonical root");
         let codex_home = root.join("codex");

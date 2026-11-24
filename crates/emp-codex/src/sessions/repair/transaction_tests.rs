@@ -57,7 +57,7 @@ struct Fixture {
 fn fixture() -> Fixture {
     let fixture_root = std::env::var_os("EMP_TRANSACTION_TEST_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("emp-transaction-recovery-tests"));
+        .unwrap_or_else(emp_test_support::fixture_root);
     fs::create_dir_all(&fixture_root).unwrap();
     let temporary = tempfile::Builder::new()
         .prefix("emp-transaction-recovery-")

@@ -1,10 +1,9 @@
 use emp_storage::quota_history::QuotaHistoryStore;
 use serde_json::json;
-use tempfile::TempDir;
 
 #[test]
 fn failed_observations_explain_gaps_without_creating_quota_points() {
-    let root = TempDir::new().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let store = QuotaHistoryStore::new(root.path().join("history.sqlite3"));
     let error = emp_codex::quota::quota_rpc_error(
         "account/rateLimits/read",

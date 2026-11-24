@@ -44,7 +44,7 @@ fn record(kind: &str, payload: Value) -> Map<String, Value> {
 }
 
 pub(super) fn fixture(compressed_parent: bool, with_child: bool, unfinished: bool) -> Fixture {
-    let temporary = tempfile::tempdir().unwrap();
+    let temporary = emp_test_support::fixture_dir().unwrap();
     let home = temporary.path().join("codex");
     let session_dir = home.join("sessions/2026/09/29");
     fs::create_dir_all(&session_dir).unwrap();
@@ -998,7 +998,7 @@ fn idle_restore_preserves_unfinished_or_uncoordinated_history() {
 
 #[test]
 fn idle_restore_of_an_empty_home_does_not_create_writer_coordination() {
-    let temporary = tempfile::tempdir().unwrap();
+    let temporary = emp_test_support::fixture_dir().unwrap();
     let (_, report) = repair_idle_before_native_restore(temporary.path()).unwrap();
     assert_eq!((report.threads_repaired, report.threads_deferred), (0, 0));
     assert!(!temporary.path().join(LOCK_DIRECTORY).exists());

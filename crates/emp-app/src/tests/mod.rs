@@ -670,7 +670,7 @@ fn configured_protocol_server(
     protocol: &str,
     auth_mode: &str,
 ) -> (TempDir, ServerHandle) {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     std::fs::write(
         &config,
@@ -728,7 +728,7 @@ fn session_header(server: &ServerHandle) -> String {
 }
 
 fn test_server() -> (TempDir, ServerHandle) {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     let server = ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config)
         .expect("start server");

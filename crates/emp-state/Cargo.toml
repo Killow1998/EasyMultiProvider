@@ -21,5 +21,6 @@ getrandom = "0.2.17"
 serde_json = { workspace = true }
 
 [dev-dependencies]
+emp-test-support = { path = "../emp-test-support" }
 base64 = "0.22"
 tempfile = "3.27"

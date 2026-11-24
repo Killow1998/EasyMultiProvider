@@ -6,7 +6,7 @@ use std::net::{IpAddr, Ipv4Addr};
 fn loopback_upgrade_preserves_native_settings_and_static_catalogs() {
     for dynamic in [false, true] {
         for owned_sideband in [false, true] {
-            let directory = tempfile::tempdir().unwrap();
+            let directory = emp_test_support::fixture_dir().unwrap();
             let root = directory.path().canonicalize().unwrap();
             let app_config = root.join("config.json");
             std::fs::write(&app_config, br#"{"auto_enable_on_start":false}"#).unwrap();
@@ -97,7 +97,7 @@ fn loopback_upgrade_preserves_native_settings_and_static_catalogs() {
 #[test]
 fn loopback_upgrade_preserves_foreign_listener_and_external_edits() {
     for external_edit in [false, true] {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let config = root.join("config.json");
         std::fs::write(&config, br#"{"auto_enable_on_start":false}"#).unwrap();

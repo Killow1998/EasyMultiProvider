@@ -90,7 +90,7 @@ fn fixture_root() -> TempDir {
     {
         tempfile::Builder::new()
             .prefix("emp-runtime-matrix-")
-            .tempdir()
+            .tempdir_in(emp_test_support::fixture_root())
             .expect("create inert runtime fixture directory")
     }
 }

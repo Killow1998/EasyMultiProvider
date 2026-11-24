@@ -25,7 +25,7 @@ fn filter() -> CallFilter {
 
 #[test]
 fn completed_history_recovery_links_its_rejection_without_double_counting_usage() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("usage.sqlite3");
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     let ledger = UsageLedger::new(path.clone(), Arc::clone(&prices));
@@ -82,7 +82,7 @@ fn completed_history_recovery_links_its_rejection_without_double_counting_usage(
 
 #[test]
 fn report_progress_counts_filtered_work_and_stops_when_the_reader_leaves() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     let ledger = UsageLedger::new(root.path().join("usage.sqlite3"), prices);
     for index in 0..6 {
@@ -156,7 +156,7 @@ fn report_progress_counts_filtered_work_and_stops_when_the_reader_leaves() {
 
 #[test]
 fn reported_tiers_and_effort_survive_restart_without_relabeling_legacy_requests() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("usage.sqlite3");
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     let ledger = UsageLedger::new(path.clone(), Arc::clone(&prices));
@@ -219,7 +219,7 @@ fn reported_tiers_and_effort_survive_restart_without_relabeling_legacy_requests(
 
 #[test]
 fn legacy_ws_errors_and_recovery_are_not_client_interruptions() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("usage.sqlite3");
     let ledger = UsageLedger::new(
         path.clone(),
@@ -300,7 +300,7 @@ fn legacy_ws_errors_and_recovery_are_not_client_interruptions() {
 }
 #[test]
 fn legacy_rates_remain_in_call_details_without_polluting_generation_averages() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     let ledger = UsageLedger::new(root.path().join("usage.sqlite3"), prices);
     ledger
@@ -348,7 +348,7 @@ fn legacy_rates_remain_in_call_details_without_polluting_generation_averages() {
 
 #[test]
 fn durable_reports_share_accounting_and_keep_delivery_distinct() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("usage.sqlite3");
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     let ledger = UsageLedger::new(path.clone(), Arc::clone(&prices));

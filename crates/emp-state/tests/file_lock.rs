@@ -1,6 +1,6 @@
 use emp_state::{IntegrationFileLock, LockError};
+use emp_test_support::fixture_dir;
 use std::time::Duration;
-use tempfile::tempdir;
 
 #[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -11,7 +11,7 @@ fn canonical_temp_root(directory: &tempfile::TempDir) -> std::path::PathBuf {
 
 #[test]
 fn lock_is_exclusive_times_out_and_is_released_on_drop() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let path = canonical_temp_root(&directory).join("state/integration.lock");
     let first = IntegrationFileLock::acquire(&path, Duration::ZERO, Duration::from_millis(1))
         .expect("first lock");
@@ -48,7 +48,7 @@ fn lock_is_exclusive_times_out_and_is_released_on_drop() {
 #[cfg(unix)]
 #[test]
 fn lock_rejects_symlinked_parent_without_touching_target() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let root = canonical_temp_root(&directory);
     let target = root.join("target");
     std::fs::create_dir(&target).expect("target");

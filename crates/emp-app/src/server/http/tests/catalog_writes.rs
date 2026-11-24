@@ -22,7 +22,7 @@ const POOL_QUOTA: &[u8] = br#"{"scope":"shared_pool","provider":"claude","accoun
 const BALANCE_BODY: &[u8] = br#"{"balance_infos":[{"currency":"USD","total_balance":"7.50"}]}"#;
 
 fn fixture(upstream: SocketAddr, balance: SocketAddr, root_certificate: &[u8]) -> Fixture {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let config = root.join("config.json");
     std::fs::write(

@@ -19,7 +19,7 @@ fn status_and_body(response: String) -> (String, Value) {
 /// memory, drive the next quota check, and reach disk once saving works.
 #[test]
 fn rotated_credentials_survive_a_failed_save_and_are_persisted_later() {
-    let directory = tempfile::tempdir().expect("rotation temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("rotation temporary directory");
     let root = credential_root(&directory);
     let account_root = root.join("state/accounts");
     let auth_path = account_root.join("rotating/auth.json.enc");
@@ -229,7 +229,7 @@ for line in sys.stdin:
 /// that no longer exists is dropped rather than written.
 #[test]
 fn shutdown_flushes_pending_rotations_of_configured_accounts_only() {
-    let directory = tempfile::tempdir().expect("flush temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("flush temporary directory");
     let root = credential_root(&directory);
     let account_root = root.join("state/accounts");
     let auth_path = account_root.join("kept/auth.json.enc");
@@ -286,7 +286,7 @@ fn shutdown_flushes_pending_rotations_of_configured_accounts_only() {
 /// only valid credential is lost, so the caller must see an error.
 #[test]
 fn shutdown_reports_rotated_credentials_it_could_not_save() {
-    let directory = tempfile::tempdir().expect("unsaved temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("unsaved temporary directory");
     let root = credential_root(&directory);
     let account_root = root.join("state/accounts");
     let auth_path = account_root.join("unsaved/auth.json.enc");
@@ -340,7 +340,7 @@ fn shutdown_reports_rotated_credentials_it_could_not_save() {
 /// pending) yet, must still finish before the final save and exit.
 #[test]
 fn shutdown_waits_for_a_quota_check_that_is_rotating_a_credential() {
-    let directory = tempfile::tempdir().expect("drain temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("drain temporary directory");
     let root = credential_root(&directory);
     let account_root = root.join("state/accounts");
     let auth_path = account_root.join("draining/auth.json.enc");

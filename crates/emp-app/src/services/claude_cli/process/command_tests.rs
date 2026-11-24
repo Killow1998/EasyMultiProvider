@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn auth_status_command_is_a_bounded_supported_status_invocation() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = emp_test_support::fixture_dir().expect("temp dir");
     let working_directory = dir.path().join("empty-workspace");
     std::fs::create_dir(&working_directory).expect("private working directory");
     let command = auth_status_command(LocalCommandConfig {

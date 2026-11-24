@@ -73,7 +73,7 @@ fn interrupted_download_retries_from_zero_and_verifies_the_complete_file() {
             first,
             b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\ncomplete".to_vec(),
         ]);
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let destination = root.path().join("package");
         download_package(&manager, &asset, &destination, |_| {}).unwrap();
         assert_eq!(server.join().unwrap(), 2);
@@ -95,7 +95,7 @@ fn permanent_download_failures_do_not_retry() {
         ),
     ] {
         let (manager, asset, server) = fixture(vec![response]);
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         assert_eq!(
             download_package(&manager, &asset, &root.path().join("package"), |_| {}).unwrap_err(),
             UpdateError(expected)

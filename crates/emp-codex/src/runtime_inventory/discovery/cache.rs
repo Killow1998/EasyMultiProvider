@@ -104,7 +104,7 @@ mod tests {
     use super::*;
     #[test]
     fn cache_requires_official_bytes_and_invalidates_replaced_files() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = emp_test_support::fixture_dir().unwrap();
         let resource = dir.path().join("official.exe");
         let cache = dir.path().join("cache");
         let engine = cache.join("opaque/codex.exe");
@@ -167,7 +167,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cache_rejects_redirected_children() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = emp_test_support::fixture_dir().unwrap();
         let resource = dir.path().join("codex.exe");
         let cache = dir.path().join("cache");
         std::fs::create_dir(&cache).unwrap();

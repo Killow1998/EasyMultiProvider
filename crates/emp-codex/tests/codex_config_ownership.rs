@@ -15,7 +15,7 @@ fn manager(directory: &std::path::Path) -> IntegrationManager {
 
 #[test]
 fn enable_writes_managed_fields_and_restore_returns_the_original_config() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let config = directory.path().join("config.toml");
     let original = r#"# header
 title = "keep"
@@ -69,7 +69,7 @@ command = "fixture-token-command"
 
 #[test]
 fn restore_without_a_lease_and_crash_recovery_are_noops_that_keep_config() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let config = directory.path().join("config.toml");
     fs::write(&config, "title = \"keep\"\n").unwrap();
     let manager = manager(directory.path());
@@ -99,7 +99,7 @@ fn restore_without_a_lease_and_crash_recovery_are_noops_that_keep_config() {
 
 #[test]
 fn enabling_refuses_when_the_service_is_not_listening() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let error = manager(directory.path())
         .enable("http://127.0.0.1:123/v1", None, false)
         .expect_err("service not ready");
@@ -113,7 +113,7 @@ fn image_mcp_updates_and_restores_only_its_owned_entry() {
         "[mcp_servers.emp_images]\ncommand = \"user-command\"\n[mcp_servers.other]\ncommand = \"other-command\"\n",
         "mcp_servers = { emp_images = {command = \"user-command\"}, other = {command = \"other-command\"} }\n",
     ] {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let config = directory.path().join("config.toml");
         fs::write(&config,format!("model_provider = \"openai\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n{servers}")).unwrap();
         let manager = manager(directory.path());
@@ -198,7 +198,7 @@ fn image_mcp_updates_and_restores_only_its_owned_entry() {
 
 #[test]
 fn search_feature_toggle_and_restore_round_trips_both_field_shapes() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let config = directory.path().join("config.toml");
     fs::write(&config, "model = \"work/gpt-5\"\n").unwrap();
     let search = emp_codex::configuration::search::SearchFeatureManager::new(
@@ -223,7 +223,7 @@ fn search_feature_toggle_and_restore_round_trips_both_field_shapes() {
 
 #[test]
 fn runtime_records_round_trip_and_offline_snapshots_stay_truthful() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let store = emp_codex::configuration::runtime::RuntimeStore::new(
         directory.path().join("state/runtime.json"),
     );

@@ -273,7 +273,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn configured_browser_helpers_never_allocate_a_console() {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let receipt = root.path().join("console.txt");
         let script = format!(
             "Add-Type 'using System; using System.Runtime.InteropServices; public class Probe {{ [DllImport(\"kernel32.dll\")] public static extern IntPtr GetConsoleWindow(); }}'; [IO.File]::WriteAllText('{}', ([Probe]::GetConsoleWindow() -eq [IntPtr]::Zero).ToString())",

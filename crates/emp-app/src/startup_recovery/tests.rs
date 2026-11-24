@@ -4,7 +4,7 @@ use serde_json::json;
 use std::fs;
 
 fn fixture() -> (tempfile::TempDir, PathBuf, Vec<u8>) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = emp_test_support::fixture_dir().unwrap();
     let state = dir.path().join("state");
     create_private_directory(&state).unwrap();
     let vault = VaultStore::from_sources(None, &state.join("master.key")).unwrap();
@@ -37,7 +37,7 @@ fn missing_key_does_not_silently_replace_saved_credentials_key() {
 
 #[test]
 fn saved_device_keys_use_credential_recovery_without_rotating_the_master_key() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = emp_test_support::fixture_dir().unwrap();
     let state = dir.path().join("state");
     create_private_directory(&state).unwrap();
     let path = state.join("gateway-clients.json");
@@ -241,7 +241,7 @@ fn failed_repeat_reset_preserves_pending_data_and_can_continue() {
 #[test]
 fn pending_marker_never_authorizes_clearing_an_external_directory() {
     let (dir, config, _) = fixture();
-    let outside = tempfile::tempdir().unwrap();
+    let outside = emp_test_support::fixture_dir().unwrap();
     fs::write(outside.path().join("keep"), b"untouched").unwrap();
     write_new_private_file(
         &dir.path().join("state/recovery-reset.json"),

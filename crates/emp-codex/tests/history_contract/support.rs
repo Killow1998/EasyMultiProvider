@@ -95,7 +95,7 @@ pub(super) fn visible_text(snapshot: &HistorySnapshot) -> String {
 }
 
 pub(super) fn build_home(records: &[Value]) -> tempfile::TempDir {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let rollout = write_rollout(directory.path(), records);
     state_database(directory.path(), &rollout);
     directory

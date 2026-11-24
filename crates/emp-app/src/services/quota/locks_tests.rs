@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn replacement_quota_refresh_waits_in_migration_lock_order() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let modules = root.join("state/modules");
     fs::create_dir_all(&modules).unwrap();

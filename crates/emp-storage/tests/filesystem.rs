@@ -2,10 +2,10 @@ use emp_files::{
     FileTransaction, FilesystemError, MAX_TRANSACTION_FILE_BYTES, with_file_transaction,
 };
 use emp_storage::{MASTER_KEY_ENV, MASTER_KEY_FILE_ENV, VAULT_MAGIC, VaultStore};
+use emp_test_support::fixture_dir;
 use serde_json::json;
 use std::fs;
 use std::sync::Mutex;
-use tempfile::tempdir;
 
 #[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -16,7 +16,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn generated_key_is_private_valid_and_reused() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let key_path = canonical_temp_path(&directory).join("private/master.key");
     let first = VaultStore::from_sources(None, &key_path).expect("create key");
     let original = fs::read(&key_path).expect("read generated key");
@@ -55,7 +55,7 @@ fn generated_key_is_private_valid_and_reused() {
 
 #[test]
 fn invalid_existing_key_is_never_replaced() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let key_path = canonical_temp_path(&directory).join("master.key");
     drop(VaultStore::from_sources(None, &key_path).expect("create private key file"));
     fs::write(&key_path, b"invalid-key\n").expect("write invalid key");
@@ -74,7 +74,7 @@ fn invalid_existing_key_is_never_replaced() {
 
 #[test]
 fn environment_key_takes_precedence_without_creating_a_file() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let key_path = directory.path().join("must-not-exist/master.key");
     let store = VaultStore::from_sources(Some(SYNTHETIC_KEY), &key_path).expect("environment key");
     assert_eq!(store.ensure_master_key(), None);
@@ -90,7 +90,7 @@ fn environment_key_takes_precedence_without_creating_a_file() {
 #[test]
 fn process_environment_selects_key_and_path_once() {
     let _lock = ENV_LOCK.lock().expect("environment lock");
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let root = canonical_temp_path(&directory);
     let default_path = root.join("default/master.key");
     let configured_path = root.join("configured/master.key");
@@ -134,7 +134,7 @@ fn process_environment_selects_key_and_path_once() {
 
 #[test]
 fn encrypted_bytes_text_and_json_never_write_plaintext() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let root = canonical_temp_path(&directory);
     let store =
         VaultStore::from_sources(Some(SYNTHETIC_KEY), &root.join("unused.key")).expect("store");
@@ -250,7 +250,7 @@ fn encrypted_bytes_text_and_json_never_write_plaintext() {
 
 #[test]
 fn key_path_rejects_a_non_directory_parent() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let parent = canonical_temp_path(&directory).join("not-a-directory");
     fs::write(&parent, b"file").expect("parent blocker");
     assert_eq!(
@@ -264,7 +264,7 @@ fn key_path_rejects_a_non_directory_parent() {
 #[cfg(unix)]
 #[test]
 fn key_paths_reject_symlink_components_and_public_permissions() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let root = canonical_temp_path(&directory);
     let real = root.join("real");
     fs::create_dir(&real).expect("real directory");
@@ -300,7 +300,7 @@ fn key_paths_reject_symlink_components_and_public_permissions() {
 
 #[test]
 fn transaction_rolls_back_existing_and_new_files_and_preserves_first_snapshot() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let root = canonical_temp_path(&directory);
     let existing = root.join("existing.json");
     let created = root.join("created.json");
@@ -334,7 +334,7 @@ fn transaction_rolls_back_existing_and_new_files_and_preserves_first_snapshot() 
 
 #[test]
 fn transaction_commit_persists_and_drop_rolls_back() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let path = canonical_temp_path(&directory).join("value");
     fs::write(&path, b"before").expect("before");
 
@@ -356,7 +356,7 @@ fn transaction_commit_persists_and_drop_rolls_back() {
 
 #[test]
 fn transaction_rejects_nonregular_and_oversized_files() {
-    let directory = tempdir().expect("tempdir");
+    let directory = fixture_dir().expect("tempdir");
     let mut transaction = FileTransaction::new();
     assert_eq!(
         transaction

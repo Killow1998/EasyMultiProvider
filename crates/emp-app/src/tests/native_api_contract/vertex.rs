@@ -288,7 +288,7 @@ fn assert_signature(body: &Value) {
 
 #[test]
 fn vertex_key_discovers_litellm_models_and_caches_express_count_tokens() {
-    let directory = TempDir::new().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     setup(&root);
     let config_path = root.join("config.json");
@@ -383,7 +383,7 @@ fn vertex_key_discovers_litellm_models_and_caches_express_count_tokens() {
 
 #[test]
 fn vertex_key_keeps_thought_only_usage_and_reported_model_in_call_records() {
-    let directory = TempDir::new().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     setup(&root);
     let upstream = VertexFixture::start();
@@ -429,7 +429,7 @@ fn vertex_key_keeps_thought_only_usage_and_reported_model_in_call_records() {
 
 #[test]
 fn vertex_key_roundtrips_a_tool_signature_after_emp_restart() {
-    let directory = TempDir::new().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     setup(&root);
     let config_path = root.join("config.json");
@@ -504,7 +504,7 @@ fn vertex_key_roundtrips_a_tool_signature_after_emp_restart() {
 #[test]
 #[ignore = "temporarily sets ADC environment and requires isolated loopback access; run alone"]
 fn vertex_adc_routes_gemini_and_claude_with_refreshed_oauth() {
-    let directory = TempDir::new().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     setup(&root);
     let oauth = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -667,7 +667,7 @@ impl Drop for Executor {
 #[test]
 #[ignore = "requires installed Codex CLI and isolated loopback access; run explicitly"]
 fn installed_codex_roundtrips_a_vertex_tool_with_real_emp() {
-    let directory = TempDir::new().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     setup(&root);
     let home = root.join("codex");

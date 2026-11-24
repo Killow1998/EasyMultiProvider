@@ -265,7 +265,7 @@ fn jev_decisions_forward_the_body_and_provider_key_without_entering_the_model_ca
                 .unwrap();
         }
     });
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let config = directory.path().join("config.json");
     std::fs::write(&config, serde_json::to_vec(&json!({
         "providers":[{"id":"openrouter","base_url":endpoint,"auth_mode":"api_key","api_key":"provider-fixture"}],
@@ -346,7 +346,7 @@ fn decision_settings_persist_and_route_native_payloads_with_per_service_defaults
                 .unwrap();
         }
     });
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let config = directory.path().join("config.json");
     let providers = [
         ("openai", "/openai/v1/decisions", "openai", "gpt-6-luna"),

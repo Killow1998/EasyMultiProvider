@@ -138,7 +138,7 @@ impl Drop for ImageUpstream {
 }
 
 pub(super) fn image_server(base_url: &str) -> (TempDir, ServerHandle) {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = crate::tests::credential_root(&directory);
     let config_path = root.join("config.json");
     let home = root.join("codex");
@@ -197,7 +197,7 @@ pub(super) fn select_turn(server: &ServerHandle, model: &str, turn: &str, websoc
     }
     let mut socket = TcpStream::connect(server.local_addr()).unwrap();
     socket
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
         .unwrap();
     write!(socket,"GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{}\r\n\r\n",server.local_addr().port(),session_header(server)).unwrap();
     let mut handshake = Vec::new();

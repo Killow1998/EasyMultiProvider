@@ -99,7 +99,7 @@ fn google_and_claude_use_their_documented_paths() {
 
 #[test]
 fn signatures_survive_restart_and_are_scoped_to_the_project_and_model() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("signatures.sqlite3");
     let route = route(
         "vertex_adc",

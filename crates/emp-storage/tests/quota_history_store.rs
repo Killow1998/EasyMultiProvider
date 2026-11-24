@@ -1,6 +1,5 @@
 use emp_storage::quota_history::QuotaHistoryStore;
 use serde_json::{Value, json};
-use tempfile::TempDir;
 
 fn fixture() -> Value {
     json!({
@@ -89,7 +88,7 @@ fn run_rust(path: &std::path::Path, fixture: &Value) -> Value {
 
 #[test]
 fn quota_history_has_a_standalone_storage_contract() {
-    let directory = TempDir::new().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let path = directory.path().join("history.sqlite3");
     let fixture = fixture();
     let result = run_rust(&path, &fixture);
@@ -117,7 +116,7 @@ fn quota_history_has_a_standalone_storage_contract() {
 
 #[test]
 fn quota_history_migrates_the_legacy_schema_without_plan_type() {
-    let directory = TempDir::new().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let path = directory.path().join("legacy.sqlite3");
     let connection = rusqlite::Connection::open(&path).expect("legacy database");
     connection
@@ -155,7 +154,7 @@ fn quota_history_migrates_the_legacy_schema_without_plan_type() {
 fn quota_history_rejects_a_symlink_database() {
     use std::os::unix::fs::symlink;
 
-    let directory = TempDir::new().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let target = directory.path().join("target.sqlite3");
     std::fs::write(&target, b"private").expect("write target");
     let link = directory.path().join("history.sqlite3");

@@ -78,7 +78,7 @@ fn check_incremental_turn(prewarm: bool) {
     let cookie = session_header(&server);
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
         .unwrap();
     write!(
         stream,
@@ -314,7 +314,7 @@ fn responses_websocket_retains_last_successful_previous_id_after_failed_or_incom
         let cookie = session_header(&server);
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(test_timeout(Duration::from_secs(5))))
             .unwrap();
         write!(
             stream,

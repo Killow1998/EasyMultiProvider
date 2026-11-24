@@ -711,7 +711,7 @@ fn lifecycle_and_unmatched_requests_keep_method_and_auth_policy() {
 
 #[cfg(unix)]
 fn integration_fixture(observed_at: Option<&str>) -> Fixture {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path();
     std::fs::write(
         root.join("config.json"),

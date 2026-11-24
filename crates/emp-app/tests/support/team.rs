@@ -58,7 +58,7 @@ impl TeamServer {
         let port = socket.local_addr().expect("Team address").port();
         drop(socket);
         let mut server = Self {
-            directory: tempfile::tempdir().expect("Team server directory"),
+            directory: emp_test_support::fixture_dir().expect("Team server directory"),
             port,
             child: None,
             stderr: None,

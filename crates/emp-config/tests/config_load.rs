@@ -1,9 +1,9 @@
 use emp_config::{CONFIG_PATH_ENV, config_path, load_configuration, normalize_configuration};
+use emp_test_support::fixture_dir;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tempfile::tempdir;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -56,7 +56,7 @@ fn config_load_matches_frozen_fixture() {
         if name == "directory" && cfg!(not(target_os = "linux")) {
             continue;
         }
-        let directory = tempdir().expect("temporary case directory");
+        let directory = fixture_dir().expect("temporary case directory");
         let path = temp_path(&directory).join("config.json");
         if name == "missing-file" {
             assert_eq!(
@@ -100,7 +100,7 @@ fn config_load_matches_frozen_fixture() {
 #[test]
 fn valid_json_is_normalized_and_private_paths_are_canonicalized() {
     let _lock = ENV_LOCK.lock().expect("environment lock");
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = temp_path(&directory);
     let path = root.join("configuration/config.json");
     fs::create_dir_all(path.parent().expect("configuration parent"))
@@ -138,7 +138,7 @@ fn valid_json_is_normalized_and_private_paths_are_canonicalized() {
 #[test]
 fn config_path_and_default_load_follow_environment_precedence() {
     let _lock = ENV_LOCK.lock().expect("environment lock");
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = temp_path(&directory);
     let configured = root.join("custom/config.json");
     let home = root.join("home");

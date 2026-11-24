@@ -8,9 +8,9 @@
 
 use emp_codex::history::CodexHomeHistoryReader;
 use emp_context::{HistoryAnchor, HistoryReader, HistorySnapshot};
+use emp_test_support::fixture_dir;
 use rusqlite::params;
 use serde_json::{Value, json};
-use tempfile::tempdir;
 
 const THREAD: &str = "01a00000-0000-7000-8000-000000000001";
 const TURN: &str = "01a00000-0000-7000-8000-000000000004";

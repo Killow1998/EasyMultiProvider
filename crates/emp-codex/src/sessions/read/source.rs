@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn zstd_source_enforces_the_uncompressed_byte_limit() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let path = directory.path().join("rollout.jsonl.zst");
         let bytes = b"{\"type\":\"event_msg\"}\n".repeat(4);
         let compressed = zstd::stream::encode_all(bytes.as_slice(), 0).unwrap();

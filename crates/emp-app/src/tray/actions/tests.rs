@@ -5,7 +5,7 @@ use std::time::Instant;
 #[test]
 fn tray_restore_and_quit_wait_for_every_admitted_request() {
     for action in [Action::Restore, Action::Quit] {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let codex = root.join("codex");
         std::fs::create_dir(&codex).unwrap();

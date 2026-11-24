@@ -304,7 +304,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        Self::with_directory(tempfile::tempdir().unwrap())
+        Self::with_directory(emp_test_support::fixture_dir().unwrap())
     }
 
     fn with_directory(directory: tempfile::TempDir) -> Self {
@@ -690,7 +690,7 @@ fn page_reply_parts<'a>(reply: &'a [u8], content_type: &str, cache: &str) -> (&'
 fn guides_and_assets_keep_wire_contracts() {
     use base64::{Engine, engine::general_purpose::STANDARD};
 
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let state = directory.path().join("state");
     std::fs::create_dir(&state).unwrap();
     let icon = crate::services::app_icon::DEFAULT_PNG;
@@ -905,7 +905,7 @@ fn page_and_asset_misses_keep_status_and_origin_order() {
 #[cfg(unix)]
 #[test]
 fn module_panel_checks_origin_and_revision() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let panel = "export const panel = \"fixture\";\n";
     let revision = install_panel_fixture(directory.path(), emp_modules::Module::Gateway, panel);
     Fixture::with_directory(directory).run_wire(async |fixture, address| {
@@ -973,7 +973,7 @@ fn module_panel_checks_origin_and_revision() {
 fn team_reads_preserve_identity_and_auth() {
     use emp_modules::Module;
 
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     install_panel_fixture(directory.path(), Module::Team, "export const panel = {};");
     let state_root = directory.path().join("state");
     let workspace_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

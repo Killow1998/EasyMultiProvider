@@ -49,7 +49,7 @@ fn child_fixture() {
     // This is a fresh, disposable process. The parent and live EMP are untouched.
     // SAFETY: limit is initialized and lives through setrlimit in this disposable child process.
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let config = root.path().canonicalize().unwrap().join("config.json");
     let server =
         ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();

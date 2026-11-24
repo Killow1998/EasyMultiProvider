@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 #[test]
 fn account_affinity_survives_reordering_revocation_and_restart_without_stealing_existing_turns() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("usage.sqlite3");
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     let original = vec!["account-a".into(), "account-b".into(), "account-c".into()];

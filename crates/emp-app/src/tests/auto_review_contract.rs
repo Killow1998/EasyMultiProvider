@@ -31,7 +31,7 @@ pub(super) fn make_review_server(
     accounts: &[Value],
     native_auth: Option<&str>,
 ) -> (tempfile::TempDir, ServerHandle, Value) {
-    let directory = tempfile::tempdir().expect("auto-review tempdir");
+    let directory = emp_test_support::fixture_dir().expect("auto-review tempdir");
     let root = credential_root(&directory);
     let catalog = root.join("models_cache.json");
     std::fs::write(

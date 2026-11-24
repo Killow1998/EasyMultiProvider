@@ -194,7 +194,7 @@ fn version_output_reports_the_running_release() {
 
 #[test]
 fn valid_session_persists_across_restart() {
-    let directory = TempDir::new().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     let (port, mut child, bootstrap_line) = spawn_emp(&config);
     let page = request(port, "/", &[]);

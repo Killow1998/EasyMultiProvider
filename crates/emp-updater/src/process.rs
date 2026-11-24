@@ -316,7 +316,7 @@ mod tests {
     fn invalid_update_executable_restores_thread_error_mode() {
         use windows_sys::Win32::System::Diagnostics::Debug::GetThreadErrorMode;
 
-        let root = tempfile::TempDir::new().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let executable = root.path().join("candidate.exe");
         std::fs::write(&executable, b"deliberately invalid executable").unwrap();
         // SAFETY: GetThreadErrorMode takes no arguments and reads only this thread.

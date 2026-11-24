@@ -119,7 +119,7 @@ mod walker_boundary_tests {
 
     #[test]
     fn walker_absolute_end_ignores_concurrent_append() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let path = directory.path().join("rollout.jsonl");
         let prefix = "{\"ordinal\":1,\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"first\"}}\n";
         let captured = "{\"ordinal\":2,\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"captured\"}}\n";

@@ -70,7 +70,7 @@ fn rust_result(fixture: &Value) -> Value {
 
 #[test]
 fn catalog_selection_resolves_context_windows_and_owner_fallbacks() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = emp_test_support::fixture_dir().expect("temporary root");
     let native = root.path().join("models_cache.json");
     let preserved = root
         .path()
@@ -212,7 +212,7 @@ fn catalog_selection_resolves_context_windows_and_owner_fallbacks() {
 
 #[test]
 fn native_snapshot_survives_missing_or_merged_codex_cache_and_accepts_new_native_data() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let cache = root.path().join("models_cache.json");
     let snapshot = root.path().join("easy-multi-provider/native-catalog.json");
     let config = json!({"native_catalog_path":cache});

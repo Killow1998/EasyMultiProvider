@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn local_key_is_stable_and_restore_returns_to_signed_out() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = emp_test_support::fixture_dir().unwrap();
         let path = dir.path().join("auth.json");
         assert!(ensure(&path, KEY).unwrap());
         let first = read(&path).unwrap();
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn existing_or_replaced_authentication_is_never_removed() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = emp_test_support::fixture_dir().unwrap();
         let path = dir.path().join("auth.json");
         ensure(&path, KEY).unwrap();
         let original = br#"{"OPENAI_API_KEY":"user-key"}"#;
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn malformed_auth_is_not_replaced() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = emp_test_support::fixture_dir().unwrap();
         let path = dir.path().join("auth.json");
         fs::write(&path, b"partial").unwrap();
         assert!(ensure(&path, KEY).is_err());
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn explicit_switch_installs_owned_key_and_restore_signs_out() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = emp_test_support::fixture_dir().unwrap();
         let path = dir.path().join("auth.json");
         let original = json!({"tokens":{"account_id":"fixture","access_token":"token"}});
         emp_state::atomic_write_private_state(&path, &serde_json::to_vec(&original).unwrap())

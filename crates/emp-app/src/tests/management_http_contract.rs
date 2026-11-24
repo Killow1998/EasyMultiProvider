@@ -17,7 +17,7 @@ fn response_json(response: &str) -> Value {
 
 #[test]
 fn migration_export_and_import_cross_the_authenticated_http_boundary() {
-    let source_directory = tempfile::tempdir().unwrap();
+    let source_directory = emp_test_support::fixture_dir().unwrap();
     let source_root = canonical_root(&source_directory);
     let source_config = source_root.join("config.json");
     std::fs::write(&source_config, serde_json::to_vec_pretty(&json!({
@@ -57,7 +57,7 @@ fn migration_export_and_import_cross_the_authenticated_http_boundary() {
     assert!(bundle.starts_with(b"EMP-MIGRATION\x01\n"));
     source.shutdown().unwrap();
 
-    let target_directory = tempfile::tempdir().unwrap();
+    let target_directory = emp_test_support::fixture_dir().unwrap();
     let target_root = canonical_root(&target_directory);
     let target_config = target_root.join("config.json");
     std::fs::write(&target_config, b"{}").unwrap();
@@ -102,7 +102,7 @@ fn migration_export_and_import_cross_the_authenticated_http_boundary() {
 
 #[test]
 fn account_import_and_delete_keep_credentials_managed_and_private() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("config.json");
     std::fs::write(&config, b"{}").unwrap();
@@ -170,7 +170,7 @@ fn account_import_and_delete_keep_credentials_managed_and_private() {
 #[test]
 fn native_search_forwards_raw_json_with_the_best_available_login() {
     let upstream = OneShotUpstream::start(json!({"data":[{"title":"result"}]}));
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("config.json");
     std::fs::write(
@@ -212,7 +212,7 @@ fn native_search_forwards_raw_json_with_the_best_available_login() {
 
 #[test]
 fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("emp-config.json");
     // An empty model picker must be rejected; this success scenario needs one
@@ -305,7 +305,7 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
 
 #[test]
 fn quit_keeps_service_available_when_an_old_listener_lease_is_not_owned() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("emp-config.json");
     std::fs::write(&config, br#"{"auto_enable_on_start":false}"#).unwrap();
@@ -950,7 +950,7 @@ fn migration_export_confirmation_is_single_use_and_session_bound() {
 
 #[test]
 fn usage_labels_survive_removed_accounts_and_resolve_across_categories() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("config.json");
     std::fs::write(&config, b"{}").unwrap();
@@ -1030,7 +1030,7 @@ fn usage_labels_survive_removed_accounts_and_resolve_across_categories() {
 
 #[test]
 fn name_only_import_reuses_authenticated_account_and_language_changes_only_preference() {
-    let root_dir = tempfile::tempdir().unwrap();
+    let root_dir = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&root_dir);
     let config = root.join("config.json");
     std::fs::write(&config, b"{}").unwrap();

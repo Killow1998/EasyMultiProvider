@@ -4,10 +4,10 @@ use emp_config::{
     save_configuration, select_export_config,
 };
 use emp_storage::VaultStore;
+use emp_test_support::fixture_dir;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tempfile::tempdir;
 
 const TEST_KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
 const PASSWORD: &str = "migration-pass";
@@ -177,7 +177,7 @@ fn category_selection_matches_migration_groups() {
 
 #[test]
 fn export_encrypts_credentials_and_uses_portable_paths() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let path = root.join("source/config.json");
     let vault = vault(&root);
@@ -275,7 +275,7 @@ fn export_encrypts_credentials_and_uses_portable_paths() {
 
 #[test]
 fn omitted_categories_do_not_read_unselected_credentials() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let vault = vault(&root);
     let config = normalize_configuration(Some(&json!({

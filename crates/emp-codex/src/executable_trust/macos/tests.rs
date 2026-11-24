@@ -47,7 +47,7 @@ fn signature_verifier_fails_closed_on_missing_tool_failure_and_timeout() {
 
 #[test]
 fn authenticated_info_must_bind_the_exact_codex_engine() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let bundle = fixture(root.path());
     let executable = bundle.join(ENGINE_RELATIVE).canonicalize().unwrap();
     let info = bundle.join("Contents/Info.plist");
@@ -115,7 +115,7 @@ fn installed_macos_signed_bundle_launch() {
     command.arg("--version");
     assert!(run_verifier(&mut command, Duration::from_secs(5)));
 
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let unsigned = fixture(root.path());
     assert!(!verify_bundle(&unsigned, &unsigned.join(ENGINE_RELATIVE)));
 }

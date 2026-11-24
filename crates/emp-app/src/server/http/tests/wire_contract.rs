@@ -126,7 +126,7 @@ fn fixture_defaults_stay_under_config_root() {
     const OVERRIDE_MODEL: &str = "fixture-model-from-env";
     if let Some(unused_home) = std::env::var_os(UNUSED_HOME) {
         {
-            let directory = tempfile::tempdir().unwrap();
+            let directory = emp_test_support::fixture_dir().unwrap();
             let upstream = std::net::TcpListener::bind(LOOPBACK).unwrap();
             upstream.set_nonblocking(true).unwrap();
             let base_url = format!("http://{}/v1", upstream.local_addr().unwrap());
@@ -260,7 +260,7 @@ fn fixture_defaults_stay_under_config_root() {
         return;
     }
 
-    let parent = tempfile::tempdir().unwrap();
+    let parent = emp_test_support::fixture_dir().unwrap();
     let home = parent.path().join("unused");
     let registry = parent.path().join("official-models.json");
     std::fs::write(
@@ -385,7 +385,7 @@ fn management_json_and_error_responses() {
     const ACCOUNTS: &[u8] = br#"{"accounts":[],"claude_quota":null,"memory_routing_status":null,"native_account":{"auth_mode":"missing","credential_set":false,"hidden_models":[],"id":"@native","model_context_windows":{},"name":"Current Codex login","native":true,"prefix":"","quota":null},"provider_quotas":{},"refresh_errors":{}}"#;
     const TOO_LARGE: &[u8] = br#"{"error":{"code":"request_too_large","limit_bytes":5242880,"message":"request body is too large (EMP limit: 5242880 bytes)","reason":"hard_limit"}}"#;
     {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let config = directory.path().join("config.json");
         std::fs::write(&config, br#"{"language":"en"}"#).unwrap();
         Fixture::with_directory(directory).run_wire(async |fixture, address| {

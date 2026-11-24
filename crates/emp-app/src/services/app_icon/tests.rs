@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn saved_appearance_loads_without_touching_codex_or_provider_configuration() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let mut selection = Selection {
         preset: "custom".into(),
         png: Some(STANDARD.encode(DEFAULT_PNG)),

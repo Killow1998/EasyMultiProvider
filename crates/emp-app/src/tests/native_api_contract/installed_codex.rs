@@ -127,7 +127,7 @@ fn installed_codex_cancels_responses_lite_upstream_without_replaying_generation(
 }
 
 fn stream_control(native: bool, cancel: bool) {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("codex");
     std::fs::create_dir(&home).unwrap();

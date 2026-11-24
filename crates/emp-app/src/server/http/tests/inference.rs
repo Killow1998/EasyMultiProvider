@@ -232,7 +232,7 @@ pub(super) fn fixture(base: &str) -> Fixture {
 }
 
 fn fixture_directory(base: &str) -> tempfile::TempDir {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path();
     let config = root.join("config.json");
     let catalog = crate::services::configuration::fixture_native_catalog_path(&config);

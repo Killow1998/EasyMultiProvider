@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn cancelling_materialization_rolls_back_and_releases_the_cached_connection() {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let ledger = UsageLedger::new(
             root.path().join("usage.db"),
             Arc::new(PriceCatalog::new(root.path().join("prices.json"), 0.0)),
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn narrower_windows_read_cached_facts_and_extensions_read_only_missing_rows() {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let ledger = UsageLedger::new(
             root.path().join("usage.db"),
             Arc::new(PriceCatalog::new(root.path().join("prices.json"), 0.0)),

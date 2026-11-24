@@ -100,7 +100,7 @@ fn wide_path(path: &Path) -> Vec<u16> {
 
 #[test]
 fn legacy_inherited_key_is_protected_without_changing_key_or_credentials() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     set_private_directory(directory.path()).unwrap();
     let path = directory.path().join("master.key");
     let key = crate::FernetKey::generate();
@@ -128,7 +128,7 @@ fn legacy_inherited_key_is_protected_without_changing_key_or_credentials() {
 
 #[test]
 fn legacy_key_granting_another_principal_access_is_not_silently_repaired() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     set_private_directory(directory.path()).unwrap();
     let path = directory.path().join("master.key");
     let bytes = crate::FernetKey::generate().encoded().to_owned();

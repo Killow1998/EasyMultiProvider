@@ -125,7 +125,7 @@ mod tests {
         use crate::services::history::DestinationPrepareError;
         use crate::services::observation::request::{Phase, RequestObservation};
         for disabled in [false, true] {
-            let root = tempfile::tempdir().unwrap();
+            let root = emp_test_support::fixture_dir().unwrap();
             let path = root.path().canonicalize().unwrap();
             if disabled {
                 std::fs::write(path.join("logs"), "block journal directory").unwrap();

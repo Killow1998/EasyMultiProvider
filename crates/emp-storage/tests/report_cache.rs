@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 #[test]
 fn nested_periods_match_fresh_reports_and_database_writes_invalidate_both_projections() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("usage.db");
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 0.0));
     prices.replace(

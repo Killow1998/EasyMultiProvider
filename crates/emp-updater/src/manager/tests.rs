@@ -22,7 +22,7 @@ fn candidate_script(root: &std::path::Path, name: &str, body: &str) -> std::path
 #[cfg(unix)]
 #[test]
 fn candidate_version_probe_accepts_only_successful_exact_output() {
-    let root = tempfile::TempDir::new().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let valid = candidate_script(root.path(), "valid", "printf 'EMP 0.12.0\\n'");
     probe_candidate_version(
         &valid,
@@ -64,7 +64,7 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
 #[cfg(unix)]
 #[test]
 fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
-    let root = tempfile::TempDir::new().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     assert_eq!(
         probe_candidate_version(
             &root.path().join("missing"),
@@ -96,7 +96,7 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
 #[cfg(unix)]
 #[test]
 fn candidate_version_probe_times_out_and_reaps_the_child() {
-    let root = tempfile::TempDir::new().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let binary = candidate_script(root.path(), "slow", "exec sleep 60");
     let manager = UpdateManager::with_endpoints(
         std::env::current_exe().unwrap(),
@@ -138,7 +138,7 @@ fn candidate_version_probe_times_out_and_reaps_the_child() {
 fn candidate_version_probe_restores_error_mode_after_bad_image() {
     use windows_sys::Win32::System::Diagnostics::Debug::GetThreadErrorMode;
 
-    let root = tempfile::TempDir::new().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let binary = root.path().join("candidate.exe");
     std::fs::write(&binary, b"deliberately invalid executable").unwrap();
     // SAFETY: GetThreadErrorMode takes no arguments and reads only this thread.
@@ -271,7 +271,7 @@ fn nonce_random_source_failure_is_returned() {
 #[cfg(target_os = "linux")]
 #[test]
 fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let binary = root.path().join("EMP");
     std::fs::write(&binary, b"original executable").unwrap();
     let args = vec![
@@ -344,7 +344,7 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
 #[cfg(unix)]
 #[test]
 fn failed_candidate_launch_preserves_the_original_system_error_code() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let manager = UpdateManager::with_endpoints(
         std::env::current_exe().unwrap(),
         Vec::new(),
@@ -374,7 +374,7 @@ fn failed_candidate_launch_preserves_the_original_system_error_code() {
 fn dpkg_owned_install_requires_manual_migration_before_any_download() {
     use std::path::PathBuf;
 
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let query = candidate_script(
         directory.path(),
         "dpkg-query",

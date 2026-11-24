@@ -9,7 +9,7 @@ fn toggle_preserves_options_and_restores_the_original_feature() {
         "[features.async_compaction]\nenabled = false\nmodel_async_compact_threshold_percent = 73\n",
         "features = {async_compaction = {enabled = true, model_async_compact_threshold_percent = 71}}\n",
     ] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = emp_test_support::fixture_dir().unwrap();
         let config = temp.path().join("config.toml");
         std::fs::write(&config, original).unwrap();
         let manager = CodexPreferences::new(config.clone(), temp.path().join("lease.json"));
@@ -30,7 +30,7 @@ fn toggle_preserves_options_and_restores_the_original_feature() {
 
 #[test]
 fn restore_preserves_external_edits_and_unrelated_settings() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = emp_test_support::fixture_dir().unwrap();
     let config = temp.path().join("config.toml");
     std::fs::write(&config, "model = 'keep'\n").unwrap();
     let manager = CodexPreferences::new(config.clone(), temp.path().join("lease.json"));
@@ -51,7 +51,7 @@ fn restore_preserves_external_edits_and_unrelated_settings() {
 
 #[test]
 fn memory_defaults_follow_the_runtime_without_replacing_original_choices() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = emp_test_support::fixture_dir().unwrap();
     let config = temp.path().join("config.toml");
     let manager = CodexPreferences::new(config.clone(), temp.path().join("preferences.json"));
     assert_eq!(
@@ -86,7 +86,7 @@ fn memory_model_overrides_preserve_permissions_and_restore_both_original_models(
         "[memories]\ngenerate_memories = false\nuse_memories = false\nextract_model = 'original-extract' # Keep explanation\nconsolidation_model = 'original-consolidate'\n",
         "memories = {generate_memories = false, extract_model = 'original'}\n",
     ] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = emp_test_support::fixture_dir().unwrap();
         let config = temp.path().join("config.toml");
         std::fs::write(&config, original).unwrap();
         let manager = CodexPreferences::new(config.clone(), temp.path().join("preferences.json"));
@@ -145,7 +145,7 @@ fn memory_model_overrides_preserve_permissions_and_restore_both_original_models(
 
 #[test]
 fn a_prepared_toggle_can_restore_after_an_interrupted_write() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = emp_test_support::fixture_dir().unwrap();
     let config = temp.path().join("config.toml");
     std::fs::write(&config, "model = 'keep'\n").unwrap();
     let manager = CodexPreferences::new(config.clone(), temp.path().join("preferences.json"));
@@ -166,7 +166,7 @@ fn memory_stages_reset_independently_to_original_values_or_absence() {
         "[memories]\ngenerate_memories = false\nextract_model = 'gpt-original-extract' # Keep explanation\nconsolidation_model = 'gpt-original-consolidate'\n",
         "memories = {use_memories = false, extract_model = 'gpt-original'}\n",
     ] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = emp_test_support::fixture_dir().unwrap();
         let config = temp.path().join("config.toml");
         std::fs::write(&config, original).unwrap();
         let manager = CodexPreferences::new(config.clone(), temp.path().join("preferences.json"));

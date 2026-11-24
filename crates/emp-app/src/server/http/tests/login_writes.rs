@@ -179,7 +179,7 @@ async fn drain_updates(fixture: &Fixture) {
 }
 
 fn login_fixture() -> Fixture {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let config = root.join("config.json");
     let catalog = root.join("native.json");

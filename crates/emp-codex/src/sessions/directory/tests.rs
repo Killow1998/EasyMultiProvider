@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn unrelated_home_entries_do_not_hide_conversation_metadata() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("state_5.sqlite");
     let database = rusqlite::Connection::open(&path).unwrap();
     database
@@ -28,7 +28,7 @@ fn unrelated_home_entries_do_not_hide_conversation_metadata() {
 
 #[test]
 fn parent_metadata_handles_ephemeral_review_sidechat_and_nested_agents_read_only() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("state_5.sqlite");
     let database = rusqlite::Connection::open(&path).unwrap();
     database.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,source TEXT,thread_source TEXT);
@@ -74,7 +74,7 @@ fn parent_metadata_handles_ephemeral_review_sidechat_and_nested_agents_read_only
 
 #[test]
 fn conflicting_edges_and_cycles_do_not_create_fake_main_conversations() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let database = rusqlite::Connection::open(root.path().join("state_5.sqlite")).unwrap();
     database
         .execute_batch(

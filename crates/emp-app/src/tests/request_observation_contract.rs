@@ -452,7 +452,7 @@ fn websocket_rejection_and_success_have_separate_turn_ids_on_the_same_connection
 #[test]
 fn an_unavailable_journal_does_not_prevent_a_real_request_or_add_attempts() {
     let upstream = OneShotUpstream::start(chat_answer());
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = canonical_root(&root);
     std::fs::create_dir_all(path.join("state")).unwrap();
     std::fs::write(path.join("state/logs"), b"block journal directory").unwrap();

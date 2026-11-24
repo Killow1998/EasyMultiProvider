@@ -165,7 +165,7 @@ impl Drop for CatalogUpstream {
     }
 }
 pub(super) fn catalog_server(upstream: &CatalogUpstream) -> (TempDir, ServerHandle) {
-    let directory = tempfile::tempdir().expect("temp dir");
+    let directory = emp_test_support::fixture_dir().expect("temp dir");
     let root = canonical_root(&directory);
     let config_path = root.join("config.json");
     let native_path = root.join("codex").join("models_cache.json");
@@ -212,7 +212,7 @@ fn metadata_server_at(upstream: SocketAddr, policy: HttpClientPolicy) -> (TempDi
         .add_dns_override("generativelanguage.googleapis.com", upstream)
         .expect("Gemini DNS override");
     let client = HttpClient::with_config(policy, transport_config).expect("metadata HTTP client");
-    let directory = tempfile::tempdir().expect("metadata temp dir");
+    let directory = emp_test_support::fixture_dir().expect("metadata temp dir");
     let root = canonical_root(&directory);
     let config_path = root.join("config.json");
     let native_path = root.join("codex").join("models_cache.json");

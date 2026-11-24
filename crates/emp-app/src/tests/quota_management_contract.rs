@@ -7,7 +7,7 @@ fn native_catalog_model_reaches_the_native_transport_boundary() {
         "id":"resp_native_fixture","object":"response","status":"completed",
         "model":"gpt-native-fixture","output":[]
     }));
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let root = canonical_root(&directory);
     let catalog = root.join("models_cache.json");
     std::fs::write(
@@ -67,7 +67,7 @@ fn native_catalog_model_reaches_the_native_transport_boundary() {
 
 #[test]
 fn quota_events_are_bounded_authenticated_and_revision_driven() {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     std::fs::write(&config, b"{}").expect("write config");
     let server = ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config)
@@ -132,7 +132,7 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
 fn native_and_imported_quota_refresh_cross_the_management_boundary() {
     use std::os::unix::fs::PermissionsExt;
 
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let root = crate::tests::credential_root(&directory);
     let auth_path = root.join("auth.json");
     let original_auth = serde_json::to_vec(&json!({
@@ -568,7 +568,7 @@ for line in sys.stdin:
 fn quota_rate_limit_http_error_is_safe() {
     use std::os::unix::fs::PermissionsExt;
 
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let root = crate::tests::credential_root(&directory);
     let account_root = root.join("state").join("accounts");
     let auth_file = account_root.join("rate-limited").join("auth.json.enc");

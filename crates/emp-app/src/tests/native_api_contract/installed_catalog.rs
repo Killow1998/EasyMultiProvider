@@ -31,7 +31,7 @@ fn installed_codex_refreshes_originator_scoped_catalogs() {
 }
 
 fn online_catalog(localhost_only: bool, originator: &str, check_refresh: bool, service_name: &str) {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("codex");
     std::fs::create_dir(&home).unwrap();

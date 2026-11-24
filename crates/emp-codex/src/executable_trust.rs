@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn entries_owned_by_another_user_are_foreign_whatever_their_mode() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
+        let dir = emp_test_support::fixture_dir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let info = std::fs::metadata(dir.path()).unwrap();
         let owner = info.uid();

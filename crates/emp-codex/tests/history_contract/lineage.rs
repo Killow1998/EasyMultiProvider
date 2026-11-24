@@ -6,7 +6,7 @@ fn lineage_cycle_is_rejected() {
     // The rollout's session_meta history_base points at its own thread id:
     // the lineage walk revisits the same rollout and must fail closed
     // instead of looping.
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let child = write_rollout(
         directory.path(),
         &[
@@ -38,7 +38,7 @@ fn lineage_cycle_is_rejected() {
 
 #[test]
 fn frozen_lineage_byte_offset_is_enforced() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     // An ancestor truncated below the frozen byte offset must fail closed.
     // The ancestor is named <thread-id>.jsonl so the reader's filename
     // fallback resolves it without a threads row.
@@ -89,7 +89,7 @@ fn invalid_history_base_bounds_are_rejected() {
         json!({"thread_id":PARENT,"end_byte_offset":0}),
     ];
     for history_base in invalid_bases {
-        let directory = tempdir().unwrap();
+        let directory = fixture_dir().unwrap();
         let child = write_rollout(
             directory.path(),
             &[
@@ -110,7 +110,7 @@ fn invalid_history_base_bounds_are_rejected() {
 
 #[test]
 fn lineage_depth_has_a_distinct_failure_from_cycles() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let id = |index: usize| format!("01a00000-0000-7000-8000-{index:012x}");
     let child_parent = id(100);
     let child_meta = json!({"ordinal":0,"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated",
@@ -141,7 +141,7 @@ fn lineage_depth_has_a_distinct_failure_from_cycles() {
 
 #[test]
 fn ancestor_lookup_rejects_ambiguous_session_files() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let child = write_rollout(
         directory.path(),
         &[
@@ -172,7 +172,7 @@ fn ancestor_lookup_rejects_ambiguous_session_files() {
 fn ancestor_lookup_does_not_follow_session_symlinks() {
     use std::os::unix::fs::symlink;
 
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let child = write_rollout(
         directory.path(),
         &[
@@ -204,7 +204,7 @@ fn ancestor_lookup_does_not_follow_session_symlinks() {
 fn ancestor_database_path_rejects_symlinked_session_directories() {
     use std::os::unix::fs::symlink;
 
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let child = write_rollout(
         directory.path(),
         &[
@@ -245,7 +245,7 @@ fn ancestor_database_path_rejects_symlinked_session_directories() {
 fn ancestor_database_path_resolves_through_a_symlinked_codex_home() {
     use std::os::unix::fs::symlink;
 
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let real = directory.path().join("real");
     std::fs::create_dir_all(real.join("sessions")).unwrap();
     let home = directory.path().join("home");
@@ -302,7 +302,7 @@ fn frozen_prefix_replay_matches_full_on_the_same_plain_and_zstd_inputs() {
     let parent_bytes = jsonl_bytes(&parent_records);
 
     for compressed in [false, true] {
-        let directory = tempdir().unwrap();
+        let directory = fixture_dir().unwrap();
         let extension = if compressed { "jsonl.zst" } else { "jsonl" };
         let parent_path = directory
             .path()

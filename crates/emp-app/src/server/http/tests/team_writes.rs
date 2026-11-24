@@ -54,7 +54,7 @@ fn payload(owner: &str) -> SharePayload {
 }
 
 fn fixture(base: &str) -> Fixture {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let worker = format!(
         r#"
 while read -r line; do

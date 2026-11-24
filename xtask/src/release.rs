@@ -209,14 +209,14 @@ mod tests {
 
     #[test]
     fn validation_accepts_a_complete_matching_set() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         complete_set(directory.path());
         validate("v0.12.2", directory.path(), "0.12.2").unwrap();
     }
 
     #[test]
     fn validation_fails_closed() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         complete_set(directory.path());
         assert!(
             validate("v0.12.1", directory.path(), "0.12.2")

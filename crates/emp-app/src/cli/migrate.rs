@@ -231,7 +231,7 @@ mod tests {
     use serde_json::json;
 
     fn setup() -> (tempfile::TempDir, PathBuf, PathBuf) {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let source = root.path().join("old/EasyMultiProvider");
         let target = root.path().join("config/easy-multi-provider");
         fs::create_dir_all(source.join("state/secrets")).unwrap();

@@ -15,7 +15,7 @@ fn assert_original(actual: &str) {
 }
 
 fn fixture() -> (tempfile::TempDir, ServerHandle) {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let codex = root.join("codex");
     std::fs::create_dir(&codex).unwrap();

@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn missing_icon_fails_before_writing_a_script() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let destination = directory.path().join("resources");
         assert!(
             write_resource_script(

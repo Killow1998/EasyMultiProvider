@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn unavailable_journal_and_mismatches_never_change_or_repeat_execution() {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let blocked = root.path().join("not-a-directory");
         std::fs::write(&blocked, b"fixture").unwrap();
         let diagnostics = Arc::new(Diagnostics::new(&blocked));

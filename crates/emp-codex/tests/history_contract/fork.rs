@@ -6,7 +6,7 @@ fn duplicate_exact_compaction_is_ambiguous() {
     // Fork replay matches the anchor's exact compaction ciphertext against
     // every parent record; two matches mean the boundary is ambiguous and
     // must fail closed rather than pick one.
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let duplicated = json!({"ordinal":900,"type":"compacted","payload":{"message":"","window_number":1,
     "replacement_history":[
         {"type":"compaction","encrypted_content":"abc"},
@@ -81,7 +81,7 @@ fn ordinal_only_ancestor_never_seeds_from_a_post_fork_checkpoint() {
     // A `history_base` without `end_byte_offset` bounds the ancestor by
     // ordinal alone; a compaction the parent wrote after the fork must not
     // become the child's inherited history.
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let parent_path = directory
         .path()
         .join(format!("sessions/2026/09/27/{PARENT}.jsonl"));
@@ -118,7 +118,7 @@ fn ordinal_only_ancestor_never_seeds_from_a_post_fork_checkpoint() {
 fn child_opaque_checkpoint_resolves_against_inherited_history_on_both_paths() {
     // An opaque child checkpoint resolves against the merged lineage
     // history; the reverse base alone cannot see the inherited items.
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let parent_path = directory
         .path()
         .join(format!("sessions/2026/09/27/{PARENT}.jsonl"));

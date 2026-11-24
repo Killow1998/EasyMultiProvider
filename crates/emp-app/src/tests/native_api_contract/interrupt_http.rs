@@ -91,7 +91,7 @@ fn steering_cancels_native_fallback_and_external_http_then_accepts_the_next_turn
                 }
             }
         });
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let config = canonical_root(&directory).join("config.json");
         let (_native_directory, server) = if native {
             let (directory, server) = native_alias_server(&format!("http://{address}/v1"));

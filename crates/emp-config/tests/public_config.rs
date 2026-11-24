@@ -44,7 +44,7 @@ fn regular_file(path: &Path) -> bool {
 
 #[test]
 fn browser_projection_redacts_credentials_and_preserves_safe_state() {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let root = directory.path().canonicalize().expect("canonical root");
     let secret_file = root.join("managed.key");
     std::fs::write(&secret_file, b"never expose this").expect("secret fixture");
@@ -81,7 +81,7 @@ fn browser_projection_redacts_credentials_and_preserves_safe_state() {
 fn browser_projection_does_not_count_a_symlink_as_a_managed_secret() {
     use std::os::unix::fs::symlink;
 
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let root = directory.path().canonicalize().expect("canonical root");
     let target = root.join("target.key");
     let link = root.join("link.key");

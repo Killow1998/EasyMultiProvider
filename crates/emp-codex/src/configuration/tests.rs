@@ -3,7 +3,7 @@ use std::fs;
 
 #[test]
 fn enable_preserves_unmanaged_toml_style_and_restore_is_exact_for_fields() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let config = directory.path().join("config.toml");
     let lease = directory.path().join("state/lease.json");
     fs::write(&config,"# keep\nopenai_base_url   = \"native\"  # inline\ntitle = \"keep\"\n[nested]\nopenai_base_url = \"nested\"\n").unwrap();

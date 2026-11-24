@@ -190,7 +190,7 @@ pub(crate) fn app_server_for(
     upstream: &RealtimeUpstream,
     native_auth: &Path,
 ) -> (TempDir, ServerHandle) {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let app_config = canonical_root(&directory).join("config.json");
     std::fs::write(
         &app_config,
@@ -213,7 +213,7 @@ pub(crate) fn app_server_for(
 
 #[test]
 fn live_call_forwards_the_native_session_over_real_http() {
-    let directory = tempfile::tempdir().expect("fixture root");
+    let directory = emp_test_support::fixture_dir().expect("fixture root");
     let native_auth = canonical_root(&directory).join("codex/auth.json");
     std::fs::create_dir_all(native_auth.parent().unwrap()).expect("native auth directory");
     std::fs::write(
@@ -278,7 +278,7 @@ fn live_call_forwards_the_native_session_over_real_http() {
 
 #[test]
 fn live_call_preserves_non_success_redirect_without_retry() {
-    let directory = tempfile::tempdir().expect("fixture root");
+    let directory = emp_test_support::fixture_dir().expect("fixture root");
     let native_auth = canonical_root(&directory).join("codex/auth.json");
     std::fs::create_dir_all(native_auth.parent().unwrap()).expect("native auth directory");
     std::fs::write(
@@ -346,7 +346,7 @@ fn live_call_preserves_upstream_auth_error_and_clarifies_empty_unsupported_error
             Some("native_realtime_unsupported"),
         ),
     ] {
-        let directory = tempfile::tempdir().expect("fixture root");
+        let directory = emp_test_support::fixture_dir().expect("fixture root");
         let native_auth = canonical_root(&directory).join("codex/auth.json");
         std::fs::create_dir_all(native_auth.parent().unwrap()).expect("native auth directory");
         std::fs::write(
@@ -382,7 +382,7 @@ fn live_call_preserves_upstream_auth_error_and_clarifies_empty_unsupported_error
 
 #[test]
 fn live_success_requires_location_before_sideband_can_start() {
-    let directory = tempfile::tempdir().expect("fixture root");
+    let directory = emp_test_support::fixture_dir().expect("fixture root");
     let native_auth = canonical_root(&directory).join("codex/auth.json");
     std::fs::create_dir_all(native_auth.parent().unwrap()).expect("native auth directory");
     std::fs::write(
@@ -427,7 +427,7 @@ fn live_success_requires_location_before_sideband_can_start() {
 
 #[test]
 fn live_caller_auth_is_checked_before_upstream_connect() {
-    let directory = tempfile::tempdir().expect("fixture root");
+    let directory = emp_test_support::fixture_dir().expect("fixture root");
     let native_auth = canonical_root(&directory).join("codex/auth.json");
     std::fs::create_dir_all(native_auth.parent().unwrap()).expect("native auth directory");
     std::fs::write(
@@ -461,7 +461,7 @@ fn live_caller_auth_is_checked_before_upstream_connect() {
 
 #[test]
 fn live_call_rejects_duplicate_framing_and_media_headers() {
-    let directory = tempfile::tempdir().expect("fixture root");
+    let directory = emp_test_support::fixture_dir().expect("fixture root");
     let native_auth = canonical_root(&directory).join("codex/auth.json");
     std::fs::create_dir_all(native_auth.parent().unwrap()).expect("native auth directory");
     std::fs::write(
@@ -501,7 +501,7 @@ fn live_call_rejects_duplicate_framing_and_media_headers() {
 
 #[test]
 fn live_reports_missing_native_auth_after_caller_authentication() {
-    let directory = tempfile::tempdir().expect("fixture root");
+    let directory = emp_test_support::fixture_dir().expect("fixture root");
     let native_auth = canonical_root(&directory).join("codex/auth.json");
     std::fs::create_dir_all(native_auth.parent().unwrap()).expect("native auth directory");
     let upstream = RealtimeUpstream::start(UpstreamResponse {

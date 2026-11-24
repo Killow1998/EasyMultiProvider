@@ -187,7 +187,7 @@ fn responses_websocket_streams_first_external_event_and_cancels_on_disconnect() 
         };
         closed_sender.send(ended).unwrap();
     });
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("config.json");
     std::fs::write(

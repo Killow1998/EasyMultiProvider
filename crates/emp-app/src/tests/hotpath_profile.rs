@@ -39,7 +39,7 @@ fn response(server: &ServerHandle, body: &[u8]) -> String {
 #[ignore = "explicit local profiling workload; no live models or credentials"]
 #[hotpath::main(percentiles = [50, 95, 99])]
 fn isolated_hotpath_workload() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let native_path = root.join("codex/auth.json");
     std::fs::create_dir_all(native_path.parent().unwrap()).unwrap();

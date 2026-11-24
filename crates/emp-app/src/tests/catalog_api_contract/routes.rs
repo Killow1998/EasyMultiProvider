@@ -417,7 +417,7 @@ fn metadata_finishes_admitted_upstream_work_after_the_client_disconnects() {
 
 #[test]
 fn calls_sse_preserves_events_after_http_framing() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let server = ServerHandle::start_for_test(
         Ipv4Addr::LOCALHOST.into(),

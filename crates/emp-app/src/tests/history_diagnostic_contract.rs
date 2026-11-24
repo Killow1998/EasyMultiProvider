@@ -166,7 +166,7 @@ fn history_failures_match_across_http_compact_sse_and_websocket() {
 fn missing_summary_output_is_distinct_from_history_lookup_and_does_not_retry() {
     let upstream = OneShotUpstream::start(json!({"id":"fixture", "choices":[{"index":0,
         "message":{"role":"assistant","content":""}, "finish_reason":"stop"}]}));
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("config.json");
     std::fs::write(&config, json!({

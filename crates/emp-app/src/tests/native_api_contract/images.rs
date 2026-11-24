@@ -54,7 +54,7 @@ fn shared_image_account_401_never_enters_credential_refresh() {
 #[test]
 fn image_credit_uses_the_project_key_and_stops_dispatch_at_the_local_limit() {
     let upstream = super::vertex::VertexFixture::start_for("api.openai.com");
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = crate::tests::credential_root(&directory);
     let home = root.join("codex");
     std::fs::create_dir_all(&home).unwrap();

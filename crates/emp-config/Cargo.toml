@@ -26,5 +26,6 @@ zeroize = "1.9"
 url = "2.5.7"
 
 [dev-dependencies]
+emp-test-support = { path = "../emp-test-support" }
 serde = { workspace = true }
 tempfile = "3.27"

@@ -1,8 +1,8 @@
 use emp_config::{account_auth_path, canonicalize_private_paths, normalize_configuration};
+use emp_test_support::fixture_dir;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tempfile::tempdir;
 
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -72,7 +72,7 @@ fn private_paths_match_frozen_fixture() {
         if case["platform"] == "unix" && cfg!(not(unix)) {
             continue;
         }
-        let directory = tempdir().expect("temporary case directory");
+        let directory = fixture_dir().expect("temporary case directory");
         let root = canonical_temp_path(&directory);
         let config_path = create_case(&root, case);
         let mut config = normalize_configuration(Some(&case["config"]))
@@ -123,7 +123,7 @@ fn private_paths_match_frozen_fixture() {
 
 #[test]
 fn account_auth_path_uses_config_parent_and_rejects_unsafe_ids() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = canonical_temp_path(&directory);
     let config_path = root.join("configuration/config.json");
     let config = json!({"account_store_path": "managed/accounts"});

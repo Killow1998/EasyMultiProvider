@@ -29,7 +29,7 @@ fn manager(root: &std::path::Path, base: &str, version: &str) -> UpdateManager {
 
 #[test]
 fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
-    let root = tempfile::TempDir::new().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let mut oversized_cache: serde_json::Value =
@@ -152,7 +152,7 @@ fn cached_release_survives_restart_revalidation_edits_and_failed_checks() {
 
 #[test]
 fn not_modified_without_cached_metadata_is_rejected() {
-    let root = tempfile::TempDir::new().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = thread::spawn(move || {
@@ -173,7 +173,7 @@ fn not_modified_without_cached_metadata_is_rejected() {
 #[test]
 fn stable_history_spans_pages_survives_304_and_tracks_the_installed_version() {
     use serde_json::{Value, json};
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let mut first = (0..97)

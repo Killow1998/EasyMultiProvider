@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn startup_migrates_active_v2_native_lease_and_restores_user_sideband() {
     for has_catalog in [false, true] {
-        let directory = tempfile::tempdir().expect("temporary directory");
+        let directory = emp_test_support::fixture_dir().expect("temporary directory");
         let root = canonical_root(&directory);
         let app_config = root.join("config.json");
         let codex_home = root.join("codex");
@@ -92,7 +92,7 @@ fn startup_migrates_active_v2_native_lease_and_restores_user_sideband() {
 #[test]
 fn startup_activates_a_clean_native_configuration_by_default_and_respects_opt_out() {
     for enabled in [None, Some(false), Some(true)] {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let root = canonical_root(&directory);
         let catalog = root.join("catalog.json");
         std::fs::write(&catalog, br#"{"models":[{"slug":"example-native","visibility":"list","supported_in_api":true}]}"#).unwrap();

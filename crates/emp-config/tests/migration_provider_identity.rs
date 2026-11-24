@@ -1,9 +1,9 @@
 use emp_config::migration::preview_migration_import;
 use emp_config::normalize_configuration;
 use emp_storage::VaultStore;
+use emp_test_support::fixture_dir;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use tempfile::tempdir;
 
 fn package(url: &str, key: &str) -> Value {
     json!({"schema":"easy-multi-provider-migration","version":1,
@@ -15,7 +15,7 @@ fn package(url: &str, key: &str) -> Value {
 
 #[test]
 fn provider_id_collision_requires_verified_url_and_nonempty_key() {
-    let root = tempdir().unwrap();
+    let root = fixture_dir().unwrap();
     let path = root.path().join("config.json");
     let vault = VaultStore::from_sources(
         Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
@@ -100,7 +100,7 @@ fn provider_id_collision_requires_verified_url_and_nonempty_key() {
 
 #[test]
 fn verified_connection_merges_even_when_local_ids_differ() {
-    let root = tempdir().unwrap();
+    let root = fixture_dir().unwrap();
     let path = root.path().join("config.json");
     let vault = VaultStore::from_sources(
         Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),

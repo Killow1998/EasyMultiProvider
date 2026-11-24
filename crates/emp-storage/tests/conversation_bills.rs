@@ -43,7 +43,7 @@ fn main_conversation(scope: &mut SessionScope, id: &str) {
 
 #[test]
 fn conversation_bills_include_related_work_without_changing_frozen_totals() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     prices.replace(
         json!({"priced":{"input_cost_per_token":"0.000001",
@@ -180,7 +180,7 @@ fn conversation_bills_include_related_work_without_changing_frozen_totals() {
 
 #[test]
 fn inherited_events_are_billed_once_only_when_all_copies_agree_on_a_conversation() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let ledger = UsageLedger::new(
         root.path().join("usage.sqlite3"),
         Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0)),

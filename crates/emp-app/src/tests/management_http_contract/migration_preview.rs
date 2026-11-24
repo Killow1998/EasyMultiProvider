@@ -9,7 +9,7 @@ fn json_body(response: &str) -> Value {
 #[test]
 fn duplicate_preferences_are_resolved_before_atomic_import_and_native_identity_changes_reject_stale_choices()
  {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let path = root.join("config.json");
     let native = root.join("auth.json");
@@ -128,7 +128,7 @@ fn duplicate_preferences_are_resolved_before_atomic_import_and_native_identity_c
 
 #[test]
 fn auth_only_import_inherits_native_preferences_and_reimport_keeps_one_reference() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let path = root.join("config.json");
     let native = root.join("auth.json");
@@ -164,7 +164,7 @@ fn auth_only_import_inherits_native_preferences_and_reimport_keeps_one_reference
 
 #[test]
 fn selected_migration_previews_redact_credentials_and_commit_only_selected_names() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let path = root.join("config.json");
     std::fs::write(&path,serde_json::to_vec(&json!({"auto_enable_on_start":false,"providers":[
@@ -272,7 +272,7 @@ fn selected_migration_previews_redact_credentials_and_commit_only_selected_names
 
 #[test]
 fn demo_migration_cannot_commit_and_preview_cache_eviction_requires_reopen() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let path = root.join("config.json");
     std::fs::write(&path, b"{\"auto_enable_on_start\":false}").unwrap();

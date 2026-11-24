@@ -1,4 +1,14 @@
-use std::{sync::OnceLock, time::Duration};
+use std::{path::PathBuf, sync::OnceLock, time::Duration};
+
+pub fn fixture_root() -> PathBuf {
+    std::env::var_os("EMP_TEST_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+pub fn fixture_dir() -> std::io::Result<tempfile::TempDir> {
+    tempfile::tempdir_in(fixture_root())
+}
 
 pub fn test_timeout(duration: Duration) -> Duration {
     static SCALE: OnceLock<f64> = OnceLock::new();

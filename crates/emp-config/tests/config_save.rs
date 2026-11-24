@@ -4,11 +4,11 @@ use emp_config::{
 };
 use emp_files::{FilesystemError, with_file_transaction};
 use emp_storage::VaultStore;
+use emp_test_support::fixture_dir;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tempfile::tempdir;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -37,7 +37,7 @@ fn root(directory: &tempfile::TempDir) -> PathBuf {
 
 #[test]
 fn config_save_round_trips_and_manages_derived_secrets() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let path = root.join("nested/config.json");
     let vault =
@@ -105,7 +105,7 @@ fn config_save_round_trips_and_manages_derived_secrets() {
 
 #[test]
 fn provider_credentials_are_hydrated_request_locally_and_fail_closed() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let vault =
         VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store");
@@ -141,7 +141,7 @@ fn provider_credentials_are_hydrated_request_locally_and_fail_closed() {
 
 #[test]
 fn config_save_preserves_masked_files_and_cleans_removed_providers() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let path = root.join("configuration/config.json");
     let vault =
@@ -195,7 +195,7 @@ fn config_save_preserves_masked_files_and_cleans_removed_providers() {
 
 #[test]
 fn caller_owned_transaction_rolls_back_config_and_secret_files() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let path = root.join("configuration/config.json");
     let vault =
@@ -249,7 +249,7 @@ fn caller_owned_transaction_rolls_back_config_and_secret_files() {
 #[test]
 fn save_uses_config_path_environment_without_reloading_vault() {
     let _lock = ENV_LOCK.lock().expect("environment lock");
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let configured = root.join("configured/config.json");
     let vault =

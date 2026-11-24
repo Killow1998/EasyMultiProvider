@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn creates_and_reuses_a_url_safe_session() {
-        let directory = tempfile::tempdir().expect("temporary directory");
+        let directory = emp_test_support::fixture_dir().expect("temporary directory");
         let path = directory
             .path()
             .canonicalize()
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn rotates_invalid_expired_and_too_distant_state() {
-        let directory = tempfile::tempdir().expect("temporary directory");
+        let directory = emp_test_support::fixture_dir().expect("temporary directory");
         let path = directory
             .path()
             .canonicalize()
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn validates_cookie_and_max_age_without_exposing_token_in_debug() {
-        let directory = tempfile::tempdir().expect("temporary directory");
+        let directory = emp_test_support::fixture_dir().expect("temporary directory");
         let path = directory
             .path()
             .canonicalize()

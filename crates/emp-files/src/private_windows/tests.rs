@@ -29,7 +29,7 @@ fn set_test_acl(path: &Path, acl: &LocalAllocation, protected: bool) {
 
 #[test]
 fn applies_and_validates_a_current_user_only_file_acl() {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     set_private_directory(directory.path()).expect("private directory ACL");
     let path = directory.path().join("private.txt");
     let file = File::create(path).expect("create file");
@@ -39,7 +39,7 @@ fn applies_and_validates_a_current_user_only_file_acl() {
 
 #[test]
 fn private_state_writes_do_not_require_write_owner_from_the_existing_owner() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     set_private_directory(directory.path()).unwrap();
     let user = CurrentUser::load().unwrap();
     let acl = private_acl(user.sid(), true).unwrap();
@@ -74,7 +74,7 @@ fn private_state_writes_do_not_require_write_owner_from_the_existing_owner() {
 
 #[test]
 fn detects_directory_reparse_points() {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let target = directory.path().join("target");
     let link = directory.path().join("link");
     fs::create_dir(&target).expect("target directory");

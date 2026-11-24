@@ -83,7 +83,7 @@ fn normalize_clients(reply: Vec<u8>) -> Vec<u8> {
 }
 
 fn fixture_with_decision() -> Fixture {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     install_panel_fixture(directory.path(), Module::Decision, "fixture panel");
     Fixture::with_directory(directory)
 }

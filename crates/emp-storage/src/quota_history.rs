@@ -617,7 +617,7 @@ mod period_tests {
 
     #[test]
     fn long_periods_are_thinned_and_keep_the_plan_in_effect() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let store = QuotaHistoryStore::new(directory.path().join("history.sqlite3"));
         let day = 24 * 60 * 60;
         let start = 1_000_000 * SAMPLE_INTERVAL_SECONDS;

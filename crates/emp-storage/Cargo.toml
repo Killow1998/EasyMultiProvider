@@ -35,4 +35,5 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization"] }
 
 [dev-dependencies]
+emp-test-support = { path = "../emp-test-support" }
 tempfile = "3.27"

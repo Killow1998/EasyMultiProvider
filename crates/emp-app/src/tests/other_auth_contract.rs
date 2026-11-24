@@ -14,7 +14,7 @@ struct QuotaFixture {
 
 impl QuotaFixture {
     fn start(source: Option<&str>) -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let root = credential_root(&directory);
         let config_path = root.join("config.json");
         let auth_path = root.join("state/accounts/demo/auth.json.enc");

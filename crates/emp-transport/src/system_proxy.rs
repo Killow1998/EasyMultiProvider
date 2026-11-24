@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn windows_registry_tool_uses_absolute_systemroot_path_with_spaces() {
-        let root = std::env::temp_dir().join("EMP Windows Root");
+        let root = emp_test_support::fixture_root().join("EMP Windows Root");
         let tool = windows_registry_tool_path(Some(root.as_os_str())).expect("absolute root");
         assert!(tool.starts_with(&root));
         assert_eq!(

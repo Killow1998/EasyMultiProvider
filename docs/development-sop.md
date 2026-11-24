@@ -64,6 +64,25 @@ cargo +1.93.1 test --locked -p emp-codex --test history_contract
 
 生产期限断言使用原始期限。需要给测试夹具留出余量时，只对余量调用 `test_timeout`。
 
+Rust 测试用 `emp_test_support::fixture_dir` 创建普通临时目录。需要自定义前缀时，
+把 `emp_test_support::fixture_root()` 传给 `tempdir_in`。默认使用系统临时目录，
+`EMP_TEST_TMPDIR` 可指定一个已存在的目录。可信可执行路径、短 Unix socket 路径和
+同卷操作测试继续按各自的路径契约选择目录。`xtask check` 的
+`test-fixture-root` 检查会拒绝普通测试直接调用 `tempfile::tempdir()` 或
+`TempDir::new()` 等使用默认目录的构造入口。
+
+Linux 本机可以在支持执行权限的 tmpfs（如 ajmy 的 `/dev/shm`）创建私有短路径，
+在测试结束后清理该目录。
+
+```sh
+fixture_root=$(mktemp -d /dev/shm/emp.XXXXXX)
+EMP_TEST_TMPDIR="$fixture_root" cargo +1.93.1 test --locked -p emp-app
+rmdir "$fixture_root"
+```
+
+在 ajmy 上先创建同类目录，再从本机传入其远程绝对路径，例如
+`ajmy-cargo.sh test --locked -p emp-app --config 'env.EMP_TEST_TMPDIR="/dev/shm/emp.ABC123"'`。
+
 Unix 可执行夹具用 `emp_test_support::write_executable`。子进程必须写完并关闭文件后，测试才能执行它。由测试进程直接写入时，并行测试的 `fork` 可能继承尚未关闭的写描述符，导致执行失败并返回 `ETXTBSY`。
 
 模组真实进程验收固定入口为 `cargo xtask module-e2e`（Unix）：先设置

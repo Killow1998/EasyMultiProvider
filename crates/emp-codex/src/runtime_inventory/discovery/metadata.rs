@@ -55,7 +55,7 @@ mod tests {
     use super::*;
     #[test]
     fn outer_app_and_editor_metadata_are_distinct_from_engine() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = emp_test_support::fixture_dir().unwrap();
         let bundle = dir.path().join("ChatGPT.app");
         std::fs::create_dir_all(bundle.join("Contents")).unwrap();
         std::fs::write(bundle.join("Contents/Info.plist"), "<plist version=\"1.0\"><dict><key>CFBundleShortVersionString</key><string>26.924.22138</string></dict></plist>").unwrap();

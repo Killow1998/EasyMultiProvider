@@ -180,7 +180,6 @@ mod tests {
     use std::io::Write;
     use std::path::Path;
     use tar::{Builder, EntryType, Header};
-    use tempfile::TempDir;
 
     fn archive_path(root: &Path, name: &str) -> std::path::PathBuf {
         root.join(name)
@@ -196,7 +195,7 @@ mod tests {
 
     #[test]
     fn rejects_traversal_archive_entries() {
-        let temp = TempDir::new().unwrap();
+        let temp = emp_test_support::fixture_dir().unwrap();
         let archive = archive_path(temp.path(), "traversal.tar.gz");
         let mut encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::default());
         let mut header = Header::new_gnu();
@@ -226,7 +225,7 @@ mod tests {
 
     #[test]
     fn rejects_symlink_archive_entries() {
-        let temp = TempDir::new().unwrap();
+        let temp = emp_test_support::fixture_dir().unwrap();
         let archive = archive_path(temp.path(), "symlink.tar.gz");
         let encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::default());
         let mut builder = Builder::new(encoder);
@@ -246,7 +245,7 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_archive_paths() {
-        let temp = TempDir::new().unwrap();
+        let temp = emp_test_support::fixture_dir().unwrap();
         let archive = archive_path(temp.path(), "duplicate.tar.gz");
         let encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::default());
         let mut builder = Builder::new(encoder);
@@ -261,7 +260,7 @@ mod tests {
 
     #[test]
     fn rejects_declared_archive_size_over_limit_before_reading_content() {
-        let temp = TempDir::new().unwrap();
+        let temp = emp_test_support::fixture_dir().unwrap();
         let archive = archive_path(temp.path(), "oversized.tar.gz");
         let mut encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::default());
         let mut header = Header::new_gnu();

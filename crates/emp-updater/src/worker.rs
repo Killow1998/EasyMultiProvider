@@ -297,7 +297,7 @@ mod windows_tests {
 
     #[test]
     fn ready_marker_accepts_canonical_windows_job_and_installation_paths() {
-        let root = tempfile::TempDir::new().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let target = root.path().join("EMP.exe");
         std::fs::write(&target, b"candidate").unwrap();
         let job = root.path().join(".emp-update-ready-test");
@@ -327,11 +327,10 @@ mod tests {
     use super::run;
     use crate::process::created;
     use emp_test_support::write_executable;
-    use tempfile::TempDir;
 
     #[test]
     fn stale_birth_time_for_a_live_pid_does_not_block_replacement() {
-        let root = TempDir::new().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let target = root.path().join("EMP");
         std::fs::write(&target, b"old executable").unwrap();
         let job = root.path().join(".emp-update-pid-reuse-test");

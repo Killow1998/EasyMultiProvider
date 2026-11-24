@@ -22,7 +22,7 @@ fn write(path: &Path, events: &[Value]) {
 
 #[test]
 fn parallel_intervals_are_unioned_deduplicated_and_refreshed_without_changing_sources() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("rollout.jsonl");
     let database = root.path().join("state_5.sqlite");
     let connection = rusqlite::Connection::open(&database).unwrap();
@@ -52,7 +52,7 @@ fn parallel_intervals_are_unioned_deduplicated_and_refreshed_without_changing_so
     events.push(tool("three", 7000, 8000));
     write(&path, &events);
     assert_eq!(reader.resolve(root.path(), &queries)[&queries[0]], 6000);
-    let outside = tempfile::NamedTempFile::new().unwrap();
+    let outside = tempfile::NamedTempFile::new_in(emp_test_support::fixture_root()).unwrap();
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute(
@@ -65,7 +65,7 @@ fn parallel_intervals_are_unioned_deduplicated_and_refreshed_without_changing_so
 
 #[test]
 fn missing_invalid_or_foreign_client_timing_is_unknown_instead_of_zero() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("rollout.jsonl");
     let mut missing = tool("one", 1000, 2000);
     missing["payload"]

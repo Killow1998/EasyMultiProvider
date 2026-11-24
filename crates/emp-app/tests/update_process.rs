@@ -11,7 +11,6 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
 
 static EMP_STARTUP_FIXTURE: Mutex<()> = Mutex::new(());
 
@@ -697,7 +696,7 @@ fn start_authenticated_emp_with_api(
 
 #[test]
 fn fake_release_http_install_replaces_running_process_and_preserves_config() {
-    let temp = TempDir::new().unwrap();
+    let temp = emp_test_support::fixture_dir().unwrap();
     let package = create_package(temp.path());
     let digest = format!("{:x}", Sha256::digest(&package));
     let (repository, release_server) =
@@ -978,7 +977,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
             "check_failed",
         ),
     ] {
-        let root = TempDir::new().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let case = root.path().join(name);
         std::fs::create_dir(&case).unwrap();
         let (repository, server) =
@@ -1008,7 +1007,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         stop_emp(&mut emp);
     }
 
-    let root = TempDir::new().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let case = root.path().join("connection");
     std::fs::create_dir(&case).unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -1032,7 +1031,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
     );
     stop_emp(&mut emp);
 
-    let root = TempDir::new().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let case = root.path().join("truncated-response");
     std::fs::create_dir(&case).unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -1092,7 +1091,7 @@ fn package_http_and_checksum_failures_preserve_the_running_installation() {
             "checksum_mismatch",
         ),
     ] {
-        let root = TempDir::new().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let case = root.path().join(name);
         std::fs::create_dir(&case).unwrap();
         let package = if matches!(mode, FakeReleaseMode::PackageError) {
@@ -1130,7 +1129,7 @@ fn package_http_and_checksum_failures_preserve_the_running_installation() {
 
 #[test]
 fn malicious_symlink_package_is_rejected_before_replacement() {
-    let temp = TempDir::new().unwrap();
+    let temp = emp_test_support::fixture_dir().unwrap();
     let package = create_symlink_package(temp.path());
     let (repository, server) = release_server(package);
     let mut emp = start_authenticated_emp(temp.path(), &repository, false);
@@ -1160,7 +1159,7 @@ fn malicious_symlink_package_is_rejected_before_replacement() {
 
 #[test]
 fn worker_ready_failure_reopens_gate_and_reports_error() {
-    let temp = TempDir::new().unwrap();
+    let temp = emp_test_support::fixture_dir().unwrap();
     let package = create_package(temp.path());
     let (repository, server) = release_server(package);
     let mut emp = start_authenticated_emp(temp.path(), &repository, true);
@@ -1224,7 +1223,7 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
 
 #[test]
 fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
-    let temp = TempDir::new().unwrap();
+    let temp = emp_test_support::fixture_dir().unwrap();
     let package = create_failing_package(temp.path());
     let (repository, server) = release_server(package);
     let mut emp = start_authenticated_emp(temp.path(), &repository, false);

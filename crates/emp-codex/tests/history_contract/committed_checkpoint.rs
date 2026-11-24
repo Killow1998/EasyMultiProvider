@@ -26,7 +26,7 @@ fn failed_turn_checkpoint() -> Vec<Value> {
 #[test]
 fn model_switch_recovers_exact_committed_checkpoint_from_a_failed_turn() {
     for compressed in [false, true] {
-        let directory = tempdir().unwrap();
+        let directory = fixture_dir().unwrap();
         let records = failed_turn_checkpoint();
         let path = if compressed {
             write_zstd(
@@ -150,7 +150,7 @@ fn committed_checkpoint_recovery_does_not_reuse_an_older_summary() {
 
 #[test]
 fn committed_child_checkpoint_recovery_preserves_inherited_history() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let parent_path = directory
         .path()
         .join(format!("sessions/2026/09/27/{PARENT}.jsonl"));
@@ -188,7 +188,7 @@ fn committed_child_checkpoint_recovery_preserves_inherited_history() {
 
 #[test]
 fn inherited_committed_checkpoint_recovery_stops_at_the_fork() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let parent_path = directory
         .path()
         .join(format!("sessions/2026/09/27/{PARENT}.jsonl"));

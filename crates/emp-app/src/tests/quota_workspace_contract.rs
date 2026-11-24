@@ -10,7 +10,7 @@ use std::net::{IpAddr, Ipv4Addr};
 fn workspace_routing_error_retries_imported_once_and_never_refreshes_native() {
     use std::os::unix::fs::PermissionsExt;
 
-    let directory = tempfile::tempdir().expect("quota workspace temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("quota workspace temporary directory");
     let root = credential_root(&directory);
     let account_root = root.join("state/accounts");
     let native_auth_path = root.join("codex/auth.json");

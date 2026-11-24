@@ -479,7 +479,7 @@ fn websocket_completion_log_follows_session_close_and_includes_idle_time() {
 }
 
 pub(super) fn realtime_fixture(upstream: &RealtimeUpstream) -> (tempfile::TempDir, Fixture) {
-    let native = tempfile::tempdir().unwrap();
+    let native = emp_test_support::fixture_dir().unwrap();
     let auth = native.path().join("auth.json");
     std::fs::write(
         &auth,
@@ -701,7 +701,7 @@ fn sideband_upgrade_preserves_raw_relay_and_tcp_half_close() {
 }
 
 pub(super) fn native_fixture(address: SocketAddr) -> Fixture {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let config = directory.path().join("config.json");
     let catalog = directory.path().join("catalog.json");
     std::fs::write(

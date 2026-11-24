@@ -26,7 +26,7 @@ fn completed(codex: &Codex) {
 }
 
 fn switch_and_resume(protocol: &'static str) {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let home = directory.path().canonicalize().unwrap();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     listener.set_nonblocking(true).unwrap();

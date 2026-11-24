@@ -122,7 +122,7 @@ impl Drop for RefreshUpstream {
     )
 )]
 fn account_server(base_url: &str, codex_binary: &str) -> (TempDir, ServerHandle, PathBuf) {
-    let directory = tempfile::tempdir().expect("account temp dir");
+    let directory = emp_test_support::fixture_dir().expect("account temp dir");
     let root = crate::tests::credential_root(&directory);
     let config_path = root.join("config.json");
     let native_auth_path = root.join("codex/auth.json");
@@ -221,7 +221,7 @@ impl Drop for ScenarioUpstream {
 #[test]
 fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata() {
     let upstream = NativeUpstream::start(2);
-    let directory = tempfile::tempdir().expect("native temp dir");
+    let directory = emp_test_support::fixture_dir().expect("native temp dir");
     let root = crate::tests::credential_root(&directory);
     let config_path = root.join("config.json");
     let native_auth_path = root.join("codex/auth.json");
@@ -368,7 +368,7 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
 #[test]
 fn gateway_requests_use_native_api_keys_and_subscription_credentials_separately() {
     let upstream = NativeUpstream::start(2);
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let catalog = root.path().join("models_cache.json");
     std::fs::write(
         &catalog,

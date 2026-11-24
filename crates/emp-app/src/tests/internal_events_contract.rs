@@ -33,7 +33,7 @@ fn read_journal(root: &Path, complete_lines_only: bool) -> Vec<Value> {
 
 #[test]
 fn final_journal_reads_a_complete_record_without_its_newline() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let logs = root.path().join("state/logs");
     std::fs::create_dir_all(&logs).unwrap();
     std::fs::write(
@@ -52,7 +52,7 @@ fn final_journal_reads_a_complete_record_without_its_newline() {
 #[test]
 #[should_panic(expected = "invalid diagnostic journal record")]
 fn final_journal_rejects_a_corrupt_last_record() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let logs = root.path().join("state/logs");
     std::fs::create_dir_all(&logs).unwrap();
     std::fs::write(logs.join("events.jsonl"), b"{\"id\":1}\n{\"marker\":\"\xe4").unwrap();
@@ -133,7 +133,7 @@ fn http_journal_pairs_receipts_and_omits_query_identity_and_content() {
 #[test]
 fn startup_failures_are_recorded_before_backend_or_listener_exists() {
     for invalid_config in [true, false] {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let config = directory.path().join("config.json");
         std::fs::write(
             &config,
@@ -179,7 +179,7 @@ fn startup_failures_are_recorded_before_backend_or_listener_exists() {
 
 #[test]
 fn history_scan_has_a_worker_receipt_and_publishes_completion_over_sse() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let home = root.join("codex");
     std::fs::create_dir_all(home.join("sessions")).unwrap();

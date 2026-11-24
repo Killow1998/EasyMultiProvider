@@ -110,7 +110,7 @@ fn post_response_stream(server: &ServerHandle, body: &[u8], cookie: &str) -> Str
 #[test]
 fn responses_endpoint_records_visible_generation_and_full_request_rates_separately() {
     let upstream = TimedUsageUpstream::start();
-    let directory = tempfile::tempdir().expect("performance temp directory");
+    let directory = emp_test_support::fixture_dir().expect("performance temp directory");
     let root = canonical_root(&directory);
     let config_path = root.join("config.json");
     let native_auth_path = root.join("codex/auth.json");

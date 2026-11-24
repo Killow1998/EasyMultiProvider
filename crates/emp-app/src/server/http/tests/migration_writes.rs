@@ -35,7 +35,7 @@ fn model(id: &str) -> Value {
 }
 
 fn source() -> Fixture {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let mut service = provider("source");
     service["api_key"] = KEY.into();
     fs::write(
@@ -213,7 +213,7 @@ fn verify_payload(bundle: &[u8]) {
 fn quit_releases_service_lock_and_flushes_credentials_with_a_stalled_export() {
     const EXPORT_PAYLOAD_BYTES: usize = 12 * 1024 * 1024;
 
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = emp_state::config::resolve_user_path(directory.path());
     let auth_path = root.join("state/accounts/kept/auth.json.enc");
     let config_path = root.join("config.json");

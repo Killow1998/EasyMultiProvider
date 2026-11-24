@@ -93,7 +93,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
+        let path = emp_test_support::fixture_root().join(format!(
             "emp-official-registry-{}-{nonce}.json",
             std::process::id()
         ));

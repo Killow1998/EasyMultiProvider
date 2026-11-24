@@ -445,7 +445,7 @@ fn management_body_rejects_ambiguous_framing_headers() {
 
 #[test]
 fn web_session_persists_across_restart() {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     let first = ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config)
         .expect("start first server");
@@ -468,7 +468,7 @@ fn web_session_persists_across_restart() {
 
 #[test]
 fn expired_web_session_is_rotated_at_startup() {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let session_path = canonical_root(&directory).join("state/web-session.json");
     std::fs::create_dir_all(session_path.parent().expect("state directory")).expect("create state");
     std::fs::write(
@@ -491,7 +491,7 @@ fn expired_web_session_is_rotated_at_startup() {
 
 #[test]
 fn caller_authorization_tracks_the_live_native_token() {
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let auth = directory.path().join("auth.json");
     std::fs::write(&auth, br#"{"tokens":{"access_token":"native-secret"}}"#).expect("write auth");
     assert!(valid_caller_authorization(

@@ -64,7 +64,7 @@ fn response_status(response: &str) -> &str {
 
 #[test]
 fn delete_cancels_inflight_quota_read_without_recreating_credentials() {
-    let directory = tempfile::tempdir().expect("account deletion state directory");
+    let directory = emp_test_support::fixture_dir().expect("account deletion state directory");
     let root = directory
         .path()
         .canonicalize()
@@ -258,7 +258,7 @@ for line in sys.stdin:
 #[test]
 fn removing_a_merged_imported_service_removes_its_aliases_but_preserves_native_and_other_accounts()
 {
-    let directory = tempfile::tempdir().expect("merged removal directory");
+    let directory = emp_test_support::fixture_dir().expect("merged removal directory");
     let root = directory.path().canonicalize().expect("canonical root");
     let config_path = root.join("config.json");
     std::fs::write(&config_path, b"{}").expect("fixture config");
@@ -305,7 +305,7 @@ fn removing_a_merged_imported_service_removes_its_aliases_but_preserves_native_a
 
 #[test]
 fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
-    let directory = tempfile::tempdir().expect("quota history identity directory");
+    let directory = emp_test_support::fixture_dir().expect("quota history identity directory");
     let root = directory
         .path()
         .canonicalize()
@@ -396,7 +396,7 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
 
 #[test]
 fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() {
-    let directory = tempfile::tempdir().expect("legacy quota history directory");
+    let directory = emp_test_support::fixture_dir().expect("legacy quota history directory");
     let root = directory
         .path()
         .canonicalize()
@@ -569,7 +569,7 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
 
 #[test]
 fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
-    let directory = tempfile::tempdir().expect("import lock directory");
+    let directory = emp_test_support::fixture_dir().expect("import lock directory");
     let root = directory
         .path()
         .canonicalize()
@@ -656,7 +656,7 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
 
 #[test]
 fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
-    let directory = tempfile::tempdir().expect("settle failure directory");
+    let directory = emp_test_support::fixture_dir().expect("settle failure directory");
     let root = directory
         .path()
         .canonicalize()
@@ -712,7 +712,7 @@ fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
 
 #[test]
 fn credential_replacement_also_locks_accounts_added_while_it_waited() {
-    let directory = tempfile::tempdir().expect("replacement lock directory");
+    let directory = emp_test_support::fixture_dir().expect("replacement lock directory");
     let root = directory
         .path()
         .canonicalize()
@@ -776,7 +776,7 @@ fn credential_replacement_also_locks_accounts_added_while_it_waited() {
 /// import waits for the migration and then applies on top of its result.
 #[test]
 fn account_import_during_credential_replacement_is_not_lost() {
-    let directory = tempfile::tempdir().expect("replacement race directory");
+    let directory = emp_test_support::fixture_dir().expect("replacement race directory");
     let root = directory
         .path()
         .canonicalize()
@@ -854,7 +854,7 @@ fn account_import_during_credential_replacement_is_not_lost() {
 /// rather than invalidate the reimport after its history was settled.
 #[test]
 fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_settled() {
-    let directory = tempfile::tempdir().expect("settle race directory");
+    let directory = emp_test_support::fixture_dir().expect("settle race directory");
     let root = directory
         .path()
         .canonicalize()

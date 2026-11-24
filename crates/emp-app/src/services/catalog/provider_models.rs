@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn cached_model_lists_gain_capabilities_without_refetch_or_disk_rewrite() {
         for claude_cli in [false, true] {
-            let directory = tempfile::tempdir().unwrap();
+            let directory = emp_test_support::fixture_dir().unwrap();
             let root = directory.path();
             let config_path = root.join("config.json");
             let mut raw = json!({

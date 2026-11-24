@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn stale_credential_directories_are_swept_but_recent_and_foreign_entries_stay() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = emp_test_support::fixture_dir().expect("temporary root");
     let stale = root
         .path()
         .join(format!("{CREDENTIAL_DIRECTORY_PREFIX}stale"));
@@ -41,7 +41,7 @@ fn stale_credential_directories_are_swept_but_recent_and_foreign_entries_stay() 
 
 #[test]
 fn credential_files_are_private_and_never_replace_existing_paths() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = emp_test_support::fixture_dir().expect("temporary root");
     let directory = root.path().join("home");
     fs::create_dir(&directory).expect("create directory");
     set_private_directory(&directory).expect("private directory");
@@ -72,7 +72,7 @@ fn credential_files_are_private_and_never_replace_existing_paths() {
 fn quota_process_runs_npm_codex_through_a_trusted_sibling_node() {
     use std::os::unix::fs::symlink;
 
-    let root = tempfile::tempdir().expect("temporary nvm install");
+    let root = emp_test_support::fixture_dir().expect("temporary nvm install");
     let bin = root.path().join("versions/node/fixture/bin");
     let package = root
         .path()

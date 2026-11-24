@@ -3,10 +3,10 @@ use emp_config::{
     load_configuration, normalize_configuration, save_configuration,
 };
 use emp_storage::VaultStore;
+use emp_test_support::fixture_dir;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tempfile::tempdir;
 
 const TEST_KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
 const PASSWORD: &str = "migration-pass";
@@ -41,7 +41,7 @@ fn vault(root: &Path) -> VaultStore {
 /// Fails if a migration grants the receiving EMP permission to rotate shared credentials.
 #[test]
 fn migration_clears_emp_login_source_even_when_replacing_an_owned_account() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let root = root(&directory);
     let path = root.join("config.json");
     let vault = vault(&root);
@@ -74,7 +74,7 @@ fn vertex_migration_keeps_distinct_projects_locations_and_auth_modes() {
             key.as_str()
         };
         for change in ["project", "location", "auth_mode", "same"] {
-            let directory = tempdir().unwrap();
+            let directory = fixture_dir().unwrap();
             let root = root(&directory);
             let path = root.join("config.json");
             let vault = vault(&root);
@@ -140,7 +140,7 @@ fn vertex_migration_keeps_distinct_projects_locations_and_auth_modes() {
 
 #[test]
 fn reimporting_an_external_connection_keeps_all_published_names() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let root = root(&directory);
     let path = root.join("config.json");
     let vault = vault(&root);
@@ -175,7 +175,7 @@ fn reimporting_an_external_connection_keeps_all_published_names() {
 
 #[test]
 fn conflicting_service_names_remain_previewable_but_are_not_imported() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let root = root(&directory);
     let path = root.join("target/config.json");
     let vault = vault(&root);
@@ -211,7 +211,7 @@ fn conflicting_service_names_remain_previewable_but_are_not_imported() {
 
 #[test]
 fn import_merges_without_deleting_local_entries_and_reencrypts_provider_keys() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let path = root.join("target/config.json");
     let vault = vault(&root);
@@ -318,7 +318,7 @@ fn import_merges_without_deleting_local_entries_and_reencrypts_provider_keys() {
 
 #[test]
 fn import_preserves_or_replaces_global_context_display_by_field_presence() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let path = root.join("target/config.json");
     let vault = vault(&root);
@@ -355,7 +355,7 @@ fn import_preserves_or_replaces_global_context_display_by_field_presence() {
 
 #[test]
 fn import_updates_the_same_account_and_renames_a_different_identity() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let path = root.join("target/config.json");
     let vault = vault(&root);
@@ -439,7 +439,7 @@ fn import_updates_the_same_account_and_renames_a_different_identity() {
 
 #[test]
 fn import_validation_rejects_payload_confusion_before_writing() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let path = root.join("target/config.json");
     let vault = vault(&root);
@@ -482,7 +482,7 @@ fn import_validation_rejects_payload_confusion_before_writing() {
 
 #[test]
 fn failed_import_rolls_back_new_account_and_provider_credentials() {
-    let directory = tempdir().expect("temporary directory");
+    let directory = fixture_dir().expect("temporary directory");
     let root = root(&directory);
     let path = root.join("target/config.json");
     fs::create_dir_all(&path).expect("make configuration path a directory");
@@ -521,7 +521,7 @@ fn failed_import_rolls_back_new_account_and_provider_credentials() {
 
 #[test]
 fn preview_reuses_an_in_memory_account_without_touching_the_filesystem() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let root = root(&directory);
     let path = root.join("not-created/config.json");
     let vault = vault(&root);

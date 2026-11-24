@@ -913,6 +913,7 @@ dependencies = [
  "emp-context",
  "emp-state",
  "emp-storage",
+ "emp-test-support",
  "emp-transport",
  "getrandom 0.2.17",
  "libc",
@@ -940,6 +941,7 @@ dependencies = [
  "emp-domain",
  "emp-files",
  "emp-storage",
+ "emp-test-support",
  "getrandom 0.2.17",
  "percent-encoding",
  "scrypt",
@@ -979,9 +981,9 @@ name = "emp-files"
 version = "0.15.9"
 dependencies = [
  "atomic-write-file",
+ "emp-test-support",
  "libc",
  "serde_json",
- "tempfile",
  "windows-sys 0.61.2",
  "zeroize",
 ]
@@ -1059,13 +1061,13 @@ dependencies = [
  "emp-domain",
  "emp-protocol",
  "emp-storage",
+ "emp-test-support",
  "emp-transport",
  "getrandom 0.2.17",
  "google-cloud-auth",
  "libc",
  "serde_json",
  "sha2 0.10.9",
- "tempfile",
  "time",
  "tokio",
  "url",
@@ -1080,6 +1082,7 @@ dependencies = [
  "emp-domain",
  "emp-files",
  "emp-storage",
+ "emp-test-support",
  "getrandom 0.2.17",
  "serde_json",
  "tempfile",
@@ -1092,6 +1095,7 @@ dependencies = [
  "base64 0.22.1",
  "emp-domain",
  "emp-files",
+ "emp-test-support",
  "fernet",
  "getrandom 0.2.17",
  "libc",
@@ -1111,6 +1115,9 @@ dependencies = [
 [[package]]
 name = "emp-test-support"
 version = "0.15.9"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "emp-transport"
@@ -1118,6 +1125,7 @@ version = "0.15.9"
 dependencies = [
  "base64 0.22.1",
  "brotli",
+ "emp-test-support",
  "flate2",
  "getrandom 0.2.17",
  "hotpath",
@@ -4360,6 +4368,7 @@ version = "0.15.9"
 dependencies = [
  "base64 0.22.1",
  "emp-modules",
+ "emp-test-support",
  "emp-updater",
  "flate2",
  "proc-macro2",

@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 #[test]
 fn helper_output_and_ignored_eof_are_bounded() {
     for oversized in [true, false] {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let script = root.path().join("fake-codex");
         let program = if oversized {
             "#!/usr/bin/env python3\nimport sys\nsys.stdout.write('x' * (5 * 1024 * 1024)); sys.stdout.flush()\n"
@@ -36,7 +36,7 @@ fn helper_output_and_ignored_eof_are_bounded() {
 
 #[test]
 fn cancelling_a_quota_read_still_persists_a_rotated_credential() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let script = root.path().join("fake-codex");
     let marker = script.with_extension("ready");
     fs::write(
@@ -119,7 +119,7 @@ fn reset_credit_projection_preserves_only_usable_ids() {
 fn isolated_process_sequences_requests_and_returns_rotated_auth() {
     let root = tempfile::Builder::new()
         .prefix("emp-fake-codex-")
-        .tempdir()
+        .tempdir_in(emp_test_support::fixture_root())
         .expect("temporary root");
     let script = root.path().join("fake-codex");
     fs::write(
@@ -258,7 +258,7 @@ for line in sys.stdin:
 
 #[test]
 fn native_snapshot_has_no_refresh_credential_and_does_not_rewrite_login() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("auth.json");
     let bytes = serde_json::to_vec(&json!({"auth_mode":"chatgpt","tokens":{
         "access_token":"native-access","refresh_token":"native-refresh","account_id":"native-account"},
@@ -286,7 +286,7 @@ fn quota_helper_accepts_temp_roots_that_cannot_be_toml_literals() {
         assert_eq!(quota["rate_limits"]["primary"]["usedPercent"], 7);
         return;
     }
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let script = root.path().join("fake-codex");
     fs::write(&script, r#"#!/usr/bin/env python3
 import configparser, json, os, pathlib, sys

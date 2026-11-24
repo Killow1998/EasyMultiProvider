@@ -111,7 +111,7 @@ mod tests {
     use super::*;
     #[test]
     fn names_are_read_only_cached_and_prefer_the_latest_explicit_name() {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let path = root.path().join("session_index.jsonl");
         std::fs::write(
             &path,

@@ -266,7 +266,7 @@ mod tests {
     }
 
     fn check_local_key_round_trip(importing: bool) {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let config = root.path().join("config.json");
         std::fs::write(&config, b"{}").unwrap();
         let home = root.path().join("codex");

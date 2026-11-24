@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn compressed_rollout_full_replay_matches_visible_history_contract() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let path = directory.path().join("rollout.jsonl.zst");
     let records = [meta(), user(1, "compressed item"), started(990, TURN)];
     write_zstd(&path, &jsonl_bytes(&records));
@@ -16,7 +16,7 @@ fn compressed_rollout_full_replay_matches_visible_history_contract() {
 
 #[test]
 fn sqlite_and_session_history_modes_are_validated() {
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let path = write_rollout(
         directory.path(),
         &[
@@ -33,7 +33,7 @@ fn sqlite_and_session_history_modes_are_validated() {
         .unwrap();
     assert!(visible_text(&legacy).contains("legacy item"));
 
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let path = write_rollout(directory.path(), &[meta(), user(1, "mode mismatch")]);
     state_database_with_mode(directory.path(), &path, "future-mode");
     let error = CodexHomeHistoryReader::new(directory.path())
@@ -44,7 +44,7 @@ fn sqlite_and_session_history_modes_are_validated() {
         .unwrap_err();
     assert_eq!(error.reason(), "invalid_history_mode");
 
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let path = write_rollout(
         directory.path(),
         &[session_meta(THREAD, "legacy"), user(1, "mode mismatch")],
@@ -58,7 +58,7 @@ fn sqlite_and_session_history_modes_are_validated() {
         .unwrap_err();
     assert_eq!(error.reason(), "history_mode_mismatch");
 
-    let directory = tempdir().unwrap();
+    let directory = fixture_dir().unwrap();
     let path = write_rollout(
         directory.path(),
         &[

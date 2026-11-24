@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn control_usage_windows_preserve_units_and_expire_without_inventing_quota() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let quota = LocalQuota::new(directory.path().join("quota.sqlite3"));
         let generation = quota.begin(Some("account-a".into()));
         assert!(quota.record_usage(
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn new_login_and_newer_requests_reject_old_observations() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let quota = LocalQuota::new(directory.path().join("quota.sqlite3"));
         let event = json!({"rate_limits":{"five_hour":{"utilization":110,"resets_at":"1970-01-01T00:08:20Z"}}});
         let old = quota.begin(Some("account-a".into()));
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn history_survives_restart_and_stays_with_the_verified_login() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let path = directory.path().join("quota.sqlite3");
         let now = crate::util::system_now();
         let quota = LocalQuota::new(&path);

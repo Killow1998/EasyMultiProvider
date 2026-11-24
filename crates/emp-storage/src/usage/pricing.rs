@@ -255,7 +255,7 @@ mod lookup_tests {
 
     #[test]
     fn upgrading_a_price_snapshot_loads_ultrafast_rates_and_keeps_standard_available() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = emp_test_support::fixture_dir().unwrap();
         let path = temporary.path().join("api_prices.json");
         let prices = json!({"gpt-6.2-sol":{
             "input_cost_per_token":0.000002,"output_cost_per_token":0.00001,

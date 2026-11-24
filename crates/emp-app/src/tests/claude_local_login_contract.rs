@@ -284,7 +284,7 @@ impl LocalLoginFixture {
             .expect("set EMP_CLAUDE_TEST_EGRESS_GUARD to the local loopback-only guard");
         assert!(guard.is_file(), "loopback-only egress guard must exist");
 
-        let directory = tempfile::tempdir().expect("temporary local-login fixture");
+        let directory = emp_test_support::fixture_dir().expect("temporary local-login fixture");
         let root = canonical_root(&directory);
         let home = root.join("home");
         let config_dir = home.join(".claude");
@@ -578,7 +578,7 @@ fn local_login_rejects_api_key_auth_status_before_inference() {
 
 #[test]
 fn local_cli_control_quota_reaches_management_views_without_inference() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let root = canonical_root(&directory);
     let home = root.join("home");
     let config_dir = home.join(".claude");

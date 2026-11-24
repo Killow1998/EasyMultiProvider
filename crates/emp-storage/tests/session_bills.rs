@@ -34,7 +34,7 @@ fn event(id: &str, session: &str, model: &str, input: i64) -> Value {
 
 #[test]
 fn session_bills_partition_reconciled_usage_without_filling_unknowns_or_repricing() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     prices.replace(
         json!({"priced":{"input_cost_per_token":"0.000001",
@@ -130,7 +130,7 @@ fn session_bills_partition_reconciled_usage_without_filling_unknowns_or_repricin
 
 #[test]
 fn existing_call_receipts_backfill_session_links_on_upgrade() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("usage.sqlite3");
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     let ledger = UsageLedger::new(path.clone(), prices.clone());

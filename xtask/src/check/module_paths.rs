@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn module_paths_stay_inside_the_declaring_crate() {
-        let root = tempfile::tempdir().unwrap();
+        let root = emp_test_support::fixture_dir().unwrap();
         let crate_dir = root.path().join("app");
         let src = crate_dir.join("src");
         let entry = src.join("lib.rs");

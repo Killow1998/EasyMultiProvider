@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 #[test]
 fn lifetime_pricing_distinguishes_unknown_placeholders_from_known_zero_after_reopen() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     prices.replace(
         json!({
@@ -53,7 +53,7 @@ fn lifetime_pricing_distinguishes_unknown_placeholders_from_known_zero_after_reo
 
 #[test]
 fn memory_receipts_restore_priced_usage_once_and_reconcile_rollout_history() {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let path = root.path().join("usage.sqlite3");
     let prices = Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0));
     prices.replace(
@@ -131,7 +131,7 @@ fn memory_receipts_restore_priced_usage_once_and_reconcile_rollout_history() {
 
 #[test]
 fn account_details_keep_tokens_periods_and_start_time_with_the_verified_owner() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = emp_test_support::fixture_dir().unwrap();
     let ledger = UsageLedger::new(
         directory.path().join("usage.sqlite3"),
         Arc::new(PriceCatalog::new(
@@ -230,7 +230,7 @@ fn account_details_keep_tokens_periods_and_start_time_with_the_verified_owner() 
 #[test]
 fn chart_series_preserve_totals_and_filter_by_receipt_and_service() {
     use emp_storage::usage::ledger::UsageSeriesFilter;
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let ledger = UsageLedger::new(
         root.path().join("usage.sqlite3"),
         Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0)),
@@ -301,7 +301,7 @@ fn chart_series_preserve_totals_and_filter_by_receipt_and_service() {
 #[test]
 fn historical_identity_requires_a_unique_matching_turn_and_route() {
     use emp_storage::usage::ledger::UsageSeriesFilter;
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let ledger = UsageLedger::new(
         root.path().join("usage.sqlite3"),
         Arc::new(PriceCatalog::new(root.path().join("prices.json"), 1000.0)),

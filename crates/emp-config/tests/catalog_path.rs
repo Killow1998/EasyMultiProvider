@@ -12,7 +12,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 #[test]
 fn generated_catalog_resolves_to_codex_home_catalog_json() {
     let _lock = ENV_LOCK.lock().expect("environment lock");
-    let directory = tempfile::tempdir().expect("temporary directory");
+    let directory = emp_test_support::fixture_dir().expect("temporary directory");
     let home = directory
         .path()
         .canonicalize()

@@ -34,7 +34,7 @@ for line in sys.stdin:
 "#;
 
 fn check_launcher(mode: &str, cancel: bool) {
-    let root = tempfile::tempdir().unwrap();
+    let root = emp_test_support::fixture_dir().unwrap();
     let launcher = root.path().join("codex");
     fs::write(&launcher, LAUNCHER).unwrap();
     fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).unwrap();
