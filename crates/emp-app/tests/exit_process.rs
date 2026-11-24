@@ -105,7 +105,7 @@ fn exit_restores_while_runtime_observation_is_stalled() {
     use std::os::unix::net::UnixListener;
 
     let upstream = Upstream::start();
-    let workspace = Workspace::with_routes(&upstream);
+    let workspace = Workspace::with_routes_in(&upstream, "/tmp");
     let mut emp = workspace.start();
     enable(&emp, &workspace);
     let control = workspace.codex_home.join("app-server-control");

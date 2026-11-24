@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn json_round_trip_preserves_results_and_unsupported_samples() {
-        let directory = crate::temporary_directory("emp-bench-report-").unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let path = directory.path().join("report.json");
         let original = report("default", 12.6, true);
         original.save(&path).unwrap();
@@ -404,7 +404,7 @@ mod tests {
                 .contains("| Startup to /healthz 200 (ms) | 32.207 | 32.207 | +0.000 | +0.00% |")
         );
 
-        let directory = crate::temporary_directory("emp-bench-report-").unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let path = directory.path().join("report.json");
         Report {
             label: "new".into(),

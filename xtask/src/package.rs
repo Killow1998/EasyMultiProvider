@@ -980,7 +980,7 @@ printf '%s' "$count" > "$FAKE_HDIUTIL_COUNT"
     #[cfg(unix)]
     #[test]
     fn hdiutil_create_recovers_from_one_transient_busy_failure() {
-        let directory = crate::temporary_directory("hdiutil-retry-").unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let mut command = fake_hdiutil(
             directory.path(),
             r#"if [ "$count" -eq 1 ]; then
@@ -1001,7 +1001,7 @@ echo created"#,
     #[cfg(unix)]
     #[test]
     fn hdiutil_create_stops_after_three_busy_failures() {
-        let directory = crate::temporary_directory("hdiutil-busy-limit-").unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let mut command = fake_hdiutil(
             directory.path(),
             "echo 'hdiutil: create failed - Resource busy' >&2\nexit 1",
@@ -1018,7 +1018,7 @@ echo created"#,
     #[cfg(unix)]
     #[test]
     fn hdiutil_create_does_not_retry_other_failures() {
-        let directory = crate::temporary_directory("hdiutil-other-error-").unwrap();
+        let directory = emp_test_support::fixture_dir().unwrap();
         let mut command = fake_hdiutil(
             directory.path(),
             "echo 'hdiutil: create failed - Operation not permitted' >&2\nexit 1",

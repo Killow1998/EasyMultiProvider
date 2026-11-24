@@ -1,6 +1,6 @@
 use emp_test_support::{Deadline, test_timeout};
 use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -57,9 +57,13 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new() -> Self {
+        Self::new_in(emp_test_support::fixture_root())
+    }
+
+    fn new_in(root: impl AsRef<Path>) -> Self {
         let directory = tempfile::Builder::new()
             .prefix("emp-j-")
-            .tempdir_in(emp_test_support::fixture_root())
+            .tempdir_in(root)
             .expect("temporary root");
         let root = directory.path().canonicalize().expect("canonical root");
         let codex_home = root.join("codex");
@@ -84,7 +88,11 @@ impl Workspace {
 
     /// Four routes, one per upstream protocol, all pointing at `upstream`.
     pub fn with_routes(upstream: &Upstream) -> Self {
-        let workspace = Self::new();
+        Self::with_routes_in(upstream, emp_test_support::fixture_root())
+    }
+
+    pub fn with_routes_in(upstream: &Upstream, root: impl AsRef<Path>) -> Self {
+        let workspace = Self::new_in(root);
         let providers: Vec<Value> = [
             ("test", "chat_completions"),
             ("anthropic", "anthropic_messages"),
