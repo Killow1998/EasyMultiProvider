@@ -16,6 +16,7 @@ members = [
     "crates/emp-router",
     "crates/emp-state",
     "crates/emp-storage",
+    "crates/emp-test-support",
     "crates/emp-transport",
     "crates/emp-updater",
     "xtask",

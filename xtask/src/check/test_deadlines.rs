@@ -2,15 +2,17 @@ use super::{Path, Result, comments, read};
 use std::collections::BTreeMap;
 use syn::{
     Expr, Pat,
+    parse::Parser as _,
+    punctuated::Punctuated,
     spanned::Spanned,
     visit::{self, Visit},
 };
 
 const ALLOWED: &[(&str, usize)] = &[
-    ("emp-app", 139),
-    ("emp-codex", 5),
+    ("emp-app", 200),
+    ("emp-codex", 8),
     ("emp-router", 3),
-    ("emp-transport", 14),
+    ("emp-transport", 16),
 ];
 
 pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> Result {
@@ -35,16 +37,20 @@ pub(super) fn check(root: &Path, paths: &[String], errors: &mut Vec<String>) -> 
             .iter()
             .find(|&&(name, _)| name == group)
             .map_or(0, |&(_, count)| count);
-        if locations.len() > allowed {
-            errors.push(format!("[test-deadlines] {group}: 当前 {} 处裸写期限，基线 {allowed}；使用 test_timeout，计数棘轮只降不升\n{}", locations.len(), locations.join("\n")));
-        } else if locations.len() < allowed {
-            println!(
-                "[test-deadlines] {group}: 请将期限基线从 {allowed} 调低至 {}",
-                locations.len()
-            );
-        }
+        check_baseline(group, &locations, allowed, errors);
     }
     Ok(())
+}
+
+fn check_baseline(group: &str, locations: &[String], allowed: usize, errors: &mut Vec<String>) {
+    let actual = locations.len();
+    if actual > allowed {
+        errors.push(format!("[test-deadlines] {group}: 当前 {actual} 处裸写期限，基线 {allowed}；使用 test_timeout，计数棘轮只降不升\n{}", locations.join("\n")));
+    } else if actual < allowed {
+        errors.push(format!(
+            "[test-deadlines] {group}: 当前 {actual} 处裸写期限，基线 {allowed}；请在同一提交将基线调低至 {actual}"
+        ));
+    }
 }
 
 fn group(path: &str) -> Option<&str> {
@@ -111,10 +117,9 @@ impl Deadlines {
             "connect_timeout"
             | "wait_for_state"
             | "wait_for_error"
-            | "probe_candidate_version"
             | "quiesce"
             | "wait_for_websocket_release" => args.last(),
-            "probe_candidate_version_observed" => args.iter().nth(3),
+            "probe_candidate_version" => args.iter().nth(3),
             "wait_for_candidate_version" => args.iter().nth(1),
             _ => None,
         };
@@ -127,6 +132,11 @@ impl Deadlines {
 fn bare_duration(expr: &Expr, constants: bool) -> bool {
     match expr {
         Expr::Paren(paren) => bare_duration(&paren.expr, constants),
+        Expr::Binary(binary) if matches!(binary.op, syn::BinOp::Add(_)) => {
+            let constants =
+                constants && !is_test_timeout(&binary.left) && !is_test_timeout(&binary.right);
+            bare_duration(&binary.left, constants) || bare_duration(&binary.right, constants)
+        }
         Expr::Call(call) => {
             let Expr::Path(path) = call.func.as_ref() else {
                 return false;
@@ -153,6 +163,13 @@ fn bare_duration(expr: &Expr, constants: bool) -> bool {
                 && call.args.iter().all(|arg| matches!(arg, Expr::Lit(_)))
         }
         Expr::Path(path) if constants => {
+            if path.path.segments.iter().map(|part| &part.ident).eq([
+                "crate",
+                "server",
+                "REQUEST_DRAIN_TIMEOUT",
+            ]) {
+                return false;
+            }
             let name = path
                 .path
                 .segments
@@ -168,6 +185,17 @@ fn bare_duration(expr: &Expr, constants: bool) -> bool {
     }
 }
 
+fn is_test_timeout(expr: &Expr) -> bool {
+    match expr {
+        Expr::Paren(paren) => is_test_timeout(&paren.expr),
+        Expr::Call(call) => matches!(
+            call.func.as_ref(),
+            Expr::Path(path) if path.path.segments.last().is_some_and(|part| part.ident == "test_timeout")
+        ),
+        _ => false,
+    }
+}
+
 fn deadline_name(name: &syn::Ident) -> bool {
     name.to_string()
         .split('_')
@@ -175,6 +203,27 @@ fn deadline_name(name: &syn::Ident) -> bool {
 }
 
 impl<'ast> Visit<'ast> for Deadlines {
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        let Some(name) = invocation.path.segments.last() else {
+            return;
+        };
+        let expressions = match name.ident.to_string().as_str() {
+            "assert" | "assert_eq" | "assert_ne" | "debug_assert" | "debug_assert_eq"
+            | "debug_assert_ne" => Punctuated::<Expr, syn::Token![,]>::parse_terminated
+                .parse2(invocation.tokens.clone())
+                .map(|args| args.into_iter().collect()),
+            "matches" | "assert_matches" | "debug_assert_matches" => {
+                parse_match_arguments.parse2(invocation.tokens.clone())
+            }
+            _ => return,
+        };
+        if let Ok(expressions) = expressions {
+            for expression in &expressions {
+                self.visit_expr(expression);
+            }
+        }
+    }
+
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let Expr::Path(path) = call.func.as_ref()
             && let Some(name) = path.path.segments.last()
@@ -236,6 +285,21 @@ impl<'ast> Visit<'ast> for Deadlines {
     }
 }
 
+fn parse_match_arguments(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Expr>> {
+    let mut expressions = vec![input.parse()?];
+    input.parse::<syn::Token![,]>()?;
+    input.call(Pat::parse_multi_with_leading_vert)?;
+    if input.peek(syn::Token![if]) {
+        input.parse::<syn::Token![if]>()?;
+        expressions.push(input.parse()?);
+    }
+    if !input.is_empty() {
+        input.parse::<syn::Token![,]>()?;
+        expressions.extend(input.call(Punctuated::<Expr, syn::Token![,]>::parse_terminated)?);
+    }
+    Ok(expressions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +334,60 @@ mod fixture {
             violations("crates/app/tests/wire.rs", source).unwrap(),
             [2, 6, 8, 9, 10, 12, 17]
         );
+    }
+
+    #[test]
+    fn inspects_assertion_operands_and_match_guards() {
+        let source = r#"
+#[test]
+fn account_import() {
+    assert!(
+        done_rx
+            .recv_timeout(Duration::from_millis(300))
+            .is_err(),
+        "import replaced credentials while a refresh held the account lock"
+    );
+    assert_eq!(rx.recv_timeout(LIMIT), Ok(()));
+    assert_ne!(rx.recv_timeout(LIMIT), Ok(()));
+    debug_assert!(rx.recv_timeout(LIMIT).is_ok());
+    debug_assert_eq!(rx.recv_timeout(LIMIT), Ok(()));
+    debug_assert_ne!(rx.recv_timeout(LIMIT), Ok(()));
+    assert!(matches!(rx.recv_timeout(LIMIT), Ok(())));
+    assert!(matches!(state, Ready if rx.recv_timeout(LIMIT).is_ok()));
+}
+"#;
+        assert_eq!(
+            violations("crates/emp-app/src/services/accounts/tests.rs", source).unwrap(),
+            [6, 10, 11, 12, 13, 14, 15, 16]
+        );
+    }
+
+    #[test]
+    fn preserves_production_deadlines_and_scales_only_fixture_margin() {
+        let source = r#"
+#[test]
+fn drain() {
+    timeout(crate::server::REQUEST_DRAIN_TIMEOUT, future);
+    rx.recv_timeout(PRODUCTION_LIMIT + test_timeout(Duration::from_secs(5)));
+    rx.recv_timeout(PRODUCTION_LIMIT + Duration::from_secs(5));
+}
+"#;
+        assert_eq!(violations("crates/app/tests/wire.rs", source).unwrap(), [6]);
+    }
+
+    #[test]
+    fn baseline_requires_an_exact_match() {
+        let mut errors = Vec::new();
+        check_baseline("sample", &[], 1, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("在同一提交将基线调低至 0"));
+
+        errors.clear();
+        let locations = ["tests/wire.rs:42".to_owned()];
+        check_baseline("sample", &locations, 1, &mut errors);
+        assert!(errors.is_empty());
+        check_baseline("sample", &locations, 0, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("tests/wire.rs:42"));
     }
 }

@@ -1,7 +1,7 @@
 use super::modules::{BuiltModule, ModuleEmp, ModuleRelease, eventually};
-use super::test_timeout;
 use super::{Emp, Response, SseClient, Upstream, Workspace, http, io_timeout, write_file};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use emp_test_support::test_timeout;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Write};

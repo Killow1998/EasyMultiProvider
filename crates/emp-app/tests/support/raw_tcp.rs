@@ -1,4 +1,4 @@
-use crate::test_time::test_timeout;
+use emp_test_support::test_timeout;
 use std::{io, net::SocketAddr};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},

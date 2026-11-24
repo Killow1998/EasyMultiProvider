@@ -1,9 +1,9 @@
 use super::*;
-use crate::test_time::test_timeout;
 use crate::{
     server::raw_tcp::{RawClient, wire_timeout},
     tests::{OneShotUpstream, live_journal, wait_for},
 };
+use emp_test_support::test_timeout;
 use std::{collections::BTreeMap, io::Read, sync::mpsc};
 use tokio::sync::oneshot;
 
@@ -343,7 +343,7 @@ fn stalled_buffered_inference(quit: bool) {
         assert_eq!(head.status, "HTTP/1.1 200 OK");
         assert!(head.headers["content-length"][0].parse::<usize>().unwrap() >= BODY_BYTES);
         if quit {
-            let reply = timeout(test_timeout(crate::server::REQUEST_DRAIN_TIMEOUT), async {
+            let reply = timeout(crate::server::REQUEST_DRAIN_TIMEOUT, async {
                 let mut socket = TcpStream::connect(address).await.unwrap();
                 socket
                     .write_all(&json_request(

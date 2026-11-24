@@ -2,7 +2,7 @@
 use super::probe_candidate_version;
 use super::{UpdateManager, nonce_with};
 use crate::release::UpdateEndpoints;
-use crate::test_time::test_timeout;
+use emp_test_support::test_timeout;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Barrier};
@@ -15,7 +15,7 @@ mod retry;
 #[cfg(unix)]
 fn candidate_script(root: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
     let binary = root.join(name);
-    crate::test_executable::write_executable(&binary, &format!("#!/bin/sh\n{body}\n"));
+    emp_test_support::write_executable(&binary, &format!("#!/bin/sh\n{body}\n"));
     binary
 }
 
@@ -29,6 +29,8 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
         "0.12.0",
         root.path(),
         test_timeout(Duration::from_secs(1)),
+        None,
+        None,
     )
     .expect("valid candidate version probe should succeed");
 
@@ -38,7 +40,9 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
             &nonzero,
             "0.12.0",
             root.path(),
-            test_timeout(Duration::from_secs(1))
+            test_timeout(Duration::from_secs(1)),
+            None,
+            None,
         )
         .unwrap_err(),
         crate::UpdateError("version_mismatch")
@@ -48,7 +52,9 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
             &valid,
             "0.12.1",
             root.path(),
-            test_timeout(Duration::from_secs(1))
+            test_timeout(Duration::from_secs(1)),
+            None,
+            None,
         )
         .unwrap_err(),
         crate::UpdateError("version_mismatch")
@@ -64,7 +70,9 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
             &root.path().join("missing"),
             "0.12.0",
             root.path(),
-            test_timeout(Duration::from_secs(1))
+            test_timeout(Duration::from_secs(1)),
+            None,
+            None,
         )
         .unwrap_err(),
         crate::UpdateError("update_failed")
@@ -76,7 +84,9 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
             &denied,
             "0.12.0",
             root.path(),
-            test_timeout(Duration::from_secs(1))
+            test_timeout(Duration::from_secs(1)),
+            None,
+            None,
         )
         .unwrap_err(),
         crate::UpdateError("directory_not_writable")
@@ -86,23 +96,35 @@ fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
 #[cfg(unix)]
 #[test]
 fn candidate_version_probe_times_out_and_reaps_the_child() {
-    let child = std::process::Command::new("sleep")
-        .arg("60")
-        .spawn()
-        .unwrap();
-    let pid = child.id() as i32;
+    let root = tempfile::TempDir::new().unwrap();
+    let binary = candidate_script(root.path(), "slow", "exec sleep 60");
+    let manager = UpdateManager::with_endpoints(
+        std::env::current_exe().unwrap(),
+        Vec::new(),
+        "0.12.0",
+        UpdateEndpoints::default(),
+        || Ok(()),
+    )
+    .unwrap();
+    manager.stage("verify_version");
+    let mut spawned_pid = None;
     let started = Instant::now();
-    assert_eq!(
-        super::wait_for_candidate_version(
-            child,
-            test_timeout(Duration::from_millis(100)),
-            None,
-            crate::UpdateError::from,
-        )
-        .unwrap_err(),
-        crate::UpdateError("update_failed")
-    );
+    let error = probe_candidate_version(
+        &binary,
+        "0.12.0",
+        root.path(),
+        test_timeout(Duration::from_millis(100)),
+        Some(&manager),
+        Some(&mut spawned_pid),
+    )
+    .unwrap_err();
     assert!(started.elapsed() < test_timeout(Duration::from_secs(2)));
+    assert_eq!(error, crate::UpdateError("update_failed"));
+    manager.failed(error);
+    let receipt = manager.snapshot().failure.unwrap();
+    assert_eq!(receipt.reason.as_deref(), Some("timeout"));
+
+    let pid = i32::try_from(spawned_pid.expect("probe started a child")).unwrap();
     // SAFETY: signal zero only probes the fixture PID and kill takes no pointers.
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     assert_eq!(
@@ -126,7 +148,9 @@ fn candidate_version_probe_restores_error_mode_after_bad_image() {
             &binary,
             "0.12.0",
             root.path(),
-            test_timeout(Duration::from_secs(1))
+            test_timeout(Duration::from_secs(1)),
+            None,
+            None,
         )
         .unwrap_err(),
         crate::UpdateError("update_failed")
@@ -330,12 +354,13 @@ fn failed_candidate_launch_preserves_the_original_system_error_code() {
     )
     .unwrap();
     manager.stage("verify_version");
-    let error = super::probe_candidate_version_observed(
+    let error = probe_candidate_version(
         &root.path().join("absent"),
         "0.12.6",
         root.path(),
         test_timeout(Duration::from_secs(1)),
         Some(&manager),
+        None,
     )
     .unwrap_err();
     manager.failed(error);

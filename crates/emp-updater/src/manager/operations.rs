@@ -255,12 +255,14 @@ impl UpdateManager {
             candidate.join(relative)
         };
         self.stage("verify_version");
-        probe_candidate_version_observed(
+        probe_candidate_version(
             &binary,
             &asset.version,
             job,
             Duration::from_secs(30),
             Some(self),
+            #[cfg(test)]
+            None,
         )?;
 
         (self.0.prepare_modules)(self, &asset.version)?;

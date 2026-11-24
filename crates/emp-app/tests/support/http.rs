@@ -1,4 +1,4 @@
-use super::test_timeout;
+use emp_test_support::test_timeout;
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -277,6 +277,17 @@ impl SseClient {
             }
         }
         Ok(Some(byte[0]))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn expect_eof(&mut self, deadline: Instant) -> io::Result<()> {
+        if self.byte(deadline)?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "data after SSE end",
+            ));
+        }
+        Ok(())
     }
 
     pub fn next_event(&mut self, deadline: Instant) -> io::Result<Option<Value>> {

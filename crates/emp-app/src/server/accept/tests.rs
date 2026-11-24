@@ -2,7 +2,7 @@
 #![cfg(unix)]
 
 use crate::lifecycle::ServerHandle;
-use crate::test_time::test_timeout;
+use emp_test_support::test_timeout;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};

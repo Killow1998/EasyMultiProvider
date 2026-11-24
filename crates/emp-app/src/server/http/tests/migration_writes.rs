@@ -1,9 +1,9 @@
 use super::{team_writes, *};
-use crate::test_time::test_timeout;
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD},
 };
+use emp_test_support::test_timeout;
 use std::{fs, path::Path};
 
 const PASSWORD: &str = "fixture-migration-password";

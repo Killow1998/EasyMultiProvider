@@ -2,17 +2,12 @@
 //! built binary with temporary CODEX_HOME/config roots, plus an in-process
 //! loopback upstream that records every request it receives.
 
+use emp_test_support::test_timeout;
 use std::path::Path;
 use std::time::Duration;
 
 #[cfg(unix)]
 mod accounts;
-#[cfg(target_os = "linux")]
-#[allow(
-    dead_code,
-    reason = "Only some integration test targets write executable fixtures"
-)]
-pub mod executable;
 mod http;
 #[cfg(target_os = "linux")]
 mod https;
@@ -23,7 +18,6 @@ mod sse;
 #[cfg(unix)]
 #[allow(dead_code, reason = "Only the e2e target uses Team process fixtures")]
 pub mod team;
-mod time;
 mod upstream;
 mod websocket;
 
@@ -54,8 +48,6 @@ pub const NATIVE_TOKEN: &str = "fixture-native-token";
 /// Synthetic provider API key; it must never be echoed by management APIs.
 pub const PROVIDER_KEY: &str = "fixture-provider-key";
 pub const ORIGINAL_CODEX_CONFIG: &str = "# user settings\n[features]\nweb_search = true\n";
-
-pub(crate) use time::test_timeout;
 
 fn io_timeout() -> Duration {
     test_timeout(Duration::from_secs(15))

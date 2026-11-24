@@ -326,7 +326,7 @@ mod windows_tests {
 mod tests {
     use super::run;
     use crate::process::created;
-    use crate::test_executable::write_executable;
+    use emp_test_support::write_executable;
     use tempfile::TempDir;
 
     #[test]

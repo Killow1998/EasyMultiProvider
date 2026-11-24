@@ -9,7 +9,6 @@ use super::{
     proxy::{ModelCatalog, ProxyCaller, RequestAccess},
     with_entry_state,
 };
-use crate::test_time::test_timeout;
 use crate::{
     lifecycle::ServerHandle as RunningServer,
     server::{
@@ -24,6 +23,7 @@ use axum::{
     extract::{Request, State},
     routing::{any, get, post},
 };
+use emp_test_support::test_timeout;
 use emp_transport::{MemoryStatus, RequestLimits, RequestLimitsConfig};
 use flate2::{Compression, GzBuilder};
 use serde::Deserialize;

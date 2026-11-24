@@ -1,0 +1,10 @@
+[package]
+publish = false
+name = "emp-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared fixtures and deadlines for EMP tests."
+
+[lints]
+workspace = true

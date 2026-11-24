@@ -1,6 +1,6 @@
 use super::{account_writes::normalize_body, *};
-use crate::test_time::test_timeout;
 use emp_modules::Module;
+use emp_test_support::test_timeout;
 use std::{fs, path::PathBuf};
 
 const MODULES: &str = "/api/modules";

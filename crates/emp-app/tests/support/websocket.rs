@@ -1,4 +1,4 @@
-use super::test_timeout;
+use emp_test_support::test_timeout;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};

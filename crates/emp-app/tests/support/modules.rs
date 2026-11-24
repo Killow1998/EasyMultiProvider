@@ -1,5 +1,5 @@
-use super::test_timeout;
 use super::{Emp, Workspace, http::read_message, io_timeout};
+use emp_test_support::test_timeout;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};

@@ -1,10 +1,7 @@
 #![cfg(target_os = "linux")]
 
-#[path = "support/time.rs"]
-mod test_time;
-use test_time::test_timeout;
-
 use emp_state::VaultStore;
+use emp_test_support::test_timeout;
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -1001,13 +998,13 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
             "check request: {}",
             String::from_utf8_lossy(&check)
         );
-        server.join().expect("fake release error server completed");
         wait_for_error(
             emp.port,
             &emp.session,
             expected,
             test_timeout(Duration::from_secs(10)),
         );
+        server.join().expect("fake release error server completed");
         stop_emp(&mut emp);
     }
 
@@ -1115,13 +1112,13 @@ fn package_http_and_checksum_failures_preserve_the_running_installation() {
             Some(b"{}"),
         );
         assert_eq!(status(&install), 202);
-        server.join().expect("fake package error server completed");
         wait_for_error(
             emp.port,
             &emp.session,
             expected,
             test_timeout(Duration::from_secs(10)),
         );
+        server.join().expect("fake package error server completed");
         assert_eq!(
             std::fs::read(&emp.executable).unwrap(),
             emp.original_executable

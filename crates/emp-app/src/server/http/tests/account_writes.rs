@@ -1,6 +1,6 @@
 use super::*;
-use crate::test_time::test_timeout;
 use emp_state::filesystem::count_commits;
+use emp_test_support::test_timeout;
 use std::{io::ErrorKind, os::unix::fs::PermissionsExt, path::Path};
 use tokio::{io::AsyncBufReadExt, net::TcpListener as AsyncListener};
 

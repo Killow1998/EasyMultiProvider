@@ -1,6 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::test_time::test_timeout;
+use emp_test_support::test_timeout;
 
 #[test]
 fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_previous() {

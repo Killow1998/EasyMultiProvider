@@ -1,6 +1,6 @@
 use crate::support::modules::{BuiltModule, ModuleRelease, eventually};
-use crate::support::test_timeout;
 use crate::support::{Emp, NATIVE_TOKEN, Upstream, Workspace, http};
+use emp_test_support::test_timeout;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -310,7 +310,8 @@ fn m04_packaged_aero_hands_off_streams_attributes_usage_and_stops() {
 #[cfg(target_os = "linux")]
 #[test]
 fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
-    use crate::support::{Response, SseClient, executable::write_executable};
+    use crate::support::{Response, SseClient};
+    use emp_test_support::write_executable;
     use std::{
         io::{Read, Write},
         net::TcpStream,
@@ -437,17 +438,21 @@ fn m01_aero_callback_completes_with_public_slots_full_and_during_drain() {
         event["type"] == "response.completed"
             && event["response"]["output"][0]["content"][0]["text"] == "AERO_CALLBACK_COMPLETED"
     }));
-    for (mut stream, release) in held {
+    for (_, release) in &held {
         release.send(()).expect("release this public upstream tail");
+    }
+    for (index, (mut stream, _)) in held.into_iter().enumerate() {
         let deadline = Instant::now() + test_timeout(Duration::from_secs(15));
         let mut completed = false;
-        while let Some(event) = stream
-            .next_event(deadline)
-            .expect("released public SSE stream")
-        {
+        while let Some(event) = stream.next_event(deadline).unwrap_or_else(|error| {
+            panic!("released public SSE stream {index}, completion received: {completed}: {error}")
+        }) {
             completed |= event["type"] == "response.completed";
         }
-        assert!(completed, "public stream ended without completion");
+        assert!(completed, "public stream {index} ended without completion");
+        stream
+            .expect_eof(deadline)
+            .expect("public SSE body reached EOF");
     }
 
     let start_call = |session: &'static str| {

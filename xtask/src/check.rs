@@ -1,5 +1,6 @@
 mod arch;
 mod comments;
+mod module_paths;
 mod modules;
 mod prose;
 mod test_deadlines;
@@ -46,7 +47,7 @@ pub fn run(args: &[String]) -> Result {
     }
     if errors.is_empty() {
         println!(
-            "check: arch, module-version, test-boundary, docs-prose, no-python-on-main, comments, disguised-sleep, msvc-only, domain-purity, single-http-driver, test-deadlines passed"
+            "check: arch, module-paths, module-version, test-boundary, docs-prose, no-python-on-main, comments, disguised-sleep, msvc-only, domain-purity, single-http-driver, test-deadlines passed"
         );
         Ok(())
     } else {

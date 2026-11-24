@@ -1,10 +1,10 @@
 use super::*;
-use crate::test_time::test_timeout;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use emp_modules::{
     Module,
     workspace::{NATIVE_SHARE, SharePayload, SubscriptionSnapshot},
 };
+use emp_test_support::test_timeout;
 use std::{fs, path::PathBuf};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},

@@ -4,11 +4,11 @@ use crate::http::request::parse_request;
 use crate::server::raw_tcp::{
     RawClient, head, read_websocket_frame, websocket_frame, wire_timeout,
 };
-use crate::test_time::test_timeout;
 use crate::tests::realtime_contract::{
     RealtimeUpstream, UpstreamResponse, app_server_for, multipart_offer,
 };
 use crate::tests::{live_journal, wait_for};
+use emp_test_support::test_timeout;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as AsyncListener, TcpStream as AsyncStream};
 use tokio::time::{Instant, timeout, timeout_at};

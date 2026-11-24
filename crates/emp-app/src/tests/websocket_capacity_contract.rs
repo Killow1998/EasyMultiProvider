@@ -1,6 +1,6 @@
 use super::*;
 use crate::services::connection_admission::{ConnectionAdmissionConfig, SlotLimits};
-use crate::test_time::test_timeout;
+use emp_test_support::test_timeout;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Instant;

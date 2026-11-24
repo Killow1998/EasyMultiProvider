@@ -1,10 +1,10 @@
 use super::*;
-use crate::test_time::test_timeout;
 use crate::{
     services::app_icon::{AppIcon, DEFAULT_PNG},
     tests::{live_journal, wait_for},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
+use emp_test_support::test_timeout;
 use std::{
     fs, os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicBool,
 };

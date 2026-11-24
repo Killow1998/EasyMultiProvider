@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use crate::lifecycle::ServerHandle;
-use crate::{test_executable::write_executable, test_time::test_timeout};
+use emp_test_support::{test_timeout, write_executable};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};

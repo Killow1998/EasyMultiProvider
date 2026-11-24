@@ -1,4 +1,4 @@
-use super::test_timeout;
+use emp_test_support::test_timeout;
 use std::io::{self, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};

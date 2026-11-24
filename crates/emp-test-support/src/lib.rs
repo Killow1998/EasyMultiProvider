@@ -13,3 +13,21 @@ pub fn test_timeout(duration: Duration) -> Duration {
     });
     duration.mul_f64(*scale)
 }
+
+#[cfg(unix)]
+pub fn write_executable(path: &std::path::Path, script: &str) {
+    let status = std::process::Command::new("/bin/sh")
+        .args([
+            "-ec",
+            "umask 077; printf '%s' \"$2\" > \"$1\"; chmod 700 \"$1\"",
+            "fixture",
+        ])
+        .arg(path)
+        .arg(script)
+        .status()
+        .expect("write fixture executable");
+    assert!(
+        status.success(),
+        "write fixture executable at {path:?}: {status}"
+    );
+}

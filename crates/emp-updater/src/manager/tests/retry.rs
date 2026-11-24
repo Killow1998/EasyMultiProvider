@@ -1,7 +1,7 @@
 //! Real HTTP failures exercise the same retry path as the packaged updater.
 use super::*;
-use crate::test_time::test_timeout;
 use crate::{UpdateError, download::download_package, release::Asset};
+use emp_test_support::test_timeout;
 use sha2::{Digest, Sha256};
 
 pub(super) fn serve_responses(listener: TcpListener, responses: Vec<Vec<u8>>) -> usize {

@@ -2,8 +2,8 @@
 #[cfg(feature = "hotpath")]
 mod hotpath_profile;
 use crate::api::quota::QUOTA_EVENT_SLOT_LIMIT;
-use crate::test_time::test_timeout;
 use base64::engine::general_purpose::STANDARD;
+use emp_test_support::test_timeout;
 
 use crate::cli::Cli;
 use crate::cli::parse_cli;

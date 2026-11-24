@@ -1,6 +1,6 @@
 use super::{account_writes::normalize_body, *};
-use crate::test_time::test_timeout;
 use emp_codex::configuration::local_auth;
+use emp_test_support::test_timeout;
 use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},

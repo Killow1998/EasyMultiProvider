@@ -1,4 +1,4 @@
-use crate::support::test_timeout;
+use emp_test_support::test_timeout;
 use std::io;
 use std::time::{Duration, Instant};
 

@@ -1,9 +1,9 @@
 use super::account_writes::{expect_upstream_get, normalize_body};
 use super::*;
-use crate::test_time::test_timeout;
 use crate::tests::{fixture_tls, live_journal, wait_for};
 use emp_state::filesystem::count_commits;
 use emp_storage::quota_history::SAMPLE_INTERVAL_SECONDS;
+use emp_test_support::test_timeout;
 use emp_transport::{HttpClient, HttpClientConfig, HttpClientPolicy};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use std::{io::BufRead, path::Path};

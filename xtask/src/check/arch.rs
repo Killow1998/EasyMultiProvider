@@ -45,11 +45,18 @@ const DEV: &[(&str, &str)] = &[
     ("emp-app", "emp-mod-aggregate"),
     ("emp-app", "emp-mod-decision"),
     ("emp-app", "emp-mod-gateway"),
+    ("emp-app", "emp-test-support"),
     ("emp-router", "emp-config"),
     ("emp-router", "emp-storage"),
+    ("emp-updater", "emp-test-support"),
 ];
 
 const FORBIDDEN: &[(&str, &str, &str)] = &[
+    (
+        "*",
+        "emp-test-support",
+        "共用测试夹具只能由 dev-dependencies 引用",
+    ),
     ("emp-server", "emp-app", "服务端不能依赖桌面壳"),
     ("emp-server", "emp-mod-*", "生产服务端不链接任何模组"),
     ("emp-mod-*", "emp-server", "模组只经宿主协议访问 Core"),
@@ -91,7 +98,33 @@ pub(super) fn check(root: &Path, errors: &mut Vec<String>) -> Result {
     }
     let metadata: Value = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("[arch] cargo metadata JSON: {error}"))?;
-    dependencies(&metadata, TRANSITIONAL, errors)
+    dependencies(&metadata, TRANSITIONAL, errors)?;
+    for package in workspace_packages(&metadata)? {
+        let directory = package["manifest_path"]
+            .as_str()
+            .and_then(|path| Path::new(path).parent())
+            .ok_or("[arch] package 缺少 manifest_path")?;
+        let targets = package["targets"]
+            .as_array()
+            .ok_or("[arch] package 缺少 targets")?;
+        let files = targets
+            .iter()
+            .filter_map(|target| target["src_path"].as_str().map(Path::new));
+        module_paths::check(root, directory, files, errors)?;
+    }
+    Ok(())
+}
+
+fn workspace_packages(metadata: &Value) -> Result<impl Iterator<Item = &Value>> {
+    let packages = metadata["packages"]
+        .as_array()
+        .ok_or("[arch] cargo metadata 缺少 packages")?;
+    let members = metadata["workspace_members"]
+        .as_array()
+        .ok_or("[arch] cargo metadata 缺少 workspace_members")?;
+    Ok(packages
+        .iter()
+        .filter(move |package| members.contains(&package["id"])))
 }
 
 fn dependencies(
@@ -99,16 +132,7 @@ fn dependencies(
     transitional: &[(&str, &str, &str)],
     errors: &mut Vec<String>,
 ) -> Result {
-    let packages = metadata["packages"]
-        .as_array()
-        .ok_or("[arch] cargo metadata 缺少 packages")?;
-    let members = metadata["workspace_members"]
-        .as_array()
-        .ok_or("[arch] cargo metadata 缺少 workspace_members")?;
-    let packages = packages
-        .iter()
-        .filter(|package| members.contains(&package["id"]))
-        .collect::<Vec<_>>();
+    let packages = workspace_packages(metadata)?.collect::<Vec<_>>();
     let names = packages
         .iter()
         .filter_map(|package| {
@@ -245,6 +269,10 @@ mod tests {
             ("emp-app", "emp-mod-decision", Value::Null, false),
             ("emp-app", "emp-state", json!("dev"), true),
             ("emp-domain", "emp-app", json!("dev"), false),
+            ("emp-app", "emp-test-support", json!("dev"), true),
+            ("emp-updater", "emp-test-support", json!("dev"), true),
+            ("emp-app", "emp-test-support", Value::Null, false),
+            ("emp-updater", "emp-test-support", json!("build"), false),
         ] {
             let metadata = json!({"workspace_members": [from, to], "packages": [
                 {"id": from, "name": from, "manifest_path": format!("/workspace/{from}/Cargo.toml"),
@@ -257,6 +285,13 @@ mod tests {
             if !valid {
                 assert!(errors[0].contains(&format!("{from} → {to}")));
                 assert!(errors[0].contains("PLAN §3.2"));
+                if to == "emp-test-support" {
+                    assert!(
+                        errors
+                            .iter()
+                            .any(|error| error.contains("只能由 dev-dependencies 引用"))
+                    );
+                }
             }
         }
     }

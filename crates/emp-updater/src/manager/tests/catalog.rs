@@ -1,7 +1,7 @@
 //! Cache persistence and HTTP validators through the real updater client.
 use super::*;
 use crate::release::MAX_RELEASE_BYTES;
-use crate::test_time::test_timeout;
+use emp_test_support::test_timeout;
 
 fn release(base: &str, notes: &str) -> String {
     let name = crate::release::current_asset_name().unwrap();

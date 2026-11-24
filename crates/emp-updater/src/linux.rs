@@ -115,7 +115,8 @@ fn query_output(
 #[cfg(test)]
 mod tests {
     use super::{package_version, system_install_manual};
-    use crate::{UpdateError, test_executable::write_executable};
+    use crate::UpdateError;
+    use emp_test_support::write_executable;
     use std::path::Path;
 
     fn fake_query(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {

@@ -1,4 +1,4 @@
-use super::test_timeout;
+use emp_test_support::test_timeout;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};

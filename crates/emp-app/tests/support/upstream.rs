@@ -1,4 +1,4 @@
-use super::test_timeout;
+use emp_test_support::test_timeout;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
