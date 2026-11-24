@@ -71,6 +71,8 @@ mod local_writes;
 #[cfg(unix)]
 mod login_writes;
 #[cfg(unix)]
+mod migration_writes;
+#[cfg(unix)]
 mod module_writes;
 #[cfg(unix)]
 mod team_writes;

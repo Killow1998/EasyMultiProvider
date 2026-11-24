@@ -1,6 +1,6 @@
-//! Session-bound, bounded import previews. Only commit publishes credentials.
-use super::{MigrationError, commit_selected, preferences};
+use super::{MigrationError, Selection, commit_selected, preferences};
 use crate::app::ServerState;
+use crate::services::observation::operation::observe;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
@@ -65,6 +65,21 @@ impl MigrationPreviews {
             .map(|p| (p.payload.clone(), p.demo))
             .ok_or_else(|| MigrationError::invalid("Reopen the migration package"))
     }
+    #[cfg(all(test, unix))]
+    pub(crate) fn expire_for_test(&self, token: &str) {
+        let mut packages = self.packages.lock().unwrap();
+        packages
+            .iter_mut()
+            .find(|package| package.token == token)
+            .unwrap()
+            .expires = Instant::now();
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn len_for_test(&self) -> usize {
+        self.packages.lock().unwrap().len()
+    }
+
     fn remove(&self, session: &str, token: &str) {
         if let Ok(mut packages) = self.packages.lock() {
             packages.retain(|p| p.session != session || p.token != token);
@@ -105,102 +120,108 @@ fn scrub(value: &Value) -> Value {
 fn id(value: &Value) -> &str {
     value["id"].as_str().unwrap_or_default()
 }
-pub(crate) fn preview_request(
+pub(crate) fn decode(
+    state: &ServerState,
+    session: &str,
+    bundle: &str,
+    password: &str,
+) -> Result<Value, MigrationError> {
+    let bundle = STANDARD.decode(bundle).map_err(MigrationError::invalid)?;
+    state
+        .backend
+        .migration_previews
+        .decode(session, &bundle, password)
+}
+
+pub(crate) fn demo(state: &ServerState, session: &str) -> Result<Value, MigrationError> {
+    let config = state
+        .backend
+        .configuration
+        .snapshot()
+        .map_err(|_| MigrationError::Internal)?;
+    let account_id = config["accounts"]
+        .as_array()
+        .and_then(|v| v.first())
+        .map(id)
+        .unwrap_or("sample-account");
+    let provider_id = config["providers"]
+        .as_array()
+        .and_then(|v| v.first())
+        .map(id)
+        .unwrap_or("sample-api");
+    let account = json!({"id":account_id,"prefix":account_id,"name":"Example subscription","hidden_models":[]});
+    let provider = json!({"id":provider_id,"name":"Example subscription","base_url":"https://example.invalid/v1","protocol":"responses","auth_mode":"api_key"});
+    let payload = json!({"schema":"easy-multi-provider-migration","version":1,"config":{"accounts":[account],"providers":[provider],"models":[{"id":format!("{provider_id}/sample-model"),"provider":provider_id,"upstream_id":"sample-model","display_name":"Example model","context_window":128000}]},"accounts":[{"metadata":account,"auth":{"tokens":{"account_id":"emp-demo-only","access_token":"emp-demo-only"}}}],"provider_keys":{provider_id:"emp-demo-only"}});
+    state
+        .backend
+        .migration_previews
+        .store(session, payload, true)
+}
+
+pub(crate) struct PreviewInput {
+    pub(crate) token: String,
+    pub(crate) selection: Option<Selection>,
+    pub(crate) preference_choices: Value,
+}
+
+pub(crate) enum PreviewAction {
+    Review,
+    Import,
+}
+
+pub(crate) fn selected(
     request_id: Option<&str>,
     state: &ServerState,
     session: &str,
-    operation: &str,
-    body: &Value,
+    action: PreviewAction,
+    input: PreviewInput,
 ) -> Result<Value, MigrationError> {
     let cache = &state.backend.migration_previews;
-    match operation {
-        "decode" => {
-            let bundle = STANDARD
-                .decode(body["bundle"].as_str().unwrap_or_default())
-                .map_err(MigrationError::invalid)?;
-            cache.decode(
-                session,
-                &bundle,
-                body["password"].as_str().unwrap_or_default(),
-            )
-        }
-        "demo" => {
-            let config = state
-                .backend
-                .configuration
-                .snapshot()
-                .map_err(|_| MigrationError::Internal)?;
-            let account_id = config["accounts"]
-                .as_array()
-                .and_then(|v| v.first())
-                .map(id)
-                .unwrap_or("sample-account");
-            let provider_id = config["providers"]
-                .as_array()
-                .and_then(|v| v.first())
-                .map(id)
-                .unwrap_or("sample-api");
-            let account = json!({"id":account_id,"prefix":account_id,"name":"Example subscription","hidden_models":[]});
-            let provider = json!({"id":provider_id,"name":"Example subscription","base_url":"https://example.invalid/v1","protocol":"responses","auth_mode":"api_key"});
-            let payload = json!({"schema":"easy-multi-provider-migration","version":1,"config":{"accounts":[account],"providers":[provider],"models":[{"id":format!("{provider_id}/sample-model"),"provider":provider_id,"upstream_id":"sample-model","display_name":"Example model","context_window":128000}]},"accounts":[{"metadata":account,"auth":{"tokens":{"account_id":"emp-demo-only","access_token":"emp-demo-only"}}}],"provider_keys":{provider_id:"emp-demo-only"}});
-            cache.store(session, payload, true)
-        }
-        "preview" | "import" => {
-            let token = body["token"].as_str().unwrap_or_default();
-            let (source, demo) = cache.get(session, token)?;
-            let selections = body["selections"]
-                .as_array()
-                .ok_or_else(|| MigrationError::invalid("Select services"))?;
-            let payload = emp_state::migration::select_migration_payload(
-                &source,
-                selections,
-                body["include_context"].as_bool().unwrap_or(true),
-                body["include_rename"].as_bool().unwrap_or(true),
-            )
-            .map_err(MigrationError::invalid)?;
-            if operation == "import" {
-                if demo {
-                    return Err(MigrationError::invalid("Demo packages cannot be imported"));
-                }
-                let result = crate::services::observation::operation::observe(
-                    &state.backend.diagnostics,
-                    request_id,
-                    "migration_import",
-                    |receipt| {
-                        commit_selected(state, &payload, &body["preference_choices"], receipt)
-                    },
-                )?;
-                cache.remove(session, token);
-                return Ok(result);
+    let (source, demo) = cache.get(session, &input.token)?;
+    let payload = input
+        .selection
+        .ok_or_else(|| MigrationError::invalid("Select services"))?
+        .apply(&source)?;
+    match action {
+        PreviewAction::Import => {
+            if demo {
+                return Err(MigrationError::invalid("Demo packages cannot be imported"));
             }
-            crate::services::observation::operation::observe(
+            let result = observe(
                 &state.backend.diagnostics,
                 request_id,
-                "migration_preview",
-                |receipt| {
-                    let current = receipt.step("read_configuration", || {
-                        state
-                            .backend
-                            .configuration
-                            .snapshot()
-                            .map_err(|_| MigrationError::Internal)
-                    })?;
-                    let resolution = receipt.step("resolve_preferences", || {
-                        preferences::resolve(
-                            state,
-                            &current,
-                            &payload,
-                            &body["preference_choices"],
-                            false,
-                        )
-                    })?;
-                    receipt.step("build_preview", || {
-                        preview(state, &current, resolution, token)
-                    })
-                },
-            )
+                "migration_import",
+                |receipt| commit_selected(state, &payload, &input.preference_choices, receipt),
+            )?;
+            cache.remove(session, &input.token);
+            Ok(result)
         }
-        _ => Err(MigrationError::invalid("Unknown migration operation")),
+        PreviewAction::Review => observe(
+            &state.backend.diagnostics,
+            request_id,
+            "migration_preview",
+            |receipt| {
+                let current = receipt.step("read_configuration", || {
+                    state
+                        .backend
+                        .configuration
+                        .snapshot()
+                        .map_err(|_| MigrationError::Internal)
+                })?;
+                let resolution = receipt.step("resolve_preferences", || {
+                    preferences::resolve(
+                        state,
+                        &current,
+                        &payload,
+                        &input.preference_choices,
+                        false,
+                    )
+                })?;
+                receipt.step("build_preview", || {
+                    preview(state, &current, resolution, &input.token)
+                })
+            },
+        ),
     }
 }
 

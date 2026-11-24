@@ -7,6 +7,7 @@ pub(crate) mod inspection;
 pub(crate) mod local_writes;
 pub(crate) mod login;
 pub(crate) mod management;
+pub(crate) mod migration;
 pub(crate) mod modules;
 pub(crate) mod pages;
 pub(crate) mod proxy;

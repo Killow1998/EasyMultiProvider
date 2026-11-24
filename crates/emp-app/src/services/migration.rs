@@ -1,5 +1,3 @@
-//! Migration commands own encryption/decryption, account publication and catalog.
-//! The HTTP boundary still owns the existing one-use export authorization.
 use crate::app::ServerState;
 use crate::services::observation::operation::{OperationObservation, observe};
 use base64::Engine as _;
@@ -10,8 +8,8 @@ use serde_json::Value;
 const MIN_EXPORT_PASSWORD_UTF8_BYTES: usize = 12;
 pub(crate) mod lan;
 mod preferences;
-mod preview;
-pub(crate) use preview::{MigrationPreviews, preview_request};
+pub(crate) mod preview;
+pub(crate) use preview::MigrationPreviews;
 
 pub(crate) enum MigrationError {
     Invalid {
@@ -34,20 +32,40 @@ pub(crate) struct Exported {
     pub(crate) summary: Value,
 }
 
+pub(crate) struct Selection {
+    pub(crate) items: Vec<Value>,
+    pub(crate) include_context: bool,
+    pub(crate) include_rename: bool,
+}
+
+impl Selection {
+    fn apply(&self, payload: &Value) -> Result<Value, MigrationError> {
+        emp_state::migration::select_migration_payload(
+            payload,
+            &self.items,
+            self.include_context,
+            self.include_rename,
+        )
+        .map_err(MigrationError::invalid)
+    }
+}
+
+pub(crate) struct ExportOptions {
+    pub(crate) groups: Option<Vec<Value>>,
+    pub(crate) selection: Option<Selection>,
+}
+
 pub(crate) fn export(
     request_id: Option<&str>,
     state: &ServerState,
-    body: &Value,
+    password: &str,
+    options: &ExportOptions,
 ) -> Result<Exported, MigrationError> {
     observe(
         &state.backend.diagnostics,
         request_id,
         "migration_export",
         |receipt| {
-            let password = body
-                .get("password")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
             if password.len() < MIN_EXPORT_PASSWORD_UTF8_BYTES {
                 return Err(MigrationError::Invalid {
                     message: "migration export password must contain at least 12 UTF-8 bytes"
@@ -55,8 +73,7 @@ pub(crate) fn export(
                     code: Some("migration_password_too_short"),
                 });
             }
-            let group_values = body.get("groups").and_then(Value::as_array);
-            let groups = match group_values {
+            let groups = match &options.groups {
                 Some(values) => {
                     let Some(values) = values.iter().map(Value::as_str).collect::<Option<Vec<_>>>()
                     else {
@@ -78,13 +95,15 @@ pub(crate) fn export(
                 .team
                 .exclude_shared_migration_providers(&mut config)
                 .map_err(|_| MigrationError::Internal)?;
-            if let Some(selections) = body.get("selections").and_then(Value::as_array) {
-                let account_ids: std::collections::BTreeSet<_> = selections
+            if let Some(selection) = &options.selection {
+                let account_ids: std::collections::BTreeSet<_> = selection
+                    .items
                     .iter()
                     .filter(|s| s["kind"] == "account")
                     .filter_map(|s| s["id"].as_str())
                     .collect();
-                let provider_ids: std::collections::BTreeSet<_> = selections
+                let provider_ids: std::collections::BTreeSet<_> = selection
+                    .items
                     .iter()
                     .filter(|s| s["kind"] == "provider")
                     .filter_map(|s| s["id"].as_str())
@@ -118,13 +137,7 @@ pub(crate) fn export(
                     Some(&state.backend.accounts.native_auth_path),
                 )
                 .map_err(MigrationError::invalid)?;
-                let payload = emp_state::migration::select_migration_payload(
-                    &payload,
-                    selections,
-                    body["include_context"].as_bool().unwrap_or(true),
-                    body["include_rename"].as_bool().unwrap_or(true),
-                )
-                .map_err(MigrationError::invalid)?;
+                let payload = selection.apply(&payload)?;
                 let mut salt = [0; 16];
                 getrandom::getrandom(&mut salt).map_err(|_| MigrationError::Internal)?;
                 let plaintext =
@@ -164,24 +177,17 @@ pub(crate) fn export(
 pub(crate) fn import(
     request_id: Option<&str>,
     state: &ServerState,
-    body: &Value,
+    encoded: &str,
+    password: &str,
 ) -> Result<Value, MigrationError> {
     observe(
         &state.backend.diagnostics,
         request_id,
         "migration_import",
         |receipt| {
-            let password = body
-                .get("password")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let Some(encoded) = body
-                .get("bundle")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-            else {
+            if encoded.is_empty() {
                 return Err(MigrationError::invalid("migration bundle is required"));
-            };
+            }
             let bundle = STANDARD
                 .decode(encoded)
                 .map_err(|_| MigrationError::invalid("migration bundle is not valid base64"))?;

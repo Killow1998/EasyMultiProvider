@@ -2,7 +2,7 @@
 //! carries the endpoint and secret; the wire carries a proof, never that secret.
 mod network;
 mod wire;
-use super::MigrationError;
+use super::{ExportOptions, MigrationError};
 use crate::app::ServerState;
 use serde_json::{Value, json};
 use std::net::{Ipv4Addr, TcpListener};
@@ -47,38 +47,46 @@ impl Drop for Sender {
     }
 }
 
-pub(crate) fn execute(
+pub(crate) fn receive(
     state: &ServerState,
     session: &str,
-    operation: &str,
-    body: &Value,
+    code: &str,
+    receiver: &str,
 ) -> Result<Value, MigrationError> {
-    if operation == "receive" {
-        let code = wire::Code::parse(body["code"].as_str().unwrap_or_default())
-            .map_err(MigrationError::invalid)?;
-        let nonce = wire::nonce(body["receiver"].as_str().unwrap_or_default())
-            .map_err(MigrationError::invalid)?;
-        return match wire::receive(&code, &nonce).map_err(MigrationError::invalid)? {
-            Some(bundle) => {
-                state
-                    .backend
-                    .migration_previews
-                    .decode(session, &bundle, &code.password())
-            }
-            None => Ok(json!({"status":"waiting"})),
-        };
+    let code = wire::Code::parse(code).map_err(MigrationError::invalid)?;
+    let nonce = wire::nonce(receiver).map_err(MigrationError::invalid)?;
+    match wire::receive(&code, &nonce).map_err(MigrationError::invalid)? {
+        Some(bundle) => state
+            .backend
+            .migration_previews
+            .decode(session, &bundle, &code.password()),
+        None => Ok(json!({"status":"waiting"})),
     }
+}
+
+pub(crate) enum SenderCommand {
+    Start {
+        address: Option<String>,
+        options: ExportOptions,
+    },
+    Cancel,
+    Approve(String),
+    Status,
+}
+
+pub(crate) fn send(state: &ServerState, command: SenderCommand) -> Result<Value, MigrationError> {
     let mut sender = state
         .backend
         .lan_migration
         .0
         .lock()
         .map_err(|_| MigrationError::Internal)?;
-    match operation {
-        "start" => {
-            if body["selections"]
-                .as_array()
-                .is_none_or(|items| items.is_empty())
+    match command {
+        SenderCommand::Start { address, options } => {
+            if options
+                .selection
+                .as_ref()
+                .is_none_or(|selection| selection.items.is_empty())
             {
                 return Err(MigrationError::invalid("Select services"));
             }
@@ -87,8 +95,7 @@ pub(crate) fn execute(
             }) {
                 return Err(MigrationError::invalid("lan_already_active"));
             }
-            let address: Ipv4Addr = match body["address"].as_str().filter(|value| !value.is_empty())
-            {
+            let address: Ipv4Addr = match address {
                 Some(value) => value
                     .parse()
                     .map_err(|_| MigrationError::invalid("lan_address_required"))?,
@@ -111,9 +118,7 @@ pub(crate) fn execute(
                     .port(),
             )
             .map_err(MigrationError::invalid)?;
-            let mut export = body.clone();
-            export["password"] = code.password().into();
-            let exported = super::export(None, state, &export)?;
+            let exported = super::export(None, state, &code.password(), &options)?;
             if exported.bundle.len() > wire::MAX_BUNDLE {
                 return Err(MigrationError::invalid("lan_package_too_large"));
             }
@@ -140,15 +145,15 @@ pub(crate) fn execute(
                 worker: Some(worker),
             });
         }
-        "cancel" => {
+        SenderCommand::Cancel => {
             *sender = None;
             return Ok(json!({"status":"cancelled"}));
         }
-        "approve" => {
+        SenderCommand::Approve(code) => {
             let sender = sender
                 .as_ref()
                 .ok_or_else(|| MigrationError::invalid("lan_expired"))?;
-            if body["code"].as_str() != Some(sender.code.encode().as_str()) {
+            if code != sender.code.encode() {
                 return Err(MigrationError::invalid("lan_expired"));
             }
             let mut delivery = sender.shared.lock().map_err(|_| MigrationError::Internal)?;
@@ -160,8 +165,7 @@ pub(crate) fn execute(
             }
             delivery.approved = true;
         }
-        "status" => {}
-        _ => return Err(MigrationError::invalid("lan_unknown_operation")),
+        SenderCommand::Status => {}
     }
     Ok(sender.as_ref().map_or_else(|| json!({"status":"idle"}), |sender| {
         let delivery = sender.shared.lock().unwrap();

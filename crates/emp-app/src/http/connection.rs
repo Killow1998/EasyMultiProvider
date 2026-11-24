@@ -2,7 +2,6 @@ use crate::api::catalog;
 use crate::api::compact::compact_request;
 use crate::api::integration::management_integration_request;
 use crate::api::lifecycle::quit_request;
-use crate::api::migration::management_migration_request;
 use crate::api::quota::serve_quota_events;
 use crate::api::realtime::serve_realtime_call;
 use crate::api::realtime::sideband::serve_realtime_sideband;
@@ -29,6 +28,7 @@ use crate::server::http::{
     gateway::{self, GatewayClientWrite},
     login,
     management::ManagementSession,
+    migration::MigrationRoute,
     modules::{self, ModuleAction},
     team,
 };
@@ -102,6 +102,13 @@ pub(crate) fn handle_connection(
             route
                 .legacy(&mut stream, request, raw.body_prefix, state, now)
                 .unwrap_or_else(EntryError::reply)
+                .wire_response(),
+        )
+    } else if let Some(route) = MigrationRoute::for_request(request) {
+        Some(
+            route
+                .legacy(&mut stream, request, raw.body_prefix, state, now)
+                .unwrap_or_else(|reply| reply)
                 .wire_response(),
         )
     } else if login::matches(request) {
@@ -200,26 +207,6 @@ pub(crate) fn handle_connection(
                 now,
             )),
             (RequestMethod::Post, "/v1/alpha/search") => Some(native_search_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                now,
-            )),
-            (
-                RequestMethod::Post,
-                "/api/migration/export"
-                | "/api/migration/export/confirm"
-                | "/api/migration/import"
-                | "/api/migration/decode"
-                | "/api/migration/preview"
-                | "/api/migration/demo"
-                | "/api/migration/lan/start"
-                | "/api/migration/lan/status"
-                | "/api/migration/lan/approve"
-                | "/api/migration/lan/cancel"
-                | "/api/migration/lan/receive",
-            ) => Some(management_migration_request(
                 &mut stream,
                 request,
                 raw.body_prefix,

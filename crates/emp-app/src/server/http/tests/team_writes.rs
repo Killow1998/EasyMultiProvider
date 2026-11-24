@@ -19,7 +19,7 @@ const PROFILE: &str = "state/team-profile.json";
 const RETAINED: &str = "state/local-key-subscription.json";
 const IGNORED: &[u8] = br#"{"extra":{"future":[1,null]}}"#;
 
-fn identity(name: &str) -> Value {
+pub(super) fn identity(name: &str) -> Value {
     json!({
         "workspace":{"id":WORKSPACE,"name":name},
         "member":{"id":MEMBER,"role":"team_admin","sync":true,"publish":true}
@@ -72,6 +72,7 @@ while read -r line; do
             esac
             printf '{{"value":{{"url":"{base}/workspace/v1/%s","method":"%s"}}}}\n' "$path" "$method"
             ;;
+        *'"action":"identity"'*'"role":"member"'*) printf '%s\n' '{{"value":{{"migration_allowed":false,"sync_allowed":true}}}}' ;;
         *'"action":"identity"'*) printf '%s\n' '{{"value":{{"migration_allowed":true,"sync_allowed":true}}}}' ;;
         *'"action":"sync_shares"'*) printf '%s\n' '{{"value":{{"selected":[0],"skipped_native":0}}}}' ;;
         *'"action":"discovery"'*) printf '%s\n' '{{"value":[]}}' ;;
@@ -122,7 +123,7 @@ done
     fixture
 }
 
-fn run_pair(test: impl AsyncFnOnce(&Pair<'_>, &AsyncListener, &str)) {
+pub(super) fn run_pair(test: impl AsyncFnOnce(&Pair<'_>, &AsyncListener, &str)) {
     let upstream = TcpListener::bind(LOOPBACK).unwrap();
     upstream.set_nonblocking(true).unwrap();
     let base = format!("http://{}", upstream.local_addr().unwrap());
@@ -222,7 +223,7 @@ impl UpstreamRequest {
     }
 }
 
-async fn respond(
+pub(super) async fn respond(
     upstream: &AsyncListener,
     path: &str,
     body: Option<&Value>,
@@ -251,7 +252,7 @@ fn login_reply() -> Value {
     reply
 }
 
-async fn login(pair: &Pair<'_>, upstream: &AsyncListener, base: &str) -> Value {
+pub(super) async fn login(pair: &Pair<'_>, upstream: &AsyncListener, base: &str) -> Value {
     let body = credentials(base).to_string();
     let (reply, ()) = tokio::join!(
         pair.post("/api/team/login?fixture=1", body.as_bytes(), 200),
@@ -482,7 +483,7 @@ fn team_writes_match_legacy_wire_upstream_bytes_and_gate_order() {
     });
 }
 
-fn read_team_profile(fixture: &Fixture) -> Value {
+pub(super) fn read_team_profile(fixture: &Fixture) -> Value {
     let path = fixture.directory.path().join(PROFILE);
     assert!(
         fs::read(&path)

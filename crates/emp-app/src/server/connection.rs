@@ -7,7 +7,9 @@ use super::{
         error::EntryWire,
         gateway, inspection,
         local_writes::LocalWriteRoute,
-        login, management, modules, pages,
+        login, management,
+        migration::MigrationRoute,
+        modules, pages,
         proxy::RequestAccess,
         settings, team, usage,
     },
@@ -143,6 +145,7 @@ pub(super) async fn drive_candidate(
         || catalog_write.is_some()
         || local_write.is_some()
         || login::matches(request)
+        || MigrationRoute::for_request(request).is_some()
         || (request.method == RequestMethod::Post && request.raw_path() == management::SESSION_PATH)
         || settings::matches(request)
         || catalog::matches(request)
