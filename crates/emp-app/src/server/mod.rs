@@ -152,7 +152,16 @@ pub(crate) async fn serve_candidate(
     listener: TcpListener,
     state: Arc<ServerState>,
 ) -> Result<(), JoinError> {
-    let router = http::with_entry_state(
+    let router = candidate_router(state.clone());
+    let control = Arc::new(ServerControl {
+        candidate: Some(state.clone()),
+        ..ServerControl::new(state.connection_admission.clone())
+    });
+    serve(listener, router, control).await
+}
+
+fn candidate_router(state: Arc<ServerState>) -> Router {
+    http::with_entry_state(
         http::accounts::routes()
             .route(
                 http::management::SESSION_PATH,
@@ -172,12 +181,7 @@ pub(crate) async fn serve_candidate(
             .merge(http::migration::routes()),
         state.clone(),
     )
-    .merge(http::inference::routes().with_state(state.clone()));
-    let control = Arc::new(ServerControl {
-        candidate: Some(state.clone()),
-        ..ServerControl::new(state.connection_admission.clone())
-    });
-    serve(listener, router, control).await
+    .merge(http::inference::routes().with_state(state))
 }
 
 async fn serve(

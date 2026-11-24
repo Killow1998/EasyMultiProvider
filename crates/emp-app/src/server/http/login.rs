@@ -20,7 +20,7 @@ use serde_json::Value;
 use std::{net::TcpStream, sync::Arc};
 
 const NATIVE_PREFIX: &str = "/api/native/login/";
-const ACCOUNTS_PREFIX: &str = "/api/accounts/login/";
+pub(super) const ACCOUNTS_PREFIX: &str = "/api/accounts/login/";
 
 pub(crate) fn matches(request: Request<'_>) -> bool {
     let path = request.raw_path();
@@ -29,13 +29,9 @@ pub(crate) fn matches(request: Request<'_>) -> bool {
 }
 
 pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
-    [NATIVE_PREFIX, ACCOUNTS_PREFIX]
-        .into_iter()
-        .fold(Router::new(), |router, prefix| {
-            router
-                .route(prefix, post(write))
-                .route(&format!("{prefix}{{*path}}"), post(write))
-        })
+    Router::new()
+        .route(NATIVE_PREFIX, post(write))
+        .route("/api/native/login/{*path}", post(write))
 }
 
 fn operation(path: &str, body: &Value) -> LoginOperation {
@@ -68,7 +64,7 @@ impl FromRequest<Arc<ServerState>> for JsonBody<LoginOperation> {
     }
 }
 
-async fn write(
+pub(super) async fn write(
     access: RequestAccess,
     _session: ManagementSession,
     State(state): State<Arc<ServerState>>,

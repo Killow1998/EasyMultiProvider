@@ -24,6 +24,62 @@ const USE_LOCAL_KEY: &str = "/api/native/login/use-local-key";
 const BODY_LIMIT: &str = "Content-Length: 5242881";
 
 #[test]
+fn session_exchange_uses_admission_time_while_blocking_worker_is_queued() {
+    let fixture = Fixture::new();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let server = ServerHandle::bind(LOOPBACK, fixture.router(), admission())
+                .await
+                .unwrap();
+            let state = &fixture.legacy.state;
+            let url = state.reopen_url().unwrap();
+            let header = format!(
+                "X-EMP-Bootstrap: {}",
+                url.split_once("?bootstrap=").unwrap().1
+            );
+            let (admitted, ready) = tokio::sync::oneshot::channel();
+            let (release, unlocked) = tokio::sync::oneshot::channel();
+            let gated = state.clone();
+            let hold_worker = tokio::task::spawn_blocking(move || {
+                crate::tests::wait_for(Duration::from_secs(5), || {
+                    gated.updates.active_for_test() == 1
+                });
+                admitted.send(()).unwrap();
+                unlocked.blocking_recv().unwrap();
+            });
+            let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+            let wire = request(state.port, "POST", SESSION_PATH, &[&header], b"");
+            client.write_all(&wire).await.unwrap();
+            ready.await.unwrap();
+
+            let expired_at = system_now();
+            state
+                .reopen_bootstrap
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .expires_at = expired_at;
+            release.send(()).unwrap();
+            hold_worker.await.unwrap();
+            let mut reply = Vec::new();
+            timeout(Duration::from_secs(5), client.read_to_end(&mut reply))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_status(&reply, 200);
+            let token = json_body(&reply)["session"].as_str().unwrap().to_owned();
+            assert_eq!(fixture.legacy.session_token(), token);
+            server.shutdown().await.unwrap();
+        });
+    fixture.legacy.shutdown().unwrap();
+}
+
+#[test]
 fn session_exchange_matches_legacy_wire_and_rotates_once() {
     let old = Fixture::new();
     Fixture::new().run_candidate(async |new, candidate| {

@@ -381,7 +381,7 @@ fn submitted_app_icon_write_finishes_once_after_disconnect() {
                     });
                     ready.await.unwrap();
 
-                    let mut client = TcpStream::connect(address).await.unwrap();
+                    let (mut client, task) = connect_submitted_write(fixture, address).await;
                     let selected = json!({
                         "preset":"fixture-disconnect",
                         "monochrome":true,
@@ -402,8 +402,7 @@ fn submitted_app_icon_write_finishes_once_after_disconnect() {
                     .unwrap();
                     assert_eq!(state.backend.app_icon.revision.load(Ordering::Acquire), 0);
                     assert!(!state.updates.drain_for_test(Duration::ZERO));
-                    client.set_zero_linger().unwrap();
-                    drop(client);
+                    disconnect_submitted_write(fixture, client, task).await;
                     release.send(()).unwrap();
                     hold_image.await.unwrap();
                     let state = state.clone();

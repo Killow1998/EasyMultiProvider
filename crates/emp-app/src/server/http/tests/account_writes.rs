@@ -209,6 +209,43 @@ fn normalize_quota_time(reply: Vec<u8>) -> Vec<u8> {
 }
 
 #[test]
+fn login_account_reads_and_delete_match_legacy_wire() {
+    let old = fixture(LOOPBACK, Path::new("missing-test-codex"));
+    fixture(LOOPBACK, Path::new("missing-test-codex")).run_candidate(async |new, candidate| {
+        let pair = Pair { old: &old, new, candidate };
+        pair.post(
+            IMPORT,
+            br#"{"id":"login","prefix":"login","auth_json":{"tokens":{"access_token":"fixture-token","account_id":"fixture-owner"}}}"#,
+            200,
+        )
+        .await;
+
+        let models = "/api/accounts/login/models";
+        let history = "/api/accounts/login/quota-history?start=1&end=100";
+        let account = "/api/accounts/login/";
+        for (method, path) in [("GET", models), ("GET", history), ("DELETE", account)] {
+            pair.parity(
+                |port, _| request(port, method, path, &[], b""),
+                401,
+                |reply| reply,
+            )
+            .await;
+        }
+        assert_eq!(pair.read(models).await["models"], json!([]));
+        assert_eq!(pair.read(history).await["account_id"], "login");
+        let deleted = pair.parity(
+            |port, session| request(port, "DELETE", account, &[session], b""),
+            200,
+            |reply| reply,
+        )
+        .await;
+        assert_eq!(deleted, json!({"status":"ok"}));
+        assert_eq!(pair.read("/api/accounts").await["accounts"], json!([]));
+    });
+    old.legacy.shutdown().unwrap();
+}
+
+#[test]
 fn account_writes_match_legacy_wire_and_persist_the_same_state() {
     let upstream = TcpListener::bind(LOOPBACK).unwrap();
     upstream.set_nonblocking(true).unwrap();
@@ -345,12 +382,11 @@ fn submitted_account_model_refresh_finishes_once_after_disconnect() {
         let import = json_request(port, IMPORT, &[session], IMPORT_BODY);
         assert_status(&exchange_wire(candidate, &import, true).await, 200);
         let refresh = json_request(port, MODELS, &[session], b"{}");
-        let mut client = TcpStream::connect(candidate).await.unwrap();
+        let (mut client, task) = connect_submitted_write(fixture, candidate).await;
         client.write_all(&refresh).await.unwrap();
         let upstream_request = wait_for_model_fetch(&upstream).await;
         assert!(!fixture.legacy.state.updates.drain_for_test(Duration::ZERO));
-        client.set_zero_linger().unwrap();
-        drop(client);
+        disconnect_submitted_write(fixture, client, task).await;
         send_models(upstream_request, "after-disconnect").await;
 
         let state = fixture.legacy.state.clone();

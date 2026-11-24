@@ -47,31 +47,40 @@ impl Write {
 }
 
 fn normalize_clients(reply: Vec<u8>) -> Vec<u8> {
-    let mut value = json_body(&reply);
-    let redact = |client: &mut Value| {
-        let id = client["id"].as_str().expect("device ID");
-        assert!(id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        let key = client["api_key"].as_str().expect("device key");
-        assert!(key.strip_prefix("emp-client-").is_some_and(|hex| {
-            hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
-        }));
-        client["id"] = json!("fixture-id");
-        client["api_key"] = json!("fixture-key");
-        if let Some(created_at) = client.get_mut("created_at") {
-            assert!(created_at.as_f64().is_some_and(|time| time > 0.0));
-            *created_at = json!(1.0);
-        }
-    };
-    if let Some(clients) = value.get_mut("clients").and_then(Value::as_array_mut) {
-        for client in clients {
-            redact(client);
-        }
+    let value = json_body(&reply);
+    let clients = if let Some(clients) = value.get("clients").and_then(Value::as_array) {
+        clients.as_slice()
     } else if value.get("api_key").is_some() {
-        redact(&mut value);
+        std::slice::from_ref(&value)
     } else {
         return reply;
-    }
-    normalize_body(reply, |_| value.to_string())
+    };
+    normalize_body(reply, |body| {
+        let mut body = body.to_owned();
+        for client in clients {
+            let id = client["id"].as_str().expect("device ID");
+            assert!(id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            let key = client["api_key"].as_str().expect("device key");
+            assert!(key.strip_prefix("emp-client-").is_some_and(|hex| {
+                hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }));
+            body = body.replace(&format!(r#""id":"{id}""#), r#""id":"fixture-id""#);
+            body = body.replace(
+                &format!(r#""api_key":"{key}""#),
+                r#""api_key":"fixture-key""#,
+            );
+            if let Some(created_at) = client.get("created_at") {
+                assert!(created_at.as_f64().is_some_and(|time| time > 0.0));
+                for delimiter in [',', '}'] {
+                    body = body.replace(
+                        &format!(r#""created_at":{created_at}{delimiter}"#),
+                        &format!(r#""created_at":1.0{delimiter}"#),
+                    );
+                }
+            }
+        }
+        body
+    })
 }
 
 fn fixture_with_decision() -> Fixture {
@@ -439,7 +448,7 @@ fn submitted_gateway_issue_saves_once_after_disconnect_and_holds_drain() {
         for (fixture, address) in comparison_endpoints(&pair) {
             let state = &fixture.legacy.state;
             let (ready, release) = state.backend.gateway_clients.gate_next_save_for_test();
-            let mut client = TcpStream::connect(address).await.unwrap();
+            let (mut client, task) = connect_submitted_write(fixture, address).await;
             let wire = ISSUE.wire(
                 fixture.port(),
                 Some(&fixture.session()),
@@ -453,8 +462,7 @@ fn submitted_gateway_issue_saves_once_after_disconnect_and_holds_drain() {
             assert!(!client_file(fixture).exists());
             assert!(!state.updates.drain_for_test(Duration::ZERO));
 
-            client.set_zero_linger().unwrap();
-            drop(client);
+            disconnect_submitted_write(fixture, client, task).await;
             release.send(()).unwrap();
             let state = state.clone();
             tokio::task::spawn_blocking(move || {

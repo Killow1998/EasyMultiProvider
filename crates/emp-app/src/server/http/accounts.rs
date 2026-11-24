@@ -1,6 +1,7 @@
 use super::{
     body::{JsonBody, read_json_body},
     error::{EntryError, JsonReply},
+    login,
     management::ManagementSession,
     proxy::RequestAccess,
     raw_head,
@@ -30,6 +31,11 @@ pub(in crate::server) fn routes() -> Router<Arc<ServerState>> {
         .route("/api/accounts", get(read))
         .route("/api/accounts/{*path}", get(read).post(write).delete(write))
         .route("/api/accounts/", delete(write))
+        .route(login::ACCOUNTS_PREFIX, post(login::write).delete(write))
+        .route(
+            "/api/accounts/login/{*path}",
+            get(read).post(login::write).delete(write),
+        )
         .route("/api/config", post(write))
 }
 
@@ -39,12 +45,13 @@ async fn read(
     State(state): State<Arc<ServerState>>,
     request: axum::extract::Request,
 ) -> Result<JsonReply, EntryError> {
+    let now = system_now();
     let raw = raw_head(request.extensions())?.clone();
     run_blocking(move || {
         let request = raw.request();
         AccountRead::for_path(request.raw_path())
             .ok_or(EntryError::NotFound)?
-            .read(request, &state, system_now())
+            .read(request, &state, now)
     })
     .await
     .map_err(|_| EntryError::internal())?

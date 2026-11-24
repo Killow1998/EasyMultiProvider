@@ -96,20 +96,31 @@ fn normalize_root(reply: Vec<u8>, pair: &Pair<'_>) -> Vec<u8> {
 
 fn normalize_time(reply: Vec<u8>, field: &str) -> Vec<u8> {
     let value = json_body(&reply);
-    let stamp = if field == "observed_at" {
-        &value["observation"][field]
-    } else {
-        &value[field]
+    let replacement = match field {
+        "updated_at" => {
+            let stamp = value[field].as_str().expect("updated_at must be a string");
+            time::OffsetDateTime::parse(stamp, &time::format_description::well_known::Rfc3339)
+                .expect("updated_at must be RFC 3339");
+            r#""2000-01-01T00:00:00Z""#
+        }
+        "observed_at" => {
+            assert!(
+                value["observation"][field]
+                    .as_f64()
+                    .is_some_and(|stamp| stamp > 0.0),
+                "observed_at must be a positive number"
+            );
+            "0"
+        }
+        _ => unreachable!("unexpected catalog timestamp field"),
     };
-    assert!(
-        stamp.as_f64().is_some_and(|value| value > 0.0)
-            || stamp.as_str().is_some_and(|value| !value.is_empty())
-    );
     normalize_body(reply, |body| {
         let key = format!("\"{field}\":");
         let (head, tail) = body.split_once(&key).unwrap();
         let end = tail.find([',', '}']).unwrap();
-        format!("{head}{key}0{}", &tail[end..])
+        let start = tail.len() - tail.trim_start().len();
+        let end = tail[..end].trim_end().len();
+        format!("{head}{key}{}{replacement}{}", &tail[..start], &tail[end..])
     })
 }
 
@@ -547,16 +558,16 @@ fn catalog_writes_match_legacy_wire_and_persist_the_same_state() {
     old.legacy.shutdown().unwrap();
 }
 
-async fn submit(fixture: &Fixture, address: SocketAddr, path: &str, body: &[u8]) -> TcpStream {
-    let mut client = TcpStream::connect(address).await.unwrap();
+async fn submit(
+    fixture: &Fixture,
+    address: SocketAddr,
+    path: &str,
+    body: &[u8],
+) -> (TcpStream, Option<tokio::task::JoinHandle<()>>) {
+    let (mut client, task) = connect_submitted_write(fixture, address).await;
     let wire = json_request(fixture.port(), path, &[&fixture.session()], body);
     client.write_all(&wire).await.unwrap();
-    client
-}
-
-fn disconnect(client: TcpStream) {
-    client.set_zero_linger().unwrap();
-    drop(client);
+    (client, task)
 }
 
 async fn wait_for_write(fixture: &Fixture) {
@@ -579,7 +590,7 @@ async fn refresh_after_disconnect(fixture: &Fixture, address: SocketAddr) {
     std::fs::remove_file(&catalog).unwrap();
     let body = b"{}";
     let wire = json_request(fixture.port(), REFRESH, &[&fixture.session()], body);
-    let mut client = TcpStream::connect(address).await.unwrap();
+    let (mut client, task) = connect_submitted_write(fixture, address).await;
     client
         .write_all(&wire[..wire.len() - body.len()])
         .await
@@ -616,7 +627,7 @@ async fn refresh_after_disconnect(fixture: &Fixture, address: SocketAddr) {
     .await
     .unwrap();
     assert!(!state.updates.drain_for_test(Duration::ZERO));
-    disconnect(client);
+    disconnect_submitted_write(fixture, client, task).await;
     assert!(!catalog.exists());
     release.send(()).unwrap();
     hold_config.await.unwrap();
@@ -664,10 +675,10 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
         let mut histories = Vec::new();
         for (fixture, address) in [(&old, old.legacy.local_addr()), (new, candidate)] {
             let state = &fixture.legacy.state;
-            let client = submit(fixture, address, DISCOVER, br#"{"provider":"fixture","selected":["gpt-6-luna"]}"#).await;
+            let (client, task) = submit(fixture, address, DISCOVER, br#"{"provider":"fixture","selected":["gpt-6-luna"]}"#).await;
             let peer = expect_upstream_get(&upstream, "/v1/models", "fixture-key").await;
             assert!(!state.updates.drain_for_test(Duration::ZERO));
-            disconnect(client);
+            disconnect_submitted_write(fixture, client, task).await;
             send_http(peer, DISCOVER_MODELS).await;
             wait_for_write(fixture).await;
             assert_selected(fixture);
@@ -675,17 +686,17 @@ fn submitted_catalog_writes_finish_once_after_disconnect() {
             refresh_after_disconnect(fixture, address).await;
 
             let start = system_now() as i64 - SAMPLE_INTERVAL_SECONDS;
-            let client = submit(fixture, address, QUOTA, br#"{"force":true}"#).await;
+            let (client, task) = submit(fixture, address, QUOTA, br#"{"force":true}"#).await;
             let peer = expect_upstream_get(&upstream, "/v1/quota", "fixture-key").await;
             assert!(!state.updates.drain_for_test(Duration::ZERO));
-            disconnect(client);
+            disconnect_submitted_write(fixture, client, task).await;
             send_http(peer, POOL_QUOTA).await;
             wait_for_write(fixture).await;
 
-            let client = submit(fixture, address, BALANCE, b"{}").await;
+            let (client, task) = submit(fixture, address, BALANCE, b"{}").await;
             let peer = wait_for_balance(&balance, &tls).await;
             assert!(!state.updates.drain_for_test(Duration::ZERO));
-            disconnect(client);
+            disconnect_submitted_write(fixture, client, task).await;
             send_balance(peer).await;
             wait_for_write(fixture).await;
 

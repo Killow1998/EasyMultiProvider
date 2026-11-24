@@ -634,7 +634,7 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
     pair_with(Fixture::new, async |pair| {
         for (fixture, address) in endpoints(pair) {
             let state = &fixture.legacy.state;
-            let mut client = TcpStream::connect(address).await.unwrap();
+            let (mut client, task) = connect_submitted_write(fixture, address).await;
             let wire = wire(fixture, "import", true, body.as_bytes());
             client
                 .write_all(&wire[..wire.len() - body.len()])
@@ -673,8 +673,7 @@ fn submitted_migration_import_finishes_once_after_disconnect_and_holds_drain() {
             .await
             .unwrap();
             assert!(!state.updates.drain_for_test(Duration::ZERO));
-            client.set_zero_linger().unwrap();
-            drop(client);
+            disconnect_submitted_write(fixture, client, task).await;
             release.send(()).unwrap();
             hold_config.await.unwrap();
             let state = state.clone();

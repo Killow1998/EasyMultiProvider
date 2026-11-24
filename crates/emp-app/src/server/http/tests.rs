@@ -63,6 +63,65 @@ pub(crate) async fn exchange_wire(address: SocketAddr, request: &[u8], end_input
 }
 
 #[cfg(unix)]
+async fn connect_submitted_write(
+    fixture: &Fixture,
+    address: SocketAddr,
+) -> (TcpStream, Option<tokio::task::JoinHandle<()>>) {
+    use crate::server::{ServerControl, candidate_router, connection::drive_candidate};
+
+    if address == fixture.legacy.local_addr() {
+        return (TcpStream::connect(address).await.unwrap(), None);
+    }
+    let listener = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (stream, peer) = listener.accept().await.unwrap();
+    let state = &fixture.legacy.state;
+    let admission = &state.connection_admission;
+    let control = Arc::new(ServerControl {
+        candidate: Some(state.clone()),
+        ..ServerControl::new(admission.clone())
+    });
+    let task = tokio::spawn(drive_candidate(
+        stream,
+        peer,
+        tokio::time::Instant::now(),
+        candidate_router(state.clone()),
+        control,
+        admission.acquire_request().unwrap(),
+    ));
+    (client, Some(task))
+}
+
+#[cfg(unix)]
+async fn disconnect_submitted_write(
+    fixture: &Fixture,
+    client: TcpStream,
+    task: Option<tokio::task::JoinHandle<()>>,
+) {
+    client.set_zero_linger().unwrap();
+    drop(client);
+    if let Some(task) = task {
+        task.abort();
+        if let Err(error) = task.await {
+            assert!(error.is_cancelled(), "{error}");
+        }
+        let state = &fixture.legacy.state;
+        let drained = state.updates.drain_for_test(Duration::ZERO);
+        let quiet = state
+            .connection_admission
+            .quiesce(0, Duration::ZERO)
+            .is_some();
+        assert_eq!(
+            (drained, quiet),
+            (false, false),
+            "write still blocked after disconnect: (update drained, connections quiet)"
+        );
+    }
+}
+
+#[cfg(unix)]
 mod account_writes;
 #[cfg(unix)]
 mod catalog_writes;

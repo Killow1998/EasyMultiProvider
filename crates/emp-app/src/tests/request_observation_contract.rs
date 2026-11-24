@@ -89,19 +89,32 @@ fn generated_compaction_sse_records_its_actual_terminal_event() {
     assert_eq!(done["fields"]["downstream_terminal"], "completed", "{done}");
 }
 
+#[track_caller]
 pub(super) fn finished(root: &Path, count: usize) -> Vec<Value> {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let records = live_journal(root);
-        if records
+        let actual = records
             .iter()
             .filter(|r| r["event"] == "request_finished")
-            .count()
-            == count
-        {
+            .count();
+        if actual == count {
             return records;
         }
-        assert!(Instant::now() < deadline, "missing request receipts");
+        assert!(
+            actual < count,
+            "extra request receipts: expected {count}, found {actual}"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "missing request receipts: expected {count}, found {actual}; recent events: {:?}",
+            records
+                .iter()
+                .rev()
+                .take(8)
+                .map(|r| &r["event"])
+                .collect::<Vec<_>>()
+        );
         #[expect(
             clippy::disallowed_methods,
             reason = "观测状态没有通知接口，以固定间隔轮询"

@@ -757,7 +757,7 @@ fn submitted_team_login_survives_disconnect_once_and_holds_drain() {
         let mut captured = Vec::new();
         for (fixture, address) in endpoints(pair) {
             let state = &fixture.legacy.state;
-            let mut client = TcpStream::connect(address).await.unwrap();
+            let (mut client, task) = connect_submitted_write(fixture, address).await;
             let request = json_request(
                 fixture.port(),
                 "/api/team/login",
@@ -770,8 +770,7 @@ fn submitted_team_login_survives_disconnect_once_and_holds_drain() {
             captured.push((request.head.clone(), request.body.clone()));
             assert!(!fixture.directory.path().join(PROFILE).exists());
             assert!(!state.updates.drain_for_test(Duration::ZERO));
-            client.set_zero_linger().unwrap();
-            drop(client);
+            disconnect_submitted_write(fixture, client, task).await;
             request.reply(200, &login_reply()).await;
 
             let state = state.clone();

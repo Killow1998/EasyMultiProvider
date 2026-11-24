@@ -87,10 +87,11 @@ async fn exchange_session(
     State(state): State<Arc<ServerState>>,
     Extension(connection): Extension<ConnectionContext>,
 ) -> Result<JsonReply, EntryError> {
+    let now = system_now();
     connection.retain_request_access(access);
     run_blocking(move || {
         let _connection = connection;
-        exchange.execute(&state, system_now())
+        exchange.execute(&state, now)
     })
     .await
     .map_err(|_| EntryError::internal())?
