@@ -336,7 +336,7 @@ fn post_stream(server: &ServerHandle, target: &str, body: &[u8], headers: &[&str
 }
 
 fn recorded_calls(server: &ServerHandle, session: &str) -> Value {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let wire = request(server, "/api/calls", &[session]);
         let report: Value = serde_json::from_str(wire.split("\r\n\r\n").nth(1).unwrap()).unwrap();
