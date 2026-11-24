@@ -18,41 +18,6 @@ const CALLS: &str = "/api/calls?start=1&end=10";
 const USAGE: &str = "/api/usage?lifetime=%74rue&owner=fixture";
 const ACCEPT: &str = "Accept: text/event-stream";
 
-pub(super) fn decode_report_wire(wire: Vec<u8>) -> Vec<u8> {
-    let split = wire
-        .windows(4)
-        .position(|bytes| bytes == b"\r\n\r\n")
-        .unwrap();
-    let head = str::from_utf8(&wire[..split]).unwrap();
-    let (status, headers) = head.split_once("\r\n").unwrap();
-    let mut headers: Vec<_> = headers.split("\r\n").collect();
-    let chunked = headers
-        .iter()
-        .position(|header| header.eq_ignore_ascii_case("Transfer-Encoding: chunked"));
-    if let Some(index) = chunked {
-        headers.remove(index);
-    }
-    headers.sort_unstable();
-    let mut decoded = format!("{status}\r\n{}\r\n\r\n", headers.join("\r\n")).into_bytes();
-    let mut body = &wire[split + 4..];
-    if chunked.is_none() {
-        decoded.extend_from_slice(body);
-        return decoded;
-    }
-    loop {
-        let end = body.windows(2).position(|bytes| bytes == b"\r\n").unwrap();
-        let size = usize::from_str_radix(str::from_utf8(&body[..end]).unwrap(), 16).unwrap();
-        body = &body[end + 2..];
-        decoded.extend_from_slice(&body[..size]);
-        assert_eq!(&body[size..size + 2], b"\r\n");
-        body = &body[size + 2..];
-        if size == 0 {
-            assert!(body.is_empty());
-            return decoded;
-        }
-    }
-}
-
 struct Stream {
     io: BufReader<TcpStream>,
     headers: BTreeMap<String, String>,

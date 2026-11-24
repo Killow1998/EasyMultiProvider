@@ -84,7 +84,7 @@ impl ManagementEvents {
         self.state.send_modify(|state| state.closed = true);
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn subscriber_count(&self) -> usize {
         self.subscribers.load(Ordering::Acquire)
     }
