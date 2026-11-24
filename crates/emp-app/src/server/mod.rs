@@ -178,7 +178,8 @@ fn candidate_router(state: Arc<ServerState>) -> Router {
             .merge(http::inspection::routes())
             .merge(http::pages::routes())
             .merge(http::team::routes())
-            .merge(http::migration::routes()),
+            .merge(http::migration::routes())
+            .merge(http::websocket::routes()),
         state.clone(),
     )
     .merge(http::inference::routes().with_state(state))

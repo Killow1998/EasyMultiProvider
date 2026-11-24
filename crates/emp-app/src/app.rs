@@ -40,6 +40,8 @@ pub(crate) struct ServerState {
     pub(crate) port: u16,
     pub(crate) base_url: String,
     pub(crate) updates: crate::services::updates::UpdateState,
+    #[cfg(all(test, unix))]
+    pub(crate) test_sideband_url: std::sync::OnceLock<String>,
 }
 
 impl ServerState {
@@ -83,6 +85,7 @@ pub(crate) struct BackendState {
     pub(crate) claude_turns: crate::services::claude_cli::tui::TurnPool,
     pub(crate) configuration: ConfigurationState,
     pub(crate) transport: TransportState,
+    pub(crate) native_websocket_connections: crate::services::native_connections::NativeConnections,
     pub(crate) accounts: AccountState,
     pub(crate) activity: ActivityService,
     pub(crate) claude_quota: crate::services::claude_cli::quota::LocalQuota,
@@ -107,7 +110,6 @@ pub(crate) struct TransportState {
     pub(crate) support_network: crate::services::network_evidence::NetworkSnapshot,
     pub(crate) runtime: Runtime,
     pub(crate) request_limits: Arc<RequestLimits>,
-    pub(crate) native_connections: crate::services::native_connections::NativeConnections,
     pub(crate) image_routes: crate::services::native::images::ImageRoutes,
     pub(crate) gemini_signatures: Arc<emp_state::gemini_signatures::GeminiSignatures>,
 }
@@ -213,12 +215,12 @@ impl BackendState {
             ),
             diagnostics,
             configuration: ConfigurationState::new(config, config_path.to_path_buf(), vault),
+            native_websocket_connections: Default::default(),
             transport: TransportState {
                 client: Arc::new(client),
                 support_network,
                 runtime,
                 request_limits,
-                native_connections: Default::default(),
                 image_routes: Default::default(),
                 gemini_signatures: Arc::new(emp_state::gemini_signatures::GeminiSignatures::new(
                     state_root.join("gemini-signatures.sqlite3"),

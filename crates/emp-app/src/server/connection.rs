@@ -15,7 +15,7 @@ use super::{
         proxy::RequestAccess,
         settings,
         stream::{Flushed, StreamConnection},
-        team, usage,
+        team, usage, websocket,
     },
     run_blocking,
 };
@@ -53,6 +53,7 @@ pub(crate) struct ShutdownAfterResponse;
 struct CandidateRequest {
     observation: HttpObservation,
     report_socket: Option<Arc<TcpStream>>,
+    websocket_probe: Option<Arc<tokio::net::TcpStream>>,
     inference: Option<Arc<InferenceConnection>>,
     stream: Option<Arc<StreamConnection>>,
     half_close: bool,
@@ -69,7 +70,7 @@ pub(crate) struct ConnectionContext(Arc<Connection>);
 struct Connection {
     control: Arc<ServerControl>,
     upgrade: Mutex<Option<UpgradeSession>>,
-    _request_permit: Option<ConnectionPermit>,
+    request_permit: Mutex<Option<ConnectionPermit>>,
     request_access: OnceLock<RequestAccess>,
     request_id: Option<String>,
 }
@@ -87,6 +88,7 @@ impl ConnectionContext {
         self.0.control.signal()
     }
 
+    #[cfg(test)]
     pub(crate) fn reserve_websocket(&self) -> Option<ConnectionPermit> {
         self.0.control.admission.acquire_websocket()
     }
@@ -95,15 +97,17 @@ impl ConnectionContext {
         &self,
         upgrade: OnUpgrade,
         reserved: Option<ConnectionPermit>,
-        session: impl FnOnce(TokioIo<Upgraded>, bool, ShutdownSignal) -> F + Send + 'static,
+        session: impl FnOnce(Option<TokioIo<Upgraded>>, bool, ShutdownSignal) -> F + Send + 'static,
     ) {
         let control = Arc::clone(&self.0.control);
         let shutdown = self.shutdown_signal();
         let session = async move {
-            if let Ok(io) = upgrade.await {
-                let permit = reserved.or_else(|| control.admission.acquire_websocket());
-                session(TokioIo::new(io), permit.is_some(), shutdown).await;
-            }
+            let io = upgrade.await.ok().map(TokioIo::new);
+            let permit = reserved.or_else(|| {
+                io.as_ref()
+                    .and_then(|_| control.admission.acquire_websocket())
+            });
+            session(io, permit.is_some(), shutdown).await;
         };
         *self.0.upgrade.lock().expect("upgrade registration") = Some(Box::pin(session));
     }
@@ -141,6 +145,7 @@ pub(super) async fn drive_candidate(
         }
     };
     let request = head.raw.request();
+    let responses_upgrade = websocket::is_responses_upgrade(request);
     let account_write = AccountWriteRoute::for_request(request);
     let catalog_write = CatalogWriteRoute::for_request(request)
         .filter(|route| !matches!(route, CatalogWriteRoute::Balance(None)));
@@ -156,6 +161,7 @@ pub(super) async fn drive_candidate(
     let half_close = if watch_report
         || usage::matches_provider_quota(request)
         || inference
+        || websocket::matches(request)
         || account_write.is_some()
         || catalog_write.is_some()
         || local_write.is_some()
@@ -197,7 +203,7 @@ pub(super) async fn drive_candidate(
     };
     observation.received(request);
     crate::services::runtime::codex_contacted(request, state);
-    let (io, socket) = if watch_report || inference {
+    let (io, socket) = if watch_report || inference || responses_upgrade {
         match io.into_std().and_then(|stream| {
             let socket = stream.try_clone();
             let socket = if streaming {
@@ -205,10 +211,7 @@ pub(super) async fn drive_candidate(
             } else {
                 socket.ok()
             };
-            Ok((
-                tokio::net::TcpStream::from_std(stream)?,
-                socket.map(Arc::new),
-            ))
+            Ok((tokio::net::TcpStream::from_std(stream)?, socket))
         }) {
             Ok(connection) => connection,
             Err(_) => {
@@ -220,22 +223,29 @@ pub(super) async fn drive_candidate(
         (io, None)
     };
     let stream = streaming.then(|| Arc::new(StreamConnection::default()));
-    let (inference, report_socket) = if inference {
+    let (inference, report_socket, websocket_probe) = if inference {
         (
             Some(Arc::new(InferenceConnection {
-                socket: socket.expect("inference socket"),
+                socket: Arc::new(socket.expect("inference socket")),
                 stream: stream.as_ref().expect("inference stream").clone(),
                 model: Mutex::new(observation.model.take()),
                 receipt: OnceLock::new(),
             })),
             None,
+            None,
         )
+    } else if responses_upgrade {
+        let probe = socket
+            .and_then(|socket| tokio::net::TcpStream::from_std(socket).ok())
+            .map(Arc::new);
+        (None, None, probe)
     } else {
-        (None, socket)
+        (None, socket.map(Arc::new), None)
     };
     let candidate = CandidateRequest {
         observation,
         report_socket,
+        websocket_probe,
         inference,
         stream,
         half_close,
@@ -298,6 +308,9 @@ async fn drive_http(
     let report_socket = candidate
         .as_ref()
         .and_then(|request| request.report_socket.as_ref());
+    let websocket_probe = candidate
+        .as_ref()
+        .and_then(|request| request.websocket_probe.as_ref());
     let inference = candidate
         .as_ref()
         .and_then(|request| request.inference.clone());
@@ -319,7 +332,7 @@ async fn drive_http(
     let context = ConnectionContext(Arc::new(Connection {
         control,
         upgrade: Mutex::default(),
-        _request_permit: permit,
+        request_permit: Mutex::new(permit),
         request_access: OnceLock::new(),
         request_id,
     }));
@@ -347,6 +360,9 @@ async fn drive_http(
             }
             if let Some(socket) = report_socket {
                 request.extensions_mut().insert(Arc::clone(socket));
+            }
+            if let Some(probe) = websocket_probe {
+                request.extensions_mut().insert(Arc::clone(probe));
             }
             if let Some(inference) = inference {
                 request.extensions_mut().insert(inference.clone());
@@ -389,10 +405,11 @@ async fn drive_http(
             Ok::<_, std::convert::Infallible>(response)
         }
     });
+    let websocket = websocket::is_upgrade_route(raw.request());
     let connection = http1::Builder::new()
-        .keep_alive(false)
+        .keep_alive(websocket)
         .half_close(half_close)
-        .title_case_headers(stream.is_some())
+        .title_case_headers(stream.is_some() || websocket)
         .allow_multiple_spaces_in_request_line_delimiters(true)
         .max_buf_size(MAX_HEADER_BYTES + 4)
         .max_headers(MAX_HEADER_BYTES / 4)
@@ -414,6 +431,22 @@ async fn drive_http(
         } => Err(std::io::ErrorKind::TimedOut.into()),
     };
     let written = result.is_ok();
+    let upgrade = context
+        .0
+        .upgrade
+        .lock()
+        .expect("upgrade registration")
+        .take();
+    if upgrade.is_some() {
+        drop(
+            context
+                .0
+                .request_permit
+                .lock()
+                .expect("request admission")
+                .take(),
+        );
+    }
     if let Some(CandidateRequest {
         mut observation,
         stream,
@@ -464,13 +497,7 @@ async fn drive_http(
             ShutdownReason::ResponseWriteFailed
         });
     }
-    let upgrade = context
-        .0
-        .upgrade
-        .lock()
-        .expect("upgrade registration")
-        .take();
-    if written && let Some(session) = upgrade {
+    if let Some(session) = upgrade {
         session.await;
     }
 }

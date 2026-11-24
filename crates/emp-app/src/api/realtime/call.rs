@@ -1,12 +1,12 @@
 use super::multipart::{read_realtime_call_from_socket, validate_headers};
 use super::{
-    MAX_REALTIME_RESPONSE_BYTES, REALTIME_TIMEOUT, RealtimeError, RealtimeResponse, header,
-    valid_call_id,
+    MAX_REALTIME_RESPONSE_BYTES, REALTIME_TIMEOUT, RealtimeCall, RealtimeError, RealtimeResponse,
+    header, valid_call_id,
 };
 use crate::VERSION;
 use crate::app::ServerState;
 use crate::http::request::Request;
-use crate::http::response::response;
+use crate::server::http::error::HttpReply;
 use crate::server::http::proxy::require_proxy;
 use crate::services::accounts::native_auth_document;
 use emp_codex::account_auth_headers;
@@ -33,17 +33,37 @@ pub(crate) fn serve_realtime_call(
         Ok(call) => call,
         Err(error) => return error.wire_response(),
     };
+    match prepare_call(state, incoming, call) {
+        Ok(call) => state
+            .backend
+            .transport
+            .runtime
+            .block_on(call.send(state))
+            .wire_response(),
+        Err(reply) => reply.wire_response(),
+    }
+}
+
+pub(crate) struct PreparedCall {
+    endpoint: String,
+    headers: BTreeMap<String, String>,
+    body: Vec<u8>,
+}
+
+pub(crate) fn prepare_call(
+    state: &ServerState,
+    incoming: BTreeMap<String, String>,
+    call: RealtimeCall,
+) -> Result<PreparedCall, HttpReply> {
     let Some(mut headers) = native_headers(state) else {
-        return super::native_subscription_unavailable().wire_response();
+        return Err(super::native_subscription_unavailable().into());
     };
     if let Err(denial) = state.backend.team.check_native_budget(state) {
-        return crate::api::native_response::error_reply(denial.public_error(state))
-            .wire_response();
+        return Err(crate::api::native_response::error_reply(
+            denial.public_error(state),
+        ));
     }
-    let forwarded = match safe_forwarded_headers(&incoming) {
-        Ok(headers) => headers,
-        Err(error) => return error.wire_response(),
-    };
+    let forwarded = safe_forwarded_headers(&incoming)?;
     headers.extend(forwarded);
     headers.insert("Content-Type".to_owned(), "application/json".to_owned());
     headers.insert("Accept".to_owned(), "application/sdp".to_owned());
@@ -55,44 +75,52 @@ pub(crate) fn serve_realtime_call(
             .unwrap_or("https://chatgpt.com/backend-api/codex")
             .to_owned(),
         Err(_) => {
-            return RealtimeError::new(
+            return Err(RealtimeError::new(
                 503,
                 "native_realtime_unavailable",
                 "Native subscription backend is not configured for realtime calls",
             )
-            .wire_response();
+            .into());
         }
     };
     let Some(endpoint) = upstream_endpoint(&base_url) else {
-        return RealtimeError::new(
+        return Err(RealtimeError::new(
             503,
             "native_realtime_unavailable",
             "Native subscription backend is not configured for realtime calls",
         )
-        .wire_response();
+        .into());
     };
     let request_body = match serde_json::to_vec(&json!({"sdp":call.sdp,"session":call.session})) {
         Ok(body) => body,
         Err(_) => {
-            return RealtimeError::new(
+            return Err(RealtimeError::new(
                 400,
                 "realtime_invalid_request",
                 "Realtime request could not be encoded",
             )
-            .wire_response();
+            .into());
         }
     };
-    let result = state.backend.transport.runtime.block_on(async {
-        tokio::time::timeout(REALTIME_TIMEOUT, async {
+    Ok(PreparedCall {
+        endpoint,
+        headers,
+        body: request_body,
+    })
+}
+
+impl PreparedCall {
+    pub(crate) async fn send(self, state: &ServerState) -> HttpReply {
+        let result = tokio::time::timeout(REALTIME_TIMEOUT, async {
             let upstream = state
                 .backend
                 .transport
                 .client
                 .open_status(
                     HttpMethod::Post,
-                    &endpoint,
-                    headers,
-                    Some(request_body),
+                    &self.endpoint,
+                    self.headers,
+                    Some(self.body),
                     false,
                 )
                 .await
@@ -131,19 +159,16 @@ pub(crate) fn serve_realtime_call(
             };
             validate_upstream_response(result)
         })
-        .await
-    });
-    let result = match result {
-        Err(_) => Err(RealtimeError::new(
-            504,
-            "native_realtime_timeout",
-            "Native realtime call creation timed out",
-        )),
-        Ok(result) => result,
-    };
-    match result {
-        Ok(result) => wire_upstream_response(result),
-        Err(error) => error.wire_response(),
+        .await;
+        let result = match result {
+            Err(_) => Err(RealtimeError::new(
+                504,
+                "native_realtime_timeout",
+                "Native realtime call creation timed out",
+            )),
+            Ok(result) => result,
+        };
+        result.map_or_else(HttpReply::from, upstream_reply)
     }
 }
 
@@ -303,18 +328,14 @@ fn validate_upstream_response(
     Ok(upstream)
 }
 
-fn wire_upstream_response(upstream: RealtimeResponse) -> Vec<u8> {
-    let reason = upstream_reason(upstream.status);
-    let location = upstream
-        .location
-        .as_deref()
-        .map(|location| [("Location", location)]);
-    response(
-        &format!("HTTP/1.1 {} {reason}", upstream.status),
-        &upstream.content_type,
-        &upstream.body,
-        location.as_ref().map_or(&[], |headers| headers.as_slice()),
-    )
+fn upstream_reply(upstream: RealtimeResponse) -> HttpReply {
+    let mut reply = HttpReply::new(upstream.status, upstream.body)
+        .with_status_text(upstream_reason(upstream.status))
+        .with_content_type(upstream.content_type);
+    if let Some(location) = upstream.location {
+        reply = reply.with_header("Location", location);
+    }
+    reply
 }
 
 fn upstream_reason(status: u16) -> &'static str {

@@ -58,7 +58,7 @@ pub(crate) fn request_rejected(state: &ServerState, reason: &'static str) {
 
 pub(crate) fn spawn_request(
     state: &Arc<ServerState>,
-    work: impl FnOnce(&ServerState) + Send + 'static,
+    work: impl FnOnce(&Arc<ServerState>) + Send + 'static,
 ) {
     let request_state = Arc::clone(state);
     if thread::Builder::new()

@@ -1,12 +1,12 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-pub(super) struct UpstreamResponse {
-    pub(super) status: u16,
-    pub(super) reason: &'static str,
-    pub(super) content_type: &'static str,
-    pub(super) location: Option<&'static str>,
-    pub(super) body: &'static [u8],
+pub(crate) struct UpstreamResponse {
+    pub(crate) status: u16,
+    pub(crate) reason: &'static str,
+    pub(crate) content_type: &'static str,
+    pub(crate) location: Option<&'static str>,
+    pub(crate) body: &'static [u8],
 }
 
 struct UpstreamRequest {
@@ -16,7 +16,7 @@ struct UpstreamRequest {
     body: Vec<u8>,
 }
 
-pub(super) struct RealtimeUpstream {
+pub(crate) struct RealtimeUpstream {
     address: SocketAddr,
     request: mpsc::Receiver<UpstreamRequest>,
     stop: Arc<AtomicBool>,
@@ -24,7 +24,7 @@ pub(super) struct RealtimeUpstream {
 }
 
 impl RealtimeUpstream {
-    pub(super) fn start(response: UpstreamResponse) -> Self {
+    pub(crate) fn start(response: UpstreamResponse) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind Voice upstream");
         listener
             .set_nonblocking(true)
@@ -152,7 +152,7 @@ fn receive_request(stream: &mut TcpStream) -> UpstreamRequest {
     }
 }
 
-fn multipart_offer() -> Vec<u8> {
+pub(crate) fn multipart_offer() -> Vec<u8> {
     let boundary = "VoiceFixtureBoundary";
     format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"sdp\"\r\nContent-Type: application/sdp\r\n\r\nv=0\r\no=offer\r\n\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"session\"\r\nContent-Type: application/json\r\n\r\n{{\"model\":\"gpt-live\",\"delegation\":{{\"type\":\"client\"}}}}\r\n--{boundary}--\r\n"
@@ -185,7 +185,7 @@ fn error_code(raw: &str) -> String {
         .to_owned()
 }
 
-pub(super) fn app_server_for(
+pub(crate) fn app_server_for(
     upstream: &RealtimeUpstream,
     native_auth: &Path,
 ) -> (TempDir, ServerHandle) {

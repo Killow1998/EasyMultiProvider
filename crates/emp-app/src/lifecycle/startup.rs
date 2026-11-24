@@ -301,6 +301,8 @@ impl ServerHandle {
             Arc::clone(&backend.modules),
         );
         let state = Arc::new(ServerState {
+            #[cfg(all(test, unix))]
+            test_sideband_url: Default::default(),
             shutdown,
             shutdown_wake,
             catalog_refresh: crate::services::account_catalog::CatalogRefreshState::default(),

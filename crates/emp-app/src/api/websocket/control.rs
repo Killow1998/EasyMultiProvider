@@ -58,99 +58,131 @@ impl Control {
     }
 }
 
-pub(super) fn run(
-    state: &ServerState,
-    websocket: &mut ObservedWebSocket<'_>,
-    pending_request: &mut Option<String>,
-    execute: impl FnOnce(&mut ObservedWebSocket<'_>, &mut DisconnectMonitor) -> TurnResult,
-) -> TurnResult {
-    let control = Arc::new(Control {
-        previous_id: websocket.last_response_id.clone(),
-        ..Control::default()
-    });
-    let request_id = websocket
-        .observation
-        .headers(Default::default())
-        .get("X-EMP-Request-ID")
-        .cloned();
-    let (sender, receiver) = oneshot::channel();
-    let mut monitor = DisconnectMonitor::from_signal(receiver, Arc::clone(&control.interrupted));
-    let reader = websocket.inner.reader_task();
-    let diagnostics = Arc::clone(&state.backend.diagnostics);
-    let task_control = Arc::clone(&control);
-    let (stop, mut stopped) = oneshot::channel::<()>();
-    let worker = websocket.inner.runtime.spawn(async move {
-        let mut sender = Some(sender);
-        let mut pending = None;
-        loop {
-            let event = tokio::select! {
-                biased;
-                _ = &mut stopped => break,
-                event = reader.read() => event,
-            };
-            let text = match reader.finish_read(event).await {
-                DownstreamEvent::Text(text) => text,
-                DownstreamEvent::Control => continue,
-                DownstreamEvent::Closed => {
+type PendingTurn = (Option<String>, Option<oneshot::Sender<()>>);
+
+pub(super) struct TurnControl {
+    stop: oneshot::Sender<()>,
+    worker: tokio::task::JoinHandle<PendingTurn>,
+}
+
+impl TurnControl {
+    pub(super) fn start(
+        state: &Arc<ServerState>,
+        websocket: &mut ObservedWebSocket<'_>,
+    ) -> (Self, DisconnectMonitor) {
+        let control = Arc::new(Control {
+            previous_id: websocket.last_response_id.clone(),
+            ..Control::default()
+        });
+        let request_id = websocket
+            .observation
+            .headers(Default::default())
+            .get("X-EMP-Request-ID")
+            .cloned();
+        let (sender, receiver) = oneshot::channel();
+        let monitor = DisconnectMonitor::from_signal(receiver, Arc::clone(&control.interrupted));
+        let reader = websocket.inner.reader_task();
+        let diagnostics = Arc::clone(&state.backend.diagnostics);
+        let task_control = Arc::clone(&control);
+        let state = Arc::clone(state);
+        let (stop, mut stopped) = oneshot::channel::<()>();
+        let worker = tokio::spawn(async move {
+            let mut sender = Some(sender);
+            let mut pending = None;
+            loop {
+                let event = tokio::select! {
+                    biased;
+                    _ = &mut stopped => break,
+                    _ = super::wait_for_drain(&state) => {
+                        reader.close(1001, "EMP connection is draining").await;
+                        let _ = sender.take().unwrap().send(());
+                        break;
+                    }
+                    event = reader.read(), if pending.is_none() => event,
+                };
+                let text = match reader.finish_read(event).await {
+                    DownstreamEvent::Text(text) => text,
+                    DownstreamEvent::Control => continue,
+                    DownstreamEvent::Closed => {
+                        let _ = sender.take().unwrap().send(());
+                        break;
+                    }
+                };
+                let value = serde_json::from_str::<Value>(&text).ok();
+                if value
+                    .as_ref()
+                    .is_none_or(|value| value["type"] != "response.interrupt")
+                {
+                    pending = Some(text);
+                    continue;
+                }
+                let value = value.unwrap();
+                let (valid, previous, terminal) = {
+                    let response = task_control.response.lock().await;
+                    let id = value["response_id"].as_str();
+                    let mode_matches = value["mode"] == "discard_partial_items";
+                    let valid =
+                        id.is_some_and(|id| Some(id) == response.id.as_deref()) && mode_matches;
+                    let previous = id
+                        .is_some_and(|id| Some(id) == task_control.previous_id.as_deref())
+                        && mode_matches;
+                    if valid && !response.terminal {
+                        task_control.interrupted.store(true, Ordering::Release);
+                    }
+                    (valid, previous, response.terminal)
+                };
+                let journal = Arc::clone(&diagnostics);
+                let fields = json!({
+                    "type":"response.interrupt", "accepted":valid || previous, "late":terminal || previous,
+                    "request_id":request_id,
+                    "error_origin":if valid || previous {"none"} else {"emp"},
+                    "error_code":if valid || previous {""} else {"invalid_request"},
+                    "response_id":value["response_id"].as_str().filter(|id| id.len() <= 128)
+                });
+                let _ = tokio::task::spawn_blocking(move || {
+                    journal.journal.event("info", "websocket_control", &fields);
+                })
+                .await;
+                if !valid && !previous {
+                    let _ = reader
+                    .writer
+                    .send_json(&crate::api::failure_response::emp_websocket_error(
+                        400,
+                        "invalid_request",
+                        "interrupt must target the active response and use discard_partial_items",
+                    ))
+                    .await;
+                } else if valid && !terminal {
                     let _ = sender.take().unwrap().send(());
                     break;
                 }
-            };
-            let value = serde_json::from_str::<Value>(&text).ok();
-            if value.as_ref().is_none_or(|value| value["type"] != "response.interrupt") {
-                pending = Some(text);
-                break;
             }
-            let value = value.unwrap();
-            let (valid, previous, terminal) = {
-                let response = task_control.response.lock().await;
-                let id = value["response_id"].as_str();
-                let mode_matches = value["mode"] == "discard_partial_items";
-                let valid = id.is_some_and(|id| Some(id) == response.id.as_deref()) && mode_matches;
-                let previous = id.is_some_and(|id| Some(id) == task_control.previous_id.as_deref()) && mode_matches;
-                if valid && !response.terminal {
-                    task_control.interrupted.store(true, Ordering::Release);
-                }
-                (valid, previous, response.terminal)
-            };
-            let journal = Arc::clone(&diagnostics);
-            let fields = json!({
-                "type":"response.interrupt", "accepted":valid || previous, "late":terminal || previous,
-                "request_id":request_id,
-                "error_origin":if valid || previous {"none"} else {"emp"},
-                "error_code":if valid || previous {""} else {"invalid_request"},
-                "response_id":value["response_id"].as_str().filter(|id| id.len() <= 128)
-            });
-            let _ = tokio::task::spawn_blocking(move || {
-                journal.journal.event("info", "websocket_control", &fields);
-            }).await;
-            if !valid && !previous {
-                let _ = reader.writer.send_json(&crate::api::failure_response::emp_websocket_error(400, "invalid_request", "interrupt must target the active response and use discard_partial_items")).await;
-            } else if valid && !terminal {
-                let _ = sender.take().unwrap().send(());
-                break;
+            (pending, sender)
+        });
+        websocket.control = Some(control);
+        (Self { stop, worker }, monitor)
+    }
+
+    pub(super) async fn finish(
+        self,
+        websocket: &mut ObservedWebSocket<'_>,
+        pending_request: &mut Option<String>,
+        result: TurnResult,
+    ) -> TurnResult {
+        drop(self.stop);
+        let (pending, _sender) = self.worker.await.expect("websocket control reader");
+        *pending_request = pending;
+        let control = websocket.control.as_ref().expect("websocket turn control");
+        let result = if let Some(event) = control.incomplete().await {
+            if websocket.send_json(&event).await.is_ok() {
+                TurnResult::Finished
+            } else {
+                TurnResult::Closed
             }
-        }
-        (pending, sender)
-    });
-    websocket.control = Some(Arc::clone(&control));
-    let result = execute(websocket, &mut monitor);
-    drop(stop);
-    let (pending, _sender) = websocket
-        .inner
-        .runtime
-        .block_on(worker)
-        .expect("websocket control reader");
-    *pending_request = pending;
-    let result = if let Some(event) = websocket.inner.runtime.block_on(control.incomplete()) {
-        if websocket.send_json(&event).is_ok() {
-            TurnResult::Finished
         } else {
-            TurnResult::Closed
-        }
-    } else {
+            result
+        };
+        websocket.control = None;
         result
-    };
-    websocket.control = None;
-    result
+    }
 }

@@ -313,8 +313,8 @@ impl RequestObservation {
     }
 }
 
-impl Drop for RequestObservation {
-    fn drop(&mut self) {
+impl RequestObservation {
+    fn finish(&mut self) {
         if let Some(continuation) = &self.continuation {
             self.fields["native_continuation"] =
                 serde_json::to_value(continuation).expect("content-free continuation facts");
@@ -356,6 +356,16 @@ impl Drop for RequestObservation {
         self.diagnostics
             .journal
             .event("info", "request_finished", &self.fields);
+    }
+}
+
+impl Drop for RequestObservation {
+    fn drop(&mut self) {
+        if self.fields["transport"] == "websocket" {
+            tokio::task::block_in_place(|| self.finish());
+        } else {
+            self.finish();
+        }
     }
 }
 

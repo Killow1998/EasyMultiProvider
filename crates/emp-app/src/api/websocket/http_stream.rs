@@ -9,8 +9,9 @@ use crate::services::events::{stream_event_activity, terminal_stream_event};
 use crate::services::{activity::ActivityGuard, native};
 use crate::util::random_hex;
 use serde_json::Value;
+use tokio::task::block_in_place;
 
-pub(super) fn serve_native(
+pub(super) async fn serve_native(
     state: &ServerState,
     turn: &Turn,
     websocket: &mut super::ObservedWebSocket<'_>,
@@ -35,7 +36,7 @@ pub(super) fn serve_native(
                 route,
             ))
     });
-    let (mut upstream, usage) = match native::open_stream_result(
+    let (mut upstream, usage) = match native::open_stream_result_async(
         state,
         route,
         config,
@@ -43,10 +44,12 @@ pub(super) fn serve_native(
         request_headers,
         ids,
         previous_usage,
-    ) {
+    )
+    .await
+    {
         Ok(stream) => stream,
         Err(error) => {
-            let _=websocket.send_json(&serde_json::json!({"type":"error","status":error.status,"error":error.body["error"]}));
+            let _=websocket.send_json(&serde_json::json!({"type":"error","status":error.status,"error":error.body["error"]})).await;
             return TurnResult::Finished;
         }
     };
@@ -59,6 +62,7 @@ pub(super) fn serve_native(
     if !state_headers.is_empty()
         && websocket
             .send_json(&serde_json::json!({"type":"response.metadata","headers":state_headers}))
+            .await
             .is_err()
     {
         return TurnResult::Closed;
@@ -67,11 +71,7 @@ pub(super) fn serve_native(
         .started_at(websocket.observation.execution_started())
         .transport("websocket");
     loop {
-        let polled = crate::services::disconnect::raced(
-            &state.backend.transport.runtime,
-            Some(monitor),
-            upstream.next_event(),
-        );
+        let polled = monitor.race(upstream.next_event()).await;
         match polled {
             DisconnectRace::Disconnected => {
                 if websocket.interrupted() {
@@ -84,9 +84,11 @@ pub(super) fn serve_native(
             DisconnectRace::Ready(Ok(Some(event))) => {
                 usage.upstream_observation(&upstream.observation);
                 usage.observe(&event.body);
-                crate::services::context::record_event(state, route, request_body, &event.body);
+                block_in_place(|| {
+                    crate::services::context::record_event(state, route, request_body, &event.body)
+                });
                 sent_output |= stream_event_activity(&event.body).0;
-                if websocket.send_upstream_json(&event.body).is_err() {
+                if websocket.send_upstream_json(&event.body).await.is_err() {
                     return TurnResult::Closed;
                 }
                 if terminal_stream_event(&event.body) {
@@ -99,9 +101,9 @@ pub(super) fn serve_native(
                 if sent_output {
                     let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
                     let failure = stream_failure_value(&error, &id);
-                    let _ = websocket.send_json(&failure);
+                    let _ = websocket.send_json(&failure).await;
                 } else {
-                    let _ = websocket.send_json(&websocket_router_error(&error));
+                    let _ = websocket.send_json(&websocket_router_error(&error)).await;
                 }
                 break;
             }
@@ -110,7 +112,7 @@ pub(super) fn serve_native(
     TurnResult::Finished
 }
 
-pub(super) fn serve_external(
+pub(super) async fn serve_external(
     state: &ServerState,
     turn: &Turn,
     websocket: &mut super::ObservedWebSocket<'_>,
@@ -131,14 +133,16 @@ pub(super) fn serve_external(
             .begin(crate::services::activity::ActivityIdentity::from_route(
                 route,
             ));
-    let (mut upstream, candidate, usage) = match crate::services::external::open_stream(
+    let (mut upstream, candidate, usage) = match crate::services::external::open_stream_async(
         state,
         route,
         request_body,
         request_headers,
         ids,
         Some(monitor),
-    ) {
+    )
+    .await
+    {
         Ok(result) => result,
         Err(error) => {
             if matches!(
@@ -152,7 +156,7 @@ pub(super) fn serve_external(
                 };
             }
             let event = crate::api::failure_response::external_websocket_error(error);
-            let _ = websocket.send_json(&event);
+            let _ = websocket.send_json(&event).await;
             return TurnResult::Finished;
         }
     };
@@ -160,11 +164,7 @@ pub(super) fn serve_external(
         .started_at(websocket.observation.execution_started())
         .transport("websocket");
     loop {
-        let polled = crate::services::disconnect::raced(
-            &state.backend.transport.runtime,
-            Some(monitor),
-            upstream.next_event(),
-        );
+        let polled = monitor.race(upstream.next_event()).await;
         usage.upstream_observation(&upstream.observation);
         match polled {
             DisconnectRace::Disconnected => {
@@ -177,22 +177,29 @@ pub(super) fn serve_external(
             }
             DisconnectRace::Ready(Ok(Some(mut event))) => {
                 usage.observe(&event.body);
-                crate::services::context::record_event(
-                    state,
-                    &candidate,
-                    request_body,
-                    &event.body,
-                );
+                block_in_place(|| {
+                    crate::services::context::record_event(
+                        state,
+                        &candidate,
+                        request_body,
+                        &event.body,
+                    )
+                });
                 sent_output |= stream_event_activity(&event.body).0;
                 if websocket
                     .send_stateless_json(&mut event.body, true)
+                    .await
                     .is_err()
                 {
                     return TurnResult::Closed;
                 }
                 if terminal_stream_event(&event.body) {
                     if event.body["type"] == "response.completed" {
-                        crate::services::providers::persist_protocol_observation(state, &candidate);
+                        block_in_place(|| {
+                            crate::services::providers::persist_protocol_observation(
+                                state, &candidate,
+                            )
+                        });
                     }
                     break;
                 }
@@ -203,10 +210,11 @@ pub(super) fn serve_external(
                 if sent_output {
                     let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
                     let failure = stream_failure_value_for_route(&error, &id, &candidate, true);
-                    let _ = websocket.send_json(&failure);
+                    let _ = websocket.send_json(&failure).await;
                 } else {
-                    let _ =
-                        websocket.send_json(&websocket_router_error_for_route(&error, &candidate));
+                    let _ = websocket
+                        .send_json(&websocket_router_error_for_route(&error, &candidate))
+                        .await;
                 }
                 break;
             }

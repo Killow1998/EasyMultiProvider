@@ -171,9 +171,16 @@ pub(crate) fn raced<T, F>(
 where
     F: Future<Output = T>,
 {
+    runtime.block_on(race(monitor, future))
+}
+
+pub(crate) async fn race<F: Future>(
+    monitor: Option<&mut DisconnectMonitor>,
+    future: F,
+) -> DisconnectRace<F::Output> {
     match monitor {
-        Some(monitor) => runtime.block_on(monitor.race(future)),
-        None => DisconnectRace::Ready(runtime.block_on(future)),
+        Some(monitor) => monitor.race(future).await,
+        None => DisconnectRace::Ready(future.await),
     }
 }
 

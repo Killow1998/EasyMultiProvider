@@ -3,8 +3,7 @@ use crate::api::failure_response::websocket_router_error;
 use crate::api::history_response::history_stream_error;
 use crate::app::ServerState;
 use crate::http::request::Request;
-use crate::http::response::json_error_response;
-use crate::http::response::status_text;
+use crate::server::http::error::HttpReply;
 use crate::server::http::proxy::require_proxy;
 use crate::services::catalog::response_catalog_etag;
 use crate::services::history::DestinationPrepareError;
@@ -21,6 +20,9 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::TcpStream;
+use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::task::block_in_place;
 
 mod aero;
 mod claude;
@@ -28,7 +30,7 @@ mod control;
 
 mod http_stream;
 mod native_socket;
-pub(super) mod socket;
+pub(crate) mod socket;
 use socket::{Downstream, DownstreamEvent, legacy_websocket_io};
 
 use native_socket::{NativeSession, NativeTurnResult, native_stream_error_value};
@@ -42,14 +44,15 @@ struct ObservedWebSocket<'a> {
     codex: bool,
 }
 impl ObservedWebSocket<'_> {
-    fn warmup(&mut self) -> Result<(), emp_transport::WebSocketError> {
+    async fn warmup(&mut self) -> Result<(), emp_transport::WebSocketError> {
         let id = "";
         let usage = serde_json::json!({"input_tokens":0,"input_tokens_details":Value::Null,"output_tokens":0,"output_tokens_details":Value::Null,"total_tokens":0});
-        self.send_json(&serde_json::json!({"type":"response.created","response":{"id":id}}))?;
-        self.send_json(&serde_json::json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","output":[],"usage":usage}}))
+        self.send_json(&serde_json::json!({"type":"response.created","response":{"id":id}}))
+            .await?;
+        self.send_json(&serde_json::json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","output":[],"usage":usage}})).await
     }
 
-    fn reject(
+    async fn reject(
         &mut self,
         state: &ServerState,
         route: &emp_domain::ResolvedRoute,
@@ -68,29 +71,36 @@ impl ObservedWebSocket<'_> {
         .started_at(self.observation.execution_started())
         .transport("websocket");
         outcome.observe(event);
-        let _ = self.send_json(event);
+        let _ = self.send_json(event).await;
     }
-    fn send_json(&mut self, event: &Value) -> Result<(), emp_transport::WebSocketError> {
-        self.send(event, false)
+    async fn send_json(&mut self, event: &Value) -> Result<(), emp_transport::WebSocketError> {
+        self.send(event, false).await
     }
-    fn send_upstream_json(&mut self, event: &Value) -> Result<(), emp_transport::WebSocketError> {
-        self.send(event, true)
+    async fn send_upstream_json(
+        &mut self,
+        event: &Value,
+    ) -> Result<(), emp_transport::WebSocketError> {
+        self.send(event, true).await
     }
-    fn send_stateless_json(
+    async fn send_stateless_json(
         &mut self,
         event: &mut Value,
         upstream: bool,
     ) -> Result<(), emp_transport::WebSocketError> {
         if event["type"] != "response.completed" {
-            return self.send(event, upstream);
+            return self.send(event, upstream).await;
         }
         let id = std::mem::replace(&mut event["response"]["id"], Value::String(String::new()));
-        let result = self.send(event, upstream);
+        let result = self.send(event, upstream).await;
         *self.last_response_id = id.as_str().map(str::to_owned);
         event["response"]["id"] = id;
         result
     }
-    fn send(&mut self, event: &Value, upstream: bool) -> Result<(), emp_transport::WebSocketError> {
+    async fn send(
+        &mut self,
+        event: &Value,
+        upstream: bool,
+    ) -> Result<(), emp_transport::WebSocketError> {
         if !self.codex
             && crate::services::events::codex_event(event["type"].as_str().unwrap_or_default())
         {
@@ -99,12 +109,12 @@ impl ObservedWebSocket<'_> {
         let formatted = self.observation.errors().event(event, upstream);
         let event = formatted.as_ref().unwrap_or(event);
         let result = match &self.control {
-            Some(control) => match self.inner.runtime.block_on(control.send(self.inner, event)) {
+            Some(control) => match control.send(self.inner, event).await {
                 Ok(false) => return Ok(()),
                 Ok(true) => Ok(()),
                 Err(error) => Err(error),
             },
-            None => self.inner.send_json(event),
+            None => self.inner.send_json(event).await,
         };
         if upstream {
             self.observation.upstream_event_written(event, result)?;
@@ -141,111 +151,157 @@ enum TurnResult {
     Closed,
 }
 
+pub(crate) fn connection_has_upgrade_token(value: &str) -> bool {
+    value
+        .split(',')
+        .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+}
+
+pub(crate) fn prepare_upgrade(
+    request: Request<'_>,
+    key_error: impl FnOnce(emp_transport::WebSocketError) -> String,
+) -> Result<String, HttpReply> {
+    if request
+        .header("Upgrade")
+        .is_none_or(|value| !value.eq_ignore_ascii_case("websocket"))
+        || !connection_has_upgrade_token(request.header("Connection").unwrap_or_default())
+        || request.header("Sec-WebSocket-Version") != Some("13")
+    {
+        return Err(HttpReply::error(400, "invalid websocket upgrade", None));
+    }
+    websocket_accept(request.header("Sec-WebSocket-Key").unwrap_or_default())
+        .map_err(|error| HttpReply::error(400, &key_error(error), None))
+}
+
 pub(crate) fn serve_responses_websocket(
     stream: &mut TcpStream,
     request: Request<'_>,
     body_prefix: Vec<u8>,
-    state: &ServerState,
+    state: &Arc<ServerState>,
     now: f64,
     connection_id: Option<&str>,
 ) {
-    if let Err(error) = require_proxy(request, state, now) {
-        let _ = stream.write_all(&error.wire_response());
-        let _ = stream.flush();
-        return;
-    }
-    let connection_tokens = request
-        .header("Connection")
-        .unwrap_or_default()
-        .split(',')
-        .map(|value| value.trim().to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    if request
-        .header("Upgrade")
-        .is_none_or(|value| !value.eq_ignore_ascii_case("websocket"))
-        || !connection_tokens.iter().any(|value| value == "upgrade")
-        || request.header("Sec-WebSocket-Version") != Some("13")
+    let accept = match require_proxy(request, state, now)
+        .map_err(|error| error.reply())
+        .and_then(|()| prepare_upgrade(request, |error| error.to_string()))
     {
-        let response = json_error_response(
-            400,
-            status_text(400),
-            "invalid websocket upgrade",
-            None,
-            &[],
-        );
-        let _ = stream.write_all(&response);
-        let _ = stream.flush();
-        return;
-    }
-    let accept = match websocket_accept(request.header("Sec-WebSocket-Key").unwrap_or_default()) {
-        Ok(value) => value,
-        Err(error) => {
-            let response =
-                json_error_response(400, status_text(400), &error.to_string(), None, &[]);
-            let _ = stream.write_all(&response);
+        Ok(accept) => accept,
+        Err(reply) => {
+            let _ = stream.write_all(&reply.wire_response());
             let _ = stream.flush();
             return;
         }
     };
-    let incoming = request.incoming();
     let head = format!(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
     );
     if stream.write_all(head.as_bytes()).is_err() || stream.flush().is_err() {
         return;
     }
-    let monitor_stream = stream.try_clone().ok();
     let runtime = state.backend.transport.runtime.handle();
     let Ok(io) = legacy_websocket_io(stream, runtime) else {
         return;
     };
-    let Ok(websocket) = Downstream::new(
+    let monitor = legacy_websocket_io(stream, runtime).ok().map(Arc::new);
+    let permit = state.connection_admission.acquire_websocket();
+    runtime.block_on(run_responses(
+        state,
+        request,
+        connection_id,
         io,
         &body_prefix,
-        std::sync::Arc::clone(&state.backend.transport.request_limits),
-        runtime.clone(),
+        monitor,
+        permit.is_some(),
+    ));
+}
+
+pub(crate) async fn run_responses(
+    state: &Arc<ServerState>,
+    request: Request<'_>,
+    connection_id: Option<&str>,
+    io: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    prefix: &[u8],
+    monitor: Option<Arc<tokio::net::TcpStream>>,
+    admitted: bool,
+) {
+    let Ok(websocket) = Downstream::new(
+        io,
+        prefix,
+        Arc::clone(&state.backend.transport.request_limits),
     ) else {
         return;
     };
-    let Some(_websocket_permit) = state.connection_admission.acquire_websocket() else {
+    if !admitted {
         state.backend.diagnostics.journal.event(
             "warning",
             "request_rejected",
             &serde_json::json!({"transport":"websocket", "reason":"connection_capacity"}),
         );
-        websocket.close(1013, "too many websocket connections");
+        websocket
+            .close(1013, "too many websocket connections")
+            .await;
         return;
-    };
+    }
     let mut native_session = NativeSession::default();
+    let session = responses_turns(
+        state,
+        request,
+        connection_id,
+        &websocket,
+        monitor.as_ref(),
+        &mut native_session,
+    );
+    session.await;
+    native_session.close_upstream().await;
+}
+
+async fn wait_for_drain(state: &ServerState) {
+    tokio::select! {
+        _ = state.wait_for_shutdown() => {}
+        _ = state.connection_admission.wait_for_websocket_drain() => {}
+    }
+}
+
+async fn responses_turns(
+    state: &Arc<ServerState>,
+    request: Request<'_>,
+    connection_id: Option<&str>,
+    websocket: &Downstream,
+    monitor: Option<&Arc<tokio::net::TcpStream>>,
+    native_session: &mut NativeSession,
+) {
     let mut last_response_id = None;
+    let incoming = request.incoming();
     loop {
         let next = match native_session.pending_request.take() {
             Some(text) => Some(text),
-            None => runtime.block_on(async {
-                loop {
-                    let event = tokio::select! {
-                        biased;
-                        _ = state.wait_for_shutdown() => break,
-                        _ = state.connection_admission.wait_for_websocket_drain() => break,
-                        event = websocket.read() => event,
-                    };
-                    match websocket.finish_read(event).await {
-                        DownstreamEvent::Text(text) => return Some(text),
-                        DownstreamEvent::Control => continue,
-                        DownstreamEvent::Closed => return None,
+            None => {
+                async {
+                    loop {
+                        let event = tokio::select! {
+                            biased;
+                            _ = wait_for_drain(state) => break,
+                            event = websocket.read() => event,
+                        };
+                        match websocket.finish_read(event).await {
+                            DownstreamEvent::Text(text) => return Some(text),
+                            DownstreamEvent::Control => continue,
+                            DownstreamEvent::Closed => return None,
+                        }
                     }
+                    websocket
+                        .writer
+                        .close(1001, "EMP connection is draining")
+                        .await;
+                    None
                 }
-                websocket
-                    .writer
-                    .close(1001, "EMP connection is draining")
-                    .await;
-                None
-            }),
+                .await
+            }
         };
         let Some(text) = next else {
             return;
         };
-        let _request_budget = websocket.take_request_budget();
+        let _request_budget = websocket.take_request_budget().await;
         if request
             .source
             .and_then(|source| source.caller.as_ref())
@@ -253,11 +309,11 @@ pub(crate) fn serve_responses_websocket(
             && crate::http::auth::proxy_identity(request, state, crate::util::system_now(), None)
                 .is_none()
         {
-            websocket.close(1008, "device key was revoked");
+            websocket.close(1008, "device key was revoked").await;
             return;
         }
         if state.connection_admission.is_quiescing() {
-            websocket.close(1001, "EMP connection is draining");
+            websocket.close(1001, "EMP connection is draining").await;
             return;
         }
         let decoded_bytes = text.len() as u64;
@@ -281,6 +337,7 @@ pub(crate) fn serve_responses_websocket(
                         "invalid_request",
                         "interrupt response_id does not identify an active response",
                     ))
+                    .await
                     .is_err()
             {
                 return;
@@ -303,28 +360,32 @@ pub(crate) fn serve_responses_websocket(
         observation = observation.with_errors(presentation);
         let mut websocket = ObservedWebSocket {
             codex: crate::services::events::codex_client(&incoming),
-            inner: &websocket,
+            inner: websocket,
             observation: &mut observation,
             control: None,
             last_response_id: &mut last_response_id,
         };
         websocket.observation.phase(Phase::ReadBody);
         let Some(_permit) = state.updates.enter() else {
-            let _ = websocket.send_json(&emp_websocket_error(
-                503,
-                "updating",
-                "EMP is installing an update. Please retry shortly.",
-            ));
+            let _ = websocket
+                .send_json(&emp_websocket_error(
+                    503,
+                    "updating",
+                    "EMP is installing an update. Please retry shortly.",
+                ))
+                .await;
             continue;
         };
         let mut request_body = match decoded {
             Ok(value @ Value::Object(_)) => value,
             _ => {
-                let _ = websocket.send_json(&emp_websocket_error(
-                    400,
-                    "invalid_request",
-                    "websocket request must be a JSON object",
-                ));
+                let _ = websocket
+                    .send_json(&emp_websocket_error(
+                        400,
+                        "invalid_request",
+                        "websocket request must be a JSON object",
+                    ))
+                    .await;
                 continue;
             }
         };
@@ -342,28 +403,32 @@ pub(crate) fn serve_responses_websocket(
             .as_deref()
             != Some("response.create")
         {
-            let _ = websocket.send_json(&emp_websocket_error(
-                400,
-                "invalid_request",
-                "websocket request.type must be response.create",
-            ));
+            let _ = websocket
+                .send_json(&emp_websocket_error(
+                    400,
+                    "invalid_request",
+                    "websocket request.type must be response.create",
+                ))
+                .await;
             continue;
         }
         let etag = response_catalog_etag(state).unwrap_or_default();
-        if websocket.send_json(&serde_json::json!({"type":"codex.response.metadata","headers":{"x-models-etag":etag}})).is_err(){return;}
+        if websocket.send_json(&serde_json::json!({"type":"codex.response.metadata","headers":{"x-models-etag":etag}})).await.is_err(){return;}
         websocket.observation.phase(Phase::ResolveRoute);
         if let Some(config) = crate::api::aero::selected_config(state, &request_body) {
             let generate = request_body.as_object_mut().unwrap().remove("generate");
             if generate == Some(Value::Bool(false)) {
                 websocket.observation.diagnostic_only("aero");
                 let result = if state.backend.modules.active(emp_modules::Module::Aero) {
-                    websocket.warmup()
+                    websocket.warmup().await
                 } else {
-                    websocket.send_json(&emp_websocket_error(
-                        404,
-                        "module_disabled",
-                        "Enable the Aero module to use this model.",
-                    ))
+                    websocket
+                        .send_json(&emp_websocket_error(
+                            404,
+                            "module_disabled",
+                            "Enable the Aero module to use this model.",
+                        ))
+                        .await
                 };
                 if result.is_err() {
                     return;
@@ -372,31 +437,27 @@ pub(crate) fn serve_responses_websocket(
             }
             request_body["stream"] = Value::Bool(true);
             let request_headers = websocket.observation.headers(incoming.clone());
-            let result = control::run(
+            let (control, mut monitor) = control::TurnControl::start(state, &mut websocket);
+            let result = aero::serve(
                 state,
+                &config,
+                &request_body,
+                (request, &request_headers),
                 &mut websocket,
-                &mut native_session.pending_request,
-                |websocket, monitor| {
-                    aero::serve(
-                        state,
-                        &config,
-                        &request_body,
-                        (request, &request_headers),
-                        websocket,
-                        monitor,
-                    )
-                },
-            );
+                &mut monitor,
+            )
+            .await;
+            let result = control
+                .finish(&mut websocket, &mut native_session.pending_request, result)
+                .await;
             if matches!(result, TurnResult::Closed) {
                 return;
             }
             continue;
         }
-        let (config, route, mut request_body) = match crate::services::memory_routing::prepare(
-            state,
-            request_body,
-            &incoming,
-        ) {
+        let (config, route, mut request_body) = match block_in_place(|| {
+            crate::services::memory_routing::prepare(state, request_body, &incoming)
+        }) {
             Ok(PreparedRequest {
                 config,
                 route,
@@ -406,37 +467,43 @@ pub(crate) fn serve_responses_websocket(
                 let _ = websocket.send_json(&serde_json::json!({
                     "type":"error", "status":400,
                     "error":{"code":"invalid_request","origin":"emp","message":"[EMP] request.model is required"}
-                }));
+                })).await;
                 continue;
             }
             Err(RequestPreparationError::Route(error)) => {
                 let _ = websocket.send_json(&serde_json::json!({
                     "type":"error", "status":error.status(),
                     "error":{"code":"router_error","origin":"emp","message":crate::services::error_origin::message("emp", &error.to_string())}
-                }));
+                })).await;
                 continue;
             }
             Err(RequestPreparationError::MemoryUnavailable(reason)) => {
-                let _ = websocket.send_json(&emp_websocket_error(
-                    503,
-                    "memory_routing_unavailable",
-                    crate::services::memory_routing::error_message(reason),
-                ));
+                let _ = websocket
+                    .send_json(&emp_websocket_error(
+                        503,
+                        "memory_routing_unavailable",
+                        crate::services::memory_routing::error_message(reason),
+                    ))
+                    .await;
                 continue;
             }
             Err(RequestPreparationError::TeamAccess(denial)) => {
                 let error = denial.public_error(state);
-                let _ = websocket.send_json(&serde_json::json!({
-                    "type":"error", "status":error.status, "error":error.body["error"]
-                }));
+                let _ = websocket
+                    .send_json(&serde_json::json!({
+                        "type":"error", "status":error.status, "error":error.body["error"]
+                    }))
+                    .await;
                 continue;
             }
             Ok(_) | Err(_) => {
-                let _ = websocket.send_json(&emp_websocket_error(
-                    500,
-                    "internal_error",
-                    "internal server error",
-                ));
+                let _ = websocket
+                    .send_json(&emp_websocket_error(
+                        500,
+                        "internal_error",
+                        "internal server error",
+                    ))
+                    .await;
                 continue;
             }
         };
@@ -453,6 +520,7 @@ pub(crate) fn serve_responses_websocket(
                 .send_json(&crate::api::claude_response::websocket_value_for_route(
                     &error, &route,
                 ))
+                .await
                 .is_err()
             {
                 return;
@@ -462,11 +530,13 @@ pub(crate) fn serve_responses_websocket(
         let ids = match projection_ids() {
             Ok(ids) => ids,
             Err(_) => {
-                let _ = websocket.send_json(&emp_websocket_error(
-                    500,
-                    "internal_error",
-                    "internal server error",
-                ));
+                let _ = websocket
+                    .send_json(&emp_websocket_error(
+                        500,
+                        "internal_error",
+                        "internal server error",
+                    ))
+                    .await;
                 continue;
             }
         };
@@ -479,7 +549,7 @@ pub(crate) fn serve_responses_websocket(
             Ok(anchor) => (anchor.thread_id, anchor.window_id),
             Err(error) => {
                 let failed = history_stream_error(&error, websocket.observation);
-                let _ = websocket.send_json(&failed);
+                let _ = websocket.send_json(&failed).await;
                 continue;
             }
         };
@@ -493,52 +563,74 @@ pub(crate) fn serve_responses_websocket(
             request_body.get("previous_response_id"),
             websocket.observation.native_continuation(),
         ) {
-            websocket.reject(
-                state,
-                &route,
-                &request_body,
-                &request_headers,
-                &native_socket::previous_response_error(reason),
-            );
+            websocket
+                .reject(
+                    state,
+                    &route,
+                    &request_body,
+                    &request_headers,
+                    &native_socket::previous_response_error(reason),
+                )
+                .await;
             continue;
         }
-        request_body = match prepare_history(state, &route, request_body, &request_headers) {
-            Ok(body @ Value::Object(_)) => body,
-            Ok(_) => {
-                let error = HistoryError::new("invalid_history_projection");
-                let failed = history_stream_error(&error, websocket.observation);
-                if websocket.send_json(&failed).is_err() {
-                    return;
+        request_body =
+            match block_in_place(|| prepare_history(state, &route, request_body, &request_headers))
+            {
+                Ok(body @ Value::Object(_)) => body,
+                Ok(_) => {
+                    let error = HistoryError::new("invalid_history_projection");
+                    let failed = history_stream_error(&error, websocket.observation);
+                    if websocket.send_json(&failed).await.is_err() {
+                        return;
+                    }
+                    continue;
                 }
-                continue;
-            }
-            Err(error) => {
-                let failed = history_stream_error(&error, websocket.observation);
-                if websocket.send_json(&failed).is_err() {
-                    return;
+                Err(error) => {
+                    let failed = history_stream_error(&error, websocket.observation);
+                    if websocket.send_json(&failed).await.is_err() {
+                        return;
+                    }
+                    continue;
                 }
-                continue;
-            }
-        };
+            };
         websocket.observation.phase(Phase::PrepareDestination);
-        let destination_context = {
-            let mut monitor = monitor_stream.as_ref().and_then(|probe| {
-                crate::services::disconnect::DisconnectMonitor::start(probe).ok()
+        let destination_context = if let Some(socket) = monitor {
+            let socket = Arc::clone(socket);
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mut monitor =
+                crate::services::disconnect::DisconnectMonitor::from_signal(receiver, interrupted);
+            let watcher = tokio::spawn(async move {
+                if socket.peek(&mut [0]).await.unwrap_or(0) == 0 {
+                    let _ = sender.send(());
+                } else {
+                    std::future::pending::<()>().await;
+                }
             });
-            prepare_destination_context(
-                state,
-                &route,
-                request_body,
-                &request_headers,
-                monitor.as_mut(),
-            )
+            let result = block_in_place(|| {
+                prepare_destination_context(
+                    state,
+                    &route,
+                    request_body,
+                    &request_headers,
+                    Some(&mut monitor),
+                )
+            });
+            watcher.abort();
+            let _ = watcher.await;
+            result
+        } else {
+            block_in_place(|| {
+                prepare_destination_context(state, &route, request_body, &request_headers, None)
+            })
         };
         request_body = match destination_context {
             Ok(body @ Value::Object(_)) => body,
             Ok(_) => {
                 let error = HistoryError::new("invalid_history_projection");
                 let failed = history_stream_error(&error, websocket.observation);
-                if websocket.send_json(&failed).is_err() {
+                if websocket.send_json(&failed).await.is_err() {
                     return;
                 }
                 continue;
@@ -550,6 +642,7 @@ pub(crate) fn serve_responses_websocket(
             }) => {
                 if websocket
                     .send_json(&emp_websocket_error(status, code, message))
+                    .await
                     .is_err()
                 {
                     return;
@@ -559,6 +652,7 @@ pub(crate) fn serve_responses_websocket(
             Err(DestinationPrepareError::Router(error)) => {
                 if websocket
                     .send_json(&websocket_router_error(&error))
+                    .await
                     .is_err()
                 {
                     return;
@@ -570,6 +664,7 @@ pub(crate) fn serve_responses_websocket(
                     .send_json(&crate::api::claude_response::websocket_value_for_route(
                         &error, &route,
                     ))
+                    .await
                     .is_err()
                 {
                     return;
@@ -580,7 +675,7 @@ pub(crate) fn serve_responses_websocket(
             Err(DestinationPrepareError::History(reason)) => {
                 let failed =
                     history_stream_error(&HistoryError::new(reason), websocket.observation);
-                if websocket.send_json(&failed).is_err() {
+                if websocket.send_json(&failed).await.is_err() {
                     return;
                 }
                 continue;
@@ -593,7 +688,7 @@ pub(crate) fn serve_responses_websocket(
                     Some("context_length_exceeded"),
                     &id,
                 );
-                if websocket.send_json(&failed).is_err() {
+                if websocket.send_json(&failed).await.is_err() {
                     return;
                 }
                 continue;
@@ -610,7 +705,7 @@ pub(crate) fn serve_responses_websocket(
         };
         let (native_turn_activity, native_usage) =
             if turn.route.dialect == emp_domain::Dialect::CodexNative {
-                match native_session.serve(state, &turn, &mut websocket) {
+                match native_session.serve(state, &turn, &mut websocket).await {
                     NativeTurnResult::Finished => continue,
                     NativeTurnResult::Closed => return,
                     NativeTurnResult::HttpFallback(activity, usage) => (activity, usage),
@@ -625,34 +720,32 @@ pub(crate) fn serve_responses_websocket(
             .and_then(|value| value.as_bool())
             .unwrap_or(true);
         if !generate {
-            if websocket.warmup().is_err() {
+            if websocket.warmup().await.is_err() {
                 return;
             }
             continue;
         }
         body.remove("generate");
         body.insert("stream".to_owned(), Value::Bool(true));
-        let result = control::run(
-            state,
-            &mut websocket,
-            &mut native_session.pending_request,
-            |websocket, monitor| {
-                if crate::services::claude_cli::selected(&turn.route) {
-                    claude::serve(state, &turn, websocket, monitor)
-                } else if turn.route.dialect == emp_domain::Dialect::CodexNative {
-                    http_stream::serve_native(
-                        state,
-                        &turn,
-                        websocket,
-                        monitor,
-                        native_turn_activity,
-                        native_usage.map(|usage| *usage),
-                    )
-                } else {
-                    http_stream::serve_external(state, &turn, websocket, monitor)
-                }
-            },
-        );
+        let (control, mut monitor) = control::TurnControl::start(state, &mut websocket);
+        let result = if crate::services::claude_cli::selected(&turn.route) {
+            claude::serve(state, turn, &mut websocket, monitor).await
+        } else if turn.route.dialect == emp_domain::Dialect::CodexNative {
+            http_stream::serve_native(
+                state,
+                &turn,
+                &mut websocket,
+                &mut monitor,
+                native_turn_activity,
+                native_usage.map(|usage| *usage),
+            )
+            .await
+        } else {
+            http_stream::serve_external(state, &turn, &mut websocket, &mut monitor).await
+        };
+        let result = control
+            .finish(&mut websocket, &mut native_session.pending_request, result)
+            .await;
         if matches!(result, TurnResult::Closed) {
             return;
         }

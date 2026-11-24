@@ -417,53 +417,57 @@ impl<'a> RequestOutcome<'a> {
     }
     pub(crate) fn finish(&mut self) {
         if !self.finalized {
-            let duration_ms = self.started.elapsed().as_millis() as u64;
-            self.event["duration_ms"] = json!(duration_ms);
-            if self.event["route"] == "prewarm" {
-                self.state.backend.diagnostics.journal.event(
-                    "info",
-                    "model_prewarm_finished",
-                    &json!({"request_id":self.event["request_id"],"model_id":self.event["model_id"],
+            tokio::task::block_in_place(|| self.record_completion());
+        }
+    }
+
+    fn record_completion(&mut self) {
+        let duration_ms = self.started.elapsed().as_millis() as u64;
+        self.event["duration_ms"] = json!(duration_ms);
+        if self.event["route"] == "prewarm" {
+            self.state.backend.diagnostics.journal.event(
+                "info",
+                "model_prewarm_finished",
+                &json!({"request_id":self.event["request_id"],"model_id":self.event["model_id"],
                         "duration_ms":duration_ms,"success":self.event["success"],
                         "error_class":self.event["error_class"],"generate":false}),
-                );
-                self.finalized = true;
-                return;
-            }
-            self.record_performance(duration_ms);
-            if let Some(owner) = &self.aggregate_owner {
-                self.state
-                    .backend
-                    .aggregate_availability
-                    .record_source_result(
-                        owner,
-                        self.event["success"] == true,
-                        self.event["failure_reason"].as_str().unwrap_or_default(),
-                        self.event["error_class"].as_str().unwrap_or_default(),
-                    );
-            }
-            if matches!(
-                emp_state::usage::call_state(&self.event),
-                "completed" | "failed"
-            ) {
-                self.state.backend.auto_review.record_result(
-                    self.event["client_model"].as_str().unwrap_or_default(),
-                    self.event["provider_id"].as_str().unwrap_or_default(),
+            );
+            self.finalized = true;
+            return;
+        }
+        self.record_performance(duration_ms);
+        if let Some(owner) = &self.aggregate_owner {
+            self.state
+                .backend
+                .aggregate_availability
+                .record_source_result(
+                    owner,
                     self.event["success"] == true,
                     self.event["failure_reason"].as_str().unwrap_or_default(),
                     self.event["error_class"].as_str().unwrap_or_default(),
                 );
-            }
-            self.update_model_facts();
-            if let Some(identity) = &self.identity {
-                self.event["account_id"] = json!(identity.account_id);
-            }
-            crate::services::memory_routing::observe(self.state, &self.event);
-            crate::services::observation::record_completion(self.state, &self.event);
-            self.persist_call();
-            self.publish(true);
-            self.finalized = true;
         }
+        if matches!(
+            emp_state::usage::call_state(&self.event),
+            "completed" | "failed"
+        ) {
+            self.state.backend.auto_review.record_result(
+                self.event["client_model"].as_str().unwrap_or_default(),
+                self.event["provider_id"].as_str().unwrap_or_default(),
+                self.event["success"] == true,
+                self.event["failure_reason"].as_str().unwrap_or_default(),
+                self.event["error_class"].as_str().unwrap_or_default(),
+            );
+        }
+        self.update_model_facts();
+        if let Some(identity) = &self.identity {
+            self.event["account_id"] = json!(identity.account_id);
+        }
+        crate::services::memory_routing::observe(self.state, &self.event);
+        crate::services::observation::record_completion(self.state, &self.event);
+        self.persist_call();
+        self.publish(true);
+        self.finalized = true;
     }
 
     fn publish(&self, finished: bool) {

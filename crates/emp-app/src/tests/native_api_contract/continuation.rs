@@ -448,3 +448,90 @@ fn prefill_rejection_unexpected_output_and_cancellation_never_replay_generation(
         assert_private(&journal);
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn prefill_disconnect_waits_for_the_client_to_retry_on_both_listeners() {
+    use crate::server::raw_tcp::{RawClient, read_websocket_frame, websocket_frame};
+    use tokio::io::AsyncWriteExt;
+
+    for candidate in [false, true] {
+        let upstream = Upstream::with_fault(10 * 1024 * 1024, Fault::SilentPrefill);
+        let (_directory, server, model) = server(&upstream, true);
+        let runtime = &server.state.backend.transport.runtime;
+        let (address, worker) = if candidate {
+            let (address, worker) = crate::server::http::tests::spawn_candidate(&server);
+            (address, Some(worker))
+        } else {
+            (server.local_addr(), None)
+        };
+        let thread_id = "11111111-1111-4111-8111-111111111111";
+        let request = json!({"type":"response.create","model":model,"input":initial_input()});
+        let wire = format!(
+            "GET /v1/responses HTTP/1.1\r\nHost: {}\r\nX-EMP-Session: {}\r\nthread-id: {thread_id}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+            server.local_addr(),
+            server.session_token(),
+        );
+        let frame = websocket_frame(
+            0x81,
+            Some([11, 12, 13, 14]),
+            &serde_json::to_vec(&request).unwrap(),
+        );
+        let send_request = async || {
+            let mut client = RawClient::request(address, wire.as_bytes()).await;
+            assert!(
+                client
+                    .head
+                    .starts_with("HTTP/1.1 101 Switching Protocols\r\n")
+            );
+            client.io.write_all(&frame).await.unwrap();
+            client
+        };
+        let mut client = runtime.block_on(send_request());
+        crate::tests::wait_for(Duration::from_secs(30), || {
+            upstream.traffic.lock().unwrap().warmups == 1
+        });
+        runtime.block_on(client.io.shutdown()).unwrap();
+        runtime.block_on(async {
+            assert_eq!(client.rest().await.last_chunk::<2>(), Some(&[0x88, 0]));
+        });
+        crate::tests::wait_for(Duration::from_secs(5), || {
+            upstream.traffic.lock().unwrap().cancelled_prefills == 1
+        });
+        {
+            let stats = upstream.traffic.lock().unwrap();
+            assert_eq!(stats.ws_connections, 1);
+            assert_eq!(stats.http_requests, 0);
+            assert!(stats.generated_hashes.is_empty());
+        }
+        runtime.block_on(async {
+            let mut retry = send_request().await;
+            loop {
+                let (flags, payload) = read_websocket_frame(&mut retry.io, false).await;
+                assert_eq!(flags, 0x81);
+                let event: Value = serde_json::from_slice(&payload).unwrap();
+                match event["type"].as_str() {
+                    Some("response.completed") => break,
+                    Some("response.failed" | "response.incomplete" | "error") => panic!("{event}"),
+                    _ => {}
+                }
+            }
+            retry.io.shutdown().await.unwrap();
+            assert_eq!(retry.rest().await, b"\x88\x00");
+        });
+        if let Some(worker) = worker {
+            server.state.request_shutdown();
+            runtime.block_on(worker).unwrap().unwrap();
+        }
+        server.shutdown().unwrap();
+        let stats = upstream.traffic.lock().unwrap();
+        let mut expected = Sha256::new();
+        append_input(&mut expected, &request);
+        assert_eq!(stats.ws_connections, 2);
+        assert_eq!(stats.http_requests, 0);
+        assert_eq!(
+            stats.generated_hashes,
+            [format!("{:x}", expected.finalize())]
+        );
+    }
+}

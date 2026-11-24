@@ -250,7 +250,7 @@ async fn response_body_holds_admission_until_completion_or_client_disconnect() {
 }
 
 #[tokio::test]
-async fn upgrade_transfers_both_permits_and_graceful_shutdown_waits_for_session() {
+async fn upgrade_releases_request_permit_and_graceful_shutdown_waits_for_session() {
     for reserve_before_handshake in [false, true] {
         let admission = admission();
         let router =
@@ -267,7 +267,8 @@ async fn upgrade_transfers_both_permits_and_graceful_shutdown_waits_for_session(
                         context.on_upgrade(
                             hyper::upgrade::on(&mut request),
                             reserved,
-                            |mut socket, admitted, shutdown| async move {
+                            |socket, admitted, shutdown| async move {
+                                let mut socket = socket.unwrap();
                                 assert!(admitted);
                                 assert_eq!(socket.read_u8().await.unwrap(), b'x');
                                 socket.write_all(b"ready").await.unwrap();
@@ -298,9 +299,9 @@ async fn upgrade_transfers_both_permits_and_graceful_shutdown_waits_for_session(
             .unwrap()
             .unwrap();
         assert_eq!(&session_ready, b"ready");
-        assert_eq!(admission.active_requests(), 1);
+        assert_eq!(admission.active_requests(), 0);
         assert_eq!(admission.active_websockets(), 1);
-        assert!(admission.acquire_request().is_none());
+        assert!(admission.acquire_request().is_some());
         assert!(admission.acquire_websocket().is_none());
 
         let address = server.local_addr();
@@ -315,7 +316,7 @@ async fn upgrade_transfers_both_permits_and_graceful_shutdown_waits_for_session(
         assert_eq!(&session_stopping, b"stopping");
         assert_eq!(shutdown.wait().await, ShutdownReason::Requested);
         assert!(poll_once(stopping.as_mut()).await.is_pending());
-        assert_eq!(admission.active_requests(), 1);
+        assert_eq!(admission.active_requests(), 0);
         assert_eq!(admission.active_websockets(), 1);
         client.io.write_all(b"y").await.unwrap();
         assert!(client.rest().await.is_empty());

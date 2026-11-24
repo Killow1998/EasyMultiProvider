@@ -10,7 +10,7 @@ use emp_transport::SseJsonParser;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub(super) fn serve(
+pub(super) async fn serve(
     state: &ServerState,
     config: &Value,
     body: &Value,
@@ -26,20 +26,22 @@ pub(super) fn serve(
         websocket.observation,
         false,
         monitor,
-    ) {
+    )
+    .await
+    {
         Ok(upstream) => upstream,
         Err(RelayError::Disconnected) => return TurnResult::Closed,
         Err(RelayError::Request(status, code, message)) => {
-            return send(websocket, &emp_websocket_error(status, code, message));
+            return send(websocket, &emp_websocket_error(status, code, message)).await;
         }
         Err(RelayError::History(error)) => {
             let event = history_stream_error(&error, websocket.observation);
-            return send(websocket, &event);
+            return send(websocket, &event).await;
         }
     };
     let status = upstream.response.status();
     if !(200..300).contains(&status) {
-        let result = await_module(state, monitor, upstream.response.read_limited(64 * 1024));
+        let result = await_module(state, monitor, upstream.response.read_limited(64 * 1024)).await;
         let error = match result {
             DisconnectRace::Ready(Ok(bytes)) => serde_json::from_slice::<Value>(&bytes).ok(),
             DisconnectRace::Ready(Err(_)) => None,
@@ -52,12 +54,12 @@ pub(super) fn serve(
         let message = error
             .and_then(|value| value["message"].as_str())
             .unwrap_or("The Aero module rejected the request.");
-        return send(websocket, &emp_websocket_error(status, code, message));
+        return send(websocket, &emp_websocket_error(status, code, message)).await;
     }
     let mut parser = SseJsonParser::new();
     let mut response_id = None;
     loop {
-        let events = match await_module(state, monitor, upstream.response.next_chunk()) {
+        let events = match await_module(state, monitor, upstream.response.next_chunk()).await {
             DisconnectRace::Disconnected => {
                 return if websocket.interrupted() {
                     TurnResult::Finished
@@ -76,7 +78,7 @@ pub(super) fn serve(
             if event["type"] == "response.created" {
                 response_id = event["response"]["id"].as_str().map(str::to_owned);
             }
-            if websocket.send_json(&event).is_err() {
+            if websocket.send_json(&event).await.is_err() {
                 return TurnResult::Closed;
             }
             if terminal_stream_event(&event) {
@@ -90,18 +92,21 @@ pub(super) fn serve(
         "The Aero stream ended before a terminal event.",
     );
     match response_id {
-        Some(id) => send(
-            websocket,
-            &json!({"type":"response.failed","response":{
-                "id":id, "object":"response", "status":"failed", "error":error["error"]
-            }}),
-        ),
-        None => send(websocket, &error),
+        Some(id) => {
+            send(
+                websocket,
+                &json!({"type":"response.failed","response":{
+                    "id":id, "object":"response", "status":"failed", "error":error["error"]
+                }}),
+            )
+            .await
+        }
+        None => send(websocket, &error).await,
     }
 }
 
-fn send(websocket: &mut ObservedWebSocket<'_>, event: &Value) -> TurnResult {
-    match websocket.send_json(event) {
+async fn send(websocket: &mut ObservedWebSocket<'_>, event: &Value) -> TurnResult {
+    match websocket.send_json(event).await {
         Ok(()) => TurnResult::Finished,
         Err(_) => TurnResult::Closed,
     }

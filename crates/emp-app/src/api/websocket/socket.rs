@@ -5,7 +5,7 @@ use emp_transport::{
 use serde_json::Value;
 use std::{io, net::TcpStream, sync::Arc};
 use tokio::{
-    io::{ReadHalf, WriteHalf},
+    io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf},
     net::TcpStream as AsyncTcpStream,
     runtime::Handle,
     sync::Mutex,
@@ -21,10 +21,15 @@ pub(in crate::api) fn legacy_websocket_io(
     AsyncTcpStream::from_std(socket)
 }
 
+pub(super) trait WebSocketIo: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> WebSocketIo for T {}
+
+type Socket = Box<dyn WebSocketIo>;
+type Reader = WebSocketReader<ReadHalf<Socket>>;
+
 pub(super) struct Downstream {
-    reader: Arc<Mutex<WebSocketReader<ReadHalf<AsyncTcpStream>>>>,
-    pub(super) writer: WebSocketWriter<WriteHalf<AsyncTcpStream>>,
-    pub(super) runtime: Handle,
+    reader: Arc<Mutex<Reader>>,
+    pub(super) writer: WebSocketWriter<WriteHalf<Socket>>,
 }
 
 pub(super) enum DownstreamEvent {
@@ -35,17 +40,19 @@ pub(super) enum DownstreamEvent {
 
 impl Downstream {
     pub(super) fn new(
-        socket: AsyncTcpStream,
+        socket: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
         prefix: &[u8],
         limits: Arc<RequestLimits>,
-        runtime: Handle,
     ) -> Result<Self, WebSocketError> {
-        let (reader, writer) =
-            split_websocket(socket, prefix, MAX_RESPONSES_WEBSOCKET_BYTES, Some(limits))?;
+        let (reader, writer) = split_websocket(
+            Box::new(socket) as Socket,
+            prefix,
+            MAX_RESPONSES_WEBSOCKET_BYTES,
+            Some(limits),
+        )?;
         Ok(Self {
             reader: Arc::new(Mutex::new(reader)),
             writer,
-            runtime,
         })
     }
 
@@ -57,7 +64,6 @@ impl Downstream {
         Self {
             reader: Arc::clone(&self.reader),
             writer: self.writer.clone(),
-            runtime: self.runtime.clone(),
         }
     }
 
@@ -87,16 +93,15 @@ impl Downstream {
         }
     }
 
-    pub(super) fn take_request_budget(&self) -> Option<RequestBudget> {
-        self.runtime
-            .block_on(async { self.reader.lock().await.take_request_budget() })
+    pub(super) async fn take_request_budget(&self) -> Option<RequestBudget> {
+        self.reader.lock().await.take_request_budget()
     }
 
-    pub(super) fn send_json(&self, event: &Value) -> Result<(), WebSocketError> {
-        self.runtime.block_on(self.writer.send_json(event))
+    pub(super) async fn send_json(&self, event: &Value) -> Result<(), WebSocketError> {
+        self.writer.send_json(event).await
     }
 
-    pub(super) fn close(&self, code: u16, reason: &str) {
-        self.runtime.block_on(self.writer.close(code, reason));
+    pub(super) async fn close(&self, code: u16, reason: &str) {
+        self.writer.close(code, reason).await;
     }
 }

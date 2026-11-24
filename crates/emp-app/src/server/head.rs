@@ -106,7 +106,9 @@ impl GuardedHead {
         delivery: Option<Arc<Delivery>>,
     ) -> Prefixed<I> {
         let request = self.raw.request();
-        let transport_length = if request.header_count("Content-Length") == 1
+        let upgrade = crate::server::http::websocket::is_upgrade_route(request);
+        let transport_length = if !upgrade
+            && request.header_count("Content-Length") == 1
             && request.header("Transfer-Encoding").is_none()
         {
             request
@@ -116,8 +118,9 @@ impl GuardedHead {
         } else {
             None
         };
-        if request.header_count("Content-Length") == 0
-            && request.header("Transfer-Encoding").is_none()
+        if upgrade
+            || request.header_count("Content-Length") == 0
+                && request.header("Transfer-Encoding").is_none()
             || transport_length == Some(0)
         {
             self.raw.allow_body();
@@ -128,25 +131,29 @@ impl GuardedHead {
             .expect("validated request line")
             .as_bytes()
             .to_vec();
-        for line in lines {
-            let Some((name, _)) = line.split_once(':') else {
-                if !line.trim().is_empty() {
+        if upgrade {
+            head.extend_from_slice(b"Connection: Upgrade\r\nUpgrade: websocket\r\n");
+        } else {
+            for line in lines {
+                let Some((name, _)) = line.split_once(':') else {
+                    if !line.trim().is_empty() {
+                        head.extend_from_slice(line.as_bytes());
+                    }
+                    continue;
+                };
+                let name = name.trim();
+                if name.eq_ignore_ascii_case("Content-Length") {
+                    if let Some(length) = transport_length {
+                        use std::io::Write;
+                        let ending = &line[line.trim_end_matches(['\r', '\n']).len()..];
+                        write!(head, "Content-Length:{length}{ending}").expect("write into Vec");
+                    }
+                } else if !name.eq_ignore_ascii_case("Transfer-Encoding")
+                    && !name.eq_ignore_ascii_case("Expect")
+                    && !reserved_source_header(name)
+                {
                     head.extend_from_slice(line.as_bytes());
                 }
-                continue;
-            };
-            let name = name.trim();
-            if name.eq_ignore_ascii_case("Content-Length") {
-                if let Some(length) = transport_length {
-                    use std::io::Write;
-                    let ending = &line[line.trim_end_matches(['\r', '\n']).len()..];
-                    write!(head, "Content-Length:{length}{ending}").expect("write into Vec");
-                }
-            } else if !name.eq_ignore_ascii_case("Transfer-Encoding")
-                && !name.eq_ignore_ascii_case("Expect")
-                && !reserved_source_header(name)
-            {
-                head.extend_from_slice(line.as_bytes());
             }
         }
         head.extend_from_slice(b"\r\n");

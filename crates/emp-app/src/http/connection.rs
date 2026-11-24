@@ -37,7 +37,7 @@ use std::net::TcpStream;
 
 pub(crate) fn handle_connection(
     mut stream: TcpStream,
-    state: &ServerState,
+    state: &std::sync::Arc<ServerState>,
     request_permit: ConnectionPermit,
     head: Option<RequestHead>,
     observation: HttpObservation,

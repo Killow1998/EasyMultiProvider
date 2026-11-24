@@ -28,6 +28,7 @@ pub(crate) enum EntryError {
     Recovery(u16, &'static str),
 }
 
+#[cfg_attr(test, derive(Debug))]
 pub(crate) struct HttpReply {
     status: u16,
     status_text: &'static str,

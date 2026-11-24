@@ -1,5 +1,5 @@
 use crate::app::ServerState;
-use crate::services::disconnect::{DisconnectMonitor, DisconnectRace, raced};
+use crate::services::disconnect::{DisconnectMonitor, DisconnectRace, race};
 use crate::services::observation;
 use crate::services::providers::persist_protocol_observation;
 use crate::services::request_outcome::RequestOutcome;
@@ -9,7 +9,6 @@ use emp_router::{CompleteResponse, ExternalRouter, ExternalStream, ProjectionIds
 use emp_transport::{FailureClass, FailurePhase, UpstreamFailure};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::ops::AsyncFnMut;
 use std::time::{Duration, Instant};
 
 pub(crate) enum ExternalRequestError {
@@ -32,6 +31,7 @@ pub(crate) fn complete(
         emp_state::official_registry::snapshot,
     )
     .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
+    let router = &router;
     let mut outcome =
         RequestOutcome::new(state, route, body, incoming, None, "responses").started_at(started);
     let _activity_guard =
@@ -47,12 +47,15 @@ pub(crate) fn complete(
         body,
         incoming,
     };
-    let (result, candidate) =
-        execution.run(None, &mut outcome, async |candidate: &ResolvedRoute| {
+    let (result, candidate) = state.backend.transport.runtime.block_on(execution.run(
+        None,
+        &mut outcome,
+        |candidate| async move {
             router
-                .execute_complete(candidate, body, incoming, ids)
+                .execute_complete(&candidate, body, incoming, ids)
                 .await
-        })?;
+        },
+    ))?;
     outcome.http_status(result.status);
     outcome.upstream_observation(&result.observation);
     outcome.observe(&result.body);
@@ -73,12 +76,26 @@ pub(crate) fn open_stream<'a>(
     ids: &ProjectionIds,
     monitor: Option<&mut DisconnectMonitor>,
 ) -> Result<(ExternalStream, ResolvedRoute, RequestOutcome<'a>), ExternalRequestError> {
+    state.backend.transport.runtime.block_on(open_stream_async(
+        state, route, body, incoming, ids, monitor,
+    ))
+}
+
+pub(crate) async fn open_stream_async<'a>(
+    state: &'a ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+    monitor: Option<&mut DisconnectMonitor>,
+) -> Result<(ExternalStream, ResolvedRoute, RequestOutcome<'a>), ExternalRequestError> {
     let started = Instant::now();
     let router = ExternalRouter::new(
         &state.backend.transport.client,
         emp_state::official_registry::snapshot,
     )
     .with_gemini_signatures(state.backend.transport.gemini_signatures.clone());
+    let router = &router;
     let mut outcome =
         RequestOutcome::new(state, route, body, incoming, None, "responses").started_at(started);
     let (stream, candidate) = Execution {
@@ -87,9 +104,10 @@ pub(crate) fn open_stream<'a>(
         body,
         incoming,
     }
-    .run(monitor, &mut outcome, async |candidate: &ResolvedRoute| {
-        router.open_stream(candidate, body, incoming, ids).await
-    })?;
+    .run(monitor, &mut outcome, |candidate| async move {
+        router.open_stream(&candidate, body, incoming, ids).await
+    })
+    .await?;
     Ok((stream, candidate, outcome))
 }
 
@@ -101,11 +119,11 @@ struct Execution<'a> {
 }
 
 impl Execution<'_> {
-    fn run<T>(
+    async fn run<T, F: Future<Output = Result<T, RouterError>>>(
         &self,
         mut monitor: Option<&mut DisconnectMonitor>,
         outcome: &mut RequestOutcome<'_>,
-        mut request: impl AsyncFnMut(&ResolvedRoute) -> Result<T, RouterError>,
+        mut request: impl FnMut(ResolvedRoute) -> F,
     ) -> Result<(T, ResolvedRoute), ExternalRequestError> {
         let Self {
             state,
@@ -122,11 +140,7 @@ impl Execution<'_> {
             outcome.candidate(&candidate);
             for attempt in 0..3 {
                 outcome.dispatch();
-                let result = match raced(
-                    &state.backend.transport.runtime,
-                    monitor.as_deref_mut(),
-                    request(&candidate),
-                ) {
+                let result = match race(monitor.as_deref_mut(), request(candidate.clone())).await {
                     DisconnectRace::Ready(result) => result,
                     DisconnectRace::Disconnected => {
                         observation::request_cancelled(state, &candidate, incoming);
@@ -139,7 +153,9 @@ impl Execution<'_> {
                     Err(error) => error,
                 };
                 if error.error_class() == FailureClass::ContextLengthExceeded {
-                    crate::services::context::record(state, &candidate, body, false);
+                    tokio::task::block_in_place(|| {
+                        crate::services::context::record(state, &candidate, body, false)
+                    });
                 }
                 let retry = retry_delay(&error, attempt, &candidate);
                 let fallback = retry.is_none()
@@ -152,11 +168,7 @@ impl Execution<'_> {
                         continue 'candidate;
                     }
                     if matches!(
-                        raced(
-                            &state.backend.transport.runtime,
-                            monitor.as_deref_mut(),
-                            async { tokio::time::sleep(delay).await },
-                        ),
+                        race(monitor.as_deref_mut(), tokio::time::sleep(delay)).await,
                         DisconnectRace::Disconnected
                     ) {
                         observation::request_cancelled(state, &candidate, incoming);

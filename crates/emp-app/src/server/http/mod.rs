@@ -17,6 +17,7 @@ pub(crate) mod stream;
 pub(crate) mod team;
 pub(super) mod updates;
 pub(crate) mod usage;
+pub(super) mod websocket;
 
 use super::head::RawRequestHead;
 use crate::app::ServerState;

@@ -23,14 +23,14 @@ pub(super) enum PrefillError {
 impl Prefill<'_> {
     /// Prefix completions stay private. Only the final generated turn is
     /// projected to the client and counted as inference/usage by its owner.
-    pub(super) fn run(
+    pub(super) async fn run(
         self,
+        state: &crate::app::ServerState,
         client: &mut AsyncClientWebSocket,
         idle_deadline: &mut tokio::time::Instant,
         websocket: &mut ObservedWebSocket<'_>,
         pending_request: &mut Option<String>,
     ) -> Result<Value, PrefillError> {
-        let runtime = &websocket.inner.runtime;
         let count = self.chunks.len();
         let mut previous = None;
         for (index, chunk) in self.chunks.into_iter().enumerate() {
@@ -48,22 +48,22 @@ impl Prefill<'_> {
             if bytes > self.budget {
                 return Err(PrefillError::InvalidResponse);
             }
-            runtime
-                .block_on(client.send_json(&payload))
+            client
+                .send_json(&payload)
+                .await
                 .map_err(|error| PrefillError::Transport(std::io::Error::other(error)))?;
             websocket.observation.native_prefill_sent(bytes);
             loop {
-                let message = runtime
-                    .block_on(next_message(
-                        client,
-                        websocket.inner,
-                        pending_request.is_none(),
-                        idle_deadline,
-                    ))
-                    .map_err(PrefillError::Transport)?
-                    .ok_or_else(|| {
-                        PrefillError::Transport(std::io::ErrorKind::UnexpectedEof.into())
-                    })?;
+                let message = next_message(
+                    state,
+                    client,
+                    websocket.inner,
+                    pending_request.is_none(),
+                    idle_deadline,
+                )
+                .await
+                .map_err(PrefillError::Transport)?
+                .ok_or_else(|| PrefillError::Transport(std::io::ErrorKind::UnexpectedEof.into()))?;
                 let event = match message {
                     Message::Upstream(event) => event,
                     Message::DownstreamClosed => return Err(PrefillError::Disconnected),
@@ -72,7 +72,7 @@ impl Prefill<'_> {
                             .ok()
                             .is_some_and(|value| value["type"] == "response.interrupt")
                         {
-                            runtime.block_on(client.send_text(&text)).map_err(|error| {
+                            client.send_text(&text).await.map_err(|error| {
                                 PrefillError::Transport(std::io::Error::other(error))
                             })?;
                         } else {
@@ -121,7 +121,7 @@ impl Prefill<'_> {
 }
 
 impl PrefillError {
-    pub(super) fn report(
+    pub(super) async fn report(
         self,
         route: &ResolvedRoute,
         websocket: &mut ObservedWebSocket<'_>,
@@ -163,10 +163,10 @@ impl PrefillError {
         };
         if upstream_rejection {
             usage.observe_upstream(&event);
-            let _ = websocket.send_upstream_json(&event);
+            let _ = websocket.send_upstream_json(&event).await;
         } else {
             usage.observe(&event);
-            let _ = websocket.send_json(&event);
+            let _ = websocket.send_json(&event).await;
         }
     }
 }

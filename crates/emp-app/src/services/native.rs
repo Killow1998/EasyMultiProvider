@@ -36,6 +36,30 @@ pub(crate) fn open_stream_result<'a>(
     ids: &ProjectionIds,
     previous_usage: Option<RequestOutcome<'a>>,
 ) -> Result<(NativeStream, RequestOutcome<'a>), NativeHttpError> {
+    state
+        .backend
+        .transport
+        .runtime
+        .block_on(open_stream_result_async(
+            state,
+            route,
+            config,
+            body,
+            incoming,
+            ids,
+            previous_usage,
+        ))
+}
+
+pub(crate) async fn open_stream_result_async<'a>(
+    state: &'a ServerState,
+    route: &ResolvedRoute,
+    config: &Value,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+    previous_usage: Option<RequestOutcome<'a>>,
+) -> Result<(NativeStream, RequestOutcome<'a>), NativeHttpError> {
     match open_stream_result_with_monitor(
         state,
         route,
@@ -45,7 +69,9 @@ pub(crate) fn open_stream_result<'a>(
         ids,
         None,
         previous_usage,
-    )? {
+    )
+    .await?
+    {
         CancellableNativeStreamOpen::Opened(stream) => Ok(*stream),
         CancellableNativeStreamOpen::Disconnected => {
             unreachable!("non-cancellable native open cannot observe a disconnect")
@@ -67,23 +93,27 @@ pub(crate) fn open_stream_cancellable<'a>(
     ids: &ProjectionIds,
     monitor: &mut DisconnectMonitor,
 ) -> Result<CancellableNativeStreamOpen<'a>, NativeHttpError> {
-    open_stream_result_with_monitor(
-        state,
-        route,
-        config,
-        body,
-        incoming,
-        ids,
-        Some(monitor),
-        None,
-    )
+    state
+        .backend
+        .transport
+        .runtime
+        .block_on(open_stream_result_with_monitor(
+            state,
+            route,
+            config,
+            body,
+            incoming,
+            ids,
+            Some(monitor),
+            None,
+        ))
 }
 
 #[expect(
     clippy::too_many_arguments,
     reason = "Native WS fallback must transfer its existing receipt alongside the stream inputs"
 )]
-fn open_stream_result_with_monitor<'a>(
+async fn open_stream_result_with_monitor<'a>(
     state: &'a ServerState,
     route: &ResolvedRoute,
     config: &Value,
@@ -108,7 +138,9 @@ fn open_stream_result_with_monitor<'a>(
             plaintext_collaboration(config),
             ids,
             |refresh| {
-                let headers = resolve_headers(state, route, incoming, true, refresh)?;
+                let headers = tokio::task::block_in_place(|| {
+                    resolve_headers(state, route, incoming, true, refresh)
+                })?;
                 receipt.lock().unwrap().native_credentials(
                     route,
                     &headers.headers,
@@ -117,7 +149,7 @@ fn open_stream_result_with_monitor<'a>(
                 Ok(headers.headers)
             },
         );
-        crate::services::disconnect::raced(&state.backend.transport.runtime, monitor, open)
+        crate::services::disconnect::race(monitor, open).await
     };
     let result = match result {
         DisconnectRace::Ready(result) => result,

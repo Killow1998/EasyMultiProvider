@@ -17,10 +17,10 @@ enum UpstreamEvent {
     WriteFailed,
 }
 
-pub(super) async fn run(
+pub(crate) async fn run(
     state: &ServerState,
     mut upstream: AsyncClientWebSocket,
-    socket: tokio::net::TcpStream,
+    socket: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     prefix: &[u8],
     maximum: usize,
 ) {

@@ -88,7 +88,7 @@ mod performance_contract;
 mod quota_management_contract;
 mod quota_rotation_contract;
 mod quota_workspace_contract;
-mod realtime_contract;
+pub(crate) mod realtime_contract;
 mod realtime_sideband_contract;
 mod request_observation_contract;
 mod response_synthesis_contract;

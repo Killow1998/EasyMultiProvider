@@ -139,6 +139,8 @@ mod migration_writes;
 mod module_writes;
 #[cfg(unix)]
 mod team_writes;
+#[cfg(unix)]
+mod websocket;
 
 pub(crate) async fn assert_wire_parity(
     old: SocketAddr,
@@ -259,6 +261,24 @@ pub(crate) fn json_request(port: u16, path: &str, headers: &[&str], body: &[u8])
     let mut headers = headers.to_vec();
     headers.extend(["Content-Type: application/json", length.as_str()]);
     request(port, "POST", path, &headers, body)
+}
+
+pub(crate) fn spawn_candidate(
+    legacy: &LegacyServer,
+) -> (
+    SocketAddr,
+    tokio::task::JoinHandle<Result<(), tokio::task::JoinError>>,
+) {
+    let state = &legacy.state;
+    let runtime = &state.backend.transport.runtime;
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind(LOOPBACK))
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    (
+        address,
+        runtime.spawn(crate::server::serve_candidate(listener, state.clone())),
+    )
 }
 
 struct Fixture {

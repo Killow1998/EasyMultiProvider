@@ -39,13 +39,17 @@ pub(super) enum NativeTurnResult<'a> {
 }
 
 impl NativeSession {
-    pub(super) fn serve<'a>(
+    pub(super) async fn close_upstream(&mut self) {
+        NativeUpstreamConnection::close(&mut self.upstream).await;
+    }
+
+    pub(super) async fn serve<'a>(
         &mut self,
         state: &'a ServerState,
         turn: &Turn,
         websocket: &mut super::ObservedWebSocket<'_>,
     ) -> NativeTurnResult<'a> {
-        let native_connections = &state.backend.transport.native_connections;
+        let native_connections = &state.backend.native_websocket_connections;
         let Turn {
             route,
             config,
@@ -56,38 +60,39 @@ impl NativeSession {
         } = turn;
         let mut native_turn_activity = None;
         let mut fallback_usage = None;
-        let (mut plan, native_account) = match native::websocket_plan(
-            state,
-            route,
-            config,
-            request_body,
-            request_headers,
-        ) {
+        let (mut plan, native_account) = match tokio::task::block_in_place(|| {
+            native::websocket_plan(state, route, config, request_body, request_headers)
+        }) {
             Ok(plan) => plan,
             Err(error) => {
                 websocket.reject(state, route, request_body, request_headers,
-                    &serde_json::json!({"type":"error","status":error.status,"error":error.body["error"]}));
+                    &serde_json::json!({"type":"error","status":error.status,"error":error.body["error"]})).await;
                 return NativeTurnResult::Finished;
             }
         };
         let previous = request_body
             .get("previous_response_id")
             .and_then(Value::as_str);
-        let (route_key, connected_now) = match self.prepare_connection(
-            state,
-            &plan,
-            previous,
-            websocket.observation.native_continuation(),
-        ) {
+        let (route_key, connected_now) = match self
+            .prepare_connection(
+                state,
+                &plan,
+                previous,
+                websocket.observation.native_continuation(),
+            )
+            .await
+        {
             Ok(connection) => connection,
             Err(reason) => {
-                websocket.reject(
-                    state,
-                    route,
-                    request_body,
-                    request_headers,
-                    &previous_response_error(reason),
-                );
+                websocket
+                    .reject(
+                        state,
+                        route,
+                        request_body,
+                        request_headers,
+                        &previous_response_error(reason),
+                    )
+                    .await;
                 return NativeTurnResult::Finished;
             }
         };
@@ -107,13 +112,16 @@ impl NativeSession {
                 .observation
                 .native_continuation()
                 .connection_reused = Some(!connected_now);
-            if upstream.metadata(&plan, connected_now, websocket).is_err() {
+            if upstream
+                .metadata(&plan, connected_now, websocket)
+                .await
+                .is_err()
+            {
                 return NativeTurnResult::Closed;
             }
             let client = &mut upstream.client;
             let traffic_before = client.traffic();
             let compression = client.compression_enabled();
-            let runtime = &websocket.inner.runtime;
             let mut idle_deadline = Instant::now() + UPSTREAM_IDLE;
             let mut usage = crate::services::request_outcome::RequestOutcome::new(
                 state,
@@ -130,7 +138,15 @@ impl NativeSession {
                 crate::services::activity::ActivityIdentity::from_route(route),
             ));
             let payload = if let Some(prefill) = prefill::Prefill::plan(&plan.payload, &plan.url) {
-                let result = prefill.run(client, &mut idle_deadline, websocket, pending_request);
+                let result = prefill
+                    .run(
+                        state,
+                        client,
+                        &mut idle_deadline,
+                        websocket,
+                        pending_request,
+                    )
+                    .await;
                 websocket.observation.native_continuation().traffic(
                     traffic_before,
                     client.traffic(),
@@ -148,8 +164,8 @@ impl NativeSession {
                         if matches!(&error, prefill::PrefillError::Transport(_)) {
                             native_connections.defer(route_key.clone());
                         }
-                        error.report(route, websocket, &mut usage);
-                        *native_upstream = None;
+                        error.report(route, websocket, &mut usage).await;
+                        NativeUpstreamConnection::close(native_upstream).await;
                         *last_native_response_id = None;
                         return NativeTurnResult::Finished;
                     }
@@ -158,7 +174,7 @@ impl NativeSession {
                 std::borrow::Cow::Borrowed(&plan.payload)
             };
             usage.dispatch();
-            if let Err(error) = runtime.block_on(client.send_json(&payload)) {
+            if let Err(error) = client.send_json(&payload).await {
                 websocket.observation.native_continuation().transport_error =
                     Some(error.to_string());
                 native_connections.defer(route_key.clone());
@@ -169,7 +185,7 @@ impl NativeSession {
                 );
                 websocket.observation.native_continuation().reason =
                     Some(ContinuationReason::UpstreamDisconnected);
-                *native_upstream = None;
+                NativeUpstreamConnection::close(native_upstream).await;
                 *last_native_response_id = None;
                 let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
                 let error = native_stream_error_value_for_route(
@@ -181,7 +197,7 @@ impl NativeSession {
                     false,
                 );
                 usage.observe(&error);
-                let _ = websocket.send_json(&error);
+                let _ = websocket.send_json(&error).await;
                 return NativeTurnResult::Finished;
             }
             let mut terminal = false;
@@ -193,12 +209,15 @@ impl NativeSession {
             let mut replay_allowed = true;
             let mut connection_expired = false;
             loop {
-                let message = match runtime.block_on(next_message(
+                let message = match next_message(
+                    state,
                     client,
                     websocket.inner,
                     pending_request.is_none(),
                     &mut idle_deadline,
-                )) {
+                )
+                .await
+                {
                     Ok(Some(message)) => message,
                     Ok(None) => break,
                     Err(error) => {
@@ -223,7 +242,7 @@ impl NativeSession {
                             .ok()
                             .is_some_and(|value| value["type"] == "response.interrupt")
                         {
-                            if let Err(error) = runtime.block_on(client.send_text(&text)) {
+                            if let Err(error) = client.send_text(&text).await {
                                 websocket.observation.native_continuation().transport_error =
                                     Some(error.to_string());
                                 break;
@@ -253,7 +272,7 @@ impl NativeSession {
                             retry: true,
                         });
                         usage.dispatch();
-                        if let Err(error) = runtime.block_on(client.send_json(&retry_payload)) {
+                        if let Err(error) = client.send_json(&retry_payload).await {
                             websocket.observation.native_continuation().transport_error =
                                 Some(error.to_string());
                             break;
@@ -285,7 +304,7 @@ impl NativeSession {
                             "error":error.body["error"]
                         });
                         usage.observe(&event);
-                        let _ = websocket.send_json(&event);
+                        let _ = websocket.send_json(&event).await;
                         projected_error = true;
                         break;
                     }
@@ -304,10 +323,12 @@ impl NativeSession {
                 if request_body.get("generate") != Some(&Value::Bool(false))
                     && crate::services::context::outcome(&event) == Some(true)
                 {
-                    crate::services::context::record_payload(state, route, &plan.payload, true);
+                    tokio::task::block_in_place(|| {
+                        crate::services::context::record_payload(state, route, &plan.payload, true)
+                    });
                 }
                 terminal = terminal_stream_event(&event);
-                if websocket.send_upstream_json(&event).is_err() {
+                if websocket.send_upstream_json(&event).await.is_err() {
                     return NativeTurnResult::Closed;
                 }
                 delivered_output |= stream_event_activity(&event).0;
@@ -323,7 +344,7 @@ impl NativeSession {
             websocket.observation.native_continuation().peer_close_code = client.peer_close_code();
             if terminal {
                 if connection_expired {
-                    *native_upstream = None;
+                    NativeUpstreamConnection::close(native_upstream).await;
                     *last_native_response_id = None;
                 } else if resumable {
                     *last_native_response_id = completed_id;
@@ -337,12 +358,12 @@ impl NativeSession {
                 && previous.is_none()
             {
                 native_connections.defer(route_key.clone());
-                *native_upstream = None;
+                NativeUpstreamConnection::close(native_upstream).await;
                 *last_native_response_id = None;
                 fallback_usage = Some(Box::new(usage));
             } else {
                 let peer_close_code = client.peer_close_code();
-                *native_upstream = None;
+                NativeUpstreamConnection::close(native_upstream).await;
                 *last_native_response_id = None;
                 if projected_error {
                     return NativeTurnResult::Finished;
@@ -357,7 +378,7 @@ impl NativeSession {
                     websocket.observation.native_continuation().reason = Some(reason);
                     let event = previous_response_error(reason);
                     usage.observe(&event);
-                    let _ = websocket.send_json(&event);
+                    let _ = websocket.send_json(&event).await;
                 } else {
                     let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
                     let error = native_stream_error_value_for_route(
@@ -369,7 +390,7 @@ impl NativeSession {
                         delivered_output,
                     );
                     usage.observe(&error);
-                    let _ = websocket.send_json(&error);
+                    let _ = websocket.send_json(&error).await;
                 }
                 return NativeTurnResult::Finished;
             }
@@ -377,13 +398,15 @@ impl NativeSession {
         if previous.is_some() {
             let reason = ContinuationReason::IncrementalFallbackUnavailable;
             websocket.observation.native_continuation().reason = Some(reason);
-            websocket.reject(
-                state,
-                route,
-                request_body,
-                request_headers,
-                &previous_response_error(reason),
-            );
+            websocket
+                .reject(
+                    state,
+                    route,
+                    request_body,
+                    request_headers,
+                    &previous_response_error(reason),
+                )
+                .await;
             return NativeTurnResult::Finished;
         }
         *fallback_active = true;
@@ -401,6 +424,7 @@ enum Message {
 }
 
 async fn next_message(
+    state: &ServerState,
     client: &mut AsyncClientWebSocket,
     downstream: &Downstream,
     read_downstream: bool,
@@ -409,6 +433,10 @@ async fn next_message(
     loop {
         tokio::select! {
             biased;
+            _ = super::wait_for_drain(state) => {
+                downstream.close(1001, "EMP connection is draining").await;
+                return Ok(Some(Message::DownstreamClosed));
+            }
             _ = tokio::time::sleep_until(*idle_deadline) => return Err(io::ErrorKind::TimedOut.into()),
             event = downstream.read(), if read_downstream => {
                 match downstream.finish_read(event).await {

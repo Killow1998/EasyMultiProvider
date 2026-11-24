@@ -44,18 +44,16 @@ pub(super) struct Upstream<'a> {
     _relay: Relay,
 }
 
-pub(super) fn await_module<F: std::future::Future>(
+pub(super) async fn await_module<F: std::future::Future>(
     state: &ServerState,
     monitor: &mut DisconnectMonitor,
     future: F,
 ) -> DisconnectRace<F::Output> {
-    state.backend.transport.runtime.block_on(async {
-        tokio::select! {
+    tokio::select! {
             biased;
             _ = state.wait_for_shutdown() => DisconnectRace::Disconnected,
             result = monitor.race(future) => result,
-        }
-    })
+    }
 }
 
 pub(crate) fn relay(
@@ -70,16 +68,20 @@ pub(crate) fn relay(
     let upstream = DisconnectMonitor::start(downstream.socket())
         .map_err(|_| RelayError::unavailable())
         .and_then(|mut monitor| {
-            open(
-                state,
-                config,
-                body,
-                (request, incoming),
-                observation,
-                compact,
-                &mut monitor,
-            )
-            .map(|upstream| (upstream, monitor))
+            state
+                .backend
+                .transport
+                .runtime
+                .block_on(open(
+                    state,
+                    config,
+                    body,
+                    (request, incoming),
+                    observation,
+                    compact,
+                    &mut monitor,
+                ))
+                .map(|upstream| (upstream, monitor))
         });
     let (mut upstream, mut monitor) = match upstream {
         Ok(upstream) => upstream,
@@ -108,7 +110,11 @@ pub(crate) fn relay(
     }
     let mut parser = SseJsonParser::new();
     loop {
-        match await_module(state, &mut monitor, upstream.response.next_chunk()) {
+        match state.backend.transport.runtime.block_on(await_module(
+            state,
+            &mut monitor,
+            upstream.response.next_chunk(),
+        )) {
             DisconnectRace::Ready(Ok(Some(chunk))) => {
                 if observation
                     .written(downstream.frame(&chunk), false)
@@ -137,7 +143,7 @@ pub(crate) fn relay(
     InferenceOutcome::Streamed
 }
 
-pub(super) fn open<'a>(
+pub(super) async fn open<'a>(
     state: &'a ServerState,
     config: &Value,
     body: &Value,
@@ -180,7 +186,7 @@ pub(super) fn open<'a>(
             "An Aero role must use an EMP model source.",
         ));
     }
-    let endpoint = match state.backend.modules.aero(state, config) {
+    let endpoint = match tokio::task::block_in_place(|| state.backend.modules.aero(state, config)) {
         Ok(endpoint) => endpoint,
         Err(error) if error == "module_disabled" => {
             return Err(RelayError::Request(
@@ -231,20 +237,6 @@ pub(super) fn open<'a>(
         endpoint.url,
         if compact { "/compact" } else { "" }
     );
-    let mut open = |body: &Value| {
-        let future = state.backend.transport.client.open(
-            HttpMethod::Post,
-            &url,
-            headers.clone(),
-            Some(serde_json::to_vec(body).expect("request JSON")),
-            true,
-        );
-        match await_module(state, monitor, future) {
-            DisconnectRace::Ready(Ok(response)) => Ok(response),
-            DisconnectRace::Ready(Err(_)) => Err(RelayError::unavailable()),
-            DisconnectRace::Disconnected => Err(RelayError::Disconnected),
-        }
-    };
     let sanitized;
     let body = if body.get("_aero_visible_input").is_some() {
         sanitized = {
@@ -259,16 +251,17 @@ pub(super) fn open<'a>(
     } else {
         body
     };
-    let mut response = open(body)?;
+    let mut response = open_module(state, monitor, &url, &headers, body).await?;
     if response.status() == 409 && response.header("x-aero-history") == Some("required") {
         observation.phase(Phase::PrepareHistory);
         let reader =
             emp_codex::history::CodexHomeHistoryReader::new(&state.backend.accounts.codex_home);
         let visible =
-            emp_context::prepare(body, incoming, false, &reader).map_err(RelayError::History)?;
+            tokio::task::block_in_place(|| emp_context::prepare(body, incoming, false, &reader))
+                .map_err(RelayError::History)?;
         let mut materialized = body.clone();
         materialized["_aero_visible_input"] = visible["input"].clone();
-        response = open(&materialized)?;
+        response = open_module(state, monitor, &url, &headers, &materialized).await?;
         observation.phase(Phase::Execute);
     }
     Ok(Upstream {
@@ -276,4 +269,25 @@ pub(super) fn open<'a>(
         _caller: call,
         _relay: endpoint,
     })
+}
+
+async fn open_module(
+    state: &ServerState,
+    monitor: &mut DisconnectMonitor,
+    url: &str,
+    headers: &BTreeMap<String, String>,
+    body: &Value,
+) -> Result<HttpResponse, RelayError> {
+    let future = state.backend.transport.client.open(
+        HttpMethod::Post,
+        url,
+        headers.clone(),
+        Some(serde_json::to_vec(body).expect("request JSON")),
+        true,
+    );
+    match await_module(state, monitor, future).await {
+        DisconnectRace::Ready(Ok(response)) => Ok(response),
+        DisconnectRace::Ready(Err(_)) => Err(RelayError::unavailable()),
+        DisconnectRace::Disconnected => Err(RelayError::Disconnected),
+    }
 }
